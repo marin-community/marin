@@ -58,7 +58,10 @@ def _config(mode: str, ungated: bool) -> model.GrugModelConfig:
 
 
 def _hlo_fingerprint(text: str) -> str:
+    """Hash of the optimized HLO without metadata or custom-call backend configs (the serialized kernels carry
+    Python source locations, which move with unrelated edits)."""
     text = re.sub(r", metadata=\{[^}]*\}", "", text)
+    text = re.sub(r", backend_config=.*$", "", text, flags=re.MULTILINE)
     text = re.sub(r"\s*//.*", "", text)
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 

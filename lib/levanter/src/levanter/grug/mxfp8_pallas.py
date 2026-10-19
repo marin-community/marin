@@ -190,9 +190,10 @@ def quantize_rows_cols(x: jax.Array):
 
 
 def _row_blocks_kernel(starts_ref, counts_ref, *refs, rows: int, dequantize: bool, with_rows: bool):
-    """One row block x one ``COL_TILE`` column slice of ``mx_quantize_row_blocks``. ``dequantize``: the input is e4m3
-    values plus per-row exponents ``[T, K / 32]`` (an MXFP8-along-rows tensor), rescaled here in f32. ``with_rows``:
-    also write the block's rows quantized along the columns (``mx_quantize_rows``), reading the tile once."""
+    """One row block x one ``COL_TILE`` column slice of ``mx_quantize_row_blocks``, one 32 x 32 tile at a time.
+    ``dequantize``: the input is e4m3 values plus per-row exponents ``[T, K / 32]`` (an MXFP8-along-rows tensor),
+    rescaled here in f32. ``with_rows``: also write the block's rows quantized along the columns
+    (``mx_quantize_rows``), from the same tiles."""
     if dequantize:
         x_ref, x_exponents_ref, *refs = refs
     else:
@@ -200,7 +201,6 @@ def _row_blocks_kernel(starts_ref, counts_ref, *refs, rows: int, dequantize: boo
     values_ref, exponents_ref, *row_refs = refs
     j = pl.program_id(0)
     c = pl.program_id(1)
-    cols = pl.ds(c * COL_TILE, COL_TILE)
     start = starts_ref[j]
     count = counts_ref[j]
     # Read a full 32-row window that stays in bounds and mask the block's rows inside it: interpret mode clamps an
@@ -210,31 +210,28 @@ def _row_blocks_kernel(starts_ref, counts_ref, *refs, rows: int, dequantize: boo
     offset = window + jnp.arange(MX_BLOCK, dtype=jnp.int32)
     row_mask = (offset >= start) & (offset < start + count)
     mask = row_mask[:, None]
-    block = plt.load(x_ref.at[window_rows, cols], mask=mask, other=0).astype(jnp.float32)
-    sub_blocks = COL_TILE // MX_BLOCK
-    if dequantize:
-        x_exponents = plt.load(
-            x_exponents_ref.at[window_rows, pl.ds(c * sub_blocks, sub_blocks)], mask=mask, other=127
-        ).astype(jnp.int32)
-        x_scale = jax.lax.bitcast_convert_type(x_exponents << 23, jnp.float32)  # [32, C / 32]
-        block = (block.reshape(MX_BLOCK, sub_blocks, MX_BLOCK) * x_scale[:, :, None]).reshape(MX_BLOCK, COL_TILE)
-    block = jnp.where(mask, block, 0.0)
-    exponent = _exponent(jnp.max(jnp.abs(block), axis=0))  # [C]
-    scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
-    plt.store(values_ref.at[window_rows, cols], (block / scale[None, :]).astype(values_ref.dtype), mask=mask)
-    exponents_ref[0, :] = exponent.astype(exponents_ref.dtype)
-    if with_rows:
-        row_values_ref, row_exponents_ref = row_refs
-        parts = block.reshape(MX_BLOCK, sub_blocks, MX_BLOCK)
-        row_exponent = _exponent(jnp.max(jnp.abs(parts), axis=2))  # [32, C / 32]
-        row_scale = jax.lax.bitcast_convert_type(row_exponent << 23, jnp.float32)
-        row_values = (parts / row_scale[:, :, None]).reshape(MX_BLOCK, COL_TILE)
-        plt.store(row_values_ref.at[window_rows, cols], row_values.astype(row_values_ref.dtype), mask=mask)
-        plt.store(
-            row_exponents_ref.at[window_rows, pl.ds(c * sub_blocks, sub_blocks)],
-            row_exponent.astype(row_exponents_ref.dtype),
-            mask=mask,
-        )
+    for sub in range(COL_TILE // MX_BLOCK):
+        cols = pl.ds(c * COL_TILE + sub * MX_BLOCK, MX_BLOCK)
+        tile = plt.load(x_ref.at[window_rows, cols], mask=mask).astype(jnp.float32)  # [32, 32]
+        if dequantize:
+            column = c * (COL_TILE // MX_BLOCK) + sub
+            x_exponent = plt.load(x_exponents_ref.at[window_rows, column], mask=row_mask).astype(jnp.int32)
+            tile = tile * jax.lax.bitcast_convert_type(x_exponent << 23, jnp.float32)[:, None]
+        tile = jnp.where(mask, tile, 0.0)
+        exponent = _exponent(jnp.max(jnp.abs(tile), axis=0))  # [32]
+        scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
+        plt.store(values_ref.at[window_rows, cols], (tile / scale[None, :]).astype(values_ref.dtype), mask=mask)
+        exponents_ref[0, sub * MX_BLOCK : (sub + 1) * MX_BLOCK] = exponent.astype(exponents_ref.dtype)
+        if with_rows:
+            row_values_ref, row_exponents_ref = row_refs
+            row_exponent = _exponent(jnp.max(jnp.abs(tile), axis=1))  # [32]
+            row_scale = jax.lax.bitcast_convert_type(row_exponent << 23, jnp.float32)
+            row_values = (tile / row_scale[:, None]).astype(row_values_ref.dtype)
+            plt.store(row_values_ref.at[window_rows, cols], row_values, mask=mask)
+            column = c * (COL_TILE // MX_BLOCK) + sub
+            plt.store(
+                row_exponents_ref.at[window_rows, column], row_exponent.astype(row_exponents_ref.dtype), mask=row_mask
+            )
 
 
 @functools.partial(jax.jit, static_argnames=("with_rows", "interpret"))

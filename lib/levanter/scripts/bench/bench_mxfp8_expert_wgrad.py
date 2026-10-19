@@ -35,7 +35,9 @@ from levanter.grug._moe.quack_mxfp8 import (
     swiglu_expert_mlp_mxfp8_backward,
     swiglu_expert_mlp_mxfp8_backward_input,
     swiglu_expert_mlp_mxfp8_fwd,
+    token_scale_blocks,
 )
+from levanter.grug.mxfp8_pallas import quantize_row_blocks, quantize_rows, quantize_rows_and_row_blocks
 from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_wgrads, _swiglu_expert_mlp_quack_wgrads
 
 
@@ -124,7 +126,16 @@ def main() -> None:
 
     wgrad_flops = 2 * args.rows * (h * up_width + i * h)
     results = {"shape": vars(args)}
+    blocks = token_scale_blocks(cu, args.capacity)
+
+    def fused_dy(dy):
+        return quantize_rows_and_row_blocks(dy, *blocks)
+
+    def separate_dy(dy):
+        return quantize_rows(dy), quantize_row_blocks(dy, *blocks)
+
     cases = [
+        ("dy rows+token quantize (bf16 = separate passes)", separate_dy, fused_dy, (dy,), None),
         ("wgrads", lambda *a: bf16_wgrads(*a, cu), lambda *a: expert_mlp_mxfp8_wgrads(*a, cu), operands, wgrad_flops),
         ("token_quantizers", None, quantizers, operands, None),
         ("forward+backward", bf16_train, mxfp8_train, (x, w_up, w_down, dy), None),
