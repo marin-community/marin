@@ -84,7 +84,8 @@ from marin.inference.config import (
     VllmEngineConfig,
 )
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
-from marin.inference.model_preparation import model_cache_entry, resolve_model_path
+from marin.inference.model_cache import model_cache_entry
+from marin.inference.model_preparation import resolve_model_path
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.storage_path import StoragePath
@@ -297,7 +298,9 @@ def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
         ),
     )
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
-    monkeypatch.setattr("marin.evaluation.runner._prepare_inference_model", lambda config, *_args: config)
+    monkeypatch.setattr(
+        "marin.evaluation.runner._prepare_inference_models", lambda candidate, judge, *_args: (candidate, judge)
+    )
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
         lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
@@ -352,7 +355,7 @@ def _evaluate_with_session(
         patch("marin.evaluation.runner.configure_coreweave_s3", lambda: None),
         patch("marin.evaluation.runner.iris_ctx", lambda: context),
         patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
-        patch("marin.evaluation.runner._prepare_inference_model", lambda config, *_args: config),
+        patch("marin.evaluation.runner._prepare_inference_models", lambda candidate, judge, *_args: (candidate, judge)),
         patch(
             "marin.evaluation.runner.inference_config_for_model",
             lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
@@ -361,7 +364,7 @@ def _evaluate_with_session(
         return _run_test_batch(batch)
 
 
-@pytest.mark.parametrize("cache_state", ["miss", "hit", "failure", "submit-failure"])
+@pytest.mark.parametrize("cache_state", ["miss", "hit", "failure", "submit-failure", "resolve-failure"])
 def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypatch, cache_state):
     revision = "a" * 40
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "cache"))
@@ -372,15 +375,21 @@ def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypat
     if cache_state == "hit":
         marker.parent.mkdirs()
         marker.write_text("{}")
+    if cache_state == "resolve-failure":
+
+        def fail_revision(*_args, **_kwargs):
+            raise RuntimeError("Hugging Face revision lookup failed")
+
+        monkeypatch.setattr("levanter.model_cache.model_info", fail_revision)
 
     events: list[str] = []
 
     class FakePrepareJob:
         job_id = "/prepare/candidate"
 
-        def wait(self, timeout=None, *, raise_on_failure=True):
+        def status(self):
             if cache_state == "failure":
-                raise RuntimeError("download failed")
+                return JobStatus.FAILED
             marker.parent.mkdirs()
             marker.write_text("{}")
             return JobStatus.SUCCEEDED
@@ -399,13 +408,16 @@ def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypat
             assert request.resources.target_cluster == "cw-rno2a"
             assert request.resources.disk == "80g"
             assert request.environment.env_vars["HF_TOKEN"] == "test-token"
-            assert request.entrypoint.callable_entrypoint.args == ("org/candidate", 14, revision)
+            assert request.entrypoint.callable_entrypoint.args == (entry.path, "org/candidate")
+            assert request.entrypoint.callable_entrypoint.kwargs == {"revision": revision}
             if cache_state == "submit-failure":
                 raise RuntimeError("Iris submission failed")
             return FakePrepareJob()
 
     config = RemoteInferenceConfig(
-        model=ServedModelConfig(weights="org/candidate", revision=revision),
+        model=ServedModelConfig(
+            weights="org/candidate", revision=None if cache_state == "resolve-failure" else revision
+        ),
         engine=VllmEngineConfig(),
         iris=IrisConfig(
             worker_resources=ResourceConfig.with_gpu("H100", count=1, regions=["us-east1"], target_cluster="cw-rno2a"),
@@ -432,7 +444,7 @@ def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypat
         judge=None,
     )
 
-    if cache_state in ("failure", "submit-failure"):
+    if cache_state in ("failure", "submit-failure", "resolve-failure"):
         with pytest.raises(RuntimeError):
             _run_test_batch(batch)
         record = read_record(record_path(batch.records_prefix, f"run-{cache_state}"))
@@ -440,14 +452,94 @@ def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypat
         if cache_state == "failure":
             assert record.jobs["prepare"] == "/prepare/candidate"
             assert events == ["prepare", "prepare stopped"]
-        else:
+        elif cache_state == "submit-failure":
             assert record.jobs == {"orchestrator": "/orchestrator"}
             assert events == ["prepare"]
+        else:
+            assert record.jobs == {"orchestrator": "/orchestrator"}
+            assert events == []
     else:
         _run_test_batch(batch)
         record = read_record(record_path(batch.records_prefix, f"run-{cache_state}"))
         assert record.status is RunStatus.SUCCEEDED
         assert events == (["gpu"] if cache_state == "hit" else ["prepare", "gpu"])
+
+
+@pytest.mark.parametrize("judge_status", [JobStatus.SUCCEEDED, JobStatus.FAILED])
+def test_evaluation_prepares_candidate_and_judge_before_serving(tmp_path, monkeypatch, judge_status):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "cache"))
+    revisions = {"candidate": "a" * 40, "judge": "b" * 40}
+    entries = {name: model_cache_entry(f"org/{name}", 14, revision) for name, revision in revisions.items()}
+    assert all(entry is not None for entry in entries.values())
+    markers = [StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER for entry in entries.values() if entry is not None]
+    events: list[str] = []
+
+    class FakePrepareJob:
+        def __init__(self, name, cache_path):
+            self.job_id = f"/prepare/{name}"
+            self.marker = StoragePath(cache_path) / DEFAULT_COMPLETE_MARKER
+
+        def status(self):
+            events.append(f"complete:{self.job_id}")
+            if self.job_id == "/prepare/prepare-judge-group" and judge_status is JobStatus.FAILED:
+                return JobStatus.FAILED
+            self.marker.parent.mkdirs()
+            self.marker.write_text("{}")
+            return JobStatus.SUCCEEDED
+
+        def terminate(self):
+            events.append(f"stop:{self.job_id}")
+
+        def logs(self, max_lines=0):
+            return ("prepare failed",)
+
+    class FakeClient:
+        def submit(self, request):
+            events.append(f"submit:{request.name}")
+            assert isinstance(request.resources.device, CpuConfig)
+            return FakePrepareJob(request.name, request.entrypoint.callable_entrypoint.args[0])
+
+    def inference_config(model, *_args, **_kwargs):
+        return RemoteInferenceConfig(
+            model=ServedModelConfig(weights=model.location, revision=revisions[model.name]),
+            engine=VllmEngineConfig(),
+            iris=IrisConfig(
+                worker_resources=ResourceConfig.with_gpu("H100", count=1, target_cluster="cw-rno2a"),
+                worker_environment=create_environment(),
+            ),
+        )
+
+    def remote(config):
+        events.append(f"serve:{config.model.model_id}")
+        assert all(marker.exists() for marker in markers)
+        return nullcontext(_remote_session())
+
+    monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
+    monkeypatch.setattr("marin.evaluation.runner.current_client", FakeClient)
+    monkeypatch.setattr("marin.evaluation.runner.inference_config_for_model", inference_config)
+    monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    batch = _hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "two-models", _successful_evaluation),))
+
+    if judge_status is JobStatus.FAILED:
+        with pytest.raises(RuntimeError):
+            _run_test_batch(batch)
+        record = read_record(record_path(batch.records_prefix, "run-two-models"))
+        assert record.status is RunStatus.INFRA_FAILED
+        assert record.jobs["prepare"] == "/prepare/prepare-group"
+        assert record.jobs["prepare-1"] == "/prepare/prepare-judge-group"
+        assert not any(event.startswith("serve:") for event in events)
+        assert {event for event in events if event.startswith("stop:")} == {
+            "stop:/prepare/prepare-group",
+            "stop:/prepare/prepare-judge-group",
+        }
+        return
+
+    _run_test_batch(batch)
+    assert events[:2] == ["submit:prepare-group", "submit:prepare-judge-group"]
+    assert events[-2:] == ["serve:org/candidate", "serve:org/judge"]
+    assert read_record(record_path(batch.records_prefix, "run-two-models")).status is RunStatus.SUCCEEDED
 
 
 def test_evaluation_steps_share_candidate_and_judge(tmp_path, monkeypatch):

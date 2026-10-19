@@ -11,12 +11,12 @@ from enum import StrEnum
 from functools import partial
 from typing import NoReturn, Protocol
 
-from fray.client import JobHandle
+from fray.client import JobHandle, wait_all
 from fray.current_client import current_client
-from fray.types import Entrypoint, JobRequest, JobStatus, ResourceConfig, create_environment
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.client.client import Job, iris_ctx
 from iris.cluster.setup_scripts import default_setup_script
-from levanter.model_cache import DEFAULT_COMPLETE_MARKER
+from levanter.model_cache import DEFAULT_COMPLETE_MARKER, cache_hf_model
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec
@@ -53,7 +53,7 @@ from marin.execution.step_spec import StepSpec
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
-from marin.inference.model_preparation import model_cache_entry, resolve_model_path
+from marin.inference.model_cache import model_cache_entry
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
 logger = logging.getLogger(__name__)
@@ -475,66 +475,74 @@ def _record_startup_failure(
     raise RuntimeError(f"{evaluation.identity.eval_ref.name} {subject} failed: {exc}") from exc
 
 
-def _prepare_inference_model(
-    config: RemoteInferenceConfig,
+def _prepare_inference_models(
+    candidate: RemoteInferenceConfig,
+    judge: RemoteInferenceConfig | None,
     run_id: str,
     env_vars: Mapping[str, str],
-) -> RemoteInferenceConfig:
-    """Mirror a cold Hugging Face checkpoint on CPU before starting inference."""
-    model = config.model
+) -> tuple[RemoteInferenceConfig, RemoteInferenceConfig | None]:
+    """Mirror cold Hugging Face checkpoints on CPU before starting inference."""
+    configs = [(candidate, run_id)]
+    if judge is not None:
+        configs.append((judge, f"judge-{run_id}"))
+    prepared: list[RemoteInferenceConfig] = []
+    pending: list[tuple[JobHandle, StoragePath]] = []
     try:
-        entry = model_cache_entry(model.weights, config.iris.cache_ttl_days, model.revision)
-        if entry is None:
-            return config
+        for config, name in configs:
+            model = config.model
+            entry = model_cache_entry(model.weights, config.iris.cache_ttl_days, model.revision)
+            if entry is None:
+                prepared.append(config)
+                continue
 
-        pinned_model = replace(model, weights=entry.repo, revision=entry.revision, api_model=model.model_id)
-        pinned_config = replace(config, model=pinned_model)
-        marker = StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
-        if marker.exists():
-            logger.info("model cache hit: %s", entry.path)
-            return pinned_config
+            pinned_model = replace(model, weights=entry.repo, revision=entry.revision, api_model=model.model_id)
+            prepared.append(replace(config, model=pinned_model))
+            marker = StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
+            if marker.exists():
+                logger.info("model cache hit: %s", entry.path)
+                continue
 
-        worker_resources = config.iris.worker_resources
-        job = current_client().submit(
-            JobRequest(
-                name=f"prepare-{run_id}",
-                entrypoint=Entrypoint.from_callable(
-                    resolve_model_path,
-                    args=(entry.repo, config.iris.cache_ttl_days, entry.revision),
-                ),
-                resources=ResourceConfig.with_cpu(
-                    cpu=4,
-                    ram="16g",
-                    disk=_MODEL_PREPARE_DISK,
-                    preemptible=False,
-                    regions=worker_resources.regions,
-                    target_cluster=worker_resources.target_cluster,
-                ),
-                environment=create_environment(
-                    setup_scripts=[default_setup_script(packages=["marin-core"])],
-                    env_vars=dict(env_vars),
-                ),
-                priority=config.iris.priority,
-                timeout=Duration.from_hours(_MODEL_PREPARE_TIMEOUT_HOURS),
+            worker_resources = config.iris.worker_resources
+            job = current_client().submit(
+                JobRequest(
+                    name=f"prepare-{name}",
+                    entrypoint=Entrypoint.from_callable(
+                        cache_hf_model,
+                        args=(entry.path, entry.repo),
+                        kwargs={"revision": entry.revision},
+                    ),
+                    resources=ResourceConfig.with_cpu(
+                        cpu=4,
+                        ram="16g",
+                        disk=_MODEL_PREPARE_DISK,
+                        preemptible=False,
+                        regions=worker_resources.regions,
+                        target_cluster=worker_resources.target_cluster,
+                    ),
+                    environment=create_environment(
+                        setup_scripts=[default_setup_script(packages=["marin-core"])],
+                        env_vars=dict(env_vars),
+                    ),
+                    priority=config.iris.priority,
+                    timeout=Duration.from_hours(_MODEL_PREPARE_TIMEOUT_HOURS),
+                )
             )
-        )
+            pending.append((job, marker))
+
+        wait_all([job for job, _ in pending], timeout=_MODEL_PREPARE_WAIT_TIMEOUT_SECONDS)
+        for job, marker in pending:
+            if not marker.exists():
+                raise RuntimeError(f"prepare job {job.job_id} did not write completion marker at {marker}")
     except Exception as exc:
-        raise RemoteInferenceStartupError(f"Model cache preparation failed: {exc}", jobs=()) from exc
-    try:
-        status = job.wait(timeout=_MODEL_PREPARE_WAIT_TIMEOUT_SECONDS)
-        if status is not JobStatus.SUCCEEDED:
-            raise RuntimeError(f"prepare job finished with status {status}")
-        if not marker.exists():
-            raise RuntimeError(f"prepare job did not write completion marker at {marker}")
-    except Exception as exc:
-        try:
-            job.terminate()
-        except Exception:
-            logger.warning("could not terminate model preparation job %s", job.job_id, exc_info=True)
+        for job, _ in pending:
+            try:
+                job.terminate()
+            except Exception:
+                logger.warning("could not terminate model preparation job %s", job.job_id, exc_info=True)
         raise RemoteInferenceStartupError(
-            f"Model cache preparation job {job.job_id} failed: {exc}", jobs=(job,)
+            f"Model cache preparation failed: {exc}", jobs=tuple(job for job, _ in pending)
         ) from exc
-    return pinned_config
+    return prepared[0], prepared[1] if judge is not None else None
 
 
 def run_evaluation_step(
@@ -608,10 +616,7 @@ def run_evaluation_steps(
         )
     with ExitStack() as stack:
         try:
-            prepared = _prepare_inference_model(inference, batch.group_id, runtime_env)
-            prepared_judge = None
-            if judge_inference is not None:
-                prepared_judge = _prepare_inference_model(judge_inference, f"judge-{batch.group_id}", runtime_env)
+            prepared, prepared_judge = _prepare_inference_models(inference, judge_inference, batch.group_id, runtime_env)
         except RemoteInferenceStartupError as exc:
             run(
                 partial(
