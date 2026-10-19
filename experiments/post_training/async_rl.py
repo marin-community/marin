@@ -66,6 +66,7 @@ from experiments.post_training.curriculum_rl.launch import (
     SEED,
     SNOWBALL_POLICY,
     SNOWBALL_SMOKE,
+    MegatronGeometry,
     PolicySpec,
     evaluation_model_config,
     model_step,
@@ -93,17 +94,6 @@ RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
 
 
 @dataclass(frozen=True)
-class MegatronGeometry:
-    """Megatron parallelism of one model, keyed as its ``megatron_config`` section."""
-
-    tensor_model_parallel_size: int
-    pipeline_model_parallel_size: int
-    context_parallel_size: int
-    expert_model_parallel_size: int
-    expert_tensor_parallel_size: int
-
-
-@dataclass(frozen=True)
 class TrainingRecipe:
     """How one policy trains: runtime, topology, parallel geometry and optimizer."""
 
@@ -121,8 +111,7 @@ class TrainingRecipe:
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
     megatron: MegatronGeometry
-    # Host memory per training task. Megatron checkpoint staging needs 1800GB; the policy spec's
-    # 512GB is sized for an FSDP load.
+    # Host memory per training task, including Megatron checkpoint staging.
     host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: Mapping[str, object]
@@ -158,14 +147,8 @@ SNOWBALL_RECIPE = TrainingRecipe(
     learning_rate=1.0e-6,
     weight_decay=1e-2,
     max_grad_norm=1.0,
-    megatron=MegatronGeometry(
-        tensor_model_parallel_size=1,
-        pipeline_model_parallel_size=2,
-        context_parallel_size=1,
-        expert_model_parallel_size=8,
-        expert_tensor_parallel_size=1,
-    ),
-    host_memory="1800GB",
+    megatron=SNOWBALL_POLICY.megatron,
+    host_memory=SNOWBALL_POLICY.task_memory,
     # The Triton MoE kernels; the fused defaults do not cover this expert layout.
     engine_init_kwargs=MappingProxyType({"moe_backend": "triton"}),
 )

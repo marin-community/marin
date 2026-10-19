@@ -128,7 +128,7 @@ def _spec() -> SkyRLSpec:
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
         config_yaml=_config_yaml(),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -343,7 +343,9 @@ def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
         )
 
 
-def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
+def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     spec = _spec()
     base = skyrl_step(spec, _execution())
     moved = skyrl_step(spec, _execution("cw-us-east-02a"))
@@ -351,10 +353,13 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
         spec,
         dataclasses.replace(_execution(), cpu=64, memory="400GB", disk="2TB"),
     )
-    changed_profile = skyrl_step(
+    provenance = tmp_path / "runtime-provenance.json"
+    provenance.write_text('{"source_commit": "changed"}\n')
+    monkeypatch.setattr("marin.rl.skyrl.SKYRL_PROVENANCE", provenance)
+    changed_runtime = skyrl_step(
         dataclasses.replace(
             spec,
-            runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
+            runtime=dataclasses.replace(spec.runtime),
         ),
         _execution(),
     )
@@ -370,7 +375,7 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
 
     assert base.fingerprint() == moved.fingerprint()
     assert base.fingerprint() == resized.fingerprint()
-    assert base.fingerprint() != changed_profile.fingerprint()
+    assert base.fingerprint() != changed_runtime.fingerprint()
     assert base.fingerprint() != changed_roles.fingerprint()
 
 
@@ -667,8 +672,7 @@ def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> 
     with pytest.raises(ValueError, match="megatron"):
         dataclasses.replace(
             spec,
-            config_yaml=_config_yaml(strategy="megatron"),
-            runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.FSDP),
+            config_yaml=_config_yaml(strategy="fsdp2"),
         )
 
 

@@ -16,6 +16,11 @@ verifies source and asset hashes, then bundles the project and its lock for
 Iris. Workers install that source in editable mode with the frozen
 Megatron/vLLM profile. No task clones the SkyRL fork.
 
+The captured runtime supports Megatron training. Marin's curriculum arms use
+Megatron for both Qwen and Snowball. Snowball shares its PP2/EP8 geometry and
+1800GB host-memory allocation with the asynchronous launcher. The obsolete
+FSDP profile and recipe fields are removed.
+
 ```mermaid
 flowchart LR
     Marin["Marin experiment<br/>root uv.lock"] -->|"launch YAML / subprocess"| Launcher

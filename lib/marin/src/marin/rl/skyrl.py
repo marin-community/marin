@@ -62,7 +62,6 @@ def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
 class SkyRLRuntimeProfile(StrEnum):
     """Frozen upstream dependency set for a SkyRL training strategy."""
 
-    FSDP = "fsdp"
     MEGATRON = "megatron"
 
 
@@ -447,7 +446,6 @@ class SkyRLOutputPaths:
 # dependencies reach the pod; `trainer.strategy` decides which backend the trainer then asks for.
 # Nothing downstream reconciles them, so a mismatch installs one backend and runs another.
 _STRATEGY_FOR_PROFILE = {
-    SkyRLRuntimeProfile.FSDP: "fsdp2",
     SkyRLRuntimeProfile.MEGATRON: "megatron",
 }
 
