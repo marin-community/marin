@@ -118,7 +118,9 @@ def test_decision_state_holds_the_solver_final_visible_turn_and_the_reference():
 def test_decision_final_turn_without_text_fails_the_submission_without_a_read():
     client = FakeDecisionClient(probabilities(low=4, high_share=0.0))
 
-    result = grade_task(decision_task(None), attempt(TextMessage(role="assistant", content="  ")), decision_client=client)
+    result = grade_task(
+        decision_task(None), attempt(TextMessage(role="assistant", content="  ")), decision_client=client
+    )
 
     assert (result.status, result.reward, client.requests) == (Outcome.SUBMISSION_FAILURE, 0.0, [])
 
@@ -131,7 +133,9 @@ def test_decision_final_turn_without_text_fails_the_submission_without_a_read():
     ],
 )
 def test_decision_grading_without_a_usable_client_is_an_infrastructure_error(client):
-    result = grade_task(decision_task(2.5), attempt(TextMessage(role="assistant", content=REPLY)), decision_client=client)
+    result = grade_task(
+        decision_task(2.5), attempt(TextMessage(role="assistant", content=REPLY)), decision_client=client
+    )
 
     assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
 
@@ -151,7 +155,9 @@ def test_decision_grading_without_a_usable_client_is_an_infrastructure_error(cli
 def test_decision_reward_follows_the_expected_level_against_the_bar(acceptance_level, read, level, reward, accepted):
     task = decision_task(acceptance_level)
 
-    result = grade_task(task, attempt(TextMessage(role="assistant", content=REPLY)), decision_client=FakeDecisionClient(read))
+    result = grade_task(
+        task, attempt(TextMessage(role="assistant", content=REPLY)), decision_client=FakeDecisionClient(read)
+    )
 
     # A null acceptance level is the "partially matches" bar, level 2.
     bar = 2.0 if acceptance_level is None else acceptance_level
