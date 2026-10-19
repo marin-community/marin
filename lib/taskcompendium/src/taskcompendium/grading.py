@@ -9,6 +9,7 @@ validation and scoring. A decision-model grader reads the solver's final visible
 (``grade_decision_answer``); ``taskcompendium.decision`` owns its scale and reward.
 """
 
+import asyncio
 import json
 import math
 
@@ -31,10 +32,12 @@ from taskcompendium.decision import (
     QUESTION_ID,
     DecisionClient,
     DecisionGrader,
+    DecisionUnavailable,
     comparative_question,
     decision_grade,
     decision_state,
     expected_level,
+    solver_output_key,
 )
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
@@ -204,10 +207,17 @@ def solver_turn_output(conversation: ConversationTrace) -> str:
     return PlainText().extract(GradingAttempt(conversation)).value
 
 
-async def _decision_level(grader: DecisionGrader, solver_output: str, client: DecisionClient | None) -> float:
+async def _decision_level(
+    grader: DecisionGrader, solver_output: str, client: DecisionClient | None, timeout: float
+) -> float:
     if client is None:
         raise RuntimeError("Decision-model grading requires a decision client")
-    reads = await client.decide(decision_state(grader, solver_output), {QUESTION_ID: comparative_question()})
+    state, questions = decision_state(grader, solver_output), {QUESTION_ID: comparative_question()}
+    try:
+        async with asyncio.timeout(timeout):
+            reads = await client.decide(state, questions, elastic=solver_output_key(grader), timeout=timeout)
+    except TimeoutError as error:
+        raise DecisionUnavailable(f"no decision within the {timeout:.0f}-second verifier deadline") from error
     if QUESTION_ID not in reads:
         raise RuntimeError(f"The decision model did not answer question {QUESTION_ID!r}")
     try:
@@ -216,12 +226,19 @@ async def _decision_level(grader: DecisionGrader, solver_output: str, client: De
         raise RuntimeError(f"The decision model returned a malformed read: {error}") from error
 
 
-async def grade_decision_answer(task: TaskSpec, attempt: GradingAttempt, client: DecisionClient | None) -> GradeResult:
+async def grade_decision_answer(
+    task: TaskSpec, attempt: GradingAttempt, client: DecisionClient | None, *, timeout: float
+) -> GradeResult:
     """Grade one decision-model task: one comparative read of the solver's final turn against the bar.
 
-    A final turn without visible text is a submission failure, decided without a read. A missing
-    client, a client error and a malformed read are infrastructure errors. ``detail`` carries the
-    expected ``level``, the ``bar`` and whether the answer was ``accepted``.
+    The read is bounded by ``timeout`` seconds, the caller's verifier deadline. A final turn without
+    visible text is a submission failure, decided without a read. A missing client, a client
+    ``RuntimeError`` or ``OSError``, and a malformed read are infrastructure errors. ``detail``
+    carries the expected ``level``, the ``bar`` and whether the answer was ``accepted``.
+
+    Raises:
+        DecisionUnavailable: the read failed transiently or missed the deadline; the caller may grade
+            once more on the same attempt.
     """
     grader = task.grader
     if not isinstance(grader, DecisionGrader):
@@ -231,7 +248,7 @@ async def grade_decision_answer(task: TaskSpec, attempt: GradingAttempt, client:
     except SubmissionFailure as error:
         return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
     try:
-        level = await _decision_level(grader, output, client)
+        level = await _decision_level(grader, output, client, timeout)
     except (RuntimeError, OSError) as error:
         return GradeResult(Outcome.INFRA_ERROR, None, str(error))
     grade = decision_grade(level, grader.bar)

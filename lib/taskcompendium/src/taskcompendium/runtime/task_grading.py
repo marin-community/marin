@@ -33,12 +33,15 @@ def grade_task(
     machine_spec: MachineSpec | None = None,
     judge_connection: JudgeConnection | None = None,
     decision_client: DecisionClient | None = None,
+    decision_timeout: float | None = None,
 ) -> GradeResult:
     """Grade with an explicit judge connection or decision client, in process, or in a fresh grading machine.
 
     A ``NoGrader`` task is unavailable. A session grader runs only inside its rollout session. A
-    decision-model grader grades on the host with ``decision_client``. Judge, decision-model and
-    machine failures, and a missing decision client, become infrastructure errors.
+    decision-model grader grades on the host with ``decision_client``, its read bounded by
+    ``decision_timeout`` seconds; it raises ``ValueError`` without a timeout. Judge, decision-model
+    and machine failures, and a missing decision client, become infrastructure errors, except that
+    ``DecisionUnavailable`` propagates so the caller can grade once more.
     """
     grader = task.grader
     if isinstance(grader, NoGrader):
@@ -46,7 +49,9 @@ def grade_task(
     if isinstance(grader, SessionGrader):
         raise TypeError("A session grader runs inside its rollout session")
     if isinstance(grader, DecisionGrader):
-        return asyncio.run(grade_decision_answer(task, attempt, decision_client))
+        if decision_timeout is None:
+            raise ValueError("Decision-model grading requires a decision timeout")
+        return asyncio.run(grade_decision_answer(task, attempt, decision_client, timeout=decision_timeout))
     if isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec):
         return grade_remote_judge_answer(task, attempt, judge_connection)
     if grader.environment is None:

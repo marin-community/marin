@@ -3,6 +3,7 @@
 
 """Decision-model grading on the host: the state the model reads, the level it returns, and the reward."""
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -14,11 +15,13 @@ from taskcompendium.decision import (
     QUESTION_ID,
     SOLVER_TURN_STATE,
     DecisionGrader,
+    DecisionUnavailable,
     ItemRole,
     Rubric,
     RubricItem,
     ScoreQuestion,
 )
+from taskcompendium.grading import grade_decision_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     AnswerType,
@@ -51,6 +54,7 @@ RUBRIC = Rubric(
     ),
 )
 PROMPT = TextMessage(role="user", content="Reconcile the ledger and tell me the approved total.")
+DEADLINE = 90.0
 
 
 def probabilities(*, low: int, high_share: float) -> tuple[float, ...]:
@@ -64,22 +68,35 @@ def probabilities(*, low: int, high_share: float) -> tuple[float, ...]:
 
 @dataclass
 class FakeDecisionClient:
-    """Answers every question with one fixed read and keeps every request."""
+    """Answers every question with one fixed read, after ``delay`` seconds, or raises ``failure``.
+
+    Every request is kept with the ``elastic`` key and ``timeout`` it was given.
+    """
 
     read: tuple[float, ...]
-    requests: list[tuple[Mapping[str, JsonValue], Mapping[str, ScoreQuestion]]] = field(default_factory=list)
+    failure: Exception | None = None
+    delay: float = 0.0
+    requests: list[tuple[Mapping[str, JsonValue], Mapping[str, ScoreQuestion], str, float]] = field(default_factory=list)
 
     async def decide(
-        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion]
+        self,
+        state: Mapping[str, JsonValue],
+        questions: Mapping[str, ScoreQuestion],
+        *,
+        elastic: str,
+        timeout: float,
     ) -> Mapping[str, tuple[float, ...]]:
-        self.requests.append((state, questions))
+        self.requests.append((state, questions, elastic, timeout))
+        await asyncio.sleep(self.delay)
+        if self.failure is not None:
+            raise self.failure
         return {question: self.read for question in questions}
 
 
-def decision_task(acceptance_level: float | None) -> TaskSpec:
+def decision_task(acceptance_level: float | None, **fields) -> TaskSpec:
     calibration = {} if acceptance_level is None else {"reference": acceptance_level}
     grader = DecisionGrader(
-        rubric=RUBRIC, reference=REFERENCE, acceptance_level=acceptance_level, calibration=calibration
+        rubric=RUBRIC, reference=REFERENCE, acceptance_level=acceptance_level, calibration=calibration, **fields
     )
     return TaskSpec(
         id="ledger",
@@ -104,22 +121,56 @@ def test_decision_state_holds_the_solver_final_visible_turn_and_the_reference():
         TextMessage(role="assistant", content=REPLY),
     )
 
-    grade_task(decision_task(None), trial, decision_client=client)
+    grade_task(decision_task(None), trial, decision_client=client, decision_timeout=DEADLINE)
 
-    [(state, questions)] = client.requests
+    [(state, questions, elastic, timeout)] = client.requests
     assert list(state) == list(SOLVER_TURN_STATE)
     assert state["z_candidate_answer"] == REPLY
     assert state["y_reference_answer"] == REFERENCE
     assert state["task_deliverable"] == RUBRIC.deliverable
+    assert "weight" not in state["rubric"][0]
     assert list(questions) == [QUESTION_ID]
     assert questions[QUESTION_ID].levels == LEVELS
+    assert (elastic, timeout) == ("z_candidate_answer", DEADLINE)
+
+
+def test_decision_elastic_key_follows_the_state_template():
+    client = FakeDecisionClient(probabilities(low=3, high_share=0.0))
+    task = decision_task(None, state={"answer": "solver_turn_output", "gold": "reference"})
+
+    grade_task(task, attempt(TextMessage(role="assistant", content=REPLY)), decision_client=client, decision_timeout=5.0)
+
+    [(state, _, elastic, _)] = client.requests
+    assert state == {"answer": REPLY, "gold": REFERENCE}
+    assert elastic == "answer"
+
+
+@pytest.mark.parametrize(
+    "client",
+    [
+        pytest.param(FakeDecisionClient((), failure=DecisionUnavailable("503 from the decision service")), id="raised"),
+        pytest.param(FakeDecisionClient(probabilities(low=4, high_share=0.0), delay=1.0), id="deadline"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_decision_unavailable_propagates_from_both_entry_points(client):
+    task = decision_task(2.5)
+    trial = attempt(TextMessage(role="assistant", content=REPLY))
+
+    with pytest.raises(DecisionUnavailable):
+        await grade_decision_answer(task, trial, client, timeout=0.05)
+    with pytest.raises(DecisionUnavailable):
+        await asyncio.to_thread(grade_task, task, trial, decision_client=client, decision_timeout=0.05)
 
 
 def test_decision_final_turn_without_text_fails_the_submission_without_a_read():
     client = FakeDecisionClient(probabilities(low=4, high_share=0.0))
 
     result = grade_task(
-        decision_task(None), attempt(TextMessage(role="assistant", content="  ")), decision_client=client
+        decision_task(None),
+        attempt(TextMessage(role="assistant", content="  ")),
+        decision_client=client,
+        decision_timeout=DEADLINE,
     )
 
     assert (result.status, result.reward, client.requests) == (Outcome.SUBMISSION_FAILURE, 0.0, [])
@@ -130,11 +181,15 @@ def test_decision_final_turn_without_text_fails_the_submission_without_a_read():
     [
         pytest.param(None, id="no-client"),
         pytest.param(FakeDecisionClient((0.0, 0.0, 1.0)), id="malformed-read"),
+        pytest.param(FakeDecisionClient((), failure=ConnectionResetError("reset by peer")), id="os-error"),
     ],
 )
 def test_decision_grading_without_a_usable_client_is_an_infrastructure_error(client):
     result = grade_task(
-        decision_task(2.5), attempt(TextMessage(role="assistant", content=REPLY)), decision_client=client
+        decision_task(2.5),
+        attempt(TextMessage(role="assistant", content=REPLY)),
+        decision_client=client,
+        decision_timeout=DEADLINE,
     )
 
     assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
@@ -156,7 +211,10 @@ def test_decision_reward_follows_the_expected_level_against_the_bar(acceptance_l
     task = decision_task(acceptance_level)
 
     result = grade_task(
-        task, attempt(TextMessage(role="assistant", content=REPLY)), decision_client=FakeDecisionClient(read)
+        task,
+        attempt(TextMessage(role="assistant", content=REPLY)),
+        decision_client=FakeDecisionClient(read),
+        decision_timeout=DEADLINE,
     )
 
     # A null acceptance level is the "partially matches" bar, level 2.

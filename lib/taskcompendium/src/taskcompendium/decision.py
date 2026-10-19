@@ -7,6 +7,8 @@ A decision model is not an LLM judge. It reads one state and answers one compara
 five-level scale (``LEVELS``): the whole candidate answer against a gold reference, under a rubric. The
 task record holds the rubric, the reference and the acceptance level (the bar); which model answers is the
 host's choice behind ``DecisionClient``. Grading runs on the host after the attempt, with no environment.
+Each read is bounded by the caller's verifier deadline; a transient failure raises ``DecisionUnavailable``,
+which the caller may answer by grading once more.
 
 The reward is 1.0 at or above the bar. Below it the reward is ``REJECTED_REWARD_MAX`` times the level's
 credit relative to the bar's credit, so a rejected answer never earns more than 0.5. A grader without a
@@ -23,8 +25,9 @@ from typing import Literal, Protocol, Self
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 MAX_RUBRIC_ITEMS = 48
+# The question, its levels and the rubric's view are the form Taskforge's decision-model experiments measured.
 LEVELS = (
-    "missing: the candidate does not address the deliverable (empty, off-task, or only keywords)",
+    "missing: the candidate does not address this (empty, off-task, or only keywords)",
     "contradicts the reference: the candidate addresses it but its content disagrees with the reference",
     "partially matches: part agrees with the reference, part is wrong or missing",
     "equivalent to the reference: different notation, wording, units or order, same correct content",
@@ -39,12 +42,14 @@ EQUIVALENT_LEVEL = 3.0
 REJECTED_REWARD_MAX = 0.5
 """The most a candidate below the bar earns."""
 QUESTION_ID = "whole"
+JUDGE_NOTE = (
+    "Judge meaning, not wording: accept the listed equivalences; a negated, quoted, hypothetical or retracted mention "
+    "does not count as asserting something; keyword lists without the corresponding claim earn nothing; when the answer "
+    "states several values, the designated final block governs."
+)
 QUESTION = (
     "Compare the whole candidate answer with the reference answer (which earned full credit), against the whole "
-    "rubric. Judge meaning, not wording: accept the listed equivalences; a negated, quoted, hypothetical or "
-    "retracted mention does not count as asserting something; keyword lists without the corresponding claim earn "
-    "nothing; an answer that offers several alternatives is graded on the alternative it commits to, and is wrong "
-    "if it commits to none."
+    f"rubric. {JUDGE_NOTE}"
 )
 
 
@@ -187,15 +192,29 @@ class ScoreQuestion:
     levels: tuple[str, ...]
 
 
-class DecisionClient(Protocol):
-    """A decision model: for each question, the probability of each of its levels, in order.
+class DecisionUnavailable(Exception):
+    """The decision model gave no answer for a reason a later read can fix.
 
-    The host supplies one; a task never names a model. ``decide`` raises ``RuntimeError`` or ``OSError``
-    when the model cannot answer, which grading reports as an infrastructure error.
+    A ``DecisionClient`` raises it for a connection error, a timeout, a 5xx, or the service reporting itself
+    unavailable. Any other exception from ``decide`` is permanent: a bad request or a schema mismatch.
+    """
+
+
+class DecisionClient(Protocol):
+    """A decision model: for each question, by id, the probability of each of its levels, in order.
+
+    The host supplies one; a task never names a model. ``decide`` answers within ``timeout`` seconds, the
+    caller's deadline, and raises ``DecisionUnavailable`` for a transient failure. ``elastic`` is the state key
+    the client may shorten, from the middle, to fit its model's window: the solver's output.
     """
 
     async def decide(
-        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion]
+        self,
+        state: Mapping[str, JsonValue],
+        questions: Mapping[str, ScoreQuestion],
+        *,
+        elastic: str,
+        timeout: float,
     ) -> Mapping[str, tuple[float, ...]]: ...
 
 
@@ -244,11 +263,30 @@ def decision_grade(level: float, bar: float) -> DecisionGrade:
     return DecisionGrade(level, bar, REJECTED_REWARD_MAX * relative)
 
 
+def rubric_view(item: RubricItem) -> dict[str, JsonValue]:
+    """The item as the decision model reads it: what it tests and how it passes, never its weight or cap."""
+    equivalences: list[JsonValue] = list(item.equivalences)
+    view: dict[str, JsonValue] = {
+        "id": item.id,
+        "role": str(item.role),
+        "tests": item.intent,
+        "pass_criterion": item.pass_criterion,
+        "equivalences": equivalences,
+        "negation_handling": item.negation_handling,
+    }
+    return view
+
+
+def solver_output_key(grader: DecisionGrader) -> str:
+    """The state key that holds the solver's output (the first, if the template repeats it)."""
+    return next(key for key, source in grader.state.items() if source is StateSource.SOLVER_TURN_OUTPUT)
+
+
 def decision_state(grader: DecisionGrader, solver_output: str) -> dict[str, JsonValue]:
     """The decision model's state: ``grader.state``'s keys, in order, each filled from its source."""
     values: dict[StateSource, JsonValue] = {
         StateSource.DELIVERABLE: grader.rubric.deliverable,
-        StateSource.RUBRIC: [item.model_dump(mode="json") for item in grader.rubric.items],
+        StateSource.RUBRIC: [rubric_view(item) for item in grader.rubric.items],
         StateSource.REFERENCE: grader.reference,
         StateSource.SOLVER_TURN_OUTPUT: solver_output,
     }
