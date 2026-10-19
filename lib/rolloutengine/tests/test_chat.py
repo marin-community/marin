@@ -107,10 +107,8 @@ async def test_a_chat_turn_is_one_completion_whose_message_the_next_request_can_
     turn = await model(request)
 
     [sent] = server.requests
-    # The prompt options win over the adapter's defaults, key by key.
     assert (sent["max_tokens"], sent["top_k"], sent["prompt_cache_key"]) == (64, 5, "attempt-1")
     assert sent["chat_template_kwargs"] == {"reasoning_effort": "low"}
-    # The message keeps only what a chat server accepts back. The refusal goes into the metadata.
     assert turn.message == {
         "role": "assistant",
         "content": "",
@@ -123,8 +121,12 @@ async def test_a_chat_turn_is_one_completion_whose_message_the_next_request_can_
 
 @pytest.mark.parametrize(
     "request_",
-    [ModelRequest((), {}, continuation=Continuation((1, 2), 0)), ModelRequest((), {"stream": True})],
-    ids=["token-continuation", "reserved-option"],
+    [
+        ModelRequest((), {}, continuation=Continuation((1, 2), 0)),
+        ModelRequest((), {"stream": True}),
+        ModelRequest((), {"extra_body": {"messages": []}}),
+    ],
+    ids=["token-continuation", "reserved-option", "reserved-extra-body-key"],
 )
 async def test_a_chat_model_rejects_a_request_that_it_cannot_serve_before_it_sends_it(request_):
     server = ChatServer([])
@@ -157,14 +159,13 @@ async def test_a_managed_agent_runs_host_tools_against_a_chat_endpoint_with_no_m
 
     assert (result.grade.status, result.grade.error) == (Outcome.UNAVAILABLE, "The agent's work has no grader")
     assert result.rollout.conversations[-1].messages[-1] == {"role": "assistant", "content": "The value of a is 12."}
-    # The second request sends the tool call back as served, then the tool's observation.
     assert server.requests[1]["messages"][-2:] == [
         {"role": "assistant", "content": "", "tool_calls": [tool_call]},
         {"role": "tool", "tool_call_id": "call-1", "content": "12"},
     ]
 
 
-async def test_a_response_without_usage_fails_only_its_attempt():
+async def test_a_response_without_usage_is_a_model_failure():
     server = ChatServer([completion({"content": "12"}, usage=False)])
     engine = RolloutEngine({}, {"agent": ShellHarness(command_timeout=None)})
     spec = rollout_spec(arithmetic_task(), harness="agent", trace=TraceMode.MESSAGES, max_total_tokens=100)
@@ -172,7 +173,6 @@ async def test_a_response_without_usage_fails_only_its_attempt():
     with pytest.raises(GradedRolloutInterrupted) as caught:
         await engine.run_task(spec, server.model())
 
-    # A model failure, not a token-contract error, so the caller's other attempts continue.
     assert caught.value.rollout.failure == RolloutFailure(
         "ValueError", {"operation": "model", "error": "The chat endpoint reported no token usage"}
     )

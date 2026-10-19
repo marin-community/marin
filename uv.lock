@@ -7533,6 +7533,7 @@ chat = [
 [package.dev-dependencies]
 test = [
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
+    { name = "openai" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
@@ -7550,6 +7551,7 @@ provides-extras = ["chat"]
 [package.metadata.requires-dev]
 test = [
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "lib/shellbox" },
+    { name = "openai", specifier = ">=1.59.9" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },

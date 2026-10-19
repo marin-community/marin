@@ -14,7 +14,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# ChatModel in rolloutengine.chat serves rollouts from an OpenAI-compatible chat endpoint.
 chat = ["openai>=1.59.9"]
 
 [dependency-groups]
@@ -23,6 +22,7 @@ test = [
     "pytest-asyncio",
     "pytest-timeout",
     "marin-shellbox[daytona,shellsim]",
+    "openai>=1.59.9",
 ]
 
 [tool.hatch.build.targets.wheel]

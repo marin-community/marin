@@ -13,9 +13,7 @@ from openai.types.chat import ChatCompletion
 from rolloutengine.models import ModelRequest, ModelTurn, TokenUsage
 
 RESERVED_OPTIONS = frozenset({"model", "messages", "stream", "n"})
-"""Request fields that the adapter sets itself. A prompt option with one of these names is an error."""
-RETURNED_MESSAGE_FIELDS = ("reasoning_content",)
-"""Fields of a served message, other than its role, content, and tool calls, that the next request sends back."""
+"""Request fields that the adapter sets itself. A prompt option or ``extra_body`` key with one of these names fails."""
 
 
 @dataclass(frozen=True)
@@ -38,10 +36,10 @@ class ChatModel:
         if request.continuation is not None or request.prompt_token_ids is not None:
             raise ValueError("A chat endpoint serves messages only, so the rollout must use TraceMode.MESSAGES")
         options = dict(request.options)
-        reserved = sorted(RESERVED_OPTIONS.intersection(options))
+        extra_body = {**self.extra_body, **options.pop("extra_body", {})}
+        reserved = sorted(RESERVED_OPTIONS.intersection(options.keys() | extra_body.keys()))
         if reserved:
             raise ValueError(f"The chat model sets these request fields itself: {reserved}")
-        extra_body = {**self.extra_body, **options.pop("extra_body", {})}
         arguments: dict[str, Any] = {
             "max_tokens": self.max_tokens,
             **options,
@@ -60,9 +58,8 @@ class ChatModel:
         message: dict[str, Any] = {"role": "assistant", "content": served.get("content") or ""}
         if served.get("tool_calls"):
             message["tool_calls"] = served["tool_calls"]
-        for name in RETURNED_MESSAGE_FIELDS:
-            if served.get(name):
-                message[name] = served[name]
+        if served.get("reasoning_content"):
+            message["reasoning_content"] = served["reasoning_content"]
         metadata: dict[str, Any] = {"response_id": response.id}
         if served.get("refusal"):
             metadata["refusal"] = served["refusal"]
