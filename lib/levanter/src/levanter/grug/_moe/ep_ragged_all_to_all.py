@@ -53,7 +53,7 @@ from levanter.grug._moe.ep_common import (
     _expert_granular_a2a_params,
     _sort_activations,
 )
-from levanter.grug.mxfp8 import mx_pack_rows
+from levanter.grug.mxfp8 import ExpertMxfp8, mx_pack_rows
 from levanter.kernels.pallas.relu2_mlp import fused_relu2
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.kernels.pallas.relu2_ragged_mlp import (
@@ -121,11 +121,9 @@ class _ExpertMlp(Protocol):
 
     def backward_parts(
         self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "C H"]
-    ) -> tuple[
-        Float[Array, "C H"], Float[Array, "C"], tuple[jax.Array, ...], Callable[..., tuple[jax.Array, jax.Array]]
-    ]:
+    ) -> tuple[Float[Array, "C H"], Float[Array, "C"], tuple[Any, ...], Callable[..., tuple[jax.Array, jax.Array]]]:
         """``backward`` as ``(dx, <y, dy>, wgrad_args, wgrad)`` with ``wgrad(*wgrad_args) = (dw13, dw2)``, so the
-        caller can run the weight gradients after sending ``dx``."""
+        caller can run the weight gradients after sending ``dx``. ``wgrad_args`` is a tuple of array pytrees."""
         ...
 
 
@@ -386,6 +384,72 @@ def _swiglu_mxfp8_wgrads(x_dispatch, d_gu, h, dy, cu):
     return _deinterleave_gate_up(dw13_interleaved), dw2
 
 
+@dataclasses.dataclass(frozen=True)
+class _CuteRelu2Mxfp8WgradExpertMlp:
+    """``_CuteRelu2Mxfp8ExpertMlp`` with block-scaled weight gradients too (``ExpertMxfp8.ALL``): the forward also
+    quantizes the dispatched rows along the token axis per expert and keeps that copy as the residual, and the
+    backward quantizes ``dy``, ``d pre`` and ``post`` along it for the two weight-gradient GEMMs."""
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_wgrad_fwd  # noqa: PLC0415
+
+        return relu2_expert_mlp_mxfp8_wgrad_fwd(
+            x_dispatch, moe_w13_local, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+        )
+
+    def backward(self, residuals, cotangent):
+        dx, output_dot, wgrad_args, wgrad = self.backward_parts(residuals, cotangent)
+        dw13, dw2 = wgrad(*wgrad_args)
+        return dx, dw13, dw2, output_dot
+
+    def backward_parts(self, residuals, cotangent):
+        from levanter.grug._moe.quack_mxfp8 import (  # noqa: PLC0415
+            expert_mlp_mxfp8_token_wgrads,
+            relu2_expert_mlp_mxfp8_backward_parts,
+        )
+
+        dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_parts(residuals, cotangent)
+        return dx, output_dot, wgrad_args, functools.partial(expert_mlp_mxfp8_token_wgrads, out_dtype=cotangent.dtype)
+
+
+@dataclasses.dataclass(frozen=True)
+class _CuteSwigluMxfp8WgradExpertMlp:
+    """``_CuteSwigluMxfp8ExpertMlp`` with block-scaled weight gradients too (``ExpertMxfp8.ALL``), as
+    ``_CuteRelu2Mxfp8WgradExpertMlp``."""
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        del physical_group_sizes
+        from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_wgrad_fwd  # noqa: PLC0415
+
+        w13_interleaved = _interleave_gate_up(moe_w13_local, moe_w2_local.shape[1])
+        return swiglu_expert_mlp_mxfp8_wgrad_fwd(
+            x_dispatch, w13_interleaved, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+        )
+
+    def backward(self, residuals, cotangent):
+        dx, output_dot, wgrad_args, wgrad = self.backward_parts(residuals, cotangent)
+        dw13, dw2 = wgrad(*wgrad_args)
+        return dx, dw13, dw2, output_dot
+
+    def backward_parts(self, residuals, cotangent):
+        from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_backward_parts  # noqa: PLC0415
+
+        dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_parts(residuals, cotangent)
+        return dx, output_dot, wgrad_args, functools.partial(_swiglu_mxfp8_token_wgrads, out_dtype=cotangent.dtype)
+
+
+def _cumulative_group_sizes(active_group_sizes: Int[Array, "Echunk"]) -> Int[Array, "Echunk+1"]:
+    return jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)])
+
+
+def _swiglu_mxfp8_token_wgrads(*wgrad_args, out_dtype):
+    from levanter.grug._moe.quack_mxfp8 import expert_mlp_mxfp8_token_wgrads  # noqa: PLC0415
+
+    dw13_interleaved, dw2 = expert_mlp_mxfp8_token_wgrads(*wgrad_args, out_dtype=out_dtype)
+    return _deinterleave_gate_up(dw13_interleaved), dw2
+
+
 @functools.cache
 def _quack_grouped_gemm_available() -> bool:
     if jax.default_backend() != "gpu":
@@ -430,13 +494,15 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungat
     return _RaggedDotExpertMlp(activation_fn)
 
 
-def _mxfp8_expert_mlp(expert_mlp: _ExpertMlp) -> _ExpertMlp:
-    """The MXFP8 variant of a QuACK expert MLP: ungated ReLU^2 or gated SwiGLU. Anything else (the portable
-    ``ragged_dot`` fallback, another activation, serial pairs) has no MXFP8 kernel and raises."""
+def _mxfp8_expert_mlp(expert_mlp: _ExpertMlp, mxfp8: ExpertMxfp8) -> _ExpertMlp:
+    """The MXFP8 variant (``ACTIVATIONS`` or ``ALL``) of a QuACK expert MLP: ungated ReLU^2 or gated SwiGLU.
+    Anything else (the portable ``ragged_dot`` fallback, another activation, serial pairs) has no MXFP8 kernel and
+    raises."""
+    wgrads = mxfp8 == ExpertMxfp8.ALL
     if type(expert_mlp) is _CuteRelu2ExpertMlp:
-        return _CuteRelu2Mxfp8ExpertMlp()
+        return _CuteRelu2Mxfp8WgradExpertMlp() if wgrads else _CuteRelu2Mxfp8ExpertMlp()
     if type(expert_mlp) is _CuteExpertMlp:
-        return _CuteSwigluMxfp8ExpertMlp()
+        return _CuteSwigluMxfp8WgradExpertMlp() if wgrads else _CuteSwigluMxfp8ExpertMlp()
     raise ValueError(f"mxfp8 experts need ungated ReLU^2 or gated SwiGLU on QuACK's SM100 kernels, got {expert_mlp}")
 
 
@@ -952,7 +1018,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     token_sharding_axes: tuple[str, ...],
     expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     overlap_weight_grads: bool = False,
-    mxfp8: bool = False,
+    mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     mxfp8_dispatch: bool = False,
     serial_pair: bool = False,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
@@ -1036,8 +1102,8 @@ def _moe_mlp_ep_ragged_a2a_local(
         if moe_w2_local.shape[-1] != x_local.shape[1]:
             raise ValueError("serial_pair needs experts that write the width they read (x + y1)")
         expert_mlp = _SerialPairExpertMlp(expert_mlp)
-    if mxfp8:
-        expert_mlp = _mxfp8_expert_mlp(expert_mlp)
+    if mxfp8 != ExpertMxfp8.NONE:
+        expert_mlp = _mxfp8_expert_mlp(expert_mlp, mxfp8)
     layout = _ExpertLayout(
         tokens_per_shard=tokens_per_shard,
         topk=topk,

@@ -12,6 +12,7 @@ numerics on any accelerator, not its speed.
 """
 
 import functools
+from enum import StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -22,6 +23,16 @@ from jax.sharding import reshard
 MX_BLOCK = 32
 _E4M3 = jnp.float8_e4m3fn
 _E4M3_MAX = 448.0
+
+
+class ExpertMxfp8(StrEnum):
+    """Which routed-expert GEMMs run with MXFP8 operands on QuACK's block-scaled SM100 kernels."""
+
+    NONE = "none"
+    ACTIVATIONS = "activations"
+    """The activation-path GEMMs (forward and input gradients); the weight gradients stay bf16."""
+    ALL = "all"
+    """The activation-path GEMMs and the weight gradients, quantized along the token axis per expert."""
 
 
 def mx_quantize_dequantize(x: jax.Array, axis: int) -> jax.Array:
@@ -76,6 +87,46 @@ def mx_quantize_cols(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
     values = (blocks / scale[..., None, :]).astype(_E4M3).reshape(*lead, t, k)
     return values, exponent.astype(jnp.uint8)
+
+
+def mx_quantize_dequantize_groups(x: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    """Round ``x[T, N]`` to MXFP8 along the token axis with 32-row blocks that restart at every row group (rows
+    ``cu[g] + 32 k`` onward), so no block mixes groups; the numerics of the MXFP8 expert weight gradients. Rows past
+    ``sum(group_sizes)`` are zeroed."""
+    rows = x.shape[0]
+    num_groups = group_sizes.shape[0]
+    cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes.astype(jnp.int32))])
+    row = jnp.arange(rows, dtype=jnp.int32)
+    group = jnp.searchsorted(cu[1:], row, side="right").astype(jnp.int32)
+    clamped = jnp.minimum(group, num_groups - 1)
+    blocks_per_group = rows // MX_BLOCK + 1
+    num_blocks = num_groups * blocks_per_group
+    local_block = (row - cu[clamped]) // MX_BLOCK
+    block = jnp.where(group < num_groups, clamped * blocks_per_group + local_block, num_blocks)
+    magnitude = jnp.abs(x.astype(jnp.float32))
+    amax = jax.ops.segment_max(magnitude, block, num_segments=num_blocks + 1)
+    scale = _e8m0_scale(jnp.maximum(amax, 0.0))[block]
+    q = jax.lax.optimization_barrier((x.astype(jnp.float32) / scale).astype(_E4M3))
+    out = q.astype(jnp.float32) * scale
+    return jnp.where((group < num_groups)[:, None], out, 0.0).astype(x.dtype)
+
+
+def mx_quantize_row_blocks(
+    x: jax.Array, block_starts: jax.Array, block_rows: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """MXFP8 ``x[T, N]`` along ``T`` over arbitrary disjoint row blocks: block ``j`` is rows
+    ``[block_starts[j], block_starts[j] + block_rows[j])`` (at most 32). Returns e4m3 ``[T, N]`` in place, where rows
+    in no block are unspecified, and uint8 exponents ``[J, N]`` (127 for an empty block)."""
+    rows = x.shape[0]
+    offset = jnp.arange(MX_BLOCK, dtype=jnp.int32)
+    valid = offset[None, :] < block_rows[:, None]  # [J, 32]
+    index = jnp.where(valid, block_starts[:, None] + offset[None, :], rows)
+    blocks = jnp.where(valid[..., None], x.astype(jnp.float32).at[index].get(mode="fill", fill_value=0), 0.0)
+    exponent = _e8m0_exponent(jnp.max(jnp.abs(blocks), axis=1))  # [J, N]
+    scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
+    values = (blocks / scale[:, None, :]).astype(_E4M3)
+    out = jnp.zeros(x.shape, _E4M3).at[index.reshape(-1)].set(values.reshape(-1, x.shape[1]), mode="drop")
+    return out, exponent.astype(jnp.uint8)
 
 
 def mx_dequantize_rows(values: jax.Array, exponents: jax.Array, dtype: jnp.dtype) -> jax.Array:

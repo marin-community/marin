@@ -55,7 +55,7 @@ from levanter.grug.grug_moe import (
     moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
-from levanter.grug.mxfp8 import mx_dense
+from levanter.grug.mxfp8 import ExpertMxfp8, mx_dense
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import SummaryStats
@@ -963,6 +963,9 @@ class GrugModelConfig:
     moe_mxfp8_dispatch: bool = False
     """With MXFP8 experts (``fp8_recipe``), send the dispatched rows as MXFP8 bytes instead of bf16 rows quantized on
     arrival. Off by default: the extra uint8 transport buffer OOMs NCCL's symmetric memory on the GB200 recipe."""
+    mxfp8_expert_wgrad: bool = False
+    """With MXFP8 experts (``fp8_recipe``), run the routed experts' weight-gradient GEMMs block-scaled too (operands
+    quantized along the token axis per expert) instead of bf16 (``ExpertMxfp8.ALL``)."""
     moe_serial_pair: bool = False  # ragged experts: neuron halves in series, y1 + mlp_b(x + y1)
     """Sequential local-expert chunks of the ``ragged_all_to_all`` backend (each a dispatch, expert MLP and
     return); fewer chunks mean fewer, larger collectives at more transport-buffer memory."""
@@ -1017,6 +1020,8 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
+        if self.mxfp8_expert_wgrad and self.fp8_recipe not in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8):
+            raise ValueError("mxfp8_expert_wgrad needs MXFP8 experts (fp8_recipe=mxfp8 or mxfp8_experts)")
         if self.moe_k_layers and (
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
@@ -3745,7 +3750,7 @@ def _run_expert_bank(
             num_expert_waves=em.num_expert_waves,
             fp8_dispatch=em.fp8_dispatch,
             expert_mxfp8_sim=cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM,
-            ragged_expert_mxfp8=cfg.fp8_recipe in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8),
+            ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
             ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
             expert_remat=em.expert_remat,
             overlap=overlap,
@@ -3763,7 +3768,7 @@ def _run_expert_bank(
         report_capacity_overflow=True,
         overlap=overlap,
         report_assignment_keep=cfg.moe_drop_renorm,
-        ragged_expert_mxfp8=cfg.fp8_recipe in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8),
+        ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
         ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
     )
 
@@ -3836,6 +3841,12 @@ def _drop_renorm_factor(
         ),
     }
     return factor, stats
+
+
+def _ragged_expert_mxfp8(cfg: "GrugModelConfig") -> ExpertMxfp8:
+    if cfg.fp8_recipe not in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8):
+        return ExpertMxfp8.NONE
+    return ExpertMxfp8.ALL if cfg.mxfp8_expert_wgrad else ExpertMxfp8.ACTIVATIONS
 
 
 def _tied_expert_activation(cfg: "GrugModelConfig", em: MoEExpertMlp):

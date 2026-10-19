@@ -36,7 +36,14 @@ from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
-from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows, quantize_rows_cols
+from levanter.grug.mxfp8_pallas import (
+    quantize_cols,
+    quantize_row_blocks,
+    quantize_rows,
+    quantize_rows_and_row_blocks,
+    quantize_rows_cols,
+    requantize_row_blocks,
+)
 from levanter.grug.mxfp8 import MX_BLOCK, mx_dequantize_rows, mx_quantize_cols, mx_quantize_rows, mx_unpack_rows
 from levanter.grug._moe.common import _swiglu_gate_up_backward, _unpack_pairs_u32
 from levanter.grug._moe.quack_moe_cute import _ACC, _QUACK_USE_PDL, _max_active_clusters, _mint_epilogue_gemm
@@ -410,6 +417,216 @@ def swiglu_expert_mlp_mxfp8_backward_input(res, dy):
     if x.dtype == jnp.uint8:
         x = mx_dequantize_rows(*mx_unpack_rows(x, w13_il.shape[1]), dy.dtype)
     return dx, output_dot, (x, d_gu, h.astype(dy.dtype), dy, cu)
+
+
+def token_scale_blocks(cu_seqlens: jax.Array, rows: int) -> tuple[jax.Array, jax.Array]:
+    """The token-axis 32-row blocks of a varlen-k operand, in the order of its blocked scale columns.
+
+    QuACK's varlen-k GEMM reads group ``e``'s scales from scale tile ``cu[e] // 128 + e`` on (4 blocks of 32
+    contraction rows per tile), so group ``e``'s block ``k`` covers rows ``cu[e] + 32 k`` onward, clipped to the
+    group: no block mixes groups or reads rows past ``cu[-1]``. Returns ``(block_starts, block_rows)`` over the
+    ``4 * padded_scale_tiles(rows, E)`` scale columns; columns past a group's last block have zero rows."""
+    num_groups = cu_seqlens.shape[0] - 1
+    num_blocks = _SCALE_ATOM_COLS * padded_scale_tiles(rows, num_groups)
+    cu = cu_seqlens.astype(jnp.int32)
+    first_block = _SCALE_ATOM_COLS * (cu[:-1] // SCALE_TILE_ROWS + jnp.arange(num_groups, dtype=jnp.int32))
+    column = jnp.arange(num_blocks, dtype=jnp.int32)
+    group = jnp.clip(jnp.searchsorted(first_block, column, side="right").astype(jnp.int32) - 1, 0, num_groups - 1)
+    starts = cu[group] + MX_BLOCK * (column - first_block[group])
+    counts = jnp.clip(cu[group + 1] - starts, 0, MX_BLOCK)
+    return jnp.minimum(starts, rows), counts
+
+
+def quantize_token_blocks(x: jax.Array, cu_seqlens: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """MXFP8 ``x[T, N]`` along ``T`` for a varlen-k GEMM: e4m3 ``[T, N]`` in place (rows past ``cu[-1]``
+    unspecified) and uint8 exponents ``[4 * padded_scale_tiles(T, E), N]`` over ``token_scale_blocks``."""
+    return quantize_row_blocks(x, *token_scale_blocks(cu_seqlens, x.shape[0]))
+
+
+@cute_launcher_factory
+def _build_wgrad_launcher(*, tile_mn, cluster_mnk, max_active_clusters, max_swizzle):
+    @cute.jit
+    def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mD):
+        gemm = GemmDefaultSm100(
+            _ACC,
+            cutlass.Float8E4M3FN,
+            tile_mn,
+            cluster_mnk,
+            sf_vec_size=MX_BLOCK,
+            gather_A=False,
+            use_clc_persistence=False,
+            use_pdl=_QUACK_USE_PDL,
+        )
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        varlen_args = make_varlen_args(None, mCuSeqlens, None)
+        gemm(
+            mA, mB, mD, None, GemmDefaultEpiMixin.EpilogueArguments(), scheduler_args, varlen_args, stream, mSFA, mSFB
+        )
+
+    return launcher
+
+
+# varlen-k wants A m-major and B n-major: [T, M] and [T, N] as stored. Logical (M, K) / (N, K) / (L, M, N).
+_TOKEN_MAJOR = _TS(mode=(1, 0), divisibility=(1, 16), static=False)
+_WGRAD_OUT_SPEC = _TS(divisibility=(1, 1, 8), static=False)
+MXFP8_WGRAD_TILE_MN = (256, 256)
+# bench_mxfp8_expert_wgrad.py at the hero chunk: (2, 2, 1) beats (2, 1, 1) by 1-5%; 256 x 128 tiles lose 12-25%.
+MXFP8_WGRAD_CLUSTER = (2, 2, 1)
+
+
+def mxfp8_token_grouped_gemm(
+    lhs: tuple[jax.Array, jax.Array],
+    rhs: tuple[jax.Array, jax.Array],
+    cu_seqlens: jax.Array,
+    *,
+    out_dtype=jnp.bfloat16,
+    tile_mn=MXFP8_WGRAD_TILE_MN,
+    cluster_mnk=MXFP8_WGRAD_CLUSTER,
+    max_swizzle=8,
+) -> jax.Array:
+    """Per-group ``lhs.T @ rhs`` (``[E, M, N]``) of two operands quantized along the token axis
+    (``quantize_token_blocks``: e4m3 ``[T, M]`` and exponents ``[J, M]``), on QuACK's block-scaled varlen-k GEMM:
+    fp32 accumulation, rows past ``cu[-1]`` never read, and an empty group yields zeros."""
+    (a, a_exponents), (b, b_exponents) = lhs, rhs
+    if a.shape[0] != b.shape[0]:
+        raise ValueError(f"lhs and rhs row counts must match, got lhs={a.shape}, rhs={b.shape}")
+    launcher = _build_wgrad_launcher(
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+    )
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=jax.ShapeDtypeStruct((cu_seqlens.shape[0] - 1, a.shape[1], b.shape[1]), out_dtype),
+        input_spec=(_TOKEN_MAJOR, _TOKEN_MAJOR, _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC),
+        output_spec=(_WGRAD_OUT_SPEC,),
+        use_static_tensors=False,
+    )
+    a_scales, b_scales = blocked_scales(a_exponents.T[None]), blocked_scales(b_exponents.T[None])
+    return call(a, b, a_scales, b_scales, cu_seqlens.astype(jnp.int32))
+
+
+def mxfp8_grouped_wgrad(lhs: jax.Array, rhs: jax.Array, cu_seqlens: jax.Array, *, out_dtype=jnp.bfloat16):
+    """The block-scaled counterpart of ``quack_grouped_wgrad``: per-group ``lhs.T @ rhs`` with both bf16 operands
+    quantized along the token axis per group (``token_scale_blocks``)."""
+    return mxfp8_token_grouped_gemm(
+        quantize_token_blocks(lhs, cu_seqlens), quantize_token_blocks(rhs, cu_seqlens), cu_seqlens, out_dtype=out_dtype
+    )
+
+
+def expert_mlp_mxfp8_wgrads(x, d_up, act, dy, cu):
+    """``(dW_up, dW_down)`` of an MXFP8 expert MLP from its bf16 ``wgrad_args``: ``x^T d_up`` and ``act^T dy`` per
+    expert, block-scaled. ``d_up`` is the up-projection's preactivation cotangent (``d gu`` interleaved for SwiGLU,
+    ``d pre`` for ReLU^2) and ``act`` its postactivation (``h`` / ``post``); the gradients come out in ``dy``'s
+    dtype, as the bf16 wgrads do. The fused backwards (``*_expert_mlp_mxfp8_backward``) quantize the same operands
+    with fewer passes."""
+    return (
+        mxfp8_grouped_wgrad(x, d_up, cu, out_dtype=dy.dtype),
+        mxfp8_grouped_wgrad(act, dy, cu, out_dtype=dy.dtype),
+    )
+
+
+def _dispatched_rows_and_tokens(x: jax.Array, width: int, cu: jax.Array):
+    """The dispatched rows (``mx_pack_rows`` bytes or bf16) quantized along their columns for the up-projection
+    and along the token axis for its weight gradient, the bf16 rows in one pass."""
+    blocks = token_scale_blocks(cu, x.shape[0])
+    if x.dtype == jnp.uint8:
+        values, exponents = mx_unpack_rows(x, width)
+        return (values, exponents), requantize_row_blocks(values, exponents, *blocks)
+    return quantize_rows_and_row_blocks(x, *blocks)
+
+
+def swiglu_expert_mlp_mxfp8_wgrad_fwd(x, w13_il, w_down, cu):
+    """``swiglu_expert_mlp_mxfp8_fwd`` whose residuals keep the rows quantized along the token axis (for
+    ``swiglu_expert_mlp_mxfp8_backward``) instead of ``x``."""
+    (values, exponents), x_tokens = _dispatched_rows_and_tokens(x, w13_il.shape[1], cu)
+    gu, h, h_scales = mxfp8_swiglu_grouped_gemm(values, padded_scale_rows(exponents, cu), *mx_weights(w13_il, "n"), cu)
+    y = mxfp8_grouped_gemm(h, h_scales, *mx_weights(w_down, "n"), cu, b_major="n")
+    # The token-axis exponents go last: callers read the pre-activations at index 3, as in the other variants.
+    return y, (x_tokens[0], w13_il, w_down, gu, cu, x_tokens[1])
+
+
+def relu2_expert_mlp_mxfp8_wgrad_fwd(x, w_up, w_down, cu):
+    """``relu2_expert_mlp_mxfp8_fwd`` whose residuals keep the rows quantized along the token axis (for
+    ``relu2_expert_mlp_mxfp8_backward``) instead of ``x``."""
+    (values, exponents), x_tokens = _dispatched_rows_and_tokens(x, w_up.shape[1], cu)
+    pre, post, post_scales = mxfp8_relu2_grouped_gemm(
+        values, padded_scale_rows(exponents, cu), *mx_weights(w_up, "n"), cu, b_major="n"
+    )
+    y = mxfp8_grouped_gemm(post, post_scales, *mx_weights(w_down, "n"), cu, b_major="n")
+    # The token-axis exponents go last: callers read the pre-activations at index 3, as in the other variants.
+    return y, (x_tokens[0], w_up, w_down, pre, cu, x_tokens[1])
+
+
+def swiglu_expert_mlp_mxfp8_backward(res, dy):
+    """``(dx, dw13_il, dw_down, <y, dy>)`` of ``swiglu_expert_mlp_mxfp8_wgrad_fwd``: all six GEMMs block-scaled.
+
+    As ``swiglu_expert_mlp_mxfp8_backward_input`` plus the weight gradients, whose operands are quantized along the
+    token axis per expert: ``dy`` and ``d gu`` in the same pass as their row quantization for the input-gradient
+    GEMMs (the rows come so from the forward), ``h`` (recomputed from ``gu``, as in the bf16 wgrads) on its own."""
+    dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_parts(res, dy)
+    dw13_il, dw_down = expert_mlp_mxfp8_token_wgrads(*wgrad_args, out_dtype=dy.dtype)
+    return dx, dw13_il, dw_down, output_dot
+
+
+def swiglu_expert_mlp_mxfp8_backward_parts(res, dy):
+    """``swiglu_expert_mlp_mxfp8_backward`` split as ``(dx, <y, dy>, wgrad_args)``: the weight gradients are
+    ``expert_mlp_mxfp8_token_wgrads(*wgrad_args)``, so a caller can run them after starting ``dx``'s transport."""
+    x_token_values, w13_il, w_down, gu, cu, x_token_exponents = res
+    x_tokens = (x_token_values, x_token_exponents)
+    rows = dy.shape[0]
+    blocks = token_scale_blocks(cu, rows)
+    (dy_values, dy_exponents), dy_tokens = quantize_rows_and_row_blocks(dy, *blocks)
+    dh = mxfp8_grouped_gemm(dy_values, padded_scale_rows(dy_exponents, cu), *mx_weights(w_down, "k"), cu, b_major="k")
+    gate, up = _unpack_pairs_u32(gu)
+    h = jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)
+    output_dot = jnp.sum(dh.astype(jnp.float32) * h, axis=-1)
+    d_gu = _swiglu_gate_up_backward(gu, dh)
+    (d_gu_values, d_gu_exponents), d_gu_tokens = quantize_rows_and_row_blocks(d_gu, *blocks)
+    dx = mxfp8_grouped_gemm(
+        d_gu_values, padded_scale_rows(d_gu_exponents, cu), *mx_weights(w13_il, "k"), cu, b_major="k"
+    )
+    h_tokens = quantize_row_blocks(h.astype(dy.dtype), *blocks)
+    return dx, output_dot, (x_tokens, d_gu_tokens, h_tokens, dy_tokens, cu)
+
+
+def expert_mlp_mxfp8_token_wgrads(x_tokens, d_up_tokens, act_tokens, dy_tokens, cu, *, out_dtype):
+    """``(dW_up, dW_down)`` from token-axis-quantized operands (the ``*_backward_parts`` ``wgrad_args``):
+    ``x^T d_up`` and ``act^T dy`` per expert."""
+    dw_up = mxfp8_token_grouped_gemm(x_tokens, d_up_tokens, cu, out_dtype=out_dtype)
+    dw_down = mxfp8_token_grouped_gemm(act_tokens, dy_tokens, cu, out_dtype=out_dtype)
+    return dw_up, dw_down
+
+
+def relu2_expert_mlp_mxfp8_backward(res, dy):
+    """``(dx, dw_up, dw_down, <y, dy>)`` of ``relu2_expert_mlp_mxfp8_wgrad_fwd``: all six GEMMs block-scaled.
+
+    ``dy`` is quantized along both axes in one pass; ``d pre``, which the dReLU^2 GEMM stores only as MXFP8 rows, is
+    requantized along the token axis without a bf16 copy; ``post`` is quantized on its own (the rows come quantized
+    from the forward)."""
+    dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_parts(res, dy)
+    dw_up, dw_down = expert_mlp_mxfp8_token_wgrads(*wgrad_args, out_dtype=dy.dtype)
+    return dx, dw_up, dw_down, output_dot
+
+
+def relu2_expert_mlp_mxfp8_backward_parts(res, dy):
+    """``relu2_expert_mlp_mxfp8_backward`` split as ``(dx, <y, dy>, wgrad_args)`` (see
+    ``swiglu_expert_mlp_mxfp8_backward_parts``)."""
+    x_token_values, w_up, w_down, pre, cu, x_token_exponents = res
+    x_tokens = (x_token_values, x_token_exponents)
+    rows = dy.shape[0]
+    blocks = token_scale_blocks(cu, rows)
+    (dy_values, dy_exponents), dy_tokens = quantize_rows_and_row_blocks(dy, *blocks)
+    post, d_pre_values, d_pre_scales, output_dot = mxfp8_drelu2_grouped_gemm(
+        dy_values, padded_scale_rows(dy_exponents, cu), *mx_weights(w_down, "k"), pre, cu
+    )
+    dx = mxfp8_grouped_gemm(d_pre_values, d_pre_scales, *mx_weights(w_up, "k"), cu, b_major="k")
+    width = d_pre_values.shape[1]
+    d_pre_exponents = unpadded_scale_rows(d_pre_scales, cu, rows, width // MX_BLOCK)
+    d_pre_tokens = requantize_row_blocks(d_pre_values, d_pre_exponents, *blocks)
+    post_tokens = quantize_row_blocks(post, *blocks)
+    return dx, output_dot, (x_tokens, d_pre_tokens, post_tokens, dy_tokens, cu)
 
 
 @cute_launcher_factory

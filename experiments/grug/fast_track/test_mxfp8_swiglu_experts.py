@@ -33,7 +33,15 @@ _CASES = {
     "mxfp8_dispatch_fused_grad_quant": dict(
         fp8_recipe=Fp8Recipe.MXFP8, moe_mxfp8_dispatch=True, mxfp8_fused_grad_quant=True
     ),
+    "mxfp8_wgrad": dict(
+        fp8_recipe=Fp8Recipe.MXFP8, moe_mxfp8_dispatch=True, mxfp8_fused_grad_quant=True, mxfp8_expert_wgrad=True
+    ),
+    "ungated_relu2_bf16": dict(**_UNGATED),
+    "ungated_relu2_mxfp8_dense": dict(fp8_recipe=Fp8Recipe.MXFP8_DENSE, **_UNGATED),
     "ungated_relu2_mxfp8": dict(fp8_recipe=Fp8Recipe.MXFP8, **_UNGATED),
+    "ungated_relu2_mxfp8_wgrad": dict(
+        fp8_recipe=Fp8Recipe.MXFP8, moe_mxfp8_dispatch=True, mxfp8_expert_wgrad=True, **_UNGATED
+    ),
 }
 
 
@@ -118,11 +126,14 @@ def _require_gpus():
 
 
 @pytest.mark.timeout(900)  # three GPU processes, each compiling a train step
-@pytest.mark.parametrize("case", ["mxfp8", "mxfp8_dispatch_fused_grad_quant"])
+@pytest.mark.parametrize(
+    "case", ["mxfp8", "mxfp8_dispatch_fused_grad_quant", "mxfp8_wgrad", "ungated_relu2_mxfp8_wgrad"]
+)
 def test_swiglu_mxfp8_loss_and_grads_track_bf16(case, tmp_path):
     _require_gpus()
-    loss, grads, _ = _case("bf16", tmp_path)
-    dense_loss, _, _ = _case("mxfp8_dense", tmp_path)
+    prefix = "ungated_relu2_" if case.startswith("ungated_relu2_") else ""
+    loss, grads, _ = _case(f"{prefix}bf16", tmp_path)
+    dense_loss, _, _ = _case(f"{prefix}mxfp8_dense", tmp_path)
     mx_loss, mx_grads, _ = _case(case, tmp_path)
     # The routed experts really ran in MXFP8: the full recipe differs from its dense-only half.
     assert mx_loss != dense_loss

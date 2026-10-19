@@ -15,7 +15,13 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plt
 
-from levanter.grug.mxfp8 import MX_BLOCK, mx_quantize_cols, mx_quantize_rows
+from levanter.grug.mxfp8 import (
+    MX_BLOCK,
+    mx_dequantize_rows,
+    mx_quantize_cols,
+    mx_quantize_row_blocks,
+    mx_quantize_rows,
+)
 
 _E4M3_MAX = 448.0
 ROW_TILE = 16
@@ -181,3 +187,138 @@ def quantize_rows_cols(x: jax.Array):
     if t % MX_BLOCK or k % COL_TILE or x.size > _MAX_CALL_ELEMENTS:
         return quantize_rows(x), quantize_cols(x)
     return mx_quantize_rows_cols_pallas(x)
+
+
+def _row_blocks_kernel(starts_ref, counts_ref, *refs, rows: int, dequantize: bool, with_rows: bool):
+    """One row block x one ``COL_TILE`` column slice of ``mx_quantize_row_blocks``. ``dequantize``: the input is e4m3
+    values plus per-row exponents ``[T, K / 32]`` (an MXFP8-along-rows tensor), rescaled here in f32. ``with_rows``:
+    also write the block's rows quantized along the columns (``mx_quantize_rows``), re-reading the tile per 32
+    columns from cache. Tuned on GB200 (301466 x 6144): 32 x 128 tiles with two
+    warps run the token quantizer at ~4.4 TB/s; 32 x 32 tiles and 3-D reshapes for the row half are 2-3x slower."""
+    if dequantize:
+        x_ref, x_exponents_ref, *refs = refs
+    else:
+        x_ref, *refs = refs
+    values_ref, exponents_ref, *row_refs = refs
+    j = pl.program_id(0)
+    c = pl.program_id(1)
+    sub_blocks = COL_TILE // MX_BLOCK
+    cols = pl.ds(c * COL_TILE, COL_TILE)
+    start = starts_ref[j]
+    count = counts_ref[j]
+    # Read a full 32-row window that stays in bounds and mask the block's rows inside it: interpret mode clamps an
+    # out-of-bounds dynamic slice instead of masking it.
+    window = jnp.minimum(start, rows - MX_BLOCK)
+    window_rows = pl.ds(window, MX_BLOCK)
+    offset = window + jnp.arange(MX_BLOCK, dtype=jnp.int32)
+    row_mask = (offset >= start) & (offset < start + count)
+    mask = row_mask[:, None]
+    block = plt.load(x_ref.at[window_rows, cols], mask=mask).astype(jnp.float32)  # [32, C]
+    if dequantize:
+        x_exponents = plt.load(x_exponents_ref.at[window_rows, pl.ds(c * sub_blocks, sub_blocks)], mask=mask)
+        x_scale = jax.lax.bitcast_convert_type(x_exponents.astype(jnp.int32) << 23, jnp.float32)  # [32, C / 32]
+        block = block * jnp.broadcast_to(x_scale[:, :, None], (MX_BLOCK, sub_blocks, MX_BLOCK)).reshape(block.shape)
+    block = jnp.where(mask, block, 0.0)
+    exponent = _exponent(jnp.max(jnp.abs(block), axis=0))  # [C]
+    scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
+    plt.store(values_ref.at[window_rows, cols], (block / scale[None, :]).astype(values_ref.dtype), mask=mask)
+    exponents_ref[0, :] = exponent.astype(exponents_ref.dtype)
+    if not with_rows:
+        return
+    row_values_ref, row_exponents_ref = row_refs
+    for sub in range(sub_blocks):
+        sub_cols = pl.ds(c * COL_TILE + sub * MX_BLOCK, MX_BLOCK)
+        part = jnp.where(mask, plt.load(x_ref.at[window_rows, sub_cols], mask=mask).astype(jnp.float32), 0.0)
+        row_exponent = _exponent(jnp.max(jnp.abs(part), axis=1))  # [32]
+        row_scale = jax.lax.bitcast_convert_type(row_exponent << 23, jnp.float32)
+        row_values = (part / row_scale[:, None]).astype(row_values_ref.dtype)
+        plt.store(row_values_ref.at[window_rows, sub_cols], row_values, mask=mask)
+        plt.store(
+            row_exponents_ref.at[window_rows, c * sub_blocks + sub],
+            row_exponent.astype(row_exponents_ref.dtype),
+            mask=row_mask,
+        )
+
+
+@functools.partial(jax.jit, static_argnames=("with_rows", "interpret"))
+def _row_blocks_call(x, x_exponents, block_starts, block_rows, *, with_rows: bool, interpret: bool):
+    t, k = x.shape
+    num_blocks = block_starts.shape[0]
+    if t < MX_BLOCK or k % COL_TILE:
+        raise ValueError(f"the row-block quantizer needs T >= {MX_BLOCK} and K % {COL_TILE} == 0, got {x.shape}")
+    sources = (x,) if x_exponents is None else (x, x_exponents)
+    out_shape = [
+        jax.ShapeDtypeStruct((t, k), jnp.float8_e4m3fn),
+        jax.ShapeDtypeStruct((num_blocks, k), jnp.uint8),
+    ]
+    out_specs = [pl.no_block_spec, pl.BlockSpec((1, COL_TILE), lambda j, c: (j, c))]
+    if with_rows:
+        out_shape += [
+            jax.ShapeDtypeStruct((t, k), jnp.float8_e4m3fn),
+            jax.ShapeDtypeStruct((t, k // MX_BLOCK), jnp.uint8),
+        ]
+        out_specs += [pl.no_block_spec, pl.no_block_spec]
+    return pl.pallas_call(
+        functools.partial(_row_blocks_kernel, rows=t, dequantize=x_exponents is not None, with_rows=with_rows),
+        grid=(num_blocks, k // COL_TILE),
+        in_specs=[pl.no_block_spec] * (2 + len(sources)),
+        out_specs=out_specs,
+        out_shape=out_shape,
+        compiler_params=plt.CompilerParams(num_warps=2, num_stages=1),
+        interpret=interpret,
+        name="mx_quantize_row_blocks",
+    )(block_starts.astype(jnp.int32), block_rows.astype(jnp.int32), *sources)
+
+
+def mx_quantize_row_blocks_pallas(
+    x: jax.Array, block_starts: jax.Array, block_rows: jax.Array, *, interpret: bool = False
+) -> tuple[jax.Array, jax.Array]:
+    """``mx_quantize_row_blocks`` in one pass: each program quantizes one row block of one ``COL_TILE`` column
+    slice. ``x`` and the values are addressed whole, so rows in no block are never written."""
+    values, exponents = _row_blocks_call(x, None, block_starts, block_rows, with_rows=False, interpret=interpret)
+    return values, exponents
+
+
+def mx_requantize_row_blocks_pallas(
+    values: jax.Array, exponents: jax.Array, block_starts: jax.Array, block_rows: jax.Array, *, interpret=False
+) -> tuple[jax.Array, jax.Array]:
+    """``mx_quantize_row_blocks`` of ``mx_dequantize_rows(values, exponents)`` without materializing it."""
+    out = _row_blocks_call(values, exponents, block_starts, block_rows, with_rows=False, interpret=interpret)
+    return out[0], out[1]
+
+
+def mx_quantize_rows_and_row_blocks_pallas(
+    x: jax.Array, block_starts: jax.Array, block_rows: jax.Array, *, interpret: bool = False
+):
+    """``(mx_quantize_rows(x), mx_quantize_row_blocks(x, ...))`` reading ``x`` once; rows in no block get
+    unspecified row values and exponents."""
+    values, exponents, row_values, row_exponents = _row_blocks_call(
+        x, None, block_starts, block_rows, with_rows=True, interpret=interpret
+    )
+    return (row_values, row_exponents), (values, exponents)
+
+
+def _row_blocks_fit(x: jax.Array) -> bool:
+    t, k = x.shape
+    return t >= MX_BLOCK and k % COL_TILE == 0 and x.size <= _MAX_CALL_ELEMENTS
+
+
+def quantize_row_blocks(x: jax.Array, block_starts: jax.Array, block_rows: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """``mx_quantize_row_blocks`` of a local 2-D ``x``: the single-pass kernel when it fits, else XLA's."""
+    if not _row_blocks_fit(x):
+        return mx_quantize_row_blocks(x, block_starts, block_rows)
+    return mx_quantize_row_blocks_pallas(x, block_starts, block_rows)
+
+
+def requantize_row_blocks(values, exponents, block_starts, block_rows) -> tuple[jax.Array, jax.Array]:
+    """``quantize_row_blocks`` of an MXFP8-along-rows tensor (e4m3 ``values``, per-row ``exponents``)."""
+    if not _row_blocks_fit(values):
+        return mx_quantize_row_blocks(mx_dequantize_rows(values, exponents, jnp.float32), block_starts, block_rows)
+    return mx_requantize_row_blocks_pallas(values, exponents, block_starts, block_rows)
+
+
+def quantize_rows_and_row_blocks(x: jax.Array, block_starts: jax.Array, block_rows: jax.Array):
+    """``(quantize_rows(x), quantize_row_blocks(x, ...))``, in one pass over ``x`` when the fused kernel fits."""
+    if not _row_blocks_fit(x):
+        return quantize_rows(x), mx_quantize_row_blocks(x, block_starts, block_rows)
+    return mx_quantize_rows_and_row_blocks_pallas(x, block_starts, block_rows)
