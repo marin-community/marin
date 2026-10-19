@@ -1,21 +1,9 @@
-"""Shared, benchmark-agnostic pass@k utilities for evalchemy.
+"""Unbiased pass@k estimation shared by code benchmarks and trial reducers.
 
-This module is the single home of the unbiased pass@k estimator that was
-previously duplicated in
-``eval/chat_benchmarks/HumanEval/human_eval/evaluation.py`` and
-``eval/chat_benchmarks/MBPPPlus/mbpp_plus/evaluation.py`` (identical copies),
-and re-implemented a third time in the now-retired standalone
-``passatk_driver.py``. Both HumanEval and MBPPPlus now import
-``estimate_pass_at_k`` from here, and ``eval.task.BaseBenchmark`` uses it for
-the generic native pass@k mode (Stage 2b).
-
-The estimator is the standard Chen et al. (2021) unbiased estimator:
-
-    pass@k = 1 - C(n - c, k) / C(n, k)
-
-computed in the numerically-stable product form. See
-``estimate_pass_at_k`` (kept byte-for-byte equivalent to the promoted copies)
-and ``aggregate_pass_at_k`` (the per-problem -> mean aggregator the base uses).
+The Chen et al. (2021) estimator is pass@k = 1 - C(n - c, k) / C(n, k),
+computed in a numerically stable product form. Code benchmark evaluators and
+``eval.execution.grading`` share the estimator; functional correctness
+aggregation uses ``aggregate_pass_at_k`` for per-problem means.
 """
 
 from __future__ import annotations
@@ -32,9 +20,6 @@ def estimate_pass_at_k(
     k: int,
 ) -> np.ndarray:
     """Estimate pass@k for each problem and return them in an array.
-
-    Promoted verbatim from the (identical) HumanEval / MBPPPlus copies so the
-    code 3a/3b/3c and the retired driver all referenced now lives once.
 
     Args:
         num_samples: either a single int n (same for every problem) or a
@@ -68,9 +53,8 @@ def aggregate_pass_at_k(
 ) -> Dict[str, float]:
     """Aggregate per-problem (n, c) into a {``pass@k``: mean} table.
 
-    Generic helper used by the ``BaseBenchmark`` native pass@k mode. For each
-    requested ``k`` (skipping any ``k`` larger than the available samples) it
-    computes the unbiased per-problem estimate and averages over problems.
+    For each requested ``k`` within the available sample count, compute the
+    unbiased per-problem estimate and average over problems.
 
     Args:
         num_samples: n (single int, applied to every problem) or per-problem n_i.

@@ -437,7 +437,6 @@ def grade(tests, completion, **kwargs) -> float:
     return result["num_passed"] / result["num_tests"]
 
 
-# The grader declares its own isolation so a driver that dispatches it (``eval.contracts.grading``)
-# runs it outside the threaded pool, as ``execute_grading_jobs(PROCESS_ISOLATED)`` does for the
-# Plus-style graders. The RL reward path that calls ``run`` directly is already process-isolated.
+# The shared grading runtime registers program graders with process isolation in
+# eval.graders.specs. Direct callers of run also execute candidates in owned processes.
 GRADER_EXECUTION_MODE = ExecutionMode.PROCESS_ISOLATED

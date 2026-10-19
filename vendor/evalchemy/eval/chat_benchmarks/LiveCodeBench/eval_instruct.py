@@ -15,15 +15,8 @@ from eval.task import BaseBenchmark
 HF_HUB_CACHE = os.environ.get("HF_HUB_CACHE")
 
 
-# Calculate mean and standard error for all metrics
-
-
 class LiveCodeBenchBenchmark(BaseBenchmark):
-    """
-    LiveCodeBench Benchmark for evaluating the math reasoning of LLMs.
-
-    Follows the evaluation logic of hendrycks_math answer extraction.
-    """
+    """Generate and grade Python solutions for LiveCodeBench's code generation task."""
     SOURCE = SourceRef("livecodebench/code_generation_lite", revision="release_v2")
     METRICS = ("accuracy_avg",)
     PRIMARY_METRIC = "accuracy_avg"
@@ -43,7 +36,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         Initialize LiveCodeBench benchmark.
 
         Args:
-            debug: If set, only evaluate on 2 examples
+            debug: Restrict input to ten examples before repeated trials.
             seed: Random seed for reproducibility. Default is [0, 1234, 1234, 1234] for lm-eval-harness.
             logger: Optional logger instance
             system_instruction: Optional system instruction for the model

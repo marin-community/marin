@@ -17,7 +17,7 @@ import lm_eval.api.registry
 import lm_eval.api.task
 import lm_eval.models
 
-try:  # torch is optional: endpoint-only installs (no [vllm]/[benchmarks]) run torch-free
+try:
     import torch.distributed as dist
 except ModuleNotFoundError:
     dist = None

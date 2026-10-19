@@ -1,23 +1,11 @@
-"""Run fingerprint (Stage-0 frozen artifact A) — content-hash of the curated controlling set.
+"""Canonical identities for resumable evaluation requests.
 
-Decision #2 (stage-0): the fingerprint is a *content-hash of a curated controlling-file SET*
-(Harbor-style, `lock.py:127-149` `_canonical_payload`), NOT a hand-picked scalar list. The real
-design work is curating which inputs are IN the hashed set (MATERIAL) vs structurally EXCLUDED
-(IGNORED). `from_run_inputs(...)` (Stage 2) RESOLVES each MATERIAL input:
-  - content-hashes the controlling FILES (task data file, grader source, rendered chat template)
-    into `*_digest` fields;
-  - resolves the model revision (HF commit) where available;
-  - normalizes decoding-param ALIASES (`max_gen_toks` / `max_new_tokens` -> `max_tokens`) so that
-    two cosmetically-different-but-materially-equal configs hash identically;
-then hashes the resolved MATERIAL set as a unit.
+``from_run_inputs`` hashes controlling files, resolves available model revisions
+and normalizes decoding aliases. ``RunFingerprint`` excludes operational settings
+and provenance, then hashes the canonical JSON payload. Source and request hashes
+validate replayed items independently of that provenance.
 
-Two-tier, mirroring Harbor (`lock.py:127-149`, reconfirmed 2026-06-15):
-  - `_canonical_payload(inputs)` strips the cosmetic/IGNORED fields and sorts (like Harbor
-    excluding `created_at`/`harbor`/`invocation`).
-  - `value()` is a single sha256 over the canonical payload (decision #2: the fingerprint VALUE
-    is one content-hash of the resolved set, NOT a struct of fields).
-
-Pure stdlib so it is importable/testable anywhere (no torch / lm_eval / numpy).
+This module uses only the Python standard library.
 """
 
 from __future__ import annotations
@@ -30,9 +18,8 @@ from typing import Any, Dict, Iterable, Optional, Sequence
 
 SCHEMA_VERSION = 1
 
-# --- Stage-0 partition (decision #2). These are the *contents* of the hashed controlling set vs
-# the structurally-excluded cosmetic set. `from_run_inputs` resolves each MATERIAL field
-# (content-hashing files where noted) before hashing.
+# from_run_inputs resolves these material fields, hashing controlling files
+# before constructing the canonical payload.
 
 # IN the hashed set — any change must refuse a resume (material delta).
 MATERIAL_FIELDS = (
@@ -54,7 +41,7 @@ MATERIAL_FIELDS = (
     "seed_set",               # full seed tuple; AIME24 n_repeat + per-repeat derivation
     "max_model_len",
     "num_fewshot",
-    "passk_batch_size",       # pass@k problem-batch size B (decision #4)
+    "passk_batch_size",       # pass@k problem-batch size
 )
 
 # Structurally EXCLUDED from the hashed set — operational settings and provenance.
@@ -119,9 +106,9 @@ def digest_file(path: Optional[str | Path]) -> Optional[str]:
 def digest_files(paths: Optional[Iterable[str | Path]]) -> Optional[str]:
     """Content-hash an ordered SET of controlling files as one digest (e.g. a multi-file grader).
 
-    Hashes ``sha256(path_basename) + sha256(content)`` per file, in sorted-by-path order, so the
-    digest is stable regardless of iteration order but still changes if any file's content or set
-    membership changes. Mirrors Harbor hashing a resolved task as a unit.
+    Full paths determine sort order. Each file contributes its basename and raw
+    content bytes, each followed by a NUL separator. The digest changes when the
+    file set or contents change, independently of the caller's iteration order.
     """
     if paths is None:
         return None
@@ -185,15 +172,14 @@ class RunFingerprint:
     def _canonical_payload(self) -> Dict[str, Any]:
         """Strip the cosmetic (IGNORED) fields; keep everything else, sorted by key.
 
-        Mirrors Harbor `JobLock._canonical_payload` (exclude set + stable sort). We exclude
-        rather than allow-list so a NEW material field a caller adds is hashed by default
-        (fail-safe toward refuse, not toward a false resume).
+        New material fields enter the hash by default; only explicitly ignored
+        operational settings and provenance are excluded.
         """
         ignored = set(IGNORED_FIELDS)
         return {k: self.inputs[k] for k in sorted(self.inputs) if k not in ignored}
 
     def value(self) -> str:
-        """Single sha256 over the canonical payload (decision #2)."""
+        """Return a single SHA-256 digest over the canonical payload."""
         payload = json.dumps(self._canonical_payload(), sort_keys=True, separators=(",", ":"))
         return _sha256_text(payload)
 
@@ -207,7 +193,7 @@ class RunFingerprint:
     def matches(self, other: "RunFingerprint") -> bool:
         return self.value() == other.value()
 
-    def __eq__(self, other: object) -> bool:  # parity with Harbor JobLock.__eq__
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, RunFingerprint):
             return NotImplemented
         return self.matches(other)
@@ -224,7 +210,6 @@ class RunFingerprint:
                 changed[k] = {"this": a.get(k), "other": b.get(k)}
         return changed
 
-    # ---- Stage 2: the MATERIAL extractor ----------------------------------------------------
     @classmethod
     def from_run_inputs(
         cls,

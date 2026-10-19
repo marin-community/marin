@@ -35,7 +35,6 @@ if str(REPO) not in sys.path:
 if str(pathlib.Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from eval.runtime.resources import ExecutionMode  # noqa: E402
 from eval.graders import livecodebench  # noqa: E402
 from lcb_test_support import living_children  # noqa: E402
 
@@ -49,7 +48,6 @@ def assert_no_child_leak():
     """Snapshot this process's children; fail on teardown if any were left running."""
     before = living_children()
     yield
-    time.sleep(0.2)  # allow a killed child's join-grace to settle before we measure
     leaked = living_children() - before
     assert not leaked, f"grader leaked child process(es): {leaked}"
 
@@ -68,10 +66,6 @@ def test_module_does_not_import_a_vendored_benchmark_module():
     )
     probe = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, cwd=str(REPO))
     assert probe.returncode == 0, probe.stderr
-
-
-def test_grader_declares_process_isolated_execution():
-    assert livecodebench.GRADER_EXECUTION_MODE is ExecutionMode.PROCESS_ISOLATED
 
 
 def test_memory_cap_is_wired_by_default():

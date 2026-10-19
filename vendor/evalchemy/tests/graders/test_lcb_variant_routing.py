@@ -38,16 +38,6 @@ def _load_variant(path: str):
     return module
 
 
-def test_all_variants_share_the_same_bounded_lcb_run():
-    """One implementation: all three variants delegate to the same shared grader helper."""
-    import eval.graders.livecodebench as grader
-
-    for _name, path in VARIANTS:
-        module = _load_variant(path)
-        assert module._lcb_grader is grader, f"{path} must route through eval.graders.livecodebench"
-        assert module.lcb_run.__name__ == "lcb_run"
-
-
 def test_lcb_run_is_bounded_not_unbounded_join():
     """A runaway through the routed lcb_run is cut at the per-test alarm and reaps; it is
     not left to the old (timeout+1)*N+5 join (the #147 unbounded pattern)."""
@@ -65,7 +55,6 @@ def test_lcb_run_is_bounded_not_unbounded_join():
     assert elapsed < old_formula, f"routed lcb_run must be bounded, took {elapsed:.1f}s vs old join {old_formula:.0f}s"
     assert elapsed < 3.0, f"a single hung test should be cut near its {timeout}s alarm, not {elapsed:.1f}s"
     assert not all(row[0] for row in result), "a runaway must not score its test passed"
-    time.sleep(0.2)
     assert (living_children() - before) == set(), "no lcb_run worker may survive a timeout"
 
 

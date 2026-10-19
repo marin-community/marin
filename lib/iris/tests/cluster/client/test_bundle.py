@@ -109,25 +109,30 @@ def test_zip_rejects_oversized_bundles(workspace):
 
 
 @pytest.fixture(scope="module")
-def evaluator_bundle(tmp_path_factory):
-    workspace = tmp_path_factory.mktemp("evaluator-workspace")
+def vendor_bundle(tmp_path_factory):
+    workspace = tmp_path_factory.mktemp("vendor-workspace")
     resources = {
         "vendor/evalchemy/eval/chat_benchmarks/fixture/data/questions.bin": os.urandom(26 * 1024 * 1024),
         "vendor/evalchemy/eval/chat_benchmarks/fixture/eval_instruct.py": b"def iter_specs(): return ()\n",
+        "vendor/evalchemy/eval/chat_benchmarks/fixture/vendor/scorer/tests/cases.json": b"[1, 2, 3]",
+        "vendor/other_package/src/library/__init__.py": b"VALUE = 1\n",
+        "vendor/other_package/src/library/data/questions.json": b"[4, 5, 6]",
     }
     for name, contents in resources.items():
         path = workspace / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(contents)
-    fixture = workspace / "vendor/evalchemy/tests/fixture.bin"
-    fixture.parent.mkdir(parents=True)
-    fixture.write_bytes(b"not needed by the evaluator")
-    return create_workspace_zip(workspace), resources
+    excluded = ("vendor/evalchemy/tests/fixture.bin", "vendor/other_package/tests/fixture.bin")
+    for name in excluded:
+        fixture = workspace / name
+        fixture.parent.mkdir(parents=True)
+        fixture.write_bytes(b"not needed at runtime")
+    return create_workspace_zip(workspace), resources, excluded
 
 
 @pytest.mark.parametrize("consumer", ["worker", "kubernetes"])
-def test_large_evaluator_bundle_round_trips_runtime_resources(evaluator_bundle, tmp_path, monkeypatch, consumer):
-    bundle, resources = evaluator_bundle
+def test_large_vendor_bundle_round_trips_runtime_resources(vendor_bundle, tmp_path, monkeypatch, consumer):
+    bundle, resources, excluded = vendor_bundle
     store = BundleStore(str(tmp_path / "bundles"))
     bundle_id = store.write(bundle)
     target = tmp_path / "workdir"
@@ -148,4 +153,4 @@ def test_large_evaluator_bundle_round_trips_runtime_resources(evaluator_bundle, 
         bundle_fetch.fetch_bundle("http://controller", bundle_id, str(target))
 
     assert {name: (target / name).read_bytes() for name in resources} == resources
-    assert not (target / "vendor/evalchemy/tests/fixture.bin").exists()
+    assert all(not (target / name).exists() for name in excluded)

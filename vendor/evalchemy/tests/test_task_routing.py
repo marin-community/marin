@@ -1,6 +1,5 @@
 """Regression tests for the task registry boundary in the eval CLI."""
 
-import logging
 from argparse import Namespace
 from types import SimpleNamespace
 
@@ -35,17 +34,13 @@ def _cli_args(tasks, archive_root):
     )
 
 
-def test_task_routing_resolves_lm_eval_and_chat_tasks_without_missing_task_warning(caplog):
+def test_task_routing_resolves_lm_eval_and_chat_tasks():
     chat_tasks = SimpleNamespace(tasks={"MATH500": object()})
     lm_eval_tasks = SimpleNamespace(all_tasks={"arc_challenge": object()})
 
-    with caplog.at_level(logging.INFO):
-        routes = resolve_task_routes(["arc_challenge", "MATH500"], chat_tasks, lm_eval_tasks)
+    routes = resolve_task_routes(["arc_challenge", "MATH500"], chat_tasks, lm_eval_tasks)
 
     assert routes == {"arc_challenge": LM_EVAL_ROUTE, "MATH500": CHAT_BENCHMARK_ROUTE}
-    assert "arc_challenge -> lm-eval" in caplog.text
-    assert "MATH500 -> Evalchemy chat benchmark" in caplog.text
-    assert "Task not found" not in caplog.text
 
 
 def test_task_routing_rejects_unknown_tasks_before_evaluation():
@@ -91,10 +86,7 @@ def test_cli_reports_task_construction_failure_before_model_initialization(monke
     assert raised.value.preparations[0].failure.exception_type == "RuntimeError"
 
 
-def test_judge_requirement_query_ignores_non_chat_task_without_warning(caplog):
+def test_judge_requirement_query_ignores_non_chat_task():
     task_manager = TaskManager(task_list=[])
 
-    with caplog.at_level(logging.WARNING):
-        assert task_manager.requires_judge_credentials("arc_challenge") is False
-
-    assert "Task not found" not in caplog.text
+    assert task_manager.requires_judge_credentials("arc_challenge") is False

@@ -49,5 +49,4 @@ def test_livebench_check_correctness_is_bounded():
     elapsed = time.perf_counter() - start
 
     assert elapsed < 8.0, f"runaway should be cut at the 5s deadline, took {elapsed:.1f}s"
-    time.sleep(0.3)  # allow the join-grace to settle before we measure
     assert (living_children() - before) == set(), "no LiveBench worker may survive a timeout"
