@@ -3,7 +3,6 @@
 
 import pytest
 
-# These tests run in the marin-taskforge package environment; environments without it skip them.
 pytest.importorskip("taskforge")
 
 import json
@@ -53,7 +52,7 @@ def evaluated(run_id: str, status: Outcome, reward: float | None, *turns: dict, 
 
 RUNS = [
     evaluated("pass", Outcome.GRADED, 1.0, {"role": "assistant", "content": "12"}),
-    evaluated("wrong", Outcome.GRADED, 0.0, {"role": "assistant", "content": "13"}),
+    evaluated("wrong", Outcome.GRADED, 0.0, {"role": "assistant", "content": "six, " * 600 + "so the answer is 13"}),
     evaluated(
         "loop",
         Outcome.SUBMISSION_FAILURE,
@@ -94,7 +93,7 @@ def test_only_the_runs_that_the_policy_failed_are_analyzed():
 
 async def test_the_agent_reads_the_failed_runs_and_returns_capability_ideas_for_generate_tasks():
     model, requests = analyst(
-        tool_call("search_runs", pattern="lookup"),
+        tool_call("search_runs", text="Answer is 13"),
         tool_call("read_run", run_id="loop"),
         {"role": "assistant", "content": json.dumps([CAPABILITY])},
     )
@@ -108,7 +107,7 @@ async def test_the_agent_reads_the_failed_runs_and_returns_capability_ideas_for_
     assert '"run_id": "loop"' in overview and '"repeated_calls": 1' in overview
     assert '"run_id": "pass"' not in overview and '"run_id": "infra"' not in overview
     search, read = requests[1].messages[-1]["content"], requests[2].messages[-1]["content"]
-    assert search.startswith('loop [1] assistant: <tool call> lookup({"key": "six"})')
+    assert search.startswith("wrong [1] ...") and search.endswith("so the answer is 13...")
     assert "[0] user: What is six plus six?" in read
     [idea] = ideas
     assert (idea.capability_id, idea.catalog_version) == (CAPABILITY["id"], "round-1")

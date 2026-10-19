@@ -11,7 +11,6 @@ training tasks from it. The agent sees only what the policy saw and wrote, never
 """
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
@@ -49,13 +48,13 @@ RUN_READER = "failed-runs/v1"
 HARNESS = "failed-run-analyst"
 ANSWER_FORMAT = JsonValueAnswer()
 MAX_TASK_CHARS = 300
-MAX_MESSAGE_CHARS = 2_000
+MAX_SNIPPET_CHARS = 200
 MAX_TOOL_OUTPUT = 20_000
 MAX_MATCHES = 50
 
 READ_RUN = FunctionDefinition(
     name="read_run",
-    description="Read the messages of one failed run, from message first_message on.",
+    description="Read the task's tools and the messages of one failed run, from message first_message on.",
     parameters={
         "type": "object",
         "properties": {"run_id": {"type": "string"}, "first_message": {"type": "integer", "minimum": 0}},
@@ -65,11 +64,11 @@ READ_RUN = FunctionDefinition(
 )
 SEARCH_RUNS = FunctionDefinition(
     name="search_runs",
-    description="List the messages of all failed runs that match a Python regular expression.",
+    description="List the messages of all failed runs that contain a text, ignoring case.",
     parameters={
         "type": "object",
-        "properties": {"pattern": {"type": "string"}},
-        "required": ["pattern"],
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
         "additionalProperties": False,
     },
 )
@@ -128,7 +127,7 @@ a check of the work before the answer, or domain knowledge.
 - Write new sample tasks, each self-contained with one checkable answer. Do not copy the text, numbers, names, \
 or answers of the failed tasks: the generated tasks train the agent, and the failed tasks evaluate it.
 
-Read a run with read_run, and find a pattern across runs with search_runs. When you are done, answer without a \
+Read a run with read_run, and find a text across runs with search_runs. When you are done, answer without a \
 tool call. The answer is one JSON array of capabilities that obeys this JSON schema:
 
 {schema}
@@ -249,7 +248,6 @@ def _summary(run: EvaluatedRun) -> dict[str, Any]:
         "stop_reason": rollout.stop_reason,
         "turns": len(turns),
         "tool_calls": len(calls),
-        # Consecutive identical calls are the sign of a loop.
         "repeated_calls": sum(previous == call for previous, call in pairwise(calls)),
         "task": task[:MAX_TASK_CHARS],
     }
@@ -258,7 +256,7 @@ def _summary(run: EvaluatedRun) -> dict[str, Any]:
 def _render(message: Mapping[str, Any]) -> str:
     calls = [f"{call['function']['name']}({call['function']['arguments']})" for call in message.get("tool_calls", ())]
     text = " ".join([str(message.get("content") or ""), *(f"<tool call> {call}" for call in calls)]).strip()
-    return f"{message.get('role')}: {text[:MAX_MESSAGE_CHARS]}"
+    return f"{message.get('role')}: {text}"
 
 
 @dataclass(frozen=True)
@@ -281,8 +279,8 @@ class _RunReader:
         try:
             if name == READ_RUN.name:
                 return ToolCallResult(self._read(str(arguments["run_id"]), int(arguments.get("first_message", 0))))
-            return ToolCallResult(self._search(re.compile(str(arguments["pattern"]))))
-        except (KeyError, TypeError, ValueError, re.error) as error:
+            return ToolCallResult(self._search(str(arguments["text"])))
+        except (KeyError, TypeError, ValueError) as error:
             return ToolCallResult(f"Tool error: {error!r}")
 
     def _messages(self, run: EvaluatedRun) -> list[str]:
@@ -293,25 +291,31 @@ class _RunReader:
     def _read(self, run_id: str, first: int) -> str:
         if run_id not in self.runs:
             return f"No failed run has the ID {run_id!r}."
-        messages = self._messages(self.runs[run_id])
-        lines: list[str] = []
-        size, end = 0, first
+        run = self.runs[run_id]
+        messages = self._messages(run)
+        if not 0 <= first < len(messages):
+            raise ValueError(f"first_message must be from 0 to {len(messages) - 1}")
+        task = run.task
+        tools = [tool.model_dump(exclude_none=True) for tool in (*task.final_tools, *task.interaction_tools)]
+        lines = [json.dumps({"tools": tools, "capabilities": list(task.environment_requirements.capabilities)})]
+        size, end = len(lines[0]), first
         for index in range(first, len(messages)):
             line = f"[{index}] {messages[index]}"
-            if lines and size + len(line) > MAX_TOOL_OUTPUT:
+            if index > first and size + len(line) > MAX_TOOL_OUTPUT:
                 break
-            lines.append(line)
+            lines.append(line[:MAX_TOOL_OUTPUT])
             size, end = size + len(line), index + 1
         lines.append(f"[Messages {first} to {end - 1} of {len(messages)}.]")
         return "\n".join(lines)
 
-    def _search(self, pattern: re.Pattern[str]) -> str:
-        matches = [
-            f"{run_id} [{index}] {message[:200]}"
-            for run_id, run in self.runs.items()
-            for index, message in enumerate(self._messages(run))
-            if pattern.search(message)
-        ]
+    def _search(self, text: str) -> str:
+        matches = []
+        for run_id, run in self.runs.items():
+            for index, message in enumerate(self._messages(run)):
+                at = message.lower().find(text.lower())
+                if at >= 0:
+                    start = max(0, at - MAX_SNIPPET_CHARS // 2)
+                    matches.append(f"{run_id} [{index}] ...{message[start : start + MAX_SNIPPET_CHARS]}...")
         return "\n".join(matches[:MAX_MATCHES]) or "No matches."
 
 
