@@ -338,7 +338,7 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
             "s3://marin-us-east-02a/marin/users/alice/run",
             ttl_days=14,
         )
-        == "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/alice/run"
+        == "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/alice/run"
     )
 
 
