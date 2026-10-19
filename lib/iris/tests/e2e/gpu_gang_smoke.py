@@ -566,7 +566,12 @@ def submit_gang(controller_url: str, target: ControllerTarget, args: SmokeArgs, 
         extras=extras,
         env_vars={"GANG_SMOKE_STEPS": str(args.steps), "GANG_SMOKE_PDB": str(args.per_device_batch)},
     )
-    client = IrisClient.remote(controller_url, workspace=repo_root(), timeout_ms=_CLIENT_TIMEOUT_MS)
+    client = IrisClient.remote(
+        controller_url,
+        workspace=repo_root(),
+        timeout_ms=_CLIENT_TIMEOUT_MS,
+        extra_bundle_includes=[_WORKLOAD],
+    )
     logger.info(
         "submitting gang %r: %d replicas, %s, group_by=%s, extras=%s",
         job_name,
