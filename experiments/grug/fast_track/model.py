@@ -883,6 +883,10 @@ class GrugModelConfig:
     """With ``scan_offload_partials``, the reverse scan copies unit ``u - 1``'s offloaded residuals back to HBM while
     unit ``u``'s backward runs, instead of at the start of unit ``u - 1`` (one more unit's residuals stay in HBM).
     Same math."""
+    scan_release_weight_grads: bool = False
+    """``scan_layers`` backward: end each layer's backward barrier on the history and query cotangents only, so the
+    layer's weight gradients and their FSDP reduce-scatters can finish under the next layer's backward instead of
+    before it starts. Same math."""
     scan_save_routed_output: bool = False
     """``scan_layers``: keep each layer's combined routed-expert output from the forward (offloaded with the
     partials under ``scan_offload_partials``) and hand it to the backward's per-layer recompute, so the recompute
@@ -5082,6 +5086,7 @@ class _ScanArgs(NamedTuple):
     route_key: jax.Array | None
     offload_partials: bool
     prefetch_partials: bool
+    release_weight_grads: bool
 
 
 @jax.custom_vjp
@@ -5309,9 +5314,13 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
                     layer_index,
                     fused=layer_static.attn.cfg.attn_res_fused_source_grads,
                 )
-                d_layer, d_history, d_q = jax.lax.optimization_barrier(
-                    (d_layer, _AttnResHistory(d_sources, d_logits, d_partial), d_q)
-                )
+                d_history = _AttnResHistory(d_sources, d_logits, d_partial)
+                if args.release_weight_grads:
+                    # The weight gradients (and their FSDP reduce-scatters) may finish under the next layer's
+                    # backward; only the history and query cotangents gate it.
+                    d_history, d_q = jax.lax.optimization_barrier((d_history, d_q))
+                else:
+                    d_layer, d_history, d_q = jax.lax.optimization_barrier((d_layer, d_history, d_q))
             d_queries = d_queries + d_q
             d_unit[unit_layer.is_kda][unit_layer.index] = d_layer
         stacked = {kind: jax.tree.map(lambda *xs: jnp.stack(xs), *layers) for kind, layers in d_unit.items()}
@@ -6183,6 +6192,7 @@ class Transformer(eqx.Module):
             route_key,
             self.config.scan_offload_partials,
             self.config.scan_prefetch_partials,
+            self.config.scan_release_weight_grads,
         )
         return _scan_layers((units_diff, queries, history), args)
 
