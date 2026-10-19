@@ -403,3 +403,23 @@ def test_generate_context_overflow_raises(fake_glm, fast_provider):
 
     with pytest.raises(ContextExhausted):
         generate(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)
+
+
+def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_provider):
+    """Ladder harness patch: a silently dead keep-alive socket reads nothing until the stall timeout, and so would
+    every other idle connection the pool holds on that path, so the retry goes through a new pool. (The fake server
+    speaks HTTP/1.0 and never keeps a connection alive, so the test checks the pool, not the socket.)"""
+    fake_glm.stream(content="never finishes", stall_after_first=True)
+    fake_glm.stream(content="second try")
+
+    async def call() -> tuple[Completion, bool]:
+        provider = replace(fast_provider, stall_timeout=0.3)
+        async with GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), provider) as client:
+            before = client.http
+            completion = await client.complete(MESSAGES, LLMPolicy())
+            return completion, client.http is not before and not before.is_closed
+
+    completion, replaced_and_retired = asyncio.run(call())
+    assert completion.content == "second try"
+    assert outcomes(completion) == [AttemptOutcome.STALLED, AttemptOutcome.COMPLETED]
+    assert replaced_and_retired

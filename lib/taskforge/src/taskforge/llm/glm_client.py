@@ -108,8 +108,13 @@ CONTEXT_LIMIT_PATTERN = re.compile(r"maximum context length is (\d+) tokens")
 SDK_REQUEST_FIELDS = frozenset({"tools", "tool_choice", "response_format", "parallel_tool_calls"})
 """Fields the client passes to ``chat.completions.create`` as keyword arguments, putting the rest in ``extra_body``."""
 ERROR_BODY_LIMIT = 2000
-CONNECT_TIMEOUT = 30.0
-WRITE_TIMEOUT = 120.0
+CONNECT_TIMEOUT = 10.0
+WRITE_TIMEOUT = 30.0
+KEEPALIVE_EXPIRY = 30.0
+"""Seconds an idle pooled connection may be reused. A relay path can drop an idle connection without a RST, so a
+long author turn would otherwise write into a dead socket and read nothing until the read timeout."""
+POOL_RESET_INTERVAL = 30.0
+"""Least seconds between two pool resets, so a burst of stalls on one bad path replaces the pool once."""
 HEALTH_TIMEOUT = 20.0
 GENERATE_PATH = "/inference/v1/generate"
 """The router's token-id route, beside the OpenAI-compatible ``/v1`` root."""
@@ -325,10 +330,9 @@ class GlmClient:
         self._backoff = ExponentialBackoff(
             initial=provider.backoff_initial, maximum=provider.backoff_maximum, factor=provider.backoff_factor
         )
-        connections = provider.max_connections
-        self._http = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
-        )
+        self._http = self._new_pool()
+        self._retired: list[httpx.AsyncClient] = []
+        self._pool_reset_at = -POOL_RESET_INTERVAL
         self._endpoint = source.current()
         self._sdk = self._sdk_client(self._endpoint)
 
@@ -341,13 +345,37 @@ class GlmClient:
         """The SDK client's connection pool, for requests to the router's other endpoints such as ``/health``."""
         return self._http
 
+    def _new_pool(self) -> httpx.AsyncClient:
+        connections = self._provider.max_connections
+        return httpx.AsyncClient(
+            limits=httpx.Limits(
+                max_connections=connections, max_keepalive_connections=connections, keepalive_expiry=KEEPALIVE_EXPIRY
+            )
+        )
+
+    def _reset_pool(self) -> None:
+        """Open a fresh connection pool after a stalled read, so the retry cannot reuse a silently dead socket.
+
+        The old pool is retired, not closed: other calls may still be streaming on its live connections. Retired
+        pools close with the client.
+        """
+        now = time.monotonic()
+        if now - self._pool_reset_at < POOL_RESET_INTERVAL:
+            return
+        self._pool_reset_at = now
+        logger.warning("GLM read stalled; replacing the connection pool (retired pools: %d)", len(self._retired) + 1)
+        self._retired.append(self._http)
+        self._http = self._new_pool()
+        self._sdk = self._sdk_client(self._endpoint)
+
     async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
-        await self._http.aclose()
+        for pool in (*self._retired, self._http):
+            await pool.aclose()
 
     def _sdk_client(self, endpoint: GlmEndpoint) -> openai.AsyncOpenAI:
         timeout = httpx.Timeout(
@@ -552,6 +580,8 @@ class GlmClient:
                     raise ContextExhausted(failure.detail, attempts) from failure
                 if failure.outcome is AttemptOutcome.TRANSPORT_ERROR:
                     self._refresh_endpoint()
+                if failure.outcome is AttemptOutcome.STALLED:
+                    self._reset_pool()
                 if failure.outcome is AttemptOutcome.ROUTE_MISSING or await self._pool_empty():
                     if hold_started is None:
                         hold_started = time.monotonic()
