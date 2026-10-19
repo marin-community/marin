@@ -4,17 +4,19 @@
 """Serve Snowball v0, the relay student, as a root job, so a lane can use GPUs in another cluster.
 
 The job holds v0's 8xH100 vLLM job (the policy's serving config, as ``harbor_glm.student_inference_config``)
-under a fixed endpoint name. A capability URL minted for that name keeps working when Iris moves the vLLM job
+under a fixed endpoint name, on non-preemptible workers (a preempted student fails every trial in flight on the
+lane's round). A capability URL minted for that name keeps working when Iris moves the vLLM job
 after a preemption, and the federation parent relays it to the lane's cluster. Submit it, wait for the endpoint,
 then hand the lane ``<capability URL>/v1`` as ``STUDENT_BASE_URL`` (environment only; the URL is a credential):
 
-    uv run iris --cluster=marin job run --target-cluster cw-rno2a --cpu 2 --memory 8GB --job-name v0-student-<lane> \
-      --no-wait -- python -m experiments.post_training.sft_shootout.serve_student \
+    uv run iris --cluster=marin job run --target-cluster cw-rno2a --enable-extra-resources --cpu 2 --memory 8GB \
+      --no-preemptible --priority interactive --job-name v0-student-<lane> --no-wait -- python -m experiments.post_training.sft_shootout.serve_student \
       --cluster cw-rno2a --endpoint /serve/v0-student-<lane>
     uv run iris --cluster=cw-rno2a endpoints mint /serve/v0-student-<lane> --ttl-hours 168
 """
 
 import argparse
+import dataclasses
 import logging
 
 from fray.current_client import current_client
@@ -49,7 +51,7 @@ def main() -> None:
         JobRequest(
             name="v0",
             entrypoint=Entrypoint.from_callable(run_iris_service, args=(service,)),
-            resources=iris.worker_resources,
+            resources=dataclasses.replace(iris.worker_resources, preemptible=False),
             environment=iris.worker_environment,
             max_retries_failure=iris.max_retries_failure,
             max_retries_preemption=iris.max_retries_preemption,
