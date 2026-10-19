@@ -3,7 +3,7 @@
 
 """Relay routing between a student (v0) and a teacher (GLM 5.3), decided per request and per trial.
 
-Rules (owner-approved for #207): the student answers until a trigger.
+Rules: the student answers until a trigger.
 
 - Format error: the newest observation is the harness's parse-error message. The teacher writes that
   one turn (a repair); control then returns to the student. Terminus-2 keeps the bad reply in the

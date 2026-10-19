@@ -35,8 +35,8 @@ REPO = "open-athena/GLM-5.3-tmax-swesmith-k8-traces-2026.10"
 README = Path(__file__).parent / "hf_README.md"
 CONSTRAINTS = Path(__file__).parent / "harbor_agents" / "mini-swe-agent-2.1.0-constraints.txt"
 POOL_MANIFEST = "s3://marin-us-east-02a/marin/experiments/sft-shootout/pool/manifest.json"
-# Pool v5 drops these TMax tasks (broken verifiers 000601, 001780; verifier hangs 000441, 001986); the running
-# TMax lanes still run them, so they are dropped here. The 7 SWE-smith removals were never sharded.
+# Pool v5 drops these TMax tasks (broken verifiers 000601, 001780; verifier hangs 000441, 001986). They were
+# sharded before v5, so their traces exist and are dropped here. The 7 SWE-smith removals were never sharded.
 EXCLUDED = {"task_000601_e01cc3c2", "task_001780_dcd2e021", "task_000441_9c3e397f", "task_001986_dd88e877"}
 RUN = re.compile(r"/traces/(?P<kind>[a-z]+(?:-relay)?)/shard-(?P<shard>[^/]+)(?:/round-(?P<round>\d+))?$")
 # Kept from driver_config.json; "harbor" and args.output hold the run's proxy address and local paths.

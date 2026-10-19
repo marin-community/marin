@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""OpenAI-compatible proxy between Harbor agents and the models of a #207 generation run.
+"""OpenAI-compatible proxy between Harbor agents and the models of a trace generation run.
 
 Plain runs have one backend, GLM 5.3 (the teacher). Relay runs add the student (v0) and route each
 request with ``relay.route``. For every chat completion the proxy:
@@ -28,8 +28,7 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -45,12 +44,11 @@ logger = logging.getLogger(__name__)
 
 TRIAL_HEADER = "x-ot-trial-id"
 UNLOGGED_REQUEST_KEYS = frozenset({"messages", "tools"})
-# How long a request keeps re-resolving a backend that refuses connections (e.g. a preempted v0 server that Iris
-# reschedules on another host) before the proxy gives up on it.
-RESOLVE_WINDOW_S = 1200
-RESOLVE_INTERVAL_S = 30
-# What an Iris capability URL answers while its endpoint is unregistered or its cluster unreachable (a v0 being
-# moved after a preemption); a backend with ``resolve`` retries these like a refused connection.
+# How long a request to a backend that can move keeps retrying before the proxy gives up on it: a preempted v0 is
+# rescheduled by Iris, and its capability URL works again once the new job registers.
+MOVE_RETRY_WINDOW = 1200
+MOVE_RETRY_INTERVAL = 30
+# What an Iris capability URL answers while its endpoint is unregistered or its cluster unreachable.
 GATEWAY_STATUSES = frozenset({404, 502, 503, 504})
 
 
@@ -61,8 +59,8 @@ class Backend:
     model: str
     tokenizer: PreTrainedTokenizerBase
     headers: dict[str, str]
-    # Returns the backend's current base URL; set for a backend whose address can change while the proxy runs.
-    resolve: Callable[[], str] | None = field(default=None, compare=False)
+    # Iris may move it while the proxy runs: refused connections and gateway errors are retried for MOVE_RETRY_WINDOW.
+    can_move: bool = False
 
 
 @dataclass(frozen=True)
@@ -155,36 +153,24 @@ def build_proxy(
         values = await asyncio.gather(*(asyncio.to_thread(count_tokens, b.tokenizer, body) for b in backends))
         return {b.author: value for b, value in zip(backends, values, strict=True)}
 
-    base_urls = {backend.author: backend.base_url for backend in [teacher] + ([relay.student] if relay else [])}
-    resolving = asyncio.Lock()
-
     async def call(backend: Backend, body: dict) -> tuple[httpx.Response, float]:
         started = time.monotonic()
         while True:
-            url = base_urls[backend.author]
+            retry = backend.can_move and time.monotonic() - started <= MOVE_RETRY_WINDOW
             try:
                 response = await client.post(
-                    f"{url}/chat/completions", json={**body, "model": backend.model}, headers=backend.headers
+                    f"{backend.base_url}/chat/completions",
+                    json={**body, "model": backend.model},
+                    headers=backend.headers,
                 )
-                if (
-                    response.status_code not in GATEWAY_STATUSES
-                    or backend.resolve is None
-                    or time.monotonic() - started > RESOLVE_WINDOW_S
-                ):
+                if response.status_code not in GATEWAY_STATUSES or not retry:
                     return response, time.monotonic() - started
+                logger.warning("%s answered %d; retrying while it moves", backend.author.value, response.status_code)
             except httpx.ConnectError:
-                if backend.resolve is None or time.monotonic() - started > RESOLVE_WINDOW_S:
+                if not retry:
                     raise
-            async with resolving:
-                if base_urls[backend.author] == url:
-                    try:
-                        base_urls[backend.author] = (await asyncio.to_thread(backend.resolve)).rstrip("/")
-                    except Exception:
-                        logger.exception("could not resolve %s", backend.author.value)
-                    if base_urls[backend.author] != url:
-                        logger.warning("%s moved; now serving at a new address", backend.author.value)
-            if base_urls[backend.author] == url:
-                await asyncio.sleep(RESOLVE_INTERVAL_S)
+                logger.warning("%s refused the connection; retrying while it moves", backend.author.value)
+            await asyncio.sleep(MOVE_RETRY_INTERVAL)
 
     def turn_record(backend: Backend, trigger: Trigger | None, response: httpx.Response, latency: float) -> dict:
         record: dict = {

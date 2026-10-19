@@ -199,23 +199,24 @@ def test_backend_failure_is_logged_and_returns_502(relay_app):
     )
 
 
-def test_a_moved_student_is_re_resolved(tmp_path, monkeypatch):
-    monkeypatch.setattr("experiments.post_training.sft_shootout.glm_proxy.RESOLVE_INTERVAL_S", 0)
-    calls: list[str] = []
+@pytest.mark.parametrize("failure", ["refused", 502, 404])
+def test_a_moving_student_is_retried_until_it_answers(tmp_path, monkeypatch, failure):
+    monkeypatch.setattr("experiments.post_training.sft_shootout.glm_proxy.MOVE_RETRY_INTERVAL", 0)
+    replies = [failure, failure, 200]
 
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request.url.host)
-        if request.url.host == "student-old":
+        status = replies.pop(0)
+        if status == "refused":
             raise httpx.ConnectError("All connection attempts failed", request=request)
-        return httpx.Response(200, json=reply("ls"))
+        return httpx.Response(status, json=reply("ls") if status == 200 else {"error": "endpoint moving"})
 
     student = Backend(
         author=Author.STUDENT,
-        base_url="http://student-old/v1",
+        base_url="https://iris.example/proxy/t/cluster=c/token/serve.v0/v1",
         model="v0",
         tokenizer=WordTokenizer(),
         headers={},
-        resolve=lambda: "http://student-new/v1",
+        can_move=True,
     )
     log_path = tmp_path / "requests.jsonl"
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -223,30 +224,6 @@ def test_a_moved_student_is_re_resolved(tmp_path, monkeypatch):
         backend(Author.TEACHER, "http://teacher/v1"), 100, RequestLog(log_path), RelayPolicy(student, 50), client=client
     )
     response = post(TestClient(app), [{"role": "user", "content": "fix the bug"}])
-    assert response.status_code == 200
-    assert calls == ["student-old", "student-new"]
-    (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
-    assert record["status"] == 200 and record["author"] == Author.STUDENT.value
-
-
-def test_a_student_behind_a_capability_url_is_retried_through_gateway_errors(tmp_path, monkeypatch):
-    monkeypatch.setattr("experiments.post_training.sft_shootout.glm_proxy.RESOLVE_INTERVAL_S", 0)
-    statuses = [502, 404, 200]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        status = statuses.pop(0)
-        return httpx.Response(status, json=reply("ls") if status == 200 else {"error": "endpoint moving"})
-
-    url = "https://iris.example/proxy/t/cluster=c/token/serve.v0/v1"
-    student = Backend(
-        author=Author.STUDENT, base_url=url, model="v0", tokenizer=WordTokenizer(), headers={}, resolve=lambda: url
-    )
-    log_path = tmp_path / "requests.jsonl"
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    app = build_proxy(
-        backend(Author.TEACHER, "http://teacher/v1"), 100, RequestLog(log_path), RelayPolicy(student, 50), client=client
-    )
-    response = post(TestClient(app), [{"role": "user", "content": "fix the bug"}])
-    assert response.status_code == 200 and statuses == []
+    assert response.status_code == 200 and replies == []
     (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert record["status"] == 200 and record["author"] == Author.STUDENT.value

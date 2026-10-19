@@ -7,10 +7,9 @@ A capability token is a JWT whose payload has ``aud`` ``iris-proxy``. Agents can
 (e.g. mini-swe-agent's ``OPENAI_API_BASE`` in an ``env`` listing), so it can land in observations,
 ``requests.jsonl`` and the rebuilt traces. Other JWTs (task fixtures) are left alone. Tokens split
 across lines are matched, including escaped breaks behind any number of backslashes (a log line in a
-tool output, inside JSON, inside JSON). The count strips every break and decodes every JWT, as the #211
-guard does; a scrubbed file is counted again and must hold none. With ``--check`` the files are only
-scanned. The exit code is 1 if ``--check`` finds a token or a scrub leaves one; use it as the gate
-before publishing.
+tool output, inside JSON, inside JSON). The count strips every break and decodes every JWT; a scrubbed
+file is counted again and must hold none. With ``--check`` the files are only scanned. The exit code is
+1 if ``--check`` finds a token or a scrub leaves one; use it as the gate before publishing.
 
     uv run python experiments/post_training/sft_shootout/scrub_run.py <prefix> [--check]
 """
@@ -46,7 +45,7 @@ def is_capability(token: str) -> bool:
 
 
 def count_tokens(text: str) -> int:
-    """Capability tokens in ``text`` with every line break removed first (the #211 guard's test)."""
+    """Capability tokens in ``text`` with every line break removed first."""
     return sum(is_capability(token) for token in PLAIN_JWT.findall(BREAKS.sub("", text)))
 
 

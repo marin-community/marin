@@ -104,7 +104,7 @@ STUDENT_REVISION = "4eeb756b404db25bc04e4daf49dfb9817bceb741"
 # The relay student's OpenAI base URL: a capability URL (a bearer credential) for serve_student.py's endpoint,
 # passed only through the environment.
 STUDENT_URL_ENV = "STUDENT_BASE_URL"
-STUDENT_POLL_S = 120
+STUDENT_POLL_INTERVAL = 120
 
 # Each family runs under its eval-campaign Harbor policy: retry list, verifier timeout, agent timeouts
 # and agent kwargs come from the YAML, and model_info is reconciled the way the eval launcher does it.
@@ -184,18 +184,20 @@ def student_inference_config(cluster: str) -> RemoteInferenceConfig:
     )
 
 
-def served_student() -> Backend:
-    """v0 behind the capability URL in ``STUDENT_BASE_URL`` (serve_student.py), once it answers."""
-    base_url = os.environ[STUDENT_URL_ENV].rstrip("/")
+def served_student(base_url: str) -> Backend:
+    """v0 behind ``base_url``, a capability URL for serve_student.py's endpoint, once it answers."""
+    base_url = base_url.rstrip("/")
     while True:
         try:
             response = httpx.get(f"{base_url}/models", timeout=30)
             if response.status_code == 200:
                 break
-        except httpx.HTTPError:
-            pass
-        logger.info("waiting for v0 to serve")
-        time.sleep(STUDENT_POLL_S)
+            reason = f"HTTP {response.status_code}"
+        except httpx.HTTPError as error:
+            # The type only: an httpx error message can carry the request URL, which is a credential.
+            reason = type(error).__name__
+        logger.info("waiting for v0 to serve (%s)", reason)
+        time.sleep(STUDENT_POLL_INTERVAL)
     (served,) = response.json()["data"]
     model = load_model_config(STUDENT_CONFIG)
     logger.info("v0 is serving %s", served["id"])
@@ -205,9 +207,8 @@ def served_student() -> Backend:
         model=served["id"],
         tokenizer=load_tokenizer(model.tokenizer or model.location, STUDENT_REVISION),
         headers={},
-        # The URL names the endpoint, not a host: while Iris moves a preempted v0 the proxy answers with a gateway
-        # error, and the same URL works again once v0 re-registers.
-        resolve=lambda: base_url,
+        # The URL names the endpoint, not a host, so it works again once a preempted v0 re-registers.
+        can_move=True,
     )
 
 
@@ -376,7 +377,9 @@ def main() -> None:
             )
             relay = None
             if args.relay:
-                relay = RelayPolicy(student=served_student(), budget_tokens=int(window * args.budget_fraction))
+                relay = RelayPolicy(
+                    student=served_student(os.environ[STUDENT_URL_ENV]), budget_tokens=int(window * args.budget_fraction)
+                )
             app = build_proxy(teacher, window, RequestLog(work / "requests.jsonl"), relay)
             capability = stack.enter_context(capability_endpoint(app, args.name))
             if urlparse(capability).hostname != AGENT_DOMAIN_ALLOW_LIST:
