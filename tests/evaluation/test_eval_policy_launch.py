@@ -3,23 +3,18 @@
 
 """Published launch recipes materialize the benchmark settings they claim."""
 
-from contextlib import nullcontext
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 import yaml
-from click.testing import CliRunner
 from iris.rpc import job_pb2
-from marin.evaluation.eval_policy import EVALCHEMY_COMMIT, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
+from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import LaunchProvenance
-from marin.external_dependencies import EVALCHEMY
 
-from eval_policy.launch import _evalchemy_config, _harbor_config, launch_policy
-from experiments.evaluation.cli import cli
+from eval_policy.launch import _evalchemy_config, _harbor_config
 from experiments.evaluation.evals import EvalchemyDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
@@ -67,7 +62,8 @@ def test_september_16_mini_datasets_use_pinned_registry(tmp_path):
     assert data["environment"]["force_build"] is True
 
 
-def test_verified_launch_rejects_changed_source_before_contacting_iris(tmp_path, monkeypatch):
+@pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])
+def test_verified_launch_requires_its_historical_evaluator_checkout(tmp_path, monkeypatch, version):
     path = _evalchemy_config(SEPTEMBER_24_VERSION, "math500", None, tmp_path / "math500.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
@@ -82,66 +78,15 @@ def test_verified_launch_rejects_changed_source_before_contacting_iris(tmp_path,
         submission_cluster="marin",
         federated_cluster=None,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        version=SEPTEMBER_24_VERSION,
+        version=version,
     )
 
-    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
-    evaluation = batch.evaluations[0]
-    assert evaluation.identity.eval_ref.name == "math500"
-    assert isinstance(evaluation.executor, EvalchemyExecutor)
-    assert f"@{EVALCHEMY_COMMIT}" in evaluation.executor.config.runtime.requirement
-    assert evaluation.identity.eval_runtime == evaluation.executor.config.runtime.requirement
+    with pytest.raises(ValueError, match="requires historical Evalchemy commit"):
+        build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
 
     ad_hoc = build_evaluation_batch(
         replace(spec, version=None), LaunchProvenance(git_sha="abc", launch_host="test"), "test"
     ).evaluations[0]
     assert isinstance(ad_hoc.executor, EvalchemyExecutor)
-    assert f"@{EVALCHEMY.commit}" in ad_hoc.executor.config.runtime.requirement
-
-    changed = yaml.safe_load(path.read_text())
-    changed["batch_size"] = 8
-    path.write_text(yaml.safe_dump(changed))
-    with pytest.raises(ValueError, match="source config differs"):
-        build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
-
-
-@pytest.mark.parametrize("h100_count", [2, 4, 8])
-@pytest.mark.parametrize("dry_run", [False, True])
-def test_subset_requests_separate_nonblocking_h100_launches(tmp_path, monkeypatch, h100_count, dry_run):
-    model_path = tmp_path / "model.yaml"
-    model_path.write_text(
-        f"name: model\nlocation: org/model\nresource_hint:\n  gpu:\n    H100: {h100_count}\n"
-        f"serve:\n  tensor_parallel_size: {h100_count}\n  data_parallel_size: 1\n  auto_overrides: false\n"
-    )
-    submissions = []
-    launched = []
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(None))
-
-    def capture_launch(batch, _client):
-        launched.append(batch)
-        return SimpleNamespace(group_id=batch.group_id, model_name=batch.model.name, evaluations=())
-
-    monkeypatch.setattr("experiments.evaluation.cli.launch_group", capture_launch)
-
-    def capture(command, **_kwargs):
-        context = cli.commands["launch"].make_context("launch", command[6:])
-        submissions.append(context.params)
-        result = CliRunner().invoke(cli.commands["launch"], command[6:])
-        assert result.exit_code == 0, result.output
-
-    monkeypatch.setattr("eval_policy.launch.run", capture)
-
-    launch_policy(SEPTEMBER_24_VERSION, model_path, None, None, "cw-rno2a", ("math500", "gsm8k-0shot"), dry_run)
-
-    assert len(submissions) == 2
-    assert {submission["evalchemy_config"][0].stem for submission in submissions} == {"math500", "gsm8k-0shot"}
-    assert all(submission["no_wait"] is not dry_run for submission in submissions)
-    assert all(submission["dry_run"] is dry_run for submission in submissions)
-    assert all(submission["accelerator"] == f"H100x{h100_count}" for submission in submissions)
-    assert all(submission["version"] == SEPTEMBER_24_VERSION for submission in submissions)
-    assert len(launched) == (0 if dry_run else 2)
-    assert {batch.evaluations[0].identity.eval_ref.name for batch in launched} == (
-        set() if dry_run else {"math500", "gsm8k-0shot"}
-    )
-    assert all(batch.accelerator.label == f"H100x{h100_count}" for batch in launched)
+    assert ad_hoc.identity.eval_runtime.startswith("evalchemy[")
+    assert "vendor/evalchemy#sha256=" in ad_hoc.identity.eval_runtime

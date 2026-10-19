@@ -1,0 +1,9 @@
+blendaxai-gm-l3-v35:
+  prompt_template: "gpt4_1106_preview/chatml_prompt.txt"
+  fn_completions: null
+  completions_kwargs:
+    model_name: "blendaxai-gm-l3-v35"
+    max_tokens: 4096
+    temperature: 1.0
+  pretty_name: "Blendax.AI-gm-l3-v35"
+  link: "https://www.blendax.ai/post/blendaxai-gm-l3-v35"

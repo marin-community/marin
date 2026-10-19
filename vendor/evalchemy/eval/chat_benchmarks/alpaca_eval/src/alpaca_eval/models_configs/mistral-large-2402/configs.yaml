@@ -1,0 +1,12 @@
+mistral-large-2402:
+  prompt_template: "mistral-medium/basic_chatml_prompt.txt" # together already deals with prompt
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "mistral-large-2402"
+    max_tokens: 4096
+    requires_chatml: True
+    price_per_token: 8e-6
+    client_kwargs:
+      base_url: 'https://api.mistral.ai/v1'
+  pretty_name: "Mistral Large (24/02)"
+  link: "https://mistral.ai/news/la-plateforme/"

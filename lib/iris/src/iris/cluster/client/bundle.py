@@ -37,6 +37,7 @@ DEFAULT_EXCLUDE = re.compile(
     | (^|/)docs/reports(/|$)
     | (^|/)docs/static(/|$)
     | (^|/)tests/snapshots(/|$)
+    | ^vendor/evalchemy/tests(/|$)  # evaluator fixtures are not runtime resources
     """,
     re.VERBOSE,
 )

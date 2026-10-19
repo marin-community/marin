@@ -1,0 +1,1 @@
+The conversation between human and AI assistant.\n[|Human|]Hello!\n[|AI|]Hi!\n[|Human|]{instruction}\n[|AI|]

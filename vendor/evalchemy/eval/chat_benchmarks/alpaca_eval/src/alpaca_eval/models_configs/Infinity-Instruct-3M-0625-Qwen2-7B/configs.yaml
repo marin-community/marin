@@ -1,0 +1,13 @@
+Infinity-Instruct-3M-0625-Qwen2-7B: # this should be the same as the name as the current directory
+  prompt_template: "Infinity-Instruct-3M-0625-Qwen2-7B/prompt.txt" # what prompt should be used for this model
+  fn_completions: "openai_completions" # what function should be used to generate completions. See `src/alpaca_eval/decoders` for options
+  completions_kwargs: # parameters to the completion function
+    model_name: "baai/Infinity-Instruct-3M-0625-Qwen2-7B"
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+      trust_remote_code: True
+    max_new_tokens: 2048
+    temperature: 0.7
+    do_sample: True
+  pretty_name: "Infinity-Instruct-3M-0625-Qwen2-7B" # name in the leaderboard
+  link: "https://huggingface.co/BAAI/Infinity-Instruct-3M-0625-Qwen2-7B" # link to the model's repo/information in the leaderboard

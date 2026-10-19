@@ -20,7 +20,7 @@ from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus
 from iris.client.client import iris_ctx
 from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, TaskAttempt
 from iris.resources.state import TaskState, is_job_finished
 from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
@@ -686,6 +686,8 @@ def _run_broker_worker(
     broker: InferenceRequestProvider,
 ) -> None:
     configure_logging()
+    job_info = get_job_info()
+    assert job_info is not None
     with _prepared_local_inference(model, engine, iris) as local_session:
         tensor_parallel_size = cast(int, local_session.tensor_parallel_size)
         broker.register_worker(
@@ -693,6 +695,7 @@ def _run_broker_worker(
             InferenceWorkerMetadata(
                 tensor_parallel_size=tensor_parallel_size,
                 backend_name=local_session.backend_name,
+                task_attempt=job_info.task_attempt.to_wire(),
             ),
         )
         worker = InferenceWorker(
@@ -742,6 +745,56 @@ def _registered_worker_metadata(request_provider: InferenceRequestProvider) -> I
     if not metadata_by_worker:
         raise RuntimeError("Brokered inference became ready before a worker registered metadata")
     return next(iter(metadata_by_worker.values()))
+
+
+def _wait_for_broker_workers(
+    request_provider: InferenceRequestProvider,
+    worker_jobs: list[JobHandle],
+    timeout_seconds: float,
+) -> dict[str, InferenceWorkerMetadata]:
+    """Wait for every requested server, preserving its startup budget while queued."""
+    client = iris_ctx().client
+    placement_deadline = Deadline.from_seconds(_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS)
+    ready_deadlines: dict[str, tuple[tuple[str, ...], Deadline]] = {}
+    while True:
+        metadata = request_provider.worker_metadata()
+        waiting = []
+        for job in worker_jobs:
+            job_name = JobName.from_string(str(job.job_id))
+            status = job.status()
+            if JobStatus.finished(status):
+                raise RuntimeError(f"Inference job {job.job_id} finished before all broker workers registered: {status}")
+            tasks = client.list_tasks(job_name) if status is JobStatus.RUNNING else ()
+            worker_metadata = metadata.get(job_name.name)
+            if worker_metadata is not None and any(
+                task.state is TaskState.RUNNING
+                and worker_metadata.task_attempt == TaskAttempt(task.task_id, task.current_attempt_number).to_wire()
+                for task in tasks
+            ):
+                continue
+            waiting.append(job_name.name)
+            placed_attempts = tuple(
+                sorted(
+                    TaskAttempt(task.task_id, task.current_attempt_number).to_wire()
+                    for task in tasks
+                    if _task_is_placed(task)
+                )
+            )
+            if placed_attempts:
+                previous = ready_deadlines.get(job_name.name)
+                if previous is None or previous[0] != placed_attempts:
+                    ready_deadlines[job_name.name] = (placed_attempts, Deadline.from_seconds(timeout_seconds))
+                _, deadline = ready_deadlines[job_name.name]
+                if deadline.expired():
+                    raise TimeoutError(f"Timed out waiting for broker worker {job.job_id!r} to register")
+            else:
+                ready_deadlines.pop(job_name.name, None)
+                if placement_deadline.expired():
+                    raise TimeoutError(f"Timed out waiting for broker worker {job.job_id!r} to be placed")
+        if not waiting:
+            logger.info("All %d broker workers registered: %s", len(worker_jobs), sorted(metadata))
+            return metadata
+        time.sleep(_ENDPOINT_READY_POLL_SECONDS)
 
 
 @contextlib.contextmanager
@@ -828,6 +881,7 @@ def _start_brokered_inference(
         request_provider = cast(InferenceRequestProvider, broker_handle)
         response_provider = cast(InferenceResponseProvider, broker_handle)
         worker_jobs = _submit_broker_workers(run_id, config, broker, request_provider)
+        _wait_for_broker_workers(request_provider, worker_jobs, iris.endpoint_ready_timeout_seconds)
         with _expose_brokered_inference(
             config,
             broker,

@@ -100,7 +100,6 @@ class VllmGpuRelease:
 
 
 EXTERNAL_PROJECTS = (
-    ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
     ExternalProject(
         "harbor",
         "harbor",

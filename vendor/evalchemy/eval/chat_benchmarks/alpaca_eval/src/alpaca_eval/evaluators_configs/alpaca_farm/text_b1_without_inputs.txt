@@ -1,0 +1,100 @@
+We are developing a model to evaluate instructions and their corresponding outputs. Please select the output (a) or (b) that best matches the given instruction.
+
+Here are 5 short examples, the real ones might be longer.
+
+## Example 1:
+
+### Instruction:
+Give a brief description of an ophthalmologist
+
+### Output (a):
+An ophthalmologist is a medical doctor who specializes in the diagnosis and treatment of eye diseases and conditions.
+
+### Output (b):
+An ophthalmologist is a medical doctor who pokes and prods at your eyes while asking you to read letters from a chart.
+
+### Best output:
+(a)
+
+## Example 2:
+
+### Instruction:
+Paraphrase the following question: "What is the capital of France?"
+
+### Output (a):
+The capital of France is Paris.
+
+### Output (b):
+Can you tell me the name of the city that serves as the capital of France?
+
+### Best output:
+(b)
+
+## Example 3:
+
+### Instruction:
+Change the first verb in "I love surfing" to a synonym
+
+### Output (a):
+I hate surfing
+
+### Output (b):
+I adore surfing
+
+### Best output:
+(b)
+
+## Example 4:
+
+### Instruction:
+Consider the following document: "Document: The following is a list of the most common elements in the Earth's crust by mass."
+Answer the following questions based on that document: what is the main idea? who are the major players? what is their motivation? how does it end?
+
+### Output (a):
+The main idea of this document is to provide a list of the most common elements in the Earth's crust by mass. The major players are the Earth, the Sun, and other planets. The motivation behind the list is to help scientists better understand the interactions between these elements and the Earth's crust. The ending of this document is not specified.
+
+### Output (b):
+The main idea of this document is to provide a list of the most common elements in the Earth's crust by mass.
+
+### Best output:
+(a)
+
+## Example 5:
+### Instruction:
+Summarize the following passage concisely: "A new study shows that people who eat more fruits and vegetables have a lower risk of heart disease. The study followed over 10,000 participants for 10 years, and found that those who ate at least 5 servings of fruits and vegetables per day had a 20% lower risk of heart disease compared to those who ate less than 3 servings per day."
+
+### Output (a):
+The study found that people who eat more fruits and vegetables have a lower risk of heart disease, and those who ate at least 5 servings per day had a 20% lower risk compared to those who ate less than 3 servings per day.
+
+### Output (b):
+The study showed that eating more fruits and vegetables can help lower the risk of heart disease.
+
+### Best output:
+(b)
+
+## Example 6:
+### Instruction:
+Provide a conclusion based on the information presented in the following text: "according to a recent survey, more and more people are choosing to work remotely. The survey found that 68% of workers believe that remote work increases their productivity, and 55% said they would like to work from home at least three days a week. The benefits of remote work include fewer distractions, no commute, and more flexible schedules."
+
+### Output (a):
+Based on the survey results, it can be concluded that remote work is becoming increasingly popular among workers, as many believe it increases productivity and would like to work from home at least part of the week. Remote work has benefits such as fewer distractions, no commute, and more flexible schedules.
+
+### Output (b):
+The survey found that some workers believe remote work is better than office work. They say remote work increases productivity and allows for a more flexible schedule. Remote work has its benefits such as no commute and fewer distractions.
+
+### Best output:
+(a)
+
+## Real task:
+Now is your turn, please carefully review each instruction and its corresponding outputs before selecting the best output. <|endofprompt|>
+
+### Instruction:
+{instruction}
+
+### Output (a):
+{output_1}
+
+### Output (b):
+{output_2}
+
+### Best output:

@@ -1,0 +1,13 @@
+Samba-CoE-v0.2-best-of-16:
+  prompt_template: "Samba-CoE-v0.1/prompt.txt"
+  fn_completions: "null"
+  completions_kwargs:
+    model_name: "sambanovasystems/Samba-CoE-v0.2"
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+    max_new_tokens: 4096
+    temperature: 0.7
+    top_p: 0.1
+    do_sample: True
+  pretty_name: "Samba CoE v0.2 (best-of-16)"
+  link: "https://coe-1.cloud.snova.ai/"

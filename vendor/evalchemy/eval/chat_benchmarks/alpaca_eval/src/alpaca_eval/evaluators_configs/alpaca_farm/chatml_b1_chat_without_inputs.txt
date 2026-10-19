@@ -1,0 +1,143 @@
+<|im_start|>system
+You are a pattern following assistant that can only answer with Output (a) or Output (b). Your goal is to select the preferred (least wrong) output for a given instruction.
+Do NOT provide any explanation for your choice. Do not say both / neither are good, you have to answer using only Output (a) or Output (b).
+<|im_end|>
+<|im_start|>user
+### Instruction:
+Describe the job of an ophthalmologist.
+
+### Output (a):
+An ophthalmologist is a medical doctor who specializes in the diagnosis and treatment of eye diseases and conditions. They conduct eye exams, prescribe eyeglasses or contact lenses, and perform surgeries.
+
+### Output (b):
+An ophthalmologist is a medical doctor who pokes and prods at your eyes while asking you to read letters from a chart.
+
+### Which is best, Output (a) or Output (b)?:
+<|im_end|>
+<|im_start|>assistant
+Output (a)
+<|im_end|>
+<|im_start|>user
+Good job! Indeed, Output (a) provides a more accurate description of the job of an ophthalmologist than (b). Output (b) is more of a joke.
+
+### Instruction:
+Paraphrase the following question: "What is the capital of France?"
+
+### Output (a):
+The capital of France is Paris.
+
+### Output (b):
+Can you tell me the name of the city that serves as the capital of France?
+
+### Which is best, Output (a) or Output (b)?:
+<|im_end|>
+<|im_start|>assistant
+Output (b)
+<|im_end|>
+<|im_start|>user
+Great! Indeed, Output (b) paraphrases the question as asked by the instruction. In contrast, Output (a) does not follow instruction as it answers the question instead.
+
+### Instruction:
+Rewrite the following sentence in a polite way: "Give it to me now."
+
+### Output (a):
+Can you please give me that item?
+
+### Output (b):
+ Could you please give it to me, pending verification?
+
+### Which is best, Output (a) or Output (b)?:
+<|im_end|>
+<|im_start|>assistant
+Output (a)
+<|im_end|>
+<|im_start|>user
+Perfect! Indeed, Output (a) is better because Output (b) adds the sentence "pending verification", which is unnecessary and unrelated to the instruction.
+
+### Instruction:
+Write a design document to describe a mobile game idea about a battle royale game with a superhero and villain theme.
+
+### Output (a):
+Design Document for a Mobile Game Idea:
+
+1. Introduction:
+A battle royale game with a superhero and villain theme.
+
+2. Game Play:
+The game is played on a large map with buildings, streets, and structures spreading across the map. Players converge on the center to compete in a winner-take-all showdown. The game includes traditional battle royale elements such as scavenging, looting, and trying to survive until the end. However, there is also a hero system in place in which players can choose to take on the role of a superhero or villain for the game. This adds some variety and variety of tactics as players use their superpowers to wreak havoc or use their villainsy to their own advantage.
+
+3. Rewards:
+As players compete in the battle royale game, they will receive experience and level up their character. These levels reward players with extra health, shields, and other all important resources. Players can choose to customize their character in various ways to make them stand out from the rest as well.
+
+4. Levelling up:
+At the end of each game, players will level up their character and receive various bonuses depending on the level. These bonuses could range from extra health to increased sprint speed or more damage while in combat. As players gain levels, they can choose to upgrade their character with more powerful abilities and powers.
+
+5. Challenges:
+Players can also complete
+
+### Output (b):
+The newly launched mobile game offers a thrilling battle royale experience with a superhero and villain theme. Players jump out of their cars and go head-to-head in a fight to the finish line. Each round features a different set of powerful superheroes and villainous villains, and the winner is the player who survives the longest. Along the way, they can collect health items and upgrade their powers to become the ultimate superhero or villain. The game offers a lively and vibrant art style and a visually appealing plot to keep the players engaged until the very end.
+
+### Which is best, Output (a) or Output (b)?:
+<|im_end|>
+<|im_start|>assistant
+Output (a)
+<|im_end|>
+<|im_start|>user
+Good job! Indeed, Output (a) is a design document as asked in the instruction and gives more useful details than Output (b).
+
+### Instruction:
+Find the average age of John (17), Laura (18), Robert (19), Edward (20).
+
+### Output (a):
+The average age of the people in the given situation is 20 years old.
+
+### Output (b):
+The average age of the people listed is 19.5 years.
+
+### Which is best, Output (a) or Output (b)?:
+<|im_end|>
+<|im_start|>assistant
+Output (b)
+<|im_end|>
+<|im_start|>user
+Great! Indeed, the real answer is 18.5 years old, which is closer to Output (b) than Output (a).
+
+### Instruction:
+Generate a to-do list with 5 tasks related to keeping a neat room.
+
+### Output (a):
+Make beds
+Organize closet
+Shoot some hole in the walls
+Dust lamps and furniture
+Tidy drawers and shelves
+
+### Output (b):
+chores:
+1. Clean up after yourself and put clean clothes away.
+2. Make sure all electronics are decommissioned before leaving the house.
+3. Remove all personal items and clutter from your room.
+4. Vacuum and mop the floor.
+5. Tidy up your desk and put all inboxes on hold.
+
+### Which is best, Output (a) or Output (b)?:
+<|im_end|>
+<|im_start|>assistant
+Output (b)
+<|im_end|>
+<|im_start|>user
+Perfect! Indeed, Output (b) is better because Output (a) adds to the to do list "Shoot some hole in the walls", which is not related to tidying a room.
+Remember not to explain your answer and just say Output (b) or Output (a).
+
+### Instruction:
+{instruction}
+
+### Output (a):
+{output_1}
+
+### Output (b):
+{output_2}
+
+### Which is best, Output (a) or Output (b)?:
+<|im_end|>

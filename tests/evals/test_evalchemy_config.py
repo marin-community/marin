@@ -12,9 +12,13 @@ serving, the eval itself) is exercised by the cluster smoke.
 
 import base64
 import json
+import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
+from marin.evaluation.evalchemy import runtime
 from marin.evaluation.evalchemy.client import build_command, build_model_args
 from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
@@ -212,6 +216,93 @@ def test_evalchemy_child_rejects_a_missing_judge_secret():
 
     with pytest.raises(ValueError, match="requires JUDGE_API_KEY"):
         _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {})
+
+
+def test_evalchemy_child_uses_its_project_environment_instead_of_the_parent(tmp_path, monkeypatch):
+    executable = tmp_path / "bin" / "uv"
+    executable.parent.mkdir()
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['PROBE_OUTPUT']).write_text(json.dumps({\n"
+        "    'environment': os.environ['UV_PROJECT_ENVIRONMENT'],\n"
+        "    'cwd': os.getcwd(),\n"
+        "}))\n"
+    )
+    executable.chmod(0o755)
+    output = tmp_path / "runtime.json"
+
+    def submit(*, entrypoint, environment, **_kwargs):
+        assert not environment.to_proto().setup_scripts
+        subprocess.run(
+            entrypoint.command,
+            env={
+                **os.environ,
+                "IRIS_WORKDIR": str(tmp_path),
+                "UV_PROJECT_ENVIRONMENT": "/parent/.venv",
+                "PROBE_OUTPUT": str(output),
+                "PATH": f"{executable.parent}:{os.environ['PATH']}",
+                **environment.env_vars,
+            },
+            check=True,
+        )
+        return SimpleNamespace(job_id="/eval/isolated", wait=lambda **_kwargs: None)
+
+    client = SimpleNamespace(submit=submit)
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    _run_evalchemy_child(_MODEL, _config(), "gs://bucket/evals/qwen3/core", {})
+
+    assert json.loads(output.read_text()) == {
+        "environment": str(tmp_path / "vendor/evalchemy/.venv"),
+        "cwd": str(tmp_path),
+    }
+
+
+@pytest.fixture
+def evaluator_sources(tmp_path, monkeypatch):
+    for directory in runtime._RUNTIME_DIRECTORIES:
+        source = tmp_path / directory / "source.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("value = 1\n")
+    for filename in runtime._RUNTIME_FILES:
+        source = tmp_path / filename
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("source input\n")
+    monkeypatch.setattr(runtime, "find_project_root", lambda _start: tmp_path)
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "vendor/evalchemy/eval/source.py",
+        "vendor/evalchemy/uv.lock",
+        "lib/finestore/src/source.py",
+        "lib/rigging/src/source.py",
+        "lib/marin/src/marin/evaluation/evalchemy/client.py",
+    ],
+)
+def test_evalchemy_provenance_changes_when_runtime_inputs_change(evaluator_sources, filename):
+    before = runtime.evalchemy_runtime_source_hash()
+    source = evaluator_sources / filename
+    source.write_text(source.read_text() + "changed input\n")
+    assert runtime.evalchemy_runtime_source_hash() != before
+
+
+def test_evalchemy_provenance_ignores_build_metadata_and_bytecode(evaluator_sources):
+    before = runtime.evalchemy_runtime_source_hash()
+    for filename in (
+        "vendor/evalchemy/eval/__pycache__/source.cpython-312.pyc",
+        "vendor/evalchemy/eval/benchmark.egg-info/PKG-INFO",
+        "vendor/evalchemy/eval/chat_benchmarks/alpaca_eval/build/lib/alpaca_eval/__init__.py",
+        "vendor/evalchemy/eval/chat_benchmarks/MTBench/dist/wheel.whl",
+        "vendor/evalchemy/eval/.pytest_cache/v/cache/nodeids",
+    ):
+        path = evaluator_sources / filename
+        path.parent.mkdir(parents=True)
+        path.write_text("generated output\n")
+    assert runtime.evalchemy_runtime_source_hash() == before
 
 
 def test_task_dirs_distinguish_shot_variants_of_one_task():

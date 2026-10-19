@@ -1,0 +1,19 @@
+Starling-LM-7B-beta-ExPO:
+  prompt_template: "Starling-LM-7B-alpha/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "chujiezheng/Starling-LM-7B-beta-ExPO"
+    model_kwargs:
+      dtype: 'bfloat16'
+      tokenizer_mode: 'auto'
+    max_new_tokens: 2048
+    use_beam_search: True
+    seed: 42
+    temperature: 0.7
+    top_k: 50
+    top_p: 0.9
+    presence_penalty: 0.1
+    frequency_penalty: 0.1
+    batch_size: 1000
+  pretty_name: "ExPO + Starling LM 7B beta"
+  link: "https://huggingface.co/chujiezheng/Starling-LM-7B-beta-ExPO"

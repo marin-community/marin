@@ -1,0 +1,14 @@
+Ein-70B-v0.1: # this should be the same as the name as the current directory
+  prompt_template: "Ein-70B-v0.1/prompt.txt" # what prompt should be used for this model
+  fn_completions: "huggingface_local_completions" # what function should be used to generate completions. See `src/alpaca_eval/decoders` for options
+  completions_kwargs: # parameters to the completion function
+    model_name: "SF-Foundation/EinBase-70B-v0.1-full"
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+      trust_remote_code: True
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 0.9
+    do_sample: True
+  pretty_name: "Ein 70B v0.1" # name in the leaderboard
+  link: "https://huggingface.co/SF-Foundation/EinBase-70B-v0.1-full" # link to the model's repo/information in the leaderboard

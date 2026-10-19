@@ -1,0 +1,30 @@
+chatgpt_fn:
+  prompt_template: "chatgpt_fn/basic_function_prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-3.5-turbo-16k-0613"
+    max_tokens: 50
+    temperature: 0
+    tool_choice:
+      type: function
+      function:
+        name: "print_best_model"
+    tools:
+      - type: function
+        function:
+          name: "print_best_model"
+          description: "Print the best model given the preferred output."
+          strict: true
+          parameters:
+            type: "object"
+            properties:
+              best_output:
+                type: "string"
+                description: "Name of the best output, should be 'Output (a)' or 'Output (b)'"
+            additionalProperties: false
+            required: [ "best_output" ]
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?i)output \(a\)'
+      2: '(?i)output \(b\)'
+  batch_size: 1

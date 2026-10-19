@@ -1,0 +1,12 @@
+gpt4:
+  prompt_template: "chatgpt/basic_prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4-0314"
+    max_tokens: 50
+    temperature: 0
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?:^|\n) ?Output \(a\)'
+      2: '(?:^|\n) ?Output \(b\)'
+  batch_size: 1

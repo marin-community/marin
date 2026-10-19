@@ -1,0 +1,8 @@
+claude-3-sonnet-20240229:
+  prompt_template: "claude-3-sonnet-20240229/prompt_chatml.txt"
+  fn_completions: "anthropic_completions"
+  completions_kwargs:
+    model_name: "claude-3-sonnet-20240229"
+    max_tokens_to_sample: 4096
+    price_per_token: 3e-6 # that's actually the context price, for output it's more expensive
+  pretty_name: "Claude 3 Sonnet (02/29)"

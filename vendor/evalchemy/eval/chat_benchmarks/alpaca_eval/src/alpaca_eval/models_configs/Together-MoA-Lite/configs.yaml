@@ -1,0 +1,9 @@
+Together-MoA-Lite:
+  prompt_template: "Qwen1.5-72B-Chat/prompt.txt" # for the aggregator we use a aggregate and synthesize prompt detailed in the repo
+  fn_completions: null
+  completions_kwargs:
+    model_name: "Together-MoA-Lite"
+    max_tokens: 2048
+    temperature: 0.7
+  pretty_name: "Together MoA-Lite"
+  link: "https://github.com/togethercomputer/moa"

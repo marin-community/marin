@@ -1,0 +1,16 @@
+REBEL-Llama-3-8B-Instruct-Armo:
+  completions_kwargs:
+    batch_size: 900
+    max_new_tokens: 4096
+    model_kwargs:
+      dtype: 'bfloat16'
+    model_name: "Cornell-AGI/REBEL-Llama-3-Armo-iter_1"
+    stop_token_ids:
+    - 128001
+    - 128009
+    temperature: 0.6
+    top_p: 0.9
+  fn_completions: "vllm_local_completions"
+  pretty_name: "REBEL-Llama-3-8B-Instruct-Armo"
+  prompt_template: "REBEL-Llama-3-8B-Instruct/prompt.txt"
+  link: "https://huggingface.co/Cornell-AGI/REBEL-Llama-3-Armo-iter_1"

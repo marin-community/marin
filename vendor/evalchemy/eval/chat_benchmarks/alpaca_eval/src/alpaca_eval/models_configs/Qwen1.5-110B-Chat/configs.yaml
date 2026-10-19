@@ -1,0 +1,15 @@
+Qwen1.5-110B-Chat:
+  prompt_template: "Qwen1.5-110B-Chat/prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "Qwen1.5-110B-Chat"
+    requires_chatml: True
+    temperature: 0.7
+    num_procs: 8
+    max_tokens: 4096
+    top_p: 0.8
+    price_per_token: 9e-7
+    client_kwargs:
+      base_url: "http://47.94.4.86:7909/v1"
+  pretty_name: "Qwen1.5 110B Chat"
+  link: "https://huggingface.co/Qwen/Qwen1.5-110B-Chat"

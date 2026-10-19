@@ -1,0 +1,19 @@
+SPPO-Mistral7B-PairRM-ExPO:
+  prompt_template: "SPPO-Mistral7B-PairRM/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "chujiezheng/Mistral7B-PairRM-SPPO-ExPO"
+    model_kwargs:
+      dtype: 'bfloat16'
+      tokenizer_mode: 'auto'
+    max_new_tokens: 2048
+    do_sample: True
+    seed: 42
+    temperature: 0.7
+    top_k: 50
+    top_p: 0.9
+    presence_penalty: 0.1
+    frequency_penalty: 0.1
+    batch_size: 1000
+  pretty_name: "ExPO + SPPO-Mistral7B-PairRM"
+  link: "https://huggingface.co/chujiezheng/Mistral7B-PairRM-SPPO-ExPO"

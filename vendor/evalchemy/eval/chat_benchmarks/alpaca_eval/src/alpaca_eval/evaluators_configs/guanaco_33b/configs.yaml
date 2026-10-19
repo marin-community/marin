@@ -1,0 +1,12 @@
+guanaco_33b:
+  prompt_template: "guanaco_33b/basic_prompt.txt"
+  fn_completions: "huggingface_api_completions" # use "huggingface_local_completions" if you want local serving
+  completions_kwargs:
+    model_name: "timdettmers/guanaco-33b-merged"
+    max_new_tokens: 50
+    #is_fast_tokenizer: False # needed for local
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?:^|\n) ?Output \(a\)'
+      2: '(?:^|\n) ?Output \(b\)'
+  batch_size: 1

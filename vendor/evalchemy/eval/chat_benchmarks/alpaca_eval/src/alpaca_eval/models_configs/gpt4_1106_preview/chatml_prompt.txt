@@ -1,0 +1,6 @@
+<|im_start|>system
+You are a helpful assistant.
+<|im_end|>
+<|im_start|>user
+{instruction}
+<|im_end|>

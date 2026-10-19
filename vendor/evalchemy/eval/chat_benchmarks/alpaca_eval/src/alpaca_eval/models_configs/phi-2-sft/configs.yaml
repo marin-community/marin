@@ -1,0 +1,14 @@
+phi-2-sft:
+  prompt_template: "phi-2-sft/prompt.txt"
+  fn_completions: "huggingface_local_completions"
+  completions_kwargs:
+    model_name: "lxuechen/phi-2-sft"
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+      trust_remote_code: True
+    max_new_tokens: 1024
+    temperature: 0.7
+    top_p: 1.0
+    do_sample: True
+  pretty_name: "Phi-2 SFT"
+  link: "https://huggingface.co/lxuechen/phi-2-sft"

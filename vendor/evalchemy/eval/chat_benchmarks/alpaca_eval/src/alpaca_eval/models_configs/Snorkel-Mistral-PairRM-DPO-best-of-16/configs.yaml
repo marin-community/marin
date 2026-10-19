@@ -1,0 +1,12 @@
+Snorkel-Mistral-PairRM-DPO-best-of-16: # this should be the same as the name as the current directory
+  prompt_template: "Snorkel-Mistral-PairRM-DPO-best-of-16/prompt.txt" # what prompt should be used for this model
+  fn_completions: "vllm_local_completions" # We use similar version of vllm_local
+  completions_kwargs: # parameters to the completion function
+    model_name: "snorkelai/Snorkel-Mistral-PairRM-DPO"
+    model_kwargs:
+      dtype: 'bfloat16'
+      trust_remote_code: True
+    max_new_tokens: 2048
+    temperature: 0.7 # We generates 16 responses and select the highest scoring one by PairRM and submit
+  pretty_name: "Snorkel (Mistral-PairRM-DPO+best-of-16)" # name in the leaderboard
+  link: "https://huggingface.co/snorkelai/Snorkel-Mistral-PairRM-DPO" # link to the model's repo/information in the leaderboard

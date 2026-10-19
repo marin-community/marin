@@ -1,0 +1,13 @@
+openbuddy-llama-30b-v7.1:
+  prompt_template: "openbuddy-llama-30b-v7.1/prompt.txt"
+  fn_completions: "huggingface_local_completions"
+  completions_kwargs:
+    model_name: "./openbuddy-llama-30b-v7.1-bf16" # local path
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 1.0
+    do_sample: True
+  pretty_name: "OpenBuddy-LLaMA-30B-v7.1"
+  link: "https://huggingface.co/OpenBuddy/openbuddy-llama-30b-v7.1-bf16"

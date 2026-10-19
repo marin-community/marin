@@ -1,0 +1,16 @@
+weighted_alpaca_eval_gpt4_turbo_new:
+  prompt_template: "alpaca_eval_clf_gpt4_turbo/alpaca_eval_clf.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4-turbo"
+    max_tokens: 1
+    temperature: 1 # temperature should be applied for sampling, so that should make no effect.
+    logprobs: true
+    top_logprobs: 5
+  fn_completion_parser: "logprob_parser"
+  completion_parser_kwargs:
+    numerator_token: "m"
+    denominator_tokens: ["m", "M"]
+    is_binarize: false
+  completion_key: "completions_all"
+  batch_size: 1

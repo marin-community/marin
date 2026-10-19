@@ -1,0 +1,74 @@
+model=$1
+venv=$2
+question_source=${3:-'huggingface'}
+api_base=$4
+api_key_name=$5
+model_display_name=$6
+
+if [ -z "$model" ] || [ -z "$venv" ]; then
+    echo "Usage: run_livebench_parallel <model> <venv-path> <optional-question-source>"
+    exit 1
+fi
+
+echo "Running livebench benchmarks sequentially with $model, using $venv"
+
+if [ -n "$api_base" ]; then
+    echo "Using API base: $api_base"
+    if [ -n "$api_key_name" ]; then
+        echo "Using API key name: $api_key_name"
+    else
+        echo "API key name not provided"
+    fi
+fi
+
+# Name of the tmux session
+SESSION=$(echo "livebench-$model" | tr '.' '_')
+
+echo "Creating tmux session $SESSION"
+
+# Kill existing session if it exists
+tmux kill-session -t $SESSION 2>/dev/null
+
+# Create a new tmux session
+tmux new-session -d -s $SESSION
+
+BENCHMARKS=(
+    "live_bench/coding"
+    "live_bench/data_analysis"
+    "live_bench/instruction_following"
+    "live_bench/language"
+    "live_bench/math"
+    # "live_bench/math/AMPS_Hard"
+    # "live_bench/math/AMPS_Hard_2"
+    # "live_bench/math/math_comp"
+    # "live_bench/math/math_comp_2"
+    # "live_bench/math/olympiad_2"
+    "live_bench/reasoning"
+    
+)
+
+gen_api_answer="python -u gen_api_answer.py --model $model --question-source $question_source"
+gen_ground_truth_judgment="python -u gen_ground_truth_judgment.py --model $model --question-source $question_source"
+
+if [ -n "$api_base" ]; then
+    gen_api_answer="$gen_api_answer --api-base $api_base"
+fi
+
+if [ -n "$api_key_name" ]; then
+    gen_api_answer="export LIVEBENCH_API_KEY=${!api_key_name} && $gen_api_answer"
+fi
+
+if [ -n "$model_display_name" ]; then
+    echo "Using model display name: $model_display_name"
+    gen_api_answer="$gen_api_answer --model-display-name $model_display_name"
+    gen_ground_truth_judgment="$gen_ground_truth_judgment --model-display-name $model_display_name"
+fi
+
+tmux send-keys -t $SESSION "source $venv" C-m
+
+command="$gen_api_answer --bench-name ${BENCHMARKS[0]} && $gen_ground_truth_judgment --bench-name ${BENCHMARKS[0]}"
+for ((i=1; i<${#BENCHMARKS[@]}; i++)); do
+    command="$command && $gen_api_answer --bench-name ${BENCHMARKS[i]} && $gen_ground_truth_judgment --bench-name ${BENCHMARKS[i]}"
+done
+
+tmux send-keys -t $SESSION "$command" C-m

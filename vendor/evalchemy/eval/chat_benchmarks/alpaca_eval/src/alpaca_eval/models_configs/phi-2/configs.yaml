@@ -1,0 +1,16 @@
+phi-2:
+  prompt_template: "phi-2/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "microsoft/phi-2"
+    model_kwargs:
+      dtype: "float16"
+      tensor_parallel_size: 1
+      tokenizer_mode: "auto"
+      trust_remote_code: True
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 1.0
+    use_beam_search: True
+  pretty_name: "Phi 2"
+  link: "https://huggingface.co/microsoft/phi-2"

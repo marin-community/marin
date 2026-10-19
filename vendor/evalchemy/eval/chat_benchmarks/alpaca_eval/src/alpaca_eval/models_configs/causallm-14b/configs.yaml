@@ -1,0 +1,14 @@
+causallm-14b:
+  prompt_template: "causallm-14b/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "CausalLM/14B" # local path
+    model_kwargs:
+      dtype: 'bfloat16'
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 1.0
+    use_beam_search: False
+    batch_size: 8
+  pretty_name: "CausalLM-14B"
+  link: "https://huggingface.co/CausalLM/14B"

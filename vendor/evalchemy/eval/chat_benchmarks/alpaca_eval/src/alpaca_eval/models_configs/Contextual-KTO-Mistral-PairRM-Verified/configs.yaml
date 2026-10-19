@@ -1,0 +1,15 @@
+Contextual-KTO-Mistral-PairRM-Verified:
+  prompt_template: "Contextual-KTO-Mistral-PairRM-Verified/prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "ContextualAI/Contextual_KTO_Mistral_PairRM"
+    requires_chatml: True
+    temperature: 0.7
+    num_procs: 8
+    is_strip: False
+    max_tokens: 2048
+    top_p: 0.95
+    client_kwargs:
+      base_url: "https://vr74xanx2jimu6ae.us-east-1.aws.endpoints.huggingface.cloud/v1/"
+  pretty_name: "sm-Contextual-KTO-Mistral-PairRM-Verified"
+  link: "https://huggingface.co/ContextualAI/Contextual_KTO_Mistral_PairRM" # link to the model's repo/information in the leaderboard

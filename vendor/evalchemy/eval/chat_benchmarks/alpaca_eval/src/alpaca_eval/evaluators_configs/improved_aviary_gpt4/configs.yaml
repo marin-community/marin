@@ -1,0 +1,12 @@
+# differences:
+# temperature=0
+# randomization of order of example
+improved_aviary_gpt4:
+  prompt_template: "aviary_gpt4/aviary_prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4"
+    max_tokens: 2048
+    temperature: 0
+  fn_completion_parser: "ranking_parser"
+  batch_size: 1

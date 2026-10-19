@@ -1,0 +1,10 @@
+claude_3_opus_ranking:
+  prompt_template: "claude_3_opus_ranking/ranking_prompt.txt"
+  fn_completions: "anthropic_completions"
+  completions_kwargs:
+    model_name: "claude-3-opus-20240229"
+    max_tokens_to_sample: 100
+    temperature: 0
+    price_per_token: 15e-6
+  fn_completion_parser: "ranking_parser"
+  batch_size: 1

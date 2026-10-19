@@ -1,0 +1,12 @@
+gemma-7b-it:
+  prompt_template: "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt" # together already deals with prompt
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "google/gemma-7b-it"
+    max_tokens: 4096
+    requires_chatml: True
+    price_per_token: 2e-7
+    client_kwargs:
+      base_url: 'https://api.together.xyz'
+  pretty_name: "Gemma Instruct (7B)"
+  link: "https://huggingface.co/google/gemma-7b-it"

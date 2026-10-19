@@ -1,0 +1,9 @@
+alpaca_eval_gpt4_0314:
+  prompt_template: "alpaca_eval_gpt4/alpaca_eval.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4-0314"
+    max_tokens: 100
+    temperature: 0
+  fn_completion_parser: "ranking_parser"
+  batch_size: 1

@@ -1,0 +1,17 @@
+SPPO-Llama-3-Instruct-8B-PairRM:
+  completions_kwargs:
+    batch_size: 900
+    do_sample: true
+    max_new_tokens: 4096
+    model_kwargs:
+      dtype: bfloat16
+    model_name: UCLA-AGI/Llama-3-Instruct-8B-SPPO-Iter3
+    stop_token_ids:
+    - 128001
+    - 128009
+    temperature: 0.9
+    top_p: 1.0
+  fn_completions: vllm_local_completions
+  pretty_name: SPPO-Llama-3-Instruct-8B-PairRM
+  prompt_template: SPPO-Llama-3-Instruct-8B-PairRM/prompt.txt
+  link: "https://huggingface.co/UCLA-AGI/Llama-3-Instruct-8B-SPPO-Iter3"

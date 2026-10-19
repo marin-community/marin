@@ -26,7 +26,6 @@ from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
-from marin.external_dependencies import ExternalDependency
 from rigging.secrets import SecretSpec
 
 logger = logging.getLogger(__name__)
@@ -105,10 +104,8 @@ class EvalchemyDefinition:
             ),
         )
 
-    def config_for(
-        self, source: EvalchemyConfig, model: ModelConfig, limit: int | None, dependency: ExternalDependency
-    ) -> EvalchemyRunConfig:
-        config = evalchemy_run_config(self.name, source, dependency)
+    def config_for(self, source: EvalchemyConfig, model: ModelConfig, limit: int | None) -> EvalchemyRunConfig:
+        config = evalchemy_run_config(self.name, source)
         effective_limit = config.max_eval_instances if limit is None else limit
         model_max_gen_toks = model.generation.max_gen_toks
         max_gen_toks = config.max_gen_toks
@@ -219,7 +216,7 @@ def harbor_definition(
     )
 
 
-def evalchemy_run_config(name: str, config: EvalchemyConfig, dependency: ExternalDependency) -> EvalchemyRunConfig:
+def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConfig:
     """Lower one launch file into Marin's served Evalchemy runner."""
     tasks: list[EvalTaskConfig] = []
     for task_name in config.tasks:
@@ -266,9 +263,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig, dependency: Externa
         chat_template_kwargs=dict(config.chat_template_kwargs),
         extra_model_args=extra_model_args,
         max_length=config.max_length,
-        runtime=EvalchemyRuntimeConfig(
-            requirement=dependency.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
-        ),
+        runtime=EvalchemyRuntimeConfig(extras=(*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras)),
         judge=config.judge,
     )
 

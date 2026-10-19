@@ -101,7 +101,7 @@ def test_relaunch_reuses_completed_steps_and_preserves_partial_archive(
     partial.parent.mkdir(parents=True)
     partial.write_text('{"response":"already generated"}')
     executed.clear()
-    monkeypatch.setattr(launch_module, "EVALCHEMY", replace(launch_module.EVALCHEMY, commit="a" * 40))
+    monkeypatch.setattr(launch_module, "evalchemy_runtime_source_hash", lambda: "a" * 64)
 
     second = runner.invoke(cli, [*command, "--run-id", batch.group_id, "--instances", "8", "--max-concurrent", "8"])
     assert second.exit_code == 0, second.output

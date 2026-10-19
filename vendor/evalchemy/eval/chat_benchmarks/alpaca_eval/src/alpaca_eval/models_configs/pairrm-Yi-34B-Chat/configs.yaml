@@ -1,0 +1,17 @@
+pairrm-Yi-34B-Chat:
+  prompt_template: "Yi-34B-Chat/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "01-ai/Yi-34b-Chat"
+    model_kwargs:
+      dtype: "bfloat16"
+      tensor_parallel_size: 4
+      tokenizer_mode: "slow"
+    max_new_tokens: 3500
+    temperature: 0.3
+    top_p: 0.8
+    stop_token_ids: [7]
+    batch_size: 900
+    best_of: 16 # number of completions to generate, using PairRM to select the best one
+  pretty_name: "PairRM 0.4B+Yi-34B-Chat (best-of-16)"
+  link: "https://huggingface.co/llm-blender/PairRM"

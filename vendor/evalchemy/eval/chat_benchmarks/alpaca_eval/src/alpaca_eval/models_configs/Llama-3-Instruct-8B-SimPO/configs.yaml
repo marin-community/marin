@@ -1,0 +1,17 @@
+Llama-3-Instruct-8B-SimPO:
+  completions_kwargs:
+    batch_size: 900
+    use_beam_search: true
+    max_new_tokens: 4096
+    model_kwargs:
+      dtype: bfloat16
+    model_name: princeton-nlp/Llama-3-Instruct-8B-SimPO 
+    stop_token_ids:
+    - 128001
+    - 128009
+    temperature: 0.9
+    top_p: 1.0
+  fn_completions: vllm_local_completions
+  pretty_name: Llama-3-Instruct-8B-SimPO 
+  prompt_template: Llama-3-Instruct-8B-SimPO/prompt.txt
+  link: https://huggingface.co/princeton-nlp/Llama-3-Instruct-8B-SimPO

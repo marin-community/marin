@@ -1,37 +1,64 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned Evalchemy client runtime for endpoint-backed evaluations.
+"""Independent, checkout-local Evalchemy runtime and content provenance."""
 
-Evalchemy runs from an isolated uvx environment on the standard Iris task image. The immutable Git
-revision identifies the CLI, graders, and benchmark data without requiring a separate task image.
-"""
+from pathlib import Path
 
-from marin.external_dependencies import EVALCHEMY
+from rigging.cache import combined_content_hash, file_content_hash
+from rigging.config_discovery import find_project_root
 
+EVALCHEMY_RUNTIME_PROJECT = "vendor/evalchemy"
 EVALCHEMY_REQUIRED_EXTRAS = ("serve-eval",)
-EVALCHEMY_REQUIREMENT = EVALCHEMY.requirement(EVALCHEMY_REQUIRED_EXTRAS)
-
-# Evalchemy's current dependency graph has Python 3.12 wheels. Letting uvx select Python 3.13 makes
-# pandas 2.2.2 build from source during a cold start.
 EVALCHEMY_PYTHON_VERSION = "3.12"
-_PYTHON_ABI = f"cp{EVALCHEMY_PYTHON_VERSION.replace('.', '')}"
 
-# FineStore writes evaluator artifacts to both GCS and CoreWeave S3. Evalchemy's lean endpoint core
-# leaves those cloud filesystem implementations to its caller.
-#
-# Keep CPU-only PyTorch as a compatibility floor for benchmark orchestration and grading code.
-# Inference stays in the separately served model process; direct wheel URLs prevent uv from
-# resolving a CUDA build when a benchmark extra declares an unconstrained torch dependency.
-_CPU_TORCH_VERSION = "2.11.0"
-_CPU_TORCH_X86_64 = (
-    "torch @ https://download.pytorch.org/whl/cpu/"
-    f"torch-{_CPU_TORCH_VERSION}%2Bcpu-{_PYTHON_ABI}-{_PYTHON_ABI}-manylinux_2_28_x86_64.whl"
-    " ; sys_platform == 'linux' and platform_machine == 'x86_64'"
+_RUNTIME_DIRECTORIES = (
+    "vendor/evalchemy/eval",
+    "vendor/evalchemy/packages/evalchemy-config/src/evalchemy_config",
+    "lib/finestore/src",
+    "lib/rigging/src",
 )
-_CPU_TORCH_AARCH64 = (
-    "torch @ https://download.pytorch.org/whl/cpu/"
-    f"torch-{_CPU_TORCH_VERSION}%2Bcpu-{_PYTHON_ABI}-{_PYTHON_ABI}-manylinux_2_28_aarch64.whl"
-    " ; sys_platform == 'linux' and platform_machine == 'aarch64'"
+_RUNTIME_FILES = (
+    "vendor/evalchemy/pyproject.toml",
+    "vendor/evalchemy/uv.lock",
+    "lib/finestore/pyproject.toml",
+    "lib/rigging/pyproject.toml",
+    "lib/marin/src/marin/evaluation/evalchemy/client.py",
+    "lib/marin/src/marin/evaluation/evalchemy/runner.py",
+    "lib/marin/src/marin/evaluation/evalchemy/runtime.py",
 )
-EVALCHEMY_EXTRA_PACKAGES = ("s3fs", "gcsfs", _CPU_TORCH_X86_64, _CPU_TORCH_AARCH64)
+
+
+def evalchemy_runtime_source_hash() -> str:
+    """Identify evaluator code, its independent lock, and local package sources."""
+    root = find_project_root(Path(__file__))
+    if root is None:
+        raise ValueError("Vendored Evalchemy requires a Marin source checkout")
+    components = []
+    for directory in _RUNTIME_DIRECTORIES:
+        source = root / directory
+        if not source.is_dir():
+            raise FileNotFoundError(f"Evalchemy runtime source directory is unavailable: {source}")
+        for candidate in sorted(source.rglob("*")):
+            relative = candidate.relative_to(root)
+            # Optional local benchmark packages generate build metadata while uv
+            # resolves their dependencies. Only source inputs identify a runtime.
+            if (
+                any(
+                    part in {"__pycache__", ".pytest_cache", ".venv", "build", "dist"}
+                    or part.endswith((".egg-info", ".dist-info"))
+                    for part in relative.parts
+                )
+                or candidate.suffix == ".pyc"
+            ):
+                continue
+            if candidate.is_file():
+                components.append(f"{relative.as_posix()}:{file_content_hash(candidate)}")
+    components.extend(f"{path}:{file_content_hash(root / path)}" for path in _RUNTIME_FILES)
+    return combined_content_hash(components)
+
+
+def evalchemy_runtime_descriptor(extras: tuple[str, ...], source_hash: str) -> str:
+    """Describe the evaluator content and selected benchmark dependencies."""
+    selected = ",".join(sorted(set(extras)))
+    return f"evalchemy[{selected}] @ {EVALCHEMY_RUNTIME_PROJECT}#sha256={source_hash}"

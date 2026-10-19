@@ -1,0 +1,13 @@
+claude:
+  prompt_template: "claude/basic_prompt.txt"
+  fn_completions: "anthropic_completions"
+  completions_kwargs:
+    model_name: "claude-v1"
+    max_tokens_to_sample: 50
+    temperature: 0
+    client_function_name: "completions"
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?:^|\n) ?Output \(a\)'
+      2: '(?:^|\n) ?Output \(b\)'
+  batch_size: 1

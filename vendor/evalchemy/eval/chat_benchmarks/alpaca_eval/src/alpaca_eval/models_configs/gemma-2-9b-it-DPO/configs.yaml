@@ -1,0 +1,17 @@
+gemma-2-9b-it-DPO:
+  completions_kwargs:
+    batch_size: 900
+    do_sample: true
+    max_new_tokens: 4096
+    model_kwargs:
+      torch_dtype: bfloat16
+    model_name: princeton-nlp/gemma-2-9b-it-DPO
+    stop_token_ids:
+    - 1
+    - 107
+    temperature: 0.5
+    top_p: 1.0
+  fn_completions: vllm_local_completions
+  pretty_name: gemma-2-9b-it-DPO
+  prompt_template: gemma-2-9b-it-DPO/prompt.txt
+  link: https://huggingface.co/princeton-nlp/gemma-2-9b-it-DPO

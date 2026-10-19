@@ -1,0 +1,15 @@
+openbuddy-llama2-13b-v11.1:
+  prompt_template: "openbuddy-llama2-13b-v11.1/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "./openbuddy-llama2-13b-v11.1-bf16" # local path
+    model_kwargs:
+      dtype: 'bfloat16'
+      tensor_parallel_size: 2 # Tensor parallelism, 2 for 2 GPUs
+    max_new_tokens: 2000 # on vllm, prompt_tokens+max_new_tokens must be <= model_max_length otherwise it will raise an error and nothing will be generated
+    temperature: 0.7
+    top_p: 1.0
+    use_beam_search: False
+    batch_size: 16
+  pretty_name: "OpenBudddy-LLaMA2-13B-v11.1"
+  link: "https://huggingface.co/OpenBuddy/openbuddy-llama2-13b-v11.1-bf16"

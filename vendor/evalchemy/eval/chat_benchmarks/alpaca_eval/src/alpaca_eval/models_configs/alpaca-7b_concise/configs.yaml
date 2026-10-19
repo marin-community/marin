@@ -1,0 +1,14 @@
+alpaca-7b_concise:
+  prompt_template: "Mixtral-8x7B-Instruct-v0.1_concise/togetherai_prompt_concise.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "togethercomputer/alpaca-7b"
+    max_tokens: 1024
+    requires_chatml: True
+    price_per_token: 2e-7
+    temperature: 0.7
+    top_p: 1.0
+    client_kwargs:
+      base_url: 'https://api.together.xyz'
+  pretty_name: "Alpaca 7B (concise)"
+  link: "https://huggingface.co/tatsu-lab/alpaca-7b-wdiff"

@@ -1,0 +1,12 @@
+evo-7b:
+  prompt_template: "alpaca-7b/prompt.txt"
+  fn_completions: "huggingface_local_completions"
+  completions_kwargs:
+    model_name: "./evo-7b" # local path
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+    max_length: 1024
+    temperature: 0.8
+    top_p: 0.95
+    do_sample: True
+  pretty_name: "Evo 7B"

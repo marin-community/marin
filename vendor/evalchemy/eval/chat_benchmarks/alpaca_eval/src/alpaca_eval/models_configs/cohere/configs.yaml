@@ -1,0 +1,7 @@
+cohere:
+  prompt_template: "cohere/prompt.txt"  # empty
+  fn_completions: "cohere_completions"
+  completions_kwargs:
+    model_name: "command-nightly"
+    max_tokens: null  # up to EOS or context length
+  pretty_name: "Cohere Command"

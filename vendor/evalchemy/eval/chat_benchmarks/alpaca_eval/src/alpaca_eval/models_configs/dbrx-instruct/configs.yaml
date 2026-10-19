@@ -1,0 +1,12 @@
+dbrx-instruct:
+  prompt_template: "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "databricks/dbrx-instruct"
+    max_tokens: 4096
+    requires_chatml: True
+    price_per_token: 1.2e-06
+    client_kwargs:
+      base_url: 'https://api.together.xyz'
+  pretty_name: "DBRX Instruct"
+  link: "https://huggingface.co/databricks/dbrx-instruct"

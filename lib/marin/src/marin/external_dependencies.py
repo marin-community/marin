@@ -62,15 +62,6 @@ CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
 )
 
 
-EVALCHEMY = ExternalDependency(
-    config_name="evalchemy",
-    distribution="evalchemy",
-    repository="https://github.com/marin-community/evalchemy.git",
-    version="0.1.0",
-    commit="09d27c93a8846531e84fb30cfa11dacd2ef404c5",
-    runtime_requirements=(),
-)
-
 HARBOR = ExternalDependency(
     config_name="harbor",
     distribution="harbor",
@@ -125,7 +116,6 @@ TPU_INFERENCE_FORK_REQUIREMENT = (
 )
 
 EXTERNAL_DEPENDENCIES = (
-    EVALCHEMY,
     HARBOR,
     MARIN_SKYRL,
 )

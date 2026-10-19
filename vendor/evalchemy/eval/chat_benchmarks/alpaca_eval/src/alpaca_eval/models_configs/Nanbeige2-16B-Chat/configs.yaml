@@ -1,0 +1,14 @@
+Nanbeige2-16B-Chat:
+  prompt_template: "Nanbeige2-16B-Chat/prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "Nanbeige2-16B-Chat"
+    max_tokens: 4096
+    temperature: 0.3
+    top_p: 0.9
+    requires_chatml: true
+    is_chat: true
+    client_kwargs:
+      base_url: "https://nanbeige.zhipin.com/api/gpt/open/chat/openai/v1"
+  pretty_name: "Nanbeige2 16B Chat"
+  link: "https://huggingface.co/Nanbeige/Nanbeige2-16B-Chat"

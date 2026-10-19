@@ -1,0 +1,5 @@
+<s>[INST] <<SYS>>
+
+<</SYS>>
+
+{instruction} [/INST]

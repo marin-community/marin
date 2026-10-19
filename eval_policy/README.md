@@ -1,6 +1,10 @@
 # Verified evaluation cohorts
 
-The launcher runs any subset of the [September 16](https://github.com/marin-community/marin/issues/9193) or [September 24](https://github.com/marin-community/marin/issues/9409) policy under `eval-policy-2026-09-16-verified` or `eval-policy-2026-09-24-verified`. Each benchmark gets its own H100 serving group, sized by the model YAML's `resource_hint.gpu.H100` value.
+The [September 16](https://github.com/marin-community/marin/issues/9193) and [September 24](https://github.com/marin-community/marin/issues/9409) policies use the labels `eval-policy-2026-09-16-verified` and `eval-policy-2026-09-24-verified`. Their Evalchemy benchmarks require the original external evaluator commit and must run from a Marin checkout that predates Evalchemy vendoring. The current launcher rejects those historical Evalchemy launches; historical records remain readable. Harbor-only subsets retain their pinned runtimes.
+
+Use a separate checkout at [Marin revision `205558e1a7fc`](https://github.com/marin-community/marin/commit/205558e1a7fc3dd705b1132691798b09dc1f254c) for those historical Evalchemy launches; it supports both cohorts and their original evaluator pins.
+
+The launcher gives each benchmark its own H100 serving group, sized by the model YAML's `resource_hint.gpu.H100` value. The following Evalchemy commands apply to that historical checkout.
 
 Run from the repository root:
 
@@ -21,6 +25,6 @@ Each policy submission creates a fresh run ID for every benchmark and AIME24 rep
 reuses that run ID and its per-eval StepSpec state, so it skips steps that already reached `SUCCESS`.
 To publish a changed Harbor or Evalchemy config or runtime as a verified cohort, add a new version
 to the policy maps, source digests, and runtime pins before launching. The existing verified labels
-continue to use their original pins.
+retain their original runtime requirements.
 
 Pi benchmarks require an explicit `thinking_format` in the model YAML's `agent.agent_kwargs` or the Harbor policy's agent kwargs. Choose `chat-template` or `qwen-chat-template` to match the model's request format; this does not select thinking on or off. Preflight constructs Pi to reject missing or invalid provider settings before submission.

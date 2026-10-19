@@ -1,0 +1,8 @@
+llama-2-chat-7b-evol70k-neft:
+  prompt_template: "llama-2-chat-7b-Evol70k-neft/prompt.txt"
+  model_kwargs:
+    torch_dtype: 'bfloat16'
+  pretty_name: "LLaMA2 Chat 7B Evol70k-NEFT"
+  link: https://github.com/neelsjain/NEFTune
+  # Completions with precomputed per the github repo linked. Particularly this link: https://github.com/neelsjain/NEFTune/blob/main/experiment_code/eval_generate.py. 
+  # Note this is a LLaMA-2-chat base model

@@ -1,0 +1,10 @@
+humpback-llama-65b:
+  prompt_template: "humpback-llama-65b/prompt.txt"
+  fn_completions: ""
+  completions_kwargs:
+    model_name: "humpback-llama-65b"
+    max_length: 2048 
+    temperature: 0.7
+    top_p: 0.9
+  pretty_name: "Humpback LLaMa 65B"
+  link: "https://arxiv.org/abs/2308.06259"

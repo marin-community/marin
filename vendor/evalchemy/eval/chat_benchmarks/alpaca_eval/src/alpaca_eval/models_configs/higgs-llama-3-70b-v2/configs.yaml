@@ -1,0 +1,12 @@
+higgs-llama-3-70b-v2:
+  prompt_template: "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "higgs-llama-3-70b-240629-v2"
+    max_tokens: 4096
+    num_procs: 8
+    requires_chatml: True
+    client_kwargs:
+      base_url: 'https://api.boson.ai/v1'
+  pretty_name: "Higgs-Llama-3-70B V2"
+  link: "https://boson.ai/"

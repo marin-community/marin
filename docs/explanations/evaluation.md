@@ -15,7 +15,7 @@ Marin supports three evaluation paths:
 
 - **In-loop training evals**: [`train_lm`][marin.experiment.train.train_lm] runs periodic multiple-choice evaluations through Levanter's lm-evaluation-harness integration and logs to W&B when an `EvalSuite` is provided.
 - **Post-hoc evals**: the shared launcher or composable `EvalGroup`s evaluate multiple-choice and
-  generation tasks with the Evalchemy fork.
+  generation tasks with the vendored Evalchemy package.
 - **Harbor tasks**: the shared launcher runs containerized agent benchmarks and registry datasets
   through Marin's Harbor integration.
 
@@ -38,6 +38,12 @@ with remote_inference(model, engine, iris) as session:
 mechanisms such as `run_evalchemy`, `run_lm_eval`, and `run_harbor_driver` own only their native task and
 result contracts. This keeps the lifecycle common without hiding mechanism-specific configuration
 or outcomes behind a universal `do_eval` interface.
+
+Evalchemy lives in `vendor/evalchemy`, outside Marin's uv workspace. Its own
+`uv.lock` isolates evaluator dependencies from training and serving dependencies.
+Local path sources bind FineStore and Rigging to the same checkout. An evaluation
+child installs the frozen project in its own virtual environment and calls its
+`evalchemy` console script; Marin does not import the vendored package.
 
 Evalchemy and Harbor write their results directly into FineStore. Evalchemy owns the
 `evalchemy_results` and `samples` tables. Harbor preserves its native files as source objects and

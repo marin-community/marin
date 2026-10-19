@@ -1,0 +1,13 @@
+Nanbeige2-8B-Chat:
+  prompt_template: "Nanbeige2-8B-Chat/prompt.txt"
+  fn_completions: null
+  completions_kwargs:
+    model_name: "Nanbeige/Nanbeige2-8B-Chat"
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+    max_new_tokens: 4096
+    temperature: 0.3
+    top_p: 0.9
+    do_sample: True
+  pretty_name: "Nanbeige2 8B Chat"
+  link: "https://huggingface.co/Nanbeige/Nanbeige2-8B-Chat"

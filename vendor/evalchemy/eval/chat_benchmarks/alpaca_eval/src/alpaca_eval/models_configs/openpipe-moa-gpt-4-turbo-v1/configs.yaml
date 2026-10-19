@@ -1,0 +1,9 @@
+openpipe-moa-gpt-4-turbo-v1:
+  prompt_template: "gpt4_1106_preview/chatml_prompt.txt"
+  fn_completions: null
+  completions_kwargs:
+    model_name: "openpipe-moa-gpt-4-turbo-v1"
+    max_tokens: 4096
+    temperature: 1.0
+  pretty_name: "OpenPipe MoA GPT-4 Turbo"
+  link: "https://openpipe.ai/blog/mixture-of-agents"

@@ -1,0 +1,13 @@
+Storm-7B-best-of-64:
+  prompt_template: "Storm-7B/prompt.txt"
+  fn_completions: null
+  completions_kwargs:
+    model_name: "jieliu/Storm-7B"
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+    max_new_tokens: 2048
+    temperature: 1.0
+    n: 64
+    batch_size: 8
+  pretty_name: "Storm-7B (best-of-64)"
+  link: "https://huggingface.co/jieliu/Storm-7B"

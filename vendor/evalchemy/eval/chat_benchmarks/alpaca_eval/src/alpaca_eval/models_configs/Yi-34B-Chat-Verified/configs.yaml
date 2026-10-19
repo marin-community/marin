@@ -1,0 +1,14 @@
+Yi-34B-Chat-Verified:
+  prompt_template: "Yi-34B-Chat-Verified/prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "yi-34b-chat"
+    requires_chatml: True
+    temperature: 0.3
+    num_procs: 1
+    max_tokens: 3500
+    top_p: 0.8
+    client_kwargs:
+      base_url: "http://api.01ww.xyz/v1"
+  pretty_name: "Yi 34B Chat"
+  link: "https://huggingface.co/01-ai/Yi-34B-Chat"

@@ -1,0 +1,16 @@
+Qwen-14B-Chat:
+  prompt_template: "Qwen-14B-Chat/prompt.txt"
+  fn_completions: "huggingface_local_completions"
+  completions_kwargs:
+    model_name: "Qwen/Qwen-14B-Chat"
+    requires_chatml: True
+    model_kwargs:
+      torch_dtype: "bfloat16"
+      trust_remote_code: True
+      tokenizer_mode: "auto"
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 1.0
+    do_sample: True
+  pretty_name: "Qwen 14B Chat"
+  link: "https://huggingface.co/Qwen/Qwen-14B-Chat"

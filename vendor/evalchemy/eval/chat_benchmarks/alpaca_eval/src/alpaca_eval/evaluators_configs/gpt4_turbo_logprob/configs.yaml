@@ -1,0 +1,16 @@
+gpt4_turbo_logprob:
+  prompt_template: "gpt4_turbo_clf/basic_clf_prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4-1106-preview"
+    max_tokens: 1
+    temperature: 1 # temperature should be applied for sampling, so that should make no effect.
+    logprobs: true
+    top_logprobs: 5
+  fn_completion_parser: "logprob_parser"
+  completion_parser_kwargs:
+    numerator_token: "A"
+    denominator_tokens: [ "A", "B" ]
+    is_binarize: false
+  completion_key: "completions_all"
+  batch_size: 1

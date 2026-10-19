@@ -1,0 +1,9 @@
+claude_ranking:
+  prompt_template: "claude_ranking/ranking_prompt.txt"
+  fn_completions: "anthropic_completions"
+  completions_kwargs:
+    model_name: "claude-v1"
+    max_tokens_to_sample: 100
+    temperature: 0
+  fn_completion_parser: "ranking_parser"
+  batch_size: 1

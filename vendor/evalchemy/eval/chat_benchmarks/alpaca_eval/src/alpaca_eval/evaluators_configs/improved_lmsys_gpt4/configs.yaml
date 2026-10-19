@@ -1,0 +1,12 @@
+# differences:
+# temperature=0
+# randomization of order of example
+improved_lmsys_gpt4:
+  prompt_template: "lmsys_gpt4/lmsys_prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4"
+    max_tokens: 1024
+    temperature: 0
+  fn_completion_parser: "lmsys_parser"
+  batch_size: 1

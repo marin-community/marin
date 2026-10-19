@@ -4,7 +4,7 @@
 """Evaluate configured tasks through an OpenAI-compatible endpoint.
 
 Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG``; the parent builds it in
-:mod:`marin.evaluation.evalchemy.runner`. Each task runs through the evalchemy fork's ``evalchemy``
+:mod:`marin.evaluation.evalchemy.runner`. Each task runs through the vendored ``evalchemy``
 CLI once (one invocation per task so each carries its own ``num_fewshot``) with lm-eval's
 ``local-completions`` (or ``local-chat-completions``) API model pointed at the served URL. Evalchemy
 writes result documents and normalized sample rows directly to FineStore tables at ``out_path``.
@@ -232,7 +232,7 @@ def main() -> None:
     print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
     failures: list[str] = []
     for task in tasks:
-        # Evalchemy is installed beside the uvx environment's interpreter.
+        # Evalchemy is installed beside the independent project's interpreter.
         cmd = build_command(config, task, sys.executable, max_length)
         print(f"running evalchemy: {' '.join(cmd)}", flush=True)
         result = subprocess.run(cmd)

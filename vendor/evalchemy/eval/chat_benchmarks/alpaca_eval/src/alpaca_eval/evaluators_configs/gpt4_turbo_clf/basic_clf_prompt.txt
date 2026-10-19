@@ -1,0 +1,35 @@
+<|im_start|>system
+You are a helpful instruction-following assistant.
+<|im_end|>
+<|im_start|>user
+Select the output A or B that best matches the given instruction. Choose your preferred output, which can be subjective. Your answer should ONLY contain: A or B. Here's an example:
+
+# Example:
+## Instruction:
+Give a description of the following job: "ophthalmologist"
+
+## Output A:
+An ophthalmologist is a medical doctor who specializes in the diagnosis and treatment of eye diseases and conditions.
+
+## Output B:
+An ophthalmologist is a medical doctor who pokes and prods at your eyes while asking you to read letters from a chart.
+
+## Which is best, A or B?
+A
+
+Here the answer is A because it provides a comprehensive and accurate description of the job of an ophthalmologist. In contrast, B is more of a joke.
+
+# Task:
+Now is the real task, do not explain your answer, just say A or B.
+
+## Instruction:
+{instruction}
+
+## Output A:
+{output_1}
+
+## Output B:
+{output_2}
+
+## Which is best, A or B?
+<|im_end|>

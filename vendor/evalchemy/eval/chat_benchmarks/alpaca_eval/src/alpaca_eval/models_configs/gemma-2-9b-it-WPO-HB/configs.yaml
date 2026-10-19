@@ -1,0 +1,20 @@
+gemma-2-9b-it-WPO-HB:
+  completions_kwargs:
+    batch_size: 1000
+    max_new_tokens: 4096
+    model_kwargs:
+      dtype: 'bfloat16'
+      tokenizer_mode: 'auto'
+    model_name: wzhouad/gemma-2-9b-it-WPO-HB
+    stop_token_ids:
+    - 1
+    - 107
+    temperature: 0.7
+    top_k: 50
+    top_p: 0.9
+    presence_penalty: 0.1
+    frequency_penalty: 0.1
+  fn_completions: vllm_local_completions
+  pretty_name: gemma-2-9b-it-WPO-HB
+  prompt_template: gemma-2-9b-it-DPO/prompt.txt
+  link: https://huggingface.co/wzhouad/gemma-2-9b-it-WPO-HB

@@ -1,0 +1,8 @@
+alpaca-7b-neft:
+  prompt_template: "alpaca-7b/prompt.txt"
+  model_kwargs:
+    torch_dtype: 'bfloat16'
+  pretty_name: "Alpaca-7B-NEFT"
+  link: https://github.com/neelsjain/NEFTune
+  # Completions with precomputed per the github repo linked. Particularly this link: https://github.com/neelsjain/NEFTune/blob/main/experiment_code/eval_generate.py. 
+  # Note this is a LLaMA-1 base model

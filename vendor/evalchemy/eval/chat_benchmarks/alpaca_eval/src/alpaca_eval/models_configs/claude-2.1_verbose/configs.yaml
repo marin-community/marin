@@ -1,0 +1,7 @@
+claude-2.1_verbose:
+  prompt_template: "claude-2.1_verbose/prompt_verbose.txt"
+  fn_completions: "anthropic_completions"
+  completions_kwargs:
+    model_name: "claude-2.1"
+    max_tokens_to_sample: 4096
+  pretty_name: "Claude 2.1 (verbose)"

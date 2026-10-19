@@ -1,0 +1,47 @@
+# DROP task override (marin-community/evalchemy#31).
+#
+# Identical to the upstream lm-eval `drop` task (EleutherAI/lm-evaluation-harness
+# v0.4.12) EXCEPT for the added `filter_list`, which extracts the short answer span from
+# a verbose completion before the strict DROP token-F1 scoring. Without it, a model run
+# without a chat template (local-completions) produces verbose completions whose token-F1
+# collapses to ~0 even when the correct answer is present (grid-wide f1 ~= 0.002).
+#
+# This file overrides the upstream `drop` task because evalchemy loads it via
+# `include_path` (see eval/eval.py -> DEFAULT_LM_EVAL_INCLUDE_DIR), and include_path task
+# configs take precedence over the packaged defaults.
+task: drop
+dataset_path: EleutherAI/drop
+output_type: generate_until
+training_split: train
+validation_split: validation
+process_docs: !function utils.process_docs
+doc_to_text: "{{passage}} {{question}}\nRespond with exactly \"Answer: <short answer>\"."
+# ``process_docs`` normalizes the raw DROP answer dictionary into ``answers``.  The
+# raw ``answer`` field remains present after Dataset.map, so rendering it here silently
+# joins its dictionary keys ("number,date,spans,worker_id,hit_id") instead of the gold.
+# Each normalized candidate is a list of spans; few-shot prompting uses the first gold.
+doc_to_target: "Answer: {{ answers[0]|join(',')}}"
+target_delimiter: "\n"
+process_results: !function utils.process_results
+should_decontaminate: true
+doc_to_decontamination_query: "{{passage}} {{question}}"
+generation_kwargs:
+  until: !function eval.generation_stops.DROP_STOP_SEQUENCES
+filter_list:
+  - name: extract_answer
+    filter:
+      # Pull the short answer out of the (possibly verbose, no-template) completion...
+      - function: custom
+        filter_fn: !function utils.drop_answer_extraction_filter
+      # ...then keep the first sample, matching upstream drop's take_first semantics.
+      - function: take_first
+metric_list:
+  - metric: em
+    aggregation: mean
+    higher_is_better: true
+  - metric: f1
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 3.3
+  primary_metric: f1

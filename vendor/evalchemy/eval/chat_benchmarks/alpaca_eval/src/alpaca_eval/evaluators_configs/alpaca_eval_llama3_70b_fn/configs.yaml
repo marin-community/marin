@@ -1,0 +1,13 @@
+alpaca_eval_llama3_70b_fn:
+  prompt_template: "alpaca_eval_llama3_70b_fn/alpaca_eval_fn.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    requires_chatml: True
+    model_name: "meta-llama/Llama-3-70b-chat-hf"
+    max_tokens: 100
+    temperature: 0
+    price_per_token: 9e-7
+    client_kwargs:
+      base_url: 'https://api.together.xyz/v1'
+  fn_completion_parser: "ranking_parser"
+  batch_size: 1

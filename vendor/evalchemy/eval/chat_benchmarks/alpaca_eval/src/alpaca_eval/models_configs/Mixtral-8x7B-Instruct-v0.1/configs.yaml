@@ -1,0 +1,12 @@
+Mixtral-8x7B-Instruct-v0.1:
+  prompt_template: "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt" # together already deals with prompt
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "mistralai/Mixtral-8x7B-Instruct-v0.1"
+    max_tokens: 4096
+    requires_chatml: True
+    price_per_token: 6e-7
+    client_kwargs:
+      base_url: 'https://api.together.xyz'
+  pretty_name: "Mixtral 8x7B v0.1"
+  link: "https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1"

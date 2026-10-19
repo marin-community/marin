@@ -1,0 +1,36 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "livebench"
+version = "0.0.4"
+description = "A living benchmark for large language models."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+]
+dependencies = [
+    "accelerate>=0.21", "aiohttp", "anthropic>=0.3", "antlr4-python3-runtime==4.11", "datasets", "fastapi", "httpx", "immutabledict", "langchain", "langdetect", 
+    "levenshtein>=0.20.4", "lxml", "markdown2[all]", "nh3", "nltk", "numpy", "openai",
+    "packaging", "pandas==2.2.2", "peft", "prompt_toolkit>=3.0.0", "protobuf", "pydantic", "pyext==0.7", "psutil", "ray", "requests", "rich>=10.0.0",
+    "sentencepiece", "shortuuid", "sympy>=1.12", "tiktoken", "torch", "transformers>=4.31.0", "tqdm>=4.62.1", "uvicorn", "wheel",
+    "fschat@git+https://github.com/lm-sys/FastChat#egg=c5223e34babd24c3f9b08205e6751ea6e42c9684", "tenacity", "lark"
+]
+
+[project.optional-dependencies]
+flash_attn  = ["flash-attn"]
+
+[project.urls]
+"Homepage" = "https://github.com/livebench/LiveBench"
+"Bug Tracker" = "https://github.com/livebench/LiveBench/issues"
+
+[tool.setuptools.packages.find]
+exclude = ["notebooks"]
+
+[tool.wheel]
+exclude = ["notebooks"]

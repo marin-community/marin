@@ -1,0 +1,16 @@
+alpaca_eval_vllm_llama3_70b_fn:
+  prompt_template: "alpaca_eval_vllm_llama3_70b_fn/alpaca_eval_fn.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "/home/shared/Meta-Llama-3-70B-Instruct" # TODO: replace with path to the model
+    model_kwargs:
+      tokenizer_mode: "auto"
+      trust_remote_code: True
+      max_model_len: 7000
+      tensor_parallel_size: 2 # 2 GPUs
+    is_chatml_prompt: true
+    max_new_tokens: 100
+    temperature: 0.0
+    top_p: 1.0
+    batch_size: 128
+  fn_completion_parser: "ranking_parser"

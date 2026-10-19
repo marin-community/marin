@@ -1,0 +1,16 @@
+Yi-34B-Chat:
+  prompt_template: "Yi-34B-Chat/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "01-ai/Yi-34b-Chat"
+    model_kwargs:
+      torch_dtype: "bfloat16"
+      tp: 4
+      tokenizer_mode: "slow"
+    max_new_tokens: 3500
+    temperature: 0.3
+    top_p: 0.8
+    stop_token_ids: [7]
+    batch_size: 900
+  pretty_name: "Yi 34B Chat"
+  link: "https://huggingface.co/01-ai/Yi-34B-Chat"

@@ -1,0 +1,18 @@
+openchat-v3.1-13b:
+  prompt_template: "openchat-13b/prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    openai_api_base: http://127.0.0.1:18888/v1
+    requires_chatml: True
+    sleep_time: 0
+
+    model_name: "openchat_v3.1_llama2"
+    max_tokens: 4096
+
+    top_p: 1.0
+    temperature: 0.7
+
+    num_procs: 128
+
+  pretty_name: "OpenChat V3.1 13B"
+  link: "https://github.com/imoneoi/openchat"

@@ -1,0 +1,19 @@
+tulu-2-dpo-13b-ExPO:
+  prompt_template: "tulu-2-dpo-70b/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "chujiezheng/tulu-2-dpo-13b-ExPO"
+    model_kwargs:
+      dtype: 'bfloat16'
+      tokenizer_mode: 'auto'
+    max_new_tokens: 2048
+    use_beam_search: True
+    seed: 42
+    temperature: 0.7
+    top_k: 50
+    top_p: 0.9
+    presence_penalty: 0.1
+    frequency_penalty: 0.1
+    batch_size: 1000
+  pretty_name: "ExPO + Tulu-2-DPO-13B"
+  link: "https://huggingface.co/chujiezheng/tulu-2-dpo-13b-ExPO"

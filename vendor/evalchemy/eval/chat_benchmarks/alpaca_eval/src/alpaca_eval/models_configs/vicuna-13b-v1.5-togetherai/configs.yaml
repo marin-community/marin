@@ -1,0 +1,12 @@
+vicuna-13b-v1.5-togetherai:
+  prompt_template: "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt" # together already deals with prompt
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "lmsys/vicuna-13b-v1.5"
+    max_tokens: 2048
+    requires_chatml: True
+    price_per_token: 3e-7
+    client_kwargs:
+      base_url: 'https://api.together.xyz'
+  pretty_name: "Vicuna 13B v1.5 (together)"
+  link: "https://huggingface.co/lmsys/vicuna-13b-v1.5"

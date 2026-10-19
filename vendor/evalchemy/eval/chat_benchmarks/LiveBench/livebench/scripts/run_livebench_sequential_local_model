@@ -1,0 +1,48 @@
+modelpath=$1
+modelid=$2
+venv=$3
+question_source=${4:-'huggingface'}
+
+
+if [ -z "$modelpath" ] || [ -z "$modelid" ] || [ -z "$venv" ]; then
+    echo "Usage: run_livebench_parallel <modelpath> <modelid> <venv-path> <optional-question-source>"
+    exit 1
+fi
+
+echo "Running livebench benchmarks sequentially using local model $modelpath from hf with id $modelid, using $venv"
+
+# Name of the tmux session
+SESSION=$(echo "livebench-$modelid" | tr '.' '_')
+
+echo "Creating tmux session $SESSION"
+
+# Kill existing session if it exists
+tmux kill-session -t $SESSION 2>/dev/null
+
+# Create a new tmux session
+tmux new-session -d -s $SESSION
+
+BENCHMARKS=(
+    "live_bench/coding"
+    "live_bench/data_analysis"
+    "live_bench/instruction_following"
+    "live_bench/language"
+    "live_bench/math/AMPS_Hard"
+    "live_bench/math/AMPS_Hard_2"
+    "live_bench/math/math_comp"
+    "live_bench/math/math_comp_2"
+    "live_bench/math/olympiad_2"
+    "live_bench/reasoning"
+)
+
+gen_api_answer="python -u gen_model_answer.py --model-path $modelpath --model-id $modelid --question-source $question_source"
+gen_ground_truth_judgment="python -u gen_ground_truth_judgment.py --model $modelid --question-source $question_source"
+
+tmux send-keys -t $SESSION "source $venv" C-m
+
+command="$gen_api_answer --bench-name ${BENCHMARKS[0]} && $gen_ground_truth_judgment --bench-name ${BENCHMARKS[0]}"
+for ((i=1; i<${#BENCHMARKS[@]}; i++)); do
+    command="$command && $gen_api_answer --bench-name ${BENCHMARKS[i]} && $gen_ground_truth_judgment --bench-name ${BENCHMARKS[i]}"
+done
+
+tmux send-keys -t $SESSION "$command" C-m

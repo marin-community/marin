@@ -1,0 +1,183 @@
+<|im_start|>system
+You are a helpful following assistant whose goal is to select the preferred (least wrong) output for a given instruction.
+Answer the question by printing only a single choice from ["Output (a)", "Output (b)"] (without quotes) corresponding to the correct answer with no other text.
+<|im_end|>
+<|im_start|>user
+## Annotation Guideline
+In this task, we will ask you to select the preferred output AI model's responses to instructions.
+
+You will read a batch of examples, which are composed of the following:
+
+1. an Instruction we give to the AI system
+2. Output (a), the first output from the AI system
+3. Output (b), the first output from the AI system
+
+Your task is to decide which response is better for each example. There are several dimensions that you can think along. Consider the following questions:
+
+1. Is the response helpful? For example, if the instruction asked for a recipe for healthy food, and the response is a useful recipe, then we can consider it helpful.
+2. Is the response language natural? For example, AI responses often have repetitions, which is not natural.
+3. Is the response factual/accurate? For example, AI responses often make up new information. For example, if the response claims that Donald Trump is the current U.S. president, then you should consider it inaccurate.
+4. and so on ... ultimately, you should decide which response is better based on your judgment and based on your own preference.
+
+You should answer using only Output (a) or Output (b) depending on which response is better.
+
+## Annotation Example
+To help you understand the annotation task, we provide a single example below.
+I will give an explanation for the correct answer, but you should only answer with the preferred output.
+
+### Example 1
+
+#### Instruction 1:
+Write a design document to describe the following mobile game idea: A battle royale game with a superhero and villain theme.
+
+#### Output (a) for example 1:
+Design Document for a Mobile Game Idea:
+
+1. Introduction:
+A battle royale game with a superhero and villain theme.
+
+2. Game Play:
+The game is played on a large map with buildings, streets, and structures spreading across the map. Players converge on the center to compete in a winner-take-all showdown. The game includes traditional battle royale elements such as scavenging, looting, and trying to survive until the end. However, there is also a hero system in place in which players can choose to take on the role of a superhero or villain for the game. This adds some variety and variety of tactics as players use their superpowers to wreak havoc or use their villainsy to their own advantage.
+
+3. Rewards:
+As players compete in the battle royale game, they will receive experience and level up their character. These levels reward players with extra health, shields, and other all important resources. Players can choose to customize their character in various ways to make them stand out from the rest as well.
+
+4. Levelling up:
+At the end of each game, players will level up their character and receive various bonuses depending on the level. These bonuses could range from extra health to increased sprint speed or more damage while in combat. As players gain levels, they can choose to upgrade their character with more powerful abilities and powers.
+
+#### Output (b) for example 1:
+The newly launched mobile game offers a thrilling battle royale experience with a superhero and villain theme. Players jump out of their cars and go head-to-head in a fight to the finish line. Each round features a different set of powerful superheroes and villainous villains, and the winner is the player who survives the longest. Along the way, they can collect health items and upgrade their powers to become the ultimate superhero or villain. The game offers a lively and vibrant art style and a visually appealing plot to keep the players engaged until the very end.
+
+#### Which is best for example 1, Output (a) or Output (b)?:
+Output (a)
+
+Indeed, Output (a) is a design document as asked in the instruction and gives more useful details than Output (b).
+
+## Batch Annotation Example
+For the batch annotation task, you will be asked to annotate a batch of examples.
+I.e. you will read all the examples first and then need to select the preferred output.
+Here's an example of how you should be formatting your answers for a batch of 3 examples.
+Note that I will also give an explanation for the correct answer, but you should only answer with the preferred output.
+
+## Example 2
+
+### Instruction 2:
+Find the average age of John (17), Laura (18), Robert (19), Edward (20).
+
+### Output (a) for example 2:
+The average age of the people in the given situation is 20 years old.
+
+### Output (b) for example 2:
+The average age of the people listed is 19.5 years.
+
+## Example 3
+
+### Instruction 3:
+Generate a to-do list with 5 tasks related to keeping a neat room
+
+### Output (a) for example 3:
+Make beds
+Organize closet
+Shoot some hole in the walls
+Dust lamps and furniture
+Tidy drawers and shelves
+
+### Output (b) for example 3:
+chores:
+1. Clean up after yourself and put clean clothes away.
+2. Make sure all electronics are decommissioned before leaving the house.
+3. Remove all personal items and clutter from your room.
+4. Vacuum and mop the floor.
+5. Tidy up your desk and put all inboxes on hold.
+
+## Example 4
+
+### Instruction 4:
+Rewrite the "Give it to me now" in a polite way
+
+### Output (a) for example 4:
+Could you please give it to me, pending verification?
+
+### Output (b) for example 4:
+Can you please give me that item?
+
+## Preferred Output for example 2-4:
+Now give all the preferred outputs for the batch of 3 examples.
+
+### Which is best for example 2, Output (a) or Output (b)?:
+Output (b)
+
+User explanation: Both outputs are wrong but Output (b) is preferred. Indeed, the real answer is 18.5 years old, which is closer to Output (b) than Output (a).
+
+### Which is best for example 3, Output (a) or Output (b)?:
+Output (b)
+
+User explanation: Output (b) is better because Output (a) adds to the to do list "Shoot some hole in the walls", which is not related to tidying a room
+
+### Which is best for example 4, Output (a) or Output (b)?:
+Output (a)
+
+User explanation: Output (a) is better because Output (b) adds the sentence "pending verification", which is unnecessary and unrelated to the instruction.
+
+## Annotation starts below
+Now is your turn. I will give you a batch of 5 examples.
+You should read all the examples first and then select the preferred answers by saying only Output (a) or Output (b) as formatted above without explanation.
+
+## Example 5
+
+### Instruction 5:
+{instruction}
+
+### Output (a) for example 5:
+{output_1}
+
+### Output (b) for example 5:
+{output_2}
+
+## Example 6
+
+### Instruction 6:
+{instruction}
+
+### Output (a) for example 6:
+{output_1}
+
+### Output (b) for example 6:
+{output_2}
+
+## Example 7
+
+### Instruction 7:
+{instruction}
+
+### Output (a) for example 7:
+{output_1}
+
+### Output (b) for example 7:
+{output_2}
+
+## Example 8
+
+### Instruction 8:
+{instruction}
+
+### Output (a) for example 8:
+{output_1}
+
+### Output (b) for example 8:
+{output_2}
+
+## Example 9
+
+### Instruction 9:
+{instruction}
+
+### Output (a) for example 9:
+{output_1}
+
+### Output (b) for example 9:
+{output_2}
+
+## Preferred Output for example 5-9:
+Now give all the preferred outputs for the batch of 5 examples.
+<|im_end|>

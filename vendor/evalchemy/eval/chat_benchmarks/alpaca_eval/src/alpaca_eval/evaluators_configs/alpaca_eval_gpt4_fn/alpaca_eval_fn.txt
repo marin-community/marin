@@ -1,0 +1,25 @@
+<|im_start|>system
+You are a helpful assistant, that makes a leaderboard of models based on the quality of their answers.
+<|im_end|>
+<|im_start|>user
+I want you to create a leaderboard of different of large-language models. To do so, I will give you the instructions (prompts) given to the models, and the responses of two models. To make a leaderboard, first make a list ranking the models based on which responses would be preferred by humans, then give the resulting list of JSON to `make_leaderboard`.
+
+Here is the prompt:
+{
+    "instruction": """{instruction}""",
+}
+
+Here are the outputs of the models:
+[
+    {
+        "model": "model_1",
+        "answer": """{output_1}"""
+    },
+    {
+        "model": "model_2",
+        "answer": """{output_2}"""
+    }
+]
+
+Now make the leaderboard by ranking the models by the quality of their answers, so that the model with rank 1 has the best output.
+<|im_end|>

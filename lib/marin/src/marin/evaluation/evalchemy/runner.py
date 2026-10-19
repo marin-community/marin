@@ -22,9 +22,9 @@ from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runtime import (
-    EVALCHEMY_EXTRA_PACKAGES,
     EVALCHEMY_PYTHON_VERSION,
-    EVALCHEMY_REQUIREMENT,
+    EVALCHEMY_REQUIRED_EXTRAS,
+    EVALCHEMY_RUNTIME_PROJECT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
 from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
@@ -91,9 +91,7 @@ def _child_env(env_vars: Mapping[str, str], **extra: str) -> dict[str, str]:
 class EvalchemyRuntimeConfig:
     """Execution policy for the Evalchemy HTTP-client child."""
 
-    requirement: str = EVALCHEMY_REQUIREMENT
-    python_version: str = EVALCHEMY_PYTHON_VERSION
-    extra_packages: tuple[str, ...] = EVALCHEMY_EXTRA_PACKAGES
+    extras: tuple[str, ...] = EVALCHEMY_REQUIRED_EXTRAS
     cpu: float = 8.0
     memory: str = "32g"
     disk: str = "50g"
@@ -207,15 +205,17 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
 
 def _evalchemy_client_command(runtime: EvalchemyRuntimeConfig) -> tuple[str, ...]:
     command = [
-        "uvx",
-        "--no-config",
+        "uv",
+        "run",
+        "--project",
+        EVALCHEMY_RUNTIME_PROJECT,
+        "--frozen",
+        "--no-default-groups",
         "--python",
-        runtime.python_version,
-        "--from",
-        runtime.requirement,
+        EVALCHEMY_PYTHON_VERSION,
     ]
-    for package in runtime.extra_packages:
-        command.extend(("--with", package))
+    for extra in runtime.extras:
+        command.extend(("--extra", extra))
     command.append("python")
     return tuple(command)
 
@@ -239,8 +239,12 @@ def _run_evalchemy_child(
         }
     client = iris_ctx().client
     child_id = uuid.uuid4().hex[:8]
-    uvx_command = shlex.join(_evalchemy_client_command(config.runtime))
-    command = f'exec {uvx_command} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
+    runtime_command = shlex.join(_evalchemy_client_command(config.runtime))
+    command = (
+        'cd "$IRIS_WORKDIR"\n'
+        f'export UV_PROJECT_ENVIRONMENT="$IRIS_WORKDIR/{EVALCHEMY_RUNTIME_PROJECT}/.venv"\n'
+        f'exec {runtime_command} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
+    )
     eval_job = client.submit(
         entrypoint=Entrypoint.from_command("bash", "-c", command),
         name=f"eval-{config.name.replace('.', '-')}-{child_id}",
@@ -250,6 +254,7 @@ def _run_evalchemy_child(
             disk=config.runtime.disk,
         ),
         environment=EnvironmentSpec(
+            setup_scripts=[],
             env_vars=_child_env(
                 env_vars,
                 JAX_PLATFORMS="cpu",
@@ -258,7 +263,7 @@ def _run_evalchemy_child(
                 TQDM_MININTERVAL="30",
                 **judge_env,
                 **{CONFIG_ENV_KEY: _run_config_json(model, config, output_dir)},
-            )
+            ),
         ),
         max_retries_failure=0,
     )

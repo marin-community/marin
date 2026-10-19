@@ -1,0 +1,7 @@
+claude-2.1_concise:
+  prompt_template: "claude-2.1_concise/prompt_concise.txt"
+  fn_completions: "anthropic_completions"
+  completions_kwargs:
+    model_name: "claude-2.1"
+    max_tokens_to_sample: 4096
+  pretty_name: "Claude 2.1 (concise)"

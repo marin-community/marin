@@ -1,0 +1,13 @@
+deita-7b-v1.0:
+  prompt_template: "vicuna-7b/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "hkust-nlp/deita-7b-v1.0"
+    model_kwargs:
+      dtype: 'bfloat16'
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 1.0
+    use_beam_search: True
+  pretty_name: "DEITA 7B v1.0"
+  link: "https://github.com/hkust-nlp/deita"

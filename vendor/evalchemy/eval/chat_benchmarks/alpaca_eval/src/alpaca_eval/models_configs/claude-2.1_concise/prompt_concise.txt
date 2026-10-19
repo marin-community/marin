@@ -1,0 +1,5 @@
+
+
+Human: {instruction} Be as concise as possible while still providing all the necessary information to answer the question.
+
+Assistant:

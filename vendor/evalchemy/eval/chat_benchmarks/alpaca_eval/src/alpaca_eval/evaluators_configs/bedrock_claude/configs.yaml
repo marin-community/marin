@@ -1,0 +1,12 @@
+bedrock_claude:
+  prompt_template: "claude/basic_prompt.txt"
+  fn_completions: "bedrock_anthropic_completions"
+  completions_kwargs:
+    model_name: "anthropic.claude-v1"
+    max_tokens_to_sample: 50
+    temperature: 0
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?:^|\n) ?Output \(a\)'
+      2: '(?:^|\n) ?Output \(b\)'
+  batch_size: 1

@@ -1,0 +1,7 @@
+bedrock_claude_2:
+  prompt_template: "claude/prompt.txt"
+  fn_completions: "bedrock_anthropic_completions"
+  completions_kwargs:
+    model_name: "anthropic.claude-v2"
+    max_tokens_to_sample: 2048
+  pretty_name: "Bedrock Claude 2"

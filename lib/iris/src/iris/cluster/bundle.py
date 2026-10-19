@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Maximum size (bytes) of a submitted workspace bundle. Enforced by the client
 # when creating the zip and re-checked by the controller when receiving it.
-MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+MAX_BUNDLE_SIZE_BYTES = 50 * 1024 * 1024
 
 
 @dataclass

@@ -288,7 +288,10 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
             "lib/verifyit/src/verifyit/grading.py",
             ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
         ),
-        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"]),
+        (
+            "lib/rigging/src/rigging/message.py",
+            ["evalchemy-unit", "rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
     ],
@@ -313,14 +316,30 @@ def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    "shellbox_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
+    "path",
+    [
+        "vendor/evalchemy/eval/chat_benchmarks/MRCR/eval_instruct.py",
+        "vendor/evalchemy/uv.lock",
+        "lib/finestore/src/finestore/client.py",
+        "lib/marin/src/marin/evaluation/evalchemy/runner.py",
+        "experiments/evaluation/evals.py",
+    ],
 )
-def test_required_unit_check_propagates_shellbox_result(shellbox_result: str, expected_exit: int) -> None:
+def test_evaluator_changes_select_the_isolated_evalchemy_suite(tmp_path: Path, path: str) -> None:
+    selection = select_changed_tests([path], tmp_path)
+
+    assert "evalchemy-unit" in selection.suites
+
+
+@pytest.mark.parametrize(
+    "suite_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
+)
+@pytest.mark.parametrize("suite", ["shellbox", "evalchemy"])
+def test_required_unit_check_propagates_isolated_suite_result(suite: str, suite_result: str, expected_exit: int) -> None:
     workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
     aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]
     results = dict.fromkeys(aggregate["needs"], "success")
-    if "shellbox" in results:
-        results["shellbox"] = shellbox_result
+    results[suite] = suite_result
     script = re.sub(
         r"\$\{\{ needs\.(\w+)\.result \}\}",
         lambda match: results.get(match.group(1), ""),

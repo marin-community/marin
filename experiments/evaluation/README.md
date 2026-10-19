@@ -239,16 +239,29 @@ shorter general-purpose selection. The policies were validated on H100. GPQA Dia
 not compatible with the TPU vLLM backend.
 
 Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
-The evaluation child then invokes the `evalchemy` console script from the pinned external runtime.
-A dry run checks the YAML shape and the resolved Marin launch plan; task availability is checked when
-the Evalchemy process starts. [evalchemy#67](https://github.com/marin-community/evalchemy/issues/67)
-tracks a CLI validation mode that can move task-catalog errors back before Iris submission.
+The evaluation child invokes the `evalchemy` console script from `vendor/evalchemy`,
+using its own frozen `uv.lock` and virtual environment. The project is excluded from
+Marin's workspace and uses local FineStore and Rigging sources. Its runtime
+descriptor hashes the evaluator, adapter, lock, and local package sources.
+A Marin dry run checks the YAML shape and the resolved launch plan. To check the
+installed Evalchemy and lm-eval task catalogs before submission, run:
 
-For a `--version eval-policy-...-verified` launch, the launcher selects the Evalchemy and Harbor
-revisions in `RUNTIME_COMMITS` from `lib/marin/src/marin/evaluation/eval_policy.py`. Evalchemy's
-child requirement uses the pinned Evalchemy commit. Harbor preflight and workers use
-`config/external/harbor/pins/<Harbor commit>/uv.lock` with `uv run --frozen`. Launches without a
-verified policy version use the current shared pins in `config/external/`.
+```bash
+uv run --project vendor/evalchemy --frozen --no-default-groups evalchemy validate-config \
+  experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml
+```
+
+This command validates the portable config and task names without constructing a
+model or task. The Marin launcher does not invoke it automatically, so an
+unchecked task name can still fail when the evaluator starts.
+
+Historical `eval-policy-...-verified` Evalchemy launches require their original
+external commits and must run from a Marin checkout that predates vendoring.
+The current launcher rejects those launches rather than changing their evaluator.
+Historical records remain readable. Harbor preflight and workers continue to use
+the `RUNTIME_COMMITS` selection from `lib/marin/src/marin/evaluation/eval_policy.py`
+and `config/external/harbor/pins/<Harbor commit>/uv.lock` with `uv run --frozen`.
+Unversioned Harbor launches use the current pin in `config/external/`.
 
 `tasks` selects one or more evaluator task names. Use `task_options.<task>` for `num_fewshot`,
 `task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include
@@ -258,7 +271,7 @@ packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog 
 explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
 launcher `--limit` overrides the file limit while `--seed` overrides the file seed. `record.json` stores the resulting task
 options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
-record provenance stores the exact Evalchemy requirement, including runtime extras. FinanceBench
+record provenance stores the Evalchemy content descriptor and runtime extras. FinanceBench
 also requires a `judge` block with a dedicated endpoint, model, and secret reference. Marin forwards
 those values as `JUDGE_*` variables while preserving the local candidate endpoint credentials. The
 record stores the judge endpoint and model, but omits its credential reference and resolved value.
@@ -323,9 +336,10 @@ resume policy; each benchmark retains its own retry count and exception taxonomy
 expects the generated Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; create that
 tree with Harbor's DS-1000 adapter before launching it.
 
-The root workspace locks an optional Harbor dependency for TaskCompendium's adapters. Evaluation
-preflight and execution install the exact `marin.external_dependencies.HARBOR` revision in an isolated
-uv environment. Every Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
+Harbor evaluation preflight and execution use the independently locked project
+under `config/external/harbor`; its evaluator dependency graph is absent from the
+root workspace lock. They install the exact `marin.external_dependencies.HARBOR`
+revision in an isolated uv environment. Every Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
 Marin runtime task cap in `eval.harbor.task_limit`. A policy's own `n_tasks` remains represented by
 the digest.
 

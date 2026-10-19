@@ -1,0 +1,11 @@
+openai
+datasets
+tenacity
+google-generativeai
+cohere
+mistralai==0.4.2
+anthropic
+reka-api
+jsonlines
+together
+fire

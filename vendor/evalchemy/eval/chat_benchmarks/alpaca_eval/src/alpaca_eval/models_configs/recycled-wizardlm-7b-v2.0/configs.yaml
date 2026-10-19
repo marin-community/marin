@@ -1,0 +1,13 @@
+recycled-wizardlm-7b-v2.0:
+  completions_kwargs:
+    do_sample: true
+    max_new_tokens: 2048
+    model_kwargs:
+      torch_dtype: bfloat16
+    model_name: ./recycled-wizardlm-7b-v2.0
+    temperature: 0.7
+    top_p: 1.0
+  fn_completions: huggingface_local_completions
+  link: 'https://github.com/tianyi-lab/Reflection_Tuning'
+  pretty_name: "Recycled WizardLM 7B V2.0"
+  prompt_template: vicuna-7b/prompt.txt

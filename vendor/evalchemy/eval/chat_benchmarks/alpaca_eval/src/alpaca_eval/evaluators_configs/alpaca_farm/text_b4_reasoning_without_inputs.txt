@@ -1,0 +1,157 @@
+We are developing a model to evaluate instructions and their corresponding outputs. Please select the output (a) or (b) that best matches the given instruction.
+
+I will first show you a single short example (the real ones might be longer). Then I'll show you how to format the answer for multiple examples. Finally, I will ask you to choose the best outputs for new examples.
+
+---
+
+## Example 1:
+
+### Instruction 1:
+Give a brief description of an ophthalmologist.
+
+### Output (a) for example 1:
+An ophthalmologist is a medical doctor who specializes in the diagnosis and treatment of eye diseases and conditions.
+
+### Output (b) for example 1:
+An ophthalmologist is a medical doctor who pokes and prods at your eyes while asking you to read letters from a chart.
+
+### Best output for example 1:
+(a)
+
+---
+
+Now I will show you 4 short examples in a row and show the correct best output and formatting. I'd like you to read all of them first and provide all the best outputs at the end. Note that the answer to one example should not impact the other.
+
+---
+
+## Example 2:
+
+### Instruction 2:
+Paraphrase the following question: "What is the capital of France?"
+
+### Output (a) for example 2:
+The capital of France is Paris.
+
+### Output (b) for example 2:
+Can you tell me the name of the city that serves as the capital of France?
+
+## Example 3:
+
+### Instruction 3:
+Change the first verb in "I love surfing" to a synonym
+
+### Output (a) for example 3:
+I hate surfing
+
+### Output (b) for example 3:
+I adore surfing
+
+## Example 4:
+
+### Instruction 4:
+Consider the following document: "Document: The following is a list of the most common elements in the Earth's crust by mass."
+Answer the following questions based on that document: what is the main idea? who are the major players? what is their motivation? how does it end?
+
+### Output (a) for example 4:
+The main idea of this document is to provide a list of the most common elements in the Earth's crust by mass. The major players are the Earth, the Sun, and other planets. The motivation behind the list is to help scientists better understand the interactions between these elements and the Earth's crust. The ending of this document is not specified.
+
+### Output (b) for example 4:
+The main idea of this document is to provide a list of the most common elements in the Earth's crust by mass.
+
+## Example 5:
+
+### Instruction 5:
+Summarize the following passage concisely: "A new study shows that people who eat more fruits and vegetables have a lower risk of heart disease. The study followed over 10,000 participants for 10 years, and found that those who ate at least 5 servings of fruits and vegetables per day had a 20% lower risk of heart disease compared to those who ate less than 3 servings per day."
+
+### Output (a) for example 5:
+The study found that people who eat more fruits and vegetables have a lower risk of heart disease, and those who ate at least 5 servings per day had a 20% lower risk compared to those who ate less than 3 servings per day.
+
+### Output (b) for example 5:
+The study showed that eating more fruits and vegetables can help lower the risk of heart disease.
+
+## Example 6:
+
+### Instruction 6:
+Provide a conclusion based on the information presented in the following text: "according to a recent survey, more and more people are choosing to work remotely. The survey found that 68% of workers believe that remote work increases their productivity, and 55% said they would like to work from home at least three days a week. The benefits of remote work include fewer distractions, no commute, and more flexible schedules."
+
+### Output (a) for example 6:
+Based on the survey results, it can be concluded that remote work is becoming increasingly popular among workers, as many believe it increases productivity and would like to work from home at least part of the week. Remote work has benefits such as fewer distractions, no commute, and more flexible schedules.
+
+### Output (b) for example 6:
+The survey found that some workers believe remote work is better than office work. They say remote work increases productivity and allows for a more flexible schedule. Remote work has its benefits such as no commute and fewer distractions.
+
+## Correct answers for examples 2-6:
+
+### Best output for example 2:
+(b)
+Explanation: Output (b) paraphrases the question as asked by the instruction. Output (a) does not follow instruction as answers the question instead.
+
+### Best output for example 3:
+(b)
+Explanation: Output (b) uses a synonym of the first verb "love" as asked by the instruction. Output (a) uses an antonym instead.
+
+### Best output for example 4
+(a)
+Explanation: Output (a) is a better answer than Output (b) because it fully addresses all parts of the instruction (including major players, motivation, and ending).
+
+### Best output for example 5:
+(b)
+Explanation: Output (b) is a better answer than Output (a) because it is more concise and summarizes the passage better.
+
+### Best output for example 6:
+(a)
+Explanation: Output (a) provides a more complete and accurate summary of the information presented in the text.
+
+---
+
+Now is your turn, please read the following 4 examples and provide the best outputs at the end, in the same format as above. Remember that the answers between examples are uncorrelated.
+
+---
+
+## Example 7:
+
+### Instruction 7:
+{instruction}
+
+### Output (a) for example 7:
+{output_1}
+
+### Output (b) for example 7:
+{output_2}
+
+## Example 8:
+
+### Instruction 8:
+{instruction}
+
+### Output (a) for example 8:
+{output_1}
+
+### Output (b) for example 8:
+{output_2}
+
+## Example 9:
+
+### Instruction 9:
+{instruction}
+
+### Output (a) for example 9:
+{output_1}
+
+### Output (b) for example 9:
+{output_2}
+
+## Example 10:
+
+### Instruction 10:
+{instruction}
+
+### Output (a) for example 10:
+{output_1}
+
+### Output (b) for example 10:
+{output_2}
+
+## Correct answers for examples 7-10 without explanations:
+
+### Best output for example 7:

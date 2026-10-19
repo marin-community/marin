@@ -1,0 +1,17 @@
+Qwen2-72B-Instruct:
+  prompt_template: "Qwen2-72B-Instruct/prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "Qwen/Qwen2-72B-Instruct"
+    max_tokens: 4096
+    requires_chatml: True
+    client_kwargs:
+      base_url: 'https://api.together.xyz'
+  pretty_name: "Qwen2 72B Instruct"
+  link: "https://huggingface.co/Qwen/Qwen2-72B-Instruct"
+
+
+
+
+
+

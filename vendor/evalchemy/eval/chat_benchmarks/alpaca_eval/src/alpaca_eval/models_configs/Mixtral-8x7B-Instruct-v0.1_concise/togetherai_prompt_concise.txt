@@ -1,0 +1,3 @@
+<|im_start|>user
+{instruction} Be as concise as possible while still providing all the necessary information to answer the question.
+<|im_end|>

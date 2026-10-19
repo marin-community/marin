@@ -1,0 +1,12 @@
+Storm-7B:
+  prompt_template: "Storm-7B/prompt.txt"
+  fn_completions: vllm_local_completions
+  completions_kwargs:
+    model_name: "jieliu/Storm-7B"
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+    max_new_tokens: 2048
+    temperature: 0
+    batch_size: 32
+  pretty_name: "Storm-7B"
+  link: "https://huggingface.co/jieliu/Storm-7B"

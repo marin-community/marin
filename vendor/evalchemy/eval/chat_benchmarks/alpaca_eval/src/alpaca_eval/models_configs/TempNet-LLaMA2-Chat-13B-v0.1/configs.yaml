@@ -1,0 +1,13 @@
+TempNet-LLaMA2-Chat-13B-v0.1:
+  prompt_template: "TempNet-LLaMA2-Chat-7B-v0.1/prompt.txt"
+  fn_completions: null
+  completions_kwargs:
+    model_name: "LLM-Opt/TempNet-LLaMA2-Chat-13B-v0.1"
+    model_kwargs:
+      torch_dtype: "float16"
+    max_new_tokens: 2048
+    temperature: 1.0
+    top_p: 1.0
+    do_sample: True
+  pretty_name: "TempNet-LLaMA2-Chat-13B-v0.1"
+  link: "https://github.com/zhqiu/TempNet"

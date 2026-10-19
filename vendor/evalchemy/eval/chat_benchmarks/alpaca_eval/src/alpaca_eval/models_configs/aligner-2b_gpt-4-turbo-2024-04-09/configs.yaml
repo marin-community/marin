@@ -1,0 +1,14 @@
+aligner-2b_gpt-4-turbo-2024-04-09:
+  prompt_template: "aligner-2b_gpt-4-turbo-2024-04-09/prompt.txt"
+  fn_completions: null
+  completions_kwargs:
+    model_name: "./aligner_2b" # local path
+    model_kwargs:
+      torch_dtype: "bfloat16"
+    max_new_tokens: 8192
+    temperature: 0.05
+    top_p: 0.95
+    top_k: 30
+    do_sample: False
+  pretty_name: "Aligner 2B+GPT-4 Turbo (04/09)"
+  link: "https://github.com/AlignInc/aligner-replication"

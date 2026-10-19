@@ -3,10 +3,12 @@
 This directory tracks Python tools and artifacts that Marin installs into
 isolated runtime environments.
 
-The Evalchemy, Harbor, and MarinSkyRL uv projects are excluded from the root
+The Harbor and MarinSkyRL uv projects are excluded from the root
 workspace so their dependency graphs do not have to resolve with Marin's
 training and serving dependencies. Each `pyproject.toml` selects an external
 source. Its adjacent `uv.lock` records the exact commit that Marin uses.
+Evalchemy lives in `vendor/evalchemy` with its own lock and local FineStore and
+Rigging sources; it is maintained with Marin rather than through this updater.
 
 Verified evaluation cohorts select revisions from `RUNTIME_COMMITS` in
 `lib/marin/src/marin/evaluation/eval_policy.py`. The `harbor/pins/<Harbor commit>/`
@@ -33,10 +35,10 @@ that module instead of reading repository-relative configuration.
 Advance one project with:
 
 ```bash
-uv run config/update-external.py evalchemy
+uv run config/update-external.py harbor
 ```
 
-Omit the project name to advance all three Git projects. The command updates
+Omit the project name to advance both Git projects. The command updates
 the selected lockfiles and regenerates the packaged requirements.
 
 Update a GPU release from its published manifest with:
@@ -75,8 +77,6 @@ only commits already landed on Marin's default branch.
 
 The external configurations intentionally model only what Marin needs:
 
-- `evalchemy` resolves the endpoint client core. Benchmark extras are selected
-  by each evaluation at runtime.
 - `harbor` resolves the Git checkout and pinned Daytona SDK used only by the
   isolated evaluation driver. The `harbor_config` modules are installed from
   that same checkout rather than a second package source, so runtime and error
@@ -95,9 +95,10 @@ The external configurations intentionally model only what Marin needs:
   paired with tpu-inference for TPU (`tpu.toml`). The GPU and TPU wheels have
   independent build and promotion paths. Neither is a workspace dependency.
 
-Evaluation provenance stores the generated commit-pinned runtime requirement.
-For Evalchemy it identifies the exact Evalchemy checkout; for Harbor the one
-Harbor commit identifies both the runtime and its `harbor_config` modules.
+Harbor evaluation provenance stores the generated commit-pinned runtime
+requirement. Its commit identifies both the runtime and its `harbor_config` modules.
+Evalchemy provenance identifies the vendored source, independent lock, adapter,
+and local FineStore and Rigging sources by content hash.
 
 `migration.toml` describes how to migrate each fork toward upstream — the base to
 select, the Marin e2e that validates it, and the constraints to respect. It holds

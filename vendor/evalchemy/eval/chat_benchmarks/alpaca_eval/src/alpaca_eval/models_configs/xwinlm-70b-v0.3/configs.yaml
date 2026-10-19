@@ -1,0 +1,13 @@
+xwinlm-70b-v0.3:
+  prompt_template: "xwinlm-7b-v0.1/prompt.txt"
+  fn_completions: "huggingface_local_completions"
+  completions_kwargs:
+    model_name: "./xwinlm-70b-v0.3" # local path
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+    max_new_tokens: 4096
+    temperature: 0.7
+    top_p: 1.0
+    do_sample: True
+  pretty_name: "XwinLM 70b V0.3"
+  link: "https://github.com/Xwin-LM/Xwin-LM"

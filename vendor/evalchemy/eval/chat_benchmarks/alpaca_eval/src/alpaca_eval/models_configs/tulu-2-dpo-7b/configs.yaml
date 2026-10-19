@@ -1,0 +1,15 @@
+tulu-2-dpo-7b:
+  prompt_template: "tulu-2-dpo-70b/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "allenai/tulu-2-dpo-7b"
+    model_kwargs:
+      dtype: 'bfloat16'
+      tensor_parallel_size: 2
+    max_new_tokens: 7500
+    temperature: 0.0
+    top_p: 1.0
+    use_beam_search: False
+    batch_size: 800
+  pretty_name: "Tulu 2+DPO 7B"
+  link: "https://huggingface.co/allenai/tulu-2-dpo-7b"

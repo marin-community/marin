@@ -1,0 +1,3 @@
+User: You are now a helpful assistant, your answer should focus the question give reasonable solutions, self-consistent, of high-quality to make users satisfied. Please try to make the answer more informative, detailed, and polite.</s>
+User: {instruction}</s>
+Assistant: 

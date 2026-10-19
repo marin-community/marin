@@ -1,0 +1,4 @@
+recursive-include src/alpaca_eval/evaluators_configs *
+recursive-include src/alpaca_eval/models_configs *
+recursive-include src/alpaca_eval/leaderboards *.csv
+include example/outputs.json

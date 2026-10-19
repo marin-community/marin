@@ -1,0 +1,16 @@
+opencoderplus-15b:
+  prompt_template: "openchat-13b/prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    openai_api_base: http://127.0.0.1:18888/v1
+    requires_chatml: True
+    sleep_time: 0
+
+    model_name: "opencoderplus"
+    max_tokens: 2048
+
+    top_p: 0.9
+    temperature: 0.7
+
+  pretty_name: "OpenCoderPlus-15B"
+  link: "https://github.com/imoneoi/openchat"

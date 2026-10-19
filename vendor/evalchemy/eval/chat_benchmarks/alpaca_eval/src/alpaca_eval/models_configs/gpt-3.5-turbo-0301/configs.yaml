@@ -1,0 +1,7 @@
+gpt-3.5-turbo-0301:
+  prompt_template: "gpt4/chatml_prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-3.5-turbo-0301"
+    max_tokens: 3072
+  pretty_name: "GPT 3.5 Turbo (03/01)"

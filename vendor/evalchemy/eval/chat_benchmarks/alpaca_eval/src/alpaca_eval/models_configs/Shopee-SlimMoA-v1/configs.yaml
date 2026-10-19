@@ -1,0 +1,9 @@
+Shopee-SlimMoA-v1:
+  prompt_template: "gemma-2-9b-it-DPO/prompt.txt"
+  fn_completions: null
+  completions_kwargs:
+    max_new_tokens: 4096
+    model_name: "Shopee-SlimMoA-v1"
+    temperature: 0.5
+  pretty_name: "Shopee SlimMoA v1"
+  link: "https://github.com/LLM-Alignment-sh/Shopee-SlimMoA"

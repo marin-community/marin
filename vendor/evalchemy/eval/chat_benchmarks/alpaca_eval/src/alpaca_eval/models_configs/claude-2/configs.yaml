@@ -1,0 +1,7 @@
+claude-2:
+  prompt_template: "claude/prompt.txt"
+  fn_completions: "anthropic_completions"
+  completions_kwargs:
+    model_name: "claude-2"
+    max_tokens_to_sample: 4096
+  pretty_name: "Claude 2"

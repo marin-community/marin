@@ -1,0 +1,12 @@
+merlinite-7B-AOT:
+  prompt_template: "merlinite-7B-AOT/prompt.txt"
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: "merlinite-7B-AOT"
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+    use_beam_search: True
+    temperature: 0.7
+    max_tokens: 2048
+    top_p: 0.9
+  pretty_name: "merlinite-7B-AOT"

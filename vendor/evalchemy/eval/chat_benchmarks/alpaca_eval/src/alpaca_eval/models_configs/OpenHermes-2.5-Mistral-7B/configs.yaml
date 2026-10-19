@@ -1,0 +1,12 @@
+OpenHermes-2.5-Mistral-7B:
+  prompt_template: "OpenHermes-2.5-Mistral-7B/togetherai_prompt.txt" # together already deals with prompt
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "teknium/OpenHermes-2p5-Mistral-7B"
+    max_tokens: 4096
+    requires_chatml: True
+    price_per_token: 0.20
+    client_kwargs:
+      base_url: 'https://api.together.xyz'
+  pretty_name: "OpenHermes-2.5-Mistral (7B)"
+  link: "https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B"

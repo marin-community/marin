@@ -1,0 +1,7 @@
+text_davinci_001:
+  prompt_template: "text_davinci_003/prompt.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "text-davinci-001"
+    max_tokens: 1500
+  pretty_name: "Davinci001"

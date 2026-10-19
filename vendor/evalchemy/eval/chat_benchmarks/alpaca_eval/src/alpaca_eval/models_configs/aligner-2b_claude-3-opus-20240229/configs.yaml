@@ -1,0 +1,14 @@
+aligner-2b_claude-3-opus-20240229:
+  prompt_template: "aligner-2b_claude-3-opus-20240229/prompt.txt"
+  fn_completions: null
+  completions_kwargs:
+    model_name: "./aligner_2b" # local path
+    model_kwargs:
+      torch_dtype: "bfloat16"
+    max_new_tokens: 8192
+    temperature: 0.05
+    top_p: 0.95
+    top_k: 10
+    do_sample: False
+  pretty_name: "Aligner 2B+Claude 3 Opus"
+  link: "https://github.com/AlignInc/aligner-replication"

@@ -1,0 +1,10 @@
+llama-2-70b-chat-hf:
+  prompt_template: "llama-2-70b-chat-hf/prompt.txt"
+  fn_completions: "replicate_completions"
+  completions_kwargs:
+    model_name: "replicate/llama70b-v2-chat:e951f18578850b652510200860fc4ea62b3b16fac280f83ff32282f87bbd2e48"
+    max_length: 4096
+    temperature: 0.7
+    top_p: 1.0
+  pretty_name: "LLaMA2 Chat 70B"
+  link: "https://ai.meta.com/llama/"

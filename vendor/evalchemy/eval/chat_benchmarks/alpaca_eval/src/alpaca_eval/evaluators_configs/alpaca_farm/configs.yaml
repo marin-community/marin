@@ -1,0 +1,181 @@
+# paths are relative to auto_annotations
+
+gpt4_1: # gpt-4-0314_pairwise_v1_b4_chatml-chat_CoT_JSON_temp=1.0 in old code
+  prompt_template: "alpaca_farm/chatml_b4_cot_json_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4-0314"
+    max_tokens: 600
+    temperature: 1.0
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: ': true'
+      2: ': false'
+  batch_size: 4
+
+gpt4_2: # gpt-4-0314_pairwise_diverse-diana_v0_b5_chatml-prompt_short_temp=1.0
+  prompt_template: "alpaca_farm/chatml_b5_diana_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4-0314"
+    max_tokens: 250
+    temperature: 1.0
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?:^|\n) ?Output \(a\)'
+      2: '(?:^|\n) ?Output \(b\)'
+  batch_size: 5
+
+gpt4_3: # gpt-4-0314_pairwise_vH_b5_chatml-prompt_short_temp=1.0
+  prompt_template: "alpaca_farm/chatml_b5_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4-0314"
+    max_tokens: 250
+    temperature: 1.0
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?:^|\n) ?Output \(a\)'
+      2: '(?:^|\n) ?Output \(b\)'
+  batch_size: 5
+
+gpt4_4: # gpt-4-0314_pairwise_v2_b1_chatml-chat_reasoning_temp=1.0
+  prompt_template: "alpaca_farm/chatml_b1_chat_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4-0314"
+    max_tokens: 20
+    temperature: 1.0
+    # messing with tokens is not necessary for GPT4 but we use the same prompt for chatGPT
+    tokens_to_avoid: [ 'Both', 'Neither', 'None', ' Both', ' Neither', 'Either', 'depends', 'context', 'It', 'both', 'Sorry' ]
+    tokens_to_favor: [ "Output (a)", "Output (b)" ]
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?:^|\n) ?Output \(a\)'
+      2: '(?:^|\n) ?Output \(b\)'
+  batch_size: 1
+
+gpt4_5: # gpt-4-0314_pairwise_diverse-joeX_v0_b5_chatml-prompt_short_temp=1.0
+  prompt_template: "alpaca_farm/chatml_b5_joe_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-4-0314"
+    max_tokens: 250
+    temperature: 1.0
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?:^|\n)Output \(a\)'
+      2: '(?:^|\n)Output \(b\)'
+  batch_size: 5
+
+chatgpt_1: # gpt-3.5-turbo_pairwise_vH_b1_chatml-prompt_short_temp=1.0
+  prompt_template: "alpaca_farm/chatml_b1_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-3.5-turbo-0301"
+    max_tokens: 50
+    temperature: 1.0
+    tokens_to_avoid: [ 'Both', 'Neither', 'None', ' Both', ' Neither', 'Either', 'depends', 'context','It', 'both','Sorry' ]
+    tokens_to_favor: [ "Output (a)", "Output (b)" ]
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '(?:^|\n) ?Output \(a\)'
+      2: '(?:^|\n) ?Output \(b\)'
+  batch_size: 1
+
+chatgpt_2: # gpt-3.5-turbo-0301_pairwise_v1_b1_chatml-chat_CoT_JSON_temp=1.0
+  prompt_template: "alpaca_farm/chatml_b1_cot_json_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-3.5-turbo-0301"
+    max_tokens: 150
+    temperature: 1.0
+    tokens_to_avoid: [ 'Both', 'Neither', 'None', ' Both', ' Neither', 'Either', 'depends', 'context','It', 'both','Sorry' ]
+  completion_parser_kwargs:
+    outputs_to_match: # to test
+      1: ': true'
+      2: ': false'
+  batch_size: 1
+
+chatgpt_3: # gpt-3.5-turbo_pairwise_v2_b1_chatml-chat_reasoning_temp=1.0
+  prompt_template: "alpaca_farm/chatml_b1_chat_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-3.5-turbo-0301"
+    max_tokens: 20
+    temperature: 1.0
+    tokens_to_avoid: [ 'Both', 'Neither', 'None', ' Both', ' Neither', 'Either', 'depends', 'context', 'It', 'both', 'Sorry' ]
+    tokens_to_favor: [ "Output (a)", "Output (b)" ]
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: 'Output \(a\)'
+      2: 'Output \(b\)'
+  batch_size: 1
+
+chatgpt_4: # gpt-3.5-turbo_pairwise_v0_b1_chatml-chat_reasoning_temp=1.0
+  prompt_template: "alpaca_farm/chatml_b1_chat_v0_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "gpt-3.5-turbo-0301"
+    max_tokens: 20
+    temperature: 1.0
+    tokens_to_avoid: [ 'Both', 'Neither', 'None', ' Both', ' Neither', 'Either', 'depends', 'context', 'It', 'both', 'Sorry' ]
+    tokens_to_favor: [ "Output (a)", "Output (b)" ]
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: 'Output \(a\)'
+      2: 'Output \(b\)'
+  batch_size: 1
+
+davinci003_1: # text-davinci-003_v1Reasoning_b4-pairwise_temp=1.0
+  prompt_template: "alpaca_farm/text_b4_reasoning_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "text-davinci-003"
+    max_tokens: 200
+    temperature: 1.0
+    tokens_to_favor: [ "(a)", "(b)" ]
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '\(a\)'
+      2: '\(b\)'
+  batch_size: 4
+
+davinci003_2: # text-davinci-003_v1_pairwise_temp=1.0
+  prompt_template: "alpaca_farm/text_b1_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "text-davinci-003"
+    max_tokens: 200
+    temperature: 1.0
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '\n\(a\)'
+      2: '\n\(b\)'
+  batch_size: 1
+
+davinci003_3: # text-davinci-003_v1_b5-pairwise_temp=1.0
+  prompt_template: "alpaca_farm/text_b5_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "text-davinci-003"
+    max_tokens: 200
+    temperature: 1.0
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: '\n\(a\)'
+      2: '\n\(b\)'
+  batch_size: 5
+
+davinci003_4: # text-davinci-003_v0_pairwise_temp=1.0
+  prompt_template: "alpaca_farm/text_b1_v0_without_inputs.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "text-davinci-003"
+    max_tokens: 200
+    temperature: 1.0
+  completion_parser_kwargs:
+    outputs_to_match:
+      1: ' \(a\)'
+      2: ' \(b\)'
+  batch_size: 1

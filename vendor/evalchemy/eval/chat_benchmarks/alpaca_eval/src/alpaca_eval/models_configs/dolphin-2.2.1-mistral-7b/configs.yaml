@@ -1,0 +1,13 @@
+dolphin-2.2.1-mistral-7b:
+  prompt_template: "Yi-34B-Chat/prompt.txt" # chatml with <|im_end|>
+  fn_completions: "huggingface_local_completions"
+  completions_kwargs:
+    model_name: "cognitivecomputations/dolphin-2.2.1-mistral-7b"
+    model_kwargs:
+      torch_dtype: 'bfloat16'
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 1.0
+    do_sample: True
+  pretty_name: "Dolphin 2.2.1 Mistral 7B"
+  link: "https://huggingface.co/cognitivecomputations/dolphin-2.2.1-mistral-7b"
