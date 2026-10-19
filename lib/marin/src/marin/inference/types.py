@@ -74,7 +74,6 @@ class LeasedInferenceResponse:
 class InferenceWorkerMetadata:
     tensor_parallel_size: int
     backend_name: str
-    task_attempt: str
 
 
 @dataclass(frozen=True)

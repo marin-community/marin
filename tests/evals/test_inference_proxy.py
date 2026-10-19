@@ -17,7 +17,7 @@ import marin.inference.iris as iris_module
 import pytest
 from fray.client import JobHandle
 from fray.types import JobStatus, ResourceConfig, create_environment
-from iris.cluster.types import EndpointAccess, JobName
+from iris.cluster.types import EndpointAccess
 from iris.resources.state import JobState, TaskState
 from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
@@ -240,136 +240,6 @@ class _SessionJob:
 
     def status(self) -> JobStatus:
         return self.job_status
-
-
-@pytest.mark.parametrize(("registered", "ready_time"), [(1, 8), (4, 6)])
-def test_broker_waits_for_every_server_without_spending_startup_budget_in_queue(
-    monkeypatch, registered: int, ready_time: int
-) -> None:
-    broker = InferenceBroker(request_lease_timeout_seconds=30)
-    metadata = {
-        f"worker-{i}": InferenceWorkerMetadata(
-            tensor_parallel_size=1, backend_name="vllm", task_attempt=f"/tester/worker-{i}/0:0"
-        )
-        for i in range(4)
-    }
-    jobs = [cast(JobHandle, _SessionJob(JobStatus.RUNNING, f"/tester/worker-{i}")) for i in range(4)]
-    for worker in range(registered):
-        broker.register_worker(f"worker-{worker}", metadata[f"worker-{worker}"])
-    now = 0.0
-    registrations = iter(((6.0, 1), (1.0, 2), (1.0, 3)))
-
-    def sleep(_seconds: float) -> None:
-        nonlocal now
-        delay, worker = next(registrations)
-        now += delay
-        broker.register_worker(f"worker-{worker}", metadata[f"worker-{worker}"])
-
-    monkeypatch.setattr(iris_module.time, "monotonic", lambda: now)
-    monkeypatch.setattr(iris_module.time, "sleep", sleep)
-    monkeypatch.setattr(
-        iris_module,
-        "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                list_tasks=lambda job_name: [
-                    SimpleNamespace(
-                        state=TaskState.PENDING if now < 6 else TaskState.RUNNING,
-                        task_id=JobName.from_string(f"{job_name}/0"),
-                        current_attempt_number=0,
-                    )
-                ]
-            )
-        ),
-    )
-
-    ready = iris_module._wait_for_broker_workers(broker, jobs, timeout_seconds=5)
-
-    assert set(ready) == {f"worker-{i}" for i in range(4)}
-    assert now == ready_time
-
-
-@pytest.mark.parametrize("stale_task_attempt", ["/tester/worker-0/0:0", "/tester/worker-0/1:1"])
-def test_broker_waits_for_current_task_attempt_registration(monkeypatch, stale_task_attempt):
-    broker = InferenceBroker(request_lease_timeout_seconds=30)
-    job = cast(JobHandle, _SessionJob(JobStatus.RUNNING, "/tester/worker-0"))
-    now = 0.0
-
-    def sleep(_seconds: float) -> None:
-        nonlocal now
-        now += 4
-        broker.register_worker(
-            "worker-0",
-            InferenceWorkerMetadata(
-                tensor_parallel_size=1,
-                backend_name="vllm",
-                task_attempt="/tester/worker-0/0:1" if now >= 12 else stale_task_attempt,
-            ),
-        )
-
-    monkeypatch.setattr(iris_module.time, "monotonic", lambda: now)
-    monkeypatch.setattr(iris_module.time, "sleep", sleep)
-    monkeypatch.setattr(
-        iris_module,
-        "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                list_tasks=lambda _job_name: [
-                    SimpleNamespace(
-                        state=TaskState.RUNNING,
-                        task_id=JobName.from_string("/tester/worker-0/0"),
-                        current_attempt_number=0 if now == 0 else 1,
-                    )
-                ]
-            )
-        ),
-    )
-
-    ready = iris_module._wait_for_broker_workers(broker, [job], timeout_seconds=5)
-
-    assert ready["worker-0"].task_attempt == "/tester/worker-0/0:1"
-    assert now == 12
-
-
-@pytest.mark.parametrize("status", [JobStatus.FAILED, JobStatus.STOPPED])
-def test_broker_startup_rejects_a_finished_worker(monkeypatch, status: JobStatus) -> None:
-    monkeypatch.setattr(iris_module, "iris_ctx", lambda: SimpleNamespace(client=SimpleNamespace()))
-    broker = InferenceBroker(request_lease_timeout_seconds=30)
-    job = cast(JobHandle, _SessionJob(status, "/tester/worker-0"))
-
-    with pytest.raises(RuntimeError, match="finished before all broker workers registered"):
-        iris_module._wait_for_broker_workers(broker, [job], timeout_seconds=5)
-
-
-def test_broker_startup_times_out_when_a_placed_server_never_registers(monkeypatch) -> None:
-    now = 0.0
-
-    def sleep(_seconds: float) -> None:
-        nonlocal now
-        now += 6
-
-    monkeypatch.setattr(iris_module.time, "monotonic", lambda: now)
-    monkeypatch.setattr(iris_module.time, "sleep", sleep)
-    monkeypatch.setattr(
-        iris_module,
-        "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                list_tasks=lambda _job_name: [
-                    SimpleNamespace(
-                        state=TaskState.RUNNING,
-                        task_id=JobName.from_string("/tester/worker-0/0"),
-                        current_attempt_number=0,
-                    )
-                ]
-            )
-        ),
-    )
-    broker = InferenceBroker(request_lease_timeout_seconds=30)
-    job = cast(JobHandle, _SessionJob(JobStatus.RUNNING, "/tester/worker-0"))
-
-    with pytest.raises(TimeoutError, match="to register"):
-        iris_module._wait_for_broker_workers(broker, [job], timeout_seconds=5)
 
 
 def _remote_session(job_status: JobStatus = JobStatus.RUNNING) -> RemoteInferenceSession:
@@ -808,13 +678,13 @@ def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> No
 
 def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) -> None:
     broker_actor = InferenceBroker(request_lease_timeout_seconds=240)
+    broker_actor.register_worker("worker-0", InferenceWorkerMetadata(tensor_parallel_size=1, backend_name="vllm"))
     proxy_models: list[str] = []
     events = []
     minted = []
 
     class _FakeJob:
-        def __init__(self, name: str):
-            self.job_id = f"/tester/{name}"
+        job_id = "worker-0"
 
         def terminate(self) -> None:
             pass
@@ -840,13 +710,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
 
         def submit(self, job_request):
             self.submissions.append(job_request)
-            broker_actor.register_worker(
-                job_request.name,
-                InferenceWorkerMetadata(
-                    tensor_parallel_size=1, backend_name="vllm", task_attempt=f"/tester/{job_request.name}/0:0"
-                ),
-            )
-            return _FakeJob(job_request.name)
+            return _FakeJob()
 
     @contextmanager
     def _fake_start_proxy(**kwargs):
@@ -867,13 +731,6 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     iris_client = SimpleNamespace(
         mint_endpoint_token=lambda name, ttl: minted.append(name)
         or SimpleNamespace(token="broker-token", capability_url=""),
-        list_tasks=lambda job_name: [
-            SimpleNamespace(
-                state=TaskState.RUNNING,
-                task_id=JobName.from_string(f"{job_name}/0"),
-                current_attempt_number=0,
-            )
-        ],
     )
     monkeypatch.setattr(iris_module, "current_client", lambda: client)
     monkeypatch.setattr(

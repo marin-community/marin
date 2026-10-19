@@ -3,6 +3,7 @@
 
 """Durable identities across command-line evaluation relaunches."""
 
+import subprocess
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
+from marin.evaluation.evalchemy import runtime
 from marin.evaluation.hardware import Platform
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationBatch, _record
@@ -164,3 +166,90 @@ def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache
     StepRunner().run(build_evaluation_steps(after, execute))
 
     assert executed == []
+
+
+@pytest.fixture
+def runtime_checkout(tmp_path, monkeypatch):
+    root = tmp_path / "runtime"
+    for directory in runtime._RUNTIME_DIRECTORIES:
+        source = root / directory / "source.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("value = 1\n")
+    for filename in runtime._RUNTIME_FILES:
+        source = root / filename
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("runtime input\n")
+    subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    monkeypatch.setattr(runtime, "find_project_root", lambda _start: root)
+    return root
+
+
+def _pipeline_spec(tmp_path):
+    return LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=("gsm8k-smoke", "arc-easy"),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=1,
+        records_prefix=str(tmp_path / "records"),
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a",
+        priority_band=0,
+        cache_key="caller-owned-immutable-artifact",
+        version="2026.10.19",
+    )
+
+
+@pytest.mark.parametrize("dependency", ["lib/finestore/src/source.py", "lib/rigging/src/source.py"])
+def test_pipeline_dependency_update_reuses_completed_step_and_partial_archive(tmp_path, runtime_checkout, dependency):
+    spec = _pipeline_spec(tmp_path)
+    before = prepare_evaluation_batch(spec)
+    executed = []
+
+    def execute(evaluation, _output_path):
+        executed.append(evaluation.identity.run_id)
+        return {"finished": evaluation.identity.run_id}
+
+    StepRunner().run(build_evaluation_steps(before, execute)[:1])
+    pending = before.evaluations[1]
+    _record(before, pending.identity, RunStatus.ARTIFACT_FAILED, "interrupted", {}, {}, {})
+    partial = Path(pending.identity.output_dir) / "saved-request.json"
+    partial.parent.mkdir(parents=True)
+    partial.write_text('{"response":"already generated"}')
+    executed.clear()
+
+    source = runtime_checkout / dependency
+    source.write_text(source.read_text() + "dependency update\n")
+    after = prepare_evaluation_batch(spec)
+    StepRunner().run(build_evaluation_steps(after, execute))
+
+    assert after.group_id == before.group_id
+    assert after.evaluations[0].identity.eval_runtime != before.evaluations[0].identity.eval_runtime
+    assert executed == [pending.identity.run_id]
+    assert after.evaluations[1].identity.output_dir == pending.identity.output_dir
+    assert partial.read_text() == '{"response":"already generated"}'
+
+
+@pytest.mark.parametrize("filename", ["vendor/evalchemy/eval/source.py", "vendor/evalchemy/uv.lock"])
+def test_pipeline_evaluator_update_uses_new_evaluation_steps(tmp_path, runtime_checkout, filename):
+    spec = _pipeline_spec(tmp_path)
+    before = prepare_evaluation_batch(spec)
+    executed = []
+
+    def execute(evaluation, _output_path):
+        executed.append(evaluation.identity.run_id)
+        return {"finished": evaluation.identity.run_id}
+
+    StepRunner().run(build_evaluation_steps(before, execute))
+    executed.clear()
+    source = runtime_checkout / filename
+    source.write_text(source.read_text() + "evaluator update\n")
+    after = prepare_evaluation_batch(spec)
+    StepRunner().run(build_evaluation_steps(after, execute))
+
+    assert after.group_id == before.group_id
+    assert {evaluation.identity.run_id for evaluation in before.evaluations}.isdisjoint(executed)
+    assert sorted(executed) == sorted(evaluation.identity.run_id for evaluation in after.evaluations)

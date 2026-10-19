@@ -26,7 +26,11 @@ from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
-from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor, evalchemy_runtime_source_hash
+from marin.evaluation.evalchemy.runtime import (
+    evalchemy_evaluator_source_hash,
+    evalchemy_runtime_descriptor,
+    evalchemy_runtime_source_hash,
+)
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     HARBOR_RUNTIME_PROJECT,
@@ -212,6 +216,7 @@ def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefi
 class _ResolvedDefinition:
     record_ref: EvalRef
     runtime_descriptor: str
+    cache_runtime_descriptor: str
     executor: EvalExecutor
     endpoint_route: EndpointRoute
     secret_env: dict[str, SecretSpec]
@@ -232,6 +237,7 @@ def _resolve_definitions(
             "run it from a Marin checkout that predates Evalchemy vendoring"
         )
     evalchemy_source_hash = evalchemy_runtime_source_hash() if evalchemy_definitions else ""
+    evalchemy_evaluator_hash = evalchemy_evaluator_source_hash() if evalchemy_definitions else ""
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
     model_agent_kwargs = harbor_model_agent_kwargs(model)
@@ -256,6 +262,9 @@ def _resolve_definitions(
                     _ResolvedDefinition(
                         record_ref=definition.record_ref_for(config),
                         runtime_descriptor=evalchemy_runtime_descriptor(config.runtime.extras, evalchemy_source_hash),
+                        cache_runtime_descriptor=evalchemy_runtime_descriptor(
+                            config.runtime.extras, evalchemy_evaluator_hash
+                        ),
                         executor=EvalchemyExecutor(config),
                         endpoint_route=EndpointRoute.DIRECT,
                         secret_env=dict(secret_env),
@@ -273,6 +282,9 @@ def _resolve_definitions(
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
                     runtime_descriptor=harbor_runtime_descriptor(config.error_taxonomy.commit, config.runtime_project),
+                    cache_runtime_descriptor=harbor_runtime_descriptor(
+                        config.error_taxonomy.commit, config.runtime_project
+                    ),
                     executor=definition.executor_for(config, model, runtime_task_limit),
                     endpoint_route=EndpointRoute.CAPABILITY,
                     secret_env=dict(definition.secret_env_for(config)),
@@ -375,7 +387,7 @@ def build_evaluation_batch(
                 "pipeline": spec.cache_key or group_id,
                 "model": _model_identity(model_ref),
                 "evaluation": _evaluation_identity(definition.record_ref),
-                "runtime": definition.runtime_descriptor if spec.cache_key is not None else None,
+                "runtime": definition.cache_runtime_descriptor if spec.cache_key is not None else None,
                 "judge": (
                     ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
                     if judge is not None

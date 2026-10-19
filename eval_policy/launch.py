@@ -10,11 +10,11 @@ from tempfile import TemporaryDirectory
 
 import yaml
 from marin.evaluation.eval_policy import (
-    AIME24_REPEATS,
     DEFAULT_SEED,
     FIXED_MAX_TOKENS,
     NUPA_SEED,
     POLICIES,
+    RUNTIME_COMMITS,
     SEPTEMBER_16_IFBENCH_MAX_TOKENS,
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
@@ -110,9 +110,13 @@ def launch_policy(
     ]
     if not evaluations:
         raise ValueError("select at least one evaluation")
-    needs_artifact = version == SEPTEMBER_24_VERSION and any(
-        policy.mechanism == "harbor" or name in POLICY_CONFIGS_24 for name, policy in evaluations
-    )
+    if any(policy.mechanism == "evalchemy" for _, policy in evaluations):
+        commit = RUNTIME_COMMITS[version]["evalchemy"]
+        raise ValueError(
+            f"{version} requires historical Evalchemy commit {commit}; "
+            "run it from a Marin checkout that predates Evalchemy vendoring"
+        )
+    needs_artifact = version == SEPTEMBER_24_VERSION
     if needs_artifact and artifact_dir is None:
         raise ValueError("selected September 24 evaluations require the pinned artifact directory from issue #9409")
     if any(name == "sotopia-hard" for name, _ in evaluations) and sotopia_dataset_dir is None:
@@ -126,53 +130,37 @@ def launch_policy(
         raise ValueError(f"SOTOPIA-hard dataset does not exist: {sotopia_dataset_dir}")
     if sotopia_dataset_dir is not None and not sotopia_dataset_dir.resolve().is_relative_to(ROOT):
         raise ValueError("SOTOPIA-hard dataset must be inside the Marin workspace for Harbor preflight")
-    for name, policy in evaluations:
-        source = (
-            _evalchemy_source(version, name, artifact_dir)
-            if policy.mechanism == "evalchemy"
-            else _harbor_source(version, name, artifact_dir)
-        )
+    for name, _ in evaluations:
+        source = _harbor_source(version, name, artifact_dir)
         if not source.is_file():
             raise ValueError(f"policy config does not exist: {source}")
     with TemporaryDirectory(prefix="marin-eval-policy-", dir=ROOT / "eval_policy") as temporary:
         directory = Path(temporary)
-        for name, policy in evaluations:
+        for name, _ in evaluations:
             config = directory / f"{name}.yaml"
-            if policy.mechanism == "evalchemy":
-                config = _evalchemy_config(version, name, artifact_dir, config)
-                selector = ("--evalchemy-config", str(config))
-            else:
-                config = _harbor_config(version, name, artifact_dir, sotopia_dataset_dir, config)
-                selector = ("--harbor-config", str(config))
-            seeds = (
-                range(DEFAULT_SEED, DEFAULT_SEED + AIME24_REPEATS)
-                if version == SEPTEMBER_16_VERSION and name == "aime24"
-                else (None,) * (AIME24_REPEATS if version == SEPTEMBER_24_VERSION and name == "aime24" else 1)
-            )
-            for seed in seeds:
-                command = [
-                    "uv",
-                    "run",
-                    "python",
-                    "-m",
-                    "experiments.evaluation.cli",
-                    "launch",
-                    "--model-config",
-                    str(model_config),
-                    *selector,
-                    "--accelerator",
-                    f"H100x{h100_count}",
-                    "--federated_cluster",
-                    cluster,
-                    "--priority",
-                    "interactive",
-                    "--version",
-                    version,
-                    "--dry-run" if dry_run else "--no-wait",
-                ]
-                if seed is not None:
-                    command.extend(("--seed", str(seed)))
-                run(command, check=True, cwd=ROOT)
+            config = _harbor_config(version, name, artifact_dir, sotopia_dataset_dir, config)
+            command = [
+                "uv",
+                "run",
+                "python",
+                "-m",
+                "experiments.evaluation.cli",
+                "launch",
+                "--model-config",
+                str(model_config),
+                "--harbor-config",
+                str(config),
+                "--accelerator",
+                f"H100x{h100_count}",
+                "--federated_cluster",
+                cluster,
+                "--priority",
+                "interactive",
+                "--version",
+                version,
+                "--dry-run" if dry_run else "--no-wait",
+            ]
+            run(command, check=True, cwd=ROOT)
 
 
 def main() -> None:
