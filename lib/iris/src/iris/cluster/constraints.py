@@ -40,7 +40,14 @@ from typing import Any, ClassVar
 
 from iris.cluster.config import ScaleGroupResources
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
-from iris.cluster.types import AUTO_DEVICE_VARIANT, AcceleratorType, CapacityType, WellKnownAttribute
+from iris.cluster.types import (
+    AUTO_DEVICE_VARIANT,
+    AVAILABILITY_PREFIX,
+    AcceleratorType,
+    CapacityType,
+    WellKnownAttribute,
+    availability_key,
+)
 from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
@@ -325,19 +332,6 @@ def zone_constraint(zone: str) -> Constraint:
     return Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value=zone)
 
 
-AVAILABILITY_PREFIX = "availability:"
-
-
-def availability_key(variant: str) -> str:
-    """Composite attribute key marking that a zone can provision ``variant``.
-
-    The variant is lowercased to match the canonical ``device-variant`` string
-    that scaling groups and workers already carry (e.g. ``availability:v5p-8``,
-    ``availability:h100``).
-    """
-    return f"{AVAILABILITY_PREFIX}{variant.strip().lower()}"
-
-
 def is_availability_key(key: str) -> bool:
     """Whether ``key`` is an ``availability:<variant>`` zone-capability marker."""
     return key.startswith(AVAILABILITY_PREFIX)
@@ -355,26 +349,15 @@ def availability_constraint(variant: str) -> Constraint:
 
 
 # ---------------------------------------------------------------------------
-# Federated availability: numeric "how much of a resource is free right now".
-#
-# Distinct from ``availability:<variant>`` above. That marker is BOOLEAN and
-# means "this accelerator has been empirically obtained in this zone" — a
-# feasibility signal. The ``available:<token>`` gate here is NUMERIC and means
-# "a federation peer has >= N of this resource free right now". The parent gates
-# a queued federated job on it (see federation.availability) so jobs wait for and
-# spread across peers with real idle capacity instead of piling onto the first.
+# availability:<variant> marks configured capability for peer routing and
+# observed zone capability for local scheduling. available:<token> counts free
+# resources and gates peer placement (see federation.availability).
 # ---------------------------------------------------------------------------
 
 AVAILABLE_PREFIX = "available:"
 
 
 def available_key(token: str) -> str:
-    """Composite attribute key naming a free-capacity resource token.
-
-    The numeric parallel of :func:`availability_key`: ``available:h100`` names the
-    count of free H100 chips a peer advertises. The token is lowercased to match the
-    canonical ``device-variant`` string (``available:v5p-8``, ``available:h100``).
-    """
     return f"{AVAILABLE_PREFIX}{token.strip().lower()}"
 
 
@@ -1033,40 +1016,13 @@ def is_any_region_marker(c: Constraint) -> bool:
     return c.key == WellKnownAttribute.REGION and c.op == ConstraintOp.EXISTS
 
 
-BACKEND_CONSTRAINT_KEY = "backend"
-"""Reserved constraint key carrying a ``--backend`` routing directive.
-
-A ``backend EQ <id>`` constraint pins a job to a named task backend. The
-meta-scheduler reads it via :func:`backend_directive` and strips it (no worker
-advertises a ``backend`` attribute, so a leftover hard ``backend=X`` constraint
-would match no worker and starve the task) before per-backend scheduling sees
-the constraints."""
-
-
-def strip_backend_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
-    """Drop the reserved ``backend`` routing directive from ``constraints``."""
-    return [c for c in constraints if c.key != BACKEND_CONSTRAINT_KEY]
-
-
-def backend_directive(constraints: Sequence[Constraint]) -> str | None:
-    """Return the ``--backend`` target from a ``backend EQ <id>`` constraint, if any."""
-    for c in constraints:
-        if c.key == BACKEND_CONSTRAINT_KEY and c.op == ConstraintOp.EQ:
-            return str(c.values[0].value)
-    return None
-
-
 CLUSTER_CONSTRAINT_KEY = "cluster"
 """Reserved constraint key carrying a ``--cluster`` federation routing directive.
 
 A ``cluster EQ <peer>`` constraint pins a whole job to a named federation peer:
 the submit-time router hands it off to that peer instead of running it locally.
 Federation strips it before the handed-off request reaches the peer's worker
-matching (no worker advertises a ``cluster`` attribute, so a leftover hard
-``cluster=X`` constraint would match no worker and starve the task), exactly as
-the ``backend`` directive is stripped for local scheduling. A job may not pin
-both a local ``backend`` and a ``cluster`` — the two directives are mutually
-exclusive (one runs the job here, the other hands it off)."""
+matching because no worker advertises a ``cluster`` attribute."""
 
 
 def strip_cluster_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:

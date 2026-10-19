@@ -10,7 +10,8 @@ from typing import Any, Iterator, Sequence
 
 import numpy as np
 import regex
-from rigging.filesystem import StoragePath, open_url, prefix_join
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.text.datasets import LmDatasetSourceConfigBase

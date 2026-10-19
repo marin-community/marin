@@ -12,7 +12,7 @@ name: "Ops - Cost Report"
 
 on:
   schedule:
-    - cron: '0 15 * * *'  # daily 15:00 UTC (after the egress report at 14:00)
+    - cron: '0 15 * * *'  # daily 15:00 UTC
   workflow_dispatch:
     inputs:
       dry_run:
@@ -82,7 +82,6 @@ jobs:
           # keys fail only their own provider; the rest still record.
           OPENAI_ADMIN_KEY: ${{ secrets.OPENAI_ADMIN_KEY }}
           ANTHROPIC_ADMIN_KEY: ${{ secrets.ANTHROPIC_ADMIN_KEY }}
-          COREWEAVE_API_TOKEN: ${{ secrets.COREWEAVE_API_TOKEN }}
           # Optional: when a configured threshold (config.yaml `alerts`) is
           # exceeded, the run posts to this webhook. Unset -> breach is logged
           # only. Same secret the notify-slack action uses.

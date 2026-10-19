@@ -10,8 +10,7 @@ both GCP and K8s providers via the ServiceTestHarness.
 import pytest
 from connectrpc.errors import ConnectError
 from iris.rpc import controller_pb2
-
-from .conftest import ServiceTestHarness
+from iris.testing.cluster import ServiceTestHarness
 
 
 def test_submit_rejects_duplicate_name(harness: ServiceTestHarness):

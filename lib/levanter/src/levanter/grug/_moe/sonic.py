@@ -16,7 +16,8 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
-from jaxtyping import Array, Float, Int
+from jax.typing import DTypeLike
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
@@ -24,6 +25,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_MOE_OUTPUT,
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _zero_dropped_assignments,
+    _zero_inactive_grouped_rows,
     split_moe_w13_output,
 )
 
@@ -83,15 +85,18 @@ if triton is not None and tl is not None:
                 k_mask = k_idx < k_this_token
                 m_abs = ms + k_idx
                 perm_idx = tl.load(m_perm_ptr + m_abs, mask=k_mask, other=0).to(tl.int64)
-
                 x_ptrs = x_ptr + perm_idx[:, None] * stride_xm + h_idx[None, :] * stride_xh
-                x_mask = k_mask[:, None] & h_mask[None, :]
-                x_vals = tl.load(x_ptrs, mask=x_mask, other=0.0).to(tl.float32)
 
                 if w_is_none:
+                    x_mask = k_mask[:, None] & h_mask[None, :]
+                    x_vals = tl.load(x_ptrs, mask=x_mask, other=0.0).to(tl.float32)
                     acc += tl.sum(x_vals, axis=0)
                 else:
                     w_vals = tl.load(w_ptr + m_abs, mask=k_mask, other=0.0).to(tl.float32)
+                    # A zero-weight row contributes nothing, so it is never read and may hold
+                    # anything, including non-finite values.
+                    x_mask = (k_mask & (w_vals != 0.0))[:, None] & h_mask[None, :]
+                    x_vals = tl.load(x_ptrs, mask=x_mask, other=0.0).to(tl.float32)
                     acc += tl.sum(x_vals * w_vals[:, None], axis=0)
 
             out_ptrs = out_ptr + t_idx * stride_outt + h_idx * stride_outh
@@ -138,9 +143,43 @@ if triton is not None and tl is not None:
         dw = tl.sum(dout * x, axis=0)
         tl.store(dw_ptr + assignment, dw)
 
+    @triton.jit
+    def _write_nothing_kernel(marker_ptr, out_ptr):
+        pass
+
+    @triton.jit
+    def _token_scatter_rows_kernel(
+        x_ptr,  # (T, H)
+        w_ptr,  # (T * K,) float32; read only when scaled
+        keep_ptr,  # (T * K,) int8
+        m_pos_ptr,  # (T * K,) int32
+        out_ptr,  # (M, H)
+        h: tl.constexpr,
+        topk: tl.constexpr,
+        block_h: tl.constexpr,
+        scaled: tl.constexpr,
+    ):
+        token = tl.program_id(axis=0).to(tl.int64)
+        for h_tile in tl.static_range(triton.cdiv(h, block_h)):
+            h_idx = (h_tile * block_h + tl.arange(0, block_h)).to(tl.int64)
+            h_mask = h_idx < h
+            x = tl.load(x_ptr + token * h + h_idx, mask=h_mask, other=0.0)
+            for k in tl.static_range(topk):
+                assignment = token * topk + k
+                keep = tl.load(keep_ptr + assignment) != 0
+                position = tl.load(m_pos_ptr + assignment).to(tl.int64)
+                if scaled:
+                    weight = tl.load(w_ptr + assignment)
+                    row = (x.to(tl.float32) * weight).to(out_ptr.dtype.element_ty)
+                else:
+                    row = x
+                tl.store(out_ptr + position * h + h_idx, row, mask=h_mask & keep)
+
 else:
     _sonic_token_gather_sum_kernel = None
     _sonic_token_gather_sum_bwd_kernel = None
+    _write_nothing_kernel = None
+    _token_scatter_rows_kernel = None
 
 
 def _require_sonic_deps() -> None:
@@ -151,6 +190,77 @@ def _require_sonic_deps() -> None:
         )
     if not os.environ.get("TRITON_CACHE_DIR"):
         os.environ["TRITON_CACHE_DIR"] = _DEFAULT_TRITON_CACHE_DIR
+
+
+def sonic_gather_sum_available() -> bool:
+    """Whether the fused gather-and-weighted-sum kernel can run in this process.
+
+    The kernel is Triton, so a non-GPU device rules it out however the imports went. The check asks
+    the default device rather than ``jax.default_backend()``: a test that stubs the backend to trace a
+    GPU-only path still runs on CPU devices, which cannot launch the kernel.
+    """
+    return (
+        jt is not None
+        and _sonic_token_gather_sum_kernel is not None
+        and _sonic_token_gather_sum_bwd_kernel is not None
+        and jax.devices()[0].platform == "gpu"
+    )
+
+
+def unwritten_buffer(shape: tuple[int, ...], dtype: DTypeLike, marker: Int[Array, ""]) -> Array:
+    """A buffer with unspecified contents, made by a GPU kernel that writes nothing.
+
+    The kernel takes ``marker`` as an operand without reading it, so the buffer depends on the
+    marker: a loop-carried marker keeps the buffer inside the loop body, and two call sites with
+    different markers get two buffers.
+    """
+    _require_sonic_deps()
+    return jt.triton_call(
+        marker,
+        kernel=_write_nothing_kernel,
+        out_shape=jax.ShapeDtypeStruct(shape, dtype),
+        grid=(1,),
+    )
+
+
+def sonic_scatter_rows(
+    x: Float[Array, "T H"],
+    dispatch_positions: Int[Array, "T K"],
+    keep: Bool[Array, "T K"],
+    *,
+    rows: int,
+    weights: Float[Array, "T K"] | None = None,
+) -> Float[Array, "M H"]:
+    """Copy each token's row to its ``K`` dispatch positions, reading the row once.
+
+    Builds the same buffer as gathering ``x[sorted_token_ids]`` row by row, which reads every
+    source row ``K`` times, in a little over half the memory traffic. Only the positions whose
+    ``keep`` is set are written; the other rows of the ``[rows, H]`` result are unspecified. With
+    ``weights``, each written row is ``x`` times its fp32 weight, rounded once to ``x``'s dtype.
+    """
+    _require_sonic_deps()
+    tokens, topk = dispatch_positions.shape
+    hidden_dim = x.shape[1]
+    # Best measured on GB200 at TK = 524288, H = 3072: 0.535 ms, 6.6 TB/s.
+    block_h = min(_next_power_of_2(hidden_dim), 2048)
+    weights_flat = (
+        jnp.zeros((1,), jnp.float32) if weights is None else weights.reshape(tokens * topk).astype(jnp.float32)
+    )
+    return jt.triton_call(
+        x,
+        weights_flat,
+        keep.reshape(tokens * topk).astype(jnp.int8),
+        dispatch_positions.reshape(tokens * topk).astype(jnp.int32),
+        kernel=_token_scatter_rows_kernel,
+        out_shape=jax.ShapeDtypeStruct((rows, hidden_dim), x.dtype),
+        grid=(tokens,),
+        num_warps=16,
+        num_stages=1,
+        h=hidden_dim,
+        topk=topk,
+        block_h=block_h,
+        scaled=weights is not None,
+    )
 
 
 def _next_power_of_2(value: int) -> int:
@@ -178,11 +288,19 @@ def _sonic_gather_sum_impl(
     *,
     tokens: int,
     topk: int,
+    output_dtype: DTypeLike | None = None,
 ) -> Float[Array, "T H"]:
     _require_sonic_deps()
     hidden_dim = dispatch_output.shape[1]
-    block_h, block_k, num_warps = _sonic_kernel_config(hidden_dim)
-    out_shape = jax.ShapeDtypeStruct((tokens, hidden_dim), dispatch_output.dtype)
+    widest_block_h, block_k, num_warps = _sonic_kernel_config(hidden_dim)
+    # The forward kernel loops over hidden tiles, and narrower tiles than the backward's single
+    # tile keep more programs resident: on GB200 at TK = 524288, H = 3072, 1024-wide tiles take
+    # 0.508 ms against 0.574 ms for one 4096-wide tile. Each element still sums its K rows in order.
+    block_h = min(widest_block_h, 1024)
+    out_shape = jax.ShapeDtypeStruct(
+        (tokens, hidden_dim),
+        dispatch_output.dtype if output_dtype is None else output_dtype,
+    )
     return jt.triton_call(
         dispatch_output,
         weights_flat,
@@ -204,6 +322,30 @@ def _sonic_gather_sum_impl(
         block_k=block_k,
         w_is_none=False,
         is_varlen_k=False,
+    )
+
+
+def sonic_gather_sum_masked(
+    dispatch_output: Float[Array, "M H"],
+    dispatch_positions: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    *,
+    output_dtype: DTypeLike | None = None,
+) -> Float[Array, "T H"]:
+    """Gather weighted rows and ignore positions outside ``dispatch_output``."""
+    tokens, topk = combine_weights.shape
+    valid = (dispatch_positions >= 0) & (dispatch_positions < dispatch_output.shape[0])
+    positions_flat = jnp.clip(dispatch_positions, 0, dispatch_output.shape[0] - 1).reshape(tokens * topk)
+    weights_flat = jnp.where(valid, combine_weights, 0).reshape(tokens * topk).astype(jnp.float32)
+    offsets = _sonic_fixed_k_offsets(tokens=tokens, topk=topk)
+    return _sonic_gather_sum_impl(
+        dispatch_output,
+        weights_flat,
+        positions_flat,
+        offsets,
+        tokens=tokens,
+        topk=topk,
+        output_dtype=output_dtype,
     )
 
 
@@ -250,6 +392,12 @@ def sonic_gather_sum(
     dispatch_positions: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
 ) -> Float[Array, "T H"]:
+    """Sum each token's ``K`` rows of ``dispatch_output``, gathered at its positions and weighted.
+
+    A row with zero weight is not read, so it may hold unspecified values. The backward still
+    reads every row for the weight gradient. A caller that passes unspecified rows zeroes their
+    weights with ``jnp.where``, whose transpose discards those gradients.
+    """
     tokens, topk = combine_weights.shape
     weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
     positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
@@ -313,6 +461,7 @@ def _moe_mlp_local_sonic(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     moe_w13: Float[Array, "E H I2"],
     moe_w2: Float[Array, "E I H"],
     *,
@@ -323,19 +472,24 @@ def _moe_mlp_local_sonic(
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
             selected_experts,
+            token_valid,
             num_experts=num_experts,
         )
     )
-    x_dispatch = tree_checkpoint_name(x[token_ids_sort], _CHECKPOINT_DISPATCH_INPUT)
+    cumulative_group_sizes = jnp.cumsum(group_sizes).astype(jnp.int32)
+    x_dispatch = _zero_inactive_grouped_rows(x[token_ids_sort], cumulative_group_sizes)
+    x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
     with jax.named_scope("moe_up_down"):
+        # Rows past the last group are unspecified kernel output; every consumer before the
+        # gather-sum is row-local or group-bounded, so only `out_dispatch` needs zeroing.
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         hidden = activation_fn(gate) * up
-        out_dispatch = ragged_dot(hidden, moe_w2, group_sizes)
+        out_dispatch = _zero_inactive_grouped_rows(ragged_dot(hidden, moe_w2, group_sizes), cumulative_group_sizes)
         out = tree_checkpoint_name(
-            sonic_gather_sum(out_dispatch, dispatch_positions, combine_weights),
+            sonic_gather_sum(out_dispatch, dispatch_positions, jnp.where(token_valid[:, None], combine_weights, 0)),
             _CHECKPOINT_MOE_OUTPUT,
         )
 

@@ -33,6 +33,10 @@ GITHUB_REPO = "marin-community/marin"
 # stamp this one.
 GITHUB_USER_AGENT = "marin-grafana-bridge"
 
+OPERATOR_BEHAVIOR_LABEL = "operator_behavior"
+DEFAULT_OPERATOR_BEHAVIOR = "default"
+HERO_OPERATOR_BEHAVIOR = "hero"
+
 
 @dataclasses.dataclass(frozen=True)
 class GithubAppCredentials:

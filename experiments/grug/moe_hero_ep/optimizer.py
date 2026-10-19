@@ -42,6 +42,17 @@ def _match_named_sharding_to_params(updates, params):
     return jax.tree.map(match_sharding, updates, params, is_leaf=lambda x: x is None)
 
 
+def _pin_sharding(x, ref):
+    """Reshard ``x`` to ``ref``'s named sharding so a following norm reduces correctly.
+
+    ``new_param`` is a computed intermediate; leaving it with an SPMD-inferred sharding lets the sharded
+    ``norm(new_param)`` over-count and collapse the tensor (issue #8073). This reshard is a same-layout
+    no-op at runtime.
+    """
+    sharding = _target_named_sharding(ref)
+    return jax.sharding.reshard(x, sharding) if sharding is not None else x
+
+
 def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
     """MuonH hyperball step: move along the orthogonalized direction, then project back to the
     parameter's Frobenius sphere (scale-invariant update)."""
@@ -53,20 +64,70 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
         if not hasattr(param, "ndim"):
             return update
         if param.ndim == 2:
-            param_norm = jnp.linalg.norm(param)
-            update_norm = jnp.linalg.norm(update)
+            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
+            # sum-of-squares in float32 plus a same-layout reshard of the intermediate reduces correctly.
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param.astype(jnp.float32))))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update.astype(jnp.float32))))
             new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-            new_param_norm = jnp.linalg.norm(new_param)
+            new_param = _pin_sharding(new_param, param)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
         axes = tuple(range(1, param.ndim))
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
         new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+        new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
         new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
         return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
     return jax.tree.map(scale_invariant_update, params, direction_updates, is_leaf=lambda x: x is None)
+
+
+def _is_gate_or_router_weight(path_lower: str) -> bool:
+    """True for exactly the ``attn_gate`` and MoE ``router`` weight leaves.
+
+    Matches the leaf attribute name at the end of the path, so it selects ``...attn.attn_gate`` and
+    ``...mlp.router`` but not the separate ``...mlp.router_bias`` leaf.
+    """
+    return path_lower.endswith(".attn_gate") or path_lower.endswith(".router")
+
+
+def _gate_router_decay_mask(params):
+    """Boolean pytree that is True on the ``attn_gate`` and ``router`` weight leaves -- the ones that
+    receive decoupled weight decay -- and False everywhere else."""
+    paths = leaf_key_paths(params)
+
+    def is_target(_, path):
+        path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+        return _is_gate_or_router_weight(path_str.lower())
+
+    return jax.tree.map(is_target, params, paths)
+
+
+def _scale_by_adam_gate_router_decay(
+    b1: float, b2: float, eps: float, weight_decay: float, total_steps: int
+) -> optax.GradientTransformation:
+    """``scale_by_adam`` plus decoupled weight decay on ``attn_gate`` and the ``router`` weight,
+    annealed linearly to 0 over ``total_steps``. The coefficient reads the Adam ``count`` and the
+    state stays ``ScaleByAdamState``, so a checkpoint written without decay resumes at the right step
+    with its moments intact."""
+    adam = optax.scale_by_adam(b1, b2, eps)
+
+    def init_fn(params):
+        return adam.init(params)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("_scale_by_adam_gate_router_decay requires params for decoupled decay")
+        step = state.count
+        updates, next_state = adam.update(updates, state, params)
+        wd = weight_decay * jnp.clip(1.0 - step / total_steps, 0.0, None)
+        mask = _gate_router_decay_mask(params)
+        updates = jax.tree.map(lambda u, p, keep: u + wd * p if keep else u, updates, params, mask)
+        return updates, next_state
+
+    return optax.GradientTransformation(init_fn, update_fn)
 
 
 def scale_with_grug_muonh(
@@ -126,6 +187,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     use_syrk: bool = True
+    gate_router_weight_decay: float = 0.0
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -161,7 +223,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                if self.gate_router_weight_decay > 0.0:
+                    components.append(
+                        _scale_by_adam_gate_router_decay(
+                            self.beta1, self.beta2, self.epsilon, self.gate_router_weight_decay, num_train_steps
+                        )
+                    )
+                else:
+                    components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
@@ -183,12 +252,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if (
-                "token_embed" in path_lower
-                or "router_bias" in path_lower
-                or path_lower.endswith(".attn_gate")
-                or ".router" in path_lower
-            ):
+            if "token_embed" in path_lower or "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"

@@ -112,9 +112,12 @@ class InferenceWorker:
 
     def _forward_one(self, client: httpx.Client, leased_request: LeasedInferenceRequest) -> LeasedInferenceResponse:
         request = leased_request.request
-        # The proxy receives /v1/... paths, while RunningModel.endpoint.url() already points at /v1.
-        upstream_path = request.path.removeprefix("/v1/")
-        url = self._upstream.endpoint.url(upstream_path)
+        if request.path == "/tokenize":
+            # Tokenization lives outside the OpenAI API root.
+            url = self._upstream.endpoint.base_url.rstrip("/").removesuffix("/v1") + request.path
+        else:
+            upstream_path = request.path.removeprefix("/v1/")
+            url = self._upstream.endpoint.url(upstream_path)
         try:
             response = self._send(client, request, url)
             inference_response = _response_from_upstream(request, response)

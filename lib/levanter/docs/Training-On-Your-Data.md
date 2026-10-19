@@ -449,3 +449,8 @@ After training, you can run a separate script to export levanter checkpoints to 
 ```bash
 python -m levanter.main.export_lm_to_hf --config_path my_config.yaml --output_dir gs://path/to/output
 ```
+
+The export gathers shards in the same order on every process. Process 0 writes and uploads up to
+`max_concurrent_shards` shards at once (default 16), subject to `export_host_budget_bytes` (default 16 GiB).
+Each shard reserves twice its tensor payload while it is written and uploaded. A shard that exceeds the
+budget runs alone. Set these fields in the export config to limit host memory or upload concurrency.

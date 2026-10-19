@@ -26,7 +26,6 @@ def to_markdown(html, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig()):
 
 
 whitespace_re = re.compile(r"[\t ]+")
-spaces_re = re.compile(r"^[ ]+$")
 
 
 always_escape_pattern = re.compile(r"([\[\]<>`])")  # square brackets, backticks, angle brackets
@@ -122,13 +121,19 @@ def _try_convert_int(val, default):
             return default
 
 
+def _title_part(title: str | None) -> str:
+    """The optional title suffix of a link or image destination, empty when there is no title."""
+    if not title:
+        return ""
+    escaped = title.replace('"', r"\"")
+    return f' "{escaped}"'
+
+
 class MyMarkdownConverter(MarkdownConverter):
-    def __init__(self, config: HtmlToMarkdownConfig, **kwargs):
+    def __init__(self, config: HtmlToMarkdownConfig):
         self.include_links = config.include_links
         self.include_images = config.include_images
-
-        kwargs = config.markdownify_kwargs
-        super().__init__(**kwargs)
+        super().__init__(**config.markdownify_kwargs)
 
     def convert_hn(self, n, el, text, parent_tags):
         if "_inline" in parent_tags:
@@ -169,7 +174,7 @@ class MyMarkdownConverter(MarkdownConverter):
             return f"<{href}>"
         if self.options["default_title"] and not title:
             title = href
-        title_part = ' "{title}"'.format(title=title.replace('"', r"\"") if title else "")
+        title_part = _title_part(title)
         return f"{prefix}[{text}]({href}{title_part}){suffix}" if href else text
 
     # markdownify doesn't allow difference pre- and post- text for converting sub and sup
@@ -204,7 +209,7 @@ class MyMarkdownConverter(MarkdownConverter):
         alt = self.escape(alt, parent_tags)
         src = el.attrs.get("src", None) or el.attrs.get("data-src", None) or ""
         title = el.attrs.get("title", None) or ""
-        title_part = ' "{title}"'.format(title=title.replace('"', r"\"") if title else "")
+        title_part = _title_part(title)
         if "_inline" in parent_tags and el.parent.name not in self.options["keep_inline_images_in"]:
             return alt
 
@@ -435,13 +440,8 @@ class MyMarkdownConverter(MarkdownConverter):
         ):
             return True
 
-        # now we want to understand paragraphs. We want to look at each cell and see how many paragraphs are in it
-        # if it's more than 1, it's probably for layout
-        # Actually, we're fine with <p>'s. we'll convert them to <br>'s.
-        # for td in table.select('td'):
-        #     if len(td.select('p')) > 1:
-        #         return True
-
+        # We're fine with <p>'s in cells: they convert to <br>'s rather than marking the table
+        # as layout.
         return False
 
     def _process_layout_table(self, table, parent_tags):
@@ -522,7 +522,6 @@ class MyMarkdownConverter(MarkdownConverter):
             is_paragraph = text1.endswith("\n\n")
             is_br = text1.endswith("<br>") or text1.endswith("  \n")
             # if text1 is a paragraph or br, we can trim any leading spaces
-            # however, we nede to
             if is_paragraph or is_br:
                 text2 = text2.lstrip()
 
@@ -543,14 +542,6 @@ class MyMarkdownConverter(MarkdownConverter):
                     newline_count = 2
                 if newline_count:
                     text2 = "\n" * newline_count + text2
-            # elif rhs_is_string:
-            #     # if instead we are joining spaces, only join if there's not already a space
-            #     tail1 = re.search(r' +$', text1)
-            #     head2 = re.search(r'^ +', text2)
-            #     if tail1 and head2:
-            #         text1 = text1[:tail1.start()]
-            #         text2 = text2[head2.end():]
-            #         text2 = ' ' + text2
 
         return text1 + text2
 

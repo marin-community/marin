@@ -521,7 +521,7 @@ def test_build_or_load_reference_eval_cache_matches_direct_logps(tmp_path: Path)
             mesh=mesh,
             axis_resources=None,
             max_buffered_batches=1,
-            prefetch_size=1,
+            fetch_batch_size=1,
             allow_nondivisible_batch_size=True,
         )
         chosen, rejected = build_or_load_reference_eval_cache(

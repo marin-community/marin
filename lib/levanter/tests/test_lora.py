@@ -13,7 +13,12 @@ import optax
 from chex import assert_trees_all_close
 from haliax.quantization import DefaultDotGeneralOp, DotGeneralOp
 from safetensors import safe_open
-from test_utils import skip_if_hf_model_not_accessible, skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from levanter.testing.helpers import (
+    skip_if_hf_model_not_accessible,
+    skip_if_module_missing,
+    skip_if_no_torch,
+    use_test_mesh,
+)
 from transformers import AutoModelForCausalLM
 
 from levanter.adaptor.lora import (

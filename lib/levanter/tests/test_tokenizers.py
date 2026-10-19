@@ -1343,6 +1343,25 @@ def test_try_load_tokenizer_from_dir_corrupt(tmp_path):
     assert not _try_load_tokenizer_from_dir(str(tmp_path))
 
 
+def test_stage_tokenizer_file_url_excludes_checkpoint_weights(fake_tokenizer_dir, clear_stage_cache):
+    (fake_tokenizer_dir / "model.safetensors").write_bytes(b"not a tokenizer")
+
+    staged_dir = _stage_tokenizer(f"file://{fake_tokenizer_dir}")
+
+    assert os.path.isfile(os.path.join(staged_dir, "tokenizer.json"))
+    assert os.path.isfile(os.path.join(staged_dir, "tokenizer_config.json"))
+    assert not os.path.exists(os.path.join(staged_dir, "model.safetensors"))
+
+
+def test_as_hf_tokenizer_loads_object_storage_path(fake_tokenizer_dir, clear_stage_cache):
+    url = f"file://{fake_tokenizer_dir}"
+    tokenizer = load_tokenizer(url)
+
+    hf_tokenizer = tokenizer.as_hf_tokenizer()
+
+    assert hf_tokenizer.get_vocab() == tokenizer.get_vocab()
+
+
 def test_stage_from_hf_copies_files_and_populates_mirror(tmp_path, fake_tokenizer_dir):
     """_stage_from_hf copies snapshot files to local_dir and pushes each to the mirror."""
     local_dir = tmp_path / "staged"
@@ -1360,6 +1379,23 @@ def test_stage_from_hf_copies_files_and_populates_mirror(tmp_path, fake_tokenize
     assert len(mirror_calls) == 2
     assert all("org/model" in u for u in mirror_calls)
     assert all(f"hf-hub-{_hf_hub_version}" in u for u in mirror_calls)
+
+
+def test_stage_from_hf_passes_pinned_revision_separately(tmp_path, fake_tokenizer_dir):
+    """Checkpoint-style repo refs pin tokenizer downloads instead of becoming invalid repo IDs."""
+    local_dir = tmp_path / "staged"
+    local_dir.mkdir()
+
+    with (
+        patch("levanter.tokenizers.snapshot_download", return_value=str(fake_tokenizer_dir)) as download,
+        patch("levanter.tokenizers._populate_mirror_file"),
+    ):
+        _stage_from_hf("org/model@deadbeef", str(local_dir))
+
+    _, kwargs = download.call_args
+    assert kwargs["revision"] == "deadbeef"
+    assert download.call_args.args == ("org/model",)
+    assert (local_dir / "tokenizer.json").exists()
 
 
 def test_stage_from_mirror_copies_files(tmp_path, fake_tokenizer_dir):

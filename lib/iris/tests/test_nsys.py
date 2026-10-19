@@ -16,7 +16,6 @@ from typing import NoReturn
 
 import pytest
 from iris.cluster.client.job_info import set_job_info
-from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.hooks.nsys import NsysHook
 from iris.hooks.nsys_main import (
     build_nsys_argv,
@@ -28,6 +27,7 @@ from iris.hooks.nsys_main import (
     should_profile,
 )
 from iris.hooks.nsys_main import main as nsys_main
+from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 
 CMD = ["python", "train.py", "--steps", "10"]
 OUT = "s3://bucket/tmp/ttl=30d/nsys"

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .api import (
-    BlockSizes,
     HybridModeConfig,
     IMPLEMENTATIONS,
     Implementation,
@@ -34,7 +33,6 @@ from .api import (
 )
 
 __all__ = [
-    "BlockSizes",
     "HybridModeConfig",
     "IMPLEMENTATIONS",
     "Implementation",

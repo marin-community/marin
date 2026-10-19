@@ -10,7 +10,8 @@
 //!
 //! A "starts-with" predicate is opaque to statistics — `prefix(key, P)`,
 //! `key LIKE 'P%'`, and `regexp_matches(key, '^P…')` all force a scan because
-//! min/max stats key on whole values. But each one *implies* the half-open range
+//! min/max stats key on whole values. A string `IN` list with a non-empty common
+//! prefix has the same problem. Each form *implies* the half-open range
 //! `[P, succ(P))`. The rule ANDs that implied range onto the predicate:
 //!
 //! ```text
@@ -46,9 +47,9 @@ use datafusion::optimizer::AnalyzerRule;
 
 use crate::store::log_read::regex_literal_prefix;
 
-/// Rewrites starts-with predicates (`prefix` / `LIKE 'P%'` / `regexp_matches`
-/// with a `^literal` anchor) to additionally carry the implied half-open key
-/// range, so DataFusion can prune row groups. See the module docs.
+/// Rewrites starts-with predicates and shared-prefix string `IN` lists to also
+/// carry the implied half-open key range, so DataFusion can prune row groups.
+/// See the module docs.
 #[derive(Debug, Default)]
 pub struct PrefixRangeRewrite;
 
@@ -108,6 +109,8 @@ fn rewrite_expr(expr: Expr, schema: &DFSchema) -> DFResult<Transformed<Expr>> {
 /// - `regexp_matches(col, '^P…')` — only when `^`-anchored; P is the literal run
 ///   after `^` (DuckDB `regexp_matches` is otherwise unanchored, so a literal
 ///   would not pin the start).
+/// - `col IN ('P1', 'P2', ...)` — P is the non-empty common prefix of two or
+///   more string literals. Negated or non-literal lists are not rewritten.
 fn guaranteed_prefix(expr: &Expr) -> Option<(Column, String)> {
     match expr {
         Expr::ScalarFunction(sf) if sf.args.len() == 2 => {
@@ -125,8 +128,34 @@ fn guaranteed_prefix(expr: &Expr) -> Option<(Column, String)> {
             let pattern = utf8_literal(&like.pattern)?;
             Some((col, like_prefix_literal(&pattern)?))
         }
+        Expr::InList(in_list) if !in_list.negated && in_list.list.len() >= 2 => {
+            let col = column_arg(&in_list.expr)?;
+            Some((col, common_literal_prefix(&in_list.list)?))
+        }
         _ => None,
     }
+}
+
+/// The non-empty Unicode-safe common prefix of string literal expressions.
+/// Every list item must be a literal (possibly under a string cast), because a
+/// dynamic value cannot contribute a planning-time bound.
+fn common_literal_prefix(exprs: &[Expr]) -> Option<String> {
+    let mut values = exprs.iter().map(utf8_literal);
+    let first = values.next()??;
+    let mut prefix_bytes = first.len();
+    for value in values {
+        let value = value?;
+        prefix_bytes = first[..prefix_bytes]
+            .chars()
+            .zip(value.chars())
+            .take_while(|(left, right)| left == right)
+            .map(|(ch, _)| ch.len_utf8())
+            .sum();
+        if prefix_bytes == 0 {
+            return None;
+        }
+    }
+    Some(first[..prefix_bytes].to_string())
 }
 
 /// A `LIKE` with no negation, case-insensitivity, or explicit escape char — the
@@ -350,6 +379,43 @@ mod tests {
     }
 
     #[test]
+    fn string_in_list_gains_common_prefix_range_and_keeps_residual() {
+        let conjuncts = analyze_filter_conjuncts(col("key").in_list(
+            vec![lit("/job/task/0"), lit("/job/task/1"), lit("/job/task/27")],
+            false,
+        ));
+        assert!(
+            conjuncts
+                .iter()
+                .any(|e| is_key_cmp(e, Operator::GtEq, "/job/task/")),
+            "lower bound from the IN list's common prefix must be added"
+        );
+        assert!(
+            conjuncts
+                .iter()
+                .any(|e| is_key_cmp(e, Operator::Lt, "/job/task0")),
+            "upper bound from the IN list's common prefix must be added"
+        );
+        assert!(
+            conjuncts.iter().any(|e| matches!(e, Expr::InList(_))),
+            "the exact IN-list residual must remain"
+        );
+    }
+
+    #[test]
+    fn string_in_list_without_a_guaranteed_prefix_is_untouched() {
+        for predicate in [
+            col("key").in_list(vec![lit("/job/a"), lit("/job/b")], true),
+            col("key").in_list(vec![lit("alpha"), lit("beta")], false),
+            col("key").in_list(vec![lit("/job/a"), col("key")], false),
+        ] {
+            let conjuncts = analyze_filter_conjuncts(predicate);
+            assert_eq!(conjuncts.len(), 1);
+            assert!(matches!(conjuncts[0], Expr::InList(_)));
+        }
+    }
+
+    #[test]
     fn like_prefix_and_anchored_regex_gain_range() {
         // LIKE 'P%'
         let like = analyze_filter_conjuncts(col("key").like(lit("/a/%")));
@@ -402,11 +468,13 @@ mod tests {
         }
     }
 
-    /// Plan `SELECT key FROM t WHERE prefix(key, '/a/')` over a `key` column of
-    /// `key_type`, and report whether the synthesized `key < '/a0'` upper bound
-    /// survived into the optimized plan. `/a0` (succ of `/a/`) appears nowhere in
-    /// the input SQL, so finding it is unambiguous.
-    async fn plans_with_synthesized_upper_bound(key_type: DataType) -> bool {
+    /// Plan a query over a `key` column of `key_type`, and report whether its
+    /// synthesized upper bound survived into the optimized plan.
+    async fn plans_with_synthesized_upper_bound(
+        key_type: DataType,
+        predicate: &str,
+        upper_bound: &str,
+    ) -> bool {
         use datafusion::arrow::array::{
             ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray,
         };
@@ -429,7 +497,7 @@ mod tests {
         let ctx = crate::query::make_ctx();
         ctx.register_batch("t", batch).unwrap();
         let plan = ctx
-            .sql("SELECT key FROM t WHERE prefix(key, '/a/')")
+            .sql(&format!("SELECT key FROM t WHERE {predicate}"))
             .await
             .unwrap()
             .into_optimized_plan()
@@ -440,7 +508,7 @@ mod tests {
             for e in node.expressions() {
                 if split_conjunction(&e)
                     .iter()
-                    .any(|c| is_key_cmp(c, Operator::Lt, "/a0"))
+                    .any(|c| is_key_cmp(c, Operator::Lt, upper_bound))
                 {
                     found_upper = true;
                 }
@@ -457,7 +525,7 @@ mod tests {
         // upper bound in its optimized plan — proof the rule is wired into the
         // real pipeline, not just unit-tested in isolation.
         assert!(
-            plans_with_synthesized_upper_bound(DataType::Utf8).await,
+            plans_with_synthesized_upper_bound(DataType::Utf8, "prefix(key, '/a/')", "/a0").await,
             "make_ctx must register PrefixRangeRewrite so the key range reaches the optimized plan"
         );
     }
@@ -469,8 +537,22 @@ mod tests {
         // through that: without the range, a key-prefix scan reads every row of
         // the namespace instead of one key band's row groups.
         assert!(
-            plans_with_synthesized_upper_bound(DataType::Utf8View).await,
+            plans_with_synthesized_upper_bound(DataType::Utf8View, "prefix(key, '/a/')", "/a0")
+                .await,
             "PrefixRangeRewrite must synthesize the key range for a Utf8View key column"
+        );
+    }
+
+    #[tokio::test]
+    async fn in_list_rule_fires_after_sql_type_coercion() {
+        assert!(
+            plans_with_synthesized_upper_bound(
+                DataType::Utf8View,
+                "key IN ('/job/task/0', '/job/task/1', '/job/task/27')",
+                "/job/task0",
+            )
+            .await,
+            "a SQL IN list on the scan's Utf8View key must expose its common-prefix range"
         );
     }
 }

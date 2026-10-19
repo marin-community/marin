@@ -41,7 +41,10 @@ from iris.cluster.controller.reconcile.snapshot import (
     pick_earliest_task_error,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
+from iris.cluster.controller.scheduling.policy import (
+    build_scheduling_context,
+    compute_demand_entries,
+)
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
@@ -54,24 +57,10 @@ from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import FakeStatsTable
-from rigging.timing import Duration, Timestamp
-from sqlalchemy import func, insert, select
-from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import (
-    ControllerTestState,
-    create_attempt_for_test,
-    submit_job_in_tx,
-)
-from tests.cluster.controller.transition_driver import (
-    WorkerTaskUpdates,
-    apply_task_observations,
-    commit_dispatch_updates,
-)
-
-from .conftest import (
+from iris.testing.controller import (
     building_counts as _building_counts,
 )
-from .conftest import (
+from iris.testing.controller import (
     check_task_can_be_scheduled,
     check_task_is_finished,
     dispatch_task,
@@ -82,27 +71,39 @@ from .conftest import (
     register_worker,
     submit_job,
     transition_task,
-    worker_daemon_backends_for_prune,
     worker_running_tasks,
 )
-from .conftest import (
+from iris.testing.controller import (
     make_test_entrypoint as _make_test_entrypoint,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_attempt as _query_attempt,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_job as _query_job,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_task as _query_task,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_worker as _query_worker,
 )
-from .conftest import (
+from iris.testing.controller import (
     schedulable_tasks as _schedulable_tasks,
 )
+from iris.testing.controller_state import (
+    ControllerTestState,
+    create_attempt_for_test,
+    submit_job_in_tx,
+)
+from iris.testing.transitions import (
+    WorkerTaskUpdates,
+    apply_task_observations,
+    commit_dispatch_updates,
+)
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import func, insert, select
+from sqlalchemy import update as sa_update
 
 _ZERO_USAGE = WorkerResourceUsage(0, 0, 0, 0)
 
@@ -125,8 +126,14 @@ def _demand_entries(state: ControllerTestState):
     Mirrors the production demand path: build the per-tick scheduling context
     from the live DB and run the single demand computation over it.
     """
+    defaults = UserBudgetDefaults()
     with state._db.read_snapshot() as snap:
-        ctx = build_scheduling_context(snap, state._health, state._worker_attrs, UserBudgetDefaults(), {})
+        ctx = build_scheduling_context(
+            snap,
+            state._health,
+            state._worker_attrs,
+            defaults,
+        )
     return compute_demand_entries(ctx, Scheduler(), {})
 
 
@@ -793,7 +800,7 @@ def test_endpoint_survives_terminal_and_clears_on_prune(state):
         _tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(finished_at_ms=1000))
     prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3203,7 +3210,7 @@ def test_prune_old_terminal_jobs(state):
     # Prune with a 1-day retention — old-job finished at ~epoch, recent-job finished just now
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3237,7 +3244,7 @@ def test_prune_old_inactive_workers(state):
 
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3253,7 +3260,7 @@ def test_prune_noop_when_nothing_old(state):
 
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3307,7 +3314,7 @@ def test_prune_orphaned_slices(state):
 
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),
@@ -3335,7 +3342,7 @@ def test_prune_keeps_slice_with_live_worker_despite_empty_worker_ids(state):
 
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        state._health,
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),
