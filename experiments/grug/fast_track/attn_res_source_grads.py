@@ -29,7 +29,7 @@ def _kernel(*refs, num_gates: int):
     mix_refs = refs[2 + num_gates : 2 + 2 * num_gates]
     d_sources_ref = refs[1]
     out_ref = refs[-1]
-    mixes = [mix_ref[...] for mix_ref in mix_refs]  # each [TB, FB], read once for every slot
+    mixes = [mix_ref[...].astype(jnp.float32) for mix_ref in mix_refs]  # each [TB, FB], read once for every slot
 
     def body(n, carry):
         acc = d_sources_ref[n].astype(jnp.float32)
@@ -53,7 +53,7 @@ def accumulate_source_grads_local(
     """``d_sources + sum_g weights[g][..., None] * d_mixes[g][None]`` on one device's tokens.
 
     ``d_sources`` is ``[N, T, D]``, each ``weights[g]`` ``[N, T]`` (zero on slots ``>= num_valid``, an int32
-    scalar) and each ``d_mixes[g]`` ``[T, D]``."""
+    scalar) and each ``d_mixes[g]`` ``[T, D]`` (any float dtype, read as float32)."""
     n, t, d = d_sources.shape
     tb, fb = min(tiles.token_block, t), min(tiles.feature_block, d)
     if t % tb or d % fb:

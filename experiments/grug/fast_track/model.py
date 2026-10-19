@@ -4830,6 +4830,15 @@ def _scan_history_layer(
         inter = (normed, lse, inter_weights)
     calls = [0]
 
+    def probed(mixed: jax.Array, source_weights: jax.Array) -> jax.Array:
+        """The gate's float32 mix in the stream dtype; in the recompute plus its zero probe (whose cotangent is
+        the mix's: the stream-dtype cotangent of the cast) and the gate's source weights recorded."""
+        out = mixed.astype(sources.dtype)
+        if probes is not None:
+            out = out + probes[len(gate_weights)]
+            gate_weights.append(jax.lax.stop_gradient(source_weights))
+        return reshard(out, _batch_spec())
+
     def two_phase_mix(p: jax.Array, gate_index: jax.Array, attn_gate: bool, j: int):
         """Phase 2: merge phase-1 mix ``j`` (0: attention gate, 1: MLP gate) with the partial (online softmax)."""
         assert inter is not None and attn_gate == (j == 0)
@@ -4842,23 +4851,18 @@ def _scan_history_layer(
         alpha = jnp.exp(lse[j] - total)  # the completed sources' share
         source_weights = inter_weights[:, j] * alpha[None]
         mixed = alpha[..., None] * normed[j].astype(jnp.float32) + (1.0 - alpha)[..., None] * p.astype(jnp.float32)
-        if probes is not None:
-            mixed = mixed + probes[len(gate_weights)]
-            gate_weights.append(jax.lax.stop_gradient(source_weights))
+        out = probed(mixed, source_weights)
         weights = jnp.concatenate([source_weights, (1.0 - alpha)[None]])
         mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
-        return reshard(mixed.astype(sources.dtype), _batch_spec()), jnp.mean(jnp.square(total)), mean_weights
+        return out, jnp.mean(jnp.square(total)), mean_weights
 
     def plain_sum_mix(p: jax.Array):
         """The completed sources' plain sum plus the partial (zero right after a block boundary)."""
         assert completed_sum is not None
-        mixed = completed_sum + p.astype(jnp.float32)
-        if probes is not None:
-            mixed = mixed + probes[len(gate_weights)]
-            gate_weights.append(unit_weights)
+        out = probed(completed_sum + p.astype(jnp.float32), unit_weights)
         counted = jnp.concatenate([valid, jnp.ones((1,), bool)]).astype(jnp.float32)
         mean_weights = counted / jnp.sum(counted)
-        return reshard(mixed.astype(sources.dtype), _batch_spec()), jnp.zeros((), jnp.float32), mean_weights
+        return out, jnp.zeros((), jnp.float32), mean_weights
 
     def mix(p: jax.Array | None, gate_index: jax.Array, attn_gate: bool):
         assert p is not None
@@ -4876,15 +4880,12 @@ def _scan_history_layer(
             partial_logit = jnp.where(boundary, -jnp.inf, partial_logit)
         gate_logits = jnp.concatenate([gate, partial_logit])
         weights = jax.nn.softmax(gate_logits, axis=0)
-        if probes is None:
-            mixed = _weighted_sources(weights[:num_sources], sources)
-        else:
-            mixed = _weighted_sources(weights[:num_sources], jax.lax.stop_gradient(sources)) + probes[len(gate_weights)]
-            gate_weights.append(jax.lax.stop_gradient(weights[:num_sources]))
-        mixed = mixed + weights[num_sources][..., None] * p.astype(jnp.float32)
+        src = sources if probes is None else jax.lax.stop_gradient(sources)
+        mixed = _weighted_sources(weights[:num_sources], src) + weights[num_sources][..., None] * p.astype(jnp.float32)
+        out = probed(mixed, weights[:num_sources])
         mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
         z = jnp.mean(jnp.square(jax.nn.logsumexp(gate_logits, axis=0)))
-        return reshard(mixed.astype(sources.dtype), _batch_spec()), z, mean_weights
+        return out, z, mean_weights
 
     noise_key = None if route_key is None else jax.random.fold_in(route_key, layer_index)
     extras = None if saved_routed is None else {_SAVED_ROUTED: saved_routed}
@@ -4958,7 +4959,7 @@ def _fused_source_grads(
         out = accumulate_source_grads_local(
             ds.reshape(n, lb * s, d),
             tuple(w.reshape(n, lb * s).astype(jnp.float32) for w in ws),
-            tuple(m.reshape(lb * s, d).astype(jnp.float32) for m in dms),
+            tuple(m.reshape(lb * s, d) for m in dms),
             nv,
             interpret=_pallas_interpret(),
         )
@@ -5266,7 +5267,7 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
                     saved_routed=unit_routed[j] if unit_routed else None,
                 )
                 num_gates = 2 + (layer_diff.attn_res_query_shared is not None)
-                probes = tuple(jnp.zeros_like(partial_in, dtype=jnp.float32) for _ in range(num_gates))
+                probes = tuple(jnp.zeros_like(partial_in) for _ in range(num_gates))
                 _, vjp_fn, gate_weights = jax.vjp(
                     layer_fn, layer_diff, logits, partial_in, queries, probes, has_aux=True
                 )
