@@ -1,4 +1,5 @@
+applet_id = "fb11c931-5861-4878-8bb5-a964d652b45f"
+
 title = "RL Data Atlas"
-description = "Task-curation source inventory with pinned inputs, row counts, and saved reviews."
+description = "Explore RL sources, curriculum coverage, curation assessments and sampled grades. Inspect executed controls and archived review evidence."
 python_entrypoint = "server.app:create_api"
-build_command = "cd ../../../.. && uv run --with-editable './lib/taskcompendium[pipeline]' python -m experiments.post_training.task_curation.export_catalog --output infra/marina/applets/rl_data_catalog/dist/catalog.json"

@@ -20,8 +20,8 @@ import sqlalchemy
 from fastembed import TextEmbedding
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from echo import repository_files, schema, search_config
-from echo.search_config import RepositoryTarget
+from .. import repository_files, schema, search_config  # noqa: TID252 -- immutable revision namespace
+from ..search_config import RepositoryTarget  # noqa: TID252 -- immutable revision namespace
 
 REPOSITORY_FILE_BATCH = 10
 DATABASE_INSERT_BATCH = 100

@@ -15,13 +15,14 @@ from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
     Command,
+    ExecutionRequirements,
     ExitReason,
     HostImage,
     Machine,
     MachineFactory,
     MachineSpec,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TaskResource, require_resolved_environment
@@ -30,6 +31,9 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
 from rolloutengine.spec import MachineRuntimeSpec
+
+SETUP_OUTPUT_CHARS = 2000
+"""How much of a failed setup command's stdout and stderr the error keeps, from the end."""
 
 
 @dataclass(frozen=True)
@@ -67,8 +71,10 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
         source = HostImage()
+    elif requirements.package_spec is not None:
+        source = requirements.package_spec
     elif requirements.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-        source = ShellSimBuiltins()
+        source = PackageSpec()
     else:
         raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
     return MachineSpec(
@@ -114,6 +120,14 @@ async def _acquire_machine(
     return machine if runtime.user is None else _UserMachine(machine, runtime.user)
 
 
+def _output_tail(output: bytes) -> str:
+    """The last ``SETUP_OUTPUT_CHARS`` characters of a command's output, for an error message."""
+    text = output.decode(errors="replace").strip()
+    if len(text) <= SETUP_OUTPUT_CHARS:
+        return repr(text)
+    return repr(f"...{text[-SETUP_OUTPUT_CHARS:]}")
+
+
 async def _prepare_machine(
     requirements: EnvironmentRequirements,
     runtime: MachineRuntimeSpec | None,
@@ -140,7 +154,10 @@ async def _prepare_machine(
             if result.reason == ExitReason.TIMED_OUT:
                 raise TimeoutError("Environment setup command timed out")
             if result.exit_code != 0:
-                raise RuntimeError(f"Environment setup command failed: {result.reason}, exit={result.exit_code}")
+                raise RuntimeError(
+                    f"Environment setup command failed: {result.reason}, exit={result.exit_code}; "
+                    f"command: {command!r}; stdout: {_output_tail(result.stdout)}; stderr: {_output_tail(result.stderr)}"
+                )
         if runtime.user is not None:
             result = await machine.run(Command(("true",), timeout=runtime.startup_timeout))
             if result.reason == ExitReason.TIMED_OUT:
@@ -181,6 +198,9 @@ class _AttemptMachineFactory:
     @property
     def backend(self) -> Backend:
         return self.factories[self.runtime.backend].backend
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self.factories[self.runtime.backend].check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:
         async with asyncio.timeout(self.runtime.startup_timeout):

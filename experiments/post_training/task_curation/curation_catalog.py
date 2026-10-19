@@ -14,12 +14,14 @@ from functools import partial
 from typing import Any
 
 from finestore.layout import CommitToken
+from finestore.rl.curation import ATTEMPTS, AssessmentAttempt, AssessmentPaths, AssessmentStatus, register_catalog
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.execution_telemetry import TELEMETRY_FILENAME
 
 CATALOG_DIRECTORY = "catalog"
+RUNS = "runs"
 MANIFEST_FILENAME = "manifest.json"
 FILTER_MANIFEST_FILENAME = "work/filtered/manifest.json"
 REVIEW_MANIFEST_FILENAME = "review/manifest.json"
@@ -153,7 +155,7 @@ def _parsed_documents(evidence: Mapping[str, bytes]) -> tuple[dict[str, Any], di
 def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report_updated_at: str) -> SourceDocuments:
     if outcome["status"] == "queued":
         return SourceDocuments(outcome["name"], {}, ManifestEvidence.MISSING)
-    root = StoragePath(outcome["path"])
+    root = _curation_root(outcome)
     documents = {}
     for name in (
         MANIFEST_FILENAME,
@@ -183,11 +185,26 @@ def _source_documents(outcome: dict[str, Any], *, started_at: str | None, report
         applicability = ManifestEvidence.UNCONFIRMED
     elif outcome["status"] not in ("failed", "running"):
         applicability = ManifestEvidence.CURRENT_ATTEMPT if current else ManifestEvidence.RETAINED_ARTIFACT
+    elif outcome.get("assessment") is not None and parsed.get(".artifact.json", {}).get("result") is not None:
+        # A failed downstream judgment does not invalidate its completed curation dependency.
+        applicability = ManifestEvidence.CURRENT_ATTEMPT if current else ManifestEvidence.RETAINED_ARTIFACT
     elif current and telemetry["status"] == "completed":
         applicability = ManifestEvidence.CURRENT_ATTEMPT
     else:
         applicability = ManifestEvidence.UNCONFIRMED
     return SourceDocuments(outcome["name"], documents, applicability)
+
+
+def _curation_root(outcome: dict[str, Any]) -> StoragePath:
+    assessment = outcome.get("assessment")
+    return StoragePath(assessment["curated_root"] if assessment is not None else outcome["path"])
+
+
+ASSESSMENT_FAILURES = {
+    "queued": (AssessmentStatus.SKIPPED, "Source was not started"),
+    "running": (AssessmentStatus.FAILED, "Source was interrupted"),
+    "failed": (AssessmentStatus.FAILED, "Source failed before assessment completed"),
+}
 
 
 def append_curation_catalog(
@@ -223,14 +240,15 @@ def append_curation_catalog(
     if len(by_name) != len(documents) or set(by_name) != {outcome["name"] for outcome in outcomes}:
         raise ValueError("Catalog documents must cover exactly the reported sources")
     with DataStore.open(root, writer_id=run_id) as store:
-        if store.read_view().point("runs", run_id=run_id) is not None:
+        if store.read_view().point(RUNS, run_id=run_id) is not None:
             raise ValueError(f"Catalog invocation already exists: {run_id}")
-        store.table("runs", primary_key=("run_id",), schema=arrow_schema(CurationRun))
+        store.table(RUNS, primary_key=("run_id",), schema=arrow_schema(CurationRun))
         store.table("sources", primary_key=("run_id", "name"), schema=arrow_schema(CurationSource))
         store.table("phases", primary_key=("run_id", "name", "ordinal"), schema=arrow_schema(CurationPhase))
+        register_catalog(store)
         with store.transaction() as transaction:
             report_uri = transaction.write_object(f"runs/{run_id}/report.json", report_bytes)
-            transaction.table("runs").add(
+            transaction.table(RUNS).add(
                 asdict(
                     CurationRun(
                         run_id=run_id,
@@ -295,7 +313,7 @@ def append_curation_catalog(
                     ),
                     unprocessed_rows=manifest.get("unprocessed_rows"),
                     manifest_path=(
-                        str(StoragePath(outcome["path"]) / MANIFEST_FILENAME) if MANIFEST_FILENAME in evidence else None
+                        str(_curation_root(outcome) / MANIFEST_FILENAME) if MANIFEST_FILENAME in evidence else None
                     ),
                     manifest_sha256=digests.get(MANIFEST_FILENAME),
                     evidence_snapshots_json=_json(snapshots),
@@ -338,6 +356,33 @@ def append_curation_catalog(
                     controls_inconsistent=counts.get("inconsistent", 0) if counts is not None else None,
                 )
                 transaction.table("sources").add(asdict(source))
+                paths = outcome.get("assessment")
+                if paths is None:
+                    assessment_status, assessment_reason = (
+                        AssessmentStatus.SKIPPED,
+                        f"Assessment disabled in {source.mode} mode",
+                    )
+                else:
+                    assessment_status, assessment_reason = ASSESSMENT_FAILURES.get(
+                        outcome["status"], (AssessmentStatus.COMPLETE, None)
+                    )
+                    if assessment_status == AssessmentStatus.FAILED:
+                        assessment_reason = outcome.get("error") or assessment_reason
+                attempt = AssessmentAttempt(
+                    run_id=run_id,
+                    name=outcome["name"],
+                    source_id=source_ids.get(outcome["name"]),
+                    pipeline_key=outcome.get("pipeline_key"),
+                    status=assessment_status,
+                    reason=assessment_reason,
+                    paths=AssessmentPaths(**paths) if paths is not None else None,
+                    curation_uri=(
+                        snapshots.get(MANIFEST_FILENAME)
+                        if document.manifest_evidence != ManifestEvidence.UNCONFIRMED
+                        else None
+                    ),
+                )
+                transaction.table(ATTEMPTS).add(attempt.model_dump(mode="json"))
                 for ordinal, phase in enumerate(telemetry.get("phases", [])):
                     transaction.table("phases").add(
                         asdict(

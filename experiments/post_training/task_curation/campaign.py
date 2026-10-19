@@ -11,20 +11,21 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from threading import Lock
 
+from finestore.rl.curation import AssessmentPaths
 from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.lazy import ArtifactStep, artifact_identity, run
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.models import SourceStatus
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, append_curation_catalog
+from experiments.post_training.task_curation.curation_catalog import append_curation_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ class CampaignPool:
     coordinator_resources: ResourceConfig = field(kw_only=True)
     concurrent_sources: int = 10
     worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="8g"))
-    chunk_storage_prefix: str = "s3://marin-us-east-02a/marin/tmp/rl-data-campaign"
+    chunk_storage_prefix: str = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,8 @@ class SourceOutcome:
     status: str
     error: str | None = None
     result: PipelineResult | None = None
+    assessment: AssessmentPaths | None = None
+    pipeline_key: str | None = None
 
 
 class CampaignFailed(RuntimeError):
@@ -119,6 +122,7 @@ def campaign_plan(steps: Sequence[ArtifactStep[Artifact]], pool: CampaignPool) -
         ],
         "concurrent_sources": pool.concurrent_sources,
         "max_workers": pool.max_workers,
+        "chunk_storage_prefix": pool.chunk_storage_prefix,
         "worker_resources": asdict(pool.worker_resources),
         "coordinator_resources": asdict(pool.coordinator_resources),
     }
@@ -167,6 +171,7 @@ def write_campaign_report(
     started_at: str,
     source_ids: Mapping[str, str],
     execution: Mapping[str, object],
+    catalog_root: str,
 ) -> None:
     """Persist source outcomes and catalog terminal reports for local or reviewed runs."""
     report = campaign_report(status, mode=mode, outcomes=outcomes, run_id=run_id, started_at=started_at)
@@ -175,7 +180,7 @@ def write_campaign_report(
     path.write_bytes(report_bytes)
     if status != CampaignStatus.RUNNING:
         append_curation_catalog(
-            str(path.parent / CATALOG_DIRECTORY),
+            catalog_root,
             report_bytes,
             run_id=run_id,
             report_path=report_path,
@@ -192,7 +197,9 @@ def run_campaign(
     runtime: CampaignRuntime,
     report_path: str,
     source_ids: Mapping[str, str],
+    catalog_root: str,
     mode: str = "sample",
+    assessments: Mapping[str, AssessmentPaths] | None = None,
 ) -> tuple[SourceOutcome, ...]:
     """Queue source builds, preserve peer outputs on failure, and write the campaign report.
 
@@ -203,7 +210,16 @@ def run_campaign(
         raise ValueError("Campaign source concurrency and worker count must be positive")
     if len({step.name for step in steps}) != len(steps):
         raise ValueError("Campaign source artifact names must be unique")
-    outcomes = {step.name: SourceOutcome(step.name, step.path(), OutcomeStatus.QUEUED) for step in steps}
+    outcomes = {
+        step.name: SourceOutcome(
+            step.name,
+            step.path(),
+            OutcomeStatus.QUEUED,
+            assessment=(assessments or {}).get(step.name),
+            pipeline_key=artifact_identity(step),
+        )
+        for step in steps
+    }
     run_id = uuid.uuid4().hex
     started_at = datetime.now(UTC).isoformat()
     report_lock = Lock()
@@ -218,11 +234,12 @@ def run_campaign(
             started_at=started_at,
             source_ids=source_ids,
             execution=asdict(pool),
+            catalog_root=catalog_root,
         )
 
     def started(step: ArtifactStep[CampaignArtifact]) -> None:
         with report_lock:
-            outcomes[step.name] = SourceOutcome(step.name, step.path(), OutcomeStatus.RUNNING)
+            outcomes[step.name] = replace(outcomes[step.name], status=OutcomeStatus.RUNNING)
             write_report(CampaignStatus.RUNNING)
 
     write_report(CampaignStatus.RUNNING)
@@ -255,13 +272,17 @@ def run_campaign(
                         logger.exception("Source failed: %s", step.name)
                         outcome = SourceOutcome(step.name, step.path(), OutcomeStatus.FAILED, error_chain(error))
                     with report_lock:
-                        outcomes[step.name] = outcome
+                        outcomes[step.name] = replace(
+                            outcome,
+                            assessment=outcomes[step.name].assessment,
+                            pipeline_key=outcomes[step.name].pipeline_key,
+                        )
                         write_report(CampaignStatus.RUNNING)
     except BaseException:
         write_report(CampaignStatus.FAILED)
         raise
     ordered = tuple(outcomes[step.name] for step in steps)
-    failed = any(outcome.status == OutcomeStatus.FAILED for outcome in ordered)
+    failed = any(outcome.status in (OutcomeStatus.FAILED, SourceStatus.INCOMPLETE) for outcome in ordered)
     write_report(CampaignStatus.FAILED if failed else CampaignStatus.COMPLETED)
     if failed:
         raise CampaignFailed(f"Campaign failed; retained source outcomes at {report_path}")

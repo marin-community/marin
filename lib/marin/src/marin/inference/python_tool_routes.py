@@ -73,7 +73,7 @@ async def _tool_response(
         result = await asyncio.to_thread(
             _run_tool_worker,
             module,
-            arguments,
+            (*arguments, "--catalog", request.app.state.shellsim_catalog),
             tool_request.to_json_bytes(),
         )
     except subprocess.TimeoutExpired:

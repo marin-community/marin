@@ -31,12 +31,15 @@ from experiments.post_training.task_curation.campaign import (
     error_chain,
     write_campaign_report,
 )
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
 
 
 @contextmanager
-def _local_artifact_prefix(prefix: str) -> Iterator[None]:
-    # lazy.lower resolves dependency paths from MARIN_PREFIX at execution time.
-    # QUICK is sequential; reviewed campaigns never enter this scope.
+def artifact_prefix(prefix: str) -> Iterator[None]:
+    """Bind planning and execution to one storage root for the entire campaign.
+
+    MARIN_PREFIX is process global, so source threads share this enclosing scope.
+    """
     previous = os.environ.get("MARIN_PREFIX")
     os.environ["MARIN_PREFIX"] = prefix
     try:
@@ -54,11 +57,12 @@ def run_local_steps(
     *,
     runtime: CampaignRuntime,
     max_workers: int,
-    download_cache: Path,
+    worker_resources: ResourceConfig,
+    cache_dir: Path,
     source_ids: Mapping[str, str],
 ) -> tuple[SourceOutcome, ...]:
     """Run each complete graph, retaining peer results when a source fails."""
-    output_root, download_cache = output_root.resolve(), download_cache.expanduser().resolve()
+    output_root, cache_dir = output_root.resolve(), cache_dir.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     report_path = output_root / "campaign.json"
     outcomes = {name: SourceOutcome(name, str(output_root / name), OutcomeStatus.QUEUED) for name in steps}
@@ -75,6 +79,7 @@ def run_local_steps(
             started_at=started_at,
             source_ids=source_ids,
             execution={"max_workers": max_workers},
+            catalog_root=str(output_root / CATALOG_DIRECTORY),
         )
 
     report(CampaignStatus.RUNNING)
@@ -87,7 +92,7 @@ def run_local_steps(
                 ZephyrContext(
                     client=client,
                     max_workers=max_workers,
-                    resources=ResourceConfig(cpu=1, ram="4g"),
+                    resources=worker_resources,
                     chunk_storage_prefix=str(output_root / ".zephyr"),
                     name="task-curation-quick",
                 ) as context,
@@ -98,7 +103,7 @@ def run_local_steps(
                     outcomes[name] = SourceOutcome(name, path, OutcomeStatus.RUNNING)
                     report(CampaignStatus.RUNNING)
                     try:
-                        with _local_artifact_prefix(str(download_cache)):
+                        with artifact_prefix(str(cache_dir)):
                             # Mutable terminal versions rerun through the ordinary executor;
                             # dependency versions and cache addresses remain unchanged.
                             terminal = replace(step, version="dev")

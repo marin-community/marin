@@ -26,15 +26,22 @@ from pathlib import Path, PurePosixPath
 from bubblewrap_bin import bwrap_path
 
 from shellbox.backends.local import launch
+from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.machine import (
+    LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
+    CommandSemantics,
+    ExecutionRequirements,
     ExitReason,
     HostImage,
     MachineSpec,
+    Mount,
     NetworkPolicy,
+    PackageSpec,
     Result,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,11 +108,11 @@ def _sandbox_argv(
     bwrap: Path,
     *,
     root: Path,
-    read_only: Iterable[str],
+    mounts: Iterable[Mount],
     network: NetworkPolicy,
     account: pwd.struct_passwd | None,
 ) -> list[str]:
-    """The bwrap invocation that runs a program over ``root`` with ``read_only`` and the system directories.
+    """The bwrap invocation that runs a program over ``root`` with the system directories and ``mounts`` read-only.
 
     The program runs without capabilities; as root, bwrap needs no user namespace for its own.
     """
@@ -124,8 +131,8 @@ def _sandbox_argv(
         else:
             argv += ["--ro-bind-try", path, path]
     argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
-    for path in read_only:
-        argv += ["--ro-bind", path, path]
+    for mount in mounts:
+        argv += ["--ro-bind", str(mount.host), str(mount.guest)]
     if account is not None:
         argv += ["setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--clear-groups", "--"]
     return argv
@@ -143,7 +150,7 @@ def _sandbox_error(bwrap: Path) -> str | None:
     """Why ``bwrap`` cannot build a command sandbox here, or None when it can."""
     with tempfile.TemporaryDirectory(prefix="shellbox-bwrap-probe-") as root:
         Path(root).chmod(ROOT_MODE)
-        argv = _sandbox_argv(bwrap, root=Path(root), read_only=(), network=NetworkPolicy.DENY, account=None)
+        argv = _sandbox_argv(bwrap, root=Path(root), mounts=(), network=NetworkPolicy.DENY, account=None)
         try:
             probe = subprocess.run(
                 [*argv, "/bin/sh", "-c", "exit 0"], capture_output=True, text=True, timeout=PROBE_TIMEOUT, check=False
@@ -240,12 +247,12 @@ class LocalMachine:
         *,
         bwrap: Path,
         root: Path,
-        read_only: tuple[str, ...],
+        mounts: tuple[Mount, ...],
         environment: dict[str, str],
     ):
         self.spec = spec
         self.root = root
-        self.read_only = read_only
+        self.mounts = mounts
         self._bwrap = bwrap
         self._environment = environment
         self._closed = False
@@ -254,12 +261,18 @@ class LocalMachine:
         if self._closed:
             raise RuntimeError("Machine is closed")
 
+    def _mounted(self, path: PurePosixPath) -> Mount | None:
+        return next((mount for mount in self.mounts if path.is_relative_to(mount.guest)), None)
+
     def _host_path(self, path: PurePosixPath) -> Path:
         """Where the host keeps the file that commands see at ``path``.
 
         A command may plant a symlink in its root that points outside it; a transfer must not follow one.
         """
-        if _within(path, (*SYSTEM_DIRECTORIES, *self.read_only)):
+        mount = self._mounted(path)
+        if mount is not None:
+            return mount.host / path.relative_to(mount.guest)
+        if _within(path, SYSTEM_DIRECTORIES):
             return Path(path)
         host = self.root / path.relative_to("/")
         if not Path(os.path.realpath(host)).is_relative_to(self.root):
@@ -275,7 +288,7 @@ class LocalMachine:
         sandbox = _sandbox_argv(
             self._bwrap,
             root=self.root,
-            read_only=self.read_only,
+            mounts=self.mounts,
             network=self.spec.network,
             account=_command_account(command.user),
         )
@@ -327,8 +340,8 @@ class LocalMachine:
     async def upload(self, source: Path, target: str) -> None:
         self._check_open()
         path = _absolute_path(target)
-        if _within(path, (*SYSTEM_DIRECTORIES, *self.read_only)):
-            raise UnsupportedMachineSpec(f"The local backend's {target} is a read-only host directory")
+        if self._mounted(path) is not None or _within(path, SYSTEM_DIRECTORIES):
+            raise UnsupportedMachineSpec(f"The local backend's {target} is a read-only host path")
         await asyncio.to_thread(_copy, source, self._host_path(path))
 
     async def download(self, source: str, target: Path) -> None:
@@ -345,11 +358,47 @@ class LocalMachine:
         await asyncio.to_thread(shutil.rmtree, self.root)
 
 
+def _check_mounts(mounts: tuple[Mount, ...]) -> None:
+    """Every mount names an existing host path and an absolute guest path outside system directories and other mounts.
+
+    bwrap creates a mount point by mkdir, which fails inside a directory it has already bound read-only.
+    """
+    missing = [str(mount.host) for mount in mounts if not mount.host.exists()]
+    if missing:
+        raise ValueError(f"Mounted host paths do not exist: {', '.join(missing)}")
+    for mount in mounts:
+        if not mount.guest.is_absolute():
+            raise UnsupportedMachineSpec(f"The local backend mounts only at absolute guest paths: {mount.guest}")
+        if _within(mount.guest, SYSTEM_DIRECTORIES):
+            raise UnsupportedMachineSpec(f"The local backend cannot mount inside a host system directory: {mount.guest}")
+        if any(other is not mount and mount.guest.is_relative_to(other.guest) for other in mounts):
+            raise UnsupportedMachineSpec(f"The local backend's mount {mount.guest} lies inside another mount")
+
+
+def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec:
+    if not isinstance(spec.source, (HostImage, PackageSpec)):
+        raise UnsupportedMachineSpec(
+            f"The local backend requires HostImage or PackageSpec, not {type(spec.source).__name__}"
+        )
+    if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
+        raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
+    return spec.source
+
+
+def check_local_environment(requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+    """Check local execution support without acquiring a bubblewrap sandbox."""
+    _check_spec(spec)
+    check_execution_requirements(
+        requirements, spec, semantics=CommandSemantics.LINUX_PROCESS, capabilities=LINUX_PROCESS_CAPABILITIES
+    )
+
+
 class LocalMachineFactory:
     """Run trusted commands on this host in bubblewrap sandboxes, any number of machines at a time.
 
     A machine's commands see the host's system directories (``/usr``, ``/etc``, ``/opt`` and the like)
-    and each directory in ``read_only`` at its own path, read-only. Every other path, including ``/tmp``
+    and each directory in ``read_only`` at its own path, read-only, and each ``Mount`` of a ``HostImage``
+    at its guest path, read-only; a guest path inside a system directory is refused. Every other path, including ``/tmp``
     and ``HOME``, lies in a root directory of the machine's own that starts empty and is removed by
     ``close``; no other host file is visible. The caller keeps each ``read_only`` directory self-contained:
     a symlink that leads out of the mounted directories does not resolve in the sandbox.
@@ -374,6 +423,8 @@ class LocalMachineFactory:
         bin_dirs: tuple[Path, ...] = (),
         bwrap: Path | None = None,
         hash_seed: str | None = None,
+        package_cache: Path | None = None,
+        python_version: str = DEFAULT_PYTHON_VERSION,
     ):
         self.read_only = tuple(directory.absolute() for directory in read_only)
         missing = [str(directory) for directory in self.read_only if not directory.is_dir()]
@@ -381,32 +432,46 @@ class LocalMachineFactory:
             raise ValueError(f"Read-only directories do not exist: {', '.join(missing)}")
         self.bin_dirs = tuple(directory.absolute() for directory in bin_dirs)
         self.hash_seed = hash_seed
+        self.package_cache = package_cache if package_cache is not None else Path.home() / ".cache/shellbox/python"
+        self.python_version = python_version
         self.bwrap = _working_bwrap(_bwrap_candidates(bwrap))
         logger.info("Local backend sandboxes commands with %s", self.bwrap)
 
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        check_local_environment(requirements, spec)
+
     async def create(self, spec: MachineSpec) -> LocalMachine:
-        if not isinstance(spec.source, HostImage):
-            raise UnsupportedMachineSpec(f"The local backend requires HostImage, not {type(spec.source).__name__}")
-        if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
-            raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
-        read_only = (*self.read_only, *(directory.absolute() for directory in spec.source.read_only))
-        missing = [str(directory) for directory in read_only if not directory.is_dir()]
-        if missing:
-            raise ValueError(f"Read-only directories do not exist: {', '.join(missing)}")
-        read_only_paths = tuple(map(str, read_only))
+        source = _check_spec(spec)
+        host = source if isinstance(source, HostImage) else HostImage()
+        if isinstance(source, PackageSpec) and source.pypi_packages is not None:
+            installed = await asyncio.to_thread(
+                resolve_python_environment, self.package_cache, source.pypi_packages, self.python_version
+            )
+            host = HostImage(read_only=(installed.root,), bin_dirs=(installed.bin_dir,))
+        # A read-only directory is a mount at its own path; the factory's and the image's may name the same one.
+        read_only = dict.fromkeys((*self.read_only, *(directory.absolute() for directory in host.read_only)))
+        mounts = tuple(
+            dict.fromkeys(
+                (
+                    *(Mount(directory, PurePosixPath(directory)) for directory in read_only),
+                    *(Mount(mount.host.absolute(), mount.guest) for mount in host.mounts),
+                )
+            )
+        )
+        _check_mounts(mounts)
         workdir = _absolute_path(spec.workdir or "/")
-        if _within(workdir, (*SYSTEM_DIRECTORIES, *read_only_paths)):
-            raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host directory")
-        root = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="shellbox-local-"))
+        if _within(workdir, SYSTEM_DIRECTORIES) or any(workdir.is_relative_to(mount.guest) for mount in mounts):
+            raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host path")
+        root = Path(tempfile.mkdtemp(prefix="shellbox-local-"))
         try:
-            await asyncio.to_thread(_prepare_root, root, workdir)
+            _prepare_root(root, workdir)
         except BaseException:
             shutil.rmtree(root)
             raise
         environment = {
             "PATH": os.pathsep.join(
                 [
-                    *(str(directory.absolute()) for directory in spec.source.bin_dirs),
+                    *(str(directory.absolute()) for directory in host.bin_dirs),
                     *map(str, self.bin_dirs),
                     DEFAULT_PATH,
                 ]
@@ -416,4 +481,24 @@ class LocalMachineFactory:
         }
         if self.hash_seed is not None:
             environment["PYTHONHASHSEED"] = self.hash_seed
-        return LocalMachine(spec, bwrap=self.bwrap, root=root, read_only=read_only_paths, environment=environment)
+        machine = LocalMachine(spec, bwrap=self.bwrap, root=root, mounts=mounts, environment=environment)
+        if not isinstance(source, PackageSpec) or not source.tools:
+            return machine
+        try:
+            result = await machine.run(
+                Command(
+                    (
+                        "/bin/sh",
+                        "-c",
+                        'for tool do path=$(command -v "$tool") && test -x "$path" || exit; done',
+                        "sh",
+                        *source.tools,
+                    )
+                )
+            )
+            if result.exit_code != 0:
+                raise UnsupportedMachineSpec("Requested tools must be executable in the sandbox PATH")
+        except BaseException:
+            await machine.close()
+            raise
+        return machine

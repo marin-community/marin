@@ -23,7 +23,8 @@ from typing import Annotated, ClassVar, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
-from shellbox.machine import UnsupportedMachineSpec
+from shellbox.machine import CommandSemantics as CommandSemantics
+from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
@@ -42,6 +43,7 @@ from verifyit.spec import (
 
 SCHEMA_VERSION = "0.27"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
+TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
 
 class AnswerType(StrEnum):
@@ -123,13 +125,19 @@ class TextMessage(BaseModel):
 
 
 class ConversationToolCall(BaseModel):
-    """A function call with its conversation identity and decoded arguments."""
+    """A recorded call, including JSON arguments rejected by the tool."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True, allow_inf_nan=False)
 
     call_id: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    arguments: dict[str, JsonValue]
+    arguments: JsonValue
+
+    def object_arguments(self) -> dict[str, JsonValue]:
+        """Return the argument object or reject non-object submission evidence."""
+        if not isinstance(self.arguments, dict):
+            raise SubmissionFailure(TOOL_ARGUMENTS_OBJECT_ERROR)
+        return self.arguments
 
 
 class AssistantToolCalls(BaseModel):
@@ -332,15 +340,6 @@ def validate_workspace_path(path: str) -> PurePosixPath:
     return workspace
 
 
-class CommandSemantics(StrEnum):
-    """The execution behavior a task's commands require."""
-
-    LINUX_PROCESS = "linux_process"
-    """Real Linux processes, installed executables, and a native filesystem."""
-    SHELL_SIMULATOR = "shell_simulator"
-    """A built-in shell language and virtual filesystem, without native executables or guest networking."""
-
-
 class EnvironmentRequirements(BaseModel):
     """Operations, initial workspace or unresolved recipe, and tool-provider contracts."""
 
@@ -355,19 +354,23 @@ class EnvironmentRequirements(BaseModel):
     environment_variables: dict[str, str] = Field(default_factory=dict)
     tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
     packages_lock: str | None = Field(default=None, min_length=1)
+    package_spec: PackageSpec | None = None
 
     @model_validator(mode="after")
     def validate_environment(self) -> "EnvironmentRequirements":
-        if sum(value is not None for value in (self.docker_image, self.docker_build, self.packages_lock)) > 1:
-            raise ValueError("Docker image, build context, and packages lock are mutually exclusive")
+        if (
+            sum(
+                value is not None
+                for value in (self.docker_image, self.docker_build, self.packages_lock, self.package_spec)
+            )
+            > 1
+        ):
+            raise ValueError("Docker image, build context, packages lock and package spec are mutually exclusive")
         if any(value is not None for value in (self.docker_image, self.docker_build, self.packages_lock)):
             if self.command_semantics != CommandSemantics.LINUX_PROCESS:
                 raise ValueError("Native environment dependencies require Linux process semantics")
-        if self.command_semantics == CommandSemantics.SHELL_SIMULATOR and set(self.capabilities) - {
-            "shell",
-            "filesystem",
-        }:
-            raise ValueError("The shell simulator provides only shell and filesystem capabilities")
+        if self.package_spec is not None and self.command_semantics is None:
+            raise ValueError("Package requirements need explicit command semantics")
         if any(not capability for capability in self.capabilities):
             raise ValueError("Capabilities must be nonempty names")
         if len(set(self.capabilities)) != len(self.capabilities):
@@ -503,9 +506,17 @@ class FileReward(BaseModel):
 
 
 def _require_grader_environment(environment: EnvironmentRequirements) -> None:
-    if environment.docker_image is None and environment.packages_lock is None and environment.docker_build is None:
+    if all(
+        selection is None
+        for selection in (
+            environment.docker_image,
+            environment.packages_lock,
+            environment.docker_build,
+            environment.package_spec,
+        )
+    ):
         raise ValueError(
-            "A grading environment requires a digest-pinned image, packages lock, or unresolved build context"
+            "A grading environment requires a pinned image, package lock, package spec, or unresolved build context"
         )
     if environment.tool_providers:
         raise ValueError("A grading environment cannot declare tool providers")
@@ -790,7 +801,7 @@ class AnswerCall(BaseAnswerFormat):
             or response.calls[0].name != ANSWER_CALL_NAME
         ):
             raise SubmissionFailure(f"Answer call requires one {ANSWER_CALL_NAME} function call")
-        arguments = response.calls[0].arguments
+        arguments = response.calls[0].object_arguments()
         if (
             set(arguments) != {ANSWER_FIELD}
             or not isinstance(arguments[ANSWER_FIELD], str)
@@ -826,6 +837,9 @@ class FinalAction(BaseAnswerFormat):
             and len(response.calls) > self.max_calls
         ):
             raise SubmissionFailure(f"Final action permits at most {self.max_calls} function calls")
+        if isinstance(response, AssistantToolCalls):
+            for call in response.calls:
+                call.object_arguments()
         return response
 
     def extract(self, attempt: GradingAttempt) -> ActionSubmission:
@@ -873,8 +887,6 @@ class TaskSpec(BaseModel):
         if grades_in_process(self.grader) and self.answer_type in (AnswerType.FILE, AnswerType.WORKSPACE_STATE):
             raise ValueError(f"A {self.answer_type} answer requires a grading environment")
         if isinstance(self.grader, VerifyitGrader) and self.grader.environment is not None:
-            if self.answer_type == AnswerType.NATIVE_ACTION:
-                raise ValueError("A verifyit grading environment cannot grade a native_action answer")
             if self.answer_type in CONVERSATION_ANSWERS and verifyit_answer_file(verifyit_spec(self.grader)) is None:
                 raise ValueError(f"Workspace verifier {self.grader.mode} cannot grade a {self.answer_type} answer")
         if isinstance(self.grader, ScriptGrader):

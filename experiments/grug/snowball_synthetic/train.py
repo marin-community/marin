@@ -120,7 +120,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mp", help="jmp policy override, e.g. 'p=f32,c=bfloat16' (default: preset).")
     parser.add_argument("--expert-axis", type=int, default=1, help="Mesh expert-parallel axis size.")
     parser.add_argument("--context-axis", type=int, default=1, help="Mesh context-parallel axis size.")
-    parser.add_argument("--moe-impl", help="MoE backend override, e.g. scatter (default: ring).")
+    parser.add_argument(
+        "--moe-impl", help="MoE backend override, e.g. scatter (default: ring_gather_combine on GPUs, ring elsewhere)."
+    )
     parser.add_argument(
         "--attention",
         choices=get_args(GrugAttentionImplementation),

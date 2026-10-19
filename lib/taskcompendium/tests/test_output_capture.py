@@ -9,6 +9,7 @@ import tarfile
 from dataclasses import dataclass, field
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.machine import (
     Backend,
     DockerImage,
@@ -71,7 +72,7 @@ class GradingMachine(FileMachine):
 
 
 @dataclass
-class GradingMachines:
+class GradingMachines(DockerMachineFactory):
     backend = Backend.DOCKER
     machines: list[GradingMachine] = field(default_factory=list)
 

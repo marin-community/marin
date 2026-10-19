@@ -4,6 +4,7 @@
 """Local machines: bubblewrap sandboxes over a private root, with the host's system directories read-only."""
 
 import asyncio
+import io
 import os
 import shutil
 import socket
@@ -11,18 +12,25 @@ import tarfile
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 from shellbox.backends.local.machine import NPROC_HEADROOM, LocalMachine, LocalMachineFactory, SandboxUnavailable
-from shellbox.backends.local.python_environment import PythonEnvironment, UvError, build_python_environment
+from shellbox.backends.local.python_environment import (
+    PythonEnvironment,
+    UvError,
+    build_python_environment,
+    resolve_python_environment,
+)
 from shellbox.machine import (
     Command,
     DockerImage,
     ExitReason,
     HostImage,
     MachineSpec,
+    Mount,
     NetworkPolicy,
+    PackageSpec,
     Result,
     UnsupportedMachineSpec,
 )
@@ -129,7 +137,9 @@ def python_environment(tmp_path_factory) -> PythonEnvironment:
     lock = tmp_path_factory.mktemp("lock") / "requirements.lock"
     lock.write_text(LOCK)
     try:
-        return build_python_environment(tmp_path_factory.mktemp("environment") / "root", lock, PYTHON_VERSION)
+        return build_python_environment(
+            Path.home() / ".cache/shellbox/python/test-locked-six" / PYTHON_VERSION, lock, PYTHON_VERSION
+        )
     except UvError as error:
         # uv reports an unreachable or failed fetch this way; any other failure is a bug in the builder.
         if not str(error).startswith("uv python install") or "Failed to download" not in str(error):
@@ -223,6 +233,26 @@ def test_host_image_adds_read_only_mount_and_program_path(tmp_path, factory):
     result = run_command(factory, Command(("grader-python",)), spec)
 
     assert (result.exit_code, result.stdout) == (0, b"mounted-runtime\n")
+
+
+def test_host_image_mounts_a_directory_read_only_at_another_guest_path(tmp_path, factory):
+    data = tmp_path / "english"
+    data.mkdir()
+    (data / "abbrev.tab").write_text("etc\n")
+    guest = PurePosixPath("/srv/fixture/data")
+    spec = MachineSpec(HostImage(mounts=(Mount(data, guest),)), workdir="/app")
+    script = f"cat {guest}/abbrev.tab; echo changed > {guest}/abbrev.tab 2>/dev/null || echo refused"
+
+    result = run_command(factory, Command(("sh", "-c", script)), spec)
+
+    assert (result.exit_code, result.stdout) == (0, b"etc\nrefused\n"), result.stderr
+    assert (data / "abbrev.tab").read_text() == "etc\n"
+
+
+def test_a_mount_inside_a_host_system_directory_is_refused(tmp_path, factory):
+    spec = MachineSpec(HostImage(mounts=(Mount(tmp_path, PurePosixPath("/usr/local/share/fixture")),)), workdir="/app")
+    with pytest.raises(UnsupportedMachineSpec, match="system directory"):
+        asyncio.run(factory.create(spec))
 
 
 def test_timeout_kills_the_command_and_its_descendants(factory):
@@ -407,13 +437,72 @@ def test_a_transfer_does_not_follow_a_symlink_out_of_the_machine_root(tmp_path, 
     assert not (outside_dir / "planted.txt").exists() and not (tmp_path / "stolen.txt").exists()
 
 
-def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(python_environment, python_factory):
+def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
+    python_environment, python_factory, monkeypatch
+):
     script = "import sys, six; print(sys.prefix); print(sys.base_prefix)"
     result = run_command(python_factory, Command(("python3", "-c", script)))
     assert result.exit_code == 0, result.stderr.decode()
     prefix, base_prefix = map(Path, result.stdout.decode().split())
     assert prefix == python_environment.bin_dir.parent
     assert base_prefix.is_relative_to(python_environment.root)
+
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    packages = PackageSpec(pypi_packages=("six==1.17.0",), tools=("python3",))
+    factory = make_factory(python_version=PYTHON_VERSION, hash_seed="23")
+    spec = MachineSpec(packages, workdir="/app")
+
+    async def check():
+        first = await factory.create(spec)
+        try:
+            result = await first.run(
+                Command(
+                    (
+                        "python3",
+                        "-c",
+                        "import six,sys,os; print(sys.prefix); print(sys.base_prefix); print(six.text_type(42)); "
+                        "print(os.environ['PYTHONHASHSEED'])",
+                    )
+                )
+            )
+            assert result.exit_code == 0, result.stderr.decode()
+            prefix, base_prefix, answer, seed = result.stdout.decode().splitlines()
+            assert prefix != base_prefix
+            assert Path(base_prefix).is_relative_to(factory.package_cache)
+            assert (answer, seed) == ("42", "23")
+            assert (await first.run(Command(("touch", "private")))).exit_code == 0
+        finally:
+            await first.close()
+        # A fresh factory must reuse the resolved installation without index access.
+        second = await make_factory(python_version=PYTHON_VERSION).create(spec)
+        try:
+            result = await second.run(Command(("python3", "-c", "import six,sys; print(sys.prefix)")))
+            assert (result.exit_code, result.stdout.decode().strip()) == (0, prefix)
+            assert (await second.run(Command(("test", "-e", "private")))).exit_code == 1
+        finally:
+            await second.close()
+
+    asyncio.run(check())
+
+
+def test_package_resolution_cannot_run_build_hooks_on_the_host(tmp_path, monkeypatch):
+    marker = tmp_path / "host-hook"
+    files = {
+        "pyproject.toml": b'[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n',
+        "backend.py": (
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\nraise RuntimeError('hook')\n".encode()
+        ),
+    }
+    source = tmp_path / "unsafe-1.tar.gz"
+    with tarfile.open(source, "w:gz") as archive:
+        for name, body in files.items():
+            entry = tarfile.TarInfo("unsafe-1/" + name)
+            entry.size = len(body)
+            archive.addfile(entry, io.BytesIO(body))
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    with pytest.raises(UvError):
+        resolve_python_environment(tmp_path / "cache", (f"unsafe @ {source.as_uri()}",), PYTHON_VERSION)
+    assert not marker.exists()
 
 
 def test_every_symlink_in_a_python_environment_resolves_inside_its_root(python_environment):
