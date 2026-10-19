@@ -13,6 +13,8 @@
 #          is met) and moves to its next shard once <out>/shard-NN/STOP exists (that shard's target is met).
 #
 # Needs GLM_BULK_TOKEN and DAYTONA_API_KEY in the environment, and for relay STUDENT_BASE_URL (serve_student.py).
+# Optional: STUDENT (harbor_glm --student, default v0; recorded in every run) and REASONING_EFFORT (low or high; unset
+# sends none, so GLM's template uses Max).
 #   bash experiments/post_training/sft_shootout/run_lane.sh <plain|relay> <family> <agent> <k> <concurrency> \
 #     <tasks parquet> <package revision> <shards dir> <out> <shard numbers...>
 set -uo pipefail
@@ -28,7 +30,8 @@ exists() {  # <remote path>
 
 generate() {  # <task list> <name> <attempts> <output> [--relay]
   uv run python $dir/harbor_glm.py --agent "$agent" --family "$family" --package-revision "$revision" --tasks "$tasks" \
-    --task-list "$1" --name "$2" --n-attempts "$3" --n-concurrent "$concurrency" --skip-if-done --output "$4" "${@:5}"
+    --task-list "$1" --name "$2" --n-attempts "$3" --n-concurrent "$concurrency" --skip-if-done --output "$4" \
+    --student "${STUDENT:-v0}" ${REASONING_EFFORT:+--reasoning-effort "$REASONING_EFFORT"} "${@:5}"
 }
 
 finish() {  # <output>
