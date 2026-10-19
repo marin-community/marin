@@ -50,6 +50,20 @@ from rolloutengine.trace import _token_trace
 
 ADVANCE_INCOMPLETE = "advance_incomplete"
 """``Transition.metrics`` key of a turn that the harness did not finish handling; training must exclude its step."""
+FAILURE_ERROR_LIMIT = 2_000
+"""The characters of the failure's message that ``RolloutFailure.diagnostics["error"]`` keeps."""
+
+
+def _failure_record(operation: RolloutOperation, cause: BaseException) -> RolloutFailure:
+    """The failure of an interrupted attempt: the failed operation, and the cause's type, message, and notes.
+
+    The record keeps the message because the exception does not cross a process boundary with the rollout.
+    """
+    diagnostics: dict[str, Any] = {"operation": operation.value, "error": str(cause)[:FAILURE_ERROR_LIMIT]}
+    notes = getattr(cause, "__notes__", ())
+    if notes:
+        diagnostics["notes"] = list(notes)
+    return RolloutFailure(type(cause).__name__, diagnostics)
 
 
 class _NoEvents:
@@ -531,7 +545,7 @@ async def harness_rollout(
     recorder = _Recorder(model, limits, trace, events)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as resources:
-        context = HarnessContext(task, machine, events, _CleanupScope(resources, cleanup), run_id)
+        context = HarnessContext(task, limits, machine, events, _CleanupScope(resources, cleanup), run_id)
         failure = await _run_harness(harness, context, recorder, attempt_deadline=None)
     rollout = recorder.rollout(run_id, {})
     if cleanup.errors:
@@ -539,5 +553,5 @@ async def harness_rollout(
     if failure is None:
         return rollout
     operation, cause = failure
-    rollout = replace(rollout, failure=RolloutFailure(type(cause).__name__, {"operation": operation.value}))
+    rollout = replace(rollout, failure=_failure_record(operation, cause))
     raise RolloutInterrupted(rollout, operation) from cause

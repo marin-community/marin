@@ -34,12 +34,14 @@ class HarnessCleanup(Protocol):
 class HarnessContext:
     """One attempt's inputs for a harness.
 
-    ``machine`` is the prepared task machine, or ``None`` when the attempt has none. A harness may report
-    its own events, such as tool calls, to ``events``, and registers the close of its resources with
-    ``cleanup``. ``run_id`` identifies the attempt.
+    ``limits`` are the attempt's limits, for example to tell the model that one turn is left. ``machine`` is
+    the prepared task machine, or ``None`` when the attempt has none. A harness may report its own events,
+    such as tool calls, to ``events``, and registers the close of its resources with ``cleanup``. ``run_id``
+    identifies the attempt.
     """
 
     task: TaskSpec
+    limits: RolloutLimits
     machine: Machine | None
     events: EventSink
     cleanup: HarnessCleanup
@@ -57,11 +59,6 @@ class ModelSession(Protocol):
     runs until a turn or attempt deadline. Each request after the end of the attempt yields before it
     raises, so a harness that asks again in a loop does not stop other attempts.
     """
-
-    @property
-    def limits(self) -> RolloutLimits:
-        """The attempt's limits, for example to tell the model that one turn is left."""
-        ...
 
     async def start(self, prompt: Prompt) -> ModelTurn:
         """Start a new conversation with ``prompt`` and return the model's turn.

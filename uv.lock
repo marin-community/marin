@@ -7525,6 +7525,11 @@ dependencies = [
     { name = "pydantic" },
 ]
 
+[package.optional-dependencies]
+chat = [
+    { name = "openai" },
+]
+
 [package.dev-dependencies]
 test = [
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
@@ -7537,8 +7542,10 @@ test = [
 requires-dist = [
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
+    { name = "openai", marker = "extra == 'chat'", specifier = ">=1.59.9" },
     { name = "pydantic", specifier = ">=2" },
 ]
+provides-extras = ["chat"]
 
 [package.metadata.requires-dev]
 test = [
