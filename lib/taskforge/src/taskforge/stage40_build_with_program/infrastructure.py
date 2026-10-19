@@ -85,6 +85,8 @@ class InfrastructureCause(StrEnum):
 
     NO_FACTORY = "no_factory"
     NO_IMAGE_BUILDER = "no_image_builder"
+    NO_DECISION_MODEL = "no_decision_model"
+    """The build grades a decision-model grader on a host whose services have no decision client."""
     SCHEDULING_TIMEOUT = "scheduling_timeout"
     SANDBOX_DEADLINE = "sandbox_deadline"
     """A startup or verifier deadline expired while a machine started, received files or ran a command."""

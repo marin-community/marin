@@ -315,6 +315,7 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
             ledger=None if config.ledger_root is None else JsonlLedger(config.ledger_root),
             reasoning_replay=config.reasoning_replay,
             agent_limits=config.agent_limits,
+            decision=None,  # BuildConfig names no decision service yet: decision-model graders fail as the host's
         )
 
 

@@ -20,6 +20,7 @@ from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskResource
 
+from taskforge.spec.decision import DecisionGrader
 from taskforge.stage10_proposal.model import ResearchKind
 
 SOURCES_STEP = "sources"
@@ -96,8 +97,9 @@ class Grader:
     """The task's grader, the answer it was written for, and the candidates it was prototyped on.
 
     Attributes:
-        package: The grader (``spec.draft.answer_grader``, ``python_grader`` or ``script_grader``),
-            passed to ``spec.draft.assemble`` as ``grader``.
+        package: The grader (``spec.draft.answer_grader``, ``judge_grader``, ``python_grader`` or
+            ``script_grader``, or a calibrated ``spec.draft.decision_grader``), passed to
+            ``spec.draft.assemble`` as ``grader``.
         answer_contract: The exact output format the solver must follow, for the instruction.
         reference_reply: A correct final reply. The grader step grades it before returning, and
             validation replays it as the reference control.
@@ -112,7 +114,7 @@ class Grader:
             that repeats one of them, other than the reference answer and the empty answer.
     """
 
-    package: GraderPackage
+    package: GraderPackage | DecisionGrader
     answer_contract: str
     reference_reply: str
     reference_files: tuple[TaskResource, ...]

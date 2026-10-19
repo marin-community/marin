@@ -40,7 +40,7 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
-from taskforge.spec import draft, rubric
+from taskforge.spec import decision, draft, rubric
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author import program as program_module
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision
@@ -92,11 +92,18 @@ that purpose.
 returning Sources"), even when you already know the facts. Never catch its `BuildFailure`.
 - Build the grader of the kind the proposal's `verification` names; `run_build` refuses a draft whose \
 grader is another kind, and refuses a composite proposal outright (no composite grader exists yet). \
-decision_model has no grader in this SDK yet, so `run_build` refuses it too. llm_as_judge, for a reply \
-whose prose is the product: `draft.judge_grader(rubric, reference)`, a `Rubric` (the deliverable, and \
-one `RubricItem` per property a correct reply has: its meaning with the reference values, tolerances and \
-units, the equivalent forms it accepts, how negated or hedged statements count, its weight, and any gate \
-or cap) and the reference reply, nothing else: the judge is the host's choice. A judge runs `import \
+decision_model, the default: `draft.decision_grader(rubric, reference)`. You state a `Rubric` (the \
+deliverable, and one `RubricItem` per property a correct reply has: its meaning with the reference values, \
+tolerances and units, the equivalent forms it accepts, how negated or hedged statements count, its \
+weight, and any gate or cap) and the reference reply, nothing else: a decision model of fixed strength \
+compares the visible output of the solver's final turn with the reference against the rubric (the \
+`state` template, `SOLVER_TURN_STATE`; pass another only deliberately), and which model is the host's \
+choice. Calibrate it with `calibrate_decision_grader(context, grader, variants)` on three equivalent \
+variants of the reference; when its `problem` is set, either the rubric rejects a correct answer or a \
+variant is not equivalent. Its instruction states the deliverable the way a requester would, with no \
+answer block or labelled fields. llm_as_judge, for a reply whose prose is the product: \
+`draft.judge_grader(rubric, reference)` with the same `Rubric` and reference reply: the judge is the \
+host's choice. A judge runs `import \
 verifyit` in a verifier machine, and `GRADER_BASE_IMAGE` has no verifyit ("No module named \
 'verifyit'"); `grade_candidate` calls no model, so a judge can never be prototyped. Never keyword or \
 regex checks standing in for a judgement. answer_in_box: `draft.answer_grader` with a verifyit mode \
@@ -236,7 +243,11 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
         outputs,
         ("Sources", "ResearchFinding", "WebCall", "Fixtures", "Grader", "GradedCandidate", "Instructions"),
     ),
-    ("Sandbox effects", sandbox_effects, ("build_machine", "grade_candidate", "publish_image")),
+    (
+        "Sandbox effects",
+        sandbox_effects,
+        ("build_machine", "grade_candidate", "calibrate_decision_grader", "DecisionCalibration", "publish_image"),
+    ),
     ("Task types", task_models, ("TaskResource", "InlineFile", "EnvironmentRequirements")),
     ("Resource contents", resources, ("resource_bytes",)),
     (
@@ -268,6 +279,7 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "WORKDIR",
             "WORKSPACE",
             "FULL_CREDIT",
+            "EQUIVALENT_VARIANTS",
             "ATTEMPTS",
             "INSTRUCTION_WORD_LIMIT",
             "GRADER_TIMEOUT",
@@ -287,6 +299,7 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "Resources",
             "file",
             "answer_grader",
+            "decision_grader",
             "judge_grader",
             "grader_environment",
             "python_grader",
@@ -297,7 +310,12 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "GRADER_VERDICT_PATH",
         ),
     ),
-    ("Rubrics for `draft.judge_grader`", rubric, ("Rubric", "RubricItem", "ItemRole")),
+    ("Rubrics for `draft.decision_grader` and `draft.judge_grader`", rubric, ("Rubric", "RubricItem", "ItemRole")),
+    (
+        "Decision-model graders",
+        decision,
+        ("DecisionGrader", "StateSource", "SOLVER_TURN_STATE", "REJECTED_REWARD_MAX", "REFERENCE_CONTROL"),
+    ),
     (
         "Verifyit specs for `draft.answer_grader`",
         verifyit_spec,

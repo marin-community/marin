@@ -4,24 +4,24 @@
 """Build checks that a built task's verifier is the kind its proposal declared.
 
 ``built_verification`` reads the kind off the TaskSpec's grader: an in-process verifyit mode is
-answer-in-box, a verifyit ``JudgeSpec`` is an LLM judge, and a script grader or any other verifyit mode
-is code. ``run_build`` refuses a draft ``verification_problem`` rejects, so the author fixes it in the
+answer-in-box, a verifyit ``JudgeSpec`` is an LLM judge, the TaskSpec form of a ``DecisionGrader``
+(``decision.task_package``) is a decision model, and a script grader or any other verifyit mode is
+code. ``run_build`` refuses a draft ``verification_problem`` rejects, so the author fixes it in the
 same session.
 
 ``unbuildable_problem`` refuses a declared kind no grader can implement yet before the program runs:
-a composite, because a TaskSpec holds one grader and there is no composite grader type, and a
-decision model, which this SDK has no grader for.
+a composite, because a TaskSpec holds one grader and there is no composite grader type.
 """
 
 from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, verifyit_spec
 from verifyit.candidate import IN_PROCESS_MODES
 from verifyit.spec import JudgeSpec, mode_of
 
+from taskforge.spec.decision import task_decision_grader
 from taskforge.stage10_proposal.model import Verification
 
 UNBUILDABLE: dict[Verification, str] = {
     Verification.COMPOSITE: "a TaskSpec holds one grader and no composite grader type exists yet",
-    Verification.DECISION_MODEL: "this SDK has no decision-model grader yet",
 }
 """Declared kinds no build can implement, with the reason."""
 
@@ -29,6 +29,8 @@ UNBUILDABLE: dict[Verification, str] = {
 def built_verification(task: TaskSpec) -> Verification | None:
     """The verification kind ``task``'s grader implements, or ``None`` for a grader no kind names."""
     grader = task.grader
+    if task_decision_grader(task) is not None:
+        return Verification.DECISION_MODEL
     if isinstance(grader, ScriptGrader):
         return Verification.CODE
     if not isinstance(grader, VerifyitGrader):

@@ -7,12 +7,13 @@ import asyncio
 import json
 from dataclasses import replace
 
+import pytest
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, RolloutData
 from rolloutengine.spec import TRACE_METRIC, TraceMode
 from shellbox.machine import Backend
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import JsonAnswer, PlainText
+from taskcompendium.models import AnswerType, JsonAnswer, PlainText, Source
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
@@ -21,17 +22,21 @@ from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
+from taskforge.spec import draft
+from taskforge.spec.rubric import Rubric, RubricItem
 from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.stage50_validate.trials import (
     Deadlines,
     EngineSettings,
     TrialPlan,
     outcome_json,
+    run_trial,
     run_trials,
     task_digest,
 )
 from tests.conftest import fake_source
 from tests.sandbox.fixture_images import FixtureImageFactory
+from tests.spec.fake_decision import FakeDecisionClient
 
 DEADLINES = Deadlines(total_turn_timeout=30, attempt_timeout=60)
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
@@ -47,6 +52,7 @@ def settings(factory) -> EngineSettings:
         tool_turn_timeout=20,
         model_turn_timeout=30,
         cleanup_timeout=10,
+        decision=None,
     )
 
 
@@ -341,3 +347,62 @@ async def test_the_attempt_file_keeps_the_steps(tmp_path, file_task, fakes):
     (record,) = attempt_records(tmp_path)
     steps = record["rollout"]["steps"]
     assert [step["turn"]["message"]["content"] for step in steps] == ["", "Done."]
+
+
+DECISION_REPLY = "The approved total is 1,234.56 USD."
+DECISION_SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
+DECISION_RUBRIC = Rubric(
+    deliverable="The approved total of the ledger.",
+    items=[
+        RubricItem(
+            id="total",
+            intent="The answer states the approved total.",
+            pass_criterion="The approved total is 1234.56 USD, within 0.01.",
+            equivalences=["$1,234.56"],
+            negation_handling="",
+            weight=1.0,
+            role="scored",
+            cap_value=None,
+        )
+    ],
+)
+
+
+def decision_task(relower):
+    grader = draft.decision_grader(DECISION_RUBRIC, "Approved total: 1234.56 USD.")
+    task = draft.assemble(
+        "ledger", "What is the approved total?", AnswerType.TEXT, PlainText(), grader, DECISION_SOURCE, environment=None
+    )
+    return relower(task)
+
+
+async def test_a_decision_task_runs_without_its_grader_and_is_graded_on_the_host(tmp_path, relower, fakes):
+    client = FakeDecisionClient({DECISION_REPLY: 3.4})
+    model = fakes.script_model([fakes.text(DECISION_REPLY)])
+    host = replace(settings(fakes.flaky_factory(0, RuntimeError)), decision=client)
+
+    outcomes = await run_trials(decision_task(relower), plan(tmp_path, k=1), host, model)
+
+    assert isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
+    assert client.requests[0][0]["z_candidate_answer"] == DECISION_REPLY
+    (record,) = [json.loads(p.read_bytes()) for p in (tmp_path / "evidence" / "solver").glob("*/attempt-*.json")]
+    assert record["rollout"]["grade"]["detail"] == {"level": 3.4, "bar": 2.0, "accepted": True}
+
+
+async def test_a_decision_trial_that_ends_before_its_first_reply_is_an_agent_timeout(tmp_path, relower, fakes):
+    client = FakeDecisionClient({})
+    model = fakes.script_model([fakes.text(DECISION_REPLY)], hang_from=0)
+    host = replace(settings(fakes.flaky_factory(0, RuntimeError)), decision=client)
+    deadlines = Deadlines(total_turn_timeout=0.05, attempt_timeout=30)
+
+    outcomes = await run_trials(decision_task(relower), plan(tmp_path, k=1, deadlines=deadlines), host, model)
+
+    assert isinstance(outcomes[0], Ungraded) and outcomes[0].cause is Cause.AGENT_TIMEOUT
+    assert client.requests == []
+
+
+async def test_a_decision_task_on_a_host_without_a_decision_client_is_refused(tmp_path, relower, fakes):
+    host = settings(fakes.flaky_factory(0, RuntimeError))
+
+    with pytest.raises(ValueError, match="no decision client"):
+        await run_trial(decision_task(relower), plan(tmp_path, k=1), host, fakes.script_model([]), "0")

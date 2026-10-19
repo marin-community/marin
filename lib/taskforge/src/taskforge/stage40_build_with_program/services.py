@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""What a build uses outside its own directory: machines, images, web tools and the ledger.
+"""What a build uses outside its own directory: machines, images, web tools, the decision model and the ledger.
 
 The caller builds one ``RLEnvBuildServices`` for a host and passes it to ``run_build``, which puts it
 on every step's context. Steps pass it on to the SDK's effects (``sandbox_effects``) and to the
@@ -19,6 +19,7 @@ from taskforge.ledger.records import Ledger, LedgerEntry
 from taskforge.llm.agent import AgentTool, ReasoningReplay
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import ImageBuilder
+from taskforge.spec.decision import DecisionClient
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,8 @@ class RLEnvBuildServices:
         ledger: Where steps, model calls and tool calls are recorded, or ``None`` to record nothing.
         reasoning_replay: Whether every agent loop replays its assistant turns' reasoning.
         agent_limits: The bounds of every agent loop.
+        decision: The decision model this host grades decision-model graders with, or ``None`` on a host
+            without one, where grading a decision-model grader fails as the host's.
     """
 
     host: MachineHost
@@ -60,6 +63,7 @@ class RLEnvBuildServices:
     ledger: Ledger | None
     reasoning_replay: ReasoningReplay
     agent_limits: AgentLimits
+    decision: DecisionClient | None
 
     @property
     def recording(self) -> Ledger:

@@ -102,6 +102,7 @@ def services(ledger) -> RLEnvBuildServices:
         ledger=ledger,
         reasoning_replay=ReasoningReplay.KEEP,
         agent_limits=LIMITS,
+        decision=None,
     )
 
 

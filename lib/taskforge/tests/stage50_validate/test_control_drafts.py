@@ -98,6 +98,7 @@ def engine_settings() -> EngineSettings:
         tool_turn_timeout=20,
         model_turn_timeout=30,
         cleanup_timeout=10,
+        decision=None,
     )
 
 

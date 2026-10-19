@@ -86,6 +86,7 @@ ALLOWED_IMPORTS = frozenset(
         "taskforge.spec.verdict",
         "taskforge.spec.controls",
         "taskforge.spec.rubric",
+        "taskforge.spec.decision",
         "taskforge.llm.agent",
         "taskforge.llm.policy",
         "taskforge.sandbox.images",
