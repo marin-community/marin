@@ -170,7 +170,6 @@ defaults:
   task_env:
     # Durable outputs remain in 02A; shared scratch uses the separate 08A bucket.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
-    MARIN_TEMP_PREFIX: s3://marin-us-east-08a
     # Task pods carry one CoreWeave endpoint/credential set valid for both buckets.
     # GB200 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls

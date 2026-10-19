@@ -163,16 +163,22 @@ def test_resolved_root_local_fallback(monkeypatch):
 # --- temp-bucket routing ----------------------------------------------------
 
 
-@pytest.mark.parametrize("cluster", ["marin", "coreweave"])
-@pytest.mark.parametrize("bucket", ["marin-us-east-02a", "marin-us-west-04a", "hero-checkpoints", "marin-us-east-08a"])
-def test_marin_temp_bucket_routes_coreweave_to_shared_scratch(cluster, bucket, monkeypatch):
-    """Source routing works on launchers and workers, with the destination's signing region."""
+@pytest.mark.parametrize(
+    ("marin_cluster", "marin_prefix", "source_prefix"),
+    [
+        ("marin", "gs://marin-us-central1", "s3://marin-us-east-02a/marin"),
+        ("coreweave", "s3://marin-us-west-04a/marin", None),
+    ],
+    ids=["launcher-with-explicit-source", "worker-with-ambient-source"],
+)
+def test_marin_temp_bucket_routes_coreweave_to_shared_scratch(marin_cluster, marin_prefix, source_prefix, monkeypatch):
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    monkeypatch.setenv("MARIN_CLUSTER", marin_cluster)
+    monkeypatch.setenv("MARIN_PREFIX", marin_prefix)
     monkeypatch.setenv("CW_KEY_ID", "test-key")
     monkeypatch.setenv("CW_KEY_SECRET", "test-secret")
-    with use_data_config(load_cluster_config(cluster)):
-        path = marin_temp_bucket(3, "store/x", source_prefix=f"s3://{bucket}/marin")
-        filesystem, key = filesystem_for(path)
+    path = marin_temp_bucket(3, "store/x", source_prefix=source_prefix)
+    filesystem, key = filesystem_for(path)
     assert path == "s3://marin-us-east-08a/tmp/ttl=3d/store/x"
     assert key == "marin-us-east-08a/tmp/ttl=3d/store/x"
     assert filesystem.client_kwargs["region_name"] == "US-EAST-08A"

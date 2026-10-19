@@ -77,9 +77,8 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -243,8 +242,8 @@ def _copy_shard(
     is safe — fsspec funnels async ops onto a single dedicated event loop,
     and synchronous APIs are reentrant.
     """
-    src_fs, _ = url_to_fs(src_dir)
-    dst_fs, _ = url_to_fs(dst_dir)
+    src_fs, _ = filesystem_for(src_dir)
+    dst_fs, _ = filesystem_for(dst_dir)
     src_base = src_dir.rstrip("/")
     dst_base = dst_dir.rstrip("/")
 
@@ -285,7 +284,7 @@ def _list_relative_files(src_dir: str) -> list[tuple[str, str]]:
       last step (see ``_finalize_executor_status``) so its presence on dst
       cleanly signals "this leaf is fully synced".
     """
-    src_fs, _ = url_to_fs(src_dir)
+    src_fs, _ = filesystem_for(src_dir)
     stripped_root = src_fs._strip_protocol(src_dir).rstrip("/")
     entries: list[tuple[str, str]] = []
     skipped_tmp = 0
@@ -328,11 +327,11 @@ def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
     """
     src = _executor_status_path(src_dir)
     dst = _executor_status_path(dst_dir)
-    src_fs, _ = url_to_fs(src)
+    src_fs, _ = filesystem_for(src)
     if not src_fs.exists(src):
         logger.warning("source has no %s — not finalizing %s", _EXECUTOR_STATUS_FILENAME, dst_dir)
         return
-    dst_fs, _ = url_to_fs(dst)
+    dst_fs, _ = filesystem_for(dst)
     _copy_one(src_fs, dst_fs, src, dst)
     logger.info("Finalized %s", dst)
 
@@ -357,7 +356,7 @@ def _remove_tmp_orphans(dst_dir: str) -> None:
     them around would make a byte-for-byte src/dst comparison fail despite
     the real data matching.
     """
-    dst_fs, _ = url_to_fs(dst_dir)
+    dst_fs, _ = filesystem_for(dst_dir)
     if not dst_fs.exists(dst_dir):
         return
     orphans = [full for full in dst_fs.find(dst_dir) if _ATOMIC_RENAME_TMP_RE.search(full)]
@@ -645,7 +644,6 @@ def _source_already_synced(
 def main() -> None:
     args = _parse_args()
     configure_logging()
-    configure_coreweave_s3()
     # Boto's credential resolver and config provider log at INFO on every
     # request; with ~5 S3 API calls per file x thousands of files, that's
     # tens of thousands of log lines per shard. The information ("credentials

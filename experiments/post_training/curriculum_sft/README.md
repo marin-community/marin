@@ -61,7 +61,7 @@ Training and evaluation run on `cw-rno2a` with `MARIN_PREFIX` set to the `ttl=7d
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --no-wait --job-name curriculum-math-sft-<version> \
-  -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=7d/curriculum-math-20260924 \
+  -e MARIN_PREFIX s3://marin-us-east-08a/tmp/ttl=7d/curriculum-math-20260924 \
   -- uv run python experiments/post_training/curriculum_sft/math_trial.py \
   --stage train --learning-rate 1e-5 --warmup 1 --version <version> --run
 ```
