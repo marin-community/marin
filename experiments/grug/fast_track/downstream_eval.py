@@ -347,11 +347,9 @@ def _text_bpb(model: Transformer, tokenizer: MarinTokenizer, texts: Sequence[str
     return total_loss / (math.log(2) * total_bytes)
 
 
-def load_model(checkpoint_root: str, *, size: str, dense: bool) -> Transformer:
-    """Load the ``params`` of the latest checkpoint under ``checkpoint_root`` at the compute dtype."""
-    config = dataclasses.replace(_h100_ladder_model(_h100_ladder_rung(size), dense=dense), vocab_size=V16384_VOCAB)
-    if not dense:
-        raise ValueError("the downstream scorer supports dense checkpoints only")
+def load_model(checkpoint_root: str, *, size: str) -> Transformer:
+    """Load the ``params`` of the latest dense checkpoint under ``checkpoint_root`` at the compute dtype."""
+    config = dataclasses.replace(_h100_ladder_model(_h100_ladder_rung(size), dense=True), vocab_size=V16384_VOCAB)
     exemplar = jax.jit(lambda: Transformer.init(config, key=jax.random.PRNGKey(0)))()
     loaded = load_checkpoint({"params": exemplar}, latest_checkpoint_path(checkpoint_root), axis_mapping=None, mesh=None)
     return jmp.get_policy(COMPUTE_POLICY).cast_to_compute(loaded["params"])
@@ -368,7 +366,7 @@ def main(checkpoint_root: str, size: str, output: str, tasks: tuple[str, ...], s
     tokenizer = load_tokenizer(V16384_TOKENIZER)
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     with set_mesh(mesh):
-        model = load_model(checkpoint_root, size=size, dense=True)
+        model = load_model(checkpoint_root, size=size)
         records = score_downstream(model, tokenizer, tasks or tuple(TASK_BUILDERS))
         text = {} if skip_text else score_text(model, tokenizer, (*PALOMA_SETS, *UNCHEATABLE_SETS))
     with StoragePath(prefix_join(output, RECORDS_FILE)).open("wb") as stream:

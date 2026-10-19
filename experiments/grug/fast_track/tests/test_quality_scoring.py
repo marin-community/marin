@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
-import json
-from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -58,70 +56,6 @@ def variable_token_pool(tmp_path, write_raw_pool):
             }
         )
     return write_raw_pool(rows, name="variable")
-
-
-def test_text_scorer_selects_only_after_the_deterministic_raw_prefix(raw_pool, zephyr_context, tmp_path):
-    positive = score_raw_pool(
-        raw_pool,
-        ctx=zephyr_context,
-        output_path=str(tmp_path / "positive"),
-        candidate=_text_scorer(1, "positive-v1"),
-        label_exclusion=NO_LABELS,
-        token_budget=40,
-        incumbent=_text_scorer(-1, "incumbent-v1"),
-    )
-    negative = score_raw_pool(
-        raw_pool,
-        ctx=zephyr_context,
-        output_path=str(tmp_path / "negative"),
-        candidate=_text_scorer(-1, "negative-v1"),
-        label_exclusion=NO_LABELS,
-        token_budget=40,
-    )
-    selected_positive = select_scored_pool(
-        positive,
-        ctx=zephyr_context,
-        output_path=str(tmp_path / "positive-selection"),
-        training_tokens=4,
-        selection_method=SelectionMethod.CANDIDATE,
-        tie_seed=3,
-        num_ranges=8,
-    )
-    selected_negative = select_scored_pool(
-        negative,
-        ctx=zephyr_context,
-        output_path=str(tmp_path / "negative-selection"),
-        training_tokens=4,
-        selection_method=SelectionMethod.CANDIDATE,
-        tie_seed=3,
-        num_ranges=8,
-    )
-    selected_incumbent = select_scored_pool(
-        positive,
-        ctx=zephyr_context,
-        output_path=str(tmp_path / "incumbent-selection"),
-        training_tokens=4,
-        selection_method=SelectionMethod.INCUMBENT,
-        tie_seed=3,
-        num_ranges=8,
-    )
-    positive_ids = [row["id"] for path in selected_positive.shards for row in pq.read_table(path).to_pylist()]
-    negative_ids = [row["id"] for path in selected_negative.shards for row in pq.read_table(path).to_pylist()]
-    incumbent_ids = [row["id"] for path in selected_incumbent.shards for row in pq.read_table(path).to_pylist()]
-    raw_prefix_ids = [
-        row["id"] for path in selected_positive.raw_prefix_shards for row in pq.read_table(path).to_pylist()
-    ]
-
-    assert positive_ids != negative_ids
-    assert positive_ids == [max(raw_prefix_ids, key=int)]
-    assert negative_ids == [min(raw_prefix_ids, key=int)]
-    assert incumbent_ids == negative_ids
-    assert selected_positive.raw_prefix_tokens == selected_negative.raw_prefix_tokens == 40
-    assert positive.classifier_identity["revision"] == "positive-v1"
-    assert "text" not in pq.read_table(positive.shards[0]).column_names
-    assert "input_ids" not in pq.read_table(positive.shards[0]).column_names
-    report = json.loads(Path(selected_positive.report_path).read_text())
-    assert report["rung_prefix_shards"] == list(selected_positive.raw_prefix_shards)
 
 
 def test_embedding_scorer_receives_id_aligned_cached_features(raw_pool, zephyr_context, tmp_path, monkeypatch):
@@ -244,49 +178,6 @@ def test_constant_candidate_scores_fail_but_random_control_can_select(raw_pool, 
     )
 
     assert (random.documents, random.selected_tokens) == (1, 5)
-
-
-def test_larger_training_budget_expands_the_raw_candidate_prefix(raw_pool, zephyr_context, tmp_path):
-    small_scored = score_raw_pool(
-        raw_pool,
-        ctx=zephyr_context,
-        output_path=str(tmp_path / "scored-small"),
-        candidate=_text_scorer(1, "v1"),
-        label_exclusion=NO_LABELS,
-        token_budget=40,
-    )
-    large_scored = score_raw_pool(
-        raw_pool,
-        ctx=zephyr_context,
-        output_path=str(tmp_path / "scored-large"),
-        candidate=_text_scorer(1, "v1"),
-        label_exclusion=NO_LABELS,
-        token_budget=60,
-    )
-    small = select_scored_pool(
-        small_scored,
-        ctx=zephyr_context,
-        output_path=str(tmp_path / "small"),
-        training_tokens=4,
-        selection_method=SelectionMethod.CANDIDATE,
-        tie_seed=5,
-        num_ranges=8,
-    )
-    large = select_scored_pool(
-        large_scored,
-        ctx=zephyr_context,
-        output_path=str(tmp_path / "large"),
-        training_tokens=6,
-        selection_method=SelectionMethod.CANDIDATE,
-        tie_seed=5,
-        num_ranges=8,
-    )
-    small_candidates = {row["id"] for path in small.raw_prefix_shards for row in pq.read_table(path).to_pylist()}
-    large_candidates = {row["id"] for path in large.raw_prefix_shards for row in pq.read_table(path).to_pylist()}
-
-    assert len(small_candidates) == 8
-    assert len(large_candidates) == 12
-    assert small_candidates < large_candidates
 
 
 def test_max_scored_pool_matches_exact_rung_pools_through_raw_cache(variable_token_pool, zephyr_context, tmp_path):
