@@ -6,14 +6,15 @@
 Writes two figures:
 
 - ``<out_dir>/67b_a2b_train_loss_tokens.png``: the 67B-A2B lineage (4096-batch start, 8192-batch resume, and the
-  three 65k-context cooldowns) against tokens seen.
+  final 65k-context cooldown from step 141k) against tokens seen.
 - ``<out_dir>/67b_a2b_train_loss_vs_scaling_completion.png``: the same lineage plus the d512/d768/d1024 scaling runs
   from the issue #6044 scaling fit, against percent of each run's planned training.
 
-Every logged step is plotted. The W&B API returns at most 10,000 history rows per query, so history is fetched in
-step ranges of ``_HISTORY_CHUNK``. Tokens per step are ``train_batch_size * max_seq_len`` from each run's W&B config
-(``train_batch_size`` may be a staged schedule), accumulated along the lineage: each run continues from its parent's
-token count at the step where it starts.
+Dashed vertical lines mark each run's scheduled data-mixture change (second ``train_weights`` stage) and the
+67B-A2B context extension from 8k to 65k. Every logged step is plotted. The W&B API returns at most 10,000 history
+rows per query, so history is fetched in step ranges of ``_HISTORY_CHUNK``. Tokens per step are
+``train_batch_size * max_seq_len`` from each run's W&B config (``train_batch_size`` may be a staged schedule),
+accumulated along the lineage: each run continues from its parent's token count at the step where it starts.
 
 Run::
 
@@ -49,34 +50,14 @@ class Segment:
     end_step: int | None = None
 
 
+_MAIN_BS4096 = "moe_67b_a2b_d2560_ep1_rep16_bs4096_seq8192_sw2k_v4_2048_muon_10T"
+_MAIN_BS8192 = "moe_67b_a2b_d2560_ep1_rep8_bs8192_seq8192_sw2k_v4_2048_muon_resume15k_v2_10T"
+_FINAL_COOLDOWN = "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step141k"
+MAIN_COLOR, LONG_CONTEXT_COLOR, EVENT_COLOR = "#2a78d6", "#8a5cd6", "#52514e"
 LINEAGE = (
-    Segment(
-        "moe_67b_a2b_d2560_ep1_rep16_bs4096_seq8192_sw2k_v4_2048_muon_10T", "main, bs 4096", "#2a78d6", None, 15_000
-    ),
-    Segment(
-        "moe_67b_a2b_d2560_ep1_rep8_bs8192_seq8192_sw2k_v4_2048_muon_resume15k_v2_10T",
-        "main, bs 8192 (from step 15k)",
-        "#2a78d6",
-        "moe_67b_a2b_d2560_ep1_rep16_bs4096_seq8192_sw2k_v4_2048_muon_10T",
-    ),
-    Segment(
-        "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step39k",
-        "65k-ctx cooldown from step 39k",
-        "#eb6834",
-        "moe_67b_a2b_d2560_ep1_rep8_bs8192_seq8192_sw2k_v4_2048_muon_resume15k_v2_10T",
-    ),
-    Segment(
-        "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step102k",
-        "65k-ctx cooldown from step 102k",
-        "#1baf7a",
-        "moe_67b_a2b_d2560_ep1_rep8_bs8192_seq8192_sw2k_v4_2048_muon_resume15k_v2_10T",
-    ),
-    Segment(
-        "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step141k",
-        "65k-ctx cooldown from step 141k (final)",
-        "#8a5cd6",
-        "moe_67b_a2b_d2560_ep1_rep8_bs8192_seq8192_sw2k_v4_2048_muon_resume15k_v2_10T",
-    ),
+    Segment(_MAIN_BS4096, "main run (bs 4096 to step 15k, then bs 8192), 8k context", MAIN_COLOR, None, 15_000),
+    Segment(_MAIN_BS8192, "main run, bs 8192", MAIN_COLOR, _MAIN_BS4096, 141_000),
+    Segment(_FINAL_COOLDOWN, "65k-context cooldown from step 141k (final)", LONG_CONTEXT_COLOR, _MAIN_BS8192),
 )
 # (run id, label, color) for the scaling-fit anchors in
 # https://github.com/marin-community/marin/issues/6044#issuecomment-4819900707
@@ -88,6 +69,15 @@ SCALING_RUNS = (
 # (steps, x values, losses) for one plotted run.
 Curve = tuple[np.ndarray, np.ndarray, np.ndarray]
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e6e5e0"
+
+
+@dataclass(frozen=True)
+class Event:
+    """A vertical dashed marker at a point in training, in the x units of the plot it is drawn on."""
+
+    x: float
+    label: str
+    color: str
 
 
 def loss_history(run: wandb.apis.public.Run) -> tuple[np.ndarray, np.ndarray]:
@@ -142,6 +132,28 @@ def lineage_tokens(api: wandb.Api) -> dict[str, Curve]:
     return out
 
 
+def mix_shift_step(run: wandb.apis.public.Run) -> int:
+    """First step of the second ``train_weights`` stage (the scheduled data-mixture change)."""
+    stages = run.config["data"]["train_weights"]
+    assert len(stages) == 2, f"{run.id}: expected two mixture stages, got {[start for start, _ in stages]}"
+    return stages[1][0]
+
+
+def lineage_events(api: wandb.Api, lineage: dict[str, Curve]) -> tuple[float, float]:
+    """Tokens seen at the 67B-A2B data-mixture change and at the start of the 65k-context cooldown."""
+    steps, tokens, _ = lineage[_MAIN_BS8192]
+    mix_tokens = float(np.interp(mix_shift_step(api.run(f"{WANDB_PROJECT}/{_MAIN_BS8192}")), steps, tokens))
+    _, cooldown_tokens, _ = lineage[_FINAL_COOLDOWN]
+    # Tokens seen before the first cooldown step: the cumulative count minus that step's own batch.
+    context_tokens = float(cooldown_tokens[0] - (cooldown_tokens[1] - cooldown_tokens[0]))
+    return mix_tokens, context_tokens
+
+
+def _draw_events(ax: plt.Axes, events: list[Event]) -> None:
+    for event in events:
+        ax.axvline(event.x, color=event.color, linestyle="--", linewidth=1.1, label=event.label)
+
+
 def _break_gaps(steps: np.ndarray, x: np.ndarray, loss: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Insert NaN after each logging gap longer than ``_MAX_STEP_GAP`` steps so the line is not drawn across it."""
     cut = np.flatnonzero(np.diff(steps) > _MAX_STEP_GAP) + 1
@@ -156,11 +168,11 @@ def _style(ax: plt.Axes) -> None:
     ax.tick_params(colors=MUTED)
 
 
-def plot_tokens(lineage: dict[str, Curve], path: str) -> None:
+def plot_tokens(lineage: dict[str, Curve], events: tuple[float, float], path: str) -> None:
     fig, ax = plt.subplots(figsize=(12, 6.5))
     for seg in LINEAGE:
         steps, tokens, loss = lineage[seg.run_id]
-        label = None if seg.run_id == LINEAGE[0].run_id else seg.label
+        label = None if seg.run_id == _MAIN_BS8192 else seg.label
         ax.plot(
             *_break_gaps(steps, tokens / 1e12, loss),
             color=seg.color,
@@ -169,14 +181,22 @@ def plot_tokens(lineage: dict[str, Curve], path: str) -> None:
             label=label,
             rasterized=True,
         )
+    mix_tokens, context_tokens = events
+    _draw_events(
+        ax,
+        [
+            Event(mix_tokens / 1e12, f"data mixture shift ({mix_tokens / 1e12:.2f}T)", EVENT_COLOR),
+            Event(
+                context_tokens / 1e12, f"context extension 8k → 65k ({context_tokens / 1e12:.2f}T)", LONG_CONTEXT_COLOR
+            ),
+        ],
+    )
     ax.set_xlabel("tokens seen (T)")
     ax.set_ylabel(LOSS_KEY)
     ax.set_ylim(1.2, 2.0)
     ax.set_xlim(0, 10.2)
     _style(ax)
-    handles, labels = ax.get_legend_handles_labels()
-    labels[0] = "main run (bs 4096 to step 15k, then bs 8192)"
-    ax.legend(handles, labels, frameon=False, loc="upper right")
+    ax.legend(loc="upper right", facecolor="white", edgecolor="none", framealpha=1)
     for line in ax.get_legend().get_lines():
         line.set_linewidth(2)
         line.set_alpha(1)
@@ -190,12 +210,14 @@ def plot_tokens(lineage: dict[str, Curve], path: str) -> None:
     fig.savefig(path, dpi=150, facecolor="white")
 
 
-def plot_completion(api: wandb.Api, lineage: dict[str, Curve], path: str) -> None:
+def plot_completion(api: wandb.Api, lineage: dict[str, Curve], events: tuple[float, float], path: str) -> None:
     fig, ax = plt.subplots(figsize=(12, 6.5))
+    mix_shifts = []
     for run_id, label, color in SCALING_RUNS:
         run = api.run(f"{WANDB_PROJECT}/{run_id}")
         steps, loss = loss_history(run)
         total = run.config["trainer"]["trainer"]["num_train_steps"]
+        mix_shifts.append(100 * mix_shift_step(run) / total)
         ax.plot(
             *_break_gaps(steps, 100 * steps / total, loss),
             color=color,
@@ -206,7 +228,7 @@ def plot_completion(api: wandb.Api, lineage: dict[str, Curve], path: str) -> Non
         )
     for seg in LINEAGE:
         steps, tokens, loss = lineage[seg.run_id]
-        label = None if seg.run_id == LINEAGE[0].run_id else f"67B-A2B {seg.label}"
+        label = None if seg.run_id == _MAIN_BS8192 else f"67B-A2B {seg.label}"
         ax.plot(
             *_break_gaps(steps, 100 * tokens / TARGET_TOKENS, loss),
             color=seg.color,
@@ -215,14 +237,26 @@ def plot_completion(api: wandb.Api, lineage: dict[str, Curve], path: str) -> Non
             label=label,
             rasterized=True,
         )
+    mix_tokens, context_tokens = events
+    _draw_events(
+        ax,
+        [
+            Event(
+                100 * mix_tokens / TARGET_TOKENS,
+                "data mixture shift (67B-A2B "
+                f"{100 * mix_tokens / TARGET_TOKENS:.1f}%, scaling runs "
+                f"{min(mix_shifts):.1f} to {max(mix_shifts):.1f}%)",
+                EVENT_COLOR,
+            ),
+            Event(100 * context_tokens / TARGET_TOKENS, "67B-A2B context extension 8k → 65k", LONG_CONTEXT_COLOR),
+        ],
+    )
     ax.set_xlabel("percent of planned training (scaling runs: step / num_train_steps; 67B-A2B: tokens / 10T)")
     ax.set_ylabel(LOSS_KEY)
     ax.set_ylim(1.2, 3.6)
     ax.set_xlim(0, 101)
     _style(ax)
-    handles, labels = ax.get_legend_handles_labels()
-    labels[len(SCALING_RUNS)] = "67B-A2B main run"
-    ax.legend(handles, labels, frameon=False, loc="upper right", fontsize=9)
+    ax.legend(loc="upper right", fontsize=9, facecolor="white", edgecolor="none", framealpha=1)
     for line in ax.get_legend().get_lines():
         line.set_linewidth(2)
         line.set_alpha(1)
@@ -240,5 +274,6 @@ if __name__ == "__main__":
     out_dir = sys.argv[1]
     api = wandb.Api(timeout=300)
     lineage = lineage_tokens(api)
-    plot_tokens(lineage, f"{out_dir}/67b_a2b_train_loss_tokens.png")
-    plot_completion(api, lineage, f"{out_dir}/67b_a2b_train_loss_vs_scaling_completion.png")
+    events = lineage_events(api, lineage)
+    plot_tokens(lineage, events, f"{out_dir}/67b_a2b_train_loss_tokens.png")
+    plot_completion(api, lineage, events, f"{out_dir}/67b_a2b_train_loss_vs_scaling_completion.png")
