@@ -326,7 +326,10 @@ def _answer(rollout: Rollout) -> list[MissingCapability]:
         return CAPABILITIES.validate_python(ANSWER_FORMAT.extract(attempt).value)
     except (SubmissionFailure, ValidationError) as error:
         final = str(messages[-1].get("content"))[:500]
-        raise ValueError(f"The analysis answer is not a list of capabilities: {final!r}") from error
+        stop = rollout.stop_reason
+        raise ValueError(
+            f"The analysis answer (stop reason {stop!r}) is not a list of capabilities: {final!r}"
+        ) from error
 
 
 def _idea(capability: MissingCapability, catalog_version: str) -> CapabilityIdea:
