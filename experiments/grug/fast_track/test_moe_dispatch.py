@@ -45,6 +45,7 @@ _CASES = {
     "scan_fused": dict(**_UNGATED, **_SCAN),
     "scan_hero": dict(**_UNGATED, **_SCAN, **_HERO),
     # GPU, ragged EP: the bridge's layer stack in bf16 and in its MXFP8 recipe with token-quantized expert wgrads.
+    "gpu_fused": dict(**_UNGATED, **_SCAN),
     "gpu_overlap": dict(**_UNGATED, **_SCAN, **_OVERLAP),
     "gpu_hero": dict(**_UNGATED, **_SCAN, **_HERO),
     "mxfp8_overlap": dict(**_UNGATED, **_SCAN, **_OVERLAP, **_MXFP8),
@@ -161,10 +162,24 @@ def _require_sm100_gpus():
 
 @pytest.mark.timeout(900)
 def test_hero_dispatch_matches_the_bridge_overlap_placement(tmp_path):
-    """bf16 on the ragged EP path: the blocks differ in rounding order (the overlap placement's shared experts run
-    inside the EP shard on gathered weights)."""
+    """bf16 on the ragged EP path: the hero block is as close to the overlap placement as fast_track's own fused
+    placement is (all three compute the same function and differ in bf16 rounding order)."""
     _require_sm100_gpus()
-    _assert_close("gpu_hero", "gpu_overlap", tmp_path, rtol=1e-3, grad_rtol=0.05)
+    loss, grads = _case("gpu_overlap", tmp_path)
+    fused_loss, fused_grads = _case("gpu_fused", tmp_path)
+    hero_loss, hero_grads = _case("gpu_hero", tmp_path)
+
+    def errors(other):
+        return [float(np.linalg.norm(o - g) / max(np.linalg.norm(g), 1e-30)) for o, g in zip(other, grads, strict=True)]
+
+    hero_err, fused_err = errors(hero_grads), errors(fused_grads)
+    print(
+        f"bf16 vs overlap: loss hero {hero_loss:.7f} fused {fused_loss:.7f} overlap {loss:.7f}; "
+        f"grad rel L2 max hero {max(hero_err):.3e} fused {max(fused_err):.3e}"
+    )
+    assert abs(hero_loss - loss) <= 2 * abs(fused_loss - loss) + 1e-5 * abs(loss)
+    for h, f in zip(hero_err, fused_err, strict=True):
+        assert h <= 2 * f + 1e-3
 
 
 @pytest.mark.timeout(900)
