@@ -132,7 +132,7 @@ def test_fused_cross_entropy_reduces_over_the_sequence_instead_of_gathering_it()
             (activation_spec(True), TOKEN_AXES),
             (P(None, "context", None), ("context",)),  # batch replicated, sequence split
         )
-        # A 3-row grad-in-forward block pads each 4-token shard to two blocks.
+        # A 3-row grad-in-forward block pads the 4- and 8-token shards of the two layouts.
         for hidden_spec, expected_psum_axes in layouts:
             for reduction, grad_in_forward_block in itertools.product(("sum", "mean"), (None, 3)):
                 def sharded(hidden, lm_head, hidden_spec=hidden_spec, reduction=reduction, block=grad_in_forward_block):
