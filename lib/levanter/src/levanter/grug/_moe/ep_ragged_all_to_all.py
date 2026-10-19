@@ -748,6 +748,17 @@ def _dispatch_chunk(sorted_x: Float[Array, "TK H"], plan: _ChunkPlan, layout: _E
     return jax.lax.ragged_all_to_all(sorted_x, dispatch_init, *plan.dispatch_params, axis_name="expert")
 
 
+def _primal_layout(layout: "_ExpertLayout") -> "_ExpertLayout":
+    """``layout`` for a forward that keeps no residuals (the primal of ``_routed_experts``, e.g. a layer scan's
+    forward whose backward recomputes the layer): the MXFP8-wgrad expert MLPs' forward also quantizes the dispatched
+    rows along the token axis for the weight gradients, which only a forward with residuals needs. Same output."""
+    primal = {
+        _CuteRelu2Mxfp8WgradExpertMlp: _CuteRelu2Mxfp8ExpertMlp,
+        _CuteSwigluMxfp8WgradExpertMlp: _CuteSwigluMxfp8ExpertMlp,
+    }.get(type(layout.expert_mlp))
+    return layout if primal is None else dataclasses.replace(layout, expert_mlp=primal())
+
+
 def _routed_experts_forward(
     sorted_x: Float[Array, "TK H"],
     weights: Float[Array, "Tlocal K"],
@@ -876,7 +887,9 @@ def _routed_experts(
     output is saved for the backward, a recompute for the backward runs only the dispatch and
     the gate/up projection.
     """
-    out, _residuals, _, _ = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+    out, _residuals, _, _ = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, _primal_layout(layout)
+    )
     return out
 
 
@@ -899,7 +912,9 @@ def _routed_experts_overlapped(
     """``_routed_experts`` plus ``overlap_fn(overlap_tokens, overlap_params)`` run under the first dispatch
     all-to-all, and its backward under the first return-cotangent all-to-all. Returns ``(out, side)``."""
     overlap = _OverlapInputs(overlap_fn, overlap_tokens, overlap_params)
-    out, _, side, _ = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap)
+    out, _, side, _ = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, _primal_layout(layout), overlap
+    )
     return out, side
 
 
