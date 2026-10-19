@@ -12,6 +12,8 @@ dependencies = [
     "marin-rolloutengine",
     "marin-shellbox[shellsim]",
     "marin-rigging",
+    "marin-finelog",
+    "marin-iris",
     "httpx>=0.27,<1",
     "openai",
     "pydantic>=2.0",
@@ -60,5 +62,7 @@ search-path = [
     "../rolloutengine/src",
     "../shellbox/src",
     "../rigging/src",
+    "../finelog/src",
+    "../iris/src",
 ]
 python-interpreter = "../../.venv/bin/python"
