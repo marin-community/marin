@@ -1,4 +1,4 @@
-# Stage the SkyRL migration
+# Maintain the vendored SkyRL runtime
 
 `scripts/skyrl_migration.py` prepares a pruned source candidate at `vendor/skyrl`,
 builds a `marinskyrl` wheel, and prepares open work for transfer from
@@ -9,10 +9,37 @@ import SkyRL or Harbor into its own environment. Editable installations are
 supported inside that nested environment. SkyRL remains outside Marin's
 workspace and root dependency resolution.
 
-The tool does not change the running launcher, publish a wheel, enable migrated
-nightlies, or archive the fork. Those steps require the cutover changes below.
+Marin's launcher uses this nested project. It passes the launch document to
+`uv run --isolated --project vendor/skyrl --frozen --no-group dev marinskyrl`
+after clearing the parent's Python environment selection. The CPU launcher
+verifies source and asset hashes, then bundles the project and its lock for
+Iris. Workers install that source in editable mode with the frozen
+Megatron/vLLM profile. No task clones the SkyRL fork.
 
-The checked-in `vendor/skyrl` tree is the script's baseline output, including
+```mermaid
+flowchart LR
+    Marin["Marin experiment<br/>root uv.lock"] -->|"launch YAML / subprocess"| Launcher
+    subgraph Nested["vendor/skyrl: independent uv.lock"]
+        Launcher["marinskyrl executable<br/>CPU environment"]
+        Source["Source, assets, provenance"]
+    end
+    Launcher -->|"verified source bundle"| Worker["Iris GPU task<br/>editable SkyRL + frozen Megatron/vLLM profile"]
+    Source --> Launcher
+    Worker --> Outputs["Checkpoints and HF export"]
+    Outputs --> Eval["Marin evaluation artifact"]
+```
+
+`SkyRLRuntime.commit` contains the SHA-256 of the vendored provenance document.
+The document binds the captured fork commit, migration patches, independent
+lock, and source file hashes. Use a fresh artifact version when it changes.
+The nested project currently selects qualified published or Git-pinned Marin
+packages; local editable Marin packages are not wired into its bundle.
+
+The migration tool rebuilds source candidates and prepares active work. It
+does not edit Marin's integration, publish a wheel, enable migrated nightlies,
+or archive the fork. Those are reviewed changes or final cutover operations.
+
+The checked-in `vendor/skyrl` tree is the script's patched baseline output, including
 its license and per-file source provenance. The generated
 [`snapshot-report.md`](https://github.com/marin-community/marin/blob/main/config/skyrl-migration/snapshot-report.md) records
 open-work transplant decisions; it does not merge those PRs into the baseline.
@@ -105,7 +132,9 @@ unique release version. An editable deployment instead ships the exact source
 and runtime assets in the Iris bundle. Both use independently frozen launcher
 and GPU environments. A successful wheel build is not runtime acceptance.
 
-Check binary dependency resolution without installing the result:
+The wheel path is retained for package acceptance and inference smoke tests.
+The production launcher uses the source bundle described above. Check wheel
+dependency resolution without installing the result:
 
 ```bash
 uv lock --project /path/to/migration/candidate/binary-consumer
@@ -160,10 +189,9 @@ to the same Qwen snapshot used for Math500. Test helpers are bundled separately;
 all runtime implementation comes from the installed wheel.
 
 This tests the wheel's Megatron workers, optimizer updates, and generation and
-scoring runtime. It does not validate Marin's launcher or checkpoint handoffs. After the
-nested launcher cutover, run a short RL training artifact on training data
-with Math500 validation, then export, resume, and evaluate its checkpoint.
-Keep the existing CatCount, OPD, and Grug/Megatron gates as complementary tests.
+scoring runtime. It does not validate Marin's launcher or checkpoint handoffs.
+Use the artifact smoke below for that boundary. Keep the existing CatCount,
+OPD, and Grug/Megatron gates as complementary tests.
 
 The captured source has a `gcsfs`/`fsspec` requirement conflict and eleven
 Math500 references that its AIME verifier cannot score. The migration patch
@@ -203,29 +231,36 @@ Math500 generation/scoring to pass in that full profile. Preserve the output
 bundle: `receipt.json` identifies the wheel, source, lock, model, and dataset;
 `megatron.xml` and `metrics.json` record the GPU gate outcomes.
 
-## Cutover changes before publication
+## Train, resume, and evaluate through Marin
 
-The generated candidate deliberately reports `production_ready: false`.
-Make and review these changes in the actual migration PR:
+The artifact smoke uses Qwen2.5-0.5B-Instruct, procedural CatCount training
+data, and two colocated H100s on `cw-rno2a`. It performs two Megatron steps,
+saves a distributed checkpoint, exports HF weights, then submits a fresh
+training job against that checkpoint root with a four-step limit. Its final
+artifact evaluates the resumed HF policy on the existing 128-row GSM8K smoke
+preset in Marin's separate serving environment.
 
-1. Adapt `vendor/skyrl/cloud/iris/runtime_bundle.py` to identify the nested
-   source using the Marin revision, source and runtime-asset hashes, and the
-   independent lock. Its current standalone Git-root and `direct_url.json`
-   assumptions reject a nested editable checkout as well as a binary wheel
-   without Git identity.
-2. Replace the fork clone in `cloud/iris/runtime_environment.py` and the
-   bootstrap in `bootstrap_runtime.sh` with the bundled `vendor/skyrl` project
-   and independently frozen GPU dependencies. Editable local Marin library
-   dependencies may resolve inside this project. Keep CPU launcher and GPU
-   profiles out of Marin's resolution; Marin calls only the nested executable.
-3. Point Marin's launcher subprocess at `vendor/skyrl`, retire
-   `config/external/MarinSkyRL`, and replace the fork-based runtime identity in
-   `lib/marin/src/marin/external_dependencies.py`. Adapt
-   `config/update-external.py`, `scripts/ci/dependency_update_policy.py`,
-   `config/external/migration.toml`, `ops-external-dependencies.yaml`, and
-   `ops-fork-ferry.yaml` so they no longer poll the archived fork. Do not add
-   `vendor/skyrl` to `[tool.uv.workspace]` or Marin's root dependencies.
-4. Adapt `run_cat_count_h100.sh`: it currently clones Marin and rewrites its
+```bash
+uv run python -m experiments.post_training.skyrl_port_smoke \
+  --version 2026.10.19.10306 --stage evaluate
+uv run python -m experiments.post_training.skyrl_port_smoke \
+  --version 2026.10.19.10306 --stage evaluate --run
+```
+
+Choose a new immutable version for each runtime change or independent rerun.
+Require successful training and export jobs, evidence that the fresh job
+loads step two and advances to step four, a complete final export, and a
+successful evaluation artifact. This is a plumbing smoke, not a learning
+quality gate. A coordinator's running state or first loss does not satisfy it.
+
+## Remaining gates before archival
+
+The generated candidate deliberately reports `production_ready: false`;
+staging alone cannot certify the runtime or reconcile active work. The port
+includes the nested launcher, hash-verified source bundle, and removal of the
+old external updater pin. Complete these gates before archiving the fork:
+
+1. Adapt `run_cat_count_h100.sh`: it currently clones Marin and rewrites its
    fork branch pin. Run the exact candidate Marin revision and nested runtime.
    Move the CPU launcher tests, CPU CatCount, OPD sync, Grug/Megatron including
    CP2/parity, and GPU CatCount lanes into Marin CI. Preserve metric gates,
@@ -233,7 +268,7 @@ Make and review these changes in the actual migration PR:
    representative task rollout plus checkpoint export/resume gate for the
    retained surface. Compare with the existing green pin before pruning is
    accepted; candidate dependencies may differ from that pin.
-5. Remove dead entrypoint registry entries such as `mini_swe`, update the
+2. Remove dead entrypoint registry entries such as `mini_swe`, update the
    stale `fully_async` validation in Marin, and validate supported task curation
    callers through the pruned runtime. Update `infra/grafana/src/nightly_config.py`,
    workflow links, [RL launching](../references/rl-launching.md), the external

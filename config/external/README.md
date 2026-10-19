@@ -3,7 +3,7 @@
 This directory tracks Python tools and artifacts that Marin installs into
 isolated runtime environments.
 
-The Evalchemy, Harbor, and MarinSkyRL uv projects are excluded from the root
+The Evalchemy and Harbor uv projects are excluded from the root
 workspace so their dependency graphs do not have to resolve with Marin's
 training and serving dependencies. Each `pyproject.toml` selects an external
 source. Its adjacent `uv.lock` records the exact commit that Marin uses.
@@ -36,7 +36,7 @@ Advance one project with:
 uv run config/update-external.py evalchemy
 ```
 
-Omit the project name to advance all three Git projects. The command updates
+Omit the project name to advance both Git projects. The command updates
 the selected lockfiles and regenerates the packaged requirements.
 
 Update a GPU release from its published manifest with:
@@ -81,16 +81,6 @@ The external configurations intentionally model only what Marin needs:
   isolated evaluation driver. The `harbor_config` modules are installed from
   that same checkout rather than a second package source, so runtime and error
   taxonomy advance atomically. Harbor is absent from Marin's workspace lock.
-- `MarinSkyRL` tracks the repository-root `marinskyrl` distribution. The
-  external lock resolves its CPU-safe base for the isolated launcher. The
-  launcher synchronizes the selected `fsdp` or `megatron` profile from that
-  revision's frozen root lock inside the cluster's standard Iris task image.
-  The lock overrides Rigging's source because a pinned Marin Git workspace
-  advertises its development version while the launcher needs published Marin
-  wheels. After each MarinSkyRL update, the updater installs the frozen base
-  lock in a temporary environment and runs `uv pip check`. This catches
-  requirements hidden by the override, including exact Rigging versions
-  required by published Iris and Finestore wheels.
 - `vllm` records the promoted GPU wheels (`gpu.toml`) and a main-line source
   paired with tpu-inference for TPU (`tpu.toml`). The GPU and TPU wheels have
   independent build and promotion paths. Neither is a workspace dependency.
@@ -110,7 +100,9 @@ then add a `migration.toml` section for it. Consumers should use the generated
 `ExternalDependency.requirement()` rather than reading a lockfile or copying its
 commit.
 
-The [SkyRL migration tool](../../docs/dev-guide/skyrl-migration.md) stages a
-pruned vendored source candidate and active fork work. Its candidate remains a
-`marinskyrl` executable with independent resolution; the live pin stays on
-the fork until the documented runtime and CI cutover is complete.
+SkyRL lives in `vendor/skyrl` with its own `pyproject.toml` and `uv.lock`.
+Marin invokes its `marinskyrl` executable in an isolated child environment.
+GPU workers receive the source, assets, and lock in a hash-verified Iris bundle;
+they do not clone the fork. The external updater does not advance this source.
+The [SkyRL migration guide](../../docs/dev-guide/skyrl-migration.md) describes
+rebuilding the pruned source and reconciling active fork work before archival.

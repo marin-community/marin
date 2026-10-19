@@ -80,15 +80,6 @@ HARBOR = ExternalDependency(
     runtime_requirements=("daytona==0.200.2", "gcsfs==2026.7.0", "pydantic-settings==2.14.2", "s3fs==2026.7.0"),
 )
 
-MARIN_SKYRL = ExternalDependency(
-    config_name="MarinSkyRL",
-    distribution="marinskyrl",
-    repository="https://github.com/marin-community/MarinSkyRL.git",
-    version="0.1.0",
-    commit="32edb00f784dac6995136d034ad7231a9b985bc0",
-    runtime_requirements=(),
-)
-
 VLLM_GPU_RELEASE = VllmGpuRelease(
     release_tag="marin-vllm-gpu-20260924-01911be34fac",
     source_commit="01911be34fac8715347962a8d791ca34a879e01e",
@@ -127,5 +118,4 @@ TPU_INFERENCE_FORK_REQUIREMENT = (
 EXTERNAL_DEPENDENCIES = (
     EVALCHEMY,
     HARBOR,
-    MARIN_SKYRL,
 )

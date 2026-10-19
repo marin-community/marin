@@ -116,8 +116,8 @@ tests and the production launcher cutover remain separate gates; see
 
 ## External dependency updates
 
-`ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
-MarinSkyRL projects at 00:17, 06:17, 12:17, and 18:17 UTC. It runs
+`ops-external-dependencies.yaml` advances the isolated Evalchemy and Harbor
+projects at 00:17, 06:17, 12:17, and 18:17 UTC. It runs
 `uv run config/update-external.py` without a project selector, records each
 resolved version and commit in the job summary, and includes every upstream
 commit subject between the old and new revisions. It opens or refreshes one

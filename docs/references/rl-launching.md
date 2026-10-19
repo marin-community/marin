@@ -57,9 +57,17 @@ The runtime executes tasks through `TaskSession` and sends token requests to mod
 Harbor tasks use the Shellbox session. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 
-The launcher uses the frozen project in `config/external/MarinSkyRL` in an isolated environment.
-This project supplies the pinned SkyRL revision, published Rigging package, and platform wheel sources.
-The launch document records that revision in `runtime.launcher_commit`.
+The launcher runs `uv run --isolated --project vendor/skyrl --frozen --no-group dev
+marinskyrl` in a child process. SkyRL has its own lock and is excluded from Marin's
+workspace. The child discards the parent's Python environment selection. SkyRL
+may depend on Marin packages inside its own environment; Marin calls SkyRL only
+through the executable.
+
+The launch document records the SHA-256 of the vendored provenance document in
+`runtime.launcher_commit`. That document binds the source, migration patches,
+runtime assets, and independent lock. The launcher verifies their hashes before
+bundling them for Iris. Workers install the bundled project in editable mode
+with the frozen Megatron/vLLM profile. They do not fetch the fork or require Git.
 Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
 
 ```text
@@ -153,7 +161,7 @@ stricter batch contract: `train_batch_size` must equal `policy_mini_batch_size`.
 
 ## Artifact and runtime boundaries
 
-Identity-bearing inputs belong in `SkyRLSpec`: the pinned MarinSkyRL runtime, model and tokenizer,
+Identity-bearing inputs belong in `SkyRLSpec`: the vendored SkyRL runtime identity, model and tokenizer,
 data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
@@ -176,8 +184,8 @@ Before submitting a large run:
 1. Print the plan with the intended immutable version and selection options.
 2. Check the resolved role plan and topology, especially engine count and DP/TP/PP/EP.
    For `fully_async`, confirm the train batch and policy mini-batch are equal.
-3. Confirm the pinned MarinSkyRL commit supports the chosen strategy, CUDA stack, model, and vLLM
-   geometry. If the commit changed, use a fresh RL artifact version unless its checkpoints are
+3. Confirm the vendored runtime supports the chosen strategy, CUDA stack, model, and vLLM
+   geometry. If its identity changed, use a fresh RL artifact version unless its checkpoints are
    explicitly compatible.
 4. Confirm request and response token budgets match the dataset and chat template.
 5. Check coordinator and worker CPU, host memory, disk, concurrency, timeout, and credentials.
