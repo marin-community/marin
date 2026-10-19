@@ -139,6 +139,8 @@ def _load_tei_embedder(endpoint_name: str) -> TeiEmbeddingClient:
 
 
 def _truncated_records(batch: pa.RecordBatch) -> Iterator[dict]:
+    # Slicing first keeps to_pylist from turning a whole row group of untruncated text into
+    # Python objects; the Arrow row group itself is still read whole.
     per_chunk = rows_per_chunk(batch.num_rows, batch.nbytes)
     for offset in range(0, batch.num_rows, per_chunk):
         for record in batch.slice(offset, per_chunk).to_pylist():
@@ -149,10 +151,8 @@ def _truncated_records(batch: pa.RecordBatch) -> Iterator[dict]:
 def _load_truncated_documents(spec: InputFileSpec) -> Reader[dict]:
     """Read ``id``/``text`` records, keeping the first HARRIER_MAX_RAW_TEXT_CHARS of each text.
 
-    Truncating here, before ``window``, bounds the Python records, the window and the TEI
-    call by the cap rather than by raw document size. Slicing each row group into
-    ``rows_per_chunk`` pieces keeps ``to_pylist`` from materializing a whole row group of
-    untruncated text. The Arrow read itself still loads one whole row group at a time.
+    Truncating before ``window`` bounds the window and the TEI call by the cap rather than
+    by raw document size.
     """
     return flat_map_reader(load_parquet_batch(spec), _truncated_records)
 
