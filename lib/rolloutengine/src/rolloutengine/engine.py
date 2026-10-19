@@ -14,7 +14,6 @@ from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, Machin
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.runtime.output_capture import captured_output_files
 
-from rolloutengine.checks import check_spec
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.event_delivery import _EventDelivery
 from rolloutengine.grading import _grade_rollout
@@ -34,6 +33,7 @@ from rolloutengine.models import (
     TaskRolloutSpec,
 )
 from rolloutengine.recorder import _CleanupScope, _Recorder, _run_harness
+from rolloutengine.validation import validate_spec
 
 
 class _Interrupted(Exception):
@@ -92,7 +92,7 @@ class RolloutEngine:
 
     def check(self, spec: TaskRolloutSpec) -> None:
         """Reject a spec before any machine starts: unknown factories or harness, or unsupported requirements."""
-        check_spec(spec, self.machine_factories)
+        validate_spec(spec, self.machine_factories)
         if spec.harness not in self.harnesses:
             raise ValueError(f"Unknown harness: {spec.harness!r}")
         self.harnesses[spec.harness].check(spec.task, spec.limits)

@@ -26,7 +26,7 @@ from rolloutengine.models import TaskRolloutSpec
 WORKSPACE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
 
 
-def check_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
+def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, MachineFactory]) -> None:
     """Check the machine selections against the task's environments, resources, and grader.
 
     A workspace answer needs a task machine only when the engine grades it: nothing reads a ``NoGrader``
