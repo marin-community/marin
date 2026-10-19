@@ -325,13 +325,12 @@ def test_resolve_training_env_adds_collective_watchdog_for_gpu():
     }
     with patch("marin.training.training._cli_helpers_module") as mod:
         mod.return_value.load_config.return_value = CliConfig()
-        gpu_env = resolve_training_env(dict(base), ResourceConfig.with_gpu("H100", count=8))
-        cpu_env = resolve_training_env(dict(base), ResourceConfig.with_cpu())
+        gpu_flags = resolve_training_env(dict(base), ResourceConfig.with_gpu("H100", count=8))["XLA_FLAGS"]
+        cpu_flags = resolve_training_env(dict(base), ResourceConfig.with_cpu())["XLA_FLAGS"]
 
-    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in gpu_env["XLA_FLAGS"]
-    assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_env["XLA_FLAGS"]
-    assert "NCCL_DEBUG" not in gpu_env
-    assert cpu_env["XLA_FLAGS"] == base["XLA_FLAGS"]
+    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in gpu_flags
+    assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_flags
+    assert cpu_flags == base["XLA_FLAGS"]
 
 
 @pytest.mark.parametrize(

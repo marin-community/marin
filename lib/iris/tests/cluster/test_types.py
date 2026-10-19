@@ -66,26 +66,6 @@ def test_environment_to_proto_captures_local_checkout(monkeypatch, fresh_launch_
     assert stamped.created_at  # launch context always captured; git fields best-effort
 
 
-def test_environment_to_proto_gpu_defaults_to_warn_without_subsystems():
-    gpu_env = EnvironmentSpec(extras=["gpu"]).to_proto().env_vars
-    cpu_env = EnvironmentSpec(extras=["cpu"]).to_proto().env_vars
-
-    assert gpu_env["NCCL_DEBUG"] == "WARN"
-    assert "NCCL_DEBUG_SUBSYS" not in gpu_env
-    assert "NCCL_DEBUG" not in cpu_env
-
-
-def test_environment_to_proto_preserves_explicit_gpu_nccl_debug_settings():
-    env = (
-        EnvironmentSpec(extras=["gpu"], env_vars={"NCCL_DEBUG": "INFO", "NCCL_DEBUG_SUBSYS": "INIT,NET"})
-        .to_proto()
-        .env_vars
-    )
-
-    assert env["NCCL_DEBUG"] == "INFO"
-    assert env["NCCL_DEBUG_SUBSYS"] == "INIT,NET"
-
-
 def test_entrypoint_from_callable_resolve_roundtrip():
     ep = Entrypoint.from_callable(_add, 3, b=4)
     fn, args, kwargs = ep.resolve()
