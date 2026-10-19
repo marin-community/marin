@@ -24,6 +24,9 @@ dependencies = [
     "marin-iris",
     "jsonschema>=4.20",
     "pyyaml>=6.0",
+    # taskforge.llm.clef: Clef's tokenizer (fit_request sizes every decision read) and its download.
+    "tokenizers>=0.22",
+    "huggingface_hub>=1.0",
 ]
 
 [dependency-groups]
