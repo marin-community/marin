@@ -162,6 +162,12 @@ def kv_update_unified_prefix(kv_pages, t_pages, t_slots, new_k, new_v, K):
     K: int32 scalar = number of valid updates (num_new_tokens)
     """
     kv_ev = _interleave_kv(new_k.astype(kv_pages.dtype), new_v.astype(kv_pages.dtype))  # [T, 2H, D]
+    cache_sharding = jax.typeof(kv_pages).sharding
+    if not cache_sharding.mesh.empty:
+        # Interleaving can erase Explicit head sharding, even for a size-one mesh axis.
+        # Match the cache's trailing dimensions before selecting a token and inserting page/slot axes.
+        update_spec = cache_sharding.spec.update(partitions=(None, *cache_sharding.spec[2:]))
+        kv_ev = jax.reshard(kv_ev, cache_sharding.update(spec=update_spec))
 
     def body(i, buf):
         p = t_pages[i]

@@ -34,12 +34,14 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm_reference
 from levanter.models.lm_model import LmConfig
 from levanter.layers.attention import AttentionMask as LmAttentionMask
+from levanter.layers.kv_cache import KvPageCache
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
     RMSNorm,
     GrugMoeHfConfig,
+    SnowballAttention,
     SnowballConfig,
     SnowballDecodeRouteCaptureBatch,
     SnowballLMHeadModel,
@@ -1220,3 +1222,98 @@ def test_snowball_paged_decode_sharding_and_expert_skew_match_unsharded():
         """,
         device_count=2,
     )
+
+
+@pytest.mark.parametrize("model_size", [1, 2], ids=["model1", "model2"])
+@pytest.mark.parametrize("update_dtype", [jnp.float32, jnp.bfloat16], ids=["fp32", "bf16"])
+def test_kv_cache_explicit_update_preserves_sharding_and_slots(model_size, update_dtype):
+    if jax.device_count() != 4:
+        pytest.skip("requires exactly four devices")
+    mesh = compact_grug_mesh(model_axis_size=model_size)
+    cache_sharding = NamedSharding(mesh, P(None, None, "model", None))
+    update_sharding = NamedSharding(mesh, P(None, "model", None))
+    heads = model_size
+    with jax.set_mesh(mesh):
+        cache = KvPageCache.init(PageTableSpec(4, 8, max_seqs=4), Axis("kv_head", heads), Axis("head_size", 128))
+        initial = np.full((4, 8, 2 * heads, 128), -7, dtype=np.float32)
+        cache = KvPageCache(hax.named(jax.device_put(initial, cache_sharding), cache.kv_pages.axes))
+        # The fifth token is padding: its valid destination must remain untouched.
+        info = PageBatchInfo(
+            slot_ids=hax.named(jnp.arange(4, dtype=jnp.int32), "seq"),
+            page_indices=hax.named(jnp.arange(4, dtype=jnp.int32)[:, None], ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray([1, 4, 8, 3], dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.arange(5, dtype=jnp.int32), "seq"),
+            num_seqs=jnp.asarray(4, dtype=jnp.int32),
+            new_token_dests=hax.named(jnp.asarray([0, 11, 23, 26, 31], dtype=jnp.int32), "position"),
+            page_size=8,
+        )
+        # Integer values are exactly representable in both update dtypes and the FP32 cache.
+        keys = (np.arange(5 * heads * 128).reshape(5, heads, 128) % 31).astype(np.float32)
+        values = -keys - 1
+        axes = (Axis("position", 5), Axis("kv_head", heads), Axis("head_size", 128))
+        new_k = hax.named(jax.device_put(jnp.asarray(keys, dtype=update_dtype), update_sharding), axes)
+        new_v = hax.named(jax.device_put(jnp.asarray(values, dtype=update_dtype), update_sharding), axes)
+        updated = eqx.filter_jit(lambda state, batch, k, v: state.update(batch, k, v))(cache, info, new_k, new_v)
+    expected = initial.copy()
+    for token, (page, slot) in enumerate(((0, 0), (1, 3), (2, 7), (3, 2))):
+        expected[page, slot, 0::2] = keys[token]
+        expected[page, slot, 1::2] = values[token]
+    assert updated.kv_pages.array.shape == initial.shape
+    assert updated.kv_pages.array.dtype == jnp.float32
+    assert updated.kv_pages.array.sharding == cache_sharding
+    np.testing.assert_array_equal(np.asarray(updated.kv_pages.array), expected)
+
+
+def test_snowball_four_device_decode_preserves_explicit_cache_sharding():
+    if jax.device_count() != 4:
+        pytest.skip("requires exactly four devices")
+    mesh = compact_grug_mesh()
+    cache_sharding = NamedSharding(mesh, P(None, None, "model", None))
+    with jax.set_mesh(mesh):
+        cfg = _tiny_config(
+            hidden_dim=16,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=128,
+            projection_implementation="native",
+            rms_norm_implementation="reference",
+        )
+        weight_sharding = NamedSharding(mesh, P(None, None))
+        attention = SnowballAttention(
+            w_q=jax.device_put(np.full((16, 256), 0.01, dtype=np.float32), weight_sharding),
+            w_k=jax.device_put(np.full((16, 128), 0.02, dtype=np.float32), weight_sharding),
+            w_v=jax.device_put(np.arange(16 * 128, dtype=np.float32).reshape(16, 128) / 2048, weight_sharding),
+            w_o=jax.device_put(np.full((256, 16), 0.01, dtype=np.float32), weight_sharding),
+            attn_gate=jax.device_put(np.zeros((16, 2), dtype=np.float32), weight_sharding),
+            cfg=cfg,
+        )
+        cache = KvPageCache.init(PageTableSpec(4, 8, max_seqs=4), Axis("kv_head", 1), Axis("head_size", 128))
+        cache = KvPageCache(hax.named(jax.device_put(cache.kv_pages.array, cache_sharding), cache.kv_pages.axes))
+        info = PageBatchInfo(
+            slot_ids=hax.named(jnp.arange(4, dtype=jnp.int32), "seq"),
+            page_indices=hax.named(jnp.arange(4, dtype=jnp.int32)[:, None], ("seq", "page")),
+            seq_lens=hax.named(jnp.ones(4, dtype=jnp.int32), "seq"),
+            cu_q_lens=hax.named(jnp.arange(5, dtype=jnp.int32), "seq"),
+            num_seqs=jnp.asarray(4, dtype=jnp.int32),
+            new_token_dests=hax.named(jnp.asarray([0, 8, 16, 24], dtype=jnp.int32), "position"),
+            page_size=8,
+        )
+        x = jax.device_put(
+            jnp.arange(64, dtype=jnp.float32).reshape(4, 1, 16) / 64,
+            NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, None)),
+        )
+        positions = jnp.zeros(4, dtype=jnp.int32)
+        _, keys, values = attention._project_qkv(x, disable_rope=False, position_ids=positions[:, None])
+        output, updated = eqx.filter_jit(
+            lambda attn, state, value: attn.decode(value, state, info, positions, use_long=False)
+        )(attention, cache, x)
+    expected = np.zeros((4, 8, 2, 128), dtype=np.float32)
+    expected[:, 0, 0] = np.asarray(keys)[:, 0, 0]
+    expected[:, 0, 1] = np.asarray(values)[:, 0, 0]
+    assert updated.kv_pages.array.sharding == cache_sharding
+    assert updated.kv_pages.array.shape == expected.shape
+    assert updated.kv_pages.array.dtype == jnp.float32
+    np.testing.assert_allclose(np.asarray(updated.kv_pages.array), expected, rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(updated.kv_pages.array)[:, 1:], expected[:, 1:])
+    assert output.shape == x.shape
+    assert bool(jnp.isfinite(output).all())
