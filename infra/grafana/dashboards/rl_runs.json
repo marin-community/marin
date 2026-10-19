@@ -71,6 +71,7 @@
       {
         "name": "training_type",
         "label": "Training type",
+        "description": "A run is async when any lifecycle, policy-step or rollout-call record in the selected clusters and window carries training_type=async. Every other run is sync, including a run with no stamp.",
         "type": "custom",
         "query": "sync,async",
         "multi": false,
@@ -209,6 +210,7 @@
       {
         "name": "execution",
         "label": "Execution",
+        "description": "All includes every identified execution of the selected job. Run-wide panels ignore this picker and Job.",
         "type": "query",
         "datasource": {
           "type": "yesoreyeram-infinity-datasource",
