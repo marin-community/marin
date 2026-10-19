@@ -88,7 +88,6 @@ class Trial:
     """One measured comparison: a variant at a rung against a baseline, possibly over several seeds."""
 
     id: str
-    """``t01``, ``t02``, ... in the order the experiment's trials were run; a new trial takes the next number."""
     variant: str
     rung: str
     protocol: str
