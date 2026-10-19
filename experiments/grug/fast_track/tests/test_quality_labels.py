@@ -99,6 +99,7 @@ def test_frozen_labels_fit_roundtrip_and_exclude_missing_and_audit_documents(tmp
     batch = QualityScoringBatch(
         texts=["unused"] * len(rows),
         document_ids=[row.document_id for row in rows],
+        sources=["unused"] * len(rows),
         embeddings=np.asarray([row.embedding for row in rows]),
     )
     predictions = scorer.scores(batch)

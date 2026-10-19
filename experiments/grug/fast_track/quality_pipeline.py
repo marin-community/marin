@@ -282,7 +282,10 @@ def _prepare_scoring_batch(
             if raw_row["id"] != feature_row["id"] or feature_row["raw_row_index"] != row_offset + row_index:
                 raise ValueError("prepared feature ID or row position differs from the raw prefix")
         embeddings = normalize_harrier_embeddings(np.asarray([row["embedding"] for row in feature_rows], dtype=np.int8))
-    return QualityScoringBatch([row["text"] for row in rows], [row["id"] for row in rows], embeddings), token_hashes
+    batch = QualityScoringBatch(
+        [row["text"] for row in rows], [row["id"] for row in rows], [row["source"] for row in rows], embeddings
+    )
+    return batch, token_hashes
 
 
 def _checked_scores(scorer: DocumentQualityScorer, batch: QualityScoringBatch) -> np.ndarray:
