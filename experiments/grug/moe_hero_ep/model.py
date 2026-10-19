@@ -170,7 +170,7 @@ def _flatten_tokens(x: jax.Array) -> jax.Array:
     trailing = (None,) * (x.ndim - 2)
     residual_spec = P(_BATCH_AXES, _seq_axis(mesh), *trailing)
     return shard_map(
-        lambda local: local.reshape(-1, *local.shape[2:]),
+        lambda local: rearrange(local, "b s ... -> (b s) ..."),
         mesh=mesh,
         in_specs=residual_spec,
         out_specs=P(_token_axes(mesh), *trailing),
@@ -184,7 +184,7 @@ def _unflatten_tokens(x_flat: jax.Array, like: Float[Array, "B S D"]) -> jax.Arr
     token_spec = P(_token_axes(mesh), *trailing)
     local_rows = like.shape[0] // math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
     restored = shard_map(
-        lambda local: local.reshape(local_rows, -1, *local.shape[1:]),
+        lambda local: rearrange(local, "(b s) ... -> b s ...", b=local_rows),
         mesh=mesh,
         in_specs=token_spec,
         out_specs=P(_BATCH_AXES, _seq_axis(mesh), *trailing),
