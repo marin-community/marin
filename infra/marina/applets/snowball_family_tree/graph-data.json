@@ -5049,9 +5049,109 @@
         "basis": "Hub repository creation",
         "source": "https://huggingface.co/open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12"
       }
+    },
+    {
+      "id": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "title": "Smartie .32 · mixed-task RLOO-N · step 14",
+      "short": "Smartie .32 · step 14",
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+      "parents": [
+        "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10"
+      ],
+      "org": "open-athena",
+      "algorithms": ["async RLOO-N", "truncated importance sampling"],
+      "summary": "Fourteen optimizer updates from campaign-2 DARE-TIES-02, with fresh optimizer state, LR 4e-6 and 512 prompt groups × 16 responses per update on 112 H100s (64 policy, 48 inference). The task file combines 12,123 NVIDIA tasks and 57,364 structural closure tasks, but shuffle=false and ordered rows prevent interpreting file proportions as a balanced training mix. Native development pass@1 rose from 41.21% to 50.22%; NVIDIA mean reward rose from 40.59% to 55.50%, while structural mean reward fell from 39.09% to 32.92%. This is the best surviving checkpoint; the historical best step 12 scored 50.33% but its weights were not recoverable. Inline BFCL/SWE/OT failures do not establish benchmark performance.",
+      "source": "https://huggingface.co/open-athena/Snowball-Smartie-RL-2026.10.15.32-step14/blob/75360ecbf7d217ae13643b48e11f4c935f90b7d5/README.md",
+      "flops": "FLOPs unknown · policy and rollout totals not audited",
+      "notes": "Initializer revision 153f5369f69a0c0a7203779099ec94e98c66748f; original weight export revision 6783e9743478bd25a9ce03ab3460e84d6a9814b0. Native validation is a repeatedly inspected 910-task development panel; pass@1 can accept partial-credit outcomes. Training inputs and raw traces remain private. The public W&B archive contains all 22 recorded metric rows, steps 0–21, and native evaluation through step 20. Checkpoint step 14 excludes subsequent updates in the same run. No serving-equivalence claim.",
+      "evidence": [
+        {"url": "https://wandb.ai/dogml/snowball-smartie-rl/runs/kg34pgjg", "text": "Training run and native validation history"},
+        {"url": "https://gist.github.com/penfever/40f0f81dd4fba022697e4fa5aeabb91d/b79646603c23bd466969ff498661a0e313b1024a", "text": "Exact launch and resolved configurations plus submitted Marin patch"},
+        {"url": "https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Artifacts/tree/20a22f8a7bdcbca7edf38279b7c24d22826693a3/wandb-full-20261019", "text": "Public unsampled W&B metrics, configuration, summary and hash manifest"}
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint; best surviving native-validation checkpoint",
+      "stage": "RL",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {"date": "2026-10-15", "basis": "Run identity date; intermediate checkpoint exported later", "source": "https://huggingface.co/open-athena/Snowball-Smartie-RL-2026.10.15.32-step14/blob/75360ecbf7d217ae13643b48e11f4c935f90b7d5/README.md"}
+    },
+    {
+      "id": "smartie-2026.10.17.45-step2",
+      "title": "Smartie .45 · six-source continuation · step 2",
+      "short": "Smartie .45 · step 2",
+      "model": null,
+      "parents": ["open-athena/Snowball-Smartie-RL-2026.10.15.32-step14"],
+      "org": "open-athena",
+      "algorithms": ["async RLOO-N", "truncated importance sampling"],
+      "summary": "The continuation campaign starts fresh from the public .32 step-14 weights, with a new optimizer and a reset step counter. Its 73,934-row mixture combines structural closure, competitive coding, SWE-Smith, CalibForge, TaskForge and Task-Trove sources. This internal checkpoint records the first two continuation updates and supplies .47's resume state. Run .45 stopped at an unbounded evaluation drain; this node does not represent another public model release.",
+      "source": "https://wandb.ai/dogml/snowball-smartie-rl/runs/dt45j7a9",
+      "flops": "FLOPs unknown · continuation token accounting incomplete",
+      "notes": "The two-update counter excludes the initializer's 14 updates. shuffle=true; last-10 checkpoint retention. The exact source configuration records resume_mode=none and the .32 step-14 initializer. Later runs resume this checkpoint with optimizer and step state.",
+      "evidence": [
+        {"url": "https://github.com/marin-community/marin/blob/2aa96b638e880f72b0f2a9c4f5bb4ce94bd60dcd/experiments/post_training/smartie/configs/2026.10.17.45.yaml", "text": "Pinned configuration: .32 initializer and fresh optimizer"},
+        {"url": "https://github.com/marin-community/marin/blob/2aa96b638e880f72b0f2a9c4f5bb4ce94bd60dcd/experiments/post_training/smartie/configs/2026.10.17.47.yaml", "text": "Successor configuration explicitly resumes .45 global_step_2"}
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "internal checkpoint; run stopped for evaluation-drain repair",
+      "stage": "RL",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {"date": "2026-10-17", "basis": "Run identity date; internal checkpoint, no public weight export", "source": "https://wandb.ai/dogml/snowball-smartie-rl/runs/dt45j7a9"}
+    },
+    {
+      "id": "smartie-2026.10.17.47-step8",
+      "title": "Smartie .47 · overlapping-eval continuation · step 8",
+      "short": "Smartie .47 · step 8",
+      "model": null,
+      "parents": ["smartie-2026.10.17.45-step2"],
+      "org": "open-athena",
+      "algorithms": ["async RLOO-N", "truncated importance sampling"],
+      "summary": "Run .47 resumes .45 global_step_2 with optimizer and step state intact and adds six updates to reach continuation step 8. Evaluation starts while unfinished training requests drain, with a deadline to discard unfinished groups. This internal checkpoint later supplies .49's resume state. Run .47 stopped on cancellation cleanup during its step-8 evaluation boundary; that infrastructure failure does not establish model collapse.",
+      "source": "https://wandb.ai/dogml/snowball-smartie-rl/runs/ai7xab9a",
+      "flops": "FLOPs unknown · six additional continuation updates",
+      "notes": "Step 8 is cumulative within the continuation chain and excludes .32's 14 updates. No public weight export is linked for this intermediate checkpoint. .49 resumes .47 step 8 directly; the unsuccessful .48 retry does not supply additional updates to this lineage.",
+      "evidence": [
+        {"url": "https://github.com/marin-community/marin/blob/2aa96b638e880f72b0f2a9c4f5bb4ce94bd60dcd/experiments/post_training/smartie/configs/2026.10.17.47.yaml", "text": "Pinned resume path: .45 global_step_2"},
+        {"url": "https://huggingface.co/open-athena/Snowball-Smartie-RL-2026.10.17.49-step12/blob/b159204442ef156bd06303afcc8b7e07385a8216/README.md", "text": "Published descendant identifies .47 global_step_8 as its direct resume checkpoint"}
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "internal checkpoint; run failed on cancellation cleanup",
+      "stage": "RL",
+      "lane": "10T",
+      "edge_kind": "retained checkpoint",
+      "timeline": {"date": "2026-10-17", "basis": "Run identity date; internal checkpoint, no public weight export", "source": "https://wandb.ai/dogml/snowball-smartie-rl/runs/ai7xab9a"}
+    },
+    {
+      "id": "open-athena/Snowball-Smartie-RL-2026.10.17.49-step12",
+      "title": "Smartie .49 · six-source continuation · step 12",
+      "short": "Smartie .49 · step 12",
+      "model": "open-athena/Snowball-Smartie-RL-2026.10.17.49-step12",
+      "parents": ["smartie-2026.10.17.47-step8"],
+      "org": "open-athena",
+      "algorithms": ["async RLOO-N", "truncated importance sampling"],
+      "summary": "This public export is the user-selected step-12 checkpoint of the six-source continuation chain. Run .49 resumes .47 step 8 with optimizer state intact and adds four updates before this checkpoint; the 12-update counter includes .45/.47 and excludes the 14 updates that produced .32's initializer. At step 12 all 204 Task-Trove validation attempts failed in preparation without verifier grades. Their zeros are infrastructure failures, so this export is not claimed as the best checkpoint under complete evaluation. The run was subsequently stopped for agent-dependency and task-preparation repairs.",
+      "source": "https://huggingface.co/open-athena/Snowball-Smartie-RL-2026.10.17.49-step12/blob/b159204442ef156bd06303afcc8b7e07385a8216/README.md",
+      "flops": "FLOPs unknown · four additional updates after .47 step 8",
+      "notes": "HF weight revision b159204442ef156bd06303afcc8b7e07385a8216. Runtime/converter 89d62d34f69f8764b82c6edf8ba7067a058da130. Conversion used 64 H100s and performed no training updates; it is not an inference hardware requirement. Private training data and incomplete benchmark coverage limit reproduction and comparison. No post-export inference-equivalence test is claimed.",
+      "evidence": [
+        {"url": "https://wandb.ai/dogml/snowball-smartie-rl/runs/vhcm56j0", "text": "Training run and recorded validation metrics"},
+        {"url": "https://github.com/marin-community/marin/blob/2aa96b638e880f72b0f2a9c4f5bb4ce94bd60dcd/experiments/post_training/smartie/configs/2026.10.17.49.yaml", "text": "Pinned configuration explicitly resumes .47 global_step_8"},
+        {"url": "https://github.com/marin-community/marin/pull/10190", "text": "Campaign implementation and source configurations"}
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint; user-selected export with incomplete evaluation",
+      "stage": "RL",
+      "lane": "10T",
+      "edge_kind": "retained checkpoint",
+      "timeline": {"date": "2026-10-17", "basis": "Run identity date; intermediate checkpoint exported later", "source": "https://huggingface.co/open-athena/Snowball-Smartie-RL-2026.10.17.49-step12/blob/b159204442ef156bd06303afcc8b7e07385a8216/README.md"}
     }
   ],
   "unplaced": [],
-  "snapshot": "2026-10-12",
+  "snapshot": "2026-10-19",
   "methodology": "Source-estimated analytic FLOPs or explicitly scoped 6ND parameter proxies; unknown RL totals remain unknown."
 }

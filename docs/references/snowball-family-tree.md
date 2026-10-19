@@ -1,9 +1,9 @@
 # Snowball model family tree
 
 [Open the Snowball model family tree](https://public.applets.marina.oa.dev/a/d3b5517a-c119-4fd9-999d-362183422bf3/)
-to explore 126 model and run nodes across the 2.7T, 5.7T and 10T cooldown families
+to explore 130 model and run nodes across the 2.7T, 5.7T and 10T cooldown families
 without signing in. This is a curated snapshot of the evidence available on
-October 12, 2026. The stable URL opens the current applet revision.
+October 19, 2026. The stable URL opens the current applet revision.
 
 The lineage map opens with the whole tree visible and its shared pretrain centered.
 Click a node to expand its summary, algorithms, compute estimate and evidence.
@@ -37,6 +37,18 @@ from every pinned parent), the [BFCL recovery negative result](https://github.co
 and the [protocol FTPO repair](https://github.com/marin-community/marin/issues/10043).
 The campaign 3 repository originally inherited the campaign 2 model card and
 provenance byte-for-byte; both were corrected on the Hub on October 12, 2026.
+
+The October 19 update adds the Smartie RL branch from campaign-2 DARE-TIES-02:
+[`.32` step 14](https://huggingface.co/open-athena/Snowball-Smartie-RL-2026.10.15.32-step14#provenance-report),
+the internal `.45` step-2 and `.47` step-8 resume checkpoints, and the public
+[`.49` step 12](https://huggingface.co/open-athena/Snowball-Smartie-RL-2026.10.17.49-step12).
+The first run starts with a fresh optimizer; the continuation starts another
+fresh optimizer from `.32` step 14, then retains optimizer and step state across
+`.45`, `.47` and `.49`. The continuation counter excludes the initializer's
+14 updates. `.32` step 14 is the best surviving native-development checkpoint;
+`.49` step 12 is a user-selected export with incomplete evaluation, not a
+complete-evaluation winner. Public model cards, pinned source configurations,
+W&B links and the complete recorded `.32` W&B archive support these nodes.
 
 ## Maintain the applet
 
