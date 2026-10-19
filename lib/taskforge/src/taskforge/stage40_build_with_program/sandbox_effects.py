@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The sandbox effects a build step may have: a prepared machine, a graded candidate, a published image.
+"""The effects a build step may have: a prepared machine, a graded candidate, a calibrated grader, a published image.
 
 Each function uses the host through ``RLEnvBuildServices``. The machine factories are wrapped
 with ``infrastructure.host_checked_factories`` first, so a host fault raises
@@ -15,6 +15,11 @@ every turn, and grading reads none, so the model serving those turns makes up id
 request's prefix by one token. A registered task session would still need such a model: the engine
 builds the task's ``TaskGrader`` inside ``run``, hands it to the session through
 ``TaskSessionContext``, and requests at least one model turn before the session grades.
+
+A decision-model grader (``spec.decision``) is graded as validation grades it: the engine runs the candidate
+with the grader swapped to ``NoGrader``, and the host's decision client (``RLEnvBuildServices.decision``)
+grades the final conversation (``decision.run_decision_trial``). ``calibrate_decision_grader`` reads the
+reference and its equivalent variants that way and sets the grader's bar.
 
 ``build_machine`` prepares a machine through RolloutEngine's own ``_prepare_machine``, so files, setup
 commands, the execution user and the startup deadline behave as in a task attempt. RolloutEngine
@@ -40,13 +45,20 @@ from rolloutengine.machines import _prepare_machine
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.machine import Machine
 from taskcompendium.grader import GraderPackage
-from taskcompendium.grading_result import GradeResult, GradingFailure
+from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerFormat, AnswerType, EnvironmentRequirements, Source, TaskResource
 
 from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, grading_environment
 from taskforge.sandbox.images import BUILD_LIMITS, DockerBuild, check_build_limits
 from taskforge.spec import draft
 from taskforge.spec.controls import candidate_turns
+from taskforge.spec.decision import (
+    REFERENCE_CONTROL,
+    DecisionClient,
+    DecisionGrader,
+    known_correct_check,
+    run_decision_trial,
+)
 from taskforge.spec.draft import MachineSettings, machine_runtime
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build_with_program.infrastructure import (
@@ -55,7 +67,8 @@ from taskforge.stage40_build_with_program.infrastructure import (
     host_checked_factories,
     infrastructure_failure,
 )
-from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
+from taskforge.stage40_build_with_program.outputs import GradedCandidate
+from taskforge.stage40_build_with_program.sdk import ANSWER_FORMAT, GRADER_TIMEOUT, graded_candidate
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import SDK_VERSION
 
@@ -80,6 +93,8 @@ GRADE_CANDIDATE_SOURCE = "taskforge.grade_candidate"
 """``Source.dataset`` of the provisional task ``grade_candidate`` grades against."""
 IMAGE_REPOSITORY_PREFIX = "taskforge-tasks"
 """Registry repository under which ``publish_image`` pushes a workpiece's task image."""
+CALIBRATION_INSTRUCTION = "(instruction)"
+"""The instruction of the provisional task ``calibrate_decision_grader`` reads its candidates against."""
 
 
 @asynccontextmanager
@@ -134,7 +149,7 @@ class _CandidateModel:
 async def grade_candidate(
     context: RLEnvBuildContext,
     requirements: EnvironmentRequirements | None,
-    grader: GraderPackage,
+    grader: GraderPackage | DecisionGrader,
     answer_type: AnswerType,
     answer_format: AnswerFormat,
     instruction: str,
@@ -152,7 +167,9 @@ async def grade_candidate(
     ``None``), ``grader`` with ``answer_type`` and ``answer_format``, and ``output_paths``. The
     candidate writes each ``workspace`` file with a shell call, paths relative to the machine root,
     then replies with ``reply`` in the form ``answer_format`` extracts. A grader with an environment
-    runs in its own verifier machine. ``settings`` applies to both machines. No model is called.
+    runs in its own verifier machine. ``settings`` applies to both machines. No model is called, except the
+    host's decision model for a ``DecisionGrader``: the candidate runs with the grader swapped to
+    ``NoGrader`` and the host grades its final conversation, as a validation trial is graded.
 
     A grader step calls this on its reference answer, on the empty answer and on wrong answers it
     invents, and keeps every candidate in ``Grader.prototyped``.
@@ -171,9 +188,11 @@ async def grade_candidate(
         BuildFailure: ``spec.draft.assemble`` or ``spec.draft.lower`` rejects the provisional task,
             including an ``answer_format`` that cannot carry ``answer_type`` to ``grader``, or
             ``workspace`` is given without a task machine.
-        BuildInfrastructureFailure: the host failed to create or drive a grading machine, or a machine
-            start or the grading outlasted its deadline (``SANDBOX_DEADLINE``).
+        BuildInfrastructureFailure: the host failed to create or drive a grading machine, a machine
+            start or the grading outlasted its deadline (``SANDBOX_DEADLINE``), or the grader is a
+            ``DecisionGrader`` and the host has no decision client (``NO_DECISION_MODEL``).
     """
+    client = _decision_client(context) if isinstance(grader, DecisionGrader) else None
     if workspace and requirements is None:
         raise BuildFailure("grade_candidate: workspace files need a task machine")
     try:
@@ -218,16 +237,82 @@ async def grade_candidate(
     except (ValueError, NotImplementedError) as error:
         raise BuildFailure(f"grade_candidate: {error}") from error
     engine = RolloutEngine(_CandidateModel(turns), factories)
-    grade = await _graded(engine, lowered)
+    grade = await _graded(engine, lowered, client)
     if grade.failure is GradingFailure.TIMEOUT:
-        grade = await _graded(engine, lowered)
+        grade = await _graded(engine, lowered, client)
     return grade
 
 
-async def _graded(engine: RolloutEngine, lowered: LoweredTaskSpec) -> GradeResult:
-    """One rollout of ``lowered`` on fresh machines; a host failure or a sandbox deadline raises as infrastructure."""
+@dataclass(frozen=True)
+class DecisionCalibration:
+    """``calibrate_decision_grader``'s result: the grader, why it is refused (``None`` when it is not), the reads.
+
+    Attributes:
+        grader: The calibrated grader, or the grader as given when it is refused.
+        problem: Why the known-correct candidates refuse it (``decision.known_correct_check``), or ``None``.
+        candidates: Every candidate read, in order (the reference, the variants, then the empty answer when
+            the grader is accepted), for ``Grader.prototyped``.
+    """
+
+    grader: DecisionGrader
+    problem: str | None
+    candidates: tuple[GradedCandidate, ...]
+
+
+async def calibrate_decision_grader(
+    context: RLEnvBuildContext, grader: DecisionGrader, variants: Sequence[str]
+) -> DecisionCalibration:
+    """Read ``grader``'s reference and the equivalent ``variants`` as validation would, and set the bar.
+
+    Each candidate is graded by ``grade_candidate`` on a provisional task without a machine, since the
+    decision model reads the final reply only. ``decision.known_correct_check`` then refuses the grader or
+    gives its acceptance level, which is stored with the reads in the returned grader's ``calibration``.
+
+    Raises:
+        BuildInfrastructureFailure: the host has no decision client (``NO_DECISION_MODEL``).
+    """
+    replies = {REFERENCE_CONTROL: grader.reference, **{f"variant:{i}": v for i, v in enumerate(variants, 1)}}
+    levels: dict[str, float] = {}
+    candidates: list[GradedCandidate] = []
+    for name, reply in replies.items():
+        grade = await _read(context, grader, reply)
+        candidates.append(graded_candidate(reply, (), grade))
+        levels[name] = _level(grade)
+    check = known_correct_check(levels)
+    if check.problem is not None:
+        return DecisionCalibration(grader, check.problem, tuple(candidates))
+    calibrated = DecisionGrader.model_validate(
+        {**grader.model_dump(), "acceptance_level": check.acceptance_level, "calibration": levels}
+    )
+    candidates.append(graded_candidate("", (), await _read(context, calibrated, "")))
+    return DecisionCalibration(calibrated, None, tuple(candidates))
+
+
+async def _read(context: RLEnvBuildContext, grader: DecisionGrader, reply: str) -> GradeResult:
+    return await grade_candidate(context, None, grader, AnswerType.TEXT, ANSWER_FORMAT, CALIBRATION_INSTRUCTION, reply)
+
+
+def _level(grade: GradeResult) -> float:
+    """The level a decision grade read; a candidate it could not read (an empty reply) reads "missing"."""
+    if grade.status is not Outcome.GRADED or grade.detail is None:
+        return 0.0
+    return float(grade.detail["level"])
+
+
+def _decision_client(context: RLEnvBuildContext) -> DecisionClient:
+    client = context.services.decision
+    if client is None:
+        raise BuildInfrastructureFailure(
+            InfrastructureCause.NO_DECISION_MODEL, "this host has no decision model to grade a decision-model grader"
+        )
+    return client
+
+
+async def _graded(engine: RolloutEngine, lowered: LoweredTaskSpec, decision: DecisionClient | None) -> GradeResult:
+    """One rollout of ``lowered`` on fresh machines, host-graded for a decision grader; a host failure or a
+    sandbox deadline raises as infrastructure."""
     try:
-        rollout = await engine.run(lowered)
+        rollout = await (engine.run(lowered) if decision is None else run_decision_trial(engine, lowered, decision))
     except RolloutInterrupted as error:
         failure = infrastructure_failure(error) or deadline_failure(error)
         if failure is None:

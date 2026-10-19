@@ -55,6 +55,7 @@ GRADERS = {
         KEYWORD_RUBRIC, {}, environment=draft.grader_environment(None), answer_path=draft.ANSWER_PATH, timeout=60.0
     ),
     Verification.LLM_AS_JUDGE: lambda: draft.judge_grader(RUBRIC, REFERENCE),
+    Verification.DECISION_MODEL: lambda: draft.decision_grader(RUBRIC, REFERENCE),
 }
 
 
@@ -69,6 +70,9 @@ def test_the_built_kind_is_read_off_the_grader(kind):
         (Verification.ANSWER_IN_BOX, Verification.CODE, True),
         (Verification.LLM_AS_JUDGE, Verification.CODE, True),
         (Verification.CODE, Verification.LLM_AS_JUDGE, True),
+        (Verification.DECISION_MODEL, Verification.LLM_AS_JUDGE, True),
+        (Verification.LLM_AS_JUDGE, Verification.DECISION_MODEL, True),
+        (Verification.DECISION_MODEL, Verification.DECISION_MODEL, False),
         (Verification.LLM_AS_JUDGE, Verification.LLM_AS_JUDGE, False),
         (Verification.CODE, Verification.CODE, False),
     ],
@@ -85,6 +89,7 @@ def test_a_composite_cannot_be_built_until_a_composite_grader_exists():
     problem = unbuildable_problem(Verification.COMPOSITE)
     assert problem is not None and "no composite grader type exists" in problem
     assert unbuildable_problem(Verification.CODE) is None
+    assert unbuildable_problem(Verification.DECISION_MODEL) is None
 
 
 def test_the_judge_grader_names_the_default_judge_and_carries_the_rubric():

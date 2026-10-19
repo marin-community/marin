@@ -98,7 +98,7 @@ from taskforge.stage40_build_with_program.infrastructure import HOST_REJECTIONS,
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
 from taskforge.stage40_build_with_program.run import TaskDraft, step_output
 from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate
-from taskforge.stage40_build_with_program.sdk import grade_diagnostics, grading_language
+from taskforge.stage40_build_with_program.sdk import grade_diagnostics, grader_name, grading_language
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import SDK_VERSION
 from taskforge.stage40_build_with_program.template import standard
@@ -837,7 +837,7 @@ class AuthorSession:
         task = draft.task
         return "\n".join(
             [
-                f"grader: {type(grader.package.grader).__name__}",
+                f"grader: {grader_name(grader.package)}",
                 f"reference: {_prototyped(reference)}",
                 f"empty answer: {empty.status} reward {empty.reward} (graded by the library; ceiling "
                 f"{grader.rejection_ceiling})",

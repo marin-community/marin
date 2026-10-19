@@ -145,6 +145,7 @@ def settings(local: MachineFactory | None, container: MachineFactory | None = No
         tool_turn_timeout=20,
         model_turn_timeout=30,
         cleanup_timeout=10,
+        decision=None,
     )
 
 

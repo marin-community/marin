@@ -60,6 +60,7 @@ from verifyit.spec import JudgeSpec, Spec, mode_of
 
 from taskforge.sandbox.factories import MachineHost, container_backend, grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
+from taskforge.spec.decision import SOLVER_TURN_STATE, DecisionGrader, StateSource, task_package
 from taskforge.spec.judge import (
     JUDGE_MODELS,
     JUDGE_QUESTION,
@@ -426,12 +427,29 @@ def judge_grader(rubric: Rubric, reference: str) -> GraderPackage:
     return verifyit_package(judge, files, environment=grader_environment(None))
 
 
+def decision_grader(
+    rubric: Rubric, reference: str, *, state: Mapping[str, StateSource] = SOLVER_TURN_STATE
+) -> DecisionGrader:
+    """A decision-model grader: a decision model compares the solver's answer with ``reference`` against ``rubric``.
+
+    ``reference`` is the gold answer, which validation also replays as the reference control. ``state`` is
+    the decision model's state template; the default passes the deliverable, the rubric, the reference and
+    the visible output of the solver's final turn, and a program changes it only deliberately. The grader has
+    no judge strength and names no model: the host's decision client answers. It is uncalibrated (the
+    "partially matches" bar) until ``sandbox_effects.calibrate_decision_grader`` sets its bar.
+
+    Raises:
+        pydantic.ValidationError: ``reference`` is empty, or ``state`` leaves out the solver's output.
+    """
+    return DecisionGrader(rubric=rubric, reference=reference, state=dict(state), acceptance_level=None, calibration={})
+
+
 def assemble(
     task_id: str,
     instruction: str,
     answer_type: AnswerType,
     answer_format: AnswerFormat,
-    grader: GraderPackage,
+    grader: GraderPackage | DecisionGrader,
     source: Source,
     *,
     environment: EnvironmentRequirements | None,
@@ -445,10 +463,11 @@ def assemble(
 
     ``answer_format`` says how the model is asked for its final answer and how the answer is read
     from its conversation; a file or workspace-state task carries one too, which grading never
-    reads. ``environment`` is the task machine (``requirements(...)``), or ``NO_MACHINE`` or ``None``
-    for a task without one. ``files`` are the agent-visible files installed relative to the machine
-    root; the grader's files stay private, so none of them may have the same bytes as an
-    agent-visible file.
+    reads. ``grader`` is a package, or a ``DecisionGrader``, which the TaskSpec carries in the form
+    ``decision.task_package`` gives it until TaskSpec has a decision grader type. ``environment`` is the
+    task machine (``requirements(...)``), or ``NO_MACHINE`` or ``None`` for a task without one. ``files``
+    are the agent-visible files installed relative to the machine root; the grader's files stay private,
+    so none of them may have the same bytes as an agent-visible file.
 
     Raises:
         ValueError: TaskSpec validation failed, files or output paths were given without a task
@@ -459,6 +478,8 @@ def assemble(
     """
     if environment == NO_MACHINE:
         environment = None
+    if isinstance(grader, DecisionGrader):
+        grader = task_package(grader)
     if environment is None and (files or output_paths):
         raise ValueError("Files and output paths require a task machine")
     if environment is not None and SHELL_CAPABILITY not in environment.capabilities:

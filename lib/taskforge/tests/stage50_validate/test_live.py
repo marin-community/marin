@@ -54,6 +54,7 @@ def settings(factories: dict[str, MachineFactory]) -> EngineSettings:
         tool_turn_timeout=120,
         model_turn_timeout=600,
         cleanup_timeout=60,
+        decision=None,
     )
 
 
