@@ -6,8 +6,9 @@
     uv run scripts/build_image_job.py --context DIR --repository capability-infra/taskforge-smoke
 
 The jobs go through the named cluster's controller (``--cluster``, default ``marin``) and run on
-``--target-cluster``; the builder's module docstring describes the build and push jobs and where
-the registry credential travels.
+``--target-cluster``. The script reads the registry credential from Secret Manager with this
+laptop's ``gcloud`` and hands it to the builder in process; the builder's module docstring
+describes the build and push jobs and where the credential travels.
 """
 
 import argparse
@@ -16,7 +17,12 @@ import json
 import logging
 from pathlib import Path
 
-from taskforge.sandbox.image_builder import TARGET_CLUSTER, IrisImageBuilder
+from taskforge.sandbox.image_builder import (
+    TARGET_CLUSTER,
+    IrisImageBuilder,
+    RegistryCredential,
+    registry_credential_json,
+)
 from taskforge.sandbox.images import BUILD_LIMITS, docker_build_from_directory
 
 
@@ -30,7 +36,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)  # blob redirects carry presigned object-store URLs
     build = docker_build_from_directory(args.context, BUILD_LIMITS)
-    builder = IrisImageBuilder(cluster=args.cluster, target_cluster=args.target_cluster)
+    credential = RegistryCredential.from_json(registry_credential_json())
+    builder = IrisImageBuilder(cluster=args.cluster, target_cluster=args.target_cluster, credential=credential)
     published = asyncio.run(builder.publish_with_timings(build, args.repository))
     print(
         json.dumps(

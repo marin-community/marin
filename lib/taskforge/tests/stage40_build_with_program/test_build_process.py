@@ -5,9 +5,8 @@
 
 import asyncio
 import json
-import shutil
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -16,7 +15,7 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.glm_client import Pool
 from taskforge.sandbox.factories import MachineHost
-from taskforge.sandbox.image_builder import IrisImageBuilder
+from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
 from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.build_process import (
     LOG_FILE,
@@ -44,6 +43,8 @@ from tests.stage40_build_with_program.conftest import WORKPIECE, LIMITS, SAMPLIN
 TOKEN_ENV = "TASKFORGE_TEST_GLM_TOKEN"
 CONTROLLER_URL = "http://controller.example:10000"
 TOKEN = "child-token"
+REGISTRY_ENV = "TASKFORGE_TEST_REGISTRY_CREDENTIAL"
+CREDENTIAL = RegistryCredential(registry="registry.example", user="publisher", password="registry-password")
 WALL_TIMEOUT = 50.0
 """Long enough for the child to start and build; the tests expecting a kill set their own."""
 SPIN_TIMEOUT = 8.0
@@ -95,6 +96,7 @@ def make_request(tmp_path, proposal, fake_glm, fast_provider):
                 reasoning_replay=ReasoningReplay.KEEP,
                 agent_limits=LIMITS,
                 image_cluster=None,
+                registry_credential_env=None,
             ),
         )
 
@@ -104,7 +106,11 @@ def make_request(tmp_path, proposal, fake_glm, fast_provider):
 def on_iris(request: BuildRequest, image_cluster: str | None) -> BuildRequest:
     """``request`` for a child in an Iris task, publishing images on ``image_cluster`` when it is set."""
     services = replace(
-        request.services, host=MachineHost.IRIS, controller_url=CONTROLLER_URL, image_cluster=image_cluster
+        request.services,
+        host=MachineHost.IRIS,
+        controller_url=CONTROLLER_URL,
+        image_cluster=image_cluster,
+        registry_credential_env=None if image_cluster is None else REGISTRY_ENV,
     )
     return replace(request, services=services)
 
@@ -231,21 +237,33 @@ def test_requests_and_results_round_trip_through_json(make_request, image_cluste
     assert [RESULT.validate_json(RESULT.dump_json(result)) for result in results] == list(results)
 
 
-def test_the_child_builds_images_only_with_an_image_cluster(make_request):
+def test_the_child_builds_images_with_the_credential_its_environment_holds_and_no_gcloud(make_request, monkeypatch):
+    monkeypatch.setenv(REGISTRY_ENV, json.dumps(asdict(CREDENTIAL)))
+    monkeypatch.setenv("PATH", "")
+
     builder = image_builder(on_iris(make_request(PROGRAM), "cw-us-east-02a").services)
 
     assert isinstance(builder, IrisImageBuilder)
-    assert (builder.controller_url, builder.target_cluster) == (CONTROLLER_URL, "cw-us-east-02a")
+    assert (builder.controller_url, builder.target_cluster, builder.credential) == (
+        CONTROLLER_URL,
+        "cw-us-east-02a",
+        CREDENTIAL,
+    )
     assert image_builder(make_request(PROGRAM).services) is None
     with pytest.raises(ValueError, match="controller URL"):
-        image_builder(replace(make_request(PROGRAM).services, image_cluster="cw-us-east-02a"))
+        image_builder(
+            replace(make_request(PROGRAM).services, image_cluster="cw-us-east-02a", registry_credential_env=REGISTRY_ENV)
+        )
 
 
-def test_the_child_builds_images_only_with_gcloud_on_its_path(make_request, monkeypatch):
-    config = on_iris(make_request(PLAIN_PROGRAM), "cw-us-east-02a").services
-    monkeypatch.setattr(shutil, "which", lambda name: None)
-    with pytest.raises(ValueError, match="gcloud"):
+def test_an_image_cluster_without_a_readable_credential_fails_before_any_build(make_request, monkeypatch):
+    config = on_iris(make_request(PROGRAM), "cw-us-east-02a").services
+    monkeypatch.delenv(REGISTRY_ENV, raising=False)
+
+    with pytest.raises(ValueError, match=f"the build reads a secret from {REGISTRY_ENV}, which is not set"):
         image_builder(config)
-    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/gcloud")
-    assert image_builder(config) is not None
-    assert image_builder(replace(config, image_cluster=None)) is None
+    with pytest.raises(ValueError, match="registry_credential_env"):
+        image_builder(replace(config, registry_credential_env=None))
+    monkeypatch.setenv(REGISTRY_ENV, json.dumps({"registry": "registry.example", "user": "publisher"}))
+    with pytest.raises(ValueError, match="not a JSON object of strings"):
+        image_builder(config)

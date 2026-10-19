@@ -13,9 +13,10 @@ Everything a step uses is a network or file service already: the GLM router over
 controller for sandboxes, the step store on S3 or local disk, and the JSONL ledger. The child
 therefore receives no objects, only a ``BuildRequest`` written as JSON to
 ``<round_dir>/build-request.json``, and constructs its own model client and ``RLEnvBuildServices``
-from it. Secrets stay out of that file: ``BuildModelConfig.token_env`` and
-``BuildServiceConfig.parallel_key_env`` name the variables of the inherited environment that hold
-the GLM token and the Parallel key. The child calls ``run_build``, which writes the draft under
+from it. Secrets stay out of that file: ``BuildModelConfig.token_env``,
+``BuildServiceConfig.parallel_key_env`` and ``BuildServiceConfig.registry_credential_env`` name the
+variables of the inherited environment that hold the GLM token, the Parallel key and the registry
+credential. The child calls ``run_build``, which writes the draft under
 ``round_dir`` as it does in process, writes a ``BuildResult`` to ``<round_dir>/build-result.json``
 and exits 0. Its log goes to ``<round_dir>/build-process.log``.
 
@@ -37,15 +38,17 @@ message, followed by the child's traceback. A child that exits without a result 
 The child calls the model at the fixed ``BuildModelConfig.base_url``. A driver behind an Iris relay
 resolves the relay's endpoint for each request, so every build starts wherever the relay is now.
 With ``BuildServiceConfig.image_cluster`` set, the child publishes images with an
-``IrisImageBuilder`` that submits its jobs to ``controller_url`` and reads the registry credential
-from Secret Manager itself, at each publish. Without it, as on a laptop, ``RLEnvBuildServices.images``
-is ``None`` and a program that publishes an image fails with ``NO_IMAGE_BUILDER``.
+``IrisImageBuilder`` that submits its jobs to ``controller_url`` and pushes with the credential it
+parses from ``registry_credential_env`` when it starts. The child reads no secret store, so the host
+needs neither ``gcloud`` nor Google credentials; whoever launches the host's job reads the secret
+with ``image_builder.registry_credential_json`` at submit time and puts the JSON in that variable.
+Without an image cluster, as on a laptop, ``RLEnvBuildServices.images`` is ``None`` and a program
+that publishes an image fails with ``NO_IMAGE_BUILDER``.
 """
 
 import asyncio
 import logging
 import os
-import shutil
 import sys
 import traceback
 from collections.abc import AsyncIterator
@@ -68,7 +71,7 @@ from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.web import web_tools
 from taskforge.sandbox.factories import MachineHost, machine_factories
-from taskforge.sandbox.image_builder import IrisImageBuilder
+from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure, ExpiredClock
@@ -117,6 +120,11 @@ class BuildServiceConfig:
         image_cluster: The Iris cluster the image builder's build and push jobs run on, submitted
             through ``controller_url``, or ``None`` for a build without an image builder. The
             registry is the credential's; ``sandbox_effects.image_repository`` names the repository.
+        registry_credential_env: The environment variable holding the registry credential's JSON
+            (``registry``, ``user``, ``password``), required with ``image_cluster``. The host's
+            launcher reads it from Secret Manager with ``image_builder.registry_credential_json``
+            at submit time and sets it, conventionally as ``image_builder.REGISTRY_CREDENTIAL_ENV``;
+            the host itself never reads Secret Manager.
     """
 
     host: MachineHost
@@ -126,6 +134,7 @@ class BuildServiceConfig:
     reasoning_replay: ReasoningReplay
     agent_limits: AgentLimits
     image_cluster: str | None
+    registry_credential_env: str | None
 
 
 @dataclass(frozen=True)
@@ -274,14 +283,17 @@ def image_builder(config: BuildServiceConfig) -> IrisImageBuilder | None:
     """The child's image builder, or ``None`` when ``config`` names no image cluster.
 
     Raises:
-        ValueError: ``config`` names an image cluster but no controller URL, or ``gcloud``, which the
-            publish path reads the registry credential with, is not on this host's PATH.
+        ValueError: ``config`` names an image cluster but no controller URL or no credential
+            variable, or the variable is unset or does not hold a registry credential.
     """
     if config.image_cluster is None:
         return None
-    if shutil.which("gcloud") is None:
-        raise ValueError("the image builder reads the registry credential with gcloud, which is not on PATH")
-    return IrisImageBuilder(controller_url=config.controller_url, target_cluster=config.image_cluster)
+    if config.registry_credential_env is None:
+        raise ValueError("an image cluster needs registry_credential_env, the variable holding the registry credential")
+    credential = RegistryCredential.from_json(_secret(config.registry_credential_env))
+    return IrisImageBuilder(
+        controller_url=config.controller_url, target_cluster=config.image_cluster, credential=credential
+    )
 
 
 @asynccontextmanager

@@ -28,12 +28,25 @@ never shares a container with the model-authored Dockerfile. The build process
    digest resolves to the same bytes and the config says linux/amd64, and returns the
    digest-pinned reference (``registry/repository@sha256:...``).
 
-The submitter reads the credential from Secret Manager (``registry_credential``) in each publish,
-so it never enters a request file or a builder's fields. The registry takes writes with Basic auth
-only (``WWW-Authenticate: Basic realm="envgen"``), so there is no short-lived scoped token to hand
-the push job instead. Exposure that remains: the push job's pod spec carries the credential
-(cluster operators can read it), and every CoreWeave task pod carries the cluster's object-store
-keys (``task_env``), which the build's RUN steps can read.
+The builder takes the credential at construction and reads no secret store itself, so it runs on
+a host without ``gcloud`` or Google credentials, such as a coordinator in an Iris task. The
+credential is the Secret Manager secret ``SECRET_NAME``, a JSON object with ``registry``, ``user``
+and ``password``. ``registry_credential_json`` reads it with ``gcloud`` and is for laptops only:
+``scripts/build_image_job.py`` parses its result in process, and whoever launches a coordinator
+job reads it at submit time and passes the JSON text in the job's environment, conventionally as
+``REGISTRY_CREDENTIAL_ENV``, from which ``build_process`` constructs the builder. That name holds
+the word "credential", so Iris redacts its value from job descriptions.
+
+Iris copies a parent task's explicit environment into every job the task submits, so a builder in
+a coordinator task would hand that variable, with the coordinator's other secrets, to the build
+job. ``submit_job`` therefore blanks every inherited variable in both jobs, and the push job alone
+receives the credential, as ``REGISTRY_AUTH``.
+
+The registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
+there is no short-lived scoped token to hand the push job instead. Exposure that remains: the
+coordinator's and the push job's pod specs carry the credential (cluster operators can read them),
+and every CoreWeave task pod carries the cluster's object-store keys (``task_env``), which the
+build's RUN steps can read.
 """
 
 import asyncio
@@ -51,6 +64,7 @@ import httpx
 from iris.cli.connect import connect_controller
 from iris.client import IrisClient, Job
 from iris.client.workload import JobState, TaskOutputArchive, TaskOutputArchiveState
+from iris.cluster.client import get_job_info
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
@@ -100,6 +114,9 @@ MANIFEST_TYPES = (
 BLANKED_ENV = {"HF_TOKEN": "", "WANDB_API_KEY": ""}
 # rigging.redaction treats "auth" as a sensitive key word, so Iris redacts this variable's value.
 REGISTRY_AUTH_ENV = "REGISTRY_AUTH"
+REGISTRY_CREDENTIAL_ENV = "TASKFORGE_REGISTRY_CREDENTIAL"
+"""The variable a coordinator job carries the credential JSON in; "credential" makes Iris redact it."""
+CREDENTIAL_FIELDS = ("registry", "user", "password")
 
 # Runs under bash in BUILD_IMAGE. kaniko replaces the container's root filesystem while it builds,
 # so it is exec'd last; its exit code is the job's.
@@ -126,13 +143,29 @@ class RegistryCredential:
     user: str
     password: str = field(repr=False)
 
+    @classmethod
+    def from_json(cls, text: str) -> "RegistryCredential":
+        """Parse the secret's JSON object. Errors name what is wrong, never the text."""
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError as error:
+            # The default message carries no input, but its exception's ``doc`` holds all of it.
+            raise ValueError(f"the registry credential is not JSON: {error.msg}") from None
+        if not isinstance(value, dict) or not all(isinstance(value.get(name), str) for name in CREDENTIAL_FIELDS):
+            raise ValueError(f"the registry credential is not a JSON object of strings {', '.join(CREDENTIAL_FIELDS)}")
+        return cls(registry=value["registry"], user=value["user"], password=value["password"])
+
     def docker_config(self) -> bytes:
         auth = base64.b64encode(f"{self.user}:{self.password}".encode()).decode()
         return json.dumps({"auths": {self.registry: {"auth": auth}}}).encode()
 
 
-def registry_credential() -> RegistryCredential:
-    """Read the capability-publisher credential from Secret Manager without echoing it."""
+def registry_credential_json() -> str:
+    """The capability-publisher credential's JSON text, read from Secret Manager with ``gcloud``.
+
+    For laptops and job launchers only; the library path never calls it (see the module docstring).
+    Nothing is echoed: ``gcloud``'s output is captured, and a failure names the command only.
+    """
     secret = subprocess.run(
         (
             "gcloud",
@@ -147,8 +180,7 @@ def registry_credential() -> RegistryCredential:
         text=True,
         check=True,
     )
-    value = json.loads(secret.stdout)
-    return RegistryCredential(registry=value["registry"], user=value["user"], password=value["password"])
+    return secret.stdout
 
 
 class BuildFailed(RuntimeError):
@@ -197,20 +229,53 @@ def output_archive(job: Job) -> TaskOutputArchive:
     return archive
 
 
+def submit_job(
+    client: IrisClient, *, name: str, entrypoint: Entrypoint, image: str, env: dict[str, str], target_cluster: str
+) -> Job:
+    """Submit one of a publish's jobs with ``env`` as its whole environment.
+
+    Every variable the job would inherit from the Iris task this process runs in, and every
+    variable in ``BLANKED_ENV``, is set empty unless ``env`` names it.
+    """
+    job_info = get_job_info()
+    inherited = {} if job_info is None else dict.fromkeys(job_info.env, "")
+    return client.submit(
+        entrypoint=entrypoint,
+        name=name,
+        environment=EnvironmentSpec(setup_scripts=[], env_vars={**inherited, **BLANKED_ENV, **env}),
+        resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
+        task_image=image,
+        container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
+        constraints=[Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster)],
+        scheduling_timeout=Duration.from_seconds(SCHEDULING_TIMEOUT),
+        timeout=Duration.from_seconds(JOB_TIMEOUT),
+        max_retries_failure=0,
+        max_retries_preemption=0,
+    )
+
+
 class IrisImageBuilder:
     """Publish DockerBuilds through a build job and a separate push job (see the module docstring).
 
     The jobs are submitted through the controller of the named Iris ``cluster`` or at
-    ``controller_url`` (exactly one), and run on ``target_cluster``. Constructing a builder contacts
-    neither Iris nor Secret Manager.
+    ``controller_url`` (exactly one), run on ``target_cluster``, and push to ``credential.registry``
+    with ``credential``. Constructing a builder contacts nothing.
     """
 
-    def __init__(self, *, cluster: str | None = None, controller_url: str | None = None, target_cluster: str):
+    def __init__(
+        self,
+        *,
+        cluster: str | None = None,
+        controller_url: str | None = None,
+        target_cluster: str,
+        credential: RegistryCredential,
+    ):
         if (cluster is None) == (controller_url is None):
             raise ValueError("Specify exactly one Iris cluster or controller URL")
         self.cluster = cluster
         self.controller_url = controller_url
         self.target_cluster = target_cluster
+        self.credential = credential
 
     async def publish(self, build: DockerBuild, repository: str) -> str:
         return (await self.publish_with_timings(build, repository)).image
@@ -218,26 +283,11 @@ class IrisImageBuilder:
     async def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
         return await asyncio.to_thread(self._publish, build, repository)
 
-    def _submit(self, client: IrisClient, name: str, entrypoint: Entrypoint, image: str, env: dict[str, str]) -> Job:
-        return client.submit(
-            entrypoint=entrypoint,
-            name=name,
-            environment=EnvironmentSpec(setup_scripts=[], env_vars={**BLANKED_ENV, **env}),
-            resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
-            task_image=image,
-            container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
-            constraints=[Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=self.target_cluster)],
-            scheduling_timeout=Duration.from_seconds(SCHEDULING_TIMEOUT),
-            timeout=Duration.from_seconds(JOB_TIMEOUT),
-            max_retries_failure=0,
-            max_retries_preemption=0,
-        )
-
     def _publish(self, build: DockerBuild, repository: str) -> Published:
         check_build_limits(build, BUILD_LIMITS)
         if not REPOSITORY.fullmatch(repository):
             raise ValueError(f"not an OCI repository name: {repository!r}")
-        credential = registry_credential()
+        credential = self.credential
         digest = build_digest(build)
         run_id = uuid.uuid4().hex[:12]
         # Builds are not reproducible, so every publish gets its own tag; the result is pinned by digest.
@@ -248,15 +298,15 @@ class IrisImageBuilder:
             client = IrisClient.remote(endpoint.url, workspace=None, credentials=endpoint.credentials)
             jobs: list[Job] = []
             try:
-                build_job = self._submit(
+                build_job = submit_job(
                     client,
-                    f"taskforge-image-build-{run_id}",
-                    Entrypoint(
+                    name=f"taskforge-image-build-{run_id}",
+                    entrypoint=Entrypoint(
                         command=["bash", "-c", BUILD_SCRIPT],
                         workdir_files={CONTEXT_FILE: build_context_archive(build)},
                     ),
-                    BUILD_IMAGE,
-                    {
+                    image=BUILD_IMAGE,
+                    env={
                         "CRANE_URL": CRANE_URL,
                         "CRANE_SHA256": CRANE_SHA256,
                         "KANIKO_IMAGE": KANIKO_IMAGE,
@@ -264,6 +314,7 @@ class IrisImageBuilder:
                         "DOCKERFILE": build.dockerfile,
                         "DESTINATION": destination,
                     },
+                    target_cluster=self.target_cluster,
                 )
                 jobs.append(build_job)
                 logger.info("submitted build job %s for %s", build_job.job_id, destination)
@@ -271,15 +322,15 @@ class IrisImageBuilder:
                 built = time.monotonic() - start
                 archive = output_archive(build_job)
                 logger.info("build archive %s (%d bytes)", archive.uri, archive.size_bytes)
-                push_job = self._submit(
+                push_job = submit_job(
                     client,
-                    f"taskforge-image-push-{run_id}",
-                    Entrypoint(
+                    name=f"taskforge-image-push-{run_id}",
+                    entrypoint=Entrypoint(
                         command=["python3", "-m", PUSH_SOURCE.stem],
                         workdir_files={PUSH_SOURCE.name: PUSH_SOURCE.read_bytes()},
                     ),
-                    PUSH_IMAGE,
-                    {
+                    image=PUSH_IMAGE,
+                    env={
                         "CRANE_URL": CRANE_URL,
                         "CRANE_SHA256": CRANE_SHA256,
                         "ARCHIVE_URI": archive.uri,
@@ -287,6 +338,7 @@ class IrisImageBuilder:
                         "DESTINATION": destination,
                         REGISTRY_AUTH_ENV: base64.b64encode(credential.docker_config()).decode(),
                     },
+                    target_cluster=self.target_cluster,
                 )
                 jobs.append(push_job)
                 logger.info("submitted push job %s", push_job.job_id)
