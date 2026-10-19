@@ -15,7 +15,8 @@ Two tracks use the same dense and MoE ladder. Each track changes one input and k
 All training commands train the MoE model by default. Use `--dense` for the dense model.
 When you do not give `--data-seed`, the data order comes from `--seed`.
 `fast-track` must have `--size`. The data-track commands use `d512` by default.
-All tracks use final Paloma macro loss (`eval/paloma/macro_loss`) as the primary metric.
+The model ladder uses final Paloma macro loss (`eval/paloma/macro_loss`) as the primary metric.
+The quality track uses the capability judge in [Compare data-track runs](#compare-data-track-runs), because one held-out loss does not rank data selections the way downstream tasks do.
 
 ## Run a data-track command
 
@@ -46,6 +47,9 @@ The examples in this file show only the CLI and its options.
 | [`quality.py`](quality.py), [`quality_features.py`](quality_features.py) | Scorer interface, ridge head, label splits, and cached Harrier features |
 | [`quality_pipeline.py`](quality_pipeline.py), [`ranked_pool.py`](ranked_pool.py) | Scored pool, ranked selection, and selected training cache |
 | [`quality_cli.py`](quality_cli.py) | Quality-track command |
+| [`downstream_tasks.py`](downstream_tasks.py), [`downstream_eval.py`](downstream_eval.py) | Frozen cloze, code, and math tasks, and the checkpoint scorer |
+| [`quality_judge.py`](quality_judge.py) | Capability-group judge of a candidate against its random control |
+| [`probe_scorers.py`](probe_scorers.py) | Probe selections (source sets, document length, whitespace, source quotas) that test the judge |
 | [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE |
 | [`train.py`](train.py) | trainer/eval/loss wiring and runtime (XLA) defaults |
 | [`optimizer.py`](optimizer.py) | MuonH optimizer config: LR groups + hyperball step |
@@ -266,16 +270,16 @@ Run each command as given in [Run a data-track command](#run-a-data-track-comman
    ```bash
    uv run python -m experiments.grug.fast_track.quality_cli \
      --scored-pool <scored-pool-artifact> --size d512 \
-     --run-id quality-candidate-d512 --selection-method candidate \
+     --run-id quality-candidate-d512 --selection-method candidate --save-checkpoints \
      --seed 0 --data-seed 0 --version 2026.10.04
 
    uv run python -m experiments.grug.fast_track.quality_cli \
      --scored-pool <scored-pool-artifact> --size d512 \
-     --run-id quality-random-d512 --selection-method random \
+     --run-id quality-random-d512 --selection-method random --save-checkpoints \
      --seed 0 --data-seed 0 --version 2026.10.04
    ```
 
-5. Apply the [comparison gate](#compare-data-track-runs).
+5. Score each checkpoint and apply the [judge](#compare-data-track-runs).
 
 The rungs use the same tokenization, embeddings, and classifier scores. Each rung builds its own selected token cache.
 The scored pool must supply at least ten times the requested training tokens.
@@ -395,19 +399,54 @@ Each data-track CLI runs one rung at a time.
 To promote a candidate, start the next rung only after the matched comparison passes its declared gate.
 Code-validation runs can use all rungs without a promotion claim.
 
-The primary metric is final Paloma macro loss (`eval/paloma/macro_loss`).
-The guardrails are Uncheatable macro loss (`eval/uncheatable_eval/macro_loss`) and per-dataset Paloma loss
-(`eval/paloma/<dataset>/loss`). Each macro metric is the mean of the dataset losses in its suite. Lower is better.
+### Why the quality track does not use one loss
 
-Measure the matched-seed noise at d512 before you select a non-inferiority margin.
-Before the candidate runs, record the margin in loss units, the guardrail limits, and the confidence-interval method.
-Use a minimum of three matched model/data seed pairs to calculate the candidate-minus-control differences.
-The gate accepts a rung when the upper one-sided 95% confidence bound is less than the margin
-and all guardrails are in their limits.
-Use a zero margin when the gate must show an improvement.
-After a rung passes, use the same declared gate for d768, d1024, and d1280.
-Record a result that does not pass and does not fail as inconclusive.
-A regression that is not significant does not show non-inferiority.
+A selection can change the domain mix, and each held-out suite rewards a different mix.
+On the d512 probes, a raw-web selection improved Paloma and the English cloze tasks, but its code gold-solution BPB went from 1.23 to 2.70.
+Paloma macro ordered the selections like the weighted capability target on only 26% of the method pairs.
+A selection of short documents had a better short-context loss and better cloze scores than random,
+but on fixed targets its loss rose as the context grew, so Paloma macro called it worse.
+So the judge compares capability groups, and the held-out losses are cheap screens for these groups.
+
+### Score the checkpoints
+
+Train the candidate and the random control with `--save-checkpoints`, with at least three matched seeds each.
+Then score each final checkpoint on one H100:
+
+```bash
+uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-02a \
+  --gpu H100x1 --enable-extra-resources --extra gpu --cpu 8 --memory 64GB --disk 64GB \
+  --job-name <name> -- python -m experiments.grug.fast_track.downstream_eval \
+  --checkpoint-root <run-output>/checkpoints --size d512 --output <run-output>/downstream
+```
+
+The scorer reads the frozen task copy (`downstream-cloze-v2`, 17 tasks) and the Paloma and Uncheatable caches.
+It writes `downstream_records.parquet` (one row for each choice) and `metrics.json` (task metrics,
+held-out loss by token class and by context length, and the fixed-target context test).
+
+### Apply the judge
+
+```bash
+uv run python -m experiments.grug.fast_track.quality_judge \
+  --candidate <candidate-run>/downstream --candidate <...> \
+  --control <random-run>/downstream --control <...>
+```
+
+The judge reports the relative gain against random for each group, with a 95% bootstrap interval over runs and paired examples:
+
+| group | target | cheap screen |
+|---|---|---|
+| E, English knowledge | correct-answer BPB of 11 cloze tasks | Paloma loss at context below 512 |
+| C, code | gold-solution BPB of HumanEval and MBPP | Uncheatable `github_cpp` and `github_python` loss |
+| M, math | gold-solution BPB of GSM8K and MATH-500 | Uncheatable `arxiv_*` loss |
+| L, long context | loss on fixed targets at 3968 tokens of context | the same |
+
+The weighted gain is the mean of E, C, and M. L is a guardrail.
+A candidate is better when the lower bound of the weighted gain is above zero and no group's lower bound is below its harm limit
+(E 1%, C 2%, M 2%, L 2%). It is worse when the upper bound of the weighted gain is below zero or a group's upper bound is below its harm limit.
+Otherwise the result is inconclusive.
+Freeze the weights and the harm limits before the candidate runs.
+A rung that passes goes to the next rung with the same gate.
 
 For quality-head comparisons, build a second raw pool with a different `corpus_sample_cli --seed` for the final confirmation.
 On that pool, build new candidate and control selections, train matched seeds, and apply the same gate.
