@@ -254,9 +254,9 @@ fn decode_prefix(
             }
             retained_bytes += batch.get_array_memory_size();
             batches.push(batch);
-            // Narrow the source prefix, not just the returned row count. Later
-            // files can hold lower sequences, so all overlapping files still
-            // have to be examined before this boundary is safe to settle.
+            // Narrow the source prefix when retained bytes exceed the budget.
+            // Later files can hold lower sequences, so examine all overlapping
+            // files before settling this boundary.
             while retained_bytes > budget.bytes && through > cursor.saturating_add(1) {
                 through = cursor + (through - cursor) / 2;
                 let narrowed = batches
