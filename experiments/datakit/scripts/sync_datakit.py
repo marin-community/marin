@@ -79,6 +79,7 @@ from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyD
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -644,6 +645,7 @@ def _source_already_synced(
 def main() -> None:
     args = _parse_args()
     configure_logging()
+    configure_coreweave_s3()
     # Boto's credential resolver and config provider log at INFO on every
     # request; with ~5 S3 API calls per file x thousands of files, that's
     # tens of thousands of log lines per shard. The information ("credentials
