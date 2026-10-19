@@ -52,6 +52,7 @@ from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
     MoeOverlapWork,
+    OverlapParamGather,
     moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
@@ -883,6 +884,10 @@ class GrugModelConfig:
     """With ``scan_offload_partials``, the reverse scan copies unit ``u - 1``'s offloaded residuals back to HBM while
     unit ``u``'s backward runs, instead of at the start of unit ``u - 1`` (one more unit's residuals stay in HBM).
     Same math."""
+    scan_release_weight_grads: bool = False
+    """``scan_layers`` backward: each layer's end barrier holds the previous layer's weight gradients instead of its
+    own, so a layer's weight gradients and their FSDP reduce-scatters can finish under the next layer's backward
+    instead of before it starts (at most two layers' gradients in flight). Same math."""
     scan_save_routed_output: bool = False
     """``scan_layers``: keep each layer's combined routed-expert output from the forward (offloaded with the
     partials under ``scan_offload_partials``) and hand it to the backward's per-layer recompute, so the recompute
@@ -957,6 +962,9 @@ class GrugModelConfig:
     mxfp8_fused_grad_quant: bool = False
     """Real-MXFP8 dense projections quantize the output gradient along rows and columns in one Pallas pass."""
     moe_ragged_chunks: int = 2
+    moe_overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK
+    """``moe_shared_placement=overlap``: where the EP shard all-gathers the shared experts' FSDP-sharded weights,
+    which places their gradients' reduce-scatter (``OverlapParamGather``). Same math."""
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
@@ -3760,6 +3768,7 @@ def _run_expert_bank(
             ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
             expert_remat=em.expert_remat,
             overlap=overlap,
+            overlap_param_gather=cfg.moe_overlap_param_gather,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
             expert_serial_pair=cfg.moe_serial_pair,
             ragged_overlap_weight_grads=cfg.moe_overlap_weight_grads,
@@ -3773,6 +3782,7 @@ def _run_expert_bank(
         mesh=get_abstract_mesh(),
         report_capacity_overflow=True,
         overlap=overlap,
+        overlap_param_gather=cfg.moe_overlap_param_gather,
         report_assignment_keep=cfg.moe_drop_renorm,
         ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
         ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
@@ -5082,6 +5092,7 @@ class _ScanArgs(NamedTuple):
     route_key: jax.Array | None
     offload_partials: bool
     prefetch_partials: bool
+    release_weight_grads: bool
 
 
 @jax.custom_vjp
@@ -5273,6 +5284,7 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
             if args.offload_partials:
                 unit_partials, unit_routed = _to_memory_kind((unit_partials, unit_routed), "device")
         d_unit: dict[bool, list[Block | None]] = {kind: [None] * plan.kind_count(kind) for kind in unit_diff}
+        pending: tuple[_UnitLayer, Block] | None = None
         for j in reversed(range(len(plan.unit))):
             unit_layer = plan.unit[j]
             layer_diff = _unit_layer(unit_diff, unit_layer)
@@ -5309,11 +5321,25 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
                     layer_index,
                     fused=layer_static.attn.cfg.attn_res_fused_source_grads,
                 )
-                d_layer, d_history, d_q = jax.lax.optimization_barrier(
-                    (d_layer, _AttnResHistory(d_sources, d_logits, d_partial), d_q)
-                )
+                d_history = _AttnResHistory(d_sources, d_logits, d_partial)
+                if args.release_weight_grads and pending is None:
+                    d_history, d_q = jax.lax.optimization_barrier((d_history, d_q))
+                elif args.release_weight_grads:
+                    # The previous layer's weight gradients (and their FSDP reduce-scatters) finish under this
+                    # layer's backward: one layer late, so at most two layers' gradients are in flight.
+                    prev_layer, prev_grads = pending
+                    prev_grads, d_history, d_q = jax.lax.optimization_barrier((prev_grads, d_history, d_q))
+                    d_unit[prev_layer.is_kda][prev_layer.index] = prev_grads
+                else:
+                    d_layer, d_history, d_q = jax.lax.optimization_barrier((d_layer, d_history, d_q))
             d_queries = d_queries + d_q
-            d_unit[unit_layer.is_kda][unit_layer.index] = d_layer
+            if args.release_weight_grads:
+                pending = (unit_layer, d_layer)
+            else:
+                d_unit[unit_layer.is_kda][unit_layer.index] = d_layer
+        if pending is not None:
+            last_layer, last_grads = pending
+            d_unit[last_layer.is_kda][last_layer.index] = last_grads
         stacked = {kind: jax.tree.map(lambda *xs: jnp.stack(xs), *layers) for kind, layers in d_unit.items()}
         if args.prefetch_partials:
             return (d_history, d_queries, next_saved), stacked
@@ -6183,6 +6209,7 @@ class Transformer(eqx.Module):
             route_key,
             self.config.scan_offload_partials,
             self.config.scan_prefetch_partials,
+            self.config.scan_release_weight_grads,
         )
         return _scan_layers((units_diff, queries, history), args)
 
