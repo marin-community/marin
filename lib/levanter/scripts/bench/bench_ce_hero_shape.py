@@ -78,8 +78,6 @@ class Variant:
     fast_backward: bool = False
     bwd_batch_block_size: Optional[int] = None
     bwd_v_block_size: Optional[int] = None
-    # grad_in_fwd only: rows per scan step; each step materializes [token_block, V] fp32 logits.
-    token_block: int = 0
     note: str = ""
 
 
@@ -115,10 +113,11 @@ VARIANTS: tuple[Variant, ...] = (
     # --- the GB10 ladder implementation as shipped, unmodified ---
     Variant("batched_xla", impl="batched_xla", note="existing GB10-keyed ladder; may raise on GB200"),
     # --- Liger-style: the forward computes both gradients, so value+grad is 3 GEMMs, not 4.
+    # b_block_size is the rows per scan step, each holding [b_block_size, V] fp32 logits.
     # fwd_s times the loss-only primal, so only total_s is comparable to the other variants.
-    Variant("grad_in_fwd-tb4096", impl="grad_in_fwd", b_block_size=HERO_B, token_block=4096),
-    Variant("grad_in_fwd-tb8192", impl="grad_in_fwd", b_block_size=HERO_B, token_block=8192),
-    Variant("grad_in_fwd-tb16384", impl="grad_in_fwd", b_block_size=HERO_B, token_block=16384),
+    Variant("grad_in_fwd-tb4096", impl="grad_in_fwd", b_block_size=4096),
+    Variant("grad_in_fwd-tb8192", impl="grad_in_fwd", b_block_size=8192),
+    Variant("grad_in_fwd-tb16384", impl="grad_in_fwd", b_block_size=16384),
 )
 VARIANTS_BY_NAME = {v.name: v for v in VARIANTS}
 
@@ -218,7 +217,7 @@ def _build_grad_in_forward_fns(token_block: int, labels: jax.Array):
 def _build_fns(variant: Variant, labels: jax.Array):
     """Return (forward_only_fn, value_and_grad_fn)."""
     if variant.impl == "grad_in_fwd":
-        return _build_grad_in_forward_fns(variant.token_block, labels)
+        return _build_grad_in_forward_fns(variant.b_block_size, labels)
     block_sizes = BlockSizes(b_block_size=variant.b_block_size, v_block_size=variant.v_block_size)
 
     def call(x, w):
