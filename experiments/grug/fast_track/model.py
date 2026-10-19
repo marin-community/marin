@@ -2942,12 +2942,19 @@ def moe_and_shared_fused(
         shared_in = (
             rearrange(part_inputs["shared"], "b s d -> (b s) d") if part_inputs and "shared" in part_inputs else x_flat
         )
+        # FSDP-sharded weights: the EP shard_map all-gathers them, so their gradients leave it reduce-scattered.
+        rows, cols = P(_FSDP_AXES, None), P(None, _FSDP_AXES)
+        overlap_up = [reshard(e.w_gate, rows) for e in shared if gated] + [reshard(e.w_up, rows) for e in shared]
         overlap = MoeOverlapWork(
             functools.partial(
                 _shared_experts_local, cfg=mlp.cfg, widths=tuple(w.shape[1] for w in shared_weights), gated=gated
             ),
             (shared_in, x_flat),
-            (jnp.concatenate(shared_weights, axis=1), w_down, gate),
+            (
+                jnp.concatenate(overlap_up, axis=1),
+                jnp.concatenate([reshard(e.w_down, cols) for e in shared], axis=0),
+                gate,
+            ),
         )
     unfused = placement == SharedExpertPlacement.UNFUSED and not part_inputs
     weights = moe_weights if unfused or overlap is not None else moe_weights + shared_weights

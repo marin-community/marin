@@ -453,6 +453,32 @@ class MoEExpertMlp(eqx.Module):
         )
 
 
+def _token_axes_spec(leaf: jax.Array, token_axes: tuple[str, ...]) -> P:
+    """``leaf``'s sharding restricted to the token axes: how an overlap parameter enters the EP shard_map."""
+    spec = tuple(_value_spec_or_default(leaf, P())) + (None,) * leaf.ndim
+    entries = []
+    for entry in spec[: leaf.ndim]:
+        axes = tuple(axis for axis in _axis_names(entry) if axis in token_axes)
+        entries.append(axes if axes else None)
+    return P(*entries)
+
+
+def _gathering_overlap_fn(fn: Callable, param_specs: Any) -> Callable:
+    """``fn`` on parameters all-gathered from ``param_specs`` inside the shard_map. The gather's transpose is a
+    reduce-scatter, so the parameter gradients leave the EP shard sharded (half an all-reduce's traffic)."""
+
+    def gather(leaf: jax.Array, spec: P) -> jax.Array:
+        for dim, entry in enumerate(spec):
+            if entry is not None:
+                leaf = jax.lax.all_gather(leaf, entry, axis=dim, tiled=True)
+        return leaf
+
+    def gathered(tokens, params):
+        return fn(tokens, jax.tree.map(gather, params, param_specs, is_leaf=lambda x: isinstance(x, P)))
+
+    return gathered
+
+
 @named_call
 def moe_mlp(
     x: Float[Array, "T D"],
@@ -743,9 +769,11 @@ def moe_mlp(
         )
         args = (x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
         if overlap is not None:
-            shard_local_fn = partial(shard_local_fn, overlap_fn=overlap.fn)
             overlap_token_specs = tuple(P(token_spec[0], *(None,) * (t.ndim - 1)) for t in overlap.tokens)
-            overlap_param_specs = jax.tree.map(lambda leaf: P(*(None,) * leaf.ndim), overlap.params)
+            overlap_param_specs = jax.tree.map(
+                lambda leaf: _token_axes_spec(leaf, token_sharding_axes), overlap.params
+            )
+            shard_local_fn = partial(shard_local_fn, overlap_fn=_gathering_overlap_fn(overlap.fn, overlap_param_specs))
             in_specs = (*in_specs, overlap_token_specs, overlap_param_specs)
             out_specs = (*out_specs, token_spec)
             args = (

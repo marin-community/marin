@@ -1592,15 +1592,18 @@ def test_fp8_dispatch_matches_full_precision_dispatch_across_shards():
 
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("implementation", ["fixed_pooled_wave_all_to_all", "ragged_all_to_all"])
-def test_overlap_work_matches_running_it_separately(implementation: MoeImplementation):
+@pytest.mark.parametrize("side_w_spec", [(None, None), ("expert", None)])
+def test_overlap_work_matches_running_it_separately(implementation: MoeImplementation, side_w_spec: tuple):
     """Work scheduled under the dispatch all-to-all (``MoeOverlapWork``) keeps the values and gradients of
-    running it outside the MoE, and is pinned by barriers in both the forward and the backward."""
+    running it outside the MoE, and is pinned by barriers in both the forward and the backward. A parameter
+    sharded over the token axes is all-gathered inside the EP shard (its gradient reduce-scattered)."""
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
     script = (
         f"""
         IMPLEMENTATION = {implementation!r}
+        SIDE_W_SPEC = {side_w_spec!r}
     """
         + """
         import jax
@@ -1632,7 +1635,7 @@ def test_overlap_work_matches_running_it_separately(implementation: MoeImplement
             jax.device_put(a, batch_sharding) for a in (x, selected_experts, combine_weights, cotangent, side_cotangent)
         )
         w_up_gate, w_down = (jax.device_put(a, expert_sharding) for a in (w_up_gate, w_down))
-        side_w = jax.device_put(side_w, NamedSharding(mesh, P(None, None)))
+        side_w = jax.device_put(side_w, NamedSharding(mesh, P(*SIDE_W_SPEC)))
 
         def side_fn(side_tokens, params):
             return jnp.tanh(jnp.einsum("td,de->te", side_tokens[0], params["w"]))
@@ -1653,15 +1656,15 @@ def test_overlap_work_matches_running_it_separately(implementation: MoeImplement
                 side = side_fn((x,), {"w": side_w})
             return jnp.sum(out * cotangent) + jnp.sum(side * side_cotangent)
 
-        def count_barriers(jaxpr):
+        def count_barriers(jaxpr, primitive="optimization_barrier"):
             found = 0
             for eqn in jaxpr.eqns:
-                found += eqn.primitive.name == "optimization_barrier"
+                found += eqn.primitive.name == primitive
                 for param in eqn.params.values():
                     for sub in param if isinstance(param, (tuple, list)) else (param,):
                         sub = getattr(sub, "jaxpr", sub)
                         if isinstance(sub, jax.extend.core.Jaxpr):
-                            found += count_barriers(sub)
+                            found += count_barriers(sub, primitive)
             return found
 
         args = (x, combine_weights, w_up_gate, w_down, side_w)
@@ -1673,6 +1676,7 @@ def test_overlap_work_matches_running_it_separately(implementation: MoeImplement
             # all-to-all in its custom VJP, and adds one more that serializes its two default expert chunks).
             expected_barriers = {"fixed_pooled_wave_all_to_all": 4, "ragged_all_to_all": 5}[IMPLEMENTATION]
             assert count_barriers(jaxpr.jaxpr) == expected_barriers
+            assert (count_barriers(jaxpr.jaxpr, "reduce_scatter") > 0) == (SIDE_W_SPEC[0] is not None)
             if IMPLEMENTATION == "ragged_all_to_all" and jax.default_backend() == "cpu":
                 raise SystemExit(0)  # XLA:CPU cannot run ragged-all-to-all; the values are checked on GPU
             expected_loss, expected_gradients = jax.jit(grad_fn, static_argnums=0)(False, *args)
