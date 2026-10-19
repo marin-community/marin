@@ -14,7 +14,7 @@ nightlies, or archive the fork. Those steps require the cutover changes below.
 
 The checked-in `vendor/skyrl` tree is the script's baseline output, including
 its license and per-file source provenance. The generated
-[`snapshot-report.md`](../../config/skyrl-migration/snapshot-report.md) records
+[`snapshot-report.md`](https://github.com/marin-community/marin/blob/main/config/skyrl-migration/snapshot-report.md) records
 open-work transplant decisions; it does not merge those PRs into the baseline.
 The `skyrl-wheel` CI lane checks source and patch hashes, the independent
 lock's freshness, and the built wheel's runtime assets:
@@ -50,7 +50,7 @@ open issues updated within the last ten days, measured in UTC at invocation.
 lists are paginated. The snapshot includes discussion, reviews, Git objects,
 and full binary/rename-capable patches. It leaves GitHub unchanged.
 
-[`config/skyrl-migration.toml`](../../config/skyrl-migration.toml) marks the
+[`config/skyrl-migration.toml`](https://github.com/marin-community/marin/blob/main/config/skyrl-migration.toml) marks the
 supported entrypoints, tests, dynamic registrations, and non-Python assets.
 The planner follows nested, relative, and literal dynamic Python imports and
 package initializers. It also roots direct imports from Marin callers and files
