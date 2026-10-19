@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import ipaddress
+import json
 import logging
 import os
 from collections.abc import Collection, Iterator, Mapping
@@ -560,6 +561,10 @@ class DefaultsConfig(_Config):
 # ---------------------------------------------------------------------------
 
 
+PRINCIPAL_REFERENCE_PREFIX = "principal:"
+UserRole = Literal["admin", "user", "dashboard"]
+
+
 class IapAuthConfig(_Config):
     url: str = ""
     # Desktop OAuth client the CLI drives for the browser edge-login flow.
@@ -572,10 +577,9 @@ class IapAuthConfig(_Config):
     # this only to give machine callers an `aud` distinct from the desktop client.
     programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
-    # Role granted to an IAP-verified email the role policy does not match (not in
-    # admin_users); admin_users always resolve to admin. "admin" here makes IAP's
-    # own allowlist the sole gate.
-    unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
+    # Role for an IAP identity absent from user_roles and admin_users.
+    # "admin" here makes IAP's own allowlist the sole gate.
+    unprovisioned_role: UserRole = "dashboard"
 
 
 class AuthConfig(_OneofConfig):
@@ -589,6 +593,10 @@ class AuthConfig(_OneofConfig):
     # no arm selected, a non-empty list alone enables auth (provider "cidr").
     trusted_cidrs: list[str] = Field(default_factory=list)
     admin_users: list[str] = Field(default_factory=list)
+    # Exact IAP identities; overrides admin_users and the provider default.
+    user_roles: dict[str, UserRole] = Field(default_factory=dict)
+    # JSON {principal ID: email}, loaded only by controllers and deploy operators.
+    principal_directory: SecretRefSpec = ""
     # Authenticate-but-not-require: valid tokens get their identity; tokenless
     # requests fall through as anonymous admin; invalid tokens still rejected.
     optional: bool = False
@@ -624,6 +632,11 @@ class AuthConfig(_OneofConfig):
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()
+
+    def require_resolved_identities(self) -> None:
+        identities = (*self.user_roles, *self.admin_users, *self.allowed_submitters)
+        if any(user.startswith(PRINCIPAL_REFERENCE_PREFIX) for user in identities):
+            raise ValueError("Auth config contains unresolved principal references")
 
 
 # ---------------------------------------------------------------------------
@@ -1097,6 +1110,54 @@ def validate_config(config: IrisClusterConfig) -> None:
 # ===========================================================================
 # Secret references (SecretRefSpec fields)
 # ===========================================================================
+
+
+def resolve_principal_references(config: IrisClusterConfig) -> IrisClusterConfig:
+    """Resolve principal references in auth and budgets without mutating config.
+
+    Errors identify opaque references or fields without exposing directory contents.
+    """
+    directory = {}
+    if config.auth and config.auth.principal_directory:
+        payload = config.auth.principal_directory
+        if not isinstance(payload, str):
+            raise ValueError("auth.principal_directory must be resolved before resolving identities")
+        try:
+            directory = json.loads(payload)
+        except json.JSONDecodeError:
+            raise ValueError("auth.principal_directory must contain a JSON object of principal IDs to emails") from None
+        if not isinstance(directory, dict) or any(
+            not isinstance(email, str)
+            or email.count("@") != 1
+            or "*" in email
+            or any(char.isspace() for char in email)
+            or not all(email.split("@"))
+            for email in directory.values()
+        ):
+            raise ValueError("auth.principal_directory must contain a JSON object of principal IDs to emails")
+
+    def resolve_identity(user: str) -> str:
+        if not user.startswith(PRINCIPAL_REFERENCE_PREFIX):
+            return user
+        principal_id = user.removeprefix(PRINCIPAL_REFERENCE_PREFIX)
+        if principal_id not in directory:
+            raise ValueError(f"{user} is missing from auth.principal_directory")
+        return directory[principal_id]
+
+    resolved = config.model_copy(deep=True)
+    if resolved.auth is not None:
+        roles: dict[str, UserRole] = {}
+        for user, role in resolved.auth.user_roles.items():
+            email = resolve_identity(user)
+            if email in roles and roles[email] != role:
+                raise ValueError("auth.user_roles contains conflicting roles after principal resolution")
+            roles[email] = role
+        resolved.auth.user_roles = roles
+        resolved.auth.admin_users = [resolve_identity(user) for user in resolved.auth.admin_users]
+        resolved.auth.allowed_submitters = [resolve_identity(user) for user in resolved.auth.allowed_submitters]
+    for tier in resolved.user_budgets:
+        tier.user_ids = [resolve_identity(user) for user in tier.user_ids]
+    return resolved
 
 
 def iter_secret_ref_fields(config: BaseModel) -> Iterator[tuple[BaseModel, str]]:

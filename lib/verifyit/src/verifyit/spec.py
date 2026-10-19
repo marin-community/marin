@@ -302,6 +302,7 @@ class JudgeSpec:
     exact_gate_answers: tuple[str, ...] = ()
     exact_gate_label: str = ""
     strip_reasoning_blocks: bool = False
+    strip_candidate_reasoning_blocks: bool = False
     max_completion_tokens: int = 8192
     incomplete_retry_tokens: int = 0
     reasoning_effort: str = ""

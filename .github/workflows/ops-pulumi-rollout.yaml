@@ -112,6 +112,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          # A queued or rerun Marina rollout must build current production source.
+          ref: ${{ matrix.name == 'marina' && 'main' || github.sha }}
 
       - name: Apply Pulumi stack
         uses: ./.github/actions/pulumi-deploy

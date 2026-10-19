@@ -56,8 +56,8 @@ JSONL through `history export`.
 
 ## Sync job
 
-The `marina-hourly` runner runs `python -m echo.sync.main` from the Marina image at the top
-of every hour. It refreshes GitHub and Discord activity from marinmirror, then processes six
+The `marina-hourly` base-image runner loads `sync.main` from Echo's current
+Postgres package at the top of every hour. It pins that revision for the execution. It refreshes GitHub and Discord activity from marinmirror, then processes six
 globally serialized repository turns: a Postgres advisory lock, a durable fair cursor, and
 one target per turn. This checks every configured repository during each hourly execution
 while preserving the cursor's fair order. A lock loser finishes successfully without
@@ -111,15 +111,13 @@ assumes a search has most of the machine; concurrent searches share those thread
 ```bash
 cd infra/marina
 uv run marina build --only echo                # compile apps/echo/web into apps/echo/dist
-export MARINA_DATABASE_URL=postgresql+pg8000://postgres:...@127.0.0.1:5432/marina
-uv run marina migrate --only echo              # create the echo schema
-uv run marina dev                              # http://127.0.0.1:8080/echo/
+uv run marina release apps/echo --local         # disposable Postgres preview at /echo/
 uv run pytest apps/echo                        # unit tests (Docker for the throwaway Postgres)
 uv run marina journey echo                     # a browser walk; screenshots in journeys-out/echo
 ```
 
-The journey seeds its own rows and needs every app's schema present, so run `marina migrate`
-(without `--only`) against the journey database first.
+Local previews and journeys create disposable Postgres databases and explicitly install
+the built packages. They need Docker; they do not use the production database.
 
 ## Search quality
 
@@ -139,9 +137,27 @@ uv run infra/marina/apps/echo/search_benchmark.py evaluate \
 ```
 
 Migrations are `migrations/mNNNN_*.py` modules applied in name order and recorded in
-`schema_migrations`; `migrate(engine)` is what `marina migrate` calls. `m0001_init` is the
+`schema_migrations`; package release calls `migrate(connection)` in its transaction. `m0001_init` is the
 schema as it stood when Echo moved into Marina and must not be edited — add a new module.
 
 Infrastructure and durable debugging records belong in Echo as wiki entries tagged
 `incident`, `debugging`, `ops`, the subsystem, severity, and resolution. Link the URL
 printed by `wiki add` or `wiki edit` from the associated PR or issue.
+
+## Release
+
+Echo uses the same package release workflow as every Marina application:
+
+```bash
+uv run marina release-status infra/marina/apps/echo --json
+uv run marina release infra/marina/apps/echo --base-version CURRENT_VERSION
+```
+
+Use a clean checkout at current remote main by default. Release runs pending schema migrations
+in its transaction and updates only Echo. Its existing `/echo/` routes, MCP namespace
+and `echo` schema remain stable. A Marina runtime rollout preserves Echo's selected
+revision. Search model instances are shared across loaded revisions within each worker.
+
+Pass `--allow-dirty` to explicitly release branch or uncommitted source
+without verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
+Use `--local` to preview in a disposable stack.

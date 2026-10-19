@@ -4,7 +4,7 @@
 """Read current FineStore and historical Evalchemy metrics into typed reports.
 
 Historical fixtures use lm-eval's ``<task_dir>/<model>/results_<ts>.json`` tree. Current fixtures
-store the same results artifacts in FineStore. Both readers key metrics by the task-config
+store result documents in a FineStore table. Both readers key metrics by the task-config
 directory so shot variants of one task do not overwrite each other.
 """
 
@@ -12,7 +12,7 @@ import json
 
 import fsspec
 import pytest
-from finestore.eval import EvaluationStore
+from finestore.store import DataStore
 from marin.evaluation.evalchemy.result import (
     EvalchemyResult,
     FineStoreEvalchemyResult,
@@ -62,20 +62,13 @@ _MMLU = {
 }
 
 
-def test_finestore_evalchemy_result_reads_evalchemy_results_artifacts(tmp_path):
+def test_finestore_evalchemy_result_reads_evalchemy_results_table(tmp_path):
     root = str(tmp_path / "archive")
-    store = EvaluationStore.open(root, writer_id="evalchemy")
+    store = DataStore.open(root, writer_id="evalchemy")
     try:
-        store.add_source_artifact(
-            "evalchemy/gsm8k_8shot/native/results_gsm8k.json",
-            json.dumps(_GSM8K).encode(),
-            content_type="application/json",
-        )
-        store.add_source_artifact(
-            "evalchemy/mmlu_5shot/native/results_mmlu.json",
-            json.dumps(_MMLU).encode(),
-            content_type="application/json",
-        )
+        table = store.table("evalchemy_results", primary_key=("source_prefix",))
+        table.append({"source_prefix": "gsm8k_8shot", "document": json.dumps(_GSM8K), "scored": True})
+        table.append({"source_prefix": "mmlu_5shot", "document": json.dumps(_MMLU), "scored": True})
         store.seal()
     finally:
         store.close()
