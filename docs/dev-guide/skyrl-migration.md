@@ -166,9 +166,19 @@ uv pip check --python "$candidate/runtime-env/bin/python"
 
 For GPU evaluation, install the same dependency project with
 `--extra megatron --extra vllm --extra telemetry`, then install the wheel with
-`--no-deps`. Apply the packaged `marinskyrl.environment_contract` CUDA runtime
-setup from `bootstrap_runtime.sh`. Never install the dependency project's root
-package or add the source tree to `PYTHONPATH` during candidate acceptance.
+`--no-deps`. The generated `run.sh` applies the CUDA environment and linker
+setup used by `vendor/skyrl/cloud/iris/bootstrap_runtime.sh`. Its packaged
+environment activation command is:
+
+```bash
+"$candidate/runtime-env/bin/python" -m marinskyrl.environment_contract \
+  write-frozen-cuda-runtime "$candidate/cuda-runtime.sh"
+source "$candidate/cuda-runtime.sh"
+```
+
+Use the generated `run.sh` for the complete GPU setup, including native-library
+links. Never install the dependency project's root package or add the source
+tree to `PYTHONPATH` during candidate acceptance.
 
 Use `skyrl_train.entrypoints.main_generate` with one inference engine on one
 H100, a pinned small Qwen model, deterministic sampling, and a bounded timeout.
@@ -182,11 +192,13 @@ Save completions and compare scores with the same model, tokenizer, data,
 sampling, and dependency versions on the unpruned source. A small model's raw
 accuracy is diagnostic; choose any regression threshold from that comparison.
 
-The smoke first runs the retained Megatron GPU tests: two AdamW update-parity
+The two-GPU allocation first runs the retained Megatron GPU tests: two AdamW update-parity
 cases and a CP2 transformer policy forward/backward and PPO optimizer step.
 All three must pass; a skipped test fails the smoke. The test model is pinned
 to the same Qwen snapshot used for Math500. Test helpers are bundled separately;
 all runtime implementation comes from the installed wheel.
+The CP2 test needs both GPUs. Generation runs afterward on one GPU in that
+same allocation.
 
 This tests the wheel's Megatron workers, optimizer updates, and generation and
 scoring runtime. It does not validate Marin's launcher or checkpoint handoffs.
@@ -213,10 +225,29 @@ uv run --no-project python -m scripts.skyrl_migration prepare-math500 \
 ```
 
 The bundle contains the wheel, dependency descriptors, data, a pinned model
-identity, and the worker harness from `config/skyrl-migration/smoke/`. Initialize
-and commit it as its own local Git repository before submitting, so Iris ships
-that directory. Submit from inside the bundle with the repository's existing
-Iris environment, `--no-sync`, two H100s, and `bash run.sh 32` or `bash run.sh 500`.
+identity, and the worker harness from `config/skyrl-migration/smoke/`. Use an
+existing Marin environment with Iris installed. Initialize the bundle as its
+own Git repository so Iris ships only that directory. Choose a fresh job name
+for each submission; run 32 rows first, then repeat with 500:
+
+```bash
+marin_root=/absolute/path/to/marin
+smoke_bundle=/absolute/path/to/math500-smoke
+smoke_job_name=skyrl-math500-YYYYMMDD-01
+smoke_rows=32
+cd "$smoke_bundle"
+git init --initial-branch=main
+git add .
+git commit -m 'Prepare pinned SkyRL wheel smoke'
+UV_PROJECT_ENVIRONMENT="$marin_root/.venv" uv run --no-sync --project "$marin_root" \
+  iris --config "$marin_root/lib/iris/config/marin.yaml" job run \
+  --target-cluster cw-rno2a --job-name "$smoke_job_name" \
+  --gpu H100x2 --enable-extra-resources --cpu 16 --memory 128GB --disk 150GB \
+  --timeout 2400 --max-retries 0 --no-sync --no-wait \
+  --task-image ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8 \
+  -- bash run.sh "$smoke_rows"
+```
+
 The worker installs the standalone Megatron/vLLM profile and wheel, verifies
 installed packages against the frozen lock, runs the Megatron tests, and runs
 the packaged evaluation entrypoint. It leaves bounded receipts,
