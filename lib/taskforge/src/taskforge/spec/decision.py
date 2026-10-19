@@ -47,7 +47,7 @@ from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import ConversationTrace, GradingAttempt, NoGrader, PlainText, SubmissionFailure, TaskSpec
 
-from taskforge.spec.rubric import Rubric
+from taskforge.spec.rubric import Rubric, RubricItem
 
 DECISION_GRADER_KIND = "decision_model"
 REFERENCE_CONTROL = "reference"
@@ -57,8 +57,9 @@ TASK_GRADER_REASON = "decision_model: graded on the host by the decision grader 
 TRIAL_GRADER_REASON = "decision_model: graded on the host after the trial"
 """The ``NoGrader.reason`` a decision task's trial runs under (``trial_form``)."""
 
+# The question, its levels and the rubric's view are WS10d v3's form DE verbatim (the verifier v3 measured).
 LEVELS = (
-    "missing: the candidate does not address the deliverable (empty, off-task, or only keywords)",
+    "missing: the candidate does not address this (empty, off-task, or only keywords)",
     "contradicts the reference: the candidate addresses it but its content disagrees with the reference",
     "partially matches: part agrees with the reference, part is wrong or missing",
     "equivalent to the reference: different notation, wording, units or order, same correct content",
@@ -77,12 +78,14 @@ DECISION_ATTEMPTS = 2
 DECISION_RETRY_BACKOFF = 2.0
 """Seconds before the retry of a decision read that failed transiently."""
 QUESTION_ID = "whole"
+JUDGE_NOTE = (
+    "Judge meaning, not wording: accept the listed equivalences; a negated, quoted, hypothetical or retracted mention "
+    "does not count as asserting something; keyword lists without the corresponding claim earn nothing; when the answer "
+    "states several values, the designated final block governs."
+)
 QUESTION = (
     "Compare the whole candidate answer with the reference answer (which earned full credit), against the whole "
-    "rubric. Judge meaning, not wording: accept the listed equivalences; a negated, quoted, hypothetical or "
-    "retracted mention does not count as asserting something; keyword lists without the corresponding claim earn "
-    "nothing; an answer that offers several alternatives is graded on the alternative it commits to, and is wrong "
-    "if it commits to none."
+    f"rubric. {JUDGE_NOTE}"
 )
 
 
@@ -173,11 +176,17 @@ class DecisionClient(Protocol):
 
     The host supplies one (``RLEnvBuildServices.decision``, ``EngineSettings.decision``); a build program and
     an author never construct one. ``decide`` answers within ``timeout`` seconds, the caller's deadline, and
-    raises ``DecisionUnavailable`` for a transient failure.
+    raises ``DecisionUnavailable`` for a transient failure. ``elastic`` is the state key the client may shorten
+    to fit its model's window: the solver's output.
     """
 
     async def decide(
-        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion], *, timeout: float
+        self,
+        state: Mapping[str, JsonValue],
+        questions: Mapping[str, ScoreQuestion],
+        *,
+        elastic: str,
+        timeout: float,
     ) -> Mapping[str, tuple[float, ...]]: ...
 
 
@@ -265,11 +274,30 @@ def solver_turn_output(conversation: ConversationTrace) -> str:
     return PlainText().extract(GradingAttempt(conversation)).value
 
 
+def rubric_view(item: RubricItem) -> dict[str, JsonValue]:
+    """The item as WS10d v3's state shows it: what it tests and how it passes, never its weight or cap."""
+    equivalences: list[JsonValue] = list(item.equivalences)
+    view: dict[str, JsonValue] = {
+        "id": item.id,
+        "role": str(item.role),
+        "tests": item.intent,
+        "pass_criterion": item.pass_criterion,
+        "equivalences": equivalences,
+        "negation_handling": item.negation_handling,
+    }
+    return view
+
+
+def solver_output_key(grader: DecisionGrader) -> str:
+    """The state key that holds the solver's output (the first, if the template repeats it)."""
+    return next(key for key, source in grader.state.items() if source is StateSource.SOLVER_TURN_OUTPUT)
+
+
 def decision_state(grader: DecisionGrader, solver_output: str) -> dict[str, JsonValue]:
     """The decision model's state: ``grader.state``'s keys, in order, each filled from its source."""
     values: dict[StateSource, JsonValue] = {
         StateSource.DELIVERABLE: grader.rubric.deliverable,
-        StateSource.RUBRIC: [item.model_dump(mode="json") for item in grader.rubric.items],
+        StateSource.RUBRIC: [rubric_view(item) for item in grader.rubric.items],
         StateSource.REFERENCE: grader.reference,
         StateSource.SOLVER_TURN_OUTPUT: solver_output,
     }
@@ -299,7 +327,7 @@ async def grade_decision_answer(
     state, questions = decision_state(grader, output), {QUESTION_ID: comparative_question()}
     try:
         async with asyncio.timeout(timeout):
-            reads = await client.decide(state, questions, timeout=timeout)
+            reads = await client.decide(state, questions, elastic=solver_output_key(grader), timeout=timeout)
     except TimeoutError as error:
         raise DecisionUnavailable(f"no decision within the {timeout:.0f}-second verifier deadline") from error
     grade = decision_grade(expected_level(reads[QUESTION_ID]), grader.bar)

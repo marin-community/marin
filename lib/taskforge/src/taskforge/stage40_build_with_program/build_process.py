@@ -66,12 +66,14 @@ from rigging.log_setup import configure_logging
 from taskforge.child_process import stop_process_group
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.agent import ReasoningReplay
+from taskforge.llm.clef.decision_client import ClefDecisionConfig, open_clef_decision_client
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.web import web_tools
 from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
+from taskforge.spec.decision import DecisionClient
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.context import (
@@ -130,6 +132,8 @@ class BuildServiceConfig:
             launcher reads it from Secret Manager with ``image_builder.registry_credential_json``
             at submit time and sets it, conventionally as ``image_builder.REGISTRY_CREDENTIAL_ENV``;
             the host itself never reads Secret Manager.
+        decision: The host's decision model (Clef behind the Orion gateway), or ``None`` for a host without
+            one, where grading a decision-model grader fails as the host's (``NO_DECISION_MODEL``).
     """
 
     host: MachineHost
@@ -140,6 +144,7 @@ class BuildServiceConfig:
     agent_limits: AgentLimits
     image_cluster: str | None
     registry_credential_env: str | None
+    decision: ClefDecisionConfig | None
 
 
 @dataclass(frozen=True)
@@ -306,7 +311,11 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
     """The model client and services of ``request``, open for the build."""
     model, config = request.model, request.services
     endpoint = GlmEndpoint(model.base_url, _secret(model.token_env), model.pool)
-    async with GlmClient(FixedEndpoint(endpoint), model.provider) as client, httpx.AsyncClient() as http:
+    async with (
+        GlmClient(FixedEndpoint(endpoint), model.provider) as client,
+        httpx.AsyncClient() as http,
+        _decision_client(config.decision) as decision,
+    ):
         yield client, RLEnvBuildServices(
             host=config.host,
             factories=machine_factories(config.host, config.controller_url),
@@ -315,8 +324,17 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
             ledger=None if config.ledger_root is None else JsonlLedger(config.ledger_root),
             reasoning_replay=config.reasoning_replay,
             agent_limits=config.agent_limits,
-            decision=None,  # BuildConfig names no decision service yet: decision-model graders fail as the host's
+            decision=decision,
         )
+
+
+@asynccontextmanager
+async def _decision_client(config: ClefDecisionConfig | None) -> AsyncIterator[DecisionClient | None]:
+    if config is None:
+        yield None
+        return
+    async with open_clef_decision_client(config) as client:
+        yield client
 
 
 async def build_result(request: BuildRequest) -> BuildResult:

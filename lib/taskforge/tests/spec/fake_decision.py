@@ -40,8 +40,14 @@ class FakeDecisionClient:
     timeouts: list[float] = field(default_factory=list)
 
     async def decide(
-        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion], *, timeout: float
+        self,
+        state: Mapping[str, JsonValue],
+        questions: Mapping[str, ScoreQuestion],
+        *,
+        elastic: str,
+        timeout: float,
     ) -> Mapping[str, tuple[float, ...]]:
+        assert elastic == self.candidate_key
         self.requests.append((state, questions))
         self.timeouts.append(timeout)
         await asyncio.sleep(self.delay)

@@ -102,6 +102,7 @@ def make_request(tmp_path, proposal, fake_glm, fast_provider):
                 agent_limits=LIMITS,
                 image_cluster=None,
                 registry_credential_env=None,
+                decision=None,
             ),
         )
 
