@@ -12,21 +12,19 @@ use connectrpc::client::ServiceTransport;
 use finelog::indices::cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::proto::finelog::stats::{StatsServiceClient, WriteRowsRequest};
 use finelog::query::{make_ctx, run_query_over, RegisteredProvider};
-use finelog::server::forwarding::{chunk_by_bytes, forward_client_config, ship_batch};
+use finelog::server::forwarding::{
+    chunk_by_bytes, forward_client_config, forward_read_budget, ship_batch, FORWARD_BATCH_BYTES,
+};
 use finelog::server::{build_app_with_config, ServerConfig};
-use finelog::store::forwarding::{read_forwarding, ReadBudget};
+use finelog::store::forwarding::{read_forwarding, ForwardRead};
 use finelog::store::schema::{schema_to_arrow, stored_form};
 use finelog::store::segment::write_segment_to_dir;
-use finelog::store::store::log_registered_schema;
+use finelog::store::store::{log_registered_schema, LOG_NAMESPACE_NAME};
 use finelog::store::{ServeMode, Store};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use serde_json::json;
-
-const ROWS_PER_READ: usize = 1_000_000;
-const READ_BYTES: usize = 256 << 20;
-const REQUEST_BYTES: usize = 150 << 20;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -48,9 +46,9 @@ enum Delivery {
 struct Args {
     /// A new, disposable directory on local disk.
     directory: PathBuf,
-    #[arg(long, default_value_t = 1_000_000)]
+    #[arg(long, default_value_t = forward_read_budget(LOG_NAMESPACE_NAME).rows)]
     rows: usize,
-    #[arg(long, default_value_t = 128)]
+    #[arg(long, default_value_t = forward_read_budget(LOG_NAMESPACE_NAME).segments)]
     segments: usize,
     #[arg(long, default_value_t = 160)]
     body_bytes: usize,
@@ -59,7 +57,7 @@ struct Args {
 }
 
 fn generate(directory: &Path, args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let path = directory.join("log");
+    let path = directory.join(LOG_NAMESPACE_NAME);
     std::fs::create_dir_all(&path)?;
     let schema = schema_to_arrow(&stored_form(log_registered_schema()));
     let per_segment = args.rows.div_ceil(args.segments);
@@ -102,6 +100,73 @@ fn generate(directory: &Path, args: &Args) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+struct LocalHub {
+    store: Arc<Store>,
+    address: SocketAddr,
+    server: tokio::task::JoinHandle<Result<(), std::io::Error>>,
+}
+
+async fn local_hub(directory: PathBuf) -> Result<LocalHub, Box<dyn std::error::Error>> {
+    let hub = Arc::new(Store::new(
+        Some(directory),
+        "".into(),
+        DEFAULT_INDEX_CACHE_MB,
+        ServeMode::Live,
+    )?);
+    hub.bootstrap_maintenance();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let app = build_app_with_config(Arc::clone(&hub), ServerConfig::default());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+    });
+    Ok(LocalHub {
+        store: hub,
+        address,
+        server,
+    })
+}
+
+async fn read_prefix(
+    source: Arc<Store>,
+    reader: Reader,
+    cursor: i64,
+    tip: i64,
+) -> Result<ForwardRead, Box<dyn std::error::Error>> {
+    let budget = forward_read_budget(LOG_NAMESPACE_NAME);
+    if matches!(reader, Reader::Native) {
+        return Ok(read_forwarding(source, LOG_NAMESPACE_NAME, cursor, tip, budget).await?);
+    }
+    let snapshot = source.query_snapshot(LOG_NAMESPACE_NAME)?;
+    let provider = source.namespace_provider(LOG_NAMESPACE_NAME, snapshot)?;
+    let sql = format!("SELECT * FROM {LOG_NAMESPACE_NAME} WHERE seq > {cursor} AND seq <= {tip} AND (cluster IS NULL OR cluster = '') ORDER BY seq LIMIT {}", budget.rows);
+    let result = run_query_over(
+        &make_ctx(),
+        vec![RegisteredProvider {
+            name: LOG_NAMESPACE_NAME.into(),
+            provider,
+        }],
+        &sql,
+    )
+    .await?;
+    let last = result.batches.last().unwrap();
+    let through = last
+        .column_by_name("seq")
+        .unwrap()
+        .as_primitive::<arrow::datatypes::Int64Type>()
+        .value(last.num_rows() - 1);
+    Ok(ForwardRead {
+        schema: result.schema,
+        batches: result.batches,
+        resume_at: None,
+        scanned_through: through,
+    })
+}
+
 async fn trial(
     source: Arc<Store>,
     directory: &Path,
@@ -118,28 +183,16 @@ async fn trial(
         Delivery::Encode => "read_encode",
         Delivery::Hub => "durable_hub",
     };
-    let hub = Arc::new(Store::new(
-        Some(directory.join(format!("hub-{reader}-{mode}-{repetition}"))),
-        "".into(),
-        DEFAULT_INDEX_CACHE_MB,
-        ServeMode::Live,
-    )?);
-    hub.bootstrap_maintenance();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
-    let app = build_app_with_config(Arc::clone(&hub), ServerConfig::default());
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-    });
+    let LocalHub {
+        store: hub,
+        address,
+        server,
+    } = local_hub(directory.join(format!("hub-{reader}-{mode}-{repetition}"))).await?;
     let url = format!("http://{address}");
     let transport =
         ServiceTransport::new(Client::builder(TokioExecutor::new()).build(HttpConnector::new()));
     let client = StatsServiceClient::new(transport, forward_client_config(url.parse()?));
-    let tip = source.namespace_persisted_seq("log")?;
+    let tip = source.namespace_persisted_seq(LOG_NAMESPACE_NAME)?;
     let started = Instant::now();
     let mut cursor = 0;
     let mut rows = 0;
@@ -150,50 +203,14 @@ async fn trial(
     let mut settle_time = Duration::ZERO;
     while cursor < tip {
         let stage = Instant::now();
-        let (schema, batches, through) = if matches!(reader_kind, Reader::Native) {
-            let read = read_forwarding(
-                Arc::clone(&source),
-                "log",
-                cursor,
-                tip,
-                ReadBudget {
-                    rows: ROWS_PER_READ,
-                    bytes: READ_BYTES,
-                    segments: 128,
-                    timeout: Duration::from_secs(60),
-                },
-            )
-            .await?;
-            (read.schema, read.batches, read.scanned_through)
-        } else {
-            let snapshot = source.query_snapshot("log")?;
-            let provider = source.namespace_provider("log", snapshot)?;
-            let sql = format!("SELECT * FROM log WHERE seq > {cursor} AND seq <= {tip} AND (cluster IS NULL OR cluster = '') ORDER BY seq LIMIT {ROWS_PER_READ}");
-            let result = run_query_over(
-                &make_ctx(),
-                vec![RegisteredProvider {
-                    name: "log".into(),
-                    provider,
-                }],
-                &sql,
-            )
-            .await?;
-            let through = result
-                .batches
-                .last()
-                .unwrap()
-                .column_by_name("seq")
-                .unwrap()
-                .as_primitive::<arrow::datatypes::Int64Type>()
-                .value(result.batches.last().unwrap().num_rows() - 1);
-            (result.schema, result.batches, through)
-        };
+        let read = read_prefix(Arc::clone(&source), reader_kind, cursor, tip).await?;
+        let through = read.scanned_through;
         read_time += stage.elapsed();
         assert!(through > cursor);
         let stage = Instant::now();
-        let (batch, sequences) = ship_batch(schema, batches, "benchmark")?.unwrap();
+        let (batch, sequences) = ship_batch(read.schema, read.batches, "benchmark")?.unwrap();
         rows += batch.num_rows();
-        let chunks = chunk_by_bytes(&batch, &sequences, REQUEST_BYTES)?;
+        let chunks = chunk_by_bytes(&batch, &sequences, FORWARD_BATCH_BYTES)?;
         encoded_bytes += chunks.iter().map(|(bytes, _)| bytes.len()).sum::<usize>();
         drop(batch);
         encode_time += stage.elapsed();
@@ -203,7 +220,7 @@ async fn trial(
                 client
                     .write_rows(
                         WriteRowsRequest::default()
-                            .with_namespace("log")
+                            .with_namespace(LOG_NAMESPACE_NAME)
                             .with_arrow_ipc(bytes),
                     )
                     .await?;
@@ -212,7 +229,9 @@ async fn trial(
         push_time += stage.elapsed();
         if matches!(delivery, Delivery::Hub) {
             let stage = Instant::now();
-            source.settle_forwarding(&url, "log", through).await?;
+            source
+                .settle_forwarding(&url, LOG_NAMESPACE_NAME, through)
+                .await?;
             settle_time += stage.elapsed();
         }
         cursor = through;
@@ -222,7 +241,7 @@ async fn trial(
         let stored_rows = hub
             .list_namespaces_with_stats()?
             .into_iter()
-            .find(|(name, _, _, _)| name == "log")
+            .find(|(name, _, _, _)| name == LOG_NAMESPACE_NAME)
             .unwrap()
             .2
             .row_count;
@@ -230,7 +249,7 @@ async fn trial(
     }
     println!(
         "{}",
-        json!({ "reader": reader, "mode": mode, "repetition": repetition, "rows": rows, "encoded_bytes": encoded_bytes, "read_ms": read_time.as_secs_f64() * 1000.0, "encode_ms": encode_time.as_secs_f64() * 1000.0, "push_ms": push_time.as_secs_f64() * 1000.0, "settle_ms": settle_time.as_secs_f64() * 1000.0, "elapsed_ms": elapsed.as_secs_f64() * 1000.0, "rows_per_second": rows as f64 / elapsed.as_secs_f64(), "profile": if cfg!(debug_assertions) { "debug" } else { "release" }, "source_durability": "local_disk", "hub_durability": "local_disk", "transport": "loopback_zstd", "source_segments": source.query_snapshot("log")?.paths.len(), "body_bytes": args.body_bytes, "cache": "warm_local_files", "allocator": "production_default" })
+        json!({ "reader": reader, "mode": mode, "repetition": repetition, "rows": rows, "encoded_bytes": encoded_bytes, "read_ms": read_time.as_secs_f64() * 1000.0, "encode_ms": encode_time.as_secs_f64() * 1000.0, "push_ms": push_time.as_secs_f64() * 1000.0, "settle_ms": settle_time.as_secs_f64() * 1000.0, "elapsed_ms": elapsed.as_secs_f64() * 1000.0, "rows_per_second": rows as f64 / elapsed.as_secs_f64(), "profile": if cfg!(debug_assertions) { "debug" } else { "release" }, "source_durability": "local_disk", "hub_durability": "local_disk", "transport": "loopback_zstd", "source_segments": source.query_snapshot(LOG_NAMESPACE_NAME)?.paths.len(), "body_bytes": args.body_bytes, "cache": "warm_local_files", "allocator": "production_default" })
     );
     server.abort();
     hub.shutdown(Duration::from_secs(5)).await;
@@ -242,8 +261,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     // Keep the reference's one SQL window identical to the production fanout
     // limit; the native reader may split it further to respect decoded bytes.
-    assert!((1..=ROWS_PER_READ).contains(&args.rows));
-    assert!((1..=128).contains(&args.segments));
+    let budget = forward_read_budget(LOG_NAMESPACE_NAME);
+    assert!((1..=budget.rows).contains(&args.rows));
+    assert!((1..=budget.segments).contains(&args.segments));
     assert!(args.repetitions > 0);
     std::fs::create_dir(&args.directory)?;
     let directory = std::fs::canonicalize(&args.directory)?;

@@ -103,15 +103,12 @@ const RELAY_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 /// Keep its recovery budget independent of the public Query RPC deadline.
 const FORWARD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Retained source rows per read, excluding decoder, ordering, and IPC working space.
+/// Retained Arrow bytes per read, excluding decoder, ordering, and IPC working space.
 const FORWARD_READ_BYTES: usize = 256 << 20;
 
-/// Rows read from one namespace per batch. The hub durably acknowledges each outbound
-/// request, so a small row cap turns its one-second flush-coalescing interval into a
-/// throughput cap. A live telemetry scan showed that reading 200,000 rows was faster
-/// than reading 50,000 because provider construction and planning dominate the bounded
-/// scan. Byte chunking still bounds each request, and this stays below the store's
-/// million-row write limit.
+/// Source sequence positions examined per non-log turn. Larger windows amortize
+/// source setup and the hub's durable acknowledgement; byte limits bound memory
+/// and outbound messages separately.
 const FORWARD_BATCH_ROWS: i64 = 200_000;
 
 /// Dense log backlogs amortize each sweep's scan and durable acknowledgement over
@@ -124,12 +121,13 @@ const FORWARD_NAMESPACE_CONCURRENCY: usize = 4;
 
 /// Maximum number of ordered segment ranges one forwarding scan intentionally spans.
 /// Sparse relay tables can seal thousands of tiny L0s while the hub is unavailable;
-/// bounding by rows alone still makes recovery localize all of them before LIMIT runs.
+/// bounding by sequence span alone can still localize all of them. Overlapping
+/// ranges needed to cover the prefix may exceed this count.
 const FORWARD_BATCH_SEGMENTS: usize = 128;
 
 /// Encoded bytes per outbound request. Keep ten MiB below the receiving store's hard
 /// Arrow IPC limit. [`chunk_by_bytes`] halves oversized batches until they fit.
-const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (10 << 20);
+pub const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (10 << 20);
 
 const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
 const FINELOG_ZSTD_LEVEL: i32 = 1;
@@ -303,6 +301,20 @@ fn build_client(target: &str) -> Result<StatsServiceClient<HttpsTransport>, Stri
     let transport = ServiceTransport::new(HyperClient::builder(TokioExecutor::new()).build(https));
     let config = forward_client_config(uri);
     Ok(StatsServiceClient::new(transport, config))
+}
+
+/// Bounds for one namespace turn; `rows` caps its source sequence span.
+pub fn forward_read_budget(namespace: &str) -> ReadBudget {
+    ReadBudget {
+        rows: if namespace == LOG_NAMESPACE_NAME {
+            FORWARD_LOG_BATCH_ROWS as usize
+        } else {
+            FORWARD_BATCH_ROWS as usize
+        },
+        bytes: FORWARD_READ_BYTES,
+        segments: FORWARD_BATCH_SEGMENTS,
+        timeout: FORWARD_READ_TIMEOUT,
+    }
 }
 
 /// Configure the forwarding wire codec, compression, and message limits.
@@ -938,29 +950,20 @@ where
         }
     }
 
-    /// Read one proven source prefix without invoking the public query engine.
+    /// Read local-origin rows in `(cursor, persisted]` with their source sequences
+    /// and examined boundary. `resume_at` identifies a legacy retention gap.
     async fn read_batch(
         &self,
         name: &str,
         cursor: i64,
         persisted: i64,
     ) -> Result<Batch, StatsError> {
-        let rows = if name == LOG_NAMESPACE_NAME {
-            FORWARD_LOG_BATCH_ROWS as usize
-        } else {
-            FORWARD_BATCH_ROWS as usize
-        };
         let read = read_forwarding(
             Arc::clone(&self.store),
             name,
             cursor,
             persisted,
-            ReadBudget {
-                rows,
-                bytes: FORWARD_READ_BYTES,
-                segments: FORWARD_BATCH_SEGMENTS,
-                timeout: FORWARD_READ_TIMEOUT,
-            },
+            forward_read_budget(name),
         )
         .await?;
         Ok(Batch {

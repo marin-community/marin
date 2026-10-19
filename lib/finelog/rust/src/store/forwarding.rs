@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,7 +10,7 @@ use arrow::array::{AsArray, BooleanArray, RecordBatch};
 use arrow::compute::{concat_batches, filter_record_batch, sort_to_indices, take};
 use arrow::datatypes::{Int64Type, SchemaRef};
 use futures::{stream, StreamExt, TryStreamExt};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use parquet::file::statistics::Statistics;
 
 use crate::errors::StatsError;
@@ -154,7 +154,7 @@ async fn read_source(
     let scan_ms = scan_started.elapsed().as_millis() as u64;
     let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     let retained_bytes: usize = batches.iter().map(RecordBatch::get_array_memory_size).sum();
-    let report = || {
+    if started.elapsed() >= SLOW_READ {
         tracing::info!(
             namespace,
             cursor,
@@ -170,9 +170,6 @@ async fn read_source(
             total_ms = started.elapsed().as_millis() as u64,
             "finelog forwarder: slow source read completed"
         );
-    };
-    if started.elapsed() >= SLOW_READ {
-        report();
     }
     Ok(ForwardRead {
         schema,
@@ -180,6 +177,50 @@ async fn read_source(
         resume_at,
         scanned_through,
     })
+}
+
+fn source_reader(
+    path: &Path,
+    cursor: i64,
+    through: i64,
+) -> Result<ParquetRecordBatchReader, StatsError> {
+    let file = File::open(path).map_err(|error| {
+        StatsError::Internal(format!(
+            "open forwarding source {}: {error}",
+            path.display()
+        ))
+    })?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(|error| StatsError::Internal(format!("open forwarding parquet: {error}")))?;
+    // Compacted legacy files can be much larger than a source window. Keep
+    // unknown statistics, and prune only on the top-level sequence column.
+    let seq_column = builder
+        .parquet_schema()
+        .columns()
+        .iter()
+        .position(|column| column.path().parts() == [IMPLICIT_SEQ_COLUMN]);
+    let row_groups = builder
+        .metadata()
+        .row_groups()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, group)| {
+            let bounds = seq_column.and_then(|column| {
+                let Statistics::Int64(stats) = group.column(column).statistics()? else {
+                    return None;
+                };
+                Some((*stats.min_opt()?, *stats.max_opt()?))
+            });
+            bounds
+                .is_none_or(|(minimum, maximum)| maximum > cursor && minimum <= through)
+                .then_some(index)
+        })
+        .collect();
+    builder
+        .with_row_groups(row_groups)
+        .with_batch_size(DECODE_BATCH_ROWS)
+        .build()
+        .map_err(|error| StatsError::Internal(format!("open forwarding parquet: {error}")))
 }
 
 fn decode_prefix(
@@ -204,44 +245,7 @@ fn decode_prefix(
                 "forward decode timed out".into(),
             ));
         }
-        let file = File::open(&source.path).map_err(|error| {
-            StatsError::Internal(format!(
-                "open forwarding source {}: {error}",
-                source.path.display()
-            ))
-        })?;
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file)
-            .map_err(|error| StatsError::Internal(format!("open forwarding parquet: {error}")))?;
-        // Compacted legacy files can be much larger than a source window. Keep
-        // unknown statistics, and prune only on the top-level sequence column.
-        let seq_column = builder
-            .parquet_schema()
-            .columns()
-            .iter()
-            .position(|column| column.path().parts() == [IMPLICIT_SEQ_COLUMN]);
-        let row_groups = builder
-            .metadata()
-            .row_groups()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, group)| {
-                let bounds = seq_column.and_then(|column| {
-                    let Statistics::Int64(stats) = group.column(column).statistics()? else {
-                        return None;
-                    };
-                    Some((*stats.min_opt()?, *stats.max_opt()?))
-                });
-                bounds
-                    .is_none_or(|(minimum, maximum)| maximum > cursor && minimum <= through)
-                    .then_some(index)
-            })
-            .collect();
-        let reader = builder
-            .with_row_groups(row_groups)
-            .with_batch_size(DECODE_BATCH_ROWS)
-            .build()
-            .map_err(|error| StatsError::Internal(format!("open forwarding parquet: {error}")))?;
-        for batch in reader {
+        for batch in source_reader(&source.path, cursor, through)? {
             if Instant::now() >= deadline {
                 return Err(StatsError::DeadlineExceeded(
                     "forward decode timed out".into(),
@@ -276,11 +280,15 @@ fn decode_prefix(
             }
         }
     }
-    if batches.is_empty() {
-        return Ok((batches, through));
-    }
-    if sequence_ordered(&batches) {
-        return Ok((batches, through));
+    Ok((order_batches(schema, batches)?, through))
+}
+
+fn order_batches(
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+) -> Result<Vec<RecordBatch>, StatsError> {
+    if batches.is_empty() || sequence_ordered(&batches) {
+        return Ok(batches);
     }
     let batch = concat_batches(&schema, &batches)
         .map_err(|error| StatsError::Internal(format!("combine forwarding rows: {error}")))?;
@@ -298,7 +306,7 @@ fn decode_prefix(
         .map_err(|error| StatsError::Internal(format!("gather forwarding rows: {error}")))?;
     let batch = RecordBatch::try_new(schema, columns)
         .map_err(|error| StatsError::Internal(format!("build forwarding rows: {error}")))?;
-    Ok((vec![batch], through))
+    Ok(vec![batch])
 }
 
 fn filter_source(
@@ -363,6 +371,8 @@ pub(crate) fn bounded_forward_read_through(
         .min(persisted)
 }
 
+/// Return `Some(minimum - 1)` when retention removed the next source position.
+/// Return `None` when that position is retained or the source has no segments.
 pub(crate) fn resume_after_eviction(cursor: i64, minimum: Option<i64>) -> Option<i64> {
     minimum
         .filter(|minimum| cursor.saturating_add(1) < *minimum)
