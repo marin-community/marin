@@ -98,6 +98,7 @@ def _reject_options(options: dict[str, object], reason: str) -> None:
     show_default=True,
 )
 @click.option("--tie-seed", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--save-checkpoints", is_flag=True, help="Save the final training checkpoint for later evaluation.")
 @seed_options
 @click.option(
     "--stage",
@@ -123,6 +124,7 @@ def main(
     training_tokens: int | None,
     selection_method: str,
     tie_seed: int,
+    save_checkpoints: bool,
     seed: int,
     data_seed: int | None,
     stage: str,
@@ -217,6 +219,7 @@ def main(
         size=size,
         dense=dense,
         training_source=QualityTrainingSource(selection, selected_tokens),
+        save_checkpoints=save_checkpoints,
         seed=seed,
         data_seed=data_seed,
     )
