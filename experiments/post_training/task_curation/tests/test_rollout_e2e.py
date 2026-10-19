@@ -125,7 +125,7 @@ def file_write_command(files):
 @pytest.mark.parametrize("case", ["math500", "tasktrove-codeforces", "tasktrove-stack_pytest"])
 async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_path, monkeypatch, machines):
     # RolloutEngine is optional in Marin CI; import it only when this manual test is selected.
-    from rolloutengine.shell import shell_harness  # noqa: PLC0415
+    from rolloutengine.shell import ShellHarness  # noqa: PLC0415
     from rolloutengine.test_support import (  # noqa: PLC0415
         SHELL,
         ReplayModel,
@@ -195,7 +195,7 @@ async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_
             function["arguments"] = json.dumps({"script" if tool_name else "cmd": candidate})
             messages = [call, {"role": "assistant", "content": "Done."}]
         model = ReplayModel(messages)
-        shell = shell_harness(command_timeout=None, shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd"))
+        shell = ShellHarness(command_timeout=None, shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd"))
         result = await engine(model, {"local": machines}, harnesses={SHELL: shell}).run_task(
             rollout_spec(
                 task,

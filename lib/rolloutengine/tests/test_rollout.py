@@ -59,7 +59,7 @@ from verifyit.grade import grade as verifyit_grade
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import RUBRIC_LABELS, FunctionCall, JudgeSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
 
-from rolloutengine.agent import agent_harness
+from rolloutengine.agent import AgentHarness
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     AttemptEnded,
@@ -87,10 +87,10 @@ from rolloutengine.contracts import (
     TransitionCompleted,
 )
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness import step_harness
+from rolloutengine.harness import StepHarness
 from rolloutengine.machines import task_machine
 from rolloutengine.recorder import harness_rollout
-from rolloutengine.shell import WORKSPACE_INSTRUCTION, ToolCallResult, ToolContext, shell_harness
+from rolloutengine.shell import WORKSPACE_INSTRUCTION, ToolCallResult, ToolContext, ShellHarness
 from rolloutengine.spec import TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import (
     SHELL,
@@ -287,7 +287,7 @@ def judge_url(judge_server) -> str:
 
 
 def shell_harnesses(**options) -> dict:
-    return {SHELL: shell_harness(**{"command_timeout": None, **options})}
+    return {SHELL: ShellHarness(**{"command_timeout": None, **options})}
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
@@ -313,7 +313,7 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
     record = await engine(
         model,
         {"local": factory},
-        harnesses={"agent": agent_harness(lambda context, complete: agent(context.machine, complete))},
+        harnesses={"agent": AgentHarness(lambda context, complete: agent(context.machine, complete))},
     ).run_task(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
     assert model.requests[0].messages == ({"role": "user", "content": content},)
@@ -415,7 +415,7 @@ def report_task(**update) -> TaskSpec:
 async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     # The verifier machine is the second machine, so grading blocks after the outputs are captured.
     factory = BlockingFactory()
-    harness = step_harness(lambda context: OutputWritingSession(context, "echo ready > /workspace/report.txt"))
+    harness = StepHarness(lambda context: OutputWritingSession(context, "echo ready > /workspace/report.txt"))
     spec = rollout_spec(
         report_task(output_paths=("/workspace/report.txt",)),
         machine=machine_runtime(),
@@ -444,7 +444,7 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
         await engine(
             ReplayModel([{"role": "assistant", "content": "ready"}]),
             {"local": factory},
-            harnesses={"fixture": step_harness(lambda context: OutputWritingSession(context, command))},
+            harnesses={"fixture": StepHarness(lambda context: OutputWritingSession(context, command))},
         ).run_task(
             rollout_spec(
                 report_task(output_paths=("/workspace/out",)),
@@ -479,7 +479,7 @@ async def test_agent_harness_receives_engine_turns_and_controls_next_history(com
 
     model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
     result = await engine(
-        model, harnesses={"agent": agent_harness(lambda _context, complete: agent(complete))}
+        model, harnesses={"agent": AgentHarness(lambda _context, complete: agent(complete))}
     ).run_task(rollout_spec(arithmetic_task(), harness="agent"))
 
     assert finished.is_set()
@@ -518,7 +518,7 @@ async def test_agent_harness_replays_exact_tokens_on_later_turns(compact):
         assert (request.prompt_token_ids, request.continuation) == (replay, None)
         return ModelTurn({"role": "assistant", "content": "12"}, replay, (21,), (-0.5,), "stop")
 
-    rollout_engine = RolloutEngine({}, {"agent": agent_harness(lambda _context, complete: agent(complete))})
+    rollout_engine = RolloutEngine({}, {"agent": AgentHarness(lambda _context, complete: agent(complete))})
     result = await rollout_engine.run_task(rollout_spec(arithmetic_task(), harness="agent"), model)
 
     assert result.grade.reward == 1.0
@@ -541,7 +541,7 @@ async def test_agent_harness_is_cancelled_when_engine_generation_is_cancelled():
         model_entered.set()
         await asyncio.Future()
 
-    runner = RolloutEngine({}, {"agent": agent_harness(lambda _context, complete: agent(complete))})
+    runner = RolloutEngine({}, {"agent": AgentHarness(lambda _context, complete: agent(complete))})
     pending = asyncio.create_task(runner.run_task(rollout_spec(arithmetic_task(), harness="agent"), model))
     await asyncio.wait_for(model_entered.wait(), timeout=5)
     pending.cancel()
@@ -557,7 +557,7 @@ async def test_agent_harness_failure_retains_the_generated_turn():
 
     runner = engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
-        harnesses={"agent": agent_harness(lambda _context, complete: agent(complete))},
+        harnesses={"agent": AgentHarness(lambda _context, complete: agent(complete))},
     )
     with pytest.raises(GradedRolloutInterrupted) as caught:
         await runner.run_task(rollout_spec(arithmetic_task(), harness="agent"))
@@ -583,7 +583,7 @@ async def test_agent_request_open_at_the_turn_limit_fails_when_the_episode_close
             messages = (*messages, handler.result().message, {"role": "user", "content": "Continue."})
 
     record = await engine(
-        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
+        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)}
     ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1))
     assert record.rollout.stop_reason == "max_turns"
     await asyncio.wait({handlers[-1]}, timeout=5)
@@ -613,7 +613,7 @@ async def test_a_call_cancelled_while_the_model_generates_changes_nothing(retry_
             await asyncio.Future()
         return ModelTurn({"role": "assistant", "content": "12"}, (10, 11), (20,), (-0.5,), "stop")
 
-    record = await RolloutEngine({}, {"agent": agent_harness(agent)}).run_task(
+    record = await RolloutEngine({}, {"agent": AgentHarness(agent)}).run_task(
         rollout_spec(arithmetic_task(), harness="agent"), model
     )
     assert len(requests) == 2
@@ -646,7 +646,7 @@ async def test_a_reply_cancelled_while_the_model_generates_can_be_sent_again():
         served = (*request.continuation.served_token_ids, 90) if request.continuation is not None else (10, 11)
         return ModelTurn({"role": "assistant", "content": "12"}, served, (20 + len(requests),), (-0.5,), "stop")
 
-    record = await RolloutEngine({}, {"agent": agent_harness(agent)}).run_task(
+    record = await RolloutEngine({}, {"agent": AgentHarness(agent)}).run_task(
         rollout_spec(arithmetic_task(), harness="agent"), model
     )
     assert requests[1] == requests[2]
@@ -701,7 +701,7 @@ async def test_session_replays_exact_initial_tokens_and_rejects_transport_change
         served = (*prefix[:-1], 99) if alter_prefix else prefix
         return ModelTurn({"role": "assistant", "content": "done"}, served, (5, 6), (-0.1, -0.2), "stop")
 
-    runner = RolloutEngine({}, {"fixture": step_harness(lambda _context: Session())})
+    runner = RolloutEngine({}, {"fixture": StepHarness(lambda _context: Session())})
     task = rollout_spec(arithmetic_task(), harness="fixture", trace=trace)
     if alter_prefix:
         # A chat endpoint cannot serve pinned tokens either, so the replay check holds in every trace mode.
@@ -885,7 +885,7 @@ async def test_machine_user_applies_to_custom_sessions_without_replacing_explici
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "Done."}]),
         {"local": Factory()},
-        harnesses={"identity": step_harness(Session)},
+        harnesses={"identity": StepHarness(Session)},
     ).run_task(
         rollout_spec(
             arithmetic_task(environment_requirements=GRADER_ENVIRONMENT),
@@ -1384,7 +1384,7 @@ async def test_a_spec_that_the_engine_cannot_run_is_rejected_before_machines_and
 
     factory = RecordingShellSimFactory()
     model = ReplayModel([{"role": "assistant", "content": "12"}])
-    harnesses = {"step": step_harness(lambda _context: FinishingSession()), "agent": agent_harness(agent)}
+    harnesses = {"step": StepHarness(lambda _context: FinishingSession()), "agent": AgentHarness(agent)}
     with pytest.raises(error, match=message):
         await engine(model, {"local": factory}, harnesses=harnesses).run_task(spec())
     assert factory.machines == []
@@ -1541,7 +1541,7 @@ async def test_token_budget_stops_model_requests_and_grades_the_last_response(us
             return replace(await super().complete(request), usage=usage)
 
     model = Model([{"role": "assistant", "content": "12"}] * 3)
-    record = await engine(model, harnesses={"fixture": step_harness(lambda _context: Session())}).run_task(
+    record = await engine(model, harnesses={"fixture": StepHarness(lambda _context: Session())}).run_task(
         rollout_spec(arithmetic_task(), harness="fixture", max_total_tokens=budget)
     )
     assert len(model.requests) == requests
@@ -1828,7 +1828,7 @@ async def test_deadlines_keep_generated_tokens_and_close_sessions(phase, budget)
         engine(
             Model([{"role": "assistant", "content": "12"}]),
             {"local": factory},
-            harnesses={"fixture": step_harness(lambda _context: Session())},
+            harnesses={"fixture": StepHarness(lambda _context: Session())},
         ).run_task(rollout_spec(task, verifier_machine=verifier, **limits))
     )
     try:
@@ -1887,7 +1887,7 @@ async def test_turn_budget_covers_all_turns_and_excludes_final_grading():
         engine(
             Model([{"role": "assistant", "content": "12"}]),
             {"local": factory},
-            harnesses={"fixture": step_harness(lambda _context: Session())},
+            harnesses={"fixture": StepHarness(lambda _context: Session())},
         ).run_task(rollout_spec(task, verifier_machine=machine_runtime(), harness="fixture", total_turn_timeout=0.05))
     )
     try:
@@ -2096,7 +2096,7 @@ async def test_external_cancellation_at_attempt_deadline_remains_cancellation(ph
         await engine(
             ReplayModel([{"role": "assistant", "content": "12"}]),
             {"local": Factory()},
-            harnesses={"fixture": step_harness(lambda _context: Session())},
+            harnesses={"fixture": StepHarness(lambda _context: Session())},
         ).run_task(rollout_spec(task, machine=machine_runtime(), harness="fixture", attempt_timeout=0.01))
     assert closed.is_set()
 
@@ -2152,7 +2152,7 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
         {"local": Factory()},
-        harnesses={"fixture": step_harness(Session)},
+        harnesses={"fixture": StepHarness(Session)},
     ).run_task(rollout_spec(task, machine=machine_runtime(user="learner"), harness="fixture"))
     assert record.grade.reward == 1.0
     assert closed.is_set()
@@ -2584,7 +2584,7 @@ async def test_steps_keep_the_harness_data_of_each_transition():
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}] * 2),
-        harnesses={"fixture": step_harness(lambda _context: Session())},
+        harnesses={"fixture": StepHarness(lambda _context: Session())},
     ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
     assert [step.transition.data for step in record.rollout.conversations[-1].steps] == [("reward", 1), ("reward", 2)]
     # The engine grades with the task's grader; the episode only handled the turns.
@@ -2610,7 +2610,7 @@ async def test_an_agent_with_two_open_requests_ends_only_its_own_attempt():
 
     model = SlowModel([{"role": "assistant", "content": "12"}] * 2)
     with pytest.raises(RolloutInterrupted) as interrupted:
-        await engine(model, harnesses={"agent": agent_harness(agent)}).run_task(
+        await engine(model, harnesses={"agent": AgentHarness(agent)}).run_task(
             rollout_spec(arithmetic_task(), harness="agent")
         )
     assert (interrupted.value.operation, type(interrupted.value.__cause__)) == (RolloutOperation.ADVANCE, RuntimeError)
@@ -2632,7 +2632,7 @@ async def test_a_request_that_the_agent_cancels_and_leaves_stays_in_the_record_a
         await asyncio.Future()
 
     with pytest.raises(GradedRolloutInterrupted) as caught:
-        await RolloutEngine({}, {"agent": agent_harness(agent)}).run_task(
+        await RolloutEngine({}, {"agent": AgentHarness(agent)}).run_task(
             rollout_spec(arithmetic_task(), harness="agent"), model
         )
     # The attempt has no model turn, as for a harness that returns before its first request.
@@ -2658,7 +2658,7 @@ async def test_closing_answers_a_server_request_before_the_agent_drains_its_hand
             await asyncio.wait(handlers)
 
     record = await engine(
-        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
+        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)}
     ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1, cleanup_timeout=5))
 
     assert isinstance(handlers[-1].exception(), RolloutEnded)
@@ -2679,7 +2679,7 @@ async def test_an_agent_cancelled_by_another_task_propagates_its_cancellation():
         await asyncio.Future()
 
     pending = asyncio.create_task(
-        harness_rollout(agent_harness(agent), arithmetic_task(), model, limits=rollout_limits())
+        harness_rollout(AgentHarness(agent), arithmetic_task(), model, limits=rollout_limits())
     )
     await asyncio.wait_for(entered.wait(), timeout=5)
     assert agent_task is not None
@@ -2712,7 +2712,7 @@ async def test_a_cancelled_stop_propagates_and_lets_the_agent_finish_stopping():
         await asyncio.Future()
 
     pending = asyncio.create_task(
-        harness_rollout(agent_harness(agent), arithmetic_task(), model, limits=rollout_limits(cleanup_timeout=0.1))
+        harness_rollout(AgentHarness(agent), arithmetic_task(), model, limits=rollout_limits(cleanup_timeout=0.1))
     )
     await asyncio.wait_for(entered.wait(), timeout=5)
     pending.cancel()
@@ -2736,7 +2736,7 @@ async def test_the_last_prompt_again_gets_the_same_turn_without_a_new_generation
         received.append(await complete(prompt))
 
     model = ReplayModel([{"role": "assistant", "content": "12"}])
-    record = await engine(model, harnesses={"agent": agent_harness(agent)}).run_task(
+    record = await engine(model, harnesses={"agent": AgentHarness(agent)}).run_task(
         rollout_spec(arithmetic_task(), harness="agent")
     )
     assert len(model.requests) == 1
@@ -2750,7 +2750,7 @@ async def test_an_ungraded_workspace_task_needs_no_task_machine():
 
     task = arithmetic_task(answer_type=AnswerType.FILE, grader=NoGrader(reason="No evaluator"))
     record = await engine(
-        ReplayModel([{"role": "assistant", "content": "Done."}]), harnesses={"agent": agent_harness(agent)}
+        ReplayModel([{"role": "assistant", "content": "Done."}]), harnesses={"agent": AgentHarness(agent)}
     ).run_task(rollout_spec(task, harness="agent"))
 
     assert (record.grade.status, record.grade.error) == (Outcome.UNAVAILABLE, "No evaluator")
@@ -2761,7 +2761,7 @@ async def test_a_harness_runs_alone_on_a_local_machine():
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
     async with task_machine(task, FixtureImageFactory(), machine_runtime(), cleanup_timeout=5) as machine:
         rollout = await harness_rollout(
-            shell_harness(command_timeout=None), task, model.complete, machine=machine, limits=rollout_limits()
+            ShellHarness(command_timeout=None), task, model.complete, machine=machine, limits=rollout_limits()
         )
         written = await machine.run(Command(("cat", "/workspace/answer")))
     assert written.stdout == b"12\n"
@@ -2807,7 +2807,7 @@ async def test_a_failed_close_is_a_cleanup_error_of_a_graded_attempt():
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
-        harnesses={"fixture": step_harness(lambda _context: FailingClose())},
+        harnesses={"fixture": StepHarness(lambda _context: FailingClose())},
     ).run_task(rollout_spec(arithmetic_task(), harness="fixture"))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.grade.diagnostics["cleanup_errors"] == [{"operation": "episode_close", "exception_type": "OSError"}]
@@ -2831,7 +2831,7 @@ async def test_an_agent_that_does_not_stop_is_a_cleanup_error_and_is_kept_until_
             ended.set()
             raise ValueError("The agent failed after its cleanup deadline")
 
-    runner = engine(ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)})
+    runner = engine(ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)})
     try:
         record = await asyncio.wait_for(
             runner.run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1, cleanup_timeout=0.1)),
@@ -2911,7 +2911,7 @@ async def test_a_standalone_rollout_checks_the_task_before_the_model_runs():
     model = ReplayModel([{"role": "assistant", "content": "12"}])
     with pytest.raises(NotImplementedError):
         await harness_rollout(
-            agent_harness(lambda _context, complete: complete(Prompt((), {}))),
+            AgentHarness(lambda _context, complete: complete(Prompt((), {}))),
             arithmetic_task(answer_format=AnswerCall()),
             model.complete,
             limits=rollout_limits(),
@@ -3013,7 +3013,7 @@ async def test_an_agent_waits_while_the_engine_grades():
         engine(
             ReplayModel([{"role": "assistant", "content": "12"}]),
             {"local": factory},
-            harnesses={"agent": agent_harness(agent)},
+            harnesses={"agent": AgentHarness(agent)},
         ).run_task(rollout_spec(task, verifier_machine=machine_runtime(), harness="agent", max_turns=1))
     )
     try:
@@ -3061,7 +3061,7 @@ async def test_an_agent_that_fails_while_it_stops_is_a_cleanup_error():
             raise OSError("The agent's server did not shut down") from None
 
     record = await engine(
-        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
+        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)}
     ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.grade.diagnostics["cleanup_errors"] == [{"operation": "agent_stop", "exception_type": "OSError"}]
@@ -3096,7 +3096,7 @@ async def test_the_end_of_the_harness_stops_a_model_call_and_drops_its_late_answ
     task = arithmetic_task(grader=ScriptGrader(argv=("sh", "-c", "echo 1"), environment=GRADER_ENVIRONMENT))
     spec = rollout_spec(task, verifier_machine=machine_runtime(), harness="agent", total_turn_timeout=0.05)
     pending = asyncio.create_task(
-        engine(model, {"local": factory}, harnesses={"agent": agent_harness(agent)}).run_task(spec)
+        engine(model, {"local": factory}, harnesses={"agent": AgentHarness(agent)}).run_task(spec)
     )
     try:
         await asyncio.wait_for(factory.entered.wait(), timeout=5)
@@ -3129,7 +3129,7 @@ async def test_an_agent_that_drains_its_handlers_stops_when_a_model_call_is_open
             await asyncio.wait(handlers)
 
     record = await engine(
-        FirstTurnModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
+        FirstTurnModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)}
     ).run_task(rollout_spec(arithmetic_task(), harness="agent", total_turn_timeout=0.05, cleanup_timeout=1))
     assert (record.rollout.stop_reason, record.grade.reward) == ("total_turn_timeout", 1.0)
     assert "cleanup_errors" not in record.grade.diagnostics
@@ -3150,7 +3150,7 @@ async def test_a_token_contract_error_in_a_handler_ends_the_attempt():
 
     with pytest.raises(RolloutContractError):
         await asyncio.wait_for(
-            RolloutEngine({}, {"agent": agent_harness(agent)}).run_task(
+            RolloutEngine({}, {"agent": AgentHarness(agent)}).run_task(
                 rollout_spec(arithmetic_task(), harness="agent"), model
             ),
             timeout=5,
@@ -3217,7 +3217,7 @@ async def test_an_agent_gets_no_turn_after_the_harness_ended():
     runner = engine(
         ReplayModel([{"role": "assistant", "content": "12"}]),
         {"local": factory},
-        harnesses={"agent": agent_harness(agent)},
+        harnesses={"agent": AgentHarness(agent)},
     )
     pending = asyncio.create_task(runner.run_task(spec))
     await asyncio.wait_for(factory.entered.wait(), timeout=5)
@@ -3234,7 +3234,7 @@ async def test_an_agent_that_repeats_its_last_prompt_in_a_loop_cannot_block_a_de
             await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
 
     record = await engine(
-        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": agent_harness(agent)}
+        ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)}
     ).run_task(rollout_spec(arithmetic_task(), harness="agent", total_turn_timeout=0.05))
     assert (record.rollout.stop_reason, record.grade.reward) == ("total_turn_timeout", 1.0)
 
@@ -3254,7 +3254,7 @@ async def test_a_cancelled_reply_starts_a_new_tool_deadline():
         await asyncio.Future()
 
     with pytest.raises(RolloutInterrupted) as caught:
-        await engine(model, harnesses={"agent": agent_harness(agent)}).run_task(
+        await engine(model, harnesses={"agent": AgentHarness(agent)}).run_task(
             rollout_spec(arithmetic_task(), harness="agent", tool_turn_timeout=0.05)
         )
     assert (caught.value.operation, type(caught.value.__cause__)) == (RolloutOperation.ADVANCE, TimeoutError)
@@ -3305,7 +3305,7 @@ async def test_a_transport_that_catches_the_cancellation_of_a_call_adds_no_turn(
                     raise GenerationLimitReached((10, 11)) from None
         return ModelTurn({"role": "assistant", "content": "12"}, (10, 11), (20 + len(requests),), (-0.5,), "stop")
 
-    record = await RolloutEngine({}, {"agent": agent_harness(agent)}).run_task(
+    record = await RolloutEngine({}, {"agent": AgentHarness(agent)}).run_task(
         rollout_spec(arithmetic_task(), harness="agent"), model
     )
     # The cancelled call adds nothing, so the same prompt again makes a new generation.

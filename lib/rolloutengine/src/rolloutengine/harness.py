@@ -122,14 +122,21 @@ class Episode(Protocol):
 
 
 @dataclass(frozen=True)
-class _StepHarness:
-    open: Callable[[HarnessContext], Episode]
+class StepHarness:
+    """A harness for an ``Episode``: ``prepare`` gives the first prompt, and ``advance`` answers each model turn.
+
+    The episode closes in the attempt's cleanup. The harness accepts every task. A harness that must reject a
+    task before any machine starts implements ``Harness`` itself, and its ``run`` can call this harness's ``run``.
+    """
+
+    open_episode: Callable[[HarnessContext], Episode]
+    """Starts one episode per attempt, for example an episode class."""
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         pass
 
     async def run(self, context: HarnessContext, recorder: RolloutRecorder) -> None:
-        episode = self.open(context)
+        episode = self.open_episode(context)
         context.cleanup.push("episode_close", episode.close)
         turn = await recorder.start(await episode.prepare())
         while True:
@@ -139,13 +146,3 @@ class _StepHarness:
             if transition.done:
                 return
             turn = await recorder.reply(transition.observations, token_ids=transition.token_ids)
-
-
-def step_harness(open_episode: Callable[[HarnessContext], Episode]) -> Harness:
-    """A harness for an ``Episode``: ``prepare`` gives the first prompt, and ``advance`` answers each model turn.
-
-    ``open_episode`` starts one episode per attempt, for example an episode class. The episode closes in
-    the attempt's cleanup. The harness accepts every task. A harness that must reject a task before any
-    machine starts implements ``Harness`` itself, and its ``run`` can call this harness's ``run``.
-    """
-    return _StepHarness(open_episode)

@@ -6,9 +6,9 @@ outputs, and its grade.
 
 ```python
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.shell import shell_harness
+from rolloutengine.shell import ShellHarness
 
-engine = RolloutEngine(machine_factories, {"shellbox": shell_harness(command_timeout=30)})
+engine = RolloutEngine(machine_factories, {"shellbox": ShellHarness(command_timeout=30)})
 result = await engine.run_task(spec, model)
 ```
 
@@ -23,9 +23,9 @@ result = await engine.run_task(spec, model)
   its key.
 - A harness does not grade. The engine grades the last conversation that has a model turn with the task's
   grader. A harness can attach its own step data, such as rewards for training, with `record(data=...)`.
-- Built-in harnesses: `shell_harness` serves a shell tool on the task machine and host tools from registered
-  providers; `agent_harness` runs an agent that owns its prompts and tool loop, for example an installed agent
-  behind an HTTP proxy; `step_harness` runs an `Episode` that returns the first prompt and handles each turn.
+- Built-in harnesses: `ShellHarness` serves a shell tool on the task machine and host tools from registered
+  providers; `AgentHarness` runs an agent that owns its prompts and tool loop, for example an installed agent
+  behind an HTTP proxy; `StepHarness` runs an `Episode` that returns the first prompt and handles each turn.
 - `harness_rollout` runs one harness on one task with one model, without grading. `task_machine` starts the
   task machine for it.
 - The engine owns the machines, the attempt deadline, grading, cleanup, and progress events for an optional

@@ -39,7 +39,7 @@ from taskcompendium.submission import (
 )
 
 from rolloutengine.contracts import LENGTH_STOP_REASON, EventSink, ModelTurn, Prompt, ToolCallCompleted, Transition
-from rolloutengine.harness import Harness, HarnessContext, RolloutRecorder
+from rolloutengine.harness import HarnessContext, RolloutRecorder
 from rolloutengine.spec import RolloutLimits
 
 UNKNOWN_TOOL_ERROR = "Unknown tool"
@@ -164,11 +164,16 @@ def _provider_tools(
     return bound
 
 
-@dataclass(frozen=True)
-class _ShellHarness:
+@dataclass(frozen=True, kw_only=True)
+class ShellHarness:
+    """Serve a shell tool on the task machine and host tools from registered providers, and end on a final response."""
+
     command_timeout: float | None
-    shell_tool: ShellToolConfig
-    tools: Mapping[str, ToolProvider]
+    """The limit of each shell command. A timed-out command returns an observation, and the model can continue."""
+    shell_tool: ShellToolConfig = DEFAULT_SHELL_TOOL
+    """The shell interface for tasks that declare the shell capability without binding a tool of their own."""
+    tools: Mapping[str, ToolProvider] = NO_TOOLS
+    """The provider that serves each ``ProviderRequirement.action_interface``."""
 
     def __post_init__(self) -> None:
         if self.command_timeout is not None and not (math.isfinite(self.command_timeout) and self.command_timeout > 0):
@@ -212,22 +217,6 @@ class _ShellHarness:
                 recorder.record(observations=transition.observations, metrics=transition.metrics)
                 return
             turn = await recorder.reply(transition.observations)
-
-
-def shell_harness(
-    *,
-    command_timeout: float | None,
-    shell_tool: ShellToolConfig = DEFAULT_SHELL_TOOL,
-    tools: Mapping[str, ToolProvider] = NO_TOOLS,
-) -> Harness:
-    """Serve a shell tool on the task machine and host tools from ``tools``, and end on a final response.
-
-    ``shell_tool`` names the shell interface for tasks that declare the shell capability without
-    binding a tool of their own. ``command_timeout`` limits each shell command; a timed-out command
-    returns an observation and the model can continue. ``tools`` maps
-    ``ProviderRequirement.action_interface`` to the provider that serves it.
-    """
-    return _ShellHarness(command_timeout, shell_tool, tools)
 
 
 class _ShellToolSession:

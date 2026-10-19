@@ -53,7 +53,7 @@ The engine resolves two registries by key:
 | `harnesses` | `TaskRolloutSpec.harness` | The `Harness` that runs the model side of the task |
 
 No harness is registered by default. Register the shell harness under the name that your specs use, for
-example `RolloutEngine(machine_factories, {"shellbox": shell_harness(command_timeout=30)})`.
+example `RolloutEngine(machine_factories, {"shellbox": ShellHarness(command_timeout=30)})`.
 Harness options, such as the shell tool's name and command timeout, belong to the registered harness:
 register one harness for each configuration, and select it with `TaskRolloutSpec.harness`.
 A machine selection of `None` supplies no machine.
@@ -166,12 +166,12 @@ block ends:
 
 ```python
 async with task_machine(task, factory, runtime, cleanup_timeout=30) as machine:
-    rollout = await harness_rollout(shell_harness(command_timeout=30), task, model, machine=machine, limits=limits)
+    rollout = await harness_rollout(ShellHarness(command_timeout=30), task, model, machine=machine, limits=limits)
 ```
 
 ### Step harness
 
-`step_harness(open_episode)` from `rolloutengine.harness` runs an `Episode`, a step-style loop, and accepts every
+`StepHarness(open_episode)` from `rolloutengine.harness` runs an `Episode`, a step-style loop, and accepts every
 task. `open_episode(context)` starts one episode for each attempt. An episode class whose constructor takes the
 context can be `open_episode`:
 
@@ -192,12 +192,12 @@ A `Transition` has these fields:
 
 ### Agent harness
 
-`agent_harness(run)` from `rolloutengine.agent` runs an agent that owns its prompts and tool loop,
-for example an installed agent behind an HTTP proxy. `run(context, complete)` sends one `Prompt` at a time to
+`AgentHarness(agent)` from `rolloutengine.agent` runs an agent that owns its prompts and tool loop,
+for example an installed agent behind an HTTP proxy. `agent(context, complete)` sends one `Prompt` at a time to
 `complete` and receives the exact `ModelTurn`:
 
 ```python
-from rolloutengine.agent import agent_harness
+from rolloutengine.agent import AgentHarness
 from rolloutengine.contracts import Prompt
 from rolloutengine.engine import RolloutEngine
 
@@ -206,7 +206,7 @@ async def run_agent(context, complete):
     turn = await complete(Prompt(({"role": "user", "content": "Fix the failing test."},), {}))
     ...
 
-engine = RolloutEngine(machine_factories, {"agent": agent_harness(run_agent)})
+engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
 ```
 
 `complete` obeys these rules:
@@ -232,7 +232,7 @@ engine = RolloutEngine(machine_factories, {"agent": agent_harness(run_agent)})
 
 ### Shell harness
 
-`shell_harness(*, command_timeout, shell_tool=ShellToolConfig(), tools={})` from `rolloutengine.shell` serves a
+`ShellHarness(*, command_timeout, shell_tool=ShellToolConfig(), tools={})` from `rolloutengine.shell` serves a
 shell tool on the task machine and host tools from tool providers, and ends on a final response.
 `command_timeout` must be `None` or positive and finite.
 The shell harness exposes `shell(command: string)` when the task declares the shell capability.
@@ -257,7 +257,7 @@ provider contracts require a registered tool provider or another harness.
 ### Tool providers
 
 A tool provider serves host tools for one action interface. Register providers with the shell harness,
-`shell_harness(command_timeout=30, tools={"checker:v1": provider})`; the key matches
+`ShellHarness(command_timeout=30, tools={"checker:v1": provider})`; the key matches
 `ProviderRequirement.action_interface` in `environment_requirements.tool_providers`.
 No provider is registered by default.
 
@@ -306,7 +306,7 @@ The shell harness's check rejects these tasks before machine acquisition:
 A task can declare a provider's tool in `interaction_tools` to fix its definition; the shell harness advertises it once.
 
 For tasks that declare only the shell capability, the harness supplies the interface.
-Pass `shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd")` to `shell_harness`
+Pass `shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd")` to `ShellHarness`
 to advertise `terminal(cmd)`. Import `ShellToolConfig` from `taskcompendium.runtime.shell`;
 curation's `ShellFactory` accepts the same option. An explicit task binding takes precedence.
 Collisions with final-answer tools are rejected before machine acquisition.
@@ -420,7 +420,7 @@ No end event is emitted when a token-contract error or cancellation propagates.
 | --- | --- |
 | Machine `startup_timeout` | Machine creation, resource upload, setup commands, and the explicit execution-user probe |
 | `model_turn_timeout` | One model request |
-| `shell_harness(command_timeout=...)` | Each shell-tool command, including separate calls within one model turn |
+| `ShellHarness(command_timeout=...)` | Each shell-tool command, including separate calls within one model turn |
 | `tool_turn_timeout` | The time from a model turn to the harness's next request or its end, including its tool operations; a cancelled request starts it again |
 | `total_turn_timeout` | The time from the harness's first request to its end, across all turns in one attempt |
 | `attempt_timeout` | Task startup, the harness, and final verification |
@@ -600,14 +600,14 @@ One engine serves every attempt; each run passes its model:
 ```python
 from rolloutengine.contracts import GradedRollout
 from rolloutengine.engine import Model, RolloutEngine
-from rolloutengine.shell import shell_harness
+from rolloutengine.shell import ShellHarness
 from rolloutengine.spec import TaskRolloutSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 
 engine = RolloutEngine(
     {"docker": DockerMachineFactory(), "shellsim": ShellSimMachineFactory()},
-    {"shellbox": shell_harness(command_timeout=30)},
+    {"shellbox": ShellHarness(command_timeout=30)},
 )
 
 

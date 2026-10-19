@@ -21,7 +21,7 @@ from verifyit.spec import NumericSpec
 
 from rolloutengine.contracts import GradedRollout, Model, ModelRequest, ModelTurn
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.shell import shell_harness
+from rolloutengine.shell import ShellHarness
 from rolloutengine.spec import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 
 TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
@@ -129,7 +129,7 @@ def engine(model, machine_factories=None, *, harnesses=None, observer=None) -> M
     """Run ``model.complete`` with a shell harness under ``SHELL``, unless ``harnesses`` replaces it."""
     rollout_engine = RolloutEngine(
         {} if machine_factories is None else machine_factories,
-        {SHELL: shell_harness(command_timeout=None), **({} if harnesses is None else harnesses)},
+        {SHELL: ShellHarness(command_timeout=None), **({} if harnesses is None else harnesses)},
         observer=observer,
     )
     return ModelEngine(rollout_engine, model.complete)

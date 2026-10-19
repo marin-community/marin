@@ -12,7 +12,7 @@ from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _retain_task
 from rolloutengine.contracts import ModelTurn, Prompt, RolloutEnded
-from rolloutengine.harness import Harness, HarnessContext, RolloutRecorder
+from rolloutengine.harness import HarnessContext, RolloutRecorder
 from rolloutengine.shell import task_prompt
 from rolloutengine.spec import RolloutLimits
 
@@ -25,7 +25,8 @@ AgentRun = Callable[[HarnessContext, AgentCompletion], Coroutine[Any, Any, None]
 """An agent: it gets the attempt's context and a completion function, and sends one prompt at a time."""
 
 
-def agent_harness(run: AgentRun) -> Harness:
+@dataclass(frozen=True)
+class AgentHarness:
     """A harness for an agent that owns its prompts and tool loop.
 
     Each completion call sends one prompt and returns the exact ``ModelTurn``, also from tasks that the agent
@@ -36,11 +37,7 @@ def agent_harness(run: AgentRun) -> Harness:
     not get, such as an answer tool or a tool provider. The task rollout reference gives the rules for
     cancelled calls and for the shutdown of the agent.
     """
-    return _AgentHarness(run)
 
-
-@dataclass(frozen=True)
-class _AgentHarness:
     agent: AgentRun
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
