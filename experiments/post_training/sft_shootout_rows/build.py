@@ -142,6 +142,8 @@ CHANGELOG = (
     "--relay-families builds a component (no replay); --match-relay cuts plain to a short relay family (fallback)",
     "CLEAN --require-clean-completion drops passes that did not end on the agent's own submit / task_complete; "
     "--plain-selection fewest-reasoning picks each task's pass with the fewest trained reasoning tokens",
+    "RECOVERYVARIANTS recovery TMax failures: seeded variants within each style (v0 TBLite-100 parser errors) and "
+    "v0's measured repeats within a point (same style 125/221, identical text 0/221)",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are

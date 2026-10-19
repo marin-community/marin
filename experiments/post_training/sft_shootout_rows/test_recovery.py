@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import itertools
 import json
 import random
 from pathlib import Path
@@ -76,6 +77,10 @@ def swe_trace(turns: int = 5) -> dict:
     return {"trial_id": "swe-trial", "family": "swesmith", "messages": messages, "tools": TOOLS}
 
 
+def failures(*styles: str) -> tuple:
+    return tuple(recovery.Failure(style, seed) for seed, style in enumerate(styles))
+
+
 def trained(rendered) -> list[int]:
     return [token for token, weight in zip(rendered.ids, rendered.mask, strict=True) if weight]
 
@@ -112,9 +117,14 @@ def test_injected_row_trains_exactly_its_plain_tokens_and_masks_the_injection(to
     plain = render_trace(tokenizer, trace["messages"], trace["tools"])
     injections = [
         recovery.Injection(
-            1, ("invalid_json", "no_json") if trace["family"] == "tmax" else ("prose_no_call", "text_tool_call")
+            1,
+            (
+                failures("invalid_json", "no_json")
+                if trace["family"] == "tmax"
+                else failures("prose_no_call", "text_tool_call")
+            ),
         ),
-        recovery.Injection(3, ("missing_fields",) if trace["family"] == "tmax" else ("prose_no_call",)),
+        recovery.Injection(3, failures("missing_fields") if trace["family"] == "tmax" else failures("prose_no_call")),
     ]
     for mode in modes:
         messages, records = recovery.inject(trace["family"], trace["messages"], injections, mode)
@@ -147,7 +157,61 @@ def test_first_and_last_teacher_turns_are_never_injection_points():
         assert recovery.eligible_turns(trace["family"], trace["messages"]) == [1, 2, 3]
         for seed in range(50):
             for injection in recovery.plan_injections(random.Random(seed), trace["family"], trace["messages"]):
-                assert 1 <= injection.turn <= 3 and 1 <= len(injection.styles) <= 3
+                assert 1 <= injection.turn <= 3 and 1 <= len(injection.failures) <= 3
+
+
+REALISTIC_TURN = {
+    "analysis": "The directory has signs.txt and sum.txt; we need to inspect both before writing players.txt.",
+    "plan": "List the files, then view the first lines of each.",
+    "commands": [{"keystrokes": "ls -la\n", "duration": 0.1}, {"keystrokes": "head -5 signs.txt\n", "duration": 0.1}],
+    "task_complete": False,
+}
+
+
+@pytest.mark.parametrize("style", sorted(recovery.TMAX_VARIANTS))
+def test_every_tmax_variant_gets_its_styles_error(style):
+    for variant in recovery.TMAX_VARIANTS[style]:
+        texts = set()
+        for seed in range(30):
+            text = recovery.tmax_variant(REALISTIC_TURN, style, variant, random.Random(seed))
+            error = recovery.terminus_feedback(text).split("ERROR: ", 1)[1]
+            assert error.startswith(recovery.TMAX_ERRORS[style]), (variant, error)
+            texts.add(text)
+        assert len(texts) > 1, f"{style}/{variant} renders one fixed text"
+
+
+def test_consecutive_tmax_failures_differ_and_vary_between_seeds():
+    for seed in range(30):
+        rng, previous = random.Random(seed), None
+        for style in ("invalid_json", "invalid_json", "no_json", "no_json", "missing_fields"):
+            text, variant = recovery.render_tmax_failure(REALISTIC_TURN, style, rng, previous)
+            assert text != previous and variant in recovery.TMAX_VARIANTS[style]
+            previous = text
+    renders = {recovery.render_tmax_failure(REALISTIC_TURN, "no_json", random.Random(s), None)[0] for s in range(30)}
+    assert len(renders) > 3
+
+
+def test_tmax_repeats_follow_v0s_measured_rates():
+    pairs = same = repeats = 0
+    rng = random.Random(0)
+    for _ in range(20000):
+        planned = recovery.plan_failures(rng, "tmax", 3)
+        for before, after in itertools.pairwise(planned):
+            pairs += 1
+            same += before.style == after.style
+            repeats += after.repeat
+    assert abs(same / pairs - recovery.TMAX_REPEAT["same_style"]) < 0.01
+    assert repeats / pairs == recovery.TMAX_REPEAT["identical_text"] == 0
+
+
+def test_a_repeat_failure_is_the_previous_text_word_for_word():
+    trace = tmax_trace()
+    first = recovery.Failure("invalid_json", 7)
+    plan = [recovery.Injection(2, (first, recovery.Failure("invalid_json", 7, repeat=True)))]
+    messages, records = recovery.inject("tmax", trace["messages"], plan)
+    failed = [m["content"] for m in messages if m.get("author") == INJECTED]
+    assert len(failed) == 2 and failed[0] == failed[1] and [r["repeat"] for r in records] == [False, True]
+    assert recovery.failed_texts(messages) == [failed]
 
 
 def test_selection_is_an_exact_seeded_fraction_per_family():
@@ -192,8 +256,8 @@ def test_a_row_over_the_context_keeps_its_plain_rendering(tokenizer, monkeypatch
 
 
 def test_smaller_plans_shrink_one_attempt_at_a_time_then_drop_the_last_point():
-    plan = [recovery.Injection(1, ("a", "b")), recovery.Injection(3, ("c", "d", "e"))]
-    shapes = [[(i.turn, len(i.styles)) for i in step] for step in recovery.smaller_plans(plan)]
+    plan = [recovery.Injection(1, failures("a", "b")), recovery.Injection(3, failures("c", "d", "e"))]
+    shapes = [[(i.turn, len(i.failures)) for i in step] for step in recovery.smaller_plans(plan)]
     assert shapes == [[(1, 2), (3, 3)], [(1, 2), (3, 2)], [(1, 2), (3, 1)], [(1, 1), (3, 1)], [(1, 1)]]
 
 
@@ -218,7 +282,7 @@ def test_a_row_whose_full_injection_is_over_the_context_takes_a_smaller_one(toke
     assert len(recovered[trial].ids) == lengths[1]
     assert (
         sum(family["attempts_per_point"].values()) == len(plan)
-        and sum(family["styles"].values()) == sum(len(i.styles) for i in plan) - 1
+        and sum(family["styles"].values()) == sum(len(i.failures) for i in plan) - 1
     )
 
 
