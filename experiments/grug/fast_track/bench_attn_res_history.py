@@ -79,9 +79,9 @@ def sweep() -> None:
     sources, weights, d_mixed = _inputs(N)
     d_mixes = d_mixed.astype(jnp.float32)
     grids = {
-        "mix": [Tiles(tb, fb, w, 1) for tb in (8, 16) for fb in (64, 128) for w in (4, 8, 16)],
-        "dw": [Tiles(tb, fb, w, 2) for tb in (4, 8) for fb in (64, 128) for w in (4, 8, 16)],
-        "srcgrad": [Tiles(tb, fb, w, 1) for tb in (8, 16, 32) for fb in (64, 128) for w in (4, 8, 16)],
+        "mix": [Tiles(tb, fb, w, 1) for tb in (8, 16) for fb in (128, 256) for w in (4, 8)],
+        "dw": [Tiles(tb, fb, w, 2) for tb in (4, 8, 16) for fb in (128, 256) for w in (4, 8)],
+        "srcgrad": [Tiles(tb, fb, w, 1) for tb in (8, 16, 32) for fb in (128, 256) for w in (4, 8)],
     }
     for name, tiles_grid in grids.items():
         results = []
