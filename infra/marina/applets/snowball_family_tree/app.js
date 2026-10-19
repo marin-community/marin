@@ -78,8 +78,7 @@ function descendants(id, set = new Set()) {
   for (const n of nodes) if (n.parents.includes(id)) descendants(n.id, set);
   return set;
 }
-// Compact labels for run nodes without a published model id. Nodes may carry
-// their own `short` field in graph-data.json; it takes precedence.
+// Nodes' own `short` fields take precedence over these fallback labels.
 const NODE_LABELS = {
   [PRETRAIN]: "67B A2B pretrain",
   "base-2.7": "2.7T cooldown",
