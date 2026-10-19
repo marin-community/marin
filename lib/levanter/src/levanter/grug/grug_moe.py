@@ -539,6 +539,7 @@ def moe_mlp(
     ragged_expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     ragged_overlap_weight_grads: bool = False,
     ragged_overlap_window: OverlapWindow = OverlapWindow.FIRST_DISPATCH,
+    ragged_defer_returns: bool = False,
     ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     ragged_expert_mxfp8_dispatch: bool = False,
     expert_serial_pair: bool = False,
@@ -583,6 +584,8 @@ def moe_mlp(
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
     `ragged_overlap_window` (``ragged_all_to_all``) picks the forward all-to-all the overlap work runs under.
+    `ragged_defer_returns` (``ragged_all_to_all``, several chunks) starts each chunk's forward return all-to-all
+    after the next chunk's dispatch arrives, so it runs under that chunk's expert MLP.
     `ragged_overlap_weight_grads` (``ragged_all_to_all``) pins each round's expert weight gradients under its
     input cotangent's return all-to-all (same math).
     `expert_serial_pair` (``ragged_all_to_all`` ungated experts only) runs each expert's two neuron halves
@@ -767,6 +770,7 @@ def moe_mlp(
                 serial_pair=expert_serial_pair,
                 overlap_weight_grads=ragged_overlap_weight_grads,
                 overlap_window=ragged_overlap_window,
+                defer_returns=ragged_defer_returns,
                 mxfp8=ragged_expert_mxfp8,
                 mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
             )

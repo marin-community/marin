@@ -1594,9 +1594,11 @@ def test_fp8_dispatch_matches_full_precision_dispatch_across_shards():
 @pytest.mark.parametrize("implementation", ["fixed_pooled_wave_all_to_all", "ragged_all_to_all"])
 @pytest.mark.parametrize("side_w_spec", [(None, None), ("expert", None)])
 @pytest.mark.parametrize("gather", ["in_work", "before_transport"])
-@pytest.mark.parametrize("window", ["first_dispatch", "last_return"])
+@pytest.mark.parametrize(
+    ("window", "defer_returns"), [("first_dispatch", False), ("last_return", False), ("first_dispatch", True)]
+)
 def test_overlap_work_matches_running_it_separately(
-    implementation: MoeImplementation, side_w_spec: tuple, gather: str, window: str
+    implementation: MoeImplementation, side_w_spec: tuple, gather: str, window: str, defer_returns: bool
 ):
     """Work scheduled under the dispatch all-to-all (``MoeOverlapWork``) keeps the values and gradients of
     running it outside the MoE, and is pinned by barriers in both the forward and the backward. A parameter
@@ -1610,6 +1612,7 @@ def test_overlap_work_matches_running_it_separately(
         SIDE_W_SPEC = {side_w_spec!r}
         GATHER = {gather!r}
         WINDOW = {window!r}
+        DEFER_RETURNS = {defer_returns!r}
     """
         + """
         import jax
@@ -1666,6 +1669,7 @@ def test_overlap_work_matches_running_it_separately(
                     overlap=overlap,
                     overlap_param_gather=OverlapParamGather(GATHER),
                     ragged_overlap_window=OverlapWindow(WINDOW),
+                    ragged_defer_returns=DEFER_RETURNS,
                     **kwargs,
                 )
             else:
@@ -1691,7 +1695,10 @@ def test_overlap_work_matches_running_it_separately(
             # Two barriers around the dispatch all-to-all in the forward and two in the backward (the pooled
             # path's are the forward pair's transposes; the ragged path pins its backward under the return
             # all-to-all in its custom VJP, and adds one more that serializes its two default expert chunks).
-            expected_barriers = {"fixed_pooled_wave_all_to_all": 4, "ragged_all_to_all": 5}[IMPLEMENTATION]
+            # Deferred returns add one barrier that holds the first chunk's return until the second dispatch lands.
+            expected_barriers = {"fixed_pooled_wave_all_to_all": 4, "ragged_all_to_all": 5 + DEFER_RETURNS}[
+                IMPLEMENTATION
+            ]
             assert count_barriers(jaxpr.jaxpr) == expected_barriers
             assert (count_barriers(jaxpr.jaxpr, "reduce_scatter") > 0) == (SIDE_W_SPEC[0] is not None)
             if IMPLEMENTATION == "ragged_all_to_all" and jax.default_backend() == "cpu":

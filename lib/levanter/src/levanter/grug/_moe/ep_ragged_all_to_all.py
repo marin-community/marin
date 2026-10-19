@@ -678,6 +678,7 @@ class _ExpertLayout:
     # Pin each chunk's expert weight gradients under its input cotangent's return all-to-all.
     overlap_weight_grads: bool = False
     overlap_window: OverlapWindow = OverlapWindow.FIRST_DISPATCH
+    defer_returns: bool = False
     # Dispatch the rows as MXFP8 bytes (``mx_pack_rows``) for an expert MLP that takes them so; the backward's
     # transports stay in the rows' dtype (quantization is straight-through).
     mxfp8_dispatch: bool = False
@@ -772,6 +773,7 @@ def _routed_experts_forward(
     )  # [TK, O]
     chunk_residuals = []
     send = mx_pack_rows(sorted_x) if layout.mxfp8_dispatch else sorted_x  # [TK, H] or [TK, H + H / 32] bytes
+    pending_return = None
     for chunk_index, plan in enumerate(plans):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             source = send
@@ -794,6 +796,15 @@ def _routed_experts_forward(
                 x_dispatch, side = jax.lax.optimization_barrier((x_dispatch, side))
             else:
                 x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
+            if pending_return is not None:
+                # defer_returns: the previous chunk's return starts once this chunk's rows have arrived, so it
+                # runs under this chunk's expert MLP instead of ahead of the dispatch.
+                pending_out, pending_plan = pending_return
+                x_dispatch, pending_out = jax.lax.optimization_barrier((x_dispatch, pending_out))
+                returned = jax.lax.ragged_all_to_all(
+                    pending_out, returned, *pending_plan.return_params, axis_name="expert"
+                )
+                pending_return = None
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
             out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
                 x_dispatch,
@@ -812,6 +823,8 @@ def _routed_experts_forward(
                 with jax.named_scope("overlap"):
                     side, side_vjp = jax.vjp(overlap.fn, tokens, overlap.params)
                 returned, side = jax.lax.optimization_barrier((returned, side))
+            elif layout.defer_returns and not last:
+                pending_return = (out_dispatch, plan)
             else:
                 returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
             chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
@@ -1038,6 +1051,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     overlap_weight_grads: bool = False,
     overlap_window: OverlapWindow = OverlapWindow.FIRST_DISPATCH,
+    defer_returns: bool = False,
     mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     mxfp8_dispatch: bool = False,
     serial_pair: bool = False,
@@ -1135,6 +1149,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         expert_mlp=expert_mlp,
         overlap_weight_grads=overlap_weight_grads,
         overlap_window=overlap_window,
+        defer_returns=defer_returns,
         mxfp8_dispatch=mxfp8_dispatch,
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten

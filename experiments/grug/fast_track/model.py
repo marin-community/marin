@@ -969,6 +969,9 @@ class GrugModelConfig:
     moe_overlap_window: OverlapWindow = OverlapWindow.FIRST_DISPATCH
     """``moe_shared_placement=overlap`` on ``ragged_all_to_all``: the forward all-to-all the shared experts run under
     (``OverlapWindow``). Same math."""
+    moe_defer_returns: bool = False
+    """``ragged_all_to_all`` with several ``moe_ragged_chunks``: each chunk's forward return all-to-all waits for the
+    next chunk's dispatch, so the next chunk's expert MLP hides it. Same math."""
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
@@ -3774,6 +3777,7 @@ def _run_expert_bank(
             overlap=overlap,
             overlap_param_gather=cfg.moe_overlap_param_gather,
             ragged_overlap_window=cfg.moe_overlap_window,
+            ragged_defer_returns=cfg.moe_defer_returns,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
             expert_serial_pair=cfg.moe_serial_pair,
             ragged_overlap_weight_grads=cfg.moe_overlap_weight_grads,
