@@ -141,9 +141,9 @@ The session applies these rules:
   or attempt deadline stops it. After a refusal, `record(data=..., metrics=...)` still adds to the step of the
   last turn until the record is final, for example to attach a final reward. If no turn exists, `record` raises
   the refusal again, so the refusal stays the outcome of the attempt.
-- The record is final when `run` returns or raises, or when a turn deadline expires. The session then cancels
-  a model call that is still open, for example in an agent's HTTP handler, and ignores its result. Thus the
-  grader and the returned rollout see the same record.
+- The record is final when `run` returns or raises, or when a turn or attempt deadline expires. The session
+  then cancels a model call that is still open, for example in an agent's HTTP handler, and ignores its result.
+  Thus the grader and the returned rollout see the same record.
 
 ### Cleanup
 

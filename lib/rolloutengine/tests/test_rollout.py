@@ -2980,6 +2980,27 @@ async def test_a_harness_that_catches_its_tool_deadline_cannot_block_the_event_l
     assert (caught.value.operation, type(caught.value.__cause__)) == (RolloutOperation.ADVANCE, TimeoutError)
 
 
+async def test_a_harness_that_catches_its_attempt_deadline_gets_no_more_turns():
+    class SwallowsDeadline:
+        def check(self, task, limits):
+            pass
+
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                pass
+            await session.reply(({"role": "user", "content": "Again."},))
+
+    with pytest.raises(RolloutInterrupted) as caught:
+        await engine(
+            ReplayModel([{"role": "assistant", "content": "12"}] * 2), harnesses={"fixture": SwallowsDeadline()}
+        ).run_task(rollout_spec(arithmetic_task(), harness="fixture", attempt_timeout=0.05))
+    assert (caught.value.operation, type(caught.value.__cause__)) == (RolloutOperation.ATTEMPT, TimeoutError)
+    assert [len(conversation.steps) for conversation in caught.value.rollout.conversations] == [1]
+
+
 async def test_a_turn_with_recorded_observations_takes_no_reply():
     class RecordsThenReplies:
         def check(self, task, limits):

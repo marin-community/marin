@@ -153,7 +153,7 @@ class RolloutEngine:
         async with AsyncExitStack() as resources:
             try:
                 async with deadline:
-                    await self._run(attempt, resources)
+                    await self._run(attempt, resources, deadline)
             except TimeoutError as error:
                 if not deadline.expired():
                     raise
@@ -163,7 +163,7 @@ class RolloutEngine:
                 return interrupted.operation, interrupted.__cause__
         return None
 
-    async def _run(self, attempt: _Attempt, resources: AsyncExitStack) -> None:
+    async def _run(self, attempt: _Attempt, resources: AsyncExitStack, deadline: asyncio.Timeout) -> None:
         spec, events = attempt.spec, attempt.events
         task = spec.task
         started = time.monotonic()
@@ -182,7 +182,7 @@ class RolloutEngine:
             events.emit(MachineReady(time.monotonic() - started))
         # The harness's resources close after grading, before the machines.
         context = HarnessContext(task, machine, events, _CleanupScope(resources, attempt.cleanup), attempt.run_id)
-        failure = await _run_harness(attempt.harness, context, attempt.recorder)
+        failure = await _run_harness(attempt.harness, context, attempt.recorder, attempt=deadline)
         # A model failure leaves the completed turns intact, so the engine grades them.
         if attempt.recorder.has_response and (failure is None or failure[0] == RolloutOperation.MODEL):
             try:
