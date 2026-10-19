@@ -62,6 +62,7 @@ from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.fast_track import attention_rows_probe, router_soft_select, trace_capture
+from experiments.grug.fast_track.attn_res_block_mix import block_mix_local, block_mix_weight_grads_local
 from experiments.grug.fast_track.attn_res_source_grads import accumulate_source_grads_local
 from experiments.grug.fast_track.gating import _load_error_grad, mixture_weights
 from experiments.grug.fast_track.key_offset import (
@@ -885,7 +886,12 @@ class GrugModelConfig:
     ``grug_moe_routed_output``; needs the expert-side routing-weight gradient). Same math."""
     attn_res_fused_source_grads: bool = False
     """``scan_layers`` backward: update the AttnRes source cotangents with one Pallas kernel per layer instead of
-    XLA's fusion, which re-reads every token's gate cotangent once per source (``attn_res_source_grads``)."""
+    XLA's fusion, which re-reads every token's gate cotangent once per source (``attn_res_source_grads``); the
+    kernel skips the history slots no block has filled yet (zero weight)."""
+    attn_res_fused_block_mix: bool = False
+    """``scan_layers`` with ``attn_res_two_phase``: the attention and MLP gates' phase-1 mixes of the completed
+    blocks (and their weight gradients) as Pallas kernels that read only the filled history slots, once for both
+    gates (``attn_res_block_mix``), instead of XLA's fusions over every slot. Same math."""
     layer_carry_offload: bool = False
     """Without ``attn_res`` (the plain layer scan, every layer rematerialized): keep each layer's input, the
     residual-stream carry, in pinned host memory for the backward instead of HBM, as the GB200 hero does
@@ -4786,9 +4792,18 @@ def _scan_history_layer(
     if plain_sum:
         logits = history.logits
     else:
-        logits = roll(history.logits, _attn_res_source_logits(history.partial, queries, eps))
+        # Only a boundary writes the new block's logits (off one the slot write is a no-op), so only a boundary
+        # computes them: 8 of the hero's 48 layers.
+        logits = jax.lax.cond(
+            boundary,
+            lambda: jax.lax.dynamic_update_index_in_dim(
+                history.logits, _attn_res_source_logits(history.partial, queries, eps), slot, axis=0
+            ),
+            lambda: history.logits,
+        )
     partial = jnp.where(boundary, jnp.zeros_like(history.partial), history.partial)
-    valid = jnp.arange(num_sources) < schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
+    num_valid = schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
+    valid = jnp.arange(num_sources) < num_valid
     gate_weights: list[jax.Array] = []
     completed_sum = None
     if plain_sum:
@@ -4805,10 +4820,14 @@ def _scan_history_layer(
         lse = jax.nn.logsumexp(gate_logits_2, axis=0)  # [2, B, S]
         inter_weights = jnp.exp(gate_logits_2 - lse[None])  # [N, 2, B, S]
         src = sources if probes is None else jax.lax.stop_gradient(sources)
-        normed = inter_weights[0][..., None] * src[0][None].astype(jnp.float32)
-        for n in range(1, num_sources):
-            normed = normed + inter_weights[n][..., None] * src[n][None].astype(jnp.float32)
-        inter = (normed.astype(sources.dtype), lse, inter_weights)
+        if layer.attn.cfg.attn_res_fused_block_mix:
+            normed = _fused_block_mix(src, inter_weights, num_valid)
+        else:
+            normed = inter_weights[0][..., None] * src[0][None].astype(jnp.float32)
+            for n in range(1, num_sources):
+                normed = normed + inter_weights[n][..., None] * src[n][None].astype(jnp.float32)
+            normed = normed.astype(sources.dtype)
+        inter = (normed, lse, inter_weights)
     calls = [0]
 
     def two_phase_mix(p: jax.Array, gate_index: jax.Array, attn_gate: bool, j: int):
@@ -4904,7 +4923,9 @@ def _accumulate_source_grads(
         d_slot = d_slot + jax.lax.dynamic_index_in_dim(weights, slot, axis=0, keepdims=False)[..., None] * d_mix
     d_partial = d_partial + jnp.where(boundary, d_slot, 0).astype(d_partial.dtype)
     if fused:
-        updated = _fused_source_grads(d_sources, gate_weights, d_mixes)
+        block = layer_index // schedule.seg_size
+        num_valid = schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
+        updated = _fused_source_grads(d_sources, gate_weights, d_mixes, num_valid)
         # The rolled slot's previous value gets no cotangent; only that one source is rewritten.
         zeroed = jnp.where(boundary, jnp.zeros_like(updated[0]), jax.lax.dynamic_index_in_dim(updated, slot, 0, False))
         return jax.lax.dynamic_update_index_in_dim(updated, zeroed, slot, axis=0), d_partial
@@ -4916,25 +4937,31 @@ def _accumulate_source_grads(
 
 
 def _fused_source_grads(
-    d_sources: Float[Array, "N B S D"], gate_weights: tuple[jax.Array, ...], d_mixes: tuple[jax.Array, ...]
+    d_sources: Float[Array, "N B S D"],
+    gate_weights: tuple[jax.Array, ...],
+    d_mixes: tuple[jax.Array, ...],
+    num_valid: jax.Array,
 ) -> Float[Array, "N B S D"]:
-    """``d_sources + sum_g weights_g[..., None] * d_mix_g[None]`` in the Pallas kernel, per batch shard."""
+    """``d_sources + sum_g weights_g[..., None] * d_mix_g[None]`` in the Pallas kernel, per batch shard. Slots
+    ``>= num_valid`` have zero weight in every gate and are left as they are."""
     n, _, s, d = d_sources.shape
     stack, rows, tokens = P(None, _BATCH_AXES, None, None), P(None, _BATCH_AXES, None), P(_BATCH_AXES, None, None)
 
-    def local(ds, ws, dms):
+    def local(ds, ws, dms, nv):
         lb = ds.shape[1]
         out = accumulate_source_grads_local(
             ds.reshape(n, lb * s, d),
             tuple(w.reshape(n, lb * s).astype(jnp.float32) for w in ws),
             tuple(m.reshape(lb * s, d).astype(jnp.float32) for m in dms),
+            nv,
+            interpret=_pallas_interpret(),
         )
         return out.reshape(n, lb, s, d)
 
     kernel = jax.shard_map(
         local,
         mesh=get_abstract_mesh(),
-        in_specs=(stack, tuple(rows for _ in gate_weights), tuple(tokens for _ in d_mixes)),
+        in_specs=(stack, tuple(rows for _ in gate_weights), tuple(tokens for _ in d_mixes), P()),
         out_specs=stack,
         check_vma=False,
     )
@@ -4942,7 +4969,72 @@ def _fused_source_grads(
         reshard(d_sources, stack),
         tuple(reshard(w, rows) for w in gate_weights),
         tuple(reshard(m, tokens) for m in d_mixes),
+        num_valid.astype(jnp.int32),
     )
+
+
+def _pallas_interpret() -> bool:
+    """The AttnRes history kernels run in Pallas interpret mode on CPU (the CPU tests of the scan path)."""
+    return jax.default_backend() == "cpu"
+
+
+_HISTORY_SPEC = P(None, _BATCH_AXES, None, None)
+_GATE_WEIGHTS_SPEC = P(None, None, _BATCH_AXES, None)
+
+
+def _history_kernel(local_fn, other_spec: P, out_spec: P):
+    """``local_fn(sources, other, num_valid)`` per batch shard of the ``[N, B, S, D]`` history."""
+    return jax.shard_map(
+        local_fn,
+        mesh=get_abstract_mesh(),
+        in_specs=(_HISTORY_SPEC, other_spec, P()),
+        out_specs=out_spec,
+        check_vma=False,
+    )
+
+
+def _block_mix_shard(src: jax.Array, weights: jax.Array, num_valid: jax.Array) -> jax.Array:
+    n, lb, s, d = src.shape
+    g = weights.shape[1]
+    mixed = block_mix_local(
+        src.reshape(n, lb * s, d), weights.reshape(n, g, lb * s), num_valid, interpret=_pallas_interpret()
+    )
+    return mixed.reshape(g, lb, s, d)
+
+
+def _block_mix_weight_grads_shard(src: jax.Array, d_mixed: jax.Array, num_valid: jax.Array) -> jax.Array:
+    n, lb, s, d = src.shape
+    g = d_mixed.shape[0]
+    d_weights = block_mix_weight_grads_local(
+        src.reshape(n, lb * s, d), d_mixed.reshape(g, lb * s, d), num_valid, interpret=_pallas_interpret()
+    )
+    return d_weights.reshape(n, g, lb, s)
+
+
+@jax.custom_vjp
+def _fused_block_mix(
+    sources: Float[Array, "N B S D"], weights: Float[Array, "N G B S"], num_valid: jax.Array
+) -> Float[Array, "G B S D"]:
+    """Phase-1 AttnRes mixes ``sum_n weights[n, g] * sources[n]`` (float32 sum, sources' dtype out) through
+    ``attn_res_block_mix``; ``weights`` must be zero on slots ``>= num_valid``."""
+    kernel = _history_kernel(_block_mix_shard, _GATE_WEIGHTS_SPEC, _HISTORY_SPEC)
+    return kernel(reshard(sources, _HISTORY_SPEC), reshard(weights, _GATE_WEIGHTS_SPEC), num_valid.astype(jnp.int32))
+
+
+def _fused_block_mix_fwd(sources, weights, num_valid):
+    return _fused_block_mix(sources, weights, num_valid), (sources, weights, num_valid)
+
+
+def _fused_block_mix_bwd(residuals, d_mixed):
+    sources, weights, num_valid = residuals
+    kernel = _history_kernel(_block_mix_weight_grads_shard, _HISTORY_SPEC, _GATE_WEIGHTS_SPEC)
+    d_weights = kernel(reshard(sources, _HISTORY_SPEC), reshard(d_mixed, _HISTORY_SPEC), num_valid.astype(jnp.int32))
+    # Unused (and dropped by XLA) when the sources are held constant, as in the scan's per-layer recompute.
+    d_sources = jnp.einsum("ngbs,gbsd->nbsd", weights, d_mixed.astype(jnp.float32)).astype(sources.dtype)
+    return d_sources, d_weights, np.zeros(jnp.shape(num_valid), dtype=jax.dtypes.float0)
+
+
+_fused_block_mix.defvjp(_fused_block_mix_fwd, _fused_block_mix_bwd)
 
 
 class LayerSkip(NamedTuple):
