@@ -211,25 +211,25 @@ def session_build(
 
 @pytest.fixture
 def author(services, proposal, ledger):
-    """``author(item_dir, model, round_no=0, revision=None)``: one ``author_round`` under ``item_dir``'s parent."""
+    """``author(workpiece_dir, model, round_no=0, revision=None)``: one ``author_round`` under ``workpiece_dir``'s parent."""
 
     async def run(
-        item_dir: Path, model: ScriptedModel, round_no: int = 0, revision: Revision | None = None
+        workpiece_dir: Path, model: ScriptedModel, round_no: int = 0, revision: Revision | None = None
     ) -> AuthorOutcome:
-        build = session_build(item_dir.parent, model, services, proposal, round_no)
+        build = session_build(workpiece_dir.parent, model, services, proposal, round_no)
         return await author_round(
-            CONFIG, model, LLMPolicy(), ledger, build, item_dir, WORKPIECE, round_no, proposal, revision
+            CONFIG, model, LLMPolicy(), ledger, build, workpiece_dir, WORKPIECE, round_no, proposal, revision
         )
 
     return run
 
 
-def authored(item: Path, round_no: int, k: int) -> Path:
-    return item / "rounds" / str(round_no) / "authored" / str(k)
+def authored(workpiece: Path, round_no: int, k: int) -> Path:
+    return workpiece / "rounds" / str(round_no) / "authored" / str(k)
 
 
-def agentic(item: Path, round_no: int, k: int) -> Path:
-    return item / "rounds" / str(round_no) / "agentic" / str(k)
+def agentic(workpiece: Path, round_no: int, k: int) -> Path:
+    return workpiece / "rounds" / str(round_no) / "agentic" / str(k)
 
 
 def read(path: Path) -> dict:
@@ -267,7 +267,7 @@ def step_statuses(path: Path) -> list[tuple[str, str]]:
 
 
 async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_step(tmp_path, author, proposal, services):
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": PROGRAM})),
         turn(("run_loader", {"path": "program.py"}), ("submit", {"path": "program.py", "notes": "first try"})),
@@ -275,7 +275,7 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
         turn(("run_grade_candidate", {"reply": "41"})),
         turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
     )
-    outcome = await author(item, model)
+    outcome = await author(workpiece, model)
 
     assert outcome.status is AuthorStatus.ACCEPTED and outcome.source == PROGRAM
     wrote, loader, refused, built, graded = tool_outputs(model)
@@ -288,8 +288,8 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
     assert graded.startswith("status graded, reward 0.0")
     assert not model.replies, "the session stopped at the accepted submit"
 
-    target = authored(item, 0, 0)
-    assert (target / "program.py").read_bytes() == (agentic(item, 0, 0) / "workspace" / "program.py").read_bytes()
+    target = authored(workpiece, 0, 0)
+    assert (target / "program.py").read_bytes() == (agentic(workpiece, 0, 0) / "workspace" / "program.py").read_bytes()
     program = load_program_source(PROGRAM)
     assert read(target / "program.json") == json.loads(json.dumps(program_manifest(program)))
     record = read(target / "author.json")
@@ -332,9 +332,9 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
     assert write["tool_results"][0]["output"] == wrote
     assert write["tokens"] == {"in": 30_000, "out": 2_000, "reasoning": 1_000, "cached": 29_000}
 
-    # The in-session build ran on the shared store under the item's id, recording to the session ledger; the
+    # The in-session build ran on the shared store under the workpiece's id, recording to the session ledger; the
     # build stage's build of the submitted program loads every step from the store.
-    run_dir = agentic(item, 0, 0) / "runs" / "0"
+    run_dir = agentic(workpiece, 0, 0) / "runs" / "0"
     assert {p.name for p in run_dir.iterdir()} == {"draft", "run.json"}
     assert read(run_dir / "run.json")["status"] == "built"
     misses = [("sources", "miss"), ("grader", "miss"), ("assemble", "miss")]
@@ -344,7 +344,7 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
         load_program_source(outcome.source or ""),
         proposal,
         WORKPIECE,
-        item / "rounds" / "0",
+        workpiece / "rounds" / "0",
         str(tmp_path / "store"),
         model,
         SAMPLING,
@@ -364,31 +364,31 @@ async def test_a_grader_crediting_the_empty_answer_fails_the_build_in_the_grader
         return GradeResult(status=status, reward=reward)
 
     monkeypatch.setattr(aa, "grade_candidate", credit_everything)
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": PROGRAM})),
         turn(("run_build", {"path": "program.py"})),
         turn(("submit", {"path": "program.py", "notes": "ships anyway"})),
         turn(("submit", {"path": "program.py", "notes": "ships anyway"})),
     )
-    outcome = await author(item, model)
+    outcome = await author(workpiece, model)
 
     _, built, refused = tool_outputs(model)
     assert built.startswith("build failed (build_failure in step grader)")
     assert "the empty answer is graded with reward 1.0, above the grader's declared rejection_ceiling 0.0" in built
     assert "never built in this session" in refused
     assert outcome.status is AuthorStatus.ACCEPTED
-    assert read(authored(item, 0, 0) / "submit.json")["tested"] is False
-    run = read(agentic(item, 0, 0) / "runs" / "0" / "run.json")
+    assert read(authored(workpiece, 0, 0) / "submit.json")["tested"] is False
+    run = read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")
     assert (run["status"], run["step"]) == ("build_failure", "grader")
 
 
 async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, proposal, ledger):
-    one_shot_item, agentic_item = tmp_path / "one_shot" / "item", tmp_path / "agentic" / "item"
+    one_shot_workpiece, agentic_workpiece = tmp_path / "one_shot" / "workpiece", tmp_path / "agentic" / "workpiece"
     one_shot_model = ScriptedModel(answer(json.dumps({"notes": "n", "source": PROGRAM})))
-    await GlmAuthor(one_shot_model, SAMPLING, one_shot_item, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
+    await GlmAuthor(one_shot_model, SAMPLING, one_shot_workpiece, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
     await author(
-        agentic_item,
+        agentic_workpiece,
         ScriptedModel(
             turn(("write_file", {"path": "program.py", "content": PROGRAM})),
             turn(("submit", {"path": "program.py", "notes": "n"})),
@@ -396,9 +396,9 @@ async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, pr
         ),
     )
 
-    target = authored(agentic_item, 0, 0)
-    assert (one_shot_item / "program.py").read_bytes() == (target / "program.py").read_bytes()
-    one_shot, agentic_record = read(one_shot_item / AUTHOR_DIR / "00" / "record.json"), read(target / "record.json")
+    target = authored(agentic_workpiece, 0, 0)
+    assert (one_shot_workpiece / "program.py").read_bytes() == (target / "program.py").read_bytes()
+    one_shot, agentic_record = read(one_shot_workpiece / AUTHOR_DIR / "00" / "record.json"), read(target / "record.json")
     shared = {"program_digest", "sdk_version", "model", "revision", "notes"}
     assert {k: one_shot[k] for k in shared} == {k: agentic_record[k] for k in shared}
     assert agentic_record["author_kind"] == "agentic"
@@ -416,7 +416,7 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
         return await load_program_in_process(source, wall_timeout=2)
 
     spinning = inspect.getsource(standard).replace("PROGRAM = ", f"{SPINNING_CLASS}PROGRAM = ")
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": spinning})),
         turn(("run_loader", {"path": "program.py"})),
@@ -425,9 +425,9 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
         answer("still nothing"),
         answer("done"),
     )
-    build = replace(session_build(item.parent, model, services, proposal, 0), loader=bounded)
+    build = replace(session_build(workpiece.parent, model, services, proposal, 0), loader=bounded)
 
-    outcome = await author_round(CONFIG, model, LLMPolicy(), ledger, build, item, WORKPIECE, 0, proposal, None)
+    outcome = await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
 
     assert outcome.status is not AuthorStatus.ACCEPTED
     _, loader, submitted = tool_outputs(model)[:3]
@@ -441,12 +441,12 @@ async def test_a_loader_child_the_host_killed_ends_the_round_as_infrastructure(
 ):
     """A loader child that dies before it writes a result, here because its module is missing, is the host's."""
     monkeypatch.setattr(load_process, "MODULE", "taskforge.no_such_loader")
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(turn(("run_loader", {"path": "program.py"})), answer("done"))
     build = replace(session_build(tmp_path, model, services, proposal, 0), loader=aa.load_in_child)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_round(CONFIG, model, LLMPolicy(), ledger, build, item, WORKPIECE, 0, proposal, None)
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
 
     assert raised.value.cause == InfrastructureCause.BUILD_PROCESS
     assert "the program loader process exited with status 1" in raised.value.message
@@ -457,7 +457,7 @@ async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(
     tmp_path, services, proposal, ledger, monkeypatch
 ):
     monkeypatch.setattr(aa, "HOST_RETRY_BACKOFF", 0.0)
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": PROGRAM})),
         turn(("run_build", {"path": "program.py"})),
@@ -467,28 +467,28 @@ async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(
     flaky = HostFailingBuilder(build.builder, SCHEDULING, failures=1)
 
     outcome = await author_round(
-        CONFIG, model, LLMPolicy(), ledger, replace(build, builder=flaky), item, WORKPIECE, 0, proposal, None
+        CONFIG, model, LLMPolicy(), ledger, replace(build, builder=flaky), workpiece, WORKPIECE, 0, proposal, None
     )
 
     assert outcome.status is AuthorStatus.ACCEPTED and flaky.calls == 2
     assert tool_outputs(model)[1].startswith("built: program ")
-    assert read(agentic(item, 0, 0) / "runs" / "0" / "run.json")["status"] == "built"
+    assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "built"
 
 
 async def test_a_container_proposal_on_a_host_without_an_image_builder_ends_before_the_author_runs(
     tmp_path, services, proposal, ledger
 ):
     container = declaring(proposal, None)
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel()
     build = session_build(tmp_path, model, services, container, 0)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_round(CONFIG, model, LLMPolicy(), ledger, build, item, WORKPIECE, 0, container, None)
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, container, None)
 
     assert raised.value.cause == InfrastructureCause.NO_IMAGE_BUILDER
     assert not model.requests, "the author never ran"
-    assert not item.exists(), "the round wrote no record and spent no revision"
+    assert not workpiece.exists(), "the round wrote no record and spent no revision"
 
 
 @pytest.mark.parametrize(
@@ -498,7 +498,7 @@ async def test_a_build_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
     tmp_path, services, proposal, ledger, monkeypatch, failure, builds
 ):
     monkeypatch.setattr(aa, "HOST_RETRY_BACKOFF", 0.0)
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": PROGRAM})),
         turn(("run_build", {"path": "program.py"})),
@@ -509,14 +509,14 @@ async def test_a_build_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
         await author_round(
-            CONFIG, model, LLMPolicy(), ledger, replace(build, builder=failing), item, WORKPIECE, 0, proposal, None
+            CONFIG, model, LLMPolicy(), ledger, replace(build, builder=failing), workpiece, WORKPIECE, 0, proposal, None
         )
 
     assert raised.value.cause == failure.cause and failing.calls == builds
-    assert read(agentic(item, 0, 0) / "runs" / "0" / "run.json")["status"] == "infrastructure"
+    assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "infrastructure"
     assert len(model.replies) == 1, "the session ended at the build"
     assert not any("infrastructure" in text for text in tool_texts(model))
-    assert not (authored(item, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+    assert not (authored(workpiece, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
 
 
 async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_author(
@@ -546,7 +546,7 @@ async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
     build = session_build(tmp_path, model, services, proposal, 0)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_round(CONFIG, model, LLMPolicy(), ledger, build, tmp_path / "item", WORKPIECE, 0, proposal, None)
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, tmp_path / "workpiece", WORKPIECE, 0, proposal, None)
 
     assert raised.value.cause == InfrastructureCause.HOST_UNREACHABLE
     assert graded == ["41"] * (1 + aa.HOST_RETRIES)
@@ -563,7 +563,7 @@ async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_un
         builds.append(run_dir)
         raise BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP, "grader")
 
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": PROGRAM})),
         turn(("run_build", {"path": "program.py"})),
@@ -572,20 +572,20 @@ async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_un
     build = replace(session_build(tmp_path, model, services, proposal, 0), builder=expiring)
 
     with pytest.raises(BuildExpired) as raised:
-        await author_round(CONFIG, model, LLMPolicy(), ledger, build, item, WORKPIECE, 0, proposal, None)
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
 
     assert (raised.value.clock, raised.value.step) == (ExpiredClock.STEP, "grader") and len(builds) == 1
-    run = read(agentic(item, 0, 0) / "runs" / "0" / "run.json")
+    run = read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")
     assert (run["status"], run["clock"], run["step"]) == ("expired", "step", "grader")
     assert run["text"] == "ran for more than 1800 seconds without returning"
     assert len(model.replies) == 1, "the session ended at the build"
     assert not any("ran for more than" in text for text in tool_texts(model))
-    assert not (authored(item, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+    assert not (authored(workpiece, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
 
 
 async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_reference(tmp_path, author):
     model = ScriptedModel(
-        turn(("read_file", {"path": "../item.json"}), ("write_file", {"path": "reference/sdk.md", "content": "x"})),
+        turn(("read_file", {"path": "../workpiece.json"}), ("write_file", {"path": "reference/sdk.md", "content": "x"})),
         turn(("edit_file", {"path": "program.py", "old_string": "@rl_env_build_step", "new_string": "@x"})),
         turn(("read_file", {"path": "program.py", "start_line": 4, "max_lines": 2})),
         turn(("submit", {"path": "missing.py", "notes": ""})),
@@ -593,11 +593,11 @@ async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_refere
         answer("done"),
         answer("done"),
     )
-    outcome = await author(tmp_path / "item", model)
+    outcome = await author(tmp_path / "workpiece", model)
 
     assert outcome.status is AuthorStatus.HANDED_OFF
     escape, reference, edit, window, missing = tool_outputs(model)[:5]
-    assert escape.startswith("error: '../item.json' is not a path inside the workspace")
+    assert escape.startswith("error: '../workpiece.json' is not a path inside the workspace")
     assert reference == "error: reference/ is read-only"
     assert edit.startswith("error: old text has ") and edit.endswith(" matches in program.py")
     assert window.startswith("lines 4-5 of ") and "    4| " in window
@@ -605,45 +605,45 @@ async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_refere
 
 
 async def test_unsubmitted_session_hands_off_once_then_the_round_spends_a_revision(tmp_path, author):
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     first = ScriptedModel(
         turn(("edit_file", {"path": "notes.md", "old_string": "", "new_string": "x"})),
         answer("I think it is done."),
         answer("Done."),
         answer("Still done."),
     )
-    assert (await author(item, first)).status is AuthorStatus.HANDED_OFF
+    assert (await author(workpiece, first)).status is AuthorStatus.HANDED_OFF
     assert [m["content"] for m in first.requests[-1].messages if m["role"] == "user"][-2:] == [aa.NUDGE, aa.NUDGE]
-    session = read(authored(item, 0, 0) / "session.json")
+    session = read(authored(workpiece, 0, 0) / "session.json")
     assert session["stop_reason"] == "unsubmitted" and session["nudges"] == 2
-    assert read(authored(item, 0, 0) / "author.json")["status"] == "handed_off"
+    assert read(authored(workpiece, 0, 0) / "author.json")["status"] == "handed_off"
 
-    (agentic(item, 0, 0) / "workspace" / "notes.md").write_text("fixtures step is next")
+    (agentic(workpiece, 0, 0) / "workspace" / "notes.md").write_text("fixtures step is next")
     second = ScriptedModel(answer("no"), answer("no"), answer("no"))
-    assert (await author(item, second)).status is AuthorStatus.AUTHOR_FAILED
+    assert (await author(workpiece, second)).status is AuthorStatus.AUTHOR_FAILED
     opening = second.requests[0].messages
     assert opening[-1]["role"] == "user" and "ended without a submission (unsubmitted)" in str(opening[-1]["content"])
-    assert (agentic(item, 0, 1) / "workspace" / "notes.md").read_text() == "fixtures step is next"
-    assert read(authored(item, 0, 1) / "session.json")["mode"] == "handoff"
-    assert read(authored(item, 0, 1) / "author.json")["status"] == "author_failed"
+    assert (agentic(workpiece, 0, 1) / "workspace" / "notes.md").read_text() == "fixtures step is next"
+    assert read(authored(workpiece, 0, 1) / "session.json")["mode"] == "handoff"
+    assert read(authored(workpiece, 0, 1) / "author.json")["status"] == "author_failed"
 
 
 async def test_context_guard_hands_off_to_fresh_sessions_until_the_round_cap(tmp_path, author):
     """A session over the context cap after any turn hands off, a handoff session included; the round stops at
     MAX_SESSIONS_PER_ROUND."""
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     statuses = []
     for _ in range(aa.MAX_SESSIONS_PER_ROUND):
         model = ScriptedModel(turn(("list_files", {}), prompt=220_000, out=1_000))
-        statuses.append((await author(item, model)).status)
-    stops = [read(authored(item, 0, k) / "session.json")["stop_reason"] for k in range(aa.MAX_SESSIONS_PER_ROUND)]
+        statuses.append((await author(workpiece, model)).status)
+    stops = [read(authored(workpiece, 0, k) / "session.json")["stop_reason"] for k in range(aa.MAX_SESSIONS_PER_ROUND)]
     assert stops == ["context"] * aa.MAX_SESSIONS_PER_ROUND
     assert statuses == [AuthorStatus.HANDED_OFF] * (aa.MAX_SESSIONS_PER_ROUND - 1) + [AuthorStatus.AUTHOR_FAILED]
-    assert (agentic(item, 0, 1) / "workspace" / "program.py").exists()
+    assert (agentic(workpiece, 0, 1) / "workspace" / "program.py").exists()
 
 
 async def test_a_cut_turn_is_nudged_to_a_smaller_step_and_never_continued(tmp_path, author):
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         cut(),
         turn(("write_file", {"path": "program.py", "content": PROGRAM})),
@@ -651,7 +651,7 @@ async def test_a_cut_turn_is_nudged_to_a_smaller_step_and_never_continued(tmp_pa
         turn(("submit", {"path": "program.py", "notes": ""})),
         turn(("submit", {"path": "program.py", "notes": ""})),
     )
-    outcome = await author(item, model)
+    outcome = await author(workpiece, model)
 
     assert outcome.status is AuthorStatus.ACCEPTED
     assert {r.policy.max_continuations for r in model.requests} == {0}
@@ -660,7 +660,7 @@ async def test_a_cut_turn_is_nudged_to_a_smaller_step_and_never_continued(tmp_pa
     assert second[-1]["role"] == "user" and str(second[-1]["content"]).startswith(
         "Your reply was cut off at the 49152-token output limit"
     )
-    session = read(authored(item, 0, 0) / "session.json")
+    session = read(authored(workpiece, 0, 0) / "session.json")
     assert session["length_nudges"] == 2 and session["nudges"] == 0 and session["length_turns"] == 2
     assert session["turns"] == 5 and session["continuations"] == 0
 
@@ -669,13 +669,13 @@ async def test_cut_turns_past_the_context_cap_hand_off(tmp_path, author):
     model = ScriptedModel(
         cut(), Completion("", "", (), FinishReason.LENGTH, Usage(215_000, 1_000, 1_000, 0), 1.0, 0.1, 0.9, 0, ())
     )
-    outcome = await author(tmp_path / "item", model)
+    outcome = await author(tmp_path / "workpiece", model)
     assert outcome.status is AuthorStatus.HANDED_OFF and not model.replies
 
 
-def prior_session(item: Path, stop: str, last_prompt: int, turns_total: int) -> Path:
+def prior_session(workpiece: Path, stop: str, last_prompt: int, turns_total: int) -> Path:
     """Round 0's accepted agentic session as ``author_round`` leaves it, for a build failure on its program."""
-    session_dir = agentic(item, 0, 0)
+    session_dir = agentic(workpiece, 0, 0)
     (session_dir / "workspace").mkdir(parents=True)
     (session_dir / "workspace" / "program.py").write_text("# edited\n")
     conversation = [
@@ -684,7 +684,7 @@ def prior_session(item: Path, stop: str, last_prompt: int, turns_total: int) -> 
         {"role": "assistant", "content": "a"},
     ]
     (session_dir / "conversation.json").write_text(json.dumps(conversation))
-    target = authored(item, 0, 0)
+    target = authored(workpiece, 0, 0)
     target.mkdir(parents=True)
     session = {"stop_reason": stop, "last_prompt_tokens": last_prompt, "turns_total": turns_total}
     (target / "session.json").write_text(json.dumps(session))
@@ -708,9 +708,9 @@ def prior_session(item: Path, stop: str, last_prompt: int, turns_total: int) -> 
 def test_build_failure_reenters_the_session_only_within_its_bounds(
     tmp_path, proposal, stop, last_prompt, turns_total, mode
 ):
-    item = tmp_path / "item"
-    previous = prior_session(item, stop, last_prompt, turns_total)
-    plan = plan_session(item, 1, proposal, FAILURE, CONFIG)
+    workpiece = tmp_path / "workpiece"
+    previous = prior_session(workpiece, stop, last_prompt, turns_total)
+    plan = plan_session(workpiece, 1, proposal, FAILURE, CONFIG)
     assert plan.mode is mode and plan.seed == previous / "workspace"
     revision_turn = str(plan.messages[-1]["content"])
     assert plan.messages[-1]["role"] == "user" and "fixtures: KeyError 'rows'" in revision_turn
@@ -723,21 +723,21 @@ def test_build_failure_reenters_the_session_only_within_its_bounds(
 
 
 async def test_same_session_revision_continues_the_conversation(tmp_path, author):
-    item = tmp_path / "item"
-    prior_session(item, "submitted", 100_000, 30)
+    workpiece = tmp_path / "workpiece"
+    prior_session(workpiece, "submitted", 100_000, 30)
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": PROGRAM})),
         turn(("submit", {"path": "program.py", "notes": ""})),
         turn(("submit", {"path": "program.py", "notes": ""})),
     )
-    outcome = await author(item, model, round_no=1, revision=FAILURE)
+    outcome = await author(workpiece, model, round_no=1, revision=FAILURE)
 
     assert outcome.status is AuthorStatus.ACCEPTED
     sent = model.requests[0].messages
     assert [m["content"] for m in sent[:3]] == ["s", "u", "a"] and "KeyError 'rows'" in str(sent[3]["content"])
-    session = read(authored(item, 1, 0) / "session.json")
+    session = read(authored(workpiece, 1, 0) / "session.json")
     assert session["mode"] == "same_session" and session["turns_total"] == 33
-    assert (agentic(item, 1, 0) / "workspace" / "program.py").read_text() == PROGRAM
+    assert (agentic(workpiece, 1, 0) / "workspace" / "program.py").read_text() == PROGRAM
 
 
 def test_tool_results_keep_head_and_tail_within_the_cap():
@@ -750,11 +750,11 @@ def test_tool_results_keep_head_and_tail_within_the_cap():
 
 
 def test_relaunch_starts_a_handoff_from_an_interrupted_session_workspace(tmp_path, proposal):
-    item = tmp_path / "item"
-    interrupted = agentic(item, 0, 0) / "workspace"
+    workpiece = tmp_path / "workpiece"
+    interrupted = agentic(workpiece, 0, 0) / "workspace"
     interrupted.mkdir(parents=True)
     (interrupted / "program.py").write_text("# half done\n")
-    plan = plan_session(item, 0, proposal, None, CONFIG)
+    plan = plan_session(workpiece, 0, proposal, None, CONFIG)
     assert plan.mode is SessionMode.HANDOFF and plan.seed == interrupted and plan.turns == 48
     assert "ended without a submission (interrupted)" in str(plan.messages[-1]["content"])
 
@@ -762,7 +762,7 @@ def test_relaunch_starts_a_handoff_from_an_interrupted_session_workspace(tmp_pat
 async def test_an_overlong_write_is_refused_briefly_and_counts_as_executed(tmp_path, author):
     """A write past the bound is refused by the handler in one line: a schema ``maxLength`` would have sent back
     jsonschema's message, which quotes the whole file, unclipped."""
-    item = tmp_path / "item"
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": "x" * (aa.WRITE_CHARS + 2961)})),
         turn(("submit", {"path": "program.py", "notes": "n" * (aa.NOTES_CHARS + 1)})),
@@ -770,12 +770,12 @@ async def test_an_overlong_write_is_refused_briefly_and_counts_as_executed(tmp_p
         answer("done"),
         answer("done"),
     )
-    await author(item, model)
+    await author(workpiece, model)
 
     write, notes = tool_outputs(model)
     assert write == f"error: content holds {aa.WRITE_CHARS + 2961} characters, more than {aa.WRITE_CHARS}; use edit_file"
     assert notes.startswith("error: notes hold 4001 characters, more than 4000; nothing handed in (the loader accepts")
-    target = authored(item, 0, 0)
+    target = authored(workpiece, 0, 0)
     session = read(target / "session.json")
     assert session["rejected_tool_calls"] == 0
     assert [s["outcome"] for s in session["submissions"]] == ["refused_notes"]

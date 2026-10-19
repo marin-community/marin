@@ -49,33 +49,33 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     refused = PROGRAM.replace("from dataclasses", "import os\nfrom dataclasses")
     fake_glm.stream(content=submission(refused))
     fake_glm.stream(content=submission(PROGRAM))
-    item_dir = tmp_path / "item"
+    workpiece_dir = tmp_path / "workpiece"
 
-    authored = await GlmAuthor(glm_client, SAMPLING, item_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
+    authored = await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
 
     assert authored.source == PROGRAM
     assert authored.program is load_program_source(PROGRAM)
-    assert (item_dir / PROGRAM_FILE).read_text() == PROGRAM
+    assert (workpiece_dir / PROGRAM_FILE).read_text() == PROGRAM
     assert "may not import 'os'" in fake_glm.requests[1]["messages"][-2]["content"]
-    assert json.loads((item_dir / AUTHOR_DIR / "00" / "request.json").read_text()) == fake_glm.requests[0]["messages"]
+    assert json.loads((workpiece_dir / AUTHOR_DIR / "00" / "request.json").read_text()) == fake_glm.requests[0]["messages"]
     schema = fake_glm.requests[0]["response_format"]["json_schema"]["schema"]
     assert list(schema["properties"]) == ["notes", "source"]
     assert schema["properties"]["notes"]["maxLength"] == NOTES_LIMIT == 2000
     assert schema["properties"]["notes"]["description"].startswith("At most 2000 characters;")
 
 
-async def test_a_revision_continues_from_the_program_the_item_holds(proposal, glm_client, fake_glm, ledger, tmp_path):
-    item_dir = tmp_path / "item"
-    item_dir.mkdir()
-    (item_dir / PROGRAM_FILE).write_text(PROGRAM)
+async def test_a_revision_continues_from_the_program_the_workpiece_holds(proposal, glm_client, fake_glm, ledger, tmp_path):
+    workpiece_dir = tmp_path / "workpiece"
+    workpiece_dir.mkdir()
+    (workpiece_dir / PROGRAM_FILE).write_text(PROGRAM)
     fixed = PROGRAM.replace('"Reply with the number."', '"Reply with the product alone."')
     fake_glm.stream(content=submission(fixed))
     revision = Revision(RevisionKind.BUILD_FAILURE, "grader: the reference scored 0.0")
 
-    authored = await GlmAuthor(glm_client, SAMPLING, item_dir, CallLedger(ledger, WORKPIECE, 2, "author"))(proposal, revision)
+    authored = await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 2, "author"))(proposal, revision)
 
     assert authored.source == fixed
-    assert (item_dir / PROGRAM_FILE).read_text() == fixed
+    assert (workpiece_dir / PROGRAM_FILE).read_text() == fixed
     turns = fake_glm.requests[0]["messages"]
     assert turns[-3] == {"role": "assistant", "content": PROGRAM}
     assert "grader: the reference scored 0.0" in turns[-2]["content"]
@@ -87,14 +87,14 @@ async def test_an_author_call_that_never_loads_keeps_its_completions(proposal, g
     refused = PROGRAM.replace("from dataclasses", "import os\nfrom dataclasses")
     fake_glm.stream(content=submission(refused))
     fake_glm.stream(content=submission(refused))
-    item_dir = tmp_path / "item"
+    workpiece_dir = tmp_path / "workpiece"
 
     with pytest.raises(StructuredOutputError):
-        await GlmAuthor(glm_client, SAMPLING, item_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
+        await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
 
-    completions = json.loads((item_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())
+    completions = json.loads((workpiece_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())
     assert [json.loads(c["content"])["source"] for c in completions] == [refused, refused]
-    assert not (item_dir / PROGRAM_FILE).exists()
+    assert not (workpiece_dir / PROGRAM_FILE).exists()
 
 
 async def test_an_author_reply_cut_off_by_the_output_limit_fails_without_a_repair(
@@ -102,12 +102,12 @@ async def test_an_author_reply_cut_off_by_the_output_limit_fails_without_a_repai
 ):
     fake_glm.stream(content=submission(PROGRAM), finish="length")
     fake_glm.stream(content=submission(PROGRAM))
-    item_dir = tmp_path / "item"
+    workpiece_dir = tmp_path / "workpiece"
 
     with pytest.raises(StructuredOutputError):
-        await GlmAuthor(glm_client, SAMPLING, item_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
+        await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
 
     assert len(fake_glm.requests) == 1
-    completions = json.loads((item_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())
+    completions = json.loads((workpiece_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())
     assert [c["finish_reason"] for c in completions] == ["length"]
-    assert not (item_dir / PROGRAM_FILE).exists()
+    assert not (workpiece_dir / PROGRAM_FILE).exists()

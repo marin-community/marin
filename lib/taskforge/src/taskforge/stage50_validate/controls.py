@@ -79,7 +79,7 @@ class ControlOutcome:
 
 @dataclass(frozen=True)
 class ControlPlan:
-    """Which item the controls belong to, their deadlines, how they retry, and where they are recorded.
+    """Which workpiece the controls belong to, their deadlines, how they retry, and where they are recorded.
 
     Each control is one ``CONTROL`` trial named by its id. ``first_attempts`` maps a control id to
     the number of its first attempt file and ledger step, as ``TrialPlan.first_attempt`` does for a

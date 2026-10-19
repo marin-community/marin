@@ -40,7 +40,7 @@ from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFa
 from tests.stage40_build_with_program.conftest import FACTORIES, PROPOSAL
 
 TASK = draft.assemble(
-    "item",
+    "workpiece",
     "What is 6 * 7? Reply with the number alone.",
     AnswerType.TEXT,
     PlainText(),
@@ -109,7 +109,7 @@ async def test_validation_writes_controls_the_grader_has_not_seen_and_replays_th
     fake_glm.stream(content=controls("41"))
 
     written = await write_controls(
-        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
     )
 
     assert (
@@ -119,7 +119,7 @@ async def test_validation_writes_controls_the_grader_has_not_seen_and_replays_th
     assert load_controls(tmp_path) == written
     assert [c.id for c in written] == ["P-reference", "N1-shortcut", "N2-off-by-two", "N3"]
     plan = ControlPlan(
-        workpiece_id="item",
+        workpiece_id="workpiece",
         round=0,
         deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
         max_retries=0,
@@ -140,7 +140,7 @@ async def test_a_control_set_the_model_never_gets_right_fails_as_the_controls_st
 
     with pytest.raises(BuildFailure) as failure:
         await write_controls(
-            TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+            TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
         )
 
     assert failure.value.step == "controls"
@@ -158,7 +158,7 @@ async def test_control_bounds_follow_the_graders_rejection_ceiling(glm_client, f
     fake_glm.stream(content=json.dumps(within))
 
     written = await write_controls(
-        TASK, lenient, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+        TASK, lenient, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
     )
 
     request = fake_glm.requests[0]["messages"][-2]["content"]
@@ -170,12 +170,12 @@ async def test_control_bounds_follow_the_graders_rejection_ceiling(glm_client, f
 
 
 async def test_a_controls_reply_the_output_limit_cut_is_asked_again_shorter(glm_client, fake_glm, ledger, tmp_path):
-    """A cut reply is one failed submission, not an unhandled error ending the item."""
+    """A cut reply is one failed submission, not an unhandled error ending the workpiece."""
     fake_glm.stream(content='{"controls": [{"id": "P-reference", "kind": "positive"', finish="length")
     fake_glm.stream(content=controls("41"))
 
     written = await write_controls(
-        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
     )
 
     retry = fake_glm.requests[1]["messages"]
@@ -190,7 +190,7 @@ async def test_controls_cut_at_every_attempt_fail_as_the_controls_step(glm_clien
 
     with pytest.raises(BuildFailure, match="cut off by the output limit") as failure:
         await write_controls(
-            TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+            TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
         )
 
     assert failure.value.step == "controls"
@@ -205,7 +205,7 @@ async def test_a_control_writing_files_outside_the_output_paths_goes_back_to_the
     fake_glm.stream(content=controls("41"))
 
     written = await write_controls(
-        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
     )
 
     assert "the task has no output paths" in fake_glm.requests[0]["messages"][-2]["content"].lower()
@@ -217,7 +217,7 @@ async def test_a_control_writing_files_outside_the_output_paths_goes_back_to_the
 async def test_a_control_writes_an_output_path_outside_the_workspace(glm_client, fake_glm, ledger, tmp_path):
     report = "/snapshot/report/x.sql"
     task = draft.assemble(
-        "item",
+        "workpiece",
         "What is 6 * 7? Write a query returning it to /snapshot/report/x.sql, then reply with the number alone.",
         AnswerType.TEXT,
         PlainText(),
@@ -231,7 +231,7 @@ async def test_a_control_writes_an_output_path_outside_the_workspace(glm_client,
     fake_glm.stream(content=json.dumps(submitted))
 
     written = await write_controls(
-        task, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "item", 0, "controls"), tmp_path
+        task, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
     )
 
     assert report in fake_glm.requests[0]["messages"][-2]["content"]

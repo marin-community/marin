@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The trial evidence for one item: outcomes by trial kind, and whether every trial was graded."""
+"""The trial evidence for one workpiece: outcomes by trial kind, and whether every trial was graded."""
 
 import math
 from collections import Counter

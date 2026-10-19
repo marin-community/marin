@@ -13,7 +13,7 @@ from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind, LedgerEntry, span
 
 ENTRY = LedgerEntry(
-    workpiece_id="item-1",
+    workpiece_id="workpiece-1",
     round=1,
     step="author",
     kind=EntryKind.LLM_CALL,
@@ -71,7 +71,7 @@ def test_rows_round_trip_through_finelog_server(embedded_server):
         (row,) = reader.query(f'SELECT * FROM "{LEDGER_NAMESPACE}"').to_pylist()
     finally:
         reader.close()
-    assert row["run_id"] == "run-1" and row["workpiece_id"] == "item-1" and row["kind"] == "llm_call"
+    assert row["run_id"] == "run-1" and row["workpiece_id"] == "workpiece-1" and row["kind"] == "llm_call"
     assert (row["started_ms"], row["ended_ms"], row["timestamp_ms"]) == (100_000, 102_500, 102_500)
     assert row["wall_time"] == 2.5
     assert (row["model"], row["tokens_in"], row["tokens_out"]) == ("glm-5.3", 7, None)
@@ -85,11 +85,11 @@ def test_undelivered_rows_never_fail_the_run_and_are_logged_at_close(tmp_path, c
 
     with caplog.at_level(logging.WARNING, logger="taskforge.ledger.finelog"):
         for _ in range(3):
-            with span(ledger, EntryKind.STEP, workpiece_id="item-1", round=0, step="build"):
+            with span(ledger, EntryKind.STEP, workpiece_id="workpiece-1", round=0, step="build"):
                 pass
         assert remote.close() is FlushResult.DROPPED
 
-    assert len(list(read_entries(tmp_path / "item-1.jsonl"))) == 3
+    assert len(list(read_entries(tmp_path / "workpiece-1.jsonl"))) == 3
     assert len(client.table.rows) == 3
     assert len(caplog.records) == 1 and client.closed
 
@@ -97,8 +97,8 @@ def test_undelivered_rows_never_fail_the_run_and_are_logged_at_close(tmp_path, c
 def test_run_ledger_off_cluster_writes_jsonl_only(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_telemetry, "resolve", lambda run_id: None)
     with run_ledger(tmp_path, run_id="run-1") as ledger:
-        with span(ledger, EntryKind.STAGE, workpiece_id="item-1", round=0, step="propose"):
+        with span(ledger, EntryKind.STAGE, workpiece_id="workpiece-1", round=0, step="propose"):
             pass
     assert isinstance(ledger, JsonlLedger)
-    (entry,) = read_entries(tmp_path / "item-1.jsonl")
+    (entry,) = read_entries(tmp_path / "workpiece-1.jsonl")
     assert (entry.kind, entry.step) == (EntryKind.STAGE, "propose")

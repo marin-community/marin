@@ -39,7 +39,7 @@ async def client(fake_glm, fast_provider):
 
 
 def call_ledger(ledger: Ledger) -> CallLedger:
-    return CallLedger(ledger=ledger, workpiece_id="item-1", round=2, step="solver")
+    return CallLedger(ledger=ledger, workpiece_id="workpiece-1", round=2, step="solver")
 
 
 async def test_rollout_model_records_retried_statuses_and_keeps_served_ids(fake_glm, client, ledger):
@@ -52,7 +52,7 @@ async def test_rollout_model_records_retried_statuses_and_keeps_served_ids(fake_
 
     assert (turn.prompt_token_ids, turn.response_token_ids, turn.text) == ((1, 2, 3), (4, 5), "done")
     [entry] = ledger.entries
-    assert (entry.kind, entry.workpiece_id, entry.round, entry.step) == (EntryKind.LLM_CALL, "item-1", 2, "solver")
+    assert (entry.kind, entry.workpiece_id, entry.round, entry.step) == (EntryKind.LLM_CALL, "workpiece-1", 2, "solver")
     assert (entry.tokens_in, entry.tokens_out, entry.finish_reason) == (3, 2, "stop")
     assert entry.cause is None
     assert entry.attrs["turn"] == "1"

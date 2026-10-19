@@ -15,7 +15,7 @@ A trial is attempted again while its outcome is ``Ungraded`` with a retryable ca
 ``TrialPlan.first_attempt``: a trial re-entered after earlier attempts passes the count already on
 disk, so no attempt file is overwritten and each ledger step stays unique. Each attempt runs on
 its own model, ``model.for_step(<kind>/<trial>/<attempt>)``: a ``GlmRolloutModel`` records its
-``LLM_CALL`` spans under the attempt's step and routes on it, so the k trials of an item do not
+``LLM_CALL`` spans under the attempt's step and routes on it, so the k trials of a workpiece do not
 share one prefix-cache key.
 
 Every trial runs under the engine's messages trace (``TaskSessionSpec.trace = MESSAGES``, set by
@@ -187,7 +187,7 @@ class RetryBackoff:
 
 @dataclass(frozen=True)
 class TrialPlan:
-    """Which item the trials belong to, how many run, their deadlines, how they retry, and where they
+    """Which workpiece the trials belong to, how many run, their deadlines, how they retry, and where they
     are recorded.
 
     ``max_retries`` bounds retries of ``RETRYABLE`` causes. ``retry_backoff`` is a template: each

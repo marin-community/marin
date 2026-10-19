@@ -161,7 +161,7 @@ async def test_machine_runs_the_grader_base_on_the_local_backend_when_the_host_h
     assert result.stdout == b"ready\n"
 
 
-async def test_publish_image_pushes_under_the_items_repository(context):
+async def test_publish_image_pushes_under_the_workpieces_repository(context):
     images = RecordingImageBuilder()
     build = DockerBuild(files=(draft.file("Dockerfile", "FROM busybox\n"),))
 

@@ -31,7 +31,7 @@ def settings(factory, max_turns: int = 6) -> EngineSettings:
 
 def plan(tmp_path, first_attempts: dict[str, int] | None = None) -> ControlPlan:
     return ControlPlan(
-        workpiece_id="item",
+        workpiece_id="workpiece",
         round=0,
         deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
         max_retries=1,

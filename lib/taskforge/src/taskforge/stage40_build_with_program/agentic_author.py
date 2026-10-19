@@ -3,7 +3,7 @@
 
 """The agentic author: one agent session per program round, which can load, build and grade its program.
 
-A session works in ``rounds/<n>/agentic/<k>/workspace/`` under the item's directory, which starts with
+A session works in ``rounds/<n>/agentic/<k>/workspace/`` under the workpiece's directory, which starts with
 the standard template as ``program.py``, the proposal, the SDK reference and the template
 (``reference/``, read-only) and an empty ``notes.md``. Its tools (``AuthorSession.tools``) read, write
 and edit workspace files, run the loader, build the program with the caller's ``ProgramBuilder`` (the
@@ -24,7 +24,7 @@ backoff from ``HOST_RETRY_BACKOFF`` inside the tool, at once re-raised for a cau
 ``HOST_REJECTIONS``, and then re-raised like ``ModelUnavailable``: ``author_round`` ends without a
 record, so the round spends no revision and a relaunch hands the workspace to a fresh session. A
 ``BuildExpired`` in ``run_build`` (a wall, step or grader clock) is re-raised at once, without a
-retry, and ends the round the same way, so the driver holds the item as abandoned instead of asking
+retry, and ends the round the same way, so the driver holds the workpiece as abandoned instead of asking
 for a rewrite. A failed build still writes its ``run.json``, ``status: "infrastructure"`` for the
 host's and ``status: "expired"`` with its ``clock`` for an expiry. A loader child the host killed
 (``LoaderProcessFailed``) raises the same failure with cause ``BUILD_PROCESS``. A proposal whose
@@ -237,7 +237,7 @@ class AgenticAuthorConfig:
 
 class ProgramBuilder(Protocol):
     async def __call__(self, source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
-        """Build ``source`` for the session's item and round, as the caller's own build stage would (same step
+        """Build ``source`` for the session's workpiece and round, as the caller's own build stage would (same step
         store, model, policy, services and research requirement), leaving ``draft/`` and the build files under
         ``run_dir``.
 
@@ -299,7 +299,7 @@ class SessionBuild:
         services: The build's services: ``grade_candidate``'s factories, host, ledger and web tools, and the
             image builder the in-session builds publish with (``None`` when they cannot). ``author_round``
             checks the proposal's solver machine against them before the session starts.
-        session_ledger: The ledger file in-session builds append to (``<root>/<item>.jsonl``); a build's step
+        session_ledger: The ledger file in-session builds append to (``<root>/<workpiece_id>.jsonl``); a build's step
             statuses are the ``STEP`` spans appended to it during the build.
         loader: Loads a program for ``run_loader``, ``run_build`` and ``submit``; ``load_in_child`` unless the
             caller bounds the load itself.
@@ -352,8 +352,8 @@ def _numbered(directory: Path) -> list[int]:
     return sorted(int(p.name) for p in directory.iterdir() if p.is_dir() and p.name.isdigit())
 
 
-def _round_dir(item_dir: Path, round_no: int) -> Path:
-    return item_dir / ROUNDS_DIR / str(round_no)
+def _round_dir(workpiece_dir: Path, round_no: int) -> Path:
+    return workpiece_dir / ROUNDS_DIR / str(round_no)
 
 
 def _traceback_tail(error: BaseException) -> str:
@@ -414,7 +414,7 @@ class TaggedLedger:
 def ledger_steps(path: Path, offset: int) -> list[dict]:
     """The build-step ``STEP`` spans appended to the ledger file ``path`` after byte ``offset``.
 
-    An item has one session at a time, so the entries after ``offset`` are the run just made.
+    A workpiece has one session at a time, so the entries after ``offset`` are the run just made.
     """
     if not path.exists():
         return []
@@ -481,7 +481,7 @@ class AuthorSession:
     def __init__(
         self,
         session_dir: Path,
-        item: str,
+        workpiece_id: str,
         round_no: int,
         proposal: TaskProposal,
         build: SessionBuild,
@@ -490,7 +490,7 @@ class AuthorSession:
         self.session_dir = session_dir
         self.workspace = session_dir / WORKSPACE_DIR
         self.runs = session_dir / RUNS_DIR
-        self.item = item
+        self.workpiece_id = workpiece_id
         self.round_no = round_no
         self.proposal = proposal
         self.build = build
@@ -651,7 +651,7 @@ class AuthorSession:
         """Grade ``reply`` with the ``workspace`` files it leaves against ``draft``'s task, no model called."""
         task = draft.task
         context = RLEnvBuildContext(
-            workpiece_id=self.item,
+            workpiece_id=self.workpiece_id,
             round=self.round_no,
             model=self.build.client,
             sampling=self.build.policy,
@@ -965,7 +965,7 @@ async def drive(
     while True:
         record = CallLedger(
             TaggedLedger(ledger, {"author_kind": AUTHOR_KIND, "session": session_id, "segment": str(segment)}),
-            session.item,
+            session.workpiece_id,
             session.round_no,
             AUTHOR_STEP,
         )
@@ -1124,11 +1124,11 @@ def _seed_message(previous: Path, lead: str) -> Message:
 
 
 def plan_session(
-    item_dir: Path, round_no: int, proposal: TaskProposal, revision: Revision | None, config: AgenticAuthorConfig
+    workpiece_dir: Path, round_no: int, proposal: TaskProposal, revision: Revision | None, config: AgenticAuthorConfig
 ) -> SessionPlan:
     """Which session round ``round_no`` runs next (see the module docstring)."""
     opening = opening_messages(proposal, config.turns)
-    sessions = _round_dir(item_dir, round_no) / AGENTIC_DIR
+    sessions = _round_dir(workpiece_dir, round_no) / AGENTIC_DIR
     if _numbered(sessions):
         previous = sessions / str(_numbered(sessions)[-1])
         record = authored_of(previous) / AUTHOR_RECORD
@@ -1140,7 +1140,7 @@ def plan_session(
         return SessionPlan(SessionMode.HANDOFF, previous / WORKSPACE_DIR, (*opening, seed), 3, config.turns, 0, None)
     if round_no == 0:
         return SessionPlan(SessionMode.FRESH, None, tuple(opening), 2, config.turns, 0, None)
-    earlier = _round_dir(item_dir, round_no - 1) / AGENTIC_DIR
+    earlier = _round_dir(workpiece_dir, round_no - 1) / AGENTIC_DIR
     previous = earlier / str(_numbered(earlier)[-1])
     prior = _read_json(authored_of(previous) / SESSION_FILE)
     bounds = config.revision_same_session
@@ -1160,7 +1160,7 @@ def plan_session(
             1,
             config.turns - bounds.max_turns_used,
             prior["turns_total"],
-            str(previous.relative_to(item_dir)),
+            str(previous.relative_to(workpiece_dir)),
         )
     lead = NO_REVISION_PROMPT if revision is None else _revision_text(revision)
     seed = _seed_message(previous, lead)
@@ -1173,8 +1173,8 @@ async def author_round(
     policy: LLMPolicy,
     ledger: Ledger,
     build: SessionBuild,
-    item_dir: Path,
-    item: str,
+    workpiece_dir: Path,
+    workpiece_id: str,
     round_no: int,
     proposal: TaskProposal,
     revision: Revision | None,
@@ -1187,8 +1187,8 @@ async def author_round(
         policy: The sampling policy of every turn; ``max_tokens`` and ``max_continuations`` come from ``config``.
         ledger: Where the session's turns and tool calls are recorded.
         build: How the session builds and grades its program.
-        item_dir: The item's directory; the round's records live under ``rounds/<round_no>/``.
-        item: The item's id.
+        workpiece_dir: The workpiece's directory; the round's records live under ``rounds/<round_no>/``.
+        workpiece_id: The workpiece's id.
         round_no: The round being authored.
         proposal: The proposal the program builds.
         revision: What the previous round's program needs, or ``None`` in round 0.
@@ -1201,13 +1201,13 @@ async def author_round(
         BuildExpired: an in-session build ran past a wall, step or grader clock.
     """
     machine_available(build.services, proposal)
-    plan = plan_session(item_dir, round_no, proposal, revision, config)
-    rdir = _round_dir(item_dir, round_no)
+    plan = plan_session(workpiece_dir, round_no, proposal, revision, config)
+    rdir = _round_dir(workpiece_dir, round_no)
     k = len(_numbered(rdir / AGENTIC_DIR))
     session_dir = rdir / AGENTIC_DIR / str(k)
     target = rdir / AUTHORED_DIR / str(k)
     session_id = f"{round_no}.{k}"
-    session = AuthorSession(session_dir, item, round_no, proposal, build, session_id)
+    session = AuthorSession(session_dir, workpiece_id, round_no, proposal, build, session_id)
     session.prepare(plan.seed)
     result = await drive(session, plan, config, client, policy, ledger, session_id)
     _write_json(session_dir / CONVERSATION_FILE, list(result.messages))

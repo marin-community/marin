@@ -18,7 +18,7 @@ machine and grader requirements are taken from the first lowering, so a grader-b
 local. The result carries a ``BackendFallback`` for the lower record. A machine that did not start or
 did not start in time (``HOST_CAUSES``) is as often the host's state at probe time as the task's, and
 the solver's machine must not depend on it: the probe runs once more, and a second such failure
-raises ``BuildInfrastructureFailure``, so the item ends as the host's and is retried later rather than
+raises ``BuildInfrastructureFailure``, so the workpiece ends as the host's and is retried later rather than
 moved. Any other outcome of the probe, a grade included, keeps the first lowering: what the probe says
 about the grader the trials will say again. A verifier machine never falls back: its preparation
 failure is a task defect the trials report.

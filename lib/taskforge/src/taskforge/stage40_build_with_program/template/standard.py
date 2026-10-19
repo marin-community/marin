@@ -26,7 +26,7 @@ The steps, in run order:
    declared ``rejection_ceiling`` goes back to the model, and after ``ATTEMPTS`` requests the build
    fails. A reference whose grader timed out raises ``BuildExpired`` at once: ``grade_candidate`` has
    already graded it a second time on fresh machines, so the grader command was slow twice. Whether
-   the grader or Taskforge was slow is unknown until someone reads the record, so the item is held
+   the grader or Taskforge was slow is unknown until someone reads the record, so the workpiece is held
    rather than sent back for a rewritten grader. The returned ``Grader`` holds the reference answer,
    the ceiling and every graded candidate.
 5. ``instructions`` writes the solver-facing prompt around the grader's answer contract and sends
@@ -178,7 +178,7 @@ async def grader(
             return str(error)
         if reference.status == Outcome.INFRA_ERROR and reference.failure is GradingFailure.TIMEOUT:
             raise BuildExpired(
-                "the grader command timed out on the reference answer twice, each time on fresh machines; the item "
+                "the grader command timed out on the reference answer twice, each time on fresh machines; the workpiece "
                 f"is held for inspection: {grade_diagnostics(reference)}",
                 ExpiredClock.GRADER,
             )

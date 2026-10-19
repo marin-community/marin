@@ -71,10 +71,10 @@ def served_tokens(completion: Completion) -> ServedTokens:
 
 
 def routing_key(record: CallLedger) -> str:
-    """The rollout's identity for prefix-cache affinity: ``<item>:<round>:<step>``.
+    """The rollout's identity for prefix-cache affinity: ``<workpiece>:<round>:<step>``.
 
     A validation trial's model is bound to its attempt's step, ``<kind>/<trial>/<attempt>``
-    (``GlmRolloutModel.for_step``), so each trial has its own key and the k trials of an item can
+    (``GlmRolloutModel.for_step``), so each trial has its own key and the k trials of a workpiece can
     land on different nodes.
     """
     return f"{record.workpiece_id}:{record.round}:{record.step}"
@@ -159,7 +159,7 @@ class GlmRolloutModel:
             raise ValueError("A rollout model cannot continue on length; set LLMPolicy.max_continuations=0")
 
     def for_step(self, step: str) -> Self:
-        """This model recording, and routing, under ``step`` of the same item and round."""
+        """This model recording, and routing, under ``step`` of the same workpiece and round."""
         return replace(self, record=replace(self.record, step=step))
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:

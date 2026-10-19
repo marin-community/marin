@@ -243,7 +243,7 @@ async def test_a_grader_that_times_out_twice_expires_the_build_instead_of_going_
         )
 
     assert expired.value.clock is ExpiredClock.GRADER
-    assert "the item is held for inspection" in expired.value.message
+    assert "the workpiece is held for inspection" in expired.value.message
     assert len(fake_glm.requests) == 1
     assert slow.grader_runs == 2
 

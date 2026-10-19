@@ -14,10 +14,10 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ledger_summary.py"
 
 def test_summary_totals_wall_time_and_tokens_per_kind_and_step(tmp_path):
     ledger = JsonlLedger(tmp_path)
-    for item, start in (("a", 0.0), ("b", 1.0)):
+    for workpiece, start in (("a", 0.0), ("b", 1.0)):
         ledger.record(
             LedgerEntry(
-                workpiece_id=item,
+                workpiece_id=workpiece,
                 round=0,
                 step="author",
                 kind=EntryKind.LLM_CALL,

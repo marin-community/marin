@@ -52,7 +52,7 @@ def run(fake_glm, fast_provider: LLMProviderConfig, ledger):
 
     def go(tools, max_turns=8, policy=LLMPolicy(), replay=ReasoningReplay.KEEP, stop=None) -> AgentRun:
         async def call() -> AgentRun:
-            record = CallLedger(ledger=ledger, workpiece_id="item-1", round=0, step="author")
+            record = CallLedger(ledger=ledger, workpiece_id="workpiece-1", round=0, step="author")
             async with GlmClient(fake_source(fake_glm), fast_provider) as client:
                 return await run_agent(client, policy, MESSAGES, tools, max_turns, record, replay, stop)
 

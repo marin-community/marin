@@ -18,7 +18,7 @@ Live tests carry ``@pytest.mark.live_glm`` and request ``glm_source``, which ski
 pool's bearer token; ``live_provider`` is the provider config they call it with. Web tests take
 ``parallel_key``, which skips unless ``TASKFORGE_PARALLEL_KEY_FILE`` names the Parallel key file.
 Live tests write raw evidence under ``evidence_root``, which is outside the checkout, and name run
-directories and item ids with ``unique_run_name``, so parallel workers and reruns never collide.
+directories and workpiece ids with ``unique_run_name``, so parallel workers and reruns never collide.
 """
 
 import json

@@ -5,9 +5,9 @@
 
 ``run_build`` runs a program's steps on its caller's event loop. A step that computes in pure
 Python never yields, so neither ``STEP_TIMEOUT`` nor any other deadline on that loop can fire, and
-every other item on the loop waits with it. ``run_build_in_process`` runs one item's round in a
+every other workpiece on the loop waits with it. ``run_build_in_process`` runs one workpiece's round in a
 child process instead, ``python -m taskforge.stage40_build_with_program.build_process <request> <result>``, and
-the driver's loop goes on serving other items while it waits.
+the driver's loop goes on serving other workpieces while it waits.
 
 Everything a step uses is a network or file service already: the GLM router over HTTP, the Iris
 controller for sandboxes, the step store on S3 or local disk, and the JSONL ledger. The child
@@ -139,7 +139,7 @@ class BuildServiceConfig:
 
 @dataclass(frozen=True)
 class BuildRequest:
-    """One item's round, as ``run_build`` takes it, with the program as source and the host as config."""
+    """One workpiece's round, as ``run_build`` takes it, with the program as source and the host as config."""
 
     workpiece_id: str
     round: int

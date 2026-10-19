@@ -58,7 +58,7 @@ def plan(
     first_attempt: int = 0,
 ) -> TrialPlan:
     return TrialPlan(
-        workpiece_id="item",
+        workpiece_id="workpiece",
         round=1,
         kind=TrialKind.SOLVER,
         k=k,
@@ -72,7 +72,7 @@ def plan(
 
 
 def ledger(tmp_path):
-    return list(read_entries(tmp_path / "ledger" / "item.jsonl"))
+    return list(read_entries(tmp_path / "ledger" / "workpiece.jsonl"))
 
 
 async def test_failed_starts_are_retried_and_every_attempt_is_recorded(tmp_path, file_task, fakes):
@@ -178,7 +178,7 @@ async def test_each_trial_of_a_glm_model_records_and_routes_under_its_own_attemp
         outcomes = await run_trials(math_task, trial_plan, settings(fakes.flaky_factory(0, RuntimeError)), model)
 
     assert [o.reward for o in outcomes if isinstance(o, Graded)] == [1.0, 1.0]
-    assert sorted(body["prompt_cache_key"] for body in fake_glm.requests) == ["item:1:solver/0/0", "item:1:solver/1/0"]
+    assert sorted(body["prompt_cache_key"] for body in fake_glm.requests) == ["workpiece:1:solver/0/0", "workpiece:1:solver/1/0"]
     calls = [entry.step for entry in ledger(tmp_path) if entry.kind is EntryKind.LLM_CALL]
     assert sorted(calls) == ["solver/0/0", "solver/1/0"]
 

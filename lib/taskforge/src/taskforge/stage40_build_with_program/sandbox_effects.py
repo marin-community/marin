@@ -79,7 +79,7 @@ surfaces as the factory's ``SCHEDULING_TIMEOUT`` host failure rather than as thi
 GRADE_CANDIDATE_SOURCE = "taskforge.grade_candidate"
 """``Source.dataset`` of the provisional task ``grade_candidate`` grades against."""
 IMAGE_REPOSITORY_PREFIX = "taskforge-tasks"
-"""Registry repository under which ``publish_image`` pushes an item's task image."""
+"""Registry repository under which ``publish_image`` pushes a workpiece's task image."""
 
 
 @asynccontextmanager
@@ -239,7 +239,7 @@ def image_repository(workpiece_id: str) -> str:
 
 
 async def publish_image(context: RLEnvBuildContext, build: DockerBuild) -> str:
-    """Build ``build`` for linux/amd64, push it under the item's repository, and return the pinned reference.
+    """Build ``build`` for linux/amd64, push it under the workpiece's repository, and return the pinned reference.
 
     A step passes the result to ``spec.draft.requirements(image=...)`` and returns it, so the
     reference is memoized with the step's output.

@@ -441,7 +441,7 @@ async def checked_structured[T: BaseModel](
 
     A reply the output limit cut off counts as a failed submission too: its first
     ``CUT_REPLY_CHARS`` go back as the assistant turn with the cut named as the problem, so the model
-    sends a shorter submission rather than the item failing on an unhandled error. Any other
+    sends a shorter submission rather than the workpiece failing on an unhandled error. Any other
     ``StructuredOutputError`` propagates.
 
     Raises:

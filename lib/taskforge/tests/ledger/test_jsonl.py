@@ -15,7 +15,7 @@ def make_entry(workpiece_id: str, step: str, **kw) -> LedgerEntry:
     return LedgerEntry(workpiece_id=workpiece_id, round=0, step=step, kind=EntryKind.STEP, started=1.0, ended=2.0, **kw)
 
 
-def test_round_trip_keeps_every_field_one_file_per_item(tmp_path):
+def test_round_trip_keeps_every_field_one_file_per_workpiece(tmp_path):
     ledger = JsonlLedger(tmp_path)
     full = LedgerEntry(
         workpiece_id="a",

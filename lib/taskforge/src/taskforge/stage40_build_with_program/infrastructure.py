@@ -14,7 +14,7 @@ Only errors the program cannot have caused are infrastructure:
 * ``NO_FACTORY``: the build needs a machine backend this host has no factory for (a laptop without
   Docker). Lowering raises it, since RolloutEngine checks each machine's environment with its
   factory before it acquires one. It is deterministic on the host (``HOST_REJECTIONS``): no retry here changes it, so the
-  loop abandons the item at once without retrying the build.
+  loop abandons the workpiece at once without retrying the build.
 * ``NO_IMAGE_BUILDER``: the build publishes a task image and this host has no ``ImageBuilder``.
   Also deterministic on the host.
 * ``SCHEDULING_TIMEOUT``: the factory itself gave up waiting for a machine (Iris could not
@@ -45,7 +45,7 @@ unreachable Docker daemon, so those stay the program's too.
 The proposal pins the solver's machine, so the host never chooses it: ``machine_available`` raises
 ``NO_FACTORY`` for a package machine on a host without the local backend and ``NO_IMAGE_BUILDER`` for
 a container proposal on a host without an image builder. ``run_build`` and the agentic author's
-``author_round`` call it before anything runs, so such an item ends as the host's before its author
+``author_round`` call it before anything runs, so such a workpiece ends as the host's before its author
 or its program spends a model call.
 """
 
@@ -97,7 +97,7 @@ class InfrastructureCause(StrEnum):
 
 
 HOST_REJECTIONS = frozenset({InfrastructureCause.NO_FACTORY, InfrastructureCause.NO_IMAGE_BUILDER})
-"""Causes that hold for as long as the host is unchanged: the item is abandoned at once, not retried."""
+"""Causes that hold for as long as the host is unchanged: the workpiece is abandoned at once, not retried."""
 DEADLINE_OPERATIONS = frozenset({RolloutOperation.START, RolloutOperation.GRADE})
 """The engine operations whose deadline only a slow sandbox can exhaust: machine start and grading."""
 

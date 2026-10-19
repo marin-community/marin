@@ -3,10 +3,10 @@
 
 """Infrastructure failures during a validation trial are retried, never charged to the task.
 
-Each case is the exception RolloutEngine raises for one failure pattern of a 2,049-item run's infrastructure
+Each case is the exception RolloutEngine raises for one failure pattern of a 2,049-workpiece run's infrastructure
 revisions during a trial (the chain ``engine.py`` builds: ``RolloutInterrupted(operation) from <original>``),
 classified by ``classify``, validation's one classifier. A pattern passes when the trial is ``Ungraded`` with a
-retryable cause. Validation never revises a program (an ungraded validation ends the item as retryable), so
+retryable cause. Validation never revises a program (an ungraded validation ends the workpiece as retryable), so
 retryable-or-ungraded is the whole rule here. The preflight's host failures are pinned in ``test_preflight.py``.
 """
 

@@ -6,7 +6,7 @@
 Each check writes ``<evidence_root>/llm/agent/<check>-<utc>.json``: the purpose, the policy,
 the full ``AgentRun`` (every message, every completion with its raw stream events, every tool
 result), a summary (turns, tool calls, tokens, wall time) and the check's own observations. Ledger
-spans go to ``<evidence_root>/llm/agent/ledger/<check>/<item>.jsonl``. ``evidence_root`` is the
+spans go to ``<evidence_root>/llm/agent/ledger/<check>/<workpiece>.jsonl``. ``evidence_root`` is the
 fixture in ``tests/conftest.py``. The web check also needs the Parallel key file (the
 ``parallel_key`` fixture there).
 """

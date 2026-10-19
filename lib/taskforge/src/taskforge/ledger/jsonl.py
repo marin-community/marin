@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Append-only local JSONL ledger, one file per item.
+"""Append-only local JSONL ledger, one file per workpiece.
 
 Each entry is written with a single ``write`` on an ``O_APPEND`` descriptor under an exclusive
 ``flock``, so concurrent writers in any number of threads or processes never interleave within a
@@ -64,7 +64,7 @@ class JsonlLedger:
 
 
 def read_entries(path: Path) -> Iterator[LedgerEntry]:
-    """Yield the complete entries in one item's ledger file, in append order."""
+    """Yield the complete entries in one workpiece's ledger file, in append order."""
     with path.open("rb") as f:
         for raw in f:
             if not raw.endswith(b"\n"):

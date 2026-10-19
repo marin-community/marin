@@ -12,8 +12,8 @@ the output limit gets no repair: the call raises ``StructuredOutputError`` at on
 
 The author lives with the build stage because its prompt documents the build SDK and the template.
 It keeps each request as sent, ending with the field instruction ``complete_structured`` appends,
-and its completions under ``<item_dir>/author/<n>/``, including the completions of a call that
-raised ``StructuredOutputError``. It writes the accepted source to ``<item_dir>/program.py`` before
+and its completions under ``<workpiece_dir>/author/<n>/``, including the completions of a call that
+raised ``StructuredOutputError``. It writes the accepted source to ``<workpiece_dir>/program.py`` before
 it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
 no source, and continues the conversation with the previous program as the model's turn and the
 revision as the next user turn.
@@ -321,36 +321,36 @@ def author_messages(proposal: TaskProposal) -> list[Message]:
 
 @dataclass(frozen=True)
 class GlmAuthor:
-    """An ``Author`` for one item and round that asks ``model`` for the program.
+    """An ``Author`` for one workpiece and round that asks ``model`` for the program.
 
     Attributes:
         model: The model that writes the program.
         sampling: Its sampling policy.
-        item_dir: The item's directory: ``program.py`` and the ``author/`` records live here.
+        workpiece_dir: The workpiece's directory: ``program.py`` and the ``author/`` records live here.
         record: Where the author's calls are recorded.
     """
 
     model: ModelClient
     sampling: LLMPolicy
-    item_dir: Path
+    workpiece_dir: Path
     record: CallLedger
 
     async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
-        """Author the program for ``proposal``, revising the item's ``program.py`` when ``revision`` is given.
+        """Author the program for ``proposal``, revising the workpiece's ``program.py`` when ``revision`` is given.
 
         Raises:
-            FileNotFoundError: ``revision`` is given and the item has no ``program.py`` to revise.
+            FileNotFoundError: ``revision`` is given and the workpiece has no ``program.py`` to revise.
             StructuredOutputError: the output limit cut a reply off, or every submission, repairs
                 included, failed to load.
         """
         messages = author_messages(proposal)
         if revision is not None:
             follow_up: list[Message] = [
-                {"role": "assistant", "content": (self.item_dir / PROGRAM_FILE).read_text()},
+                {"role": "assistant", "content": (self.workpiece_dir / PROGRAM_FILE).read_text()},
                 {"role": "user", "content": REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)},
             ]
             messages += follow_up
-        attempts = self.item_dir / AUTHOR_DIR
+        attempts = self.workpiece_dir / AUTHOR_DIR
         attempts.mkdir(parents=True, exist_ok=True)
         record_dir = attempts / f"{len(list(attempts.iterdir())):02d}"
         record_dir.mkdir()
@@ -371,7 +371,7 @@ class GlmAuthor:
             raise
         _write(record_dir / COMPLETIONS_FILE, _COMPLETIONS.dump_json(result.completions, indent=2))
         source = result.value.source
-        _write(self.item_dir / PROGRAM_FILE, source.encode())
+        _write(self.workpiece_dir / PROGRAM_FILE, source.encode())
         program = load_program_source(source)
         record = {
             "program_digest": program.digest,

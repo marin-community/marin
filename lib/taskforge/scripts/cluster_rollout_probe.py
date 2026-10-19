@@ -34,7 +34,7 @@ machine with network must not see.
 
 Everything goes to ``--results-dir`` (default ``$IRIS_OUTPUT_DIR/cluster_rollout_probe``, which
 Iris archives with the attempt): ``summary.json``, the trial evidence ``run_trials`` writes, and
-``ledger/<item>.jsonl``. Each file is printed as ``RESULT_FILE <path> <index>/<count> <chunk>``
+``ledger/<workpiece>.jsonl``. Each file is printed as ``RESULT_FILE <path> <index>/<count> <chunk>``
 lines, where ``<chunk>`` is a JSON string of at most ``PRINT_CHUNK`` characters, and the summary as
 ``RESULT_SUMMARY``. ``--reassemble <logs> --results-dir <dir>`` rebuilds the directory from saved
 ``iris job logs`` output: chunks are grouped by path, ordered by index, ``json.loads``-ed and

@@ -5,7 +5,7 @@
 
 Each check writes ``<evidence_root>/validate/<unique_run_name(check)>/``: ``summary.json`` (purpose,
 per-trial outcome, reward, cause, shell commands executed, token counts, wall time), the per-attempt
-rollout records that ``run_trials`` writes, and the ledger (``ledger/<item>.jsonl``). ``evidence_root``
+rollout records that ``run_trials`` writes, and the ledger (``ledger/<workpiece>.jsonl``). ``evidence_root``
 is the fixture in ``tests/conftest.py``.
 """
 

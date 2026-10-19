@@ -144,7 +144,7 @@ process are preferred whenever a task fits one.
 
 ## Model calls
 
-`llm.recording` records every model call as an `LLM_CALL` span under a `CallLedger` (ledger, item,
+`llm.recording` records every model call as an `LLM_CALL` span under a `CallLedger` (ledger, workpiece,
 round, step), with tokens, finish reason and the call's attempt record (`attempts`,
 `attempts_<outcome>` counts, non-200 `http_statuses`, `wall_time`). `recorded_complete` and
 `recorded_structured` wrap one call each; `run_agent` and `GlmRolloutModel` record through
@@ -178,7 +178,7 @@ own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each a
 the messages trace. Each turn is one streamed chat-completions call with `return_token_ids`, and
 the turn reports the ids and logprobs the server sent in its chunks, and the call's usage; under
 `TraceMode.MESSAGES` the engine records them without checking them, and a stream without them gives
-a turn with empty ids. Every request of a rollout carries `prompt_cache_key: <item>:<round>:<step>`,
+a turn with empty ids. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
 
@@ -243,7 +243,7 @@ A step uses the host through `sandbox_effects`: `build_machine` prepares a machi
 would, `grade_candidate` grades a candidate reply and workspace through `RolloutEngine.run`, and
 `publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
 first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
-cause chain, even one the program wrapped, so the caller retries or abandons the item instead of
+cause chain, even one the program wrapped, so the caller retries or abandons the workpiece instead of
 asking the author for a revision. A host fault is a machine the host could not create or lost
 (classified by the message table in `sandbox.host_failures`, which validation's classifier reads too),
 an unreachable controller, or a startup or verifier deadline that expired while a sandbox started,
@@ -258,7 +258,7 @@ program's) and `BuildInfrastructureFailure` (the host's), carrying the `ExpiredC
 the step: `WALL` when `build_process.run_build_in_process` kills the build at its wall clock, `STEP`
 when a step runs past `run.STEP_TIMEOUT`, and `GRADER` when the standard grader step's reference
 timed out on both of `grade_candidate`'s gradings. Until someone reads the record nobody knows whether
-Taskforge or the program was slow, so the library does not presume: the driver holds the item as
+Taskforge or the program was slow, so the library does not presume: the driver holds the workpiece as
 abandoned, spends no revision, does not rebuild it on its own and asks the author for no rewrite.
 
 `stage40_build_with_program/template/standard.py` is the standard program: five steps and the sink `assemble`.
@@ -278,14 +278,14 @@ as a `BuildFailure`, the program's, so no revision can move the solver between n
 CPython and a container. Nor can the host: before anything runs,
 `run_build` and the agentic author's `author_round` call `infrastructure.machine_available`, which
 raises `NO_IMAGE_BUILDER` for a container proposal on a host without an image builder and `NO_FACTORY`
-for a package machine on a host without the local backend, so the item ends as the host's, with no
+for a package machine on a host without the local backend, so the workpiece ends as the host's, with no
 revision spent and no author adapting the task to the host.
 `grader` grades its own reference answer and the empty answer with `grade_candidate` before it returns,
 sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
 grader that rejects its own reference, returns a reward outside its score range, or credits the
 empty answer above its declared `rejection_ceiling` is a build failure. A reference whose grader
 timed out on both of `grade_candidate`'s gradings raises `BuildExpired` (`GRADER`) at once instead of
-going back to the model, and the driver holds the item as abandoned. The `Grader` it returns
+going back to the model, and the driver holds the workpiece as abandoned. The `Grader` it returns
 holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
 its partial-credit scheme) and every candidate it graded. The agentic author's `run_build` tool
 grades the empty answer in the library after every build, whatever the program did, and fails the
@@ -320,13 +320,13 @@ re-raise it like `ModelUnavailable`, so the round ends without a record and spen
 loader child the host killed raises it with cause `BUILD_PROCESS`. A `BuildExpired` from `run_build`
 never reaches the model either: the tool writes `run.json` with `status: "expired"`, the `clock`, the
 `step` and the message as `text`, and re-raises it at once, so the round ends the same way and the
-driver holds the item as abandoned.
+driver holds the workpiece as abandoned.
 `submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
 program that never built in the session is refused once and handed in untested when submitted again;
 an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
 when a turn's prompt and output plus `turn_max_tokens` exceed `session_token_cap`, at the turn budget,
 or after a third reply without a tool call (a reply cut at the output limit is nudged to take a
-smaller step instead). It writes, under the item's directory:
+smaller step instead). It writes, under the workpiece's directory:
 
 ```
 rounds/<n>/authored/<k>/

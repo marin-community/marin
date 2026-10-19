@@ -40,7 +40,7 @@ from taskforge.llm.structured import StructuredOutputError
 
 @dataclass(frozen=True)
 class CallLedger:
-    """Where model calls and tool calls are recorded, all under one item, round and step."""
+    """Where model calls and tool calls are recorded, all under one workpiece, round and step."""
 
     ledger: Ledger
     workpiece_id: str

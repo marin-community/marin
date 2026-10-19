@@ -7,7 +7,7 @@ A build ends in one of three ways besides a draft. A step raises ``BuildFailure`
 cannot be built as written, which the next round's author can fix. ``BuildInfrastructureFailure``
 says the host failed instead (``infrastructure.py`` classifies host errors), so no revision of the
 program can fix it. ``BuildExpired`` says a build, step or grader ran past its clock, which is the
-fault of neither until someone reads the record, so a driver holds the item as abandoned.
+fault of neither until someone reads the record, so a driver holds the workpiece as abandoned.
 """
 
 from dataclasses import dataclass
@@ -63,7 +63,7 @@ class BuildExpired(Exception):
     """A build, step or grader ran past its clock.
 
     Whether Taskforge was slow or the program was is unknown until someone reads the record, so this is
-    neither the program's failure nor the host's: a driver holds the item as abandoned, spends no revision
+    neither the program's failure nor the host's: a driver holds the workpiece as abandoned, spends no revision
     and does not rebuild it on its own. A step raises ``BuildExpired(message, clock)`` and the runner
     re-raises it with ``step`` set to that step's name; ``str()`` is ``message``.
     """
@@ -101,5 +101,5 @@ class RLEnvBuildContext:
 
 
 def call_ledger(context: RLEnvBuildContext) -> CallLedger:
-    """Where the running step records its model and tool calls: its item, round and step name."""
+    """Where the running step records its model and tool calls: its workpiece, round and step name."""
     return CallLedger(ledger=context.services.recording, workpiece_id=context.workpiece_id, round=context.round, step=context.step)

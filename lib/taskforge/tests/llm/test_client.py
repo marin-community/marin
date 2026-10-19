@@ -348,7 +348,7 @@ def test_continuations_stop_at_policy_limit(fake_glm, run):
 def generate(source: EndpointSource, provider: LLMProviderConfig, max_tokens: int = 64) -> TokenCompletion:
     async def call() -> TokenCompletion:
         async with GlmClient(source, provider) as client:
-            return await client.generate((1, 2, 3), LLMPolicy(), max_tokens=max_tokens, routing_key="item:0:solver")
+            return await client.generate((1, 2, 3), LLMPolicy(), max_tokens=max_tokens, routing_key="workpiece:0:solver")
 
     return asyncio.run(call())
 
@@ -375,7 +375,7 @@ def test_generate_posts_token_ids_and_reads_ids_logprobs_bytes_and_usage(fake_gl
         "stream": False,
     }
     headers = fake_glm.request_headers[0]
-    assert (headers["authorization"], headers[ROUTING_KEY_HEADER]) == ("Bearer test-token", "item:0:solver")
+    assert (headers["authorization"], headers[ROUTING_KEY_HEADER]) == ("Bearer test-token", "workpiece:0:solver")
 
 
 def test_generate_retries_a_retryable_status_and_records_each_attempt(fake_glm, fast_provider):

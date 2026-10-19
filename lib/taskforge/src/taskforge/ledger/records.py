@@ -31,7 +31,7 @@ class EntryKind(StrEnum):
 
 @dataclass(frozen=True)
 class LedgerEntry:
-    """One timed unit of work for one item.
+    """One timed unit of work for one workpiece.
 
     ``started`` is Unix seconds. ``span`` sets ``ended`` to ``started`` plus a monotonic duration,
     so ``wall_time`` is not skewed by a wall-clock step.

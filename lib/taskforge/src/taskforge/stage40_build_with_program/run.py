@@ -11,9 +11,9 @@ and records one ``STEP`` ledger span tagged with its key digest and cache status
 
 A step that fails because of the host raises ``BuildInfrastructureFailure``
 (``infrastructure.py``), even when the program caught the host's error and raised its own. No
-revision of the program can fix the host, so the caller retries or abandons the item without
+revision of the program can fix the host, so the caller retries or abandons the workpiece without
 asking the author. A step that runs past ``STEP_TIMEOUT`` raises ``BuildExpired`` naming the step:
-whether the step or Taskforge was slow is unknown, so the caller holds the item rather than asking for
+whether the step or Taskforge was slow is unknown, so the caller holds the workpiece rather than asking for
 a revision.
 
 ``run_build`` computes the model part of every key (``build_model_digest``), runs the program for
@@ -70,7 +70,7 @@ BUILD_STAGE = "build"
 """The ``step`` of the ``STAGE`` ledger span ``run_build`` records around a build."""
 STEP_TIMEOUT = 1800.0
 """Seconds one step may run before the build expires (``BuildExpired``); a step that never returns would
-otherwise hold its item for good."""
+otherwise hold its workpiece for good."""
 
 
 class ResearchRequirement(StrEnum):
