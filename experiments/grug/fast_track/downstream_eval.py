@@ -40,6 +40,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.fast_track.downstream_tasks import DOWNSTREAM_TASKS_VERSION, TASK_BUILDERS, staged_task_examples
 from experiments.grug.fast_track.launch import (
+    H100_LADDER_SIZES,
+    PALOMA_DETOK_VERSION,
     V16384_TOKENIZER,
     V16384_VOCAB,
     _h100_ladder_model,
@@ -56,8 +58,11 @@ REQUEST_BUCKETS = (256, 512, 1024, 2048, 4096)
 COMPUTE_POLICY = "params=float32,compute=bfloat16,output=float32"
 
 EVAL_CACHE_ROOT = "s3://marin-us-east-02a/marin"
-PALOMA_CACHE_VERSION = "2026.09.17"
+# Uncheatable caches have one version; Paloma uses the version that training evaluates.
 UNCHEATABLE_CACHE_VERSION = "2026.06.28"
+EVAL_CACHE_TAG = V16384_TOKENIZER.rsplit("/", 1)[-1]
+RECORDS_FILE = "downstream_records.parquet"
+METRICS_FILE = "metrics.json"
 PALOMA_SETS = (
     "4chan",
     "c4_100_domains",
@@ -91,12 +96,13 @@ MAX_TEXT_TOKENS_PER_SET = 1_000_000
 # Context-length buckets for the held-out loss: [1, 128), [128, 512), [512, 2048), [2048, 4096).
 CONTEXT_BUCKETS = (128, 512, 2048)
 CONTEXT_BUCKET_NAMES = ("lt128", "128_512", "512_2048", "ge2048")
-# Fixed-target context test: the last TARGET_SPAN tokens of each document that is at least
-# MAX_REQUEST_TOKENS long, scored with each available context length. The targets stay the same,
-# so a loss change across lengths measures only how much the model uses longer context.
+# Fixed-target context test: the TARGET_SPAN tokens just before position MAX_REQUEST_TOKENS of each
+# document that is at least MAX_REQUEST_TOKENS long, scored with each available context length. The
+# targets stay the same, so a loss change across lengths measures only how much the model uses longer context.
 TARGET_SPAN = 128
 TARGET_CONTEXTS = (128, 512, 2048, MAX_REQUEST_TOKENS - TARGET_SPAN)
 MAX_CONTEXT_TEST_DOCUMENTS = 200
+LONG_CONTEXT_LOSS_KEY = f"fixed_target_context_{TARGET_CONTEXTS[-1]}_loss"
 TEXT_READ_BATCH = 256
 
 
@@ -260,9 +266,9 @@ def downstream_metrics(records: pa.Table) -> dict[str, dict[str, float]]:
 
 def _cache_path(eval_set: str) -> str:
     if eval_set in PALOMA_SETS:
-        return prefix_join(EVAL_CACHE_ROOT, f"paloma/{eval_set}-hero-bpe-v16384/{PALOMA_CACHE_VERSION}/validation")
+        return prefix_join(EVAL_CACHE_ROOT, f"paloma/{eval_set}-{EVAL_CACHE_TAG}/{PALOMA_DETOK_VERSION}/validation")
     return prefix_join(
-        EVAL_CACHE_ROOT, f"uncheatable_eval/{eval_set}-hero-bpe-v16384/{UNCHEATABLE_CACHE_VERSION}/validation"
+        EVAL_CACHE_ROOT, f"uncheatable_eval/{eval_set}-{EVAL_CACHE_TAG}/{UNCHEATABLE_CACHE_VERSION}/validation"
     )
 
 
@@ -358,7 +364,7 @@ def load_model(checkpoint_root: str, *, size: str, dense: bool) -> Transformer:
 
 @click.command()
 @click.option("--checkpoint-root", required=True, help="Directory that holds step-N checkpoints.")
-@click.option("--size", required=True, type=click.Choice(["d512", "d768", "d1024", "d1280"]))
+@click.option("--size", required=True, type=click.Choice(H100_LADDER_SIZES))
 @click.option("--output", required=True, help="Directory for metrics.json and downstream_records.parquet.")
 @click.option("--task", "tasks", multiple=True, help="Downstream task; omit for every task.")
 @click.option("--skip-text", is_flag=True, help="Skip the held-out text scores.")
@@ -370,7 +376,7 @@ def main(checkpoint_root: str, size: str, output: str, tasks: tuple[str, ...], s
         model = load_model(checkpoint_root, size=size, dense=True)
         records = score_downstream(model, tokenizer, tasks or tuple(TASK_BUILDERS))
         text = {} if skip_text else score_text(model, tokenizer, (*PALOMA_SETS, *UNCHEATABLE_SETS))
-    with StoragePath(prefix_join(output, "downstream_records.parquet")).open("wb") as stream:
+    with StoragePath(prefix_join(output, RECORDS_FILE)).open("wb") as stream:
         pq.write_table(records, stream)
     summary = {
         "checkpoint_root": checkpoint_root,
@@ -380,7 +386,7 @@ def main(checkpoint_root: str, size: str, output: str, tasks: tuple[str, ...], s
         "downstream": downstream_metrics(records),
         "text": text,
     }
-    with StoragePath(prefix_join(output, "metrics.json")).open("w") as stream:
+    with StoragePath(prefix_join(output, METRICS_FILE)).open("w") as stream:
         json.dump(summary, stream, indent=1)
     print("DOWNSTREAM_METRICS " + json.dumps(summary))
 

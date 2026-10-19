@@ -269,12 +269,12 @@ Run each command as given in [Run a data-track command](#run-a-data-track-comman
 
    ```bash
    uv run python -m experiments.grug.fast_track.quality_cli \
-     --scored-pool <scored-pool-artifact> --size d512 \
+     --scored-pool <scored-pool-artifact> --size d512 --dense \
      --run-id quality-candidate-d512 --selection-method candidate --save-checkpoints \
      --seed 0 --data-seed 0 --version 2026.10.04
 
    uv run python -m experiments.grug.fast_track.quality_cli \
-     --scored-pool <scored-pool-artifact> --size d512 \
+     --scored-pool <scored-pool-artifact> --size d512 --dense \
      --run-id quality-random-d512 --selection-method random --save-checkpoints \
      --seed 0 --data-seed 0 --version 2026.10.04
    ```
@@ -410,7 +410,8 @@ So the judge compares capability groups, and the held-out losses are cheap scree
 
 ### Score the checkpoints
 
-Train the candidate and the random control with `--save-checkpoints`, with at least three matched seeds each.
+Train the candidate and the random control with `--dense --save-checkpoints`, with at least three matched seeds each.
+The scorer reads dense checkpoints only.
 Then score each final checkpoint on one H100:
 
 ```bash

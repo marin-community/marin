@@ -14,7 +14,6 @@ from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_namespaced_name
 
-TRAIN_SPLIT = "train"
 TOKENIZATION_POLICY = "fast-track-long-string-v1"
 TOKENIZATION_CHUNK_CHARS = 10_000
 TOKENIZATION_MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
