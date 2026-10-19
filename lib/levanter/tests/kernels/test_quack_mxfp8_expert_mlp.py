@@ -299,9 +299,10 @@ def test_mxfp8_expert_backward_wgrads_stay_within_mxfp8_error_of_the_exact_mlp(g
     dy = dy + nan_tail
     if dispatch == "bf16":
         rows = rows + nan_tail
-    fwd, backward_input, backward, bf16_wgrads = (
+    fwd, wgrad_fwd, backward_input, backward, bf16_wgrads = (
         (
             mx.swiglu_expert_mlp_mxfp8_fwd,
+            mx.swiglu_expert_mlp_mxfp8_wgrad_fwd,
             mx.swiglu_expert_mlp_mxfp8_backward_input,
             mx.swiglu_expert_mlp_mxfp8_backward,
             sonic._swiglu_expert_mlp_quack_wgrads,
@@ -309,6 +310,7 @@ def test_mxfp8_expert_backward_wgrads_stay_within_mxfp8_error_of_the_exact_mlp(g
         if gated
         else (
             mx.relu2_expert_mlp_mxfp8_fwd,
+            mx.relu2_expert_mlp_mxfp8_wgrad_fwd,
             mx.relu2_expert_mlp_mxfp8_backward_input,
             mx.relu2_expert_mlp_mxfp8_backward,
             sonic._relu2_expert_mlp_quack_wgrads,
@@ -316,10 +318,12 @@ def test_mxfp8_expert_backward_wgrads_stay_within_mxfp8_error_of_the_exact_mlp(g
     )
 
     def run(x, w_up, w_down, dy):
-        _, residuals = fwd(x, w_up, w_down, cu)
+        y, residuals = fwd(x, w_up, w_down, cu)
+        wgrad_y, wgrad_residuals = wgrad_fwd(x, w_up, w_down, cu)
         dx, row_dot, wgrad_args = backward_input(residuals, dy)
         return (
-            backward(residuals, dy),
+            (y, wgrad_y),
+            backward(wgrad_residuals, dy),
             (dx, row_dot),
             bf16_wgrads(*wgrad_args),
             mx.expert_mlp_mxfp8_wgrads(*wgrad_args),
@@ -327,8 +331,9 @@ def test_mxfp8_expert_backward_wgrads_stay_within_mxfp8_error_of_the_exact_mlp(g
 
     w_up = w13_il if gated else w13_il[..., :_WIDTH]
     reference = _exact_swiglu_experts if gated else _exact_relu2_experts
-    fused, (dx, row_dot), bf16_wgrads, unfused_wgrads = jax.jit(run)(rows, w_up, w_down, dy)
+    (y, wgrad_y), fused, (dx, row_dot), bf16_wgrads, unfused_wgrads = jax.jit(run)(rows, w_up, w_down, dy)
     active = slice(0, _NUM_TOKENS)
+    np.testing.assert_array_equal(np.asarray(wgrad_y[active], np.float32), np.asarray(y[active], np.float32))
     _, _, exact_dw_up, exact_dw_down = jax.jit(lambda *a: _reference_run(reference, *a))(
         x[active], w_up, w_down, dy[active]
     )

@@ -272,11 +272,13 @@ class _CuteRelu2Mxfp8ExpertMlp:
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
-        from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_fwd  # noqa: PLC0415
-
-        return relu2_expert_mlp_mxfp8_fwd(
-            x_dispatch, moe_w13_local, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+        from levanter.grug._moe.quack_mxfp8 import (  # noqa: PLC0415
+            relu2_expert_mlp_mxfp8_fwd,
+            relu2_expert_mlp_mxfp8_wgrad_fwd,
         )
+
+        fwd = relu2_expert_mlp_mxfp8_wgrad_fwd if self.mxfp8_wgrads else relu2_expert_mlp_mxfp8_fwd
+        return fwd(x_dispatch, moe_w13_local, moe_w2_local, _cumulative_group_sizes(active_group_sizes))
 
     def apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         out, residuals = self.forward(
@@ -313,12 +315,14 @@ class _CuteSwigluMxfp8ExpertMlp:
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
-        from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_fwd  # noqa: PLC0415
+        from levanter.grug._moe.quack_mxfp8 import (  # noqa: PLC0415
+            swiglu_expert_mlp_mxfp8_fwd,
+            swiglu_expert_mlp_mxfp8_wgrad_fwd,
+        )
 
         w13_interleaved = _interleave_gate_up(moe_w13_local, moe_w2_local.shape[1])
-        return swiglu_expert_mlp_mxfp8_fwd(
-            x_dispatch, w13_interleaved, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
-        )
+        fwd = swiglu_expert_mlp_mxfp8_wgrad_fwd if self.mxfp8_wgrads else swiglu_expert_mlp_mxfp8_fwd
+        return fwd(x_dispatch, w13_interleaved, moe_w2_local, _cumulative_group_sizes(active_group_sizes))
 
     def apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         out, residuals = self.forward(

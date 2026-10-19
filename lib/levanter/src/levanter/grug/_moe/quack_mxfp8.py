@@ -527,20 +527,46 @@ def expert_mlp_mxfp8_wgrads(x, d_up, act, dy, cu):
     )
 
 
-def _token_quantized_rows(x: jax.Array, width: int, blocks) -> tuple[jax.Array, jax.Array]:
-    """The dispatched rows (``mx_pack_rows`` bytes or bf16) quantized along the token axis."""
+def _dispatched_rows_and_tokens(x: jax.Array, width: int, cu: jax.Array):
+    """The dispatched rows (``mx_pack_rows`` bytes or bf16) quantized along their columns for the up-projection
+    and along the token axis for its weight gradient, the bf16 rows in one pass."""
+    blocks = token_scale_blocks(cu, x.shape[0])
     if x.dtype == jnp.uint8:
-        return requantize_row_blocks(*mx_unpack_rows(x, width), *blocks)
-    return quantize_row_blocks(x, *blocks)
+        values, exponents = mx_unpack_rows(x, width)
+        return (values, exponents), requantize_row_blocks(values, exponents, *blocks)
+    return quantize_rows_and_row_blocks(x, *blocks)
+
+
+def swiglu_expert_mlp_mxfp8_wgrad_fwd(x, w13_il, w_down, cu):
+    """``swiglu_expert_mlp_mxfp8_fwd`` whose residuals keep the rows quantized along the token axis (for
+    ``swiglu_expert_mlp_mxfp8_backward``) instead of ``x``."""
+    (values, exponents), x_tokens = _dispatched_rows_and_tokens(x, w13_il.shape[1], cu)
+    gu, h, h_scales = mxfp8_swiglu_grouped_gemm(values, padded_scale_rows(exponents, cu), *mx_weights(w13_il, "n"), cu)
+    y = mxfp8_grouped_gemm(h, h_scales, *mx_weights(w_down, "n"), cu, b_major="n")
+    # The token-axis exponents go last: callers read the pre-activations at index 3, as in the other variants.
+    return y, (x_tokens[0], w13_il, w_down, gu, cu, x_tokens[1])
+
+
+def relu2_expert_mlp_mxfp8_wgrad_fwd(x, w_up, w_down, cu):
+    """``relu2_expert_mlp_mxfp8_fwd`` whose residuals keep the rows quantized along the token axis (for
+    ``relu2_expert_mlp_mxfp8_backward``) instead of ``x``."""
+    (values, exponents), x_tokens = _dispatched_rows_and_tokens(x, w_up.shape[1], cu)
+    pre, post, post_scales = mxfp8_relu2_grouped_gemm(
+        values, padded_scale_rows(exponents, cu), *mx_weights(w_up, "n"), cu, b_major="n"
+    )
+    y = mxfp8_grouped_gemm(post, post_scales, *mx_weights(w_down, "n"), cu, b_major="n")
+    # The token-axis exponents go last: callers read the pre-activations at index 3, as in the other variants.
+    return y, (x_tokens[0], w_up, w_down, pre, cu, x_tokens[1])
 
 
 def swiglu_expert_mlp_mxfp8_backward(res, dy):
-    """``(dx, dw13_il, dw_down, <y, dy>)`` of ``swiglu_expert_mlp_mxfp8_fwd`` with all six GEMMs block-scaled.
+    """``(dx, dw13_il, dw_down, <y, dy>)`` of ``swiglu_expert_mlp_mxfp8_wgrad_fwd``: all six GEMMs block-scaled.
 
     As ``swiglu_expert_mlp_mxfp8_backward_input`` plus the weight gradients, whose operands are quantized along the
     token axis per expert: ``dy`` and ``d gu`` in the same pass as their row quantization for the input-gradient
-    GEMMs, the rows and ``h`` (recomputed from ``gu``, as in the bf16 wgrads) on their own."""
-    x, w13_il, w_down, gu, cu = res
+    GEMMs (the rows come so from the forward), ``h`` (recomputed from ``gu``, as in the bf16 wgrads) on its own."""
+    x_token_values, w13_il, w_down, gu, cu, x_token_exponents = res
+    x_tokens = (x_token_values, x_token_exponents)
     rows = dy.shape[0]
     blocks = token_scale_blocks(cu, rows)
     (dy_values, dy_exponents), dy_tokens = quantize_rows_and_row_blocks(dy, *blocks)
@@ -553,7 +579,6 @@ def swiglu_expert_mlp_mxfp8_backward(res, dy):
     dx = mxfp8_grouped_gemm(
         d_gu_values, padded_scale_rows(d_gu_exponents, cu), *mx_weights(w13_il, "k"), cu, b_major="k"
     )
-    x_tokens = _token_quantized_rows(x, w13_il.shape[1], blocks)
     h_tokens = quantize_row_blocks(h.astype(dy.dtype), *blocks)
     dw13_il = mxfp8_token_grouped_gemm(x_tokens, d_gu_tokens, cu, out_dtype=dy.dtype)
     dw_down = mxfp8_token_grouped_gemm(h_tokens, dy_tokens, cu, out_dtype=dy.dtype)
@@ -561,12 +586,13 @@ def swiglu_expert_mlp_mxfp8_backward(res, dy):
 
 
 def relu2_expert_mlp_mxfp8_backward(res, dy):
-    """``(dx, dw_up, dw_down, <y, dy>)`` of ``relu2_expert_mlp_mxfp8_fwd`` with all six GEMMs block-scaled.
+    """``(dx, dw_up, dw_down, <y, dy>)`` of ``relu2_expert_mlp_mxfp8_wgrad_fwd``: all six GEMMs block-scaled.
 
     ``dy`` is quantized along both axes in one pass; ``d pre``, which the dReLU^2 GEMM stores only as MXFP8 rows, is
-    requantized along the token axis without a bf16 copy; ``post`` and the dispatched rows are quantized on their
-    own."""
-    x, w_up, w_down, pre, cu = res
+    requantized along the token axis without a bf16 copy; ``post`` is quantized on its own (the rows come quantized
+    from the forward)."""
+    x_token_values, w_up, w_down, pre, cu, x_token_exponents = res
+    x_tokens = (x_token_values, x_token_exponents)
     rows = dy.shape[0]
     blocks = token_scale_blocks(cu, rows)
     (dy_values, dy_exponents), dy_tokens = quantize_rows_and_row_blocks(dy, *blocks)
@@ -577,7 +603,6 @@ def relu2_expert_mlp_mxfp8_backward(res, dy):
     width = d_pre_values.shape[1]
     d_pre_exponents = unpadded_scale_rows(d_pre_scales, cu, rows, width // MX_BLOCK)
     d_pre_tokens = requantize_row_blocks(d_pre_values, d_pre_exponents, *blocks)
-    x_tokens = _token_quantized_rows(x, w_up.shape[1], blocks)
     post_tokens = quantize_row_blocks(post, *blocks)
     dw_up = mxfp8_token_grouped_gemm(x_tokens, d_pre_tokens, cu, out_dtype=dy.dtype)
     dw_down = mxfp8_token_grouped_gemm(post_tokens, dy_tokens, cu, out_dtype=dy.dtype)

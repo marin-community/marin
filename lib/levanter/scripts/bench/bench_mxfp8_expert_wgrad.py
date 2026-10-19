@@ -32,9 +32,11 @@ from levanter.grug._moe.quack_mxfp8 import (
     relu2_expert_mlp_mxfp8_backward,
     relu2_expert_mlp_mxfp8_backward_input,
     relu2_expert_mlp_mxfp8_fwd,
+    relu2_expert_mlp_mxfp8_wgrad_fwd,
     swiglu_expert_mlp_mxfp8_backward,
     swiglu_expert_mlp_mxfp8_backward_input,
     swiglu_expert_mlp_mxfp8_fwd,
+    swiglu_expert_mlp_mxfp8_wgrad_fwd,
     token_scale_blocks,
 )
 from levanter.grug.mxfp8_pallas import quantize_row_blocks, quantize_rows, quantize_rows_and_row_blocks
@@ -47,12 +49,14 @@ def _paths(activation: str):
             swiglu_expert_mlp_mxfp8_fwd,
             swiglu_expert_mlp_mxfp8_backward_input,
             _swiglu_expert_mlp_quack_wgrads,
+            swiglu_expert_mlp_mxfp8_wgrad_fwd,
             swiglu_expert_mlp_mxfp8_backward,
         )
     return (
         relu2_expert_mlp_mxfp8_fwd,
         relu2_expert_mlp_mxfp8_backward_input,
         _relu2_expert_mlp_quack_wgrads,
+        relu2_expert_mlp_mxfp8_wgrad_fwd,
         relu2_expert_mlp_mxfp8_backward,
     )
 
@@ -93,7 +97,7 @@ def main() -> None:
     sizes = np.full(e, args.rows // e)
     sizes[-1] += args.rows - sizes.sum()
     cu = jnp.asarray(np.concatenate([[0], np.cumsum(sizes)]), jnp.int32)
-    fwd, backward_input, bf16_wgrads, mxfp8_backward = _paths(args.activation)
+    fwd, backward_input, bf16_wgrads, mxfp8_wgrad_fwd, mxfp8_backward = _paths(args.activation)
 
     def wgrad_args(x, w_up, w_down, dy):
         _, residuals = fwd(x, w_up, w_down, cu)
@@ -107,7 +111,7 @@ def main() -> None:
         return y, dx, *bf16_wgrads(*grad_args)
 
     def mxfp8_train(x, w_up, w_down, dy):
-        y, residuals = fwd(x, w_up, w_down, cu)
+        y, residuals = mxfp8_wgrad_fwd(x, w_up, w_down, cu)
         return y, *mxfp8_backward(residuals, dy)[:3]
 
     def quantizers(x, d_up, act, dy):
