@@ -8,7 +8,7 @@ them from the environment) and the root as ``TASKFORGE_STEP_STORE_LIVE_ROOT``::
 
     TASKFORGE_STEP_STORE_LIVE_ROOT=s3://<bucket>/<scratch prefix> uv run --package marin-taskforge \\
         --frozen --group test pytest -c lib/taskforge/pyproject.toml \\
-        lib/taskforge/tests/stage40_build/test_step_store_live.py -m manual
+        lib/taskforge/tests/stage40_build_with_program/test_step_store_live.py -m manual
 
 The test leaves nothing under the root. Last run 2026-10-13 against CoreWeave S3: store 0.37 s,
 hit load 0.04 s, no temporary objects left behind.
@@ -22,7 +22,7 @@ import pytest
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from taskforge.stage40_build.step_store import SDK_VERSION, RLEnvBuildStepKey, RLEnvBuildStepStore
+from taskforge.stage40_build_with_program.step_store import SDK_VERSION, RLEnvBuildStepKey, RLEnvBuildStepStore
 
 ROOT_ENV = "TASKFORGE_STEP_STORE_LIVE_ROOT"
 

@@ -21,7 +21,7 @@ A memo holds a step's stored output under one key; the ledger calls its own rows
 The store writes the blob before the memo, so every memo points at a complete blob, and it
 writes each file to a temporary sibling before renaming it into place. On an object store the
 rename is a copy and a delete, so a memo costs three requests and appears whole or not at all;
-CI exercises a ``file://`` root, and ``tests/stage40_build/test_step_store_live.py`` (marker
+CI exercises a ``file://`` root, and ``tests/stage40_build_with_program/test_step_store_live.py`` (marker
 ``manual``) runs the same round trip against a bucket. A step's output has to come
 back intact from ``canonical_json`` followed by a pydantic ``TypeAdapter`` of its output type.
 Dataclasses, pydantic output types, tuples, strings and numbers come back intact. Raw ``bytes`` come back

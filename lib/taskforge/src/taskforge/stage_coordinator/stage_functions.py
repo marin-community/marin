@@ -11,7 +11,7 @@ as they are and may also call any stage directly::
     triage        Triage       ``stage20_triage.verdict.accept``
     author        Author       ``stage30_author.author.static_author(program)``
     load_program  LoadProgram  ``stage30_author.loader.load_program_source``
-    build         Build        ``stage40_build.run.run_build``
+    build         Build        ``stage40_build_with_program.run.run_build``
     validate      Validate     a caller's function
     review        Review       a caller's function
 
@@ -32,7 +32,7 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import Author
 from taskforge.stage30_author.program import RLEnvBuildProgram
-from taskforge.stage40_build.run import TaskDraft
+from taskforge.stage40_build_with_program.run import TaskDraft
 from taskforge.stage60_review.decision import Decision
 
 

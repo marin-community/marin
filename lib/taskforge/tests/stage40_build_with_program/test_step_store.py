@@ -6,8 +6,8 @@ from dataclasses import dataclass
 import pytest
 
 from taskforge.content_hash import digest
-from taskforge.stage40_build.run import _memoized
-from taskforge.stage40_build.step_store import (
+from taskforge.stage40_build_with_program.run import _memoized
+from taskforge.stage40_build_with_program.step_store import (
     SDK_VERSION,
     CacheStatus,
     RLEnvBuildStepKey,

@@ -85,19 +85,19 @@ def test_stages_import_only_lower_stages_and_shared_modules():
 def test_every_import_form_counts_and_an_upward_import_is_refused(tmp_path):
     module = tmp_path / "author.py"
     module.write_text(
-        "from taskforge import stage40_build, llm\n"
+        "from taskforge import stage40_build_with_program, llm\n"
         "import taskforge.content_hash\n"
         "from taskforge.stage20_triage.verdict import accept\n"
     )
 
     assert sorted(imported_packages(module)) == [
         (1, "llm"),
-        (1, "stage40_build"),
+        (1, "stage40_build_with_program"),
         (2, "content_hash"),
         (3, "stage20_triage"),
     ]
-    assert not import_allowed("stage30_author", "stage40_build")
-    assert import_allowed("stage40_build", "stage30_author")
+    assert not import_allowed("stage30_author", "stage40_build_with_program")
+    assert import_allowed("stage40_build_with_program", "stage30_author")
     assert not import_allowed("llm", "stage30_author")
     assert import_allowed("stage_coordinator", "stage60_review")
     assert not import_allowed("stage60_review", "stage_coordinator")

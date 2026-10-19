@@ -7,22 +7,22 @@ Taskforge turns task ideas into TaskCompendium `TaskSpec`s with a model's help. 
 
 ```
 src/taskforge/
-  stage_coordinator/  workpiece_machine.py: Stage, Exit, TRANSITIONS, `transition`, `derive_state`;
-                      event_log.py: WorkpieceEventLog, InMemoryEventLog, WorkpieceEventStore,
-                      JsonEventStore;
-                      stage_functions.py: the stage Protocols and `StageFunctions`;
-                      coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
-  content_hash.py     canonical JSON and its sha256 digests
-  llm/                the ModelClient protocol, the GLM client, sampling policy, structured output
-  stage20_triage/     verdict.py: TriageDecision and `accept`
-  stage30_author/     program.py: build steps and the DAG they form;
-                      author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
-                      the program manifest;
-                      loader.py: `load_program_source`, the plain loader of a program's source
-  stage40_build/      context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
-                      step_store.py: step keys, memos, the memo store and `memoized`;
-                      run.py: `run_program`, `run_build`, the draft and `WorkpieceBuildProvenance`
-  stage60_review/     decision.py: the Decision types (Accept, Reject, Retry, Modify)
+  stage_coordinator/           workpiece_machine.py: Stage, Exit, TRANSITIONS, `transition`, `derive_state`;
+                               event_log.py: WorkpieceEventLog, InMemoryEventLog, WorkpieceEventStore,
+                               JsonEventStore;
+                               stage_functions.py: the stage Protocols and `StageFunctions`;
+                               coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
+  content_hash.py              canonical JSON and its sha256 digests
+  llm/                         the ModelClient protocol, the GLM client, sampling policy, structured output
+  stage20_triage/              verdict.py: TriageDecision and `accept`
+  stage30_author/              program.py: build steps and the DAG they form;
+                               author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
+                               the program manifest;
+                               loader.py: `load_program_source`, the plain loader of a program's source
+  stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
+                               step_store.py: step keys, memos, the memo store and `memoized`;
+                               run.py: `run_program`, `run_build`, the draft and `WorkpieceBuildProvenance`
+  stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
 
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
@@ -43,7 +43,7 @@ inputs, puts the sink last, and refuses a step whose output reaches neither anot
 sink. A step receives an `RLEnvBuildContext` (workpiece id, model, sampling policy) as its first
 parameter. The decorator reads the step's inputs from the parameters after it, and the runner
 passes each one by name: another step's output, or the caller's proposal for a parameter called
-`proposal`. `tests/stage40_build/test_run.py` builds this toy program, abridged here:
+`proposal`. `tests/stage40_build_with_program/test_run.py` builds this toy program, abridged here:
 
 ```python
 @rl_env_build_step

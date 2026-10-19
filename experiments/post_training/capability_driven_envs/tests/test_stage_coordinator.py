@@ -18,9 +18,9 @@ from taskforge.stage20_triage.verdict import accept
 from taskforge.stage30_author.author import static_author
 from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
-from taskforge.stage40_build.context import RLEnvBuildContext
-from taskforge.stage40_build.run import DRAFT_DIR, TaskDraft, load_draft, run_build
-from taskforge.stage40_build.step_store import model_digest
+from taskforge.stage40_build_with_program.context import RLEnvBuildContext
+from taskforge.stage40_build_with_program.run import DRAFT_DIR, TaskDraft, load_draft, run_build
+from taskforge.stage40_build_with_program.step_store import model_digest
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision
 from taskforge.stage_coordinator.coordinator import StageCoordinator, WorkpieceBudget, run_workpiece
 from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore

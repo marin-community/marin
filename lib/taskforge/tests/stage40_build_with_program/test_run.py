@@ -31,9 +31,9 @@ from taskforge.content_hash import digest
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
-from taskforge.stage40_build.context import BuildFailure, RLEnvBuildContext
-from taskforge.stage40_build.run import DRAFT_DIR, load_draft, run_build, run_program
-from taskforge.stage40_build.step_store import CacheStatus, RLEnvBuildStepStore, model_digest
+from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext
+from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft, run_build, run_program
+from taskforge.stage40_build_with_program.step_store import CacheStatus, RLEnvBuildStepStore, model_digest
 
 WORKPIECE = "toy-0"
 PROPOSAL = {"id": "toy/0", "task": "Multiply the two numbers in /workspace/numbers.txt."}

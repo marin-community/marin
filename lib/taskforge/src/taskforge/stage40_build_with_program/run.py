@@ -25,8 +25,8 @@ from taskforge.content_hash import canonical_json, digest
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
-from taskforge.stage40_build.context import BuildFailure, RLEnvBuildContext
-from taskforge.stage40_build.step_store import (
+from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext
+from taskforge.stage40_build_with_program.step_store import (
     SDK_VERSION,
     CacheStatus,
     RLEnvBuildStepKey,

@@ -77,9 +77,9 @@ from taskforge.stage30_author.author import (
     program_manifest,
 )
 from taskforge.stage30_author.program import RLEnvBuildProgram
-from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure
-from taskforge.stage40_build.run import DRAFT_DIR, load_draft
-from taskforge.stage40_build.step_store import CacheStatus, check_workpiece_id
+from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
+from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft
+from taskforge.stage40_build_with_program.step_store import CacheStatus, check_workpiece_id
 from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, Retry
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
@@ -402,7 +402,7 @@ def _build_failure_line(error: Exception, program: RLEnvBuildProgram) -> str:
 
         NameError: name 'scale' is not defined at numbers, program line 12: return scale * 2
         TypeError: ... in library code at pydantic/main.py:253 (__init__), called from numbers, program line 12: ...
-        ValueError: ... outside the program, at taskforge/stage40_build/run.py:124 (run)
+        ValueError: ... outside the program, at taskforge/stage40_build_with_program/run.py:124 (run)
     """
     files = _program_files(program)
     steps = {*program.steps, program.sink.name}

@@ -44,9 +44,9 @@ from taskforge.stage30_author.program import (
     rl_env_build_sink,
     rl_env_build_step,
 )
-from taskforge.stage40_build.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
-from taskforge.stage40_build.run import DRAFT_DIR, TASK_FILE, TaskDraft, run_build
-from taskforge.stage40_build.step_store import StoreCorruption, model_digest
+from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
+from taskforge.stage40_build_with_program.run import DRAFT_DIR, TASK_FILE, TaskDraft, run_build
+from taskforge.stage40_build_with_program.step_store import StoreCorruption, model_digest
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
 from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
@@ -136,7 +136,7 @@ from taskcompendium.models import (
 from verifyit.spec import NumericSpec
 
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
-from taskforge.stage40_build.context import RLEnvBuildContext
+from taskforge.stage40_build_with_program.context import RLEnvBuildContext
 """
 SOURCE = "\n\n".join(
     [
