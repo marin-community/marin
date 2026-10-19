@@ -23,6 +23,13 @@ held-out task, no replay), train-index.jsonl (with epoch) or validation-index.js
 selection.jsonl (task or slot -> chosen trial),
 dropped.jsonl, and manifest.json with per-family supervised and context tokens and file hashes.
 
+Relay per family: each family's relay episodes are taken whole, in their own seeded order, until they reach plain's B
+for that family. --relay-families builds only those families, with no replay, as a component marked
+COMPONENT_NOT_AN_ARM, so a family can be built and verified before the others finish. The full arm built later from the
+same inputs holds the same rows for that family. Fallback (off unless triggered): if a family's relay pool ends below
+plain's B for it, the relay arm takes every episode of that family, and --arm plain --match-relay <relay prefix> builds
+a plain control whose rows of that family are cut, in a seeded task order, to relay's total.
+
 Usage:
     python -m experiments.post_training.sft_shootout_rows.build --arm plain --traces <rebuilt.jsonl> ... \\
         --pool <tasks.jsonl> --replay <replay slice prefix> --output <prefix>
@@ -49,6 +56,7 @@ from experiments.post_training.sft_shootout_rows.arms import (
     SEED,
     Attempt,
     first_passing,
+    match_plain_to_relay,
     relay_subsample,
     rs_multi_epochs,
 )
@@ -104,6 +112,8 @@ FAMILY_NOTES = {
         "mini-swe-agent resends earlier reasoning, so rows match the harness; v0/GLM length ratio p50 1.03, p99 1.07"
     ),
 }
+# Written into a relay component prefix (some families, no replay); verify_arms and trainers refuse it as an arm.
+COMPONENT_MARKER = "COMPONENT_NOT_AN_ARM"
 # Changes to row semantics or manifest accounting, newest last; recorded in every manifest.
 CHANGELOG = (
     "2705769260 plain, RS-multi, relay arms from #207 canonical traces; v0 turns masked",
@@ -124,6 +134,8 @@ CHANGELOG = (
     "token gate over the inputs, held-out ids, _SUCCESS marker (task #234)",
     "RECOVERY recovery arm: plain's rows with masked failed attempts before teacher turns of 20% of rows; a row "
     "over the context takes a smaller injection (task #225)",
+    "RELAYFAMILY relay subsample per family: each family's episodes to its share of plain's B, own seeded order; "
+    "--relay-families builds a component (no replay); --match-relay cuts plain to a short relay family (fallback)",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
@@ -451,6 +463,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="also add context-handoff rows from summarized TMax trials (off by default; see recovery.py)",
     )
+    parser.add_argument(
+        "--relay-families",
+        nargs="+",
+        choices=("swesmith", "tmax"),
+        help="relay only: build just these families as a component (no replay, not a trainable arm); default all",
+    )
+    parser.add_argument(
+        "--match-relay",
+        help=(
+            "plain only, fallback mode, off unless triggered: a built relay arm prefix; plain's rows of a family whose "
+            "relay total ended below plain's B for it are cut to relay's total (needs --plain)"
+        ),
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--tokenizer-dir", help="local v0 tokenizer files (hash-checked); default: the regional copy")
     parser.add_argument(
@@ -460,6 +485,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.test_inputs and not args.builder_commit:
         raise ValueError("--builder-commit is required unless --test-inputs")
+    if (args.relay_families and args.arm != "relay") or (args.match_relay and args.arm != "plain"):
+        raise ValueError("--relay-families is for the relay arm and --match-relay for plain")
     return args
 
 
@@ -540,20 +567,52 @@ class ArmRows(NamedTuple):
     index: list[dict]
     splits: dict
     b_tokens: int | None
+    # Arm-specific manifest fields (relay family budgets, a relay component, the plain fallback match).
+    extra: dict
 
 
 def build_rows(
-    arm: Arm, kept: dict[str, Candidate], attempts: list[Attempt], plain: dict | None, replay: Replay, out: Path
+    arm: Arm,
+    kept: dict[str, Candidate],
+    attempts: list[Attempt],
+    plain: dict | None,
+    replay: Replay,
+    out: Path,
+    relay_families: list[str] | None = None,
+    match_relay: dict | None = None,
 ) -> ArmRows:
-    """Select the arm's attempts and write its split files into `out`."""
+    """Select the arm's attempts and write its split files into `out`.
+
+    relay_families (relay only): build just these families as a component, without replay. match_relay (plain only):
+    the built relay arm's manifest; plain's rows of a family whose relay total is below plain's B for it are cut to
+    relay's total, and replay stays plain's cut."""
     splits: dict = {}
     if arm == "plain":
         chosen = first_passing(attempts)
+        extra = {}
+        replay_b = b_tokens = sum(a.supervised for a in chosen.values())
+        if match_relay is not None:
+            if plain is None or sorted(chosen) != plain["task_slots"]:
+                raise ValueError("--match-relay needs --plain, and this build's tasks must be plain's task slots")
+            plain_b, relay_totals = plain_family_b(plain), family_supervised(match_relay)
+            chosen = match_plain_to_relay(chosen, plain_b, relay_totals)
+            b_tokens, replay_b = sum(a.supervised for a in chosen.values()), plain["B_supervised_tokens"]
+            extra = {
+                "matched_to_relay": {
+                    "relay_builder_commit": match_relay["builder_commit"],
+                    "relay_output_hashes": match_relay["output_hashes"],
+                    "plain_family_b": plain_b,
+                    "relay_family_totals": relay_totals,
+                    "matched_family_totals": {
+                        f: sum(a.supervised for a in chosen.values() if a.family == f) for f in plain_b
+                    },
+                    "note": "fallback: plain cut to relay's total in each family where relay ended below plain's B",
+                }
+            }
         selection = [{"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())]
-        b_tokens = sum(a.supervised for a in chosen.values())
-        rows = [entry(kept[a.trial_id]) for _, a in sorted(chosen.items())] + replay.cut(b_tokens)
+        rows = [entry(kept[a.trial_id]) for _, a in sorted(chosen.items())] + replay.cut(replay_b)
         index = write_epochs(out, "plain", lambda epoch: rows, splits)
-        return ArmRows(selection, index, splits, b_tokens)
+        return ArmRows(selection, index, splits, b_tokens, extra)
     if arm == "validation":
         # One fixed set for every arm: GLM's first passing trace per held-out task, per family, no replay.
         chosen = first_passing(attempts)
@@ -565,7 +624,7 @@ def build_rows(
                 out / f"validation-{family}-prebuilt.jsonl.gz", rows, f"{SEED}:validation:{family}"
             )
             index += [{"split": f"validation-{family}"} | item for item in family_index]
-        return ArmRows(selection, index, splits, None)
+        return ArmRows(selection, index, splits, None, {})
     if plain is None:
         raise ValueError("--plain is required for rs-multi and relay")
     b_tokens = plain["B_supervised_tokens"]
@@ -587,12 +646,37 @@ def build_rows(
             lambda epoch: [entry(kept[a.trial_id]) for _, a in sorted(plan[epoch].items())] + replay_cut,
             splits,
         )
-        return ArmRows(selection, index, splits, b_tokens)
-    chosen_episodes, _ = relay_subsample(attempts, b_tokens)
+        return ArmRows(selection, index, splits, b_tokens, {})
+    budgets = plain_family_b(plain)
+    families = sorted(relay_families or budgets)
+    component = families != sorted(budgets)
+    chosen_episodes, totals = relay_subsample(attempts, {family: budgets[family] for family in families})
     selection = [{"trial_id": a.trial_id, "task_id": a.task_id, "sample": a.sample} for a in chosen_episodes]
-    rows = [entry(kept[a.trial_id]) for a in chosen_episodes] + replay.cut(b_tokens)
+    rows = [entry(kept[a.trial_id]) for a in chosen_episodes]
+    if not component:
+        rows += replay.cut(b_tokens)
     index = write_epochs(out, "relay", lambda epoch: rows, splits)
-    return ArmRows(selection, index, splits, b_tokens)
+    extra = {
+        "relay_families": {
+            family: {"plain_b": budgets[family], "achieved": totals[family], "delta": totals[family] - budgets[family]}
+            for family in families
+        },
+        "relay_component": component,
+    }
+    return ArmRows(selection, index, splits, sum(budgets[f] for f in families) if component else b_tokens, extra)
+
+
+def family_supervised(manifest: dict) -> dict[str, int]:
+    """A built arm's agentic supervised tokens per family (epoch 0; plain and relay repeat their rows every epoch)."""
+    return {f: v for f, v in manifest["splits"]["epoch-0"]["supervised_tokens"].items() if f != "replay"}
+
+
+def plain_family_b(plain: dict) -> dict[str, int]:
+    """Plain's B split by agentic family."""
+    budgets = family_supervised(plain)
+    if sum(budgets.values()) != plain["B_supervised_tokens"]:
+        raise ValueError("Plain's per-family supervised tokens do not sum to its B")
+    return budgets
 
 
 def handoff_rows(
@@ -689,7 +773,7 @@ def build_recovery_rows(
     rows += replay.cut(plain["B_supervised_tokens"])
     splits: dict = {}
     index = write_epochs(out, "recovery", lambda epoch: rows, splits)
-    return ArmRows(selection, index, splits, b_tokens), stats
+    return ArmRows(selection, index, splits, b_tokens, {}), stats
 
 
 def eligibility(arm: Arm, traces: list[dict], pool: dict[str, dict], attempts: list[Attempt]) -> dict:
@@ -831,7 +915,7 @@ def build_manifest(
         "splits": splits,
         "replay": (
             None
-            if args.arm == "validation"
+            if args.arm == "validation" or rows.extra.get("relay_component")
             else (
                 replay.info
                 | {
@@ -853,7 +937,10 @@ def build_manifest(
                 f"plain's task slots; per epoch (seed '{SEED}:rs-multi:<epoch>') one passing attempt per slot, "
                 "without replacement until a task's passes are used, then refilled"
             ),
-            "relay": f"passing relay episodes with >=1 GLM turn, seeded order '{SEED}:relay', whole episodes to B",
+            "relay": (
+                f"passing relay episodes with >=1 GLM turn; per family a seeded order '{SEED}:relay:<family>', "
+                "whole episodes to that family's share of plain's B"
+            ),
             "recovery": (
                 "plain's trajectories (same selection, same B); a seeded 20% of each family's rows get 1-2 "
                 "injection points with 1-3 masked failed attempts each (recovery.py)"
@@ -866,9 +953,9 @@ def build_manifest(
         ),
         "heldout_rows": heldout_rows(args.arm, rows.index, pool),
         "output_hashes": output_hashes(out),
-    }
+    } | rows.extra
     if args.arm == "relay":
-        manifest["relay_supervised_tokens"] = splits["epoch-0"]["supervised_total"] - replay.info["supervised_tokens"]
+        manifest["relay_supervised_tokens"] = sum(family_supervised(manifest).values())
         manifest["relay_pool"] = relay_pool(attempts)
     return manifest
 
@@ -914,11 +1001,16 @@ def main() -> None:
         if args.arm == "recovery":
             rows, recovery_stats = build_recovery_rows(args, traces, pool, tokenizer, kept, attempts, plain, replay, out)
         else:
-            rows = build_rows(args.arm, kept, attempts, plain, replay, out)
+            match_relay = (
+                json.loads((StoragePath(args.match_relay) / "manifest.json").read_text()) if args.match_relay else None
+            )
+            rows = build_rows(args.arm, kept, attempts, plain, replay, out, args.relay_families, match_relay)
         index_name = "validation-index.jsonl" if args.arm == "validation" else "train-index.jsonl"
         (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in rows.index))
         (out / "selection.jsonl").write_text("".join(json.dumps(item) + "\n" for item in rows.selection))
         (out / "dropped.jsonl").write_text("".join(json.dumps(item) + "\n" for item in dropped))
+        if rows.extra.get("relay_component"):
+            (out / COMPONENT_MARKER).write_text("relay component: some families only, no replay; not a trainable arm\n")
         eligible = eligibility(args.arm, traces, pool, attempts)
         manifest = build_manifest(args, pool, kept, dropped, attempts, trace_files, gate, eligible, rows, replay, out)
         if recovery_stats is not None:

@@ -10,7 +10,12 @@ supervised and context tokens equal the split's totals; no training row comes fr
 manifest). Across arms: replay rows in every epoch file are the same multiset as plain's epoch 0. Plain: the three
 epoch files hold the same rows (as a multiset) in different orders. RS-multi: each epoch's agentic supervised tokens
 are within 1% of plain's B, on plain's task slots. Recovery: plain's trials and B exactly, every row trains plain's
-target tokens, and rows not marked injected are byte-identical to plain's. Any other arm is refused.
+target tokens, and rows not marked injected are byte-identical to plain's. Relay: each family's episodes reach plain's
+B for it to whole-episode granularity (dropping the family's last chosen episode would fall below it), or the family
+took every usable episode and its shortfall is reported; every epoch holds the same rows, each trial once. A relay
+component (COMPONENT_NOT_AN_ARM, some families, no replay) gets the same family checks; given with a full relay arm
+(components listed first), the arm's rows for the component's families must be byte-identical to the component's. Any
+other arm is refused.
 
     python -m experiments.post_training.sft_shootout_rows.verify_arms <plain prefix> [<other arm prefix> ...]
 """
@@ -24,7 +29,7 @@ from typing import NamedTuple
 
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.sft_shootout_rows.build import EPOCHS
+from experiments.post_training.sft_shootout_rows.build import COMPONENT_MARKER, EPOCHS, plain_family_b
 from experiments.post_training.sweep_data.prepare_agentic import BATCH, PAD_TOKEN, read_component
 from experiments.post_training.sweep_data.select import CONTEXT
 
@@ -35,6 +40,7 @@ class ArmCheck(NamedTuple):
     # Per epoch: {"replay": Counter of row hashes, "agentic": Counter of row hashes, "supervised": per-family tokens}.
     epochs: dict[int, dict]
     report: dict
+    selection: list[dict]
 
 
 def check_prefix(uri: str) -> ArmCheck:
@@ -45,6 +51,8 @@ def check_prefix(uri: str) -> ArmCheck:
     if (root / "DRY_RUN_NOT_FOR_TRAINING").exists():
         raise ValueError(f"{uri}: carries a dry-run marker")
     manifest, _, files = read_component(root)
+    if (COMPONENT_MARKER in files) != bool(manifest.get("relay_component")):
+        raise ValueError(f"{uri}: component marker and manifest disagree")
     index = [json.loads(line) for line in files["train-index.jsonl"].decode().splitlines()]
     heldout = {task for tasks in manifest["heldout_task_ids"].values() for task in tasks}
     leaked = sorted({item["task_id"] for item in index if item.get("task_id") in heldout})
@@ -114,7 +122,8 @@ def check_prefix(uri: str) -> ArmCheck:
         },
         "heldout_rows": 0,
     }
-    return ArmCheck(manifest, index, epochs, report)
+    selection = [json.loads(line) for line in files["selection.jsonl"].decode().splitlines()]
+    return ArmCheck(manifest, index, epochs, report, selection)
 
 
 def check_recovery(uri: str, manifest: dict, index: list[dict], arm: dict, plain_manifest: dict, plain: dict) -> dict:
@@ -153,8 +162,45 @@ def check_recovery(uri: str, manifest: dict, index: list[dict], arm: dict, plain
     }
 
 
+def check_relay(uri: str, arm: ArmCheck, plain_manifest: dict) -> dict:
+    """Relay arm or component: per-family totals to plain's B at whole-episode granularity, same rows every epoch."""
+    budgets = plain_family_b(plain_manifest)
+    families = sorted(arm.manifest["relay_families"])
+    if arm.manifest["relay_component"] != (families != sorted(budgets)):
+        raise ValueError(f"{uri}: relay_component disagrees with its families")
+    if (
+        not arm.manifest["relay_component"]
+        and arm.manifest["B_supervised_tokens"] != plain_manifest["B_supervised_tokens"]
+    ):
+        raise ValueError(f"{uri}: relay B differs from plain's")
+    if not (arm.epochs[0]["agentic"] == arm.epochs[1]["agentic"] == arm.epochs[2]["agentic"]):
+        raise ValueError(f"{uri}: relay epochs do not hold the same rows")
+    trials = [item["trial_id"] for item in arm.index if item["epoch"] == 0 and item["family"] != "replay"]
+    if len(trials) != len(set(trials)) or set(trials) != {item["trial_id"] for item in arm.selection}:
+        raise ValueError(f"{uri}: relay trials repeat or differ from the selection")
+    supervised = {
+        item["trial_id"]: (item["family"], item["supervised_tokens"]) for item in arm.index if item["epoch"] == 0
+    }
+    report = {}
+    for family in families:
+        chosen = [supervised[item["trial_id"]][1] for item in arm.selection if supervised[item["trial_id"]][0] == family]
+        total, budget = sum(chosen), budgets[family]
+        if (
+            total != arm.epochs[0]["supervised"].get(family, 0)
+            or total != arm.manifest["relay_families"][family]["achieved"]
+        ):
+            raise ValueError(f"{uri}: {family} relay total differs between rows and manifest")
+        if total >= budget and chosen and total - chosen[-1] >= budget:
+            raise ValueError(f"{uri}: {family} took episodes past plain's B {budget}")
+        pool = arm.manifest["relay_pool"][family]["supervised_tokens"]
+        if total < budget and total != pool:
+            raise ValueError(f"{uri}: {family} is short of plain's B but did not take its whole pool")
+        report[family] = {"plain_b": budget, "achieved": total, "delta": total - budget, "episodes": len(chosen)}
+    return report
+
+
 def main() -> None:
-    plain_manifest, plain_index, plain, plain_report = check_prefix(sys.argv[1])
+    plain_manifest, plain_index, plain, plain_report, _ = check_prefix(sys.argv[1])
     if plain_manifest["arm"] != "plain":
         raise ValueError("The first prefix must be plain")
     if not (plain[0]["agentic"] == plain[1]["agentic"] == plain[2]["agentic"]):
@@ -167,8 +213,17 @@ def main() -> None:
         raise ValueError("Plain epochs share an order")
     reports = [plain_report | {"epochs_same_rows_different_order": True}]
     b = plain_manifest["B_supervised_tokens"]
+    components = []
     for uri in sys.argv[2:]:
-        manifest, index, arm, report = check_prefix(uri)
+        check = check_prefix(uri)
+        manifest, index, arm, report = check.manifest, check.index, check.epochs, check.report
+        if manifest.get("relay_component"):
+            if any(arm[epoch]["replay"] for epoch in range(EPOCHS)):
+                raise ValueError(f"{uri}: relay component holds replay rows")
+            report["relay"] = check_relay(uri, check, plain_manifest)
+            components.append((uri, check))
+            reports.append(report)
+            continue
         if manifest["replay"]["rows_sha256"] != plain_manifest["replay"]["rows_sha256"]:
             raise ValueError(f"{uri}: replay cut differs from plain's")
         for epoch in range(EPOCHS):
@@ -185,6 +240,14 @@ def main() -> None:
                 if abs(deviations[epoch]) > 0.01:
                     raise ValueError(f"{uri}: epoch {epoch} agentic supervised {agentic} is not within 1% of B {b}")
             report["agentic_supervised_vs_B"] = deviations
+        elif manifest["arm"] == "relay":
+            report["relay"] = check_relay(uri, check, plain_manifest)
+            for component_uri, component in components:
+                families = set(component.manifest["relay_families"])
+                trials = {item["trial_id"] for item in index if item["family"] in families}
+                if {t: v for t, v in arm[0]["by_trial"].items() if t in trials} != component.epochs[0]["by_trial"]:
+                    raise ValueError(f"{uri}: rows of {sorted(families)} differ from the component {component_uri}")
+                report.setdefault("matches_components", []).append(component_uri)
         elif manifest["arm"] == "recovery":
             report["recovery"] = check_recovery(uri, manifest, index, arm, plain_manifest, plain)
         else:

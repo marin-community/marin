@@ -9,8 +9,9 @@ Eligible tasks: pool tasks that are not held out and have at least one passing G
 - RS-multi: the same task slots; in each epoch every slot draws one of its task's passing attempts with a seeded
   generator, without replacement until the task's passes are used up, then the pool refills. One row per slot per
   epoch.
-- relay: passing relay episodes with at least one GLM turn, taken in a seeded random order (whole episodes) until
-  their supervised tokens reach B; v0 turns carry zero loss.
+- relay: passing relay episodes with at least one GLM turn. Each family's episodes are taken in their own seeded random
+  order (whole episodes) until their supervised tokens reach that family's share of plain's B; v0 turns carry zero
+  loss.
 """
 
 import random
@@ -57,14 +58,37 @@ def rs_multi_epochs(attempts: list[Attempt], tasks: list[str], epochs: int) -> l
     return plan
 
 
-def relay_subsample(episodes: list[Attempt], budget: int) -> tuple[list[Attempt], int]:
-    """Whole episodes in a seeded order until supervised tokens reach `budget`; returns (episodes, total)."""
-    order = sorted(episodes, key=lambda a: a.trial_id)
-    random.Random(f"{SEED}:relay").shuffle(order)
-    chosen, total = [], 0
-    for episode in order:
-        if total >= budget:
-            break
-        chosen.append(episode)
-        total += episode.supervised
-    return chosen, total
+def relay_subsample(episodes: list[Attempt], budgets: dict[str, int]) -> tuple[list[Attempt], dict[str, int]]:
+    """Per family, whole episodes in a seeded order until supervised tokens reach the family's budget.
+
+    Returns the chosen episodes (family by family) and each family's total; a total overshoots its budget by less
+    than one episode. A family whose pool is below its budget takes every episode."""
+    chosen, totals = [], {}
+    for family, budget in sorted(budgets.items()):
+        order = sorted((a for a in episodes if a.family == family), key=lambda a: a.trial_id)
+        random.Random(f"{SEED}:relay:{family}").shuffle(order)
+        totals[family] = 0
+        for episode in order:
+            if totals[family] >= budget:
+                break
+            chosen.append(episode)
+            totals[family] += episode.supervised
+    return chosen, totals
+
+
+def match_plain_to_relay(
+    chosen: dict[str, Attempt], plain_b: dict[str, int], relay_totals: dict[str, int]
+) -> dict[str, Attempt]:
+    """Fallback for a family whose relay pool ends below plain's B for it: keep plain's rows of that family in a seeded
+    task order (whole rows) until their supervised tokens reach relay's total; other families keep every row."""
+    kept = {task: a for task, a in chosen.items() if relay_totals.get(a.family, plain_b[a.family]) >= plain_b[a.family]}
+    for family in sorted(f for f in plain_b if relay_totals.get(f, plain_b[f]) < plain_b[f]):
+        order = sorted(task for task, a in chosen.items() if a.family == family)
+        random.Random(f"{SEED}:plain-match:{family}").shuffle(order)
+        total = 0
+        for task in order:
+            if total >= relay_totals[family]:
+                break
+            kept[task] = chosen[task]
+            total += chosen[task].supervised
+    return kept
