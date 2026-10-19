@@ -14,12 +14,16 @@ read the snapshot from the nearby cache.
 The populate step streams **directly into the cache filesystem** — there is no
 full local copy of the snapshot. :func:`cache_hf_model` is the easy path for the
 common case (mirror an HF repo by id), downloading and uploading one file at a
-time so a multi-hundred-GB repo never has to fit on local disk. :func:`cache_to_prefix`
-takes an arbitrary populate callback for callers that need a custom source.
+time so a multi-hundred-GB repo never has to fit on local disk. If a worker stops
+before the completion marker is written, the next worker verifies existing files
+against the requested Hugging Face tree and downloads only missing or mismatched files.
+:func:`cache_to_prefix` takes an arbitrary populate callback for callers that need
+a custom source.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -31,7 +35,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 import fsspec
-from huggingface_hub import hf_hub_download, list_repo_files, model_info
+from huggingface_hub import RepoFile, hf_hub_download, list_repo_tree, model_info
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
@@ -145,8 +149,9 @@ def cache_hf_model(
 
     The easy path over :func:`cache_to_prefix`: streams the repo into the cache
     one file at a time (see :func:`_stream_hf_snapshot`), excluding the cache
-    completion marker, so the snapshot never has to fit on local disk. The caller
-    chooses ``cache_path``; use :func:`resolve_cached_model_path` when a branch
+    completion marker, so the snapshot never has to fit on local disk. An incomplete
+    prefix is checked against source file hashes and resumed under the same lock.
+    The caller chooses ``cache_path``; use :func:`resolve_cached_model_path` when a branch
     or tag must be resolved and included in the cache identity. Returns ``cache_path``.
 
     Args:
@@ -237,14 +242,60 @@ def _stream_hf_snapshot(
     repo.
     """
     # A repository may contain this filename; only cache_to_prefix may write it.
-    filenames = [filename for filename in list_repo_files(model_id, revision=revision) if filename != complete_marker]
-    logger.info("streaming %d files from HF repo %s into %s", len(filenames), model_id, dest)
+    files = [
+        entry
+        for entry in list_repo_tree(model_id, revision=revision, recursive=True)
+        if isinstance(entry, RepoFile) and entry.path != complete_marker
+    ]
+    logger.info("streaming %d files from HF repo %s into %s", len(files), model_id, dest)
     with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
-        for filename in filenames:
-            local_path = hf_hub_download(model_id, filename, revision=revision, local_dir=scratch)
-            remote_path = f"{dest}/{filename}"
+        for file in files:
+            remote_path = f"{dest}/{file.path}"
+            if _verified_hf_file_md5(fs, remote_path, file) is not None:
+                logger.info("model cache file hit: %s", remote_path)
+                continue
+
+            local_path = hf_hub_download(model_id, file.path, revision=revision, local_dir=scratch)
+            local_md5 = _verified_hf_file_md5(fsspec.filesystem("file"), local_path, file)
+            if local_md5 is None:
+                raise ValueError(f"Hugging Face download does not match pinned metadata: {file.path}")
             # Local/posix-backed fsspec filesystems don't auto-create parents; object
             # stores treat this as a no-op since they have no real directories.
             fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
             fs.put_file(local_path, remote_path)
+            fs.invalidate_cache(remote_path)
+            remote_info = fs.info(remote_path)
+            if remote_info["size"] != file.size:
+                raise OSError(f"Uploaded model cache file has the wrong size: {remote_path}")
+            # GCS md5Hash is a checksum of object bytes. ETags are not portable
+            # content hashes; when no provider checksum exists, read the object.
+            remote_md5 = remote_info.get("md5Hash")
+            if remote_md5 is not None:
+                if remote_md5 != base64.b64encode(local_md5).decode("ascii"):
+                    raise OSError(f"Uploaded model cache file has the wrong checksum: {remote_path}")
+            elif _verified_hf_file_md5(fs, remote_path, file) is None:
+                raise OSError(f"Uploaded model cache file does not match pinned metadata: {remote_path}")
             os.remove(local_path)
+
+
+def _verified_hf_file_md5(fs: fsspec.AbstractFileSystem, path: str, file: RepoFile) -> bytes | None:
+    """Return the MD5 of a file matching pinned HF metadata, or None on a mismatch."""
+    try:
+        info = fs.info(path)
+    except FileNotFoundError:
+        return None
+    if info["size"] != file.size:
+        return None
+
+    if file.lfs is not None:
+        expected_digest = file.lfs.sha256
+        digest = hashlib.sha256()
+    else:
+        expected_digest = file.blob_id
+        digest = hashlib.sha1(f"blob {file.size}\0".encode())
+    md5 = hashlib.md5(usedforsecurity=False)
+    with fs.open(path, "rb") as handle:
+        while chunk := handle.read(8 * 1024 * 1024):
+            digest.update(chunk)
+            md5.update(chunk)
+    return md5.digest() if digest.hexdigest() == expected_digest else None
