@@ -715,6 +715,16 @@ def classify(
             broad = True
             continue
 
+        if filepath in (
+            "infra/grafana/src/vllm_observability.py",
+            "infra/grafana/tests/test_vllm_observability.py",
+            "infra/grafana/pyproject.toml",
+            "infra/grafana/uv.lock",
+        ):
+            forced.add("finelog")
+            native_changed.add("finelog")
+            continue
+
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
         # import graph, so force-select the owning scope and mark it for a source

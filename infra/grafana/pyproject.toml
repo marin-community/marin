@@ -46,7 +46,8 @@ sources = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-addopts = "--durations=10 -v"
+addopts = "--durations=10 -v -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+markers = ["integration: requires a source-built native Finelog server"]
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"
 
