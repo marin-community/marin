@@ -246,9 +246,9 @@ vllm = { VLLM_TARGET_DEVICE = "tpu" }
 
 [tool.uv.extra-build-dependencies]
 vllm = [
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
 
 [tool.uv.sources]
@@ -277,12 +277,12 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # if this is a fixed-base overlay PR, then follow
 # .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
 # temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...afb26719464d5957e695bde478ae93a160b11d14
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "afb26719464d5957e695bde478ae93a160b11d14" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...e8809d492d5d6c7008369919a00384eb1c4de969
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "e8809d492d5d6c7008369919a00384eb1c4de969" }
+# https://github.com/marin-community/vllm/compare/9d88ceb02694c6e3df182ec3c87201284f50e2c6...70ea9ae8f2601f06d820ee9d70e3afbdc52683b1
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "70ea9ae8f2601f06d820ee9d70e3afbdc52683b1" }
+# https://github.com/marin-community/tpu-inference/compare/cdaf47c66c1089e66e0dd8b0aba92bc3f9b919c5...c4f9314316ce8a1a1db3a1152de80883b2bfe1c8
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "c4f9314316ce8a1a1db3a1152de80883b2bfe1c8" }
 thalas = { git = "https://github.com/RohithKuditipudi/thalas.git", rev = "6f9139ffa2e1f5799446d65076ed67a01b91426c" }
-joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "f438927f5c3ade6b157fc30715a055bf125a4e6a" }
+joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "e78772d48747afa476e83c65a00ecf8e8d66bec4" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 

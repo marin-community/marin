@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import math
 import random
+import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -226,6 +227,13 @@ def _softmax(logits: dict[Key, float]) -> dict[Key, float]:
     return {key: value / total for key, value in exps.items()}
 
 
+def _standard_gumbel(rng: random.Random) -> float:
+    u = rng.random()
+    while u == 0.0:
+        u = rng.random()
+    return -math.log(-math.log(u))
+
+
 def prefix_mass(chunk: bytes, probs: dict[Key, float], *, credit: float) -> float:
     """P(next text starts with ``chunk``) restricted to one side's top-k.
 
@@ -337,6 +345,36 @@ def select_avg_bytes_union(
     return force(vocab_a, key, a), force(vocab_b, key, b)
 
 
+def select_tempered_prob_cap_bytes_union(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    alpha: float,
+    beta: float,
+    temperature: float,
+    rng: random.Random,
+    vocab_a: Vocab,
+    vocab_b: Vocab,
+) -> tuple[list[int], list[int]]:
+    """Apply a probability-cap penalty over token bytes, then sample at temperature."""
+    a = candidates(vocab_a, a_topk)
+    b = candidates(vocab_b, b_topk)
+
+    def log_probs(logits: dict[Key, float]) -> dict[Key, float]:
+        maximum = max(logits.values())
+        log_normalizer = math.log(sum(math.exp(logit - maximum) for logit in logits.values()))
+        return {key: logit - maximum - log_normalizer for key, logit in logits.items()}
+
+    student = log_probs(avg_bytes_union_scores(a, b, 0.0))
+    advisor = log_probs(avg_bytes_union_scores(a, b, 1.0))
+    scores = student
+    if alpha > 0.0:
+        log_alpha = math.log(alpha)
+        scores = {key: log_p - beta * max(0.0, log_alpha + log_p - advisor[key]) for key, log_p in student.items()}
+    key = _temperature_sample(list(scores), list(scores.values()), temperature, rng)
+    return force(vocab_a, key, a), force(vocab_b, key, b)
+
+
 def select_grad_steps_bytes_union(
     a_topk: list[dict[str, Any]],
     b_topk: list[dict[str, Any]],
@@ -357,6 +395,178 @@ def select_grad_steps_bytes_union(
         student_probs = _softmax(scores)
         scores = {key: logit + step_size * (advisor_probs[key] - student_probs[key]) for key, logit in scores.items()}
     key = _temperature_sample(list(scores), list(scores.values()), temperature, rng)
+    return force(vocab_a, key, a), force(vocab_b, key, b)
+
+
+def select_best_of_n_bytes_union(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    advisor_weight: float,
+    temperature: float,
+    teacher_temperature: float,
+    final_temperature: float,
+    rng: random.Random,
+    vocab_a: Vocab,
+    vocab_b: Vocab,
+) -> tuple[list[int], list[int]]:
+    """Temper best-of-N probabilities for one teacher ranking; allow real N >= 1."""
+    effective_n = advisor_weight
+    a = candidates(vocab_a, a_topk)
+    b = candidates(vocab_b, b_topk)
+    student = avg_bytes_union_scores(a, b, 0.0)
+    maximum = max(student.values())
+    student = {key: (logit - maximum) / temperature for key, logit in student.items()}
+    log_normalizer = math.log(sum(math.exp(logit) for logit in student.values()))
+    student = {key: logit - log_normalizer for key, logit in student.items()}
+    teacher = avg_bytes_union_scores(a, b, 1.0)
+    gumbels = {key: _standard_gumbel(rng) for key in teacher}
+    # The second field breaks teacher-logit ties uniformly when teacher_temperature is zero.
+    ranked = sorted(
+        teacher,
+        key=lambda key: (teacher[key] + teacher_temperature * gumbels[key], gumbels[key]),
+        reverse=True,
+    )
+    log_weights, log_tail = [], -math.inf
+    log_n = math.log(effective_n)
+    small_ratio = math.log(sys.float_info.epsilon) - log_n
+    for key in reversed(ranked):
+        log_p = student[key]
+        if log_tail == -math.inf:
+            log_weight = effective_n * log_p
+            log_tail = log_p
+        else:
+            x = log_p - log_tail
+            if x < small_ratio:
+                # (p + tail)^N - tail^N approaches N * p * tail^(N-1).
+                log_weight = log_n + log_p + (effective_n - 1.0) * log_tail
+            else:
+                d = x + math.log1p(math.exp(-x)) if x > 0.0 else math.log1p(math.exp(x))
+                log_weight = effective_n * (log_tail + d) + math.log(-math.expm1(-effective_n * d))
+                log_tail += d
+        log_weights.append(log_weight)
+    log_weights.reverse()
+    key = _temperature_sample(ranked, log_weights, final_temperature, rng)
+    return force(vocab_a, key, a), force(vocab_b, key, b)
+
+
+def select_mixed_best_of_n_bytes_union(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    advisor_weight: float,
+    temperature: float,
+    teacher_temperature: float,
+    final_temperature: float,
+    tau: float,
+    rng: random.Random,
+    vocab_a: Vocab,
+    vocab_b: Vocab,
+) -> tuple[list[int], list[int]]:
+    """Mix advisor mass into student proposals, then temper best-of-N selection."""
+    effective_n = advisor_weight
+    a = candidates(vocab_a, a_topk)
+    b = candidates(vocab_b, b_topk)
+    proposal = avg_bytes_union_scores(a, b, 0.0)
+    maximum = max(proposal.values())
+    proposal = {key: (logit - maximum) / temperature for key, logit in proposal.items()}
+    log_normalizer = math.log(sum(math.exp(logit) for logit in proposal.values()))
+    proposal = {key: logit - log_normalizer for key, logit in proposal.items()}
+    teacher = avg_bytes_union_scores(a, b, 1.0)
+    if tau > 0.0:
+        maximum = max(teacher.values())
+        advisor = {key: (logit - maximum) / temperature for key, logit in teacher.items()}
+        log_normalizer = math.log(sum(math.exp(logit) for logit in advisor.values()))
+        log_tau = math.log(tau)
+        log_total = math.log1p(tau)
+        for key, log_proposal in proposal.items():
+            log_advisor = log_tau + advisor[key] - log_normalizer
+            proposal[key] = (
+                max(log_proposal, log_advisor) + math.log1p(math.exp(-abs(log_proposal - log_advisor))) - log_total
+            )
+    gumbels = {key: _standard_gumbel(rng) for key in teacher}
+    # The second field breaks teacher-logit ties uniformly when teacher_temperature is zero.
+    ranked = sorted(
+        teacher,
+        key=lambda key: (teacher[key] + teacher_temperature * gumbels[key], gumbels[key]),
+        reverse=True,
+    )
+    log_weights, log_tail = [], -math.inf
+    log_n = math.log(effective_n)
+    small_ratio = math.log(sys.float_info.epsilon) - log_n
+    for key in reversed(ranked):
+        log_p = proposal[key]
+        if log_tail == -math.inf:
+            log_weight = effective_n * log_p
+            log_tail = log_p
+        else:
+            x = log_p - log_tail
+            if x < small_ratio:
+                # (p + tail)^N - tail^N approaches N * p * tail^(N-1).
+                log_weight = log_n + log_p + (effective_n - 1.0) * log_tail
+            else:
+                d = x + math.log1p(math.exp(-x)) if x > 0.0 else math.log1p(math.exp(x))
+                log_weight = effective_n * (log_tail + d) + math.log(-math.expm1(-effective_n * d))
+                log_tail += d
+        log_weights.append(log_weight)
+    log_weights.reverse()
+    key = _temperature_sample(ranked, log_weights, final_temperature, rng)
+    return force(vocab_a, key, a), force(vocab_b, key, b)
+
+
+def select_summed_best_of_n_bytes_union(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    advisor_weight: float,
+    temperature: float,
+    teacher_temperature: float,
+    beta: float,
+    final_temperature: float,
+    rng: random.Random,
+    vocab_a: Vocab,
+    vocab_b: Vocab,
+) -> tuple[list[int], list[int]]:
+    """Add beta-weighted best-of-N log probabilities, scaled by the proposal temperature, to teacher logits."""
+    effective_n = advisor_weight
+    a = candidates(vocab_a, a_topk)
+    b = candidates(vocab_b, b_topk)
+    student = avg_bytes_union_scores(a, b, 0.0)
+    maximum = max(student.values())
+    student = {key: (logit - maximum) / temperature for key, logit in student.items()}
+    log_normalizer = math.log(sum(math.exp(logit) for logit in student.values()))
+    student = {key: logit - log_normalizer for key, logit in student.items()}
+    teacher = avg_bytes_union_scores(a, b, 1.0)
+    gumbels = {key: _standard_gumbel(rng) for key in teacher}
+    # The second field breaks teacher-logit ties uniformly when teacher_temperature is zero.
+    ranked = sorted(
+        teacher,
+        key=lambda key: (teacher[key] + teacher_temperature * gumbels[key], gumbels[key]),
+        reverse=True,
+    )
+    log_weights, log_tail = [], -math.inf
+    log_n = math.log(effective_n)
+    small_ratio = math.log(sys.float_info.epsilon) - log_n
+    for key in reversed(ranked):
+        log_p = student[key]
+        if log_tail == -math.inf:
+            log_weight = effective_n * log_p
+            log_tail = log_p
+        else:
+            x = log_p - log_tail
+            if x < small_ratio:
+                # (p + tail)^N - tail^N approaches N * p * tail^(N-1).
+                log_weight = log_n + log_p + (effective_n - 1.0) * log_tail
+            else:
+                d = x + math.log1p(math.exp(-x)) if x > 0.0 else math.log1p(math.exp(x))
+                log_weight = effective_n * (log_tail + d) + math.log(-math.expm1(-effective_n * d))
+                log_tail += d
+        log_weights.append(log_weight)
+    log_weights.reverse()
+    scores = [
+        teacher[key] + beta * temperature * log_weight for key, log_weight in zip(ranked, log_weights, strict=True)
+    ]
+    key = _temperature_sample(ranked, scores, final_temperature, rng)
     return force(vocab_a, key, a), force(vocab_b, key, b)
 
 

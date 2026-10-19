@@ -20,10 +20,22 @@ selector live in ``xtok_selection``:
   average the resulting probabilities — same-tokenizer pairs only.
 - ``unnormalized_add``: ``logit_a + alpha * logit_b`` on raw token ids for
   same-tokenizer pairs.
+- ``unnormalized_add_no_vocab``: the same token-ID sum without byte vocabularies.
 - ``unnormalized_add_bytes_union``: the same sum over the byte-keyed union,
   preserving each side's EOS mapping.
 - ``grad_step_size=<step_size>``: update student logits toward the advisor's
   raw-logit softmax over the byte-keyed union; advisor weight counts the updates.
+- ``best_of_n``: choose the advisor's highest-logit student proposal over the
+  byte-keyed union; advisor weight is effective N, interpolated for real N >= 1.
+- ``soft_best_of_n_teacher_temperature=<temperature>``: sample the advisor at
+  a positive temperature over distinct student proposals, with the same effective N.
+- ``tempered_best_of_n``: sweep (N, proposal temperature, advisor temperature),
+  tempering each ranking's probabilities to preserve the N=1 sampling temperature.
+- ``tempered_best_of_n_mixture``: also sweep added advisor mass in the proposal
+  distribution; N=1 samples the tempered mixture.
+- ``tempered_best_of_n_sum``: sweep (N, proposal temperature, advisor temperature,
+  beta); add beta times the proposal-temperature-scaled best-of-N log
+  probabilities to the advisor logits, then apply sampling temperature.
 - ``one_sided_logprob_avg``: penalize student probabilities where the advisor
   assigns lower probability, normalized over the raw-token union for
   same-tokenizer pairs.
@@ -31,6 +43,9 @@ selector live in ``xtok_selection``:
 - ``harmonic_avg``: take a weighted harmonic average of student and advisor probabilities.
   Both rules temperature-scale each side over the raw-token union and
   require same-tokenizer pairs.
+- ``tempered_prob_cap``: sweep (alpha, beta) pairs; cap the student at
+  advisor probability / alpha with penalty exponent beta, then apply
+  sampling temperature to the pooled weights.
 - ``power_avg=<power>``: take a weighted power mean of the temperature-normalized
   student and advisor probabilities over the raw-token union; same-tokenizer only.
 - ``token_dropout``: retain an advisor-sampled token, independently drop other
@@ -144,9 +159,15 @@ class XtokSelectionRule(StrEnum):
     AVG_LOGITS = "avg_logits"
     AVG_PROBS = "avg_probs"
     UNNORMALIZED_ADD = "unnormalized_add"
+    UNNORMALIZED_ADD_NO_VOCAB = "unnormalized_add_no_vocab"
     UNNORMALIZED_ADD_BYTES_UNION = "unnormalized_add_bytes_union"
+    BEST_OF_N = "best_of_n"
+    TEMPERED_BEST_OF_N = "tempered_best_of_n"
+    TEMPERED_BEST_OF_N_MIXTURE = "tempered_best_of_n_mixture"
+    TEMPERED_BEST_OF_N_SUM = "tempered_best_of_n_sum"
     ONE_SIDED_LOGPROB_AVG = "one_sided_logprob_avg"
     PROB_CAP = "prob_cap"
+    TEMPERED_PROB_CAP = "tempered_prob_cap"
     HARMONIC_AVG = "harmonic_avg"
     TOKEN_DROPOUT = "token_dropout"
     TAU_FILTER_STUDENT = "tau_filter_student"
@@ -168,6 +189,12 @@ class XtokSelectionRule(StrEnum):
                 raise ValueError(f"step_size must be finite and positive (got {step_size})")
             normalized = f"grad_step_size={step_size}"
             name = "GRAD_STEPS"
+        elif value.startswith("soft_best_of_n_teacher_temperature="):
+            teacher_temperature = float(value.removeprefix("soft_best_of_n_teacher_temperature="))
+            if not math.isfinite(teacher_temperature) or teacher_temperature <= 0.0:
+                raise ValueError(f"teacher_temperature must be finite and positive (got {teacher_temperature})")
+            normalized = f"soft_best_of_n_teacher_temperature={teacher_temperature}"
+            name = "SOFT_BEST_OF_N"
         else:
             return None
         member = str.__new__(cls, normalized)
@@ -187,6 +214,14 @@ class XtokSelectionRule(StrEnum):
             return float(self.value.removeprefix("grad_step_size="))
         return None
 
+    @property
+    def best_of_n_teacher_temperature(self) -> float | None:
+        if self is XtokSelectionRule.BEST_OF_N:
+            return 0.0
+        if self.value.startswith("soft_best_of_n_teacher_temperature="):
+            return float(self.value.removeprefix("soft_best_of_n_teacher_temperature="))
+        return None
+
 
 @dataclass(frozen=True)
 class JointDecodeSamplingConfig:
@@ -202,7 +237,12 @@ class JointDecodeSamplingConfig:
     selection_rule: XtokSelectionRule
     # The sweep axis: one run decodes every prompt at every weight, engines
     # loaded once. Versioned as a whole — extending the grid re-runs the sweep.
-    advisor_weights: tuple[float, ...]
+    advisor_weights: (
+        tuple[float, ...]
+        | tuple[tuple[float, float], ...]
+        | tuple[tuple[float, float, float], ...]
+        | tuple[tuple[float, float, float, float], ...]
+    )
     temperature: float = 1.0
     stop: tuple[str, ...] | None = None
     # anchored_prefix_mass only: per-byte credit for advisor tokens that are
@@ -218,44 +258,111 @@ class JointDecodeSamplingConfig:
             raise ValueError(f"temperature must be >= 0 (got {self.temperature})")
         if not self.advisor_weights:
             raise ValueError("advisor_weights must be non-empty")
-        if self.selection_rule in (XtokSelectionRule.AVG_LOGITS, XtokSelectionRule.BYTES_UNION):
-            if any(not math.isfinite(weight) for weight in self.advisor_weights):
+        weights = cast(tuple[float, ...], self.advisor_weights)
+        if self.selection_rule is XtokSelectionRule.TEMPERED_BEST_OF_N:
+            if not math.isfinite(self.temperature):
+                raise ValueError(f"sampling temperature must be finite (got {self.temperature})")
+            for point in self.advisor_weights:
+                if not isinstance(point, tuple) or len(point) != 3:
+                    raise ValueError(
+                        f"tempered_best_of_n requires (N, proposal temperature, advisor temperature): {point}"
+                    )
+                effective_n, proposal_temperature, advisor_temperature = point
+                if (
+                    not math.isfinite(effective_n)
+                    or effective_n < 1.0
+                    or not math.isfinite(proposal_temperature)
+                    or proposal_temperature <= 0.0
+                    or not math.isfinite(advisor_temperature)
+                    or advisor_temperature < 0.0
+                ):
+                    raise ValueError(
+                        f"expected finite N >= 1, proposal temperature > 0, advisor temperature >= 0: {point}"
+                    )
+                if not math.isfinite(self.temperature / proposal_temperature):
+                    raise ValueError(
+                        f"derived final temperature must be finite: {self.temperature} / {proposal_temperature}"
+                    )
+        elif self.selection_rule is XtokSelectionRule.TEMPERED_BEST_OF_N_MIXTURE:
+            if not math.isfinite(self.temperature):
+                raise ValueError(f"sampling temperature must be finite (got {self.temperature})")
+            for point in self.advisor_weights:
+                if not isinstance(point, tuple) or len(point) != 4:
+                    raise ValueError(
+                        "tempered_best_of_n_mixture requires "
+                        f"(N, proposal temperature, advisor temperature, tau): {point}"
+                    )
+                effective_n, proposal_temperature, advisor_temperature, tau = point
+                if (
+                    not math.isfinite(effective_n)
+                    or effective_n < 1.0
+                    or not math.isfinite(proposal_temperature)
+                    or proposal_temperature <= 0.0
+                    or not math.isfinite(advisor_temperature)
+                    or advisor_temperature < 0.0
+                    or not math.isfinite(tau)
+                    or tau < 0.0
+                ):
+                    raise ValueError(
+                        f"expected finite N >= 1, proposal temperature > 0, advisor temperature and tau >= 0: {point}"
+                    )
+                if not math.isfinite(self.temperature / proposal_temperature):
+                    raise ValueError(
+                        f"derived final temperature must be finite: {self.temperature} / {proposal_temperature}"
+                    )
+        elif self.selection_rule in (XtokSelectionRule.AVG_LOGITS, XtokSelectionRule.BYTES_UNION):
+            if any(not math.isfinite(weight) for weight in weights):
                 raise ValueError(f"advisor_weights must all be finite (got {self.advisor_weights})")
         elif self.selection_rule in (
             XtokSelectionRule.UNNORMALIZED_ADD,
+            XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB,
             XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION,
         ):
-            if any(not math.isfinite(alpha) or alpha < 0.0 for alpha in self.advisor_weights):
+            if any(not math.isfinite(alpha) or alpha < 0.0 for alpha in weights):
                 raise ValueError(
                     f"unnormalized-add alphas must all be finite and nonnegative (got {self.advisor_weights})"
                 )
         elif self.selection_rule is XtokSelectionRule.ONE_SIDED_LOGPROB_AVG:
-            if any(not math.isfinite(strength) or strength < 0.0 for strength in self.advisor_weights):
+            if any(not math.isfinite(strength) or strength < 0.0 for strength in weights):
                 raise ValueError(
                     f"one-sided logprob strengths must all be finite and nonnegative (got {self.advisor_weights})"
                 )
         elif self.selection_rule is XtokSelectionRule.PROB_CAP:
-            if any(not math.isfinite(alpha) or alpha < 0.0 for alpha in self.advisor_weights):
+            if any(not math.isfinite(alpha) or alpha < 0.0 for alpha in weights):
                 raise ValueError(
                     f"{self.selection_rule.value} alphas must all be finite and nonnegative (got {self.advisor_weights})"
                 )
+        elif self.selection_rule is XtokSelectionRule.TEMPERED_PROB_CAP:
+            for point in self.advisor_weights:
+                if not isinstance(point, tuple) or len(point) != 2:
+                    raise ValueError(f"tempered_prob_cap requires (alpha, beta): {point}")
+                alpha, beta = point
+                if not math.isfinite(alpha) or alpha < 0.0 or not math.isfinite(beta) or beta < 0.0:
+                    raise ValueError(f"tempered_prob_cap requires finite nonnegative alpha and beta: {point}")
+        elif self.selection_rule is XtokSelectionRule.TEMPERED_BEST_OF_N_SUM:
+            pass
         elif self.selection_rule in (XtokSelectionRule.TAU_FILTER_STUDENT, XtokSelectionRule.TAU_FILTER_ADVISOR):
-            if any(not math.isfinite(tau) or tau < 0.0 for tau in self.advisor_weights):
+            if any(not math.isfinite(tau) or tau < 0.0 for tau in weights):
                 raise ValueError(
                     f"{self.selection_rule.value} taus must all be finite and nonnegative (got {self.advisor_weights})"
                 )
         elif self.selection_rule.grad_step_size is not None:
-            if any(not math.isfinite(steps) or steps < 0.0 or steps != int(steps) for steps in self.advisor_weights):
+            if any(not math.isfinite(steps) or steps < 0.0 or steps != int(steps) for steps in weights):
                 raise ValueError(
                     f"gradient step counts must all be finite nonnegative integers (got {self.advisor_weights})"
                 )
-        elif any(not 0.0 <= weight <= 1.0 for weight in self.advisor_weights):
+        elif self.selection_rule.best_of_n_teacher_temperature is not None:
+            if any(not math.isfinite(effective_n) or effective_n < 1.0 for effective_n in weights):
+                raise ValueError(f"effective N values must all be finite and >= 1 (got {self.advisor_weights})")
+        elif any(not 0.0 <= weight <= 1.0 for weight in weights):
             raise ValueError(f"advisor_weights must all be in [0, 1] (got {self.advisor_weights})")
         if (
             self.selection_rule.power is not None
+            or self.selection_rule.best_of_n_teacher_temperature is not None
             or self.selection_rule
             in (
                 XtokSelectionRule.PROB_CAP,
+                XtokSelectionRule.TEMPERED_PROB_CAP,
                 XtokSelectionRule.HARMONIC_AVG,
                 XtokSelectionRule.TOKEN_DROPOUT,
                 XtokSelectionRule.TAU_FILTER_STUDENT,
@@ -379,7 +486,9 @@ class XtokChunkSpec:
     """
 
     chunk_id: int
-    advisor_weight: float
+    advisor_weight: (
+        float | tuple[float, float] | tuple[float, float, float] | tuple[float, float, float, float] | list[float]
+    )
     weight_index: int
     chunk_start: int
     chunk_end: int
@@ -478,7 +587,12 @@ def sweep_chunk_specs(
     chunks_dir: str,
     num_prompts: int,
     n_samples: int,
-    advisor_weights: tuple[float, ...],
+    advisor_weights: (
+        tuple[float, ...]
+        | tuple[tuple[float, float], ...]
+        | tuple[tuple[float, float, float], ...]
+        | tuple[tuple[float, float, float, float], ...]
+    ),
     chunk_size: int,
     *,
     student_weights: tuple[float, ...] | None = None,
@@ -511,7 +625,7 @@ class XtokPathStep:
     EOS included, contribute no bytes) and each side's exact forced token
     ids."""
 
-    bytes_hex: str
+    bytes_hex: str | None
     tokens_a: list[int]
     tokens_b: list[int]
 
@@ -535,6 +649,9 @@ def write_sweep_chunk(
     n_samples: int,
     token_paths: dict[int, list[XtokPathStep]],
     student_weight: float | None = None,
+    best_of_n_settings: tuple[float, float, float, float] | tuple[float, float, float, float, float] | None = None,
+    tempered_prob_cap_settings: tuple[float, float] | None = None,
+    tempered_best_of_n_sum_settings: tuple[float, float, float, float] | None = None,
 ) -> None:
     """Generate one chunk at its advisor weight (the caller has already set
     the weight on the selector state and reset token_paths, which the
@@ -558,6 +675,25 @@ def write_sweep_chunk(
     records = []
     path_records = []
     weight_metadata = {"advisor_weight": chunk.advisor_weight}
+    if best_of_n_settings is not None:
+        effective_n, proposal_temperature, advisor_temperature, final_temperature = best_of_n_settings[:4]
+        weight_metadata = {
+            "advisor_weight": effective_n,
+            "proposal_temperature": proposal_temperature,
+            "advisor_temperature": advisor_temperature,
+            "final_temperature": final_temperature,
+        }
+        if len(best_of_n_settings) == 5:
+            weight_metadata["teacher_distribution_boost"] = best_of_n_settings[4]
+    if tempered_prob_cap_settings is not None:
+        weight_metadata["alpha"], weight_metadata["beta"] = tempered_prob_cap_settings
+    if tempered_best_of_n_sum_settings is not None:
+        (
+            weight_metadata["advisor_weight"],
+            weight_metadata["proposal_temperature"],
+            weight_metadata["advisor_temperature"],
+            weight_metadata["beta"],
+        ) = tempered_best_of_n_sum_settings
     if student_weight is not None:
         weight_metadata["student_weight"] = student_weight
     rows = zip(chunk_prompt_ids, completion_indices, outputs, strict=True)
@@ -623,7 +759,9 @@ def _child_config_from_file(path: str) -> JointDecodeLocalWorkerConfig:
         data = json.load(f)
     sampling_data = dict(data["sampling"])
     sampling_data["selection_rule"] = XtokSelectionRule(sampling_data["selection_rule"])
-    sampling_data["advisor_weights"] = tuple(sampling_data["advisor_weights"])
+    sampling_data["advisor_weights"] = tuple(
+        tuple(weight) if isinstance(weight, list) else weight for weight in sampling_data["advisor_weights"]
+    )
     student_weights = data["student_weights"]
     placement_data = data["placement"]
     return JointDecodeLocalWorkerConfig(
@@ -660,7 +798,7 @@ class _SweepState:
     baked into the coordinator at engine spawn; chunks run serially, so
     setting these between generate() calls is race-free."""
 
-    advisor_weight: float
+    advisor_weight: float | tuple[float, ...] | list[float]
     token_paths: dict[int, list[XtokPathStep]]  # request_index -> steps
     student_weight: float = 1.0
 
@@ -837,19 +975,87 @@ def _tau_filter_weights(
     return union, [math.exp(score - maximum) for score in scores]
 
 
+def _make_no_vocab_select_token(
+    sampling: JointDecodeSamplingConfig,
+    state: _SweepState,
+) -> Callable[..., tuple[list[int], list[int]]]:
+    def select_token(a_topk, b_topk, *, rng, request_index: int):
+        alpha = cast(float, state.advisor_weight)
+        scale = 1.0 + alpha
+        tokens_a, tokens_b = xtok_selection.select_avg_logits(
+            a_topk,
+            b_topk,
+            advisor_weight=alpha / scale,
+            temperature=sampling.temperature / scale,
+            rng=rng,
+            request_index=request_index,
+        )
+        state.token_paths.setdefault(request_index, []).append(
+            XtokPathStep(bytes_hex=None, tokens_a=list(tokens_a), tokens_b=list(tokens_b))
+        )
+        return tokens_a, tokens_b
+
+    return select_token
+
+
 def _make_select_token(
     sampling: JointDecodeSamplingConfig,
     vocab_a: xtok_selection.Vocab,
     vocab_b: xtok_selection.Vocab,
     state: _SweepState,
 ) -> Callable[..., tuple[list[int], list[int]]]:
+    if sampling.selection_rule is XtokSelectionRule.TEMPERED_BEST_OF_N:
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            effective_n, proposal_temperature, advisor_temperature, final_temperature = cast(
+                tuple[float, float, float, float], state.advisor_weight
+            )
+            tokens_a, tokens_b = xtok_selection.select_best_of_n_bytes_union(
+                a_topk,
+                b_topk,
+                advisor_weight=effective_n,
+                temperature=proposal_temperature,
+                teacher_temperature=advisor_temperature,
+                final_temperature=final_temperature,
+                rng=rng,
+                vocab_a=vocab_a,
+                vocab_b=vocab_b,
+            )
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
+    if sampling.selection_rule is XtokSelectionRule.TEMPERED_BEST_OF_N_MIXTURE:
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            effective_n, proposal_temperature, advisor_temperature, final_temperature, tau = cast(
+                tuple[float, float, float, float, float], state.advisor_weight
+            )
+            tokens_a, tokens_b = xtok_selection.select_mixed_best_of_n_bytes_union(
+                a_topk,
+                b_topk,
+                advisor_weight=effective_n,
+                temperature=proposal_temperature,
+                teacher_temperature=advisor_temperature,
+                final_temperature=final_temperature,
+                tau=tau,
+                rng=rng,
+                vocab_a=vocab_a,
+                vocab_b=vocab_b,
+            )
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
     if (power := sampling.selection_rule.power) is not None:
 
         def select_token(a_topk, b_topk, *, rng, request_index: int):
             union, weights = _power_avg_weights(
                 a_topk,
                 b_topk,
-                advisor_weight=state.advisor_weight,
+                advisor_weight=cast(float, state.advisor_weight),
                 temperature=sampling.temperature,
                 power=power,
             )
@@ -867,12 +1073,54 @@ def _make_select_token(
             union, weights = _one_sided_logprob_weights(
                 a_topk,
                 b_topk,
-                advisor_weight=state.advisor_weight,
+                advisor_weight=cast(float, state.advisor_weight),
                 temperature=sampling.temperature,
             )
             token = rng.choices(union, weights=weights, k=1)[0]
             tokens_a = [token]
             tokens_b = [token]
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
+    if sampling.selection_rule is XtokSelectionRule.TEMPERED_BEST_OF_N_SUM:
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            effective_n, proposal_temperature, advisor_temperature, beta = cast(
+                tuple[float, float, float, float], state.advisor_weight
+            )
+            tokens_a, tokens_b = xtok_selection.select_summed_best_of_n_bytes_union(
+                a_topk,
+                b_topk,
+                advisor_weight=effective_n,
+                temperature=proposal_temperature,
+                teacher_temperature=advisor_temperature,
+                beta=beta,
+                final_temperature=sampling.temperature,
+                rng=rng,
+                vocab_a=vocab_a,
+                vocab_b=vocab_b,
+            )
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
+    if sampling.selection_rule is XtokSelectionRule.TEMPERED_PROB_CAP:
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            alpha, beta = cast(tuple[float, float], state.advisor_weight)
+            tokens_a, tokens_b = xtok_selection.select_tempered_prob_cap_bytes_union(
+                a_topk,
+                b_topk,
+                alpha=alpha,
+                beta=beta,
+                temperature=sampling.temperature,
+                rng=rng,
+                vocab_a=vocab_a,
+                vocab_b=vocab_b,
+            )
             state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
             return tokens_a, tokens_b
 
@@ -885,7 +1133,7 @@ def _make_select_token(
                 a_topk,
                 b_topk,
                 selection_rule=sampling.selection_rule,
-                advisor_weight=state.advisor_weight,
+                advisor_weight=cast(float, state.advisor_weight),
                 temperature=sampling.temperature,
             )
             token = rng.choices(union, weights=weights, k=1)[0]
@@ -903,7 +1151,7 @@ def _make_select_token(
                 a_topk,
                 b_topk,
                 selection_rule=sampling.selection_rule,
-                tau=state.advisor_weight,
+                tau=cast(float, state.advisor_weight),
                 temperature=sampling.temperature,
             )
             token = rng.choices(union, weights=weights, k=1)[0]
@@ -931,7 +1179,7 @@ def _make_select_token(
                 raise ValueError("both sides must provide at least one top-k logit")
 
             union = list(set(a_logits) | set(b_logits))
-            dropout_probability = state.advisor_weight
+            dropout_probability = cast(float, state.advisor_weight)
             if dropout_probability == 0.0:
                 token = sample_token(a_logits, union, rng)
             else:
@@ -976,7 +1224,7 @@ def _make_select_token(
             union = list(set(a_logits) | set(b_logits))
             probabilities_a = probabilities(a_logits, union)
             probabilities_b = probabilities(b_logits, union)
-            advisor_weight = state.advisor_weight
+            advisor_weight = cast(float, state.advisor_weight)
             weights = [
                 (1.0 - advisor_weight) * probability_a + advisor_weight * probability_b
                 for probability_a, probability_b in zip(probabilities_a, probabilities_b, strict=True)
@@ -995,7 +1243,7 @@ def _make_select_token(
         from joint_decode.selection import select_avg_logits  # noqa: PLC0415
 
         def select_token(a_topk, b_topk, *, rng, request_index: int):
-            alpha = state.advisor_weight
+            alpha = cast(float, state.advisor_weight)
             scale = 1.0 + alpha
             tokens_a, tokens_b = select_avg_logits(
                 a_topk,
@@ -1013,7 +1261,7 @@ def _make_select_token(
     if sampling.selection_rule is XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION:
 
         def select_token(a_topk, b_topk, *, rng, request_index: int):
-            alpha = state.advisor_weight
+            alpha = cast(float, state.advisor_weight)
             scale = state.student_weight + alpha
             if scale == 0.0:
                 a = xtok_selection.candidates(vocab_a, a_topk)
@@ -1043,7 +1291,7 @@ def _make_select_token(
             tokens_a, tokens_b = xtok_selection.select_avg_logits(
                 a_topk,
                 b_topk,
-                advisor_weight=state.advisor_weight,
+                advisor_weight=cast(float, state.advisor_weight),
                 temperature=sampling.temperature,
                 rng=rng,
                 request_index=request_index,
@@ -1062,6 +1310,9 @@ def _make_select_token(
     elif (step_size := sampling.selection_rule.grad_step_size) is not None:
         rule = xtok_selection.select_grad_steps_bytes_union
         rule_kwargs = {"step_size": step_size}
+    elif (teacher_temperature := sampling.selection_rule.best_of_n_teacher_temperature) is not None:
+        rule = xtok_selection.select_best_of_n_bytes_union
+        rule_kwargs = {"teacher_temperature": teacher_temperature, "final_temperature": 1.0}
     else:
         raise ValueError(f"unknown selection rule: {sampling.selection_rule!r}")
 
@@ -1069,7 +1320,7 @@ def _make_select_token(
         tokens_a, tokens_b = rule(
             a_topk,
             b_topk,
-            advisor_weight=state.advisor_weight,
+            advisor_weight=cast(float, state.advisor_weight),
             temperature=sampling.temperature,
             rng=rng,
             vocab_a=vocab_a,
@@ -1111,9 +1362,13 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
             )
         advisor_prompts = [advisor_prompts_by_id[prompt_id] for prompt_id in prompt_ids]
 
-    vocab_a = _load_vocab(config.decoder_model_path)
-    vocab_b = _load_vocab(config.advisor_model_path)
     state = _SweepState(advisor_weight=config.sampling.advisor_weights[0], token_paths={})
+    if config.sampling.selection_rule is XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB:
+        select_token = _make_no_vocab_select_token(config.sampling, state)
+    else:
+        vocab_a = _load_vocab(config.decoder_model_path)
+        vocab_b = _load_vocab(config.advisor_model_path)
+        select_token = _make_select_token(config.sampling, vocab_a, vocab_b, state)
 
     def engine_params(model_path: str, model: JointDecodeModelConfig) -> joint_decode_backend.EngineModelParams:
         return joint_decode_backend.EngineModelParams(
@@ -1138,7 +1393,7 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
         top_k_b=config.sampling.top_k_b,
         seed=config.sampling.seed,
         stop=tuple(config.sampling.stop or ()),
-        select_token=_make_select_token(config.sampling, vocab_a, vocab_b, state),
+        select_token=select_token,
         decoder_placement=config.placement.decoder,
         advisor_placement=config.placement.advisor,
         max_microbatch_size=config.microbatch_size,
@@ -1155,7 +1410,40 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
                     continue
 
                 chunk = XtokChunkSpec(**claim.chunk)
-                state.advisor_weight = chunk.advisor_weight
+                best_of_n_settings = None
+                tempered_prob_cap_settings = None
+                tempered_best_of_n_sum_settings = None
+                if config.sampling.selection_rule is XtokSelectionRule.TEMPERED_BEST_OF_N:
+                    effective_n, proposal_temperature, advisor_temperature = cast(list[float], chunk.advisor_weight)
+                    best_of_n_settings = (
+                        effective_n,
+                        proposal_temperature,
+                        advisor_temperature,
+                        config.sampling.temperature / proposal_temperature,
+                    )
+                    state.advisor_weight = best_of_n_settings
+                elif config.sampling.selection_rule is XtokSelectionRule.TEMPERED_BEST_OF_N_MIXTURE:
+                    effective_n, proposal_temperature, advisor_temperature, tau = cast(list[float], chunk.advisor_weight)
+                    best_of_n_settings = (
+                        effective_n,
+                        proposal_temperature,
+                        advisor_temperature,
+                        config.sampling.temperature / proposal_temperature,
+                        tau,
+                    )
+                    state.advisor_weight = best_of_n_settings
+                elif config.sampling.selection_rule is XtokSelectionRule.TEMPERED_PROB_CAP:
+                    alpha, beta = cast(list[float], chunk.advisor_weight)
+                    tempered_prob_cap_settings = (alpha, beta)
+                    state.advisor_weight = tempered_prob_cap_settings
+                elif config.sampling.selection_rule is XtokSelectionRule.TEMPERED_BEST_OF_N_SUM:
+                    effective_n, proposal_temperature, advisor_temperature, beta = cast(
+                        list[float], chunk.advisor_weight
+                    )
+                    tempered_best_of_n_sum_settings = (effective_n, proposal_temperature, advisor_temperature, beta)
+                    state.advisor_weight = tempered_best_of_n_sum_settings
+                else:
+                    state.advisor_weight = chunk.advisor_weight
                 student_weight = (
                     None
                     if config.student_weights is None
@@ -1172,6 +1460,9 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
                     n_samples=config.sampling.n_samples,
                     token_paths=state.token_paths,
                     student_weight=student_weight,
+                    best_of_n_settings=best_of_n_settings,
+                    tempered_prob_cap_settings=tempered_prob_cap_settings,
+                    tempered_best_of_n_sum_settings=tempered_best_of_n_sum_settings,
                 )
                 ledger.mark_done(claim)
 
@@ -1410,7 +1701,8 @@ def run_joint_decode_completion_chunks(config: JointDecodeCompletionStepConfig) 
         ledger_prefix=config.ledger_prefix,
         output_path=config.output_path,
     )
-    ledger.ensure_manifest(ledger_path, chunks)
+    records = [json.loads(json.dumps(asdict(chunk))) for chunk in chunks]
+    ledger.ensure_manifest(ledger_path, records)
 
     pool_configs = {pool_config.pool.pool_id: pool_config for pool_config in config.worker_pools}
 

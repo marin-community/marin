@@ -5,8 +5,11 @@ import gzip
 import json
 import math
 import random
+from collections import Counter
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
+from decimal import Decimal, localcontext
+from itertools import product
 from types import SimpleNamespace
 
 import numpy as np
@@ -42,6 +45,9 @@ from experiments.downstream_scaling.evals.framework.xregion.pool import EnginePl
 
 PATH_CONTRACT_PREFIX = "/xregion-tp-path-contract"
 XTOK_TP1_PATH = f"{PATH_CONTRACT_PREFIX}/test/joint-decode-avg-xtok-14c664"
+BEST_OF_N_DRAWS = 50_000
+# Hoeffding + union bound: at most 1e-9 false rejection probability across three token frequencies.
+BEST_OF_N_ABS_TOLERANCE = math.sqrt(math.log(6 / 1e-9) / (2 * BEST_OF_N_DRAWS))
 
 
 class FakeDecoder:
@@ -113,6 +119,40 @@ def make_chunk(tmp_path) -> XtokChunkSpec:
         output_path=str(tmp_path / "chunk-000003.jsonl.gz"),
         token_paths_path=str(tmp_path / "token-paths-000003.jsonl.gz"),
     )
+
+
+def best_of_n_frequencies(
+    a_topk, b_topk, *, effective_n, teacher_temperature, proposal_temperature=None, sampling_temperature=0.4
+):
+    rule = (
+        joint_decode_avg_v2.XtokSelectionRule.BEST_OF_N
+        if teacher_temperature == 0.0
+        else joint_decode_avg_v2.XtokSelectionRule(f"soft_best_of_n_teacher_temperature={teacher_temperature}")
+    )
+    advisor_weights = (effective_n,)
+    settings = effective_n
+    if proposal_temperature is not None:
+        rule = joint_decode_avg_v2.XtokSelectionRule.TEMPERED_BEST_OF_N
+        advisor_weights = ((effective_n, proposal_temperature, teacher_temperature),)
+        settings = (effective_n, proposal_temperature, teacher_temperature, sampling_temperature / proposal_temperature)
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=3,
+        top_k_b=3,
+        seed=0,
+        selection_rule=rule,
+        advisor_weights=advisor_weights,
+        temperature=sampling_temperature,
+    )
+    vocab_a = make_vocab({1: b"a", 2: b"b", 3: b"c"}, eos_id=9)
+    vocab_b = make_vocab({11: b"a", 12: b"b", 13: b"c"}, eos_id=8)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=settings, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab_a, vocab_b, state)
+    rng = random.Random(42)
+    counts = Counter(select_token(a_topk, b_topk, rng=rng, request_index=0)[0][0] for _ in range(BEST_OF_N_DRAWS))
+    return {token: count / BEST_OF_N_DRAWS for token, count in counts.items()}
 
 
 def entry(token_id: int, logit: float) -> dict[str, float]:
@@ -250,6 +290,10 @@ def test_child_config_json_round_trip(tmp_path):
         (joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG, (0.0, 0.5, 1.0), 0.4),
         (joint_decode_avg_v2.XtokSelectionRule("power_avg=-0.5"), (0.0, 0.5, 1.0), 0.4),
         (joint_decode_avg_v2.XtokSelectionRule("grad_step_size=0.5"), (0.0, 1.0, 64.0), 0.4),
+        (joint_decode_avg_v2.XtokSelectionRule.BEST_OF_N, (1.0, 1.5, 128.0), 0.4),
+        (joint_decode_avg_v2.XtokSelectionRule("soft_best_of_n_teacher_temperature=0.4"), (1.0, 1.5, 128.0), 0.4),
+        (joint_decode_avg_v2.XtokSelectionRule.TEMPERED_BEST_OF_N, ((1.0, 0.001, 0.0), (1.5, 0.4, 0.7)), 0.4),
+        (joint_decode_avg_v2.XtokSelectionRule.TEMPERED_BEST_OF_N, ((2.0, 0.4, 0.0),), 0.0),
     ],
 )
 def test_v2_child_config_json_round_trip_preserves_advisor_prompts_path(tmp_path, rule, advisor_weights, temperature):
@@ -466,6 +510,220 @@ def test_v2_grad_steps_matches_student_and_converges_to_advisor(steps, reference
     assert rng.probabilities[0] == pytest.approx(reference_rng.probabilities[0], rel=1e-12, abs=1e-12)
 
 
+@pytest.mark.parametrize(
+    ("effective_n", "teacher_temperature", "teacher_weights"),
+    [
+        (2, 0.0, (1.0, 4.0, 2.0)),
+        (3, 0.0, (1.0, 4.0, 4.0)),
+        (2, 0.4, (1.0, 4.0, 2.0)),
+        (3, 1.2, (1.0, 4.0, 4.0)),
+    ],
+)
+@pytest.mark.parametrize("proposal_temperature", [None, 0.4])
+def test_v2_best_of_n_matches_enumerated_proposals(
+    effective_n, teacher_temperature, teacher_weights, proposal_temperature
+):
+    student = {1: 0.5, 2: 0.3, 3: 0.2}
+    teacher_logits = {token: math.log(weight) for token, weight in enumerate(teacher_weights, start=1)}
+    expected = dict.fromkeys(student, 0.0)
+    for draws in product(student, repeat=effective_n):
+        draw_probability = math.prod(student[token] for token in draws)
+        candidates = set(draws)
+        if teacher_temperature == 0.0:
+            highest_logit = max(teacher_logits[token] for token in candidates)
+            selected = {token: 1.0 for token in candidates if teacher_logits[token] == highest_logit}
+        else:
+            selected = {token: math.exp(teacher_logits[token] / teacher_temperature) for token in candidates}
+        total = sum(selected.values())
+        for token, weight in selected.items():
+            expected[token] += draw_probability * weight / total
+
+    actual = best_of_n_frequencies(
+        [entry(token, 0.4 * math.log(probability)) for token, probability in student.items()],
+        [entry(token + 10, logit) for token, logit in teacher_logits.items()],
+        effective_n=effective_n,
+        teacher_temperature=teacher_temperature,
+        proposal_temperature=proposal_temperature,
+    )
+
+    assert actual == pytest.approx(expected, rel=0.0, abs=BEST_OF_N_ABS_TOLERANCE)
+
+
+@pytest.mark.parametrize(("teacher_temperature", "teacher_a_probability"), [(0.0, 0.0), (0.7, 0.2)])
+def test_v2_best_of_n_fractional_matches_two_token_marginal(teacher_temperature, teacher_a_probability):
+    effective_n = 1.5
+    student_a_probability = 0.75
+    expected_a = teacher_a_probability * (1 - (1 - student_a_probability) ** effective_n)
+    expected_a += (1 - teacher_a_probability) * student_a_probability**effective_n
+
+    actual = best_of_n_frequencies(
+        [entry(1, 0.4 * math.log(0.75)), entry(2, 0.4 * math.log(0.25))],
+        [entry(11, 0.7 * math.log(0.2)), entry(12, 0.7 * math.log(0.8))],
+        effective_n=effective_n,
+        teacher_temperature=teacher_temperature,
+    )
+
+    assert actual == pytest.approx({1: expected_a, 2: 1 - expected_a}, rel=0.0, abs=BEST_OF_N_ABS_TOLERANCE)
+
+
+def test_v2_best_of_n_zero_hint_matches_floor_filled_student():
+    actual = best_of_n_frequencies(
+        [entry(1, 0.4 * math.log(3)), entry(2, 0.0)],
+        [entry(12, 1.0), entry(13, -1.0)],
+        effective_n=1.0,
+        teacher_temperature=0.7,
+    )
+
+    assert actual == pytest.approx({1: 0.6, 2: 0.2, 3: 0.2}, rel=0.0, abs=BEST_OF_N_ABS_TOLERANCE)
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        joint_decode_avg_v2.XtokSelectionRule.BEST_OF_N,
+        joint_decode_avg_v2.XtokSelectionRule("soft_best_of_n_teacher_temperature=0.4"),
+        joint_decode_avg_v2.XtokSelectionRule.TEMPERED_BEST_OF_N,
+    ],
+)
+def test_v2_best_of_n_records_bytes_and_distinct_eos(rule):
+    tempered = rule is joint_decode_avg_v2.XtokSelectionRule.TEMPERED_BEST_OF_N
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=rule,
+        advisor_weights=((1.5, 0.4, 0.7),) if tempered else (1.5,),
+        temperature=0.4,
+    )
+    vocab_a = make_vocab({1: b"a"}, eos_id=9)
+    vocab_b = make_vocab({11: b"a"}, eos_id=8)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=(1.5, 0.4, 0.7, 1.0) if tempered else 1.5, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab_a, vocab_b, state)
+    rng = ScriptedRandom([b"a", xtok_selection.EOS_KEY], draws=(0.5,) * 4)
+
+    for token_a, token_b in ((1, 11), (9, 8)):
+        assert select_token(
+            [entry(1, 0.4 * math.log(2)), entry(9, 0.0)],
+            [entry(11, 0.0), entry(8, 1.0)],
+            rng=rng,
+            request_index=0,
+        ) == ([token_a], [token_b])
+
+    assert state.token_paths == {
+        0: [
+            joint_decode_avg_v2.XtokPathStep(bytes_hex=b"a".hex(), tokens_a=[1], tokens_b=[11]),
+            joint_decode_avg_v2.XtokPathStep(bytes_hex="", tokens_a=[9], tokens_b=[8]),
+        ]
+    }
+
+
+@pytest.mark.parametrize("proposal_temperature", [0.001, 0.4, 1.2])
+@pytest.mark.parametrize("advisor_temperature", [0.0, 0.7])
+def test_v2_tempered_best_of_n_zero_hint_preserves_sampling_temperature(proposal_temperature, advisor_temperature):
+    actual = best_of_n_frequencies(
+        [entry(1, 0.0), entry(2, -1.0)],
+        [entry(11, 0.0), entry(12, 1.0)],
+        effective_n=1.0,
+        teacher_temperature=advisor_temperature,
+        proposal_temperature=proposal_temperature,
+    )
+    expected_b = 1 / (1 + math.exp(1 / 0.4))
+    assert actual == pytest.approx({1: 1 - expected_b, 2: expected_b}, rel=0.0, abs=BEST_OF_N_ABS_TOLERANCE)
+
+
+@pytest.mark.parametrize("sampling_temperature", [0.0, 0.2, 0.8])
+@pytest.mark.parametrize(("advisor_temperature", "advisor_a_probability"), [(0.0, 0.0), (0.7, 0.2)])
+def test_v2_tempered_best_of_n_matches_two_token_marginal(
+    sampling_temperature, advisor_temperature, advisor_a_probability
+):
+    effective_n = 2.5
+    proposal_temperature = 0.4
+    p_a = 0.75
+    final_temperature = sampling_temperature / proposal_temperature
+    expected_a = 0.0
+    for rank_probability, win_a in (
+        (advisor_a_probability, 1 - (1 - p_a) ** effective_n),
+        (1 - advisor_a_probability, p_a**effective_n),
+    ):
+        if final_temperature == 0.0:
+            conditional_a = float(win_a > 0.5)
+        else:
+            a = win_a ** (1 / final_temperature)
+            b = (1 - win_a) ** (1 / final_temperature)
+            conditional_a = a / (a + b)
+        expected_a += rank_probability * conditional_a
+
+    actual = best_of_n_frequencies(
+        [entry(1, proposal_temperature * math.log(p_a)), entry(2, proposal_temperature * math.log(1 - p_a))],
+        [entry(11, 0.7 * math.log(0.2)), entry(12, 0.7 * math.log(0.8))],
+        effective_n=effective_n,
+        teacher_temperature=advisor_temperature,
+        proposal_temperature=proposal_temperature,
+        sampling_temperature=sampling_temperature,
+    )
+    expected = {token: probability for token, probability in ((1, expected_a), (2, 1 - expected_a)) if probability > 0}
+    assert actual == pytest.approx(expected, rel=0.0, abs=BEST_OF_N_ABS_TOLERANCE)
+
+
+def test_v2_tempered_best_of_n_preserves_small_probabilities_before_heating():
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.TEMPERED_BEST_OF_N,
+        advisor_weights=((2.0, 1.0, 0.0),),
+        temperature=10.0,
+    )
+    state = joint_decode_avg_v2._SweepState(advisor_weight=(2.0, 1.0, 0.0, 10.0), token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(
+        sampling,
+        make_vocab({1: b"a", 2: b"b"}, eos_id=9),
+        make_vocab({11: b"a", 12: b"b"}, eos_id=8),
+        state,
+    )
+    rng = ScriptedRandom([b"b"], draws=(0.5, 0.5))
+    select_token(
+        [entry(1, math.log1p(-1e-20)), entry(2, math.log(1e-20))],
+        [entry(11, 0.0), entry(12, 1.0)],
+        rng=rng,
+        request_index=0,
+    )
+    with localcontext() as context:
+        context.prec = 80
+        p = Decimal("1e-20")
+        a = ((1 - p) ** 2) ** Decimal("0.1")
+        b = (1 - (1 - p) ** 2) ** Decimal("0.1")
+        expected_b = float(b / (a + b))
+    assert rng.probabilities[0] == pytest.approx({b"a": 1 - expected_b, b"b": expected_b}, rel=1e-12, abs=1e-12)
+
+
+def test_v2_tempered_best_of_n_rejects_overflowing_temperature_ratio():
+    with pytest.raises(ValueError, match="derived final temperature must be finite"):
+        joint_decode_avg_v2.JointDecodeSamplingConfig(
+            n_samples=1,
+            max_tokens=8,
+            advisor_max_tokens=8,
+            top_k_a=2,
+            top_k_b=2,
+            seed=0,
+            selection_rule=joint_decode_avg_v2.XtokSelectionRule.TEMPERED_BEST_OF_N,
+            advisor_weights=((1.0, 1e-320, 0.0),),
+            temperature=0.4,
+        )
+
+
+def test_soft_best_of_n_rule_normalizes_numeric_spelling():
+    rule = joint_decode_avg_v2.XtokSelectionRule("soft_best_of_n_teacher_temperature=4e-1")
+    assert rule is joint_decode_avg_v2.XtokSelectionRule("soft_best_of_n_teacher_temperature=0.4")
+    assert rule.value == "soft_best_of_n_teacher_temperature=0.4"
+
+
 def test_grad_steps_rule_normalizes_numeric_spelling():
     rule = joint_decode_avg_v2.XtokSelectionRule("grad_step_size=5e-1")
     assert rule is joint_decode_avg_v2.XtokSelectionRule("grad_step_size=0.5")
@@ -654,9 +912,113 @@ def test_probability_caps_reject_invalid_sampling_parameters(rule, alpha, temper
         )
 
 
+@pytest.mark.parametrize("alpha,beta", [(0.0, 1.0), (0.6, 0.0), (0.6, 0.03), (0.6, 1.0), (1.0, 0.4), (2.0, 2.0)])
+@pytest.mark.parametrize("temperature", [0.4, 1.0])
+@pytest.mark.parametrize("shifts", [(0.0, 0.0), (1000.0, -1000.0)])
+def test_tempered_prob_cap_matches_pool_first_reference(alpha, beta, temperature, shifts):
+    vocab = make_vocab({1: b"a", 2: b"b", 3: b"c"}, eos_id=9)
+    a_topk = [entry(1, math.log(2) + shifts[0]), entry(2, shifts[0])]
+    b_topk = [entry(2, math.log(3) + shifts[1]), entry(3, shifts[1])]
+    # At temperature 1, floor filling gives these distributions over (a, b, c).
+    student = np.array([0.5, 0.25, 0.25])
+    advisor = np.array([0.2, 0.6, 0.2])
+    pooled = student if alpha == 0.0 else student * np.minimum(1.0, advisor / (alpha * student)) ** beta
+    expected = pooled ** (1 / temperature)
+    expected /= expected.sum()
+    rng = ScriptedRandom([b"a"])
+
+    assert xtok_selection.select_tempered_prob_cap_bytes_union(
+        a_topk, b_topk, alpha=alpha, beta=beta, temperature=temperature, rng=rng, vocab_a=vocab, vocab_b=vocab
+    ) == ([1], [1])
+
+    observed = rng.probabilities[0]
+    assert observed == pytest.approx(dict(zip((b"a", b"b", b"c"), expected, strict=True)), rel=1e-12, abs=1e-12)
+    if temperature == 1.0 and (beta == 1.0 or alpha == 1.0):
+        if beta == 1.0:
+            tokens, weights = joint_decode_avg_v2._capped_logprob_weights(
+                a_topk,
+                b_topk,
+                selection_rule=joint_decode_avg_v2.XtokSelectionRule.PROB_CAP,
+                advisor_weight=alpha,
+                temperature=1.0,
+            )
+        else:
+            tokens, weights = joint_decode_avg_v2._one_sided_logprob_weights(
+                a_topk, b_topk, advisor_weight=beta, temperature=1.0
+            )
+        total = sum(weights)
+        old_probabilities = {
+            vocab.token_bytes[token]: weight / total for token, weight in zip(tokens, weights, strict=True)
+        }
+        assert observed == pytest.approx(old_probabilities, rel=1e-12, abs=1e-12)
+
+
+def test_tempered_prob_cap_applies_temperature_after_clipping():
+    vocab = make_vocab({1: b"a", 2: b"b"}, eos_id=9)
+    a_topk = [entry(1, math.log(0.6)), entry(2, math.log(0.4))]
+    b_topk = [entry(1, math.log(0.4)), entry(2, math.log(0.6))]
+    rng = ScriptedRandom([b"a"])
+    xtok_selection.select_tempered_prob_cap_bytes_union(
+        a_topk, b_topk, alpha=0.6, beta=1.0, temperature=0.4, rng=rng, vocab_a=vocab, vocab_b=vocab
+    )
+
+    # Neither token is clipped at temperature 1; applying temperature first clips a.
+    assert rng.probabilities[0] == pytest.approx(
+        {b"a": 0.7337363472028701, b"b": 0.26626365279713}, rel=1e-12, abs=1e-12
+    )
+
+
+def test_tempered_prob_cap_preserves_mass_with_underflowing_advisor_probability():
+    vocab = make_vocab({1: b"a", 2: b"b"}, eos_id=9)
+    rng = ScriptedRandom([b"a"])
+    xtok_selection.select_tempered_prob_cap_bytes_union(
+        [entry(1, 0.0), entry(2, 0.0)],
+        [entry(1, -1000.0), entry(2, 0.0)],
+        alpha=0.6,
+        beta=0.001,
+        temperature=0.4,
+        rng=rng,
+        vocab_a=vocab,
+        vocab_b=vocab,
+    )
+
+    # Decimal keeps exp(-1000) representable; compute the reference in probability space.
+    with localcontext() as context:
+        context.prec = 80
+        advisor = [Decimal(-1000).exp(), Decimal(1)]
+        total = sum(advisor)
+        advisor = [p / total for p in advisor]
+        pooled = [Decimal("0.5") * min(Decimal(1), p / Decimal("0.3")) ** Decimal("0.001") for p in advisor]
+        weights = [p ** Decimal("2.5") for p in pooled]
+        expected = {key: float(weight / sum(weights)) for key, weight in zip((b"a", b"b"), weights, strict=True)}
+    assert rng.probabilities[0] == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    "key,expected", [(b"a", ([1], [12])), (b"ab", ([1, 2], [11])), (xtok_selection.EOS_KEY, ([9], [8]))]
+)
+def test_tempered_prob_cap_aligns_bytes_and_distinct_eos(key, expected):
+    vocab_a = make_vocab({1: b"a", 2: b"b"}, eos_id=9)
+    vocab_b = make_vocab({11: b"ab", 12: b"a", 13: b"b"}, eos_id=8)
+    assert (
+        xtok_selection.select_tempered_prob_cap_bytes_union(
+            [entry(1, 1.0), entry(9, 0.0)],
+            [entry(11, 0.0), entry(8, 1.0)],
+            alpha=0.6,
+            beta=0.03,
+            temperature=0.4,
+            rng=ScriptedRandom([key]),
+            vocab_a=vocab_a,
+            vocab_b=vocab_b,
+        )
+        == expected
+    )
+
+
 @pytest.mark.parametrize("power", [-2.0, -1.0, -0.5, 0.0, 1.0, 2.0])
 @pytest.mark.parametrize("shifts", [(0.0, 0.0), (1000.0, -1000.0)])
 def test_power_avg_selector_matches_direct_mean_and_records_paths(power, shifts):
+    weights = (0.0, 0.0001, 0.4, 1.0)
     sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
         n_samples=1,
         max_tokens=8,
@@ -665,7 +1027,7 @@ def test_power_avg_selector_matches_direct_mean_and_records_paths(power, shifts)
         top_k_b=2,
         seed=0,
         selection_rule=joint_decode_avg_v2.XtokSelectionRule(f"power_avg={power}"),
-        advisor_weights=(0.0, 0.0001, 0.4, 1.0),
+        advisor_weights=weights,
         temperature=0.4,
     )
     vocab = make_vocab({1: b"a", 2: b"b"}, eos_id=9)
@@ -677,7 +1039,7 @@ def test_power_avg_selector_matches_direct_mean_and_records_paths(power, shifts)
     student = {1: 0.5, 2: 0.25, 9: 0.25}
     teacher = {1: 0.2, 2: 0.6, 9: 0.2}
 
-    for request_index, weight in enumerate(sampling.advisor_weights):
+    for request_index, weight in enumerate(weights):
         state.advisor_weight = weight
         expected = {
             token: (
@@ -1253,6 +1615,306 @@ def test_v2_student_sweep_reuses_engines_and_records_each_pair(tmp_path, monkeyp
         )
 
 
+def test_tempered_prob_cap_sweep_roundtrips_and_resumes_with_correct_parameters(tmp_path, monkeypatch):
+    prompts_path = tmp_path / "prompts.jsonl.gz"
+    advisor_prompts_path = tmp_path / "advisor-prompts.jsonl.gz"
+    for path, prompt in ((prompts_path, "student question"), (advisor_prompts_path, "advisor reference")):
+        with gzip.open(path, "wt") as f:
+            f.write(json.dumps({"id": "p0", "prompt": prompt}) + "\n")
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=2,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.TEMPERED_PROB_CAP,
+        advisor_weights=((0.0, 1.0), (0.6, 0.0), (0.6, 0.03), (0.6, 1.0), (1.0, 0.4)),
+        temperature=0.4,
+    )
+    config = joint_decode_avg_v2.JointDecodeLocalWorkerConfig(
+        decoder_model_path="/student",
+        advisor_model_path="/advisor",
+        prompts_path=str(prompts_path),
+        advisor_prompts_path=str(advisor_prompts_path),
+        sampling=sampling,
+        decoder_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        advisor_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        ledger_path=str(tmp_path / "ledger"),
+        poll_backoff=0.0,
+        microbatch_size=2,
+        barrier_timeout_s=60,
+        owner="test-worker",
+        placement=joint_decode_avg_v2.JointDecodePlacement(
+            decoder=EnginePlacement((0,), (1, 1, 1), 1),
+            advisor=EnginePlacement((1,), (1, 1, 1), 1),
+        ),
+    )
+    config_path = joint_decode_avg_v2._write_child_config(tmp_path, config)
+    config = joint_decode_avg_v2._child_config_from_file(str(config_path))
+    chunks = joint_decode_avg_v2.sweep_chunk_specs(str(chunks_dir), 1, 2, config.sampling.advisor_weights, 2)
+    ledger.ensure_manifest(config.ledger_path, [json.loads(json.dumps(asdict(chunk))) for chunk in chunks])
+    probabilities = []
+    engine_events = []
+    interrupt_after_first_chunk = True
+
+    @contextmanager
+    def open_joint_decoder(**kwargs):
+        engine_events.append("open")
+
+        def generate(prompts_a, prompts_b):
+            if interrupt_after_first_chunk and probabilities:
+                raise RuntimeError("simulated decoder failure")
+            assert prompts_a == ["student question"] * 2
+            assert prompts_b == ["advisor reference"] * 2
+            rng = ScriptedRandom([b"a", xtok_selection.EOS_KEY] * len(prompts_a))
+            for request_index in range(len(prompts_a)):
+                for expected in (([1], [11]), ([9], [8])):
+                    assert (
+                        kwargs["select_token"](
+                            [entry(1, math.log(2)), entry(2, 0.0)],
+                            [entry(12, math.log(3)), entry(8, 0.0)],
+                            rng=rng,
+                            request_index=request_index,
+                        )
+                        == expected
+                    )
+            probabilities.extend(rng.probabilities[::2])
+            return [SimpleNamespace(text="a", finish_reason="stop") for _ in prompts_a]
+
+        try:
+            yield SimpleNamespace(generate=generate)
+        finally:
+            engine_events.append("close")
+
+    monkeypatch.setattr(
+        algorithms,
+        "joint_decode_backend",
+        SimpleNamespace(EngineModelParams=SimpleNamespace, open_joint_decoder=open_joint_decoder),
+        raising=False,
+    )
+    vocabs = {
+        "/student": make_vocab({1: b"a", 2: b"b"}, eos_id=9),
+        "/advisor": make_vocab({11: b"a", 12: b"b"}, eos_id=8),
+    }
+    monkeypatch.setattr(joint_decode_avg_v2, "_load_vocab", vocabs.__getitem__)
+    monkeypatch.setenv("TPU_VISIBLE_CHIPS", "0,1")
+    with pytest.raises(RuntimeError, match="simulated decoder failure"):
+        joint_decode_avg_v2._run_joint_decode_local_worker(config)
+    assert ledger.done_chunk_ids(config.ledger_path) == [0]
+    completed_files = {path: path.read_bytes() for path in chunks_dir.iterdir()}
+
+    interrupt_after_first_chunk = False
+    joint_decode_avg_v2._run_joint_decode_local_worker(joint_decode_avg_v2._child_config_from_file(str(config_path)))
+
+    assert engine_events == ["open", "close", "open", "close"]
+    assert ledger.done_chunk_ids(config.ledger_path) == list(range(5))
+    assert all(path.read_bytes() == data for path, data in completed_files.items())
+    records = [record for chunk in chunks for record in read_jsonl_gz(chunk.output_path)]
+    paths = [record for chunk in chunks for record in read_jsonl_gz(chunk.token_paths_path)]
+    assert [record["completion_index"] for record in records] == list(range(10))
+    for record, path, observed in zip(records, paths, probabilities, strict=True):
+        point_index = record["completion_index"] // sampling.n_samples
+        alpha, beta = sampling.advisor_weights[point_index]
+        metadata = {"advisor_weight": [alpha, beta], "alpha": alpha, "beta": beta}
+        assert record["completion"]["metadata"] == {"finish_reason": "stop", **metadata}
+        assert path == {
+            "id": "p0",
+            "completion_index": record["completion_index"],
+            "weight_index": point_index,
+            **metadata,
+            "steps": [
+                {"bytes_hex": b"a".hex(), "tokens_a": [1], "tokens_b": [11]},
+                {"bytes_hex": "", "tokens_a": [9], "tokens_b": [8]},
+            ],
+        }
+        student = np.array([0.5, 0.25, 0.25])
+        advisor = np.array([0.2, 0.6, 0.2])
+        pooled = student if alpha == 0.0 else student * np.minimum(1.0, advisor / (alpha * student)) ** beta
+        expected = pooled**2.5
+        expected /= expected.sum()
+        assert observed == pytest.approx(
+            dict(zip((b"a", b"b", xtok_selection.EOS_KEY), expected, strict=True)), rel=1e-12, abs=1e-12
+        )
+
+
+def test_v2_tempered_sweep_reuses_engines_and_records_each_point(tmp_path, monkeypatch):
+    prompts_path = tmp_path / "prompts.jsonl.gz"
+    with gzip.open(prompts_path, "wt") as f:
+        f.write(json.dumps({"id": "p0", "prompt": "q0"}) + "\n")
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=2,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.TEMPERED_BEST_OF_N,
+        advisor_weights=((2.0, 0.4, 0.0), (2.0, 1.0, 0.7), (1.0, 0.001, 0.2)),
+        temperature=0.4,
+    )
+    config = joint_decode_avg_v2.JointDecodeLocalWorkerConfig(
+        decoder_model_path="/student",
+        advisor_model_path="/advisor",
+        prompts_path=str(prompts_path),
+        advisor_prompts_path=None,
+        sampling=sampling,
+        decoder_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        advisor_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        ledger_path=str(tmp_path / "ledger"),
+        poll_backoff=0.0,
+        microbatch_size=2,
+        barrier_timeout_s=60,
+        owner="test-worker",
+        placement=joint_decode_avg_v2.JointDecodePlacement(
+            decoder=EnginePlacement((0,), (1, 1, 1), 1),
+            advisor=EnginePlacement((1,), (1, 1, 1), 1),
+        ),
+    )
+    chunks = joint_decode_avg_v2.sweep_chunk_specs(str(chunks_dir), 1, 2, sampling.advisor_weights, 2)
+    ledger.ensure_manifest(config.ledger_path, [json.loads(json.dumps(asdict(chunk))) for chunk in chunks])
+    probabilities = []
+    engine_events = []
+
+    @contextmanager
+    def open_joint_decoder(**kwargs):
+        engine_events.append("open")
+
+        def generate(prompts_a, prompts_b):
+            assert prompts_a == prompts_b
+            # Equal Gumbels leave B first for every advisor temperature and key iteration order.
+            rng = ScriptedRandom([b"a"] * len(prompts_a), draws=(0.5,) * (2 * len(prompts_a)))
+            for request_index in range(len(prompts_a)):
+                kwargs["select_token"](
+                    [entry(1, 0.0), entry(2, -1.0)],
+                    [entry(11, 0.0), entry(12, 1.0)],
+                    rng=rng,
+                    request_index=request_index,
+                )
+            probabilities.extend(rng.probabilities)
+            return [SimpleNamespace(text="a", finish_reason="stop") for _ in prompts_a]
+
+        yield SimpleNamespace(generate=generate)
+        engine_events.append("close")
+
+    # Replace model/tokenizer I/O; use the real worker, selector, ledger, and output writer.
+    monkeypatch.setattr(
+        algorithms,
+        "joint_decode_backend",
+        SimpleNamespace(EngineModelParams=SimpleNamespace, open_joint_decoder=open_joint_decoder),
+        raising=False,
+    )
+    vocabs = {
+        "/student": make_vocab({1: b"a", 2: b"b"}, eos_id=9),
+        "/advisor": make_vocab({11: b"a", 12: b"b"}, eos_id=8),
+    }
+    monkeypatch.setattr(joint_decode_avg_v2, "_load_vocab", vocabs.__getitem__)
+    monkeypatch.setenv("TPU_VISIBLE_CHIPS", "0,1")
+    joint_decode_avg_v2._run_joint_decode_local_worker(config)
+
+    assert engine_events == ["open", "close"]
+    assert ledger.done_chunk_ids(config.ledger_path) == [0, 1, 2]
+    records = [record for chunk in chunks for record in read_jsonl_gz(chunk.output_path)]
+    paths = [record for chunk in chunks for record in read_jsonl_gz(chunk.token_paths_path)]
+    assert [record["completion_index"] for record in records] == list(range(6))
+    for record, path, observed in zip(records, paths, probabilities, strict=True):
+        point_index = record["completion_index"] // sampling.n_samples
+        n, proposal_temperature, advisor_temperature = sampling.advisor_weights[point_index]
+        final_temperature = sampling.temperature / proposal_temperature
+        metadata = {
+            "advisor_weight": n,
+            "proposal_temperature": proposal_temperature,
+            "advisor_temperature": advisor_temperature,
+            "final_temperature": final_temperature,
+        }
+        assert record["completion"]["metadata"] == {"finish_reason": "stop", **metadata}
+        assert path == {
+            "id": "p0",
+            "completion_index": record["completion_index"],
+            "weight_index": point_index,
+            **metadata,
+            "steps": [{"bytes_hex": b"a".hex(), "tokens_a": [1], "tokens_b": [11]}],
+        }
+        if n == 1:
+            expected_a = 1 / (1 + math.exp(-1 / sampling.temperature))
+        else:
+            # With B ranked first, A wins only when both student proposals are A.
+            win_a = (1 / (1 + math.exp(-1 / proposal_temperature))) ** 2
+            a = win_a ** (1 / final_temperature)
+            b = (1 - win_a) ** (1 / final_temperature)
+            expected_a = a / (a + b)
+        assert observed == pytest.approx({b"a": expected_a, b"b": 1 - expected_a}, rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("rule", "advisor_weights", "saved_weights"),
+    [
+        (joint_decode_avg_v2.XtokSelectionRule.BEST_OF_N, (1.0, 2.0), [1.0, 2.0]),
+        (
+            joint_decode_avg_v2.XtokSelectionRule.TEMPERED_BEST_OF_N,
+            ((1.0, 0.4, 0.0), (2.0, 0.2, 0.7)),
+            [[1.0, 0.4, 0.0], [2.0, 0.2, 0.7]],
+        ),
+    ],
+)
+def test_v2_sweep_resumes_manifest_after_worker_submission_failure(
+    tmp_path, monkeypatch, rule, advisor_weights, saved_weights
+):
+    prompts_path = tmp_path / "prompts.jsonl.gz"
+    with gzip.open(prompts_path, "wt") as f:
+        f.write(json.dumps({"id": "p0", "prompt": "q0"}) + "\n")
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=rule,
+        advisor_weights=advisor_weights,
+        temperature=0.4,
+    )
+    config = joint_decode_avg_v2.JointDecodeCompletionStepConfig(
+        output_path="mirror://test-run",
+        decoder_model_path="/student",
+        advisor_model_path="/advisor",
+        prompts_path=str(prompts_path),
+        advisor_prompts_path=None,
+        sampling=sampling,
+        decoder_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        advisor_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        worker_pools=joint_decode_avg_v2.joint_decode_pool_configs("test", (worker_pool(),), {}),
+        ledger_prefix=str(tmp_path),
+        chunk_size=1,
+        microbatch_size=1,
+        heartbeat_timeout=60,
+        poll_backoff=0.0,
+        barrier_timeout_s=60,
+        aggregate_workers=1,
+    )
+    ledger_path = ledger.convert_mirror_path(ledger_prefix=config.ledger_prefix, output_path=config.output_path)
+    if rule is joint_decode_avg_v2.XtokSelectionRule.BEST_OF_N:
+        # A manifest written through the original scalar path must remain resumable.
+        chunks = joint_decode_avg_v2.sweep_chunk_specs(
+            f"{config.output_path}/chunks/chunk_size=1", 1, 1, advisor_weights, 1
+        )
+        ledger.ensure_manifest(ledger_path, chunks)
+
+    def unavailable_workers(**kwargs):
+        raise ConnectionError("worker submission unavailable")
+
+    monkeypatch.setattr(joint_decode_avg_v2.xregion_pool, "run_worker_pools", unavailable_workers)
+    for _ in range(2):
+        # Retrying must get past the manifest check and reach worker submission again.
+        with pytest.raises(ConnectionError, match="worker submission unavailable"):
+            joint_decode_avg_v2.run_joint_decode_completion_chunks(config)
+    assert [chunk["advisor_weight"] for chunk in ledger.read_manifest(ledger_path)] == saved_weights
+
+
 def test_v2_student_grid_changes_step_identity():
     config = joint_decode_avg_v2.JointDecodeConfig(
         sampling=joint_decode_avg_v2.JointDecodeSamplingConfig(
@@ -1308,3 +1970,127 @@ def test_write_sweep_chunk_leftover_trace_raises(tmp_path):
             n_samples=2,
             token_paths={batch_index: [step] for batch_index in (0, 1, 2, 3, 99)},
         )
+
+
+def test_v2_unnormalized_add_no_vocab_matches_softmax_across_alpha_sweep():
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB,
+        advisor_weights=(0.0, 2.0),
+        temperature=0.5,
+    )
+    state = joint_decode_avg_v2._SweepState(advisor_weight=0.0, token_paths={})
+    select_token = joint_decode_avg_v2._make_no_vocab_select_token(sampling, state)
+    rng = ScriptedRandom([1, 2])
+    # The floor-filled logits are A=(log(2), 0, 0), B=(0, log(3), 0).
+    # At T=0.5, the unnormalized softmax weights are (4, 3**(2*alpha), 1).
+    cases = (
+        (0.0, 1, {1: 4 / 6, 2: 1 / 6, 3: 1 / 6}),
+        (2.0, 2, {1: 4 / 86, 2: 81 / 86, 3: 1 / 86}),
+    )
+    for request_index, (alpha, token_id, expected) in enumerate(cases):
+        state.advisor_weight = alpha
+        assert select_token(
+            [entry(1, math.log(2)), entry(2, 0.0)],
+            [entry(2, math.log(3)), entry(3, 0.0)],
+            rng=rng,
+            request_index=request_index,
+        ) == ([token_id], [token_id])
+        assert rng.probabilities[-1] == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+
+def test_v2_unnormalized_add_no_vocab_worker_writes_token_paths_without_bytes(tmp_path, monkeypatch):
+    prompts_path = tmp_path / "prompts.jsonl.gz"
+    with gzip.open(prompts_path, "wt") as f:
+        f.write(json.dumps({"id": "p0", "prompt": "q0"}) + "\n")
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=2,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_NO_VOCAB,
+        advisor_weights=(0.0, 2.0),
+        temperature=0.0,
+    )
+    config = joint_decode_avg_v2.JointDecodeLocalWorkerConfig(
+        decoder_model_path="/student",
+        advisor_model_path="/advisor",
+        prompts_path=str(prompts_path),
+        advisor_prompts_path=None,
+        sampling=sampling,
+        decoder_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        advisor_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        ledger_path=str(tmp_path / "ledger"),
+        poll_backoff=0.0,
+        microbatch_size=2,
+        barrier_timeout_s=60,
+        owner="test-worker",
+        placement=joint_decode_avg_v2.JointDecodePlacement(
+            decoder=EnginePlacement((0,), (1, 1, 1), 1),
+            advisor=EnginePlacement((1,), (1, 1, 1), 1),
+        ),
+    )
+    config_path = joint_decode_avg_v2._write_child_config(tmp_path, config)
+    config = joint_decode_avg_v2._child_config_from_file(str(config_path))
+    chunks = joint_decode_avg_v2.sweep_chunk_specs(str(chunks_dir), 1, 2, sampling.advisor_weights, 2)
+    ledger.ensure_manifest(config.ledger_path, chunks)
+
+    @contextmanager
+    def open_joint_decoder(**kwargs):
+        def generate(prompts_a, prompts_b):
+            assert prompts_a == prompts_b
+            outputs = []
+            for request_index in range(len(prompts_a)):
+                tokens_a, _ = kwargs["select_token"](
+                    [entry(1, 1.0), entry(2, 0.0)],
+                    [entry(1, 0.0), entry(2, 1.0)],
+                    rng=random.Random(0),
+                    request_index=request_index,
+                )
+                outputs.append(SimpleNamespace(text=str(tokens_a[0]), finish_reason="stop"))
+            return outputs
+
+        yield SimpleNamespace(generate=generate)
+
+    def reject_byte_vocab(model_path):
+        raise ValueError(f"Unsupported SentencePiece token in {model_path}: '▁gave'")
+
+    # Replace model/tokenizer I/O; keep the real selector, ledger, and output writer.
+    monkeypatch.setattr(
+        algorithms,
+        "joint_decode_backend",
+        SimpleNamespace(EngineModelParams=SimpleNamespace, open_joint_decoder=open_joint_decoder),
+        raising=False,
+    )
+    monkeypatch.setattr(joint_decode_avg_v2, "_load_vocab", reject_byte_vocab)
+    monkeypatch.setenv("TPU_VISIBLE_CHIPS", "0,1")
+    joint_decode_avg_v2._run_joint_decode_local_worker(config)
+
+    assert ledger.done_chunk_ids(config.ledger_path) == [0, 1]
+    records = [record for chunk in chunks for record in read_jsonl_gz(chunk.output_path)]
+    paths = [record for chunk in chunks for record in read_jsonl_gz(chunk.token_paths_path)]
+    assert [record["completion_index"] for record in records] == [0, 1, 2, 3]
+    for record, path in zip(records, paths, strict=True):
+        point_index = record["completion_index"] // sampling.n_samples
+        alpha = sampling.advisor_weights[point_index]
+        token_id = 1 if alpha == 0.0 else 2
+        assert record["completion"] == {
+            "text": str(token_id),
+            "metadata": {"finish_reason": "stop", "advisor_weight": alpha},
+        }
+        assert path == {
+            "id": "p0",
+            "completion_index": record["completion_index"],
+            "advisor_weight": alpha,
+            "weight_index": point_index,
+            "steps": [{"bytes_hex": None, "tokens_a": [token_id], "tokens_b": [token_id]}],
+        }

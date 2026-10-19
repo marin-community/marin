@@ -1,30 +1,35 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-r"""Repeat the seven smallest Delphi recipes, with two seed-0 controls.
+r"""Train Delphi seed repeats and two gap-filling compute budgets.
 
-Source: marin-community/marin W&B configs and execution logs, recovered 2026-09-22
+Original recipes: marin-community/marin W&B configs and execution logs, recovered 2026-09-22
 (commit 9e946e47cfa74efe43cca1b74360c27f64dd1226). The source model class was
 Qwen3 despite its logged use_qk_norm=False. Change VERSION for any recipe change.
 
-After auditing the materialized configs, run this from the repository root with
-WANDB_API_KEY exported. It submits all 16 runs through seven separate top-level
-Iris jobs: one for the ten single-host runs and one per multi-host run. Separate
-top-level jobs avoid JAX coordinator name collisions.
+The new slugs 5e19 and 6e20 use budgets 5.3e19 and 5.5e20 FLOPs, respectively,
+each with seeds 0, 42, and 62746. These seed-0 runs are new points, not controls.
+
+After auditing the materialized configs, launch from the repository root with
+WANDB_API_KEY exported. Each group below runs its single-host runs in one
+top-level Iris job and each multi-host run in its own. Separate top-level jobs
+avoid JAX coordinator name collisions between multi-host runs. Define the
+submit helper once per shell:
+
+    submit_delphi() {
+      local delphi_label="$1"
+      shift
+      uv run iris --cluster=marin job run --no-wait --no-cancel-on-exit \
+        --priority batch --region us-central2 --cpu 1 --memory 2G --extra cpu \
+        --job-name "delphi-seeds-${delphi_label}-$(date -u +%Y%m%d-%H%M%S)-$$" \
+        -- python experiments/downstream_scaling/train_delphi_seeds.py "$@"
+    }
+
+The 16 original-recipe runs, as seven jobs; the single-host job includes the
+two seed-0 controls:
 
     (
       set -e
-      delphi_batch="$(date -u +%Y%m%d-%H%M%S)-$$"
-
-      submit_delphi() {
-        local delphi_label="$1"
-        shift
-        uv run iris --cluster=marin job run --no-wait --no-cancel-on-exit \
-          --priority batch --region us-central2 --cpu 1 --memory 2G --extra cpu \
-          --job-name "delphi-seeds-${delphi_label}-${delphi_batch}" \
-          -- python experiments/downstream_scaling/train_delphi_seeds.py "$@"
-      }
-
       submit_delphi single-host --slugs 3e18 9e18 2e19 3e19
       for delphi_slug in 9e19 2e20 3e20; do
         for delphi_seed in 42 62746; do
@@ -34,10 +39,23 @@ top-level jobs avoid JAX coordinator name collisions.
       done
     )
 
---slugs and --seeds select a subset of these 16 runs. Retry only groups whose
-previous coordinator has stopped. Existing successful artifacts are skipped;
-interrupted runs resume from their own checkpoints. Fresh coordinator names
-preserve the training run IDs and output paths.
+The six gap-filling runs, as four jobs:
+
+    (
+      set -e
+      submit_delphi 5e19 --slugs 5e19
+      for delphi_seed in 0 42 62746; do
+        submit_delphi "6e20-seed${delphi_seed}" \
+          --slugs 6e20 --seeds "$delphi_seed"
+      done
+    )
+
+Submit the groups separately, and relaunch a single job by running its
+submit_delphi line alone. For each multi-host submission, select exactly one
+slug and one seed. The --slugs and --seeds options filter all 22 planned runs.
+Retry only jobs whose previous coordinator has stopped. Existing successful
+artifacts are skipped; interrupted runs resume from their own checkpoints.
+Fresh coordinator names preserve the training run IDs and output paths.
 """
 
 import argparse
@@ -83,7 +101,7 @@ SOURCE_CHECKPOINT_ROOT = "gs://marin-us-central2/checkpoints/isoflop/"
 
 @dataclass(frozen=True)
 class ModelSpec:
-    source_id: str
+    source_id: str | None
     hidden_dim: int
     num_layers: int
     num_heads: int
@@ -212,12 +230,46 @@ MODELS = {
         epsilon=3.5698237912888785e-8,
         tags=["FLOPs=3.0e+20", "N=2.5e+09", "B=128", "steps=35510", "tokens=1.9e+10", "optimizer=completed-adamh"],
     ),
+    "5e19": ModelSpec(
+        source_id=None,
+        hidden_dim=1664,
+        num_layers=17,
+        num_heads=13,
+        intermediate_dim=6656,
+        batch_size=32,
+        per_device_batch=8,
+        num_train_steps=56177,
+        tpu_type="v4-8",
+        learning_rate=0.0032217113312772803,
+        adam_lr=0.000270286256418283,
+        beta2=0.9999,
+        epsilon=4.490054418904255e-08,
+        tags=["FLOPs=5.3e+19", "N=1.2e+09", "B=32", "steps=56177", "tokens=7.4e+09", "optimizer=completed-adamh"],
+    ),
+    "6e20": ModelSpec(
+        source_id=None,
+        hidden_dim=2432,
+        num_layers=24,
+        num_heads=19,
+        intermediate_dim=9728,
+        batch_size=128,
+        per_device_batch=4,
+        num_train_steps=57061,
+        tpu_type="v4-64",
+        learning_rate=0.004231208493199293,
+        adam_lr=0.0002681844758689343,
+        beta2=0.99980001,
+        epsilon=4.5252432903428175e-08,
+        tags=["FLOPs=5.5e+20", "N=2.9e+09", "B=128", "steps=57061", "tokens=3.0e+10", "optimizer=completed-adamh"],
+    ),
 }
 
 DEFAULT_RUNS: tuple[tuple[str, int], ...] = (
     *((slug, seed) for slug in MODELS for seed in (42, 62746)),
     ("3e18", 0),
     ("9e18", 0),
+    ("5e19", 0),
+    ("6e20", 0),
 )
 
 
@@ -646,7 +698,7 @@ def validate_outputs(steps: list[ArtifactStep[LevanterCheckpoint]], prefix: str)
         if not isinstance(tracker, WandbConfig):
             raise ValueError(f"{step.name}: expected one W&B tracker.")
         encoded = json.dumps(draccus.encode(config))
-        forbidden = (SOURCE_CHECKPOINT_ROOT, *(spec.source_id for spec in MODELS.values()))
+        forbidden = (SOURCE_CHECKPOINT_ROOT, *(spec.source_id for spec in MODELS.values() if spec.source_id is not None))
         if any(source in encoded for source in forbidden):
             raise ValueError(f"{step.name}: a config field still references an original run.")
         if tracker.replicate_path != step.path(prefix) or pod_config.output_path != step.path(prefix):
