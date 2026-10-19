@@ -479,6 +479,10 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     for text in settings:
         apply_setting(config, parse_setting(text))
     trainer = config["trainer"]
+    if trainer.get("gradient_streaming", {}).get("chunk_groups") is not None:
+        trainer["policy"]["megatron_config"].setdefault("transformer_config_kwargs", {})[
+            "disable_parameter_transpose_cache"
+        ] = True
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = -1
