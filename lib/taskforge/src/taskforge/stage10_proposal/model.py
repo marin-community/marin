@@ -11,6 +11,7 @@ A proposal is written as::
     grounding: unverified
     null_reason: null
     environment: container
+    solver_machine: null
     verification: composite
     research_need: needed
     research_reason: "the deliverable should follow real lab handouts"
@@ -25,6 +26,9 @@ A proposal is written as::
 
 The body must contain every heading in ``REQUIRED_HEADINGS`` as a level-two heading, once each,
 in that order, unless ``null_reason`` is set, in which case the body may be abbreviated.
+``solver_machine`` pins the machine the solver works on: ``null`` for a container proposal, which runs
+in the image its build publishes, and one of ``SolverMachine`` for any other, so no later stage chooses
+it.
 ``research_need`` must agree with ``research``: ``needed`` lists at least one item and ``not_needed``
 none, and the body of a non-null proposal cites every item, and only listed items, as ``research[i]``.
 ``render`` produces the canonical bytes: string scalars are JSON-quoted (valid YAML), keys appear
@@ -65,6 +69,7 @@ HEADER_KEYS = (
     "grounding",
     "null_reason",
     "environment",
+    "solver_machine",
     "verification",
     "research_need",
     "research_reason",
@@ -91,6 +96,26 @@ class Environment(StrEnum):
     REASONING = "reasoning"
     SHELLSIM = "shellsim"
     CONTAINER = "container"
+
+
+class SolverMachine(StrEnum):
+    """The machine a reasoning or shellsim proposal's solver works on; a container proposal has its own image.
+
+    ShellSim, CPython 3.12 with its standard library on Taskforge's grader-base image, or CPython 3.12
+    with PyPI packages the build lists, which runs only on a host with the local backend.
+    """
+
+    SHELLSIM = "shellsim"
+    CPYTHON = "cpython"
+    PACKAGES = "packages"
+
+
+SOLVER_MACHINE_RULE = f"""solver_machine is `null` for a container task, which runs in its own image, and \
+otherwise the solver's machine: `{SolverMachine.SHELLSIM}` when reading, shell tools or a short Python script \
+are enough; `{SolverMachine.CPYTHON}` when solving needs more computation than ShellSim's few seconds of \
+Python, or a real clock; `{SolverMachine.PACKAGES}` when solving also needs PyPI packages (numpy, pandas, ...) \
+and no system packages. The build keeps the machine the proposal declares."""
+"""The rule for the ``solver_machine`` header value, for prompts that write or revise a proposal."""
 
 
 class Verification(StrEnum):
@@ -153,6 +178,7 @@ class ProposalHeader:
     id: str
     source: SourceRef
     environment: Environment
+    solver_machine: SolverMachine | None
     verification: Verification
     grounding: Grounding
     research_need: ResearchNeed
@@ -192,6 +218,7 @@ def render(p: TaskProposal) -> str:
         f"grounding: {h.grounding}",
         f"null_reason: {'null' if h.null_reason is None else _quoted(h.null_reason)}",
         f"environment: {h.environment}",
+        f"solver_machine: {'null' if h.solver_machine is None else h.solver_machine}",
         f"verification: {h.verification}",
         f"research_need: {h.research_need}",
         f"research_reason: {_quoted(h.research_reason)}",
@@ -305,10 +332,12 @@ def _header(raw: object) -> ProposalHeader:
     if missing:
         raise ProposalFormatError(f"front matter: missing key(s) {missing}")
     null_reason = raw["null_reason"]
+    environment = _enum(Environment, raw["environment"], "environment")
     return ProposalHeader(
         id=_text(raw["id"], "id"),
         source=_source(raw["source"]),
-        environment=_enum(Environment, raw["environment"], "environment"),
+        environment=environment,
+        solver_machine=_solver_machine(raw["solver_machine"], environment),
         verification=_enum(Verification, raw["verification"], "verification"),
         grounding=_enum(Grounding, raw["grounding"], "grounding"),
         research_need=_enum(ResearchNeed, raw["research_need"], "research_need"),
@@ -318,6 +347,20 @@ def _header(raw: object) -> ProposalHeader:
         resources=tuple(_text(item, f"resources[{i}]") for i, item in enumerate(_list(raw["resources"], "resources"))),
         null_reason=None if null_reason is None else _text(null_reason, "null_reason"),
     )
+
+
+def _solver_machine(value: object, environment: Environment) -> SolverMachine | None:
+    if environment is Environment.CONTAINER:
+        if value is not None:
+            raise ProposalFormatError(
+                f"solver_machine: a container proposal runs in its own image and declares null, got {value!r}"
+            )
+        return None
+    if value is None:
+        raise ProposalFormatError(
+            f"solver_machine: a {environment} proposal declares one of {[str(m) for m in SolverMachine]}, got null"
+        )
+    return _enum(SolverMachine, value, "solver_machine")
 
 
 def _text(value: object, field: str) -> str:
@@ -390,8 +433,10 @@ def _alternation(enum: type[StrEnum]) -> str:
 def _header_rest() -> str:
     """The front matter after ``null_reason``, through the closing delimiter."""
     item = rf"  - \{{kind: {_alternation(ResearchKind)}, purpose: {QUOTED}\}}\n"
+    imageless = "|".join(_literal(str(e)) for e in Environment if e is not Environment.CONTAINER)
     return (
-        rf"environment: {_alternation(Environment)}\n"
+        rf"(?:environment: {_literal(Environment.CONTAINER)}\nsolver_machine: null\n"
+        rf"|environment: (?:{imageless})\nsolver_machine: {_alternation(SolverMachine)}\n)"
         rf"verification: {_alternation(Verification)}\n"
         rf"(?:research_need: {ResearchNeed.NEEDED}\nresearch_reason: {QUOTED}\nresearch:\n(?:{item})+"
         rf"|research_need: {ResearchNeed.NOT_NEEDED}\nresearch_reason: {QUOTED}\nresearch: \[\]\n)"
@@ -404,7 +449,8 @@ def _header_rest() -> str:
 def document_regex(proposal_id: str, source: SourceRef) -> str:
     """A ``structured_outputs.regex`` over a whole proposal document.
 
-    Front-matter keys, their order and enum values are pinned and the ``id`` and ``source`` lines are literal.
+    Front-matter keys, their order and enum values are pinned and the ``id`` and ``source`` lines are literal;
+    ``solver_machine`` is ``null`` exactly for a container proposal.
     A proposed document (``null_reason: null``) has every required heading, in order, each with at least one
     line under it; a null document has a free body. Bodies are free text and EOS is allowed after any line of
     the last section.

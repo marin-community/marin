@@ -28,6 +28,7 @@ source: {{kind: capability, ref: "d01.cap", hash: "abc"}}
 grounding: unverified
 null_reason: null
 environment: reasoning
+solver_machine: shellsim
 verification: {verification}
 research_need: needed
 research_reason: "the deliverable is modeled on real lab handouts"

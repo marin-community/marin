@@ -4,6 +4,7 @@ source: {kind: capability, ref: "d28.research.search", hash: "2e40a1355f7c664edd
 grounding: unverified
 null_reason: null
 environment: container
+solver_machine: null
 verification: composite
 research_need: needed
 research_reason: "Realism depends on actual federal statutes, regulations, and DOL guidance text, citations, and current status, which builders cannot derive from the capability record."

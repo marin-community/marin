@@ -76,6 +76,7 @@ source: {{kind: capability, ref: "{idea.capability_id}", hash: "{idea.capability
 grounding: unverified
 null_reason: null
 environment: shellsim
+solver_machine: shellsim
 verification: simple
 research_need: not_needed
 research_reason: "the example program draws its own recipe"

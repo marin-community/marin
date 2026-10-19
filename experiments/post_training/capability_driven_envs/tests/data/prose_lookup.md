@@ -4,6 +4,7 @@ source: {kind: capability, ref: "d43.culinary.scaling", hash: "416682a2b724560f0
 grounding: unverified
 null_reason: null
 environment: reasoning
+solver_machine: shellsim
 verification: simple
 research_need: not_needed
 research_reason: "Baker's-percentage conventions and the arithmetic are standard culinary knowledge with synthetic fixture numbers."

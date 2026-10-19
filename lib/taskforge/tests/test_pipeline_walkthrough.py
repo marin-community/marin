@@ -80,6 +80,7 @@ source: {kind: capability, ref: "toy", hash: "0"}
 grounding: unverified
 null_reason: null
 environment: shellsim
+solver_machine: shellsim
 verification: simple
 research_need: not_needed
 research_reason: "the numbers are in the task's own file"

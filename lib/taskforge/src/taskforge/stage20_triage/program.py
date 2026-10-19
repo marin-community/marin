@@ -35,6 +35,7 @@ from taskforge.stage10_proposal.model import (
     DOCUMENT_REPAIR_PROMPT,
     HEADER_KEYS,
     REQUIRED_HEADINGS,
+    SOLVER_MACHINE_RULE,
     ProposalFormatError,
     ResearchNeed,
     SourceRef,
@@ -161,6 +162,7 @@ def repair_format_rules() -> str:
 - Reply with the complete revised document only. The first line is `---`. No code fences around it.
 - Keep the same YAML front matter: exactly these keys, all required, in this order: {", ".join(HEADER_KEYS)}.
   Copy the id, source, and grounding lines exactly. Double-quote every string value.
+- {SOLVER_MACHINE_RULE}
 - null_reason is `null` for a proposed task. Only if the task cannot be made credible, set null_reason
   to a substantive reason, research_need to `{ResearchNeed.NOT_NEEDED}`, research, build, and resources
   to empty lists, and write a short body explaining why.

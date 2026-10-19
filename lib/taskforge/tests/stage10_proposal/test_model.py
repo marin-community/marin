@@ -14,6 +14,7 @@ from taskforge.stage10_proposal.model import (
     ResearchItem,
     ResearchKind,
     ResearchNeed,
+    SolverMachine,
     SourceKind,
     SourceRef,
     TaskProposal,
@@ -52,6 +53,7 @@ AUTHORED = (
     "  ref: d01.algebra.linear-transformations\n"
     "  hash: 9f3a12\n"
     "environment: container\n"
+    "solver_machine: null\n"
     "verification: composite\n"
     "grounding: unverified\n"
     "research_need: needed\n"
@@ -84,6 +86,7 @@ def _proposal(
         grounding=Grounding.UNVERIFIED,
         null_reason=null_reason,
         environment=Environment.CONTAINER,
+        solver_machine=None,
         verification=Verification.COMPOSITE,
         research_need=research_need,
         research_reason="the deliverable should follow real handouts",
@@ -115,6 +118,35 @@ def test_authored_document_parses_to_typed_header_and_canonical_form_is_stable()
     assert parse(canonical) == proposal
     assert render(parse(canonical)) == canonical
     assert parse(canonical).digest == proposal.digest
+
+
+@pytest.mark.parametrize("machine", list(SolverMachine))
+def test_an_imageless_proposal_declares_its_solver_machine(machine):
+    text = AUTHORED.replace("environment: container", "environment: shellsim").replace(
+        "solver_machine: null", f"solver_machine: {machine}"
+    )
+
+    proposal = parse(text)
+
+    assert proposal.header.solver_machine is machine
+    assert f"solver_machine: {machine}\n" in render(proposal)
+    assert parse(render(proposal)) == proposal
+    assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), render(proposal))
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (("solver_machine: null\n", ""), "missing key(s) ['solver_machine']"),
+        (("solver_machine: null", "solver_machine: cpython"), "a container proposal runs in its own image"),
+        (("environment: container", "environment: reasoning"), "a reasoning proposal declares one of"),
+        (("solver_machine: null", "solver_machine: container"), "a container proposal runs in its own image"),
+    ],
+    ids=["missing", "container-with-a-machine", "imageless-without-one", "container-as-a-machine"],
+)
+def test_the_solver_machine_must_match_the_environment(edit, message):
+    with pytest.raises(ProposalFormatError, match=re.escape(message)):
+        parse(AUTHORED.replace(*edit))
 
 
 def test_digest_changes_with_content():
@@ -200,6 +232,7 @@ def test_document_regex_matches_canonical_render(variant):
     "edit",
     [
         ("environment: container", 'environment: "shellsim"'),
+        ("solver_machine: null", "solver_machine: shellsim"),
         ('build:\n  - "fixtures": "30 matrices"\n  - "grader": "check.py"\n', 'build: {"fixtures": "30 matrices"}\n'),
         ('hash: "9f3a12"', 'hash: "9f3a"'),
         ("/3", "/4"),
@@ -209,6 +242,7 @@ def test_document_regex_matches_canonical_render(variant):
     ],
     ids=[
         "quoted-enum",
+        "container-with-a-machine",
         "build-mapping",
         "hash-copy",
         "changed-id",

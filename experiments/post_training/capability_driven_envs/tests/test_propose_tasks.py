@@ -23,6 +23,7 @@ SLOT = {
     "title": "banquet scaling",
     "workflow": "banquet production",
     "environment": "reasoning",
+    "solver_machine": "shellsim",
     "verification": "code",
     "distinctive_challenge": "trim loss after scaling",
     "research_need": "not_needed",
@@ -55,6 +56,7 @@ source: {{kind: capability, ref: "{CAPABILITY_ID}", hash: "{capability_hash}"}}
 grounding: unverified
 null_reason: null
 environment: reasoning
+solver_machine: shellsim
 verification: code
 research_need: not_needed
 research_reason: "the recipe and yields are synthetic"
@@ -93,7 +95,7 @@ def test_a_capability_is_proposed_and_reviewed_against_its_catalog_record(tmp_pa
 def test_a_plan_invalid_after_its_repair_fails_only_its_capability(tmp_path: Path):
     ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
     model = ScriptedModel()
-    unrunnable = json.dumps({**PLAN, "slots": [{**SLOT, "environment": "container"}]})
+    unrunnable = json.dumps({**PLAN, "slots": [{**SLOT, "environment": "container", "solver_machine": None}]})
     model.reply(unrunnable)
     model.reply(unrunnable)
     output = tmp_path / "run"

@@ -30,6 +30,7 @@ source: {kind: capability, ref: "d00.arithmetic.products", hash: "abc123"}
 grounding: unverified
 null_reason: null
 environment: reasoning
+solver_machine: shellsim
 verification: simple
 research_need: needed
 research_reason: "the task depends on an external fact the build must confirm"

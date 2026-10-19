@@ -15,6 +15,7 @@ from taskforge.stage10_proposal.model import (
     DOCUMENT_REPAIR_PROMPT,
     Environment,
     ResearchNeed,
+    SolverMachine,
     Verification,
     document_regex,
     document_request_fields,
@@ -96,11 +97,13 @@ def test_catalog_loads_capabilities_with_their_incoming_edges(ideas):
 
 
 def slot(number: int, environment: str, verification: str, status: str = "propose") -> dict:
+    """A planned slot; an imageless slot declares ShellSim, a container slot no solver machine."""
     return {
         "slot": number,
         "title": f"t{number}",
         "workflow": "w",
         "environment": environment,
+        "solver_machine": None if environment == "container" else "shellsim",
         "verification": verification,
         "distinctive_challenge": "c",
         "research_need": "not_needed",
@@ -129,6 +132,16 @@ def test_slot_plan_requires_n_slots_and_rejects_using_an_excluded_pairing():
     excluded = [{"environment": "container", "verification": "judge", "reason": "x"}]
     with pytest.raises(ValidationError, match="excluded_combinations"):
         plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "judge")], excluded))
+
+
+@pytest.mark.parametrize(
+    ("environment", "machine"), [("container", "cpython"), ("reasoning", None)], ids=["container", "imageless"]
+)
+def test_slot_plan_declares_a_solver_machine_exactly_for_an_imageless_slot(environment, machine):
+    slots = [{**slot(1, environment, "code"), "solver_machine": machine}]
+
+    with pytest.raises(ValidationError, match="solver_machine is null exactly for a container slot"):
+        slot_plan_type(1, ALL_ENVIRONMENTS).model_validate(plan(slots, []))
 
 
 def test_slot_plan_caps_how_many_proposed_slots_share_a_pairing():
@@ -178,6 +191,7 @@ def filled_document(idea, number: int, research_need: ResearchNeed = ResearchNee
     document = (
         document_template(f"{CAPABILITY_ID}/{number}", idea)
         .replace("<reasoning | shellsim | container>", "shellsim")
+        .replace("<shellsim | cpython | packages, or null for container>", "cpython")
         .replace("<simple | code | judge | composite>", "code")
         .replace("<needed | not_needed>", str(research_need))
         .replace("<web | github>", "github")
@@ -195,6 +209,7 @@ def test_the_filled_template_is_a_document_the_regex_accepts_and_the_identity_is
     assert re.fullmatch(document_regex(f"{CAPABILITY_ID}/4", source_ref(idea)), text)
     proposal = checked_proposal(text, idea, 4)
     assert proposal.header.environment is Environment.SHELLSIM
+    assert proposal.header.solver_machine is SolverMachine.CPYTHON
     assert proposal.header.research_need is research_need
     with pytest.raises(ValueError, match="id"):
         checked_proposal(text, idea, 5)
@@ -202,11 +217,12 @@ def test_the_filled_template_is_a_document_the_regex_accepts_and_the_identity_is
 
 def test_null_slot_is_not_needed(ideas):
     idea = ideas[CAPABILITY_ID]
-    planned = PlannedSlot.model_validate(slot(7, "reasoning", "judge", "null"))
+    planned = PlannedSlot.model_validate({**slot(7, "reasoning", "judge", "null"), "solver_machine": "packages"})
     outcome = null_slot_proposal(idea, planned)
     assert outcome.completions == ()
     proposal = outcome.proposal
     assert proposal.header.null_reason == "no grader"
+    assert proposal.header.solver_machine is SolverMachine.PACKAGES
     assert proposal.header.verification is Verification.JUDGE
     assert proposal.header.research_need is ResearchNeed.NOT_NEEDED
     assert proposal.header.research_reason == "null slot: no grader"

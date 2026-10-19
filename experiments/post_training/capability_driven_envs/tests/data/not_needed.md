@@ -4,6 +4,7 @@ source: {kind: capability, ref: "d01.algebra.linear-transformations", hash: "c58
 grounding: unverified
 null_reason: null
 environment: reasoning
+solver_machine: shellsim
 verification: code
 research_need: not_needed
 research_reason: "Synthetic generator fixtures and derivable exact arithmetic; no external artifacts required."

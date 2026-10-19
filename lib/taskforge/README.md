@@ -68,7 +68,10 @@ siblings. `stage10_proposal.model.TaskProposal` is YAML front matter (`ProposalH
 `HEADER_KEYS` order) plus a markdown body with required section headings. `parse` and `render`
 round-trip it and `digest` is the sha256 of the canonical form. `parse` also checks the research
 decision: `research_need: needed` lists at least one `research` item and `not_needed` none, and a
-non-null body cites every item, and only listed items, as `research[i]`.
+non-null body cites every item, and only listed items, as `research[i]`. `solver_machine` pins the
+solver's machine: `null` for a container proposal, which runs in the image its build publishes, and
+`shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one. The proposer
+or triage writes it, and the build keeps it.
 `document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
 field that constrains a completion to the canonical layout for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
@@ -76,8 +79,8 @@ built from `DOCUMENT_REPAIR_PROMPT`.
 
 `experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
 source for catalog capabilities, which takes its model, sampling policy and host environments at
-construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a research
-decision, then writes each document under the regex with GLM thinking first.
+construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a solver
+machine and a research decision, then writes each document under the regex with GLM thinking first.
 `propose_tasks` in the same package proposes and reviews the catalog's capabilities from the
 command line.
 
