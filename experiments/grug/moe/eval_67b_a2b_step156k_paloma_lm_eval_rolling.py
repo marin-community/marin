@@ -5,24 +5,24 @@
 
 The open-weight baselines in issue #8824 used lm-eval's ``loglikelihood_rolling`` through
 the ``local-completions`` backend with ``max_length=4096``. This reproduces that recipe
-for a grug checkpoint:
+for a grug checkpoint, at that ``max_length`` or a longer one:
 
 - Each document is scored independently; nothing is packed across documents.
 - Tokens come from the HF tokenizer with ``add_special_tokens=False``; the prefix token
   is BOS (the Marin tokenizer has one), so the first document token is scored.
 - Windows follow ``get_rolling_token_windows`` + ``make_disjoint_window`` with
-  ``max_seq_len = max_length - 2`` and ``context_len = 1``: disjoint 4,094-token
-  prediction windows, each conditioned on the single preceding token, except the final
-  window, which keeps a full 4,094-token left context.
+  ``max_seq_len = max_length - 2`` and ``context_len = 1``: disjoint prediction windows of
+  ``max_length - 2`` tokens (4,094 at 4096), each conditioned on the single preceding token,
+  except the final window, which keeps a full ``max_length - 2``-token left context.
 - Paloma uses the test split: lm-eval prefers a task's test split over its validation split.
 - Per-subset BPB = -sum(loglik) / sum(utf8 bytes of doc text) / ln 2; macro BPB is the
   unweighted mean over the subsets of each suite.
 
-Submit (target is ``step156k`` or ``skew8``)::
+Submit (target is ``step156k`` or ``skew8``; optional second argument is lm-eval ``max_length``, default 4096)::
 
     .venv/bin/iris --cluster=marin job run --no-wait --region us-central2 \\
         -e WANDB_API_KEY "$WANDB_API_KEY" \\
-        -- python -m experiments.grug.moe.eval_67b_a2b_step156k_paloma_lm_eval_rolling skew8
+        -- python -m experiments.grug.moe.eval_67b_a2b_step156k_paloma_lm_eval_rolling skew8 32768
 """
 
 import dataclasses
@@ -64,11 +64,9 @@ from experiments.paloma import PALOMA_DATASETS_TO_DIR, paloma
 
 logger = logging.getLogger(__name__)
 
-# lm-eval's API backend stores max_length - 1 and rolls with max_length - 1 again.
-_LM_EVAL_MAX_LENGTH: int = 4096
-_WINDOW_LEN: int = _LM_EVAL_MAX_LENGTH - 2
-# Row lengths for bucketing windows; each window needs len(context) + len(continuation) slots.
-_BUCKETS: tuple[int, ...] = (512, 1024, 2048, 4096)
+# lm-eval's max_length used by the #8824 baselines.
+_DEFAULT_LM_EVAL_MAX_LENGTH: int = 4096
+_MIN_BUCKET: int = 512
 _TOKENS_PER_BATCH: int = 1 << 20
 # Fields that must equal the training run's recorded model config (seq_len legitimately differs).
 _CHECKED_MODEL_FIELDS: tuple[str, ...] = (
@@ -93,9 +91,21 @@ class RollingEvalConfig:
     checkpoint_step: int
     tokenizer_id: str
     window_len: int
+    max_length: int
     mp: str
     suite: str
     dataset_paths: dict[str, InputName | str]
+
+
+def window_len(max_length: int) -> int:
+    """lm-eval's API backend stores ``max_length - 1`` and rolls with ``max_length - 1`` again."""
+    return max_length - 2
+
+
+def row_buckets(max_length: int) -> tuple[int, ...]:
+    """Power-of-two row lengths from 512 to ``max_length``; a window needs len(context) + len(continuation) slots."""
+    assert max_length >= _MIN_BUCKET and max_length & (max_length - 1) == 0, max_length
+    return tuple(1 << e for e in range(_MIN_BUCKET.bit_length() - 1, max_length.bit_length()))
 
 
 def rolling_windows(tokens: list[int], prefix_token: int, max_seq_len: int) -> Iterator[tuple[list[int], list[int]]]:
@@ -139,9 +149,11 @@ def _check_model_matches_training_run(model: GrugModelConfig, checkpoint_path: s
 
 def _run_eval_local(config: RollingEvalConfig) -> None:
     _check_model_matches_training_run(config.model, config.checkpoint_path)
+    assert config.window_len == window_len(config.max_length)
+    buckets = row_buckets(config.max_length)
     trainer = TrainerConfig(
         id=config.run_id,
-        train_batch_size=_BUCKETS[0],
+        train_batch_size=buckets[0],
         num_train_steps=1,
         profiler=ProfilerConfig(),
         mp=jmp.get_policy(config.mp),
@@ -155,6 +167,7 @@ def _run_eval_local(config: RollingEvalConfig) -> None:
                 "lm_eval_rolling",
                 config.suite,
                 f"qk{config.model.qk_mult:g}",
+                f"max_length{config.max_length}",
                 "issue8824_compare",
             ],
             group="june-tpu-67b-a2b-evals",
@@ -220,9 +233,9 @@ def _run_eval_local(config: RollingEvalConfig) -> None:
             weight = reshard(weight, jax.typeof(per_pos).sharding)
             return reshard(jnp.sum(per_pos * weight, axis=1), replicated)
 
-        bucket_of = np.array([next(b for b in _BUCKETS if len(w[1]) <= b) for w in windows])
+        bucket_of = np.array([next(b for b in buckets if len(w[1]) <= b) for w in windows])
         t_eval = time.perf_counter()
-        for bucket in _BUCKETS:
+        for bucket in buckets:
             idx = np.flatnonzero(bucket_of == bucket)
             batch_size = _TOKENS_PER_BATCH // bucket
             logger.info("bucket=%d windows=%d batch_size=%d", bucket, len(idx), batch_size)
@@ -294,10 +307,10 @@ PALOMA_TEST = {name: paloma.cd(f"{part}/test/test*.jsonl.gz") for name, part in 
 UNCHEATABLE_LEGACY = {name: uncheatable_eval.cd(ALL_UNCHEATABLE_EVAL_DATASETS[name]) for name in ACTIVE_DATASETS}
 
 
-def rolling_eval_steps(target: EvalTarget) -> list[ExecutorStep]:
+def rolling_eval_steps(target: EvalTarget, max_length: int) -> list[ExecutorStep]:
     steps = []
     for suite, paths in (("paloma", PALOMA_TEST), ("uncheatable_eval", UNCHEATABLE_LEGACY)):
-        run_id = f"moe_67b_a2b_d2560_{target.tag}_{suite}_lm_eval_rolling4096"
+        run_id = f"moe_67b_a2b_d2560_{target.tag}_{suite}_lm_eval_rolling{max_length}"
         steps.append(
             ExecutorStep(
                 name=f"grug/{run_id}",
@@ -310,7 +323,8 @@ def rolling_eval_steps(target: EvalTarget) -> list[ExecutorStep]:
                     checkpoint_path=versioned(target.checkpoint_path),
                     checkpoint_step=target.checkpoint_step,
                     tokenizer_id=versioned(marin_tokenizer),
-                    window_len=versioned(_WINDOW_LEN),
+                    window_len=versioned(window_len(max_length)),
+                    max_length=max_length,
                     mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
                     suite=suite,
                     dataset_paths=paths,
@@ -323,11 +337,12 @@ def rolling_eval_steps(target: EvalTarget) -> list[ExecutorStep]:
 if __name__ == "__main__":
     targets = {"step156k": STEP156K, "skew8": CTXEXT_QK175_SKEW8}
     target = targets[sys.argv.pop(1)]
+    max_length = int(sys.argv.pop(1)) if len(sys.argv) > 1 else _DEFAULT_LM_EVAL_MAX_LENGTH
     executor_main(
-        steps=rolling_eval_steps(target),
+        steps=rolling_eval_steps(target, max_length),
         description=(
             f"67B-A2B {target.tag} (qk_mult={target.model.qk_mult}) Paloma (test split) + UncheatableEval BPB "
-            f"with lm-eval 0.4.12 loglikelihood_rolling semantics (max_length={_LM_EVAL_MAX_LENGTH}, "
+            f"with lm-eval 0.4.12 loglikelihood_rolling semantics (max_length={max_length}, "
             "per-document, BOS prefix). v4-64 us-central2."
         ),
     )
