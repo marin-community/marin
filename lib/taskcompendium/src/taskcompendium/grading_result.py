@@ -43,8 +43,9 @@ class GradingProgress:
     """Where a sandbox grading stands, for a caller whose own deadline may expire before the grader runs.
 
     ``grade_in_sandbox`` sets ``STAGING`` while it starts and prepares the verifier machine and
-    ``GRADER`` once the grader's command starts. A caller that times the whole grading out reads
-    the phase to report the preparation, not the grader, as what ran out of time.
+    ``GRADER`` once the grader's command starts; a caller that captures the task's output files
+    before grading sets ``STAGING`` around that capture too. A caller that times the whole grading
+    out reads the phase to report the preparation, not the grader, as what ran out of time.
     """
 
     phase: GradingPhase = GradingPhase.GRADER

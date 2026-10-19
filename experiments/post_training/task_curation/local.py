@@ -31,11 +31,12 @@ from experiments.post_training.task_curation.campaign import (
     error_chain,
     write_campaign_report,
 )
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
 
 
 @contextmanager
-def local_artifact_prefix(prefix: str) -> Iterator[None]:
-    """Bind planning and execution to a local cache for the entire campaign.
+def artifact_prefix(prefix: str) -> Iterator[None]:
+    """Bind planning and execution to one storage root for the entire campaign.
 
     MARIN_PREFIX is process global, so source threads share this enclosing scope.
     """
@@ -56,6 +57,7 @@ def run_local_steps(
     *,
     runtime: CampaignRuntime,
     max_workers: int,
+    worker_resources: ResourceConfig,
     cache_dir: Path,
     source_ids: Mapping[str, str],
 ) -> tuple[SourceOutcome, ...]:
@@ -77,6 +79,7 @@ def run_local_steps(
             started_at=started_at,
             source_ids=source_ids,
             execution={"max_workers": max_workers},
+            catalog_root=str(output_root / CATALOG_DIRECTORY),
         )
 
     report(CampaignStatus.RUNNING)
@@ -89,7 +92,7 @@ def run_local_steps(
                 ZephyrContext(
                     client=client,
                     max_workers=max_workers,
-                    resources=ResourceConfig(cpu=1, ram="4g"),
+                    resources=worker_resources,
                     chunk_storage_prefix=str(output_root / ".zephyr"),
                     name="task-curation-quick",
                 ) as context,
@@ -100,7 +103,7 @@ def run_local_steps(
                     outcomes[name] = SourceOutcome(name, path, OutcomeStatus.RUNNING)
                     report(CampaignStatus.RUNNING)
                     try:
-                        with local_artifact_prefix(str(cache_dir)):
+                        with artifact_prefix(str(cache_dir)):
                             # Mutable terminal versions rerun through the ordinary executor;
                             # dependency versions and cache addresses remain unchanged.
                             terminal = replace(step, version="dev")
