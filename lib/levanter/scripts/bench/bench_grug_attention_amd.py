@@ -1,6 +1,10 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Time one Grug attention layer, forward and forward+backward, on one GPU.
+"""Time one Grug attention layer, forward and forward+backward, on one AMD GPU.
+
+AMD (ROCm) only: the script exits on any other platform. It benchmarks Grug's AMD attention kernel,
+``gpu_pallas_triton_flash``, whose tile defaults are tuned for AMD Instinct GPUs. The NVIDIA kernels
+(``gpu_fa4_cute*``) need packed segment IDs, which these inputs do not have.
 
 Defaults are the June Snowball per-GPU shape at global batch 64 on 8 GPUs: 8 sequences of 4096 tokens, 20 query
 heads, 5 KV heads, head_dim 128, bf16. Each mask (sliding window 2048, global causal) runs for each
@@ -12,8 +16,8 @@ flash kernels in ``levanter.grug.attention._amd_pallas_triton_flash`` (forward, 
 ``--sweep-part``), keeping the defaults for the other two. ``--block-q``, ``--block-k``, ``--num-warps`` and
 ``--num-stages`` replace that part's default values for one axis of the grid.
 
-    python lib/levanter/scripts/bench/bench_grug_attention.py --impl reference xla_flash gpu_pallas_triton_flash
-    python lib/levanter/scripts/bench/bench_grug_attention.py --sweep --sweep-part dkv --block-q 64 128 --num-stages 1
+    python lib/levanter/scripts/bench/bench_grug_attention_amd.py --impl reference xla_flash gpu_pallas_triton_flash
+    python lib/levanter/scripts/bench/bench_grug_attention_amd.py --sweep --sweep-part dkv --block-q 64 128 --num-stages 1
 """
 
 import argparse
@@ -24,6 +28,7 @@ import time
 
 import jax
 import jax.numpy as jnp
+from jax.extend.backend import get_backend
 
 from levanter.grug.attention import AttentionMask, attention
 from levanter.grug.attention._amd_pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
@@ -184,6 +189,9 @@ def sweep(args) -> None:
 
 def main() -> None:
     args = parse_args()
+    platform_version = get_backend().platform_version
+    if "rocm" not in platform_version:
+        raise SystemExit(f"This benchmark needs an AMD (ROCm) GPU; got platform {platform_version!r}.")
     print(f"devices={jax.devices()} default_blocks={TritonFlashBlockSizes()}", flush=True)
     if args.sweep:
         sweep(args)
