@@ -72,7 +72,9 @@ def through(glm_source: FixedEndpoint, base_url: str) -> FixedEndpoint:
 
 
 def ledger_record(evidence_dir: Path, check: str, workpiece_id: str) -> CallLedger:
-    return CallLedger(ledger=JsonlLedger(evidence_dir / "ledger" / check), workpiece_id=workpiece_id, round=0, step=check)
+    return CallLedger(
+        ledger=JsonlLedger(evidence_dir / "ledger" / check), workpiece_id=workpiece_id, round=0, step=check
+    )
 
 
 async def shellsim() -> ShellSimMachine:

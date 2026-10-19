@@ -20,7 +20,7 @@ from taskforge.stage40_build_with_program.glm_author import (
     sdk_reference,
 )
 from tests.stage30_author.programs import PROGRAM
-from tests.stage40_build_with_program.conftest import WORKPIECE, SAMPLING
+from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE
 
 
 def test_the_sdk_reference_lists_the_fields_of_the_task_types_steps_read():
@@ -51,20 +51,26 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     fake_glm.stream(content=submission(PROGRAM))
     workpiece_dir = tmp_path / "workpiece"
 
-    authored = await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
+    authored = await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(
+        proposal, None
+    )
 
     assert authored.source == PROGRAM
     assert authored.program is load_program_source(PROGRAM)
     assert (workpiece_dir / PROGRAM_FILE).read_text() == PROGRAM
     assert "may not import 'os'" in fake_glm.requests[1]["messages"][-2]["content"]
-    assert json.loads((workpiece_dir / AUTHOR_DIR / "00" / "request.json").read_text()) == fake_glm.requests[0]["messages"]
+    assert (
+        json.loads((workpiece_dir / AUTHOR_DIR / "00" / "request.json").read_text()) == fake_glm.requests[0]["messages"]
+    )
     schema = fake_glm.requests[0]["response_format"]["json_schema"]["schema"]
     assert list(schema["properties"]) == ["notes", "source"]
     assert schema["properties"]["notes"]["maxLength"] == NOTES_LIMIT == 2000
     assert schema["properties"]["notes"]["description"].startswith("At most 2000 characters;")
 
 
-async def test_a_revision_continues_from_the_program_the_workpiece_holds(proposal, glm_client, fake_glm, ledger, tmp_path):
+async def test_a_revision_continues_from_the_program_the_workpiece_holds(
+    proposal, glm_client, fake_glm, ledger, tmp_path
+):
     workpiece_dir = tmp_path / "workpiece"
     workpiece_dir.mkdir()
     (workpiece_dir / PROGRAM_FILE).write_text(PROGRAM)
@@ -72,7 +78,9 @@ async def test_a_revision_continues_from_the_program_the_workpiece_holds(proposa
     fake_glm.stream(content=submission(fixed))
     revision = Revision(RevisionKind.BUILD_FAILURE, "grader: the reference scored 0.0")
 
-    authored = await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 2, "author"))(proposal, revision)
+    authored = await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 2, "author"))(
+        proposal, revision
+    )
 
     assert authored.source == fixed
     assert (workpiece_dir / PROGRAM_FILE).read_text() == fixed

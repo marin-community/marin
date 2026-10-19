@@ -195,8 +195,9 @@ async def run_workpiece(
     revisions and sends the workpiece back to the author. When the build raises
     ``BuildInfrastructureFailure``, ``BuildExpired``, ``ModelUnavailable`` or an ``OSError`` from
     outside the program's frames, the workpiece fails in place with its revisions unspent, and the next
-    ``run_workpiece`` builds the same program again. Such an ``OSError`` is a storage fault, a missing blob or memo, or a corrupt
-    one (``StoreCorruption``); one raised by the program's own code is the program's.
+    ``run_workpiece`` builds the same program again. Such an ``OSError`` is a storage fault, a missing
+    blob or memo, or a corrupt one (``StoreCorruption``); one raised by the program's own code is the
+    program's.
 
     Raises:
         ValueError: ``workpiece_id`` is unsafe as a directory name, the workpiece was opened for another

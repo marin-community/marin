@@ -184,7 +184,10 @@ async def grade_candidate(
             answer_format=answer_format,
             grader=grader,
             source=Source(
-                dataset=GRADE_CANDIDATE_SOURCE, revision=SDK_VERSION, row=context.workpiece_id, importer_revision=SDK_VERSION
+                dataset=GRADE_CANDIDATE_SOURCE,
+                revision=SDK_VERSION,
+                row=context.workpiece_id,
+                importer_revision=SDK_VERSION,
             ),
             environment=requirements,
             files=files,

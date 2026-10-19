@@ -53,7 +53,14 @@ from taskforge.stage40_build_with_program.run import (
 from taskforge.stage40_build_with_program.sdk import research, structured
 from taskforge.stage40_build_with_program.services import AgentLimits
 from taskforge.stage40_build_with_program.step_store import CacheStatus, RLEnvBuildStepStore
-from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING, RecordingImageBuilder, declaring, web_tool
+from tests.stage40_build_with_program.conftest import (
+    FACTORIES,
+    SAMPLING,
+    WORKPIECE,
+    RecordingImageBuilder,
+    declaring,
+    web_tool,
+)
 
 
 class Hint(BaseModel):

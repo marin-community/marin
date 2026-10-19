@@ -45,8 +45,8 @@ from tests.sandbox.fixture_images import SlowGraderFactory
 from tests.stage40_build_with_program.conftest import (
     FACTORIES,
     IMAGE,
-    WORKPIECE,
     SAMPLING,
+    WORKPIECE,
     RecordingImageBuilder,
     declaring,
     web_tool,

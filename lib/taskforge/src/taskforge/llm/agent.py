@@ -188,7 +188,9 @@ async def _tool_result(
 ) -> ToolResult:
     """Run or reject ``call``; ``outcome`` is recorded only once known, so a handler exception leaves just ``cause``."""
     started = time.monotonic()
-    with span(record.ledger, EntryKind.STEP, workpiece_id=record.workpiece_id, round=record.round, step=record.step) as fields:
+    with span(
+        record.ledger, EntryKind.STEP, workpiece_id=record.workpiece_id, round=record.round, step=record.step
+    ) as fields:
         fields.attrs.update({"turn": str(turn), "tool": call.name, "call_id": call.id})
         try:
             if truncated:

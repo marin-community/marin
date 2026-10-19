@@ -366,7 +366,12 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 @pytest.mark.parametrize(
     ("proposal", "budget", "digest", "refusal"),
     [
-        (replace(PROPOSAL, body=PROPOSAL.body.replace("Multiply", "Add")), BUDGET, UNUSED_MODEL_DIGEST, "opened for proposal"),
+        (
+            replace(PROPOSAL, body=PROPOSAL.body.replace("Multiply", "Add")),
+            BUDGET,
+            UNUSED_MODEL_DIGEST,
+            "opened for proposal",
+        ),
         (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, "opened under budget"),
         (PROPOSAL, BUDGET, "another-model", "opened with model digest"),
     ],

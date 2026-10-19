@@ -106,7 +106,8 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
             lambda s: s.replace("sdk import ANSWER_FORMAT", "sdk import ANSWER_FROMAT").replace(
                 "        ANSWER_FORMAT,\n", "        ANSWER_FROMAT,\n"
             ),
-            r"has no name 'ANSWER_FROMAT'; did you mean 'ANSWER_FORMAT' from taskforge\.stage40_build_with_program\.sdk\?",
+            r"has no name 'ANSWER_FROMAT'; "
+            r"did you mean 'ANSWER_FORMAT' from taskforge\.stage40_build_with_program\.sdk\?",
         ),
         (
             lambda s: s.replace(
@@ -121,7 +122,8 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
                 "sdk import ANSWER_FORMAT\n",
                 "sdk import ANSWER_FORMAT\nfrom taskforge.stage40_build_with_program.sandbox_effects import machine\n",
             ),
-            r"has no name 'machine'; did you mean 'build_machine' from taskforge\.stage40_build_with_program\.sandbox_effects, "
+            r"has no name 'machine'; "
+            r"did you mean 'build_machine' from taskforge\.stage40_build_with_program\.sandbox_effects, "
             r"or 'machine' from taskforge\.spec\.draft\?",
         ),
         (
@@ -142,9 +144,11 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
         (
             lambda s: s.replace(
                 "sdk import ANSWER_FORMAT\n",
-                "sdk import ANSWER_FORMAT\nfrom taskforge.stage40_build_with_program.sandbox_effects import try_grader\n",
+                "sdk import ANSWER_FORMAT\n"
+                "from taskforge.stage40_build_with_program.sandbox_effects import try_grader\n",
             ),
-            r"has no name 'try_grader'; did you mean 'grade_candidate' from taskforge\.stage40_build_with_program\.sandbox_effects\?",
+            r"has no name 'try_grader'; "
+            r"did you mean 'grade_candidate' from taskforge\.stage40_build_with_program\.sandbox_effects\?",
         ),
         (
             lambda s: s.replace(
@@ -157,7 +161,8 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
         ),
         (
             lambda s: s.replace("stage40_build_with_program.outputs import", "stage40_build_with_program.output import"),
-            r"may not import 'taskforge.stage40_build_with_program.output'; did you mean 'taskforge.stage40_build_with_program.outputs'\?",
+            r"may not import 'taskforge.stage40_build_with_program.output'; "
+            r"did you mean 'taskforge.stage40_build_with_program.outputs'\?",
         ),
         (
             lambda s: s.replace("sink=assemble", "assemble"),
@@ -223,7 +228,8 @@ IMPORT_EACH = re.escape("Import each SDK name the program uses from its module."
                 '    return Question(text="What is 6 * 7?")',
                 '    await research(context, "Find the product.")\n    return Question(text="What is 6 * 7?")',
             ),
-            rf"{UNBOUND}\n- `research` \(line \d+\); did you mean 'research' from taskforge\.stage40_build_with_program\.sdk\?\n"
+            rf"{UNBOUND}\n- `research` \(line \d+\); "
+            rf"did you mean 'research' from taskforge\.stage40_build_with_program\.sdk\?\n"
             rf"{IMPORT_EACH}",
         ),
         (
@@ -233,7 +239,8 @@ IMPORT_EACH = re.escape("Import each SDK name the program uses from its module."
         (
             lambda s: s.replace("stage40_build_with_program.outputs import", "stage40_build_with_program.output import"),
             r"the program failed to load: ImportError: build programs may not import "
-            r"'taskforge\.stage40_build_with_program\.output'; did you mean 'taskforge\.stage40_build_with_program\.outputs'\? Allowed: \[.*\]",
+            r"'taskforge\.stage40_build_with_program\.output'; "
+            r"did you mean 'taskforge\.stage40_build_with_program\.outputs'\? Allowed: \[.*\]",
         ),
     ],
     ids=["unbound-without-suggestion", "unbound-with-suggestion", "import-without-suggestion", "import-with-suggestion"],

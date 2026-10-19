@@ -33,12 +33,17 @@ from taskforge.stage40_build_with_program.build_process import (
     image_builder,
     run_build_in_process,
 )
-from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure, ExpiredClock
+from taskforge.stage40_build_with_program.context import (
+    BuildExpired,
+    BuildFailure,
+    BuildInfrastructureFailure,
+    ExpiredClock,
+)
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from tests.stage30_author.programs import PROGRAM as PLAIN_PROGRAM
-from tests.stage40_build_with_program.conftest import WORKPIECE, LIMITS, SAMPLING
+from tests.stage40_build_with_program.conftest import LIMITS, SAMPLING, WORKPIECE
 
 TOKEN_ENV = "TASKFORGE_TEST_GLM_TOKEN"
 CONTROLLER_URL = "http://controller.example:10000"

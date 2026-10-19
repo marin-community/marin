@@ -211,7 +211,9 @@ async def run_program(
         BuildInfrastructureFailure: a step failed because of the host, anywhere in the cause chain
             of what it raised.
     """
-    assert store.workpiece_id == context.workpiece_id, f"store is for {store.workpiece_id}, context for {context.workpiece_id}"
+    assert (
+        store.workpiece_id == context.workpiece_id
+    ), f"store is for {store.workpiece_id}, context for {context.workpiece_id}"
     unknown = sorted(invalidate - {*program.steps, program.sink.name})
     assert not unknown, f"invalidate names {unknown}, which are not steps of the program"
     outputs: dict[str, Any] = {PROPOSAL_INPUT: proposal}

@@ -140,7 +140,13 @@ async def test_a_control_set_the_model_never_gets_right_fails_as_the_controls_st
 
     with pytest.raises(BuildFailure) as failure:
         await write_controls(
-            TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
+            TASK,
+            GRADER,
+            parse(PROPOSAL),
+            glm_client,
+            LLMPolicy(),
+            CallLedger(ledger, "workpiece", 0, "controls"),
+            tmp_path,
         )
 
     assert failure.value.step == "controls"
@@ -190,7 +196,13 @@ async def test_controls_cut_at_every_attempt_fail_as_the_controls_step(glm_clien
 
     with pytest.raises(BuildFailure, match="cut off by the output limit") as failure:
         await write_controls(
-            TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
+            TASK,
+            GRADER,
+            parse(PROPOSAL),
+            glm_client,
+            LLMPolicy(),
+            CallLedger(ledger, "workpiece", 0, "controls"),
+            tmp_path,
         )
 
     assert failure.value.step == "controls"

@@ -86,7 +86,9 @@ def record_completions(fields: SpanFields, completions: Sequence[Completion]) ->
 @contextmanager
 def llm_call_span(record: CallLedger, model: str, attrs: Mapping[str, str]) -> Iterator[SpanFields]:
     """An ``LLM_CALL`` span under ``record`` for ``model``, tagged with ``attrs``; exceptions propagate as ``cause``."""
-    with span(record.ledger, EntryKind.LLM_CALL, workpiece_id=record.workpiece_id, round=record.round, step=record.step) as fields:
+    with span(
+        record.ledger, EntryKind.LLM_CALL, workpiece_id=record.workpiece_id, round=record.round, step=record.step
+    ) as fields:
         fields.model = model
         fields.attrs.update(attrs)
         yield fields

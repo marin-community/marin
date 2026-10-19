@@ -43,7 +43,7 @@ from taskforge.stage40_build_with_program.sandbox_effects import (
 from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
 from taskforge.stage50_validate.lowering import VERIFIER_TIMEOUT
 from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory, shell_grader
-from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING, RecordingImageBuilder, declaring
+from tests.stage40_build_with_program.conftest import FACTORIES, SAMPLING, WORKPIECE, RecordingImageBuilder, declaring
 
 SHELLSIM = draft.requirements(image=None)
 DOCKER = draft.requirements(image=f"registry.example/task@sha256:{'0' * 64}")

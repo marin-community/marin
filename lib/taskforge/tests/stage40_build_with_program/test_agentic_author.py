@@ -50,7 +50,7 @@ from taskforge.stage40_build_with_program.infrastructure import InfrastructureCa
 from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft, run_build
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.template import standard
-from tests.stage40_build_with_program.conftest import WORKPIECE, SAMPLING, declaring
+from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE, declaring
 
 PROGRAM = '''"""Grades 6 * 7 in process."""
 
@@ -211,7 +211,10 @@ def session_build(
 
 @pytest.fixture
 def author(services, proposal, ledger):
-    """``author(workpiece_dir, model, round_no=0, revision=None)``: one ``author_round`` under ``workpiece_dir``'s parent."""
+    """``author(workpiece_dir, model, round_no=0, revision=None)``: one ``author_round``.
+
+    The round runs under ``workpiece_dir``'s parent.
+    """
 
     async def run(
         workpiece_dir: Path, model: ScriptedModel, round_no: int = 0, revision: Revision | None = None
@@ -352,7 +355,11 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
         0,
         research=ResearchRequirement.OFF,
     )
-    assert step_statuses(stage_ledger.path_for(WORKPIECE)) == [("sources", "hit"), ("grader", "hit"), ("assemble", "hit")]
+    assert step_statuses(stage_ledger.path_for(WORKPIECE)) == [
+        ("sources", "hit"),
+        ("grader", "hit"),
+        ("assemble", "hit"),
+    ]
 
 
 async def test_a_grader_crediting_the_empty_answer_fails_the_build_in_the_grader_step(tmp_path, author, monkeypatch):
@@ -386,7 +393,9 @@ async def test_a_grader_crediting_the_empty_answer_fails_the_build_in_the_grader
 async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, proposal, ledger):
     one_shot_workpiece, agentic_workpiece = tmp_path / "one_shot" / "workpiece", tmp_path / "agentic" / "workpiece"
     one_shot_model = ScriptedModel(answer(json.dumps({"notes": "n", "source": PROGRAM})))
-    await GlmAuthor(one_shot_model, SAMPLING, one_shot_workpiece, CallLedger(ledger, WORKPIECE, 0, "author"))(proposal, None)
+    await GlmAuthor(one_shot_model, SAMPLING, one_shot_workpiece, CallLedger(ledger, WORKPIECE, 0, "author"))(
+        proposal, None
+    )
     await author(
         agentic_workpiece,
         ScriptedModel(
@@ -546,7 +555,9 @@ async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
     build = session_build(tmp_path, model, services, proposal, 0)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_round(CONFIG, model, LLMPolicy(), ledger, build, tmp_path / "workpiece", WORKPIECE, 0, proposal, None)
+        await author_round(
+            CONFIG, model, LLMPolicy(), ledger, build, tmp_path / "workpiece", WORKPIECE, 0, proposal, None
+        )
 
     assert raised.value.cause == InfrastructureCause.HOST_UNREACHABLE
     assert graded == ["41"] * (1 + aa.HOST_RETRIES)
