@@ -8,13 +8,12 @@
 out of ``TaskSessionSpec.total_turn_timeout`` is a budget stop like running out of turns, so it is
 ``Graded`` too (``classify.trial_outcome``), and so is a verifyit pytest grade of 0 because the candidate's own code
 did not load (``Graded.candidate_code_error``): a failed attempt, flagged so the band and the summary can show it.
-Everything else is ``Ungraded``: task setup, infrastructure, grader and contract failures that say nothing about the
+Everything else is ``Ungraded``: task setup, infrastructure and grader failures that say nothing about the
 submission. Statistics use graded outcomes only; ungraded ones make the evidence incomplete.
 """
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, RolloutData
 from taskcompendium.grading_result import GradeResult
@@ -61,10 +60,6 @@ class Cause(StrEnum):
     """A shell tool step raised (the machine failed, not the command)."""
     GENERATION_LIMIT = "generation_limit"
     """The first prompt left no generation budget, so nothing was graded."""
-    TOKEN_CONTRACT = "token_contract"
-    """The model transport broke the exact-token contract. Not in ``RETRYABLE``: a sampled trial has
-    its own retry budget (``TrialPlan.token_contract_retries``); a scripted control is deterministic
-    and has none."""
     GRADER_RAISED = "grader_raised"
     GRADER_TIMEOUT = "grader_timeout"
     GRADER_MISSING_REWARD = "grader_missing_reward"
@@ -138,27 +133,12 @@ class Graded:
 
 
 @dataclass(frozen=True)
-class ContractBreak:
-    """Where a sampled rollout broke the exact-token contract, with the conversation up to the break.
-
-    The engine keeps no rollout for a contract break, so ``messages`` (the chat messages the model
-    was asked to continue) are the partial rollout's only record.
-    """
-
-    turn: int
-    prefix_length: int
-    messages: tuple[dict[str, Any], ...]
-
-
-@dataclass(frozen=True)
 class Ungraded:
-    """A trial without a grade. ``rollout`` is the last completed record, when the engine kept one;
-    ``contract_break`` is set for a ``TOKEN_CONTRACT`` trial whose model reported where it broke."""
+    """A trial without a grade. ``rollout`` is the last completed record, when the engine kept one."""
 
     cause: Cause
     detail: str
     rollout: RolloutData | None
-    contract_break: ContractBreak | None
 
     @property
     def retryable(self) -> bool:

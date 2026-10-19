@@ -16,7 +16,7 @@ from taskforge.llm.client import ModelUnavailable
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
-from taskforge.llm.rollout_model import GlmRolloutModel, RolloutTransport
+from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import StructuredOutputError
 from tests.conftest import fake_source
 
@@ -42,11 +42,11 @@ def call_ledger(ledger: Ledger) -> CallLedger:
     return CallLedger(ledger=ledger, workpiece_id="item-1", round=2, step="solver")
 
 
-async def test_rollout_model_records_retried_statuses_and_keeps_exact_tokens(fake_glm, client, ledger):
+async def test_rollout_model_records_retried_statuses_and_keeps_served_ids(fake_glm, client, ledger):
     fake_glm.status(429, "slow down")
     fake_glm.status(503, "busy")
     fake_glm.stream(content="done", prompt_tokens=3, completion_tokens=2, prompt_token_ids=(1, 2, 3), token_ids=(4, 5))
-    model = GlmRolloutModel(client, ROLLOUT_POLICY, RolloutTransport.CHAT_COMPLETIONS, call_ledger(ledger))
+    model = GlmRolloutModel(client, ROLLOUT_POLICY, call_ledger(ledger))
 
     turn = await model(ModelRequest(CONVERSATION, {}, prefix_token_ids=(1, 2), assistant_message_index=None))
 
@@ -64,7 +64,7 @@ async def test_rollout_model_records_retried_statuses_and_keeps_exact_tokens(fak
 async def test_rollout_model_records_a_call_that_runs_out_of_attempts(fake_glm, client, ledger):
     for _ in range(3):
         fake_glm.status(429, "slow down")
-    model = GlmRolloutModel(client, ROLLOUT_POLICY, RolloutTransport.CHAT_COMPLETIONS, call_ledger(ledger))
+    model = GlmRolloutModel(client, ROLLOUT_POLICY, call_ledger(ledger))
 
     with pytest.raises(ModelUnavailable):
         await model(ModelRequest(CONVERSATION[:1], {}, prefix_token_ids=(), assistant_message_index=None))

@@ -15,7 +15,6 @@ from rolloutengine.contracts import (
     GenerationLimitReached,
     ModelRequest,
     ModelTurn,
-    RolloutContractError,
     RolloutData,
     RolloutInterrupted,
     RolloutOperation,
@@ -29,10 +28,9 @@ from taskcompendium.models import NoGrader
 from verifyit.spec import ExactSpec, PytestSpec
 
 from taskforge.llm.client import ModelRequestRejected, ModelUnavailable
-from taskforge.llm.rollout_model import TokenContractBreak
 from taskforge.spec.draft import answer_grader, grader_environment
 from taskforge.stage50_validate.classify import candidate_code_error, classify, trial_outcome
-from taskforge.stage50_validate.outcome import RETRYABLE, Cause, ContractBreak, Graded, Ungraded
+from taskforge.stage50_validate.outcome import RETRYABLE, Cause, Graded, Ungraded
 from tests.sandbox.fixture_images import SHELL_GRADER_ARGV, FixtureImageFactory
 
 INVALID_REWARD_GRADER = """printf '%s' '{"reward": "nan?"}' > /logs/verifier/reward.json\n"""
@@ -136,16 +134,6 @@ async def test_first_prompt_over_the_limit_is_a_generation_limit(math_task, fake
     outcome = await outcome_of(math_task, fakes.raising_model(lambda: GenerationLimitReached(())))
 
     assert isinstance(outcome, Ungraded) and (outcome.cause, outcome.retryable) == (Cause.GENERATION_LIMIT, False)
-
-
-async def test_changed_token_prefix_is_a_contract_failure(file_task, fakes):
-    async def model(request: ModelRequest) -> ModelTurn:
-        message = fakes.shell("ls") if not request.prefix_token_ids else fakes.text("done")
-        return ModelTurn(message, (99,), (1,), None, "stop")
-
-    outcome = await outcome_of(file_task, model, fakes.flaky_factory(failures=0, error=RuntimeError))
-
-    assert isinstance(outcome, Ungraded) and outcome.cause is Cause.TOKEN_CONTRACT
 
 
 async def test_failing_task_setup_is_a_non_retryable_task_defect(file_task_with, fakes):
@@ -301,18 +289,6 @@ def test_declared_outputs_the_engine_cannot_capture_count_against_the_task(math_
     raised.__cause__ = RuntimeError("verifier exploded")
     fallback = trial_outcome(raised, task)
     assert isinstance(fallback, Ungraded) and fallback.cause is Cause.GRADER_RAISED
-
-
-def test_a_token_contract_break_keeps_the_conversation_up_to_the_break(math_task):
-    messages = ({"role": "user", "content": "q"}, {"role": "assistant", "content": "a"})
-    error = TokenContractBreak("served prompt diverges", turn=1, messages=messages, prefix_length=42)
-
-    broken = trial_outcome(error, math_task.task)
-    bare = trial_outcome(RolloutContractError("served prompt diverges"), math_task.task)
-
-    assert isinstance(broken, Ungraded) and broken.cause is Cause.TOKEN_CONTRACT
-    assert broken.contract_break == ContractBreak(turn=1, prefix_length=42, messages=messages)
-    assert isinstance(bare, Ungraded) and bare.cause is Cause.TOKEN_CONTRACT and bare.contract_break is None
 
 
 @pytest.mark.parametrize("answer,status,reward", [("395", Outcome.GRADED, 1.0), ("", Outcome.SUBMISSION_FAILURE, 0.0)])

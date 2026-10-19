@@ -30,7 +30,6 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, JsonValueAnswer, PlainText, Source, TaskSpec
 from verifyit.spec import NumericSpec, StructuredExactSpec
 
-from taskforge.llm.client import ModelUnavailable
 from taskforge.sandbox.factories import MachineHost, grading_environment
 from taskforge.spec.controls import (
     Control,

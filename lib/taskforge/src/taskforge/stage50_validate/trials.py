@@ -18,26 +18,20 @@ its own model, ``model.for_step(<kind>/<trial>/<attempt>)``: a ``GlmRolloutModel
 ``LLM_CALL`` spans under the attempt's step and routes on it, so the k trials of an item do not
 share one prefix-cache key.
 
-A sampled rollout breaks the exact-token contract when the model samples a token sequence the
-server does not reproduce when it re-renders the conversation (``llm.rollout_model``). That is
-sampling noise, so a ``TOKEN_CONTRACT`` attempt is retried on its own budget,
-``token_contract_retries``; each attempt's record keeps the traceback naming the divergent ids and,
-under ``contract_break``, the conversation up to the break (the engine keeps no rollout for it).
-``contract_retries`` counts those attempts from the files. A control replays fixed turns, so its plan
-has no such budget. A token-route reply whose ids, logprobs and bytes do not align
-(``TokenEvidenceError``) is not sampling noise and is never retried.
-
-Solver trials sample on ``SOLVER_TRANSPORT``, the token-id route, which keeps the sampled ids
-verbatim instead of re-rendering text.
+Every trial runs under the engine's messages trace (``TaskSessionSpec.trace = MESSAGES``, set by
+``EngineSettings.apply``): a trial is graded and never trained on, so the engine records the token
+ids a model reports without checking them, with an all-zero loss mask, and a model's next prompt
+need not extend the ids of its last turn. The attempt span's ``tokens_in`` and
+``tokens_out`` sum the prompt and response ids of the attempt's turns.
 
 A graded attempt's record says whether the candidate's own code did not load
 (``candidate_code_error``); the span carries ``candidate_code_error="true"`` when it did.
 
 Validation owns its trials' deadlines and engine limits: ``TrialPlan.deadlines`` replaces the
 total-turn and attempt deadlines of the builder's ``TaskSessionSpec`` (``Deadlines.apply``) and
-``EngineSettings.apply`` its turn, command, tool-turn, model-turn and cleanup limits, so every trial
-is bounded whatever the builder set, and the ledger's ``input_hash`` covers the effective
-``LoweredTaskSpec`` (``task_digest``). The builder's verifier deadline and machine settings stand.
+``EngineSettings.apply`` its trace and its turn, command, tool-turn, model-turn and cleanup limits,
+so every trial is bounded whatever the builder set, and the ledger's ``input_hash`` covers the
+effective ``LoweredTaskSpec`` (``task_digest``). The builder's verifier deadline and machine settings stand.
 
 The attempt file holds the whole ``RolloutData``, steps included: a validation round is reviewed
 from its files alone, and the final reply, the tool calls and the per-turn usage are read from the
@@ -55,8 +49,8 @@ of its trials is one ``MACHINE_UNSUPPORTED`` attempt carrying the refusals.
 """
 
 import asyncio
-import copy
 import base64
+import copy
 import dataclasses
 import json
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -68,14 +62,13 @@ from typing import Any, Protocol
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.spec import LoweredTaskSpec, TraceMode
 from shellbox.machine import MachineFactory
 from taskcompendium.models import CONVERSATION_ANSWERS, TaskSpec
 from taskcompendium.submission import submission_compatibility
 
 from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
-from taskforge.llm.rollout_model import RolloutTransport
 from taskforge.sandbox.factories import Refusal, task_refusals
 from taskforge.stage50_validate.classify import trial_outcome
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
@@ -93,14 +86,11 @@ ATTEMPT_PREFIX = "attempt-"
 """Each attempt file is ``<evidence_dir>/<kind>/<trial>/attempt-<n>.json``."""
 CLEANUP_ERROR_COUNT = "cleanup_error_count"
 """The ``RolloutData.metrics`` key where RolloutEngine counts failed cleanup actions."""
-SOLVER_TRANSPORT = RolloutTransport.TOKEN_ROUTE
-"""The transport of a solver trial's ``GlmRolloutModel``. In a study of 48 GLM-5.3 trials per
-transport, the token-id route broke the exact-token contract in 0 trials and chat completions in 18."""
 
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """The machine factories ``RolloutEngine`` runs on, and the session limits validation
+    """The machine factories ``RolloutEngine`` runs on, and the session trace and limits validation
     imposes on every trial.
 
     ``factories`` is keyed by shellbox ``Backend`` value, as ``machine_factories`` returns it.
@@ -126,9 +116,10 @@ class EngineSettings:
             raise ValueError("EngineSettings needs positive model_turn_timeout and cleanup_timeout")
 
     def apply(self, lowered: LoweredTaskSpec) -> LoweredTaskSpec:
-        """``lowered`` with these session limits in place of the builder's."""
+        """``lowered`` under the messages trace, with these session limits in place of the builder's."""
         session = lowered.session.model_copy(
             update={
+                "trace": TraceMode.MESSAGES,
                 "max_turns": self.max_turns,
                 "command_timeout": self.command_timeout,
                 "tool_turn_timeout": self.tool_turn_timeout,
@@ -199,8 +190,8 @@ class TrialPlan:
     """Which item the trials belong to, how many run, their deadlines, how they retry, and where they
     are recorded.
 
-    ``max_retries`` bounds retries of ``RETRYABLE`` causes and ``token_contract_retries`` those of
-    ``TOKEN_CONTRACT``. ``retry_backoff`` is a template: each trial waits on its own copy.
+    ``max_retries`` bounds retries of ``RETRYABLE`` causes. ``retry_backoff`` is a template: each
+    trial waits on its own copy.
     ``first_attempt`` numbers each trial's first attempt file and ledger step; later attempts follow it.
     """
 
@@ -210,17 +201,14 @@ class TrialPlan:
     k: int
     deadlines: Deadlines
     max_retries: int
-    token_contract_retries: int
     retry_backoff: ExponentialBackoff
     evidence_dir: Path
     ledger: Ledger
     first_attempt: int
 
     def __post_init__(self) -> None:
-        if self.k < 1 or self.max_retries < 0 or self.token_contract_retries < 0 or self.first_attempt < 0:
-            raise ValueError("A trial plan needs k >= 1 and non-negative retry counts and first attempt")
-        if self.kind is TrialKind.CONTROL and self.token_contract_retries:
-            raise ValueError("A control replays fixed turns, so a token contract break is not retried")
+        if self.k < 1 or self.max_retries < 0 or self.first_attempt < 0:
+            raise ValueError("A trial plan needs k >= 1 and non-negative max retries and first attempt")
 
 
 async def run_trials(
@@ -237,40 +225,27 @@ async def run_trial(
     lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: TrialModel, trial: str
 ) -> Outcome:
     """Run one trial of ``lowered`` under ``plan.deadlines`` and ``settings``, attempting it again
-    after a backoff while it fails for a retryable cause or, within ``plan.token_contract_retries``,
-    a broken token contract."""
+    after a backoff while it fails for a retryable cause, up to ``plan.max_retries`` times."""
     lowered = settings.apply(plan.deadlines.apply(lowered))
     unsupported = submission_refusal(lowered.task)
     if unsupported is not None:
-        return _refuse(lowered, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None, None))
+        return _refuse(lowered, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None))
     refusals = task_refusals(lowered, settings.factories)
     if refusals:
-        return _refuse(lowered, plan, trial, Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None, None))
+        return _refuse(lowered, plan, trial, Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None))
     backoff = copy.copy(plan.retry_backoff)
-    retries = contract_retries = 0
+    retries = 0
     attempt = plan.first_attempt
     while True:
         engine = settings.engine(model.for_step(attempt_step(plan, trial, attempt)))
         outcome = await _attempt(engine, lowered, plan, trial, attempt)
         if isinstance(outcome, Graded):
             return outcome
-        if outcome.retryable and retries < plan.max_retries:
-            retries += 1
-        elif outcome.cause is Cause.TOKEN_CONTRACT and contract_retries < plan.token_contract_retries:
-            contract_retries += 1
-        else:
+        if not outcome.retryable or retries >= plan.max_retries:
             return outcome
+        retries += 1
         await asyncio.sleep(backoff.next_interval())
         attempt += 1
-
-
-def contract_retries(evidence_dir: Path, kind: TrialKind) -> int:
-    """How many attempts of ``kind`` under ``evidence_dir`` broke the exact-token contract.
-
-    Each was retried, except a trial's last when its ``token_contract_retries`` budget was spent.
-    """
-    attempts = (evidence_dir / str(kind)).glob(f"*/{ATTEMPT_PREFIX}*.json")
-    return sum(json.loads(path.read_bytes()).get("cause") == Cause.TOKEN_CONTRACT for path in attempts)
 
 
 def refusal_detail(refusals: Sequence[Refusal]) -> str:
@@ -332,8 +307,8 @@ def record_attempt(
     fields.attrs = _attributes(outcome)
     rollout = outcome.rollout
     if rollout is not None and rollout.steps:
-        fields.tokens_in = len(rollout.prompt_token_ids) + rollout.loss_mask.count(0)
-        fields.tokens_out = rollout.loss_mask.count(1)
+        fields.tokens_in = sum(len(step.turn.prompt_token_ids) for step in rollout.steps)
+        fields.tokens_out = sum(len(step.turn.response_token_ids) for step in rollout.steps)
         fields.finish_reason = rollout.stop_reason
     if isinstance(outcome, Ungraded):
         fields.cause = str(outcome.cause)
@@ -378,7 +353,6 @@ def outcome_json(outcome: Outcome) -> bytes:
             "cause": outcome.cause,
             "retryable": outcome.retryable,
             "detail": outcome.detail,
-            "contract_break": None if outcome.contract_break is None else dataclasses.asdict(outcome.contract_break),
         }
     )
     record["cleanup_errors"] = cleanup_errors(outcome)

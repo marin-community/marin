@@ -10,10 +10,9 @@ the path and set its mode, run by the shell tool as the task machine's ``Machine
 after the setup commands), then a final reply (``WORKSPACE_REPLY``). The task's own grader then runs on that
 machine state. Grading is the engine's, unchanged.
 
-A control replays under the engine's messages trace (``TaskSessionSpec.trace = MESSAGES``): a scripted
-turn carries no token ids, the engine skips its prefix, evidence, log-probability and credit checks,
-and the attempt records no token evidence (an all-zero loss mask), which a control never needs.
-Solver trials keep the exact-token trace of ``lowered.session``.
+A control replays under the engine's messages trace, as every trial does (``EngineSettings.apply``):
+a scripted turn carries no token ids, the engine skips its prefix, evidence, log-probability and
+credit checks, and the attempt records no token evidence, which a control never needs.
 """
 
 import asyncio
@@ -25,7 +24,7 @@ from typing import Any, Self
 
 from rigging.timing import ExponentialBackoff
 from rolloutengine.contracts import ModelRequest, ModelTurn
-from rolloutengine.spec import LoweredTaskSpec, TraceMode
+from rolloutengine.spec import LoweredTaskSpec
 from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
 
 from taskforge.ledger.records import Ledger
@@ -110,7 +109,6 @@ class ControlPlan:
             k=1,
             deadlines=self.deadlines,
             max_retries=self.max_retries,
-            token_contract_retries=0,
             retry_backoff=self.retry_backoff,
             evidence_dir=self.evidence_dir,
             ledger=self.ledger,
@@ -154,8 +152,6 @@ async def replay(
 ) -> list[ControlOutcome]:
     """Replay every control concurrently as a ``CONTROL`` trial of ``lowered``, named by its id.
 
-    The trials run under the messages trace, so the scripted turns need no token ids.
-
     Raises:
         ValueError: ``check_replayable`` refuses ``controls``, or ``plan.first_attempts`` names a control not
             in ``controls``.
@@ -166,12 +162,11 @@ async def replay(
     if unknown:
         raise ValueError(f"First attempts name controls {unknown} that are not replayed")
     context_turns = context_assistant_turns(task)
-    scripted = lowered.model_copy(update={"session": lowered.session.model_copy(update={"trace": TraceMode.MESSAGES})})
     async with asyncio.TaskGroup() as group:
         runs = [
             group.create_task(
                 run_trial(
-                    scripted,
+                    lowered,
                     plan.trial_plan(control.id),
                     settings,
                     ScriptedModel(control_turns(control), context_turns),

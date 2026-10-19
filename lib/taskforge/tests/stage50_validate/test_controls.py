@@ -3,7 +3,7 @@
 
 """Control replay through the real engine with a deterministic stand-in for the server's chat template."""
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 import pytest
 from rigging.timing import ExponentialBackoff
@@ -11,13 +11,10 @@ from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome
 
 from taskforge.ledger.jsonl import JsonlLedger
-from taskforge.llm.glm_client import GlmClient
-from taskforge.llm.policy import LLMPolicy
 from taskforge.spec.controls import ControlCategory, ControlKind, Expectation
 from taskforge.stage50_validate.controls import ControlPlan, ControlVerdict, replay
-from taskforge.stage50_validate.outcome import Cause, Graded, Ungraded
+from taskforge.stage50_validate.outcome import Graded
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings
-from tests.conftest import fake_source
 from tests.sandbox.fixture_images import FixtureImageFactory
 
 
@@ -146,14 +143,3 @@ async def test_a_control_longer_than_max_turns_is_refused(tmp_path, file_task, f
             plan(tmp_path),
             settings(fakes.flaky_factory(0, RuntimeError), max_turns=1),
         )
-
-
-@dataclass
-class PromptIdStream:
-    """A one-token reply whose first chunk carries ``prompt_token_ids``; the fake server sends it as is."""
-
-    events: list[dict]
-    send_done: bool = True
-    stall: None = None
-
-

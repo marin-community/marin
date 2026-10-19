@@ -23,8 +23,8 @@ moved. Any other outcome of the probe, a grade included, keeps the first lowerin
 about the grader the trials will say again. A verifier machine never falls back: its preparation
 failure is a task defect the trials report.
 
-The probe is not evidence: it records no attempt file and no ledger span, and runs under the engine's
-messages trace, so its one-token reply carries no token ids.
+The probe is not evidence: it records no attempt file and no ledger span. Like every trial it runs
+under the engine's messages trace (``EngineSettings.apply``), so its empty reply carries no token ids.
 """
 
 import asyncio
@@ -33,7 +33,7 @@ from dataclasses import dataclass
 
 from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.lowering import lower_task
-from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec, TraceMode
+from rolloutengine.spec import LoweredTaskSpec, TaskRuntimeSpec
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import TaskSpec
 
@@ -141,8 +141,6 @@ async def _probe(lowered: LoweredTaskSpec, settings: EngineSettings, deadlines: 
     """One engine run of ``lowered`` with the probe model, classified as a trial outcome would be."""
     engine = settings.engine(_ProbeModel())
     prepared = settings.apply(deadlines.apply(lowered))
-    # The probe's turn carries no token ids: it is never recorded, so it runs under the messages trace.
-    prepared = prepared.model_copy(update={"session": prepared.session.model_copy(update={"trace": TraceMode.MESSAGES})})
     try:
         async with asyncio.timeout(deadlines.attempt_timeout):
             result: RolloutData | Exception = await engine.run(prepared)

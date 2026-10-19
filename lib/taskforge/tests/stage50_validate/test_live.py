@@ -12,7 +12,6 @@ is the fixture in ``tests/conftest.py``.
 import json
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -31,14 +30,7 @@ from taskforge.spec.controls import Control
 from taskforge.stage50_validate.controls import ControlOutcome, ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.evidence import Complete, Evidence, Incomplete
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
-from taskforge.stage50_validate.trials import (
-    SOLVER_TRANSPORT,
-    Deadlines,
-    EngineSettings,
-    TrialPlan,
-    contract_retries,
-    run_trials,
-)
+from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
 from tests.conftest import unique_run_name
 from tests.sandbox.fixture_images import FixtureImageFactory
 
@@ -51,7 +43,6 @@ RETRY_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0)
 DEADLINES = Deadlines(total_turn_timeout=900, attempt_timeout=1200)
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
 DOCKER_BACKEND = Backend.DOCKER.value
-TOKEN_CONTRACT_RETRIES = 2
 
 
 def settings(factories: dict[str, MachineFactory]) -> EngineSettings:
@@ -74,7 +65,6 @@ def plan(directory: Path, kind: TrialKind, workpiece_id: str, k: int = K, max_re
         k=k,
         deadlines=DEADLINES,
         max_retries=max_retries,
-        token_contract_retries=TOKEN_CONTRACT_RETRIES,
         retry_backoff=RETRY_BACKOFF,
         evidence_dir=directory,
         ledger=JsonlLedger(directory / "ledger"),
@@ -116,7 +106,7 @@ def outcome_summary(outcome: Outcome) -> dict[str, object]:
     common = {
         "turns": 0 if rollout is None else len(rollout.steps),
         "stop_reason": None if rollout is None else rollout.stop_reason,
-        "response_tokens": 0 if rollout is None else rollout.loss_mask.count(1),
+        "response_tokens": 0 if rollout is None else sum(len(step.turn.response_token_ids) for step in rollout.steps),
         "shell_calls": shell_commands(outcome),
         "final_message": None if rollout is None or not rollout.messages else rollout.messages[-1].get("content"),
     }
@@ -163,7 +153,6 @@ def evidence_summary(evidence: Evidence, kind: TrialKind) -> dict[str, object]:
         "solved": stats.solved,
         "timed_out": stats.timed_out,
         "candidate_code_errors": stats.candidate_code_errors,
-        "contract_retries": stats.contract_retries,
     }
 
 
@@ -196,14 +185,10 @@ async def solver_trials(
     directory = check_dir(evidence_dir, check)
     workpiece_id = lowered.task.id
     trial_plan = plan(directory, TrialKind.SOLVER, workpiece_id)
-    model = GlmRolloutModel(
-        client, POLICY, SOLVER_TRANSPORT, CallLedger(trial_plan.ledger, workpiece_id, 0, str(TrialKind.SOLVER))
-    )
+    model = GlmRolloutModel(client, POLICY, CallLedger(trial_plan.ledger, workpiece_id, 0, str(TrialKind.SOLVER)))
     started = time.monotonic()
     outcomes = await run_trials(lowered, trial_plan, settings(factories), model)
-    evidence = Evidence(
-        {TrialKind.SOLVER: tuple(outcomes)}, {TrialKind.SOLVER: contract_retries(directory, TrialKind.SOLVER)}
-    )
+    evidence = Evidence({TrialKind.SOLVER: tuple(outcomes)})
     write_summary(
         directory,
         purpose,
@@ -313,5 +298,5 @@ async def test_unsupported_machine_is_not_retried(client, evidence_dir, file_tas
     )
     assert all(isinstance(o, Ungraded) and o.cause is Cause.MACHINE_UNSUPPORTED for o in outcomes)
     assert factory.creates == K
-    status = Evidence({TrialKind.SOLVER: tuple(outcomes)}, {}).status
+    status = Evidence({TrialKind.SOLVER: tuple(outcomes)}).status
     assert isinstance(status, Incomplete) and status.causes[Cause.MACHINE_UNSUPPORTED] == K

@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GlmRolloutModel against a scripted GLM server through RolloutEngine, and live on GLM-5.3.
+"""GlmRolloutModel against a scripted GLM server through RolloutEngine, and live on GLM-5.3, under the
+messages trace.
 
-The live checks run on both transports and write
-``<evidence_root>/validate/rollout_model/[reasoning-]<transport>-<utc>.json``: every rollout
-(messages, token ids, logprobs, per-turn usage) plus, per turn, whether the next prompt preserved
-the served prefix and how many prompt tokens the server reported cached. ``evidence_root`` is the
-fixture in ``tests/conftest.py``.
+The live checks write ``<evidence_root>/validate/rollout_model/<check>-<utc>.json``: every rollout
+(messages, token ids, logprobs, per-turn usage) plus, per turn, how many prompt tokens the server
+reported cached. ``evidence_root`` is the fixture in ``tests/conftest.py``.
 """
 
 import asyncio
@@ -21,9 +20,9 @@ from typing import Any
 
 import pytest
 from pydantic import JsonValue
-from rolloutengine.contracts import GenerationLimitReached, ModelRequest, RolloutContractError, RolloutData
+from rolloutengine.contracts import GenerationLimitReached, ModelRequest, RolloutData, TokenUsage
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.spec import TRACE_METRIC, LoweredTaskSpec, TraceMode
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
 
@@ -31,7 +30,7 @@ from taskforge.ledger.records import EntryKind, LedgerEntry
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
-from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel, RolloutTransport, served_tokens
+from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel, served_tokens
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import (
     assemble,
@@ -42,7 +41,7 @@ from taskforge.spec.draft import (
     requirements,
     session,
 )
-from tests.conftest import fake_source
+from tests.conftest import ScriptedStream, fake_source
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 
 POLICY = LLMPolicy(max_continuations=0)
@@ -70,7 +69,65 @@ PUZZLE_2 = (
 )
 PUZZLE_1_ANSWER = "5 11 17 41 101 107 191 227 311 347 461 641 821 857 881".split()
 LONG_REASONING_TOKENS = 1000
-TRANSPORTS = pytest.mark.parametrize("transport", list(RolloutTransport))
+# A chat-completions stream in vLLM's shape for ``return_token_ids`` with ``logprobs``: the prompt ids
+# on the first chunk, and each token-carrying chunk with its ids and full logprob entries.
+VLLM_CHUNKS: list[dict | str] = [
+    {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1760000000,
+        "model": "glm-5.3",
+        "prompt_token_ids": [151331, 151333, 2001],
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "logprobs": None, "finish_reason": None}
+        ],
+    },
+    {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1760000000,
+        "model": "glm-5.3",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"reasoning": "Plan"},
+                "logprobs": {
+                    "content": [{"token": "Plan", "logprob": -0.0123, "bytes": [80, 108, 97, 110], "top_logprobs": []}]
+                },
+                "finish_reason": None,
+                "token_ids": [34592],
+            }
+        ],
+    },
+    {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1760000000,
+        "model": "glm-5.3",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "ok"},
+                "logprobs": {
+                    "content": [
+                        {"token": "ok", "logprob": -0.5, "bytes": [111, 107], "top_logprobs": []},
+                        {"token": "<|user|>", "logprob": -1.25, "bytes": None, "top_logprobs": []},
+                    ]
+                },
+                "finish_reason": "stop",
+                "token_ids": [1012, 151336],
+            }
+        ],
+    },
+    {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1760000000,
+        "model": "glm-5.3",
+        "choices": [],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 3, "total_tokens": 6},
+    },
+]
 
 
 @pytest.fixture
@@ -160,6 +217,7 @@ def output_check(path: str, words: Sequence[str] | None):
 
 
 def shellsim(task: TaskSpec, max_turns: int = 6) -> LoweredTaskSpec:
+    """``task`` on ShellSim under the messages trace, as validation runs every trial."""
     limits = session(
         max_turns=max_turns,
         model_turn_timeout=None,
@@ -169,7 +227,7 @@ def shellsim(task: TaskSpec, max_turns: int = 6) -> LoweredTaskSpec:
         attempt_timeout=None,
         verifier_timeout=30,
         cleanup_timeout=30,
-    )
+    ).model_copy(update={"trace": TraceMode.MESSAGES})
     return lower(
         task,
         host=MachineHost.LAPTOP,
@@ -190,7 +248,7 @@ async def fake_client(fake_glm, fast_provider):
         yield client
 
 
-async def test_two_turn_rollout_keeps_served_ids_and_replays_reasoning(fake_glm, fake_client):
+async def test_two_turn_rollout_records_served_ids_and_replays_reasoning(fake_glm, fake_client):
     fake_glm.responses.append(
         token_stream(
             [1, 2, 3],
@@ -202,15 +260,14 @@ async def test_two_turn_rollout_keeps_served_ids_and_replays_reasoning(fake_glm,
     )
     fake_glm.responses.append(token_stream([1, 2, 3, 4, 5, 6, 7], [8, 9], content="Done."))
 
-    rollout = await rollout_engine(
-        GlmRolloutModel(fake_client, POLICY, RolloutTransport.CHAT_COMPLETIONS, call_ledger())
-    ).run(shellsim(shell_task()))
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shellsim(shell_task()))
 
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
+    assert rollout.metrics[TRACE_METRIC] == TraceMode.MESSAGES.value
     assert rollout.prompt_token_ids == (1, 2, 3)
     assert rollout.response_token_ids == (4, 5, 6, 7, 8, 9)
-    assert rollout.loss_mask == (1, 1, 0, 0, 1, 1)
-    assert rollout.logprobs == (-0.5, -0.5, 0.0, 0.0, -0.5, -0.5)
+    assert (rollout.loss_mask, rollout.logprobs) == ((0,) * 6, None)
+    assert [step.turn.logprobs for step in rollout.steps] == [(-0.5, -0.5)] * 2
     first, second = fake_glm.requests
     assert (first["return_token_ids"], first["logprobs"]) == (True, True)
     assert [tool["function"]["name"] for tool in first["tools"]] == ["shell"]
@@ -221,9 +278,7 @@ async def test_two_turn_rollout_keeps_served_ids_and_replays_reasoning(fake_glm,
 async def test_length_cut_turn_is_graded_with_length_stop(fake_glm, fake_client):
     fake_glm.responses.append(token_stream([1, 2], [3, 4], content="I will", finish="length"))
 
-    rollout = await rollout_engine(
-        GlmRolloutModel(fake_client, POLICY, RolloutTransport.CHAT_COMPLETIONS, call_ledger())
-    ).run(shellsim(shell_task()))
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shellsim(shell_task()))
 
     assert rollout.stop_reason == "length"
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
@@ -236,9 +291,7 @@ async def test_tool_call_cut_at_the_budget_ends_the_rollout_with_length_unexecut
     fake_glm.responses.append(token_stream([1, 2], [3, 4, 5], tool_call=("shell", command), finish="tool_calls"))
     policy = LLMPolicy(max_tokens=3, max_continuations=0)
 
-    rollout = await rollout_engine(
-        GlmRolloutModel(fake_client, policy, RolloutTransport.CHAT_COMPLETIONS, call_ledger())
-    ).run(shellsim(shell_task()))
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, policy, call_ledger())).run(shellsim(shell_task()))
 
     assert rollout.stop_reason == "length"
     assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
@@ -251,22 +304,12 @@ async def test_prompt_filling_the_context_raises_generation_limit(fake_glm, fake
     request = ModelRequest(({"role": "user", "content": "x"},), {}, (1, 2), 1)
 
     with pytest.raises(GenerationLimitReached) as raised:
-        await GlmRolloutModel(fake_client, POLICY, RolloutTransport.CHAT_COMPLETIONS, call_ledger())(request)
+        await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
 
     assert raised.value.prompt_token_ids == (1, 2)
 
 
-async def test_ids_that_disagree_with_usage_break_the_contract(fake_glm, fake_client):
-    stream = token_stream([1, 2, 3], [4, 5], content="hi")
-    stream.events[-1]["usage"]["completion_tokens"] = 3
-    fake_glm.responses.append(stream)
-    request = ModelRequest(({"role": "user", "content": "x"},), {}, (), None)
-
-    with pytest.raises(RolloutContractError, match="disagree with usage"):
-        await GlmRolloutModel(fake_client, POLICY, RolloutTransport.CHAT_COMPLETIONS, call_ledger())(request)
-
-
-async def test_rollout_fails_naming_tokens_the_server_retokenized(fake_glm, fake_client):
+async def test_a_prompt_the_server_retokenized_is_graded_with_the_ids_it_served(fake_glm, fake_client):
     # Recorded live from a GLM-5.3 rollout of the d01 task (turns 3-4): the model
     # sampled "1" ")," "(" "1" inside smul(2**(n-1),(1,0)); the re-rendered prompt encodes the same
     # text canonically as "1" "),(" "1".
@@ -283,31 +326,32 @@ async def test_rollout_fails_naming_tokens_the_server_retokenized(fake_glm, fake
     )
     fake_glm.responses.append(token_stream([1, 2, 3, *canonical, observation, 9], [10], content="Done."))
 
-    with pytest.raises(RolloutContractError, match=r"index 5 of the 11-token prefix it served \[23482, 16"):
-        await rollout_engine(GlmRolloutModel(fake_client, POLICY, RolloutTransport.CHAT_COMPLETIONS, call_ledger())).run(
-            shellsim(shell_task())
-        )
+    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shellsim(shell_task()))
+
+    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
+    assert rollout.steps[1].turn.prompt_token_ids == (1, 2, 3, *canonical, observation, 9)
 
 
-async def test_a_continued_completion_has_no_exact_tokens(fake_glm, fake_client):
-    fake_glm.responses.append(token_stream([1, 2], [3], content="par", finish="length"))
-    fake_glm.responses.append(token_stream([1, 2, 3, 9], [4], content="tial"))
-
-    completion = await fake_client.complete(
-        [{"role": "user", "content": "x"}], LLMPolicy(max_continuations=1), dict(TOKEN_FIELDS)
-    )
-
-    assert completion.continuations
-    with pytest.raises(RolloutContractError, match="without continuation"):
-        served_tokens(completion)
-
-
-async def test_stream_without_prompt_ids_breaks_the_contract(fake_glm, fake_client):
-    fake_glm.stream(content="hi")
+async def test_a_stream_without_token_ids_gives_a_turn_with_its_usage(fake_glm, fake_client):
+    fake_glm.stream(content="hi", prompt_tokens=7, completion_tokens=2)
     request = ModelRequest(({"role": "user", "content": "x"},), {}, (), None)
 
-    with pytest.raises(RolloutContractError, match="prompt_token_ids"):
-        await GlmRolloutModel(fake_client, POLICY, RolloutTransport.CHAT_COMPLETIONS, call_ledger())(request)
+    turn = await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
+
+    assert (turn.text, turn.prompt_token_ids, turn.response_token_ids) == ("hi", (), ())
+    assert turn.usage == TokenUsage(prompt_tokens=7, completion_tokens=2)
+
+
+async def test_served_tokens_survive_the_sdks_reserialised_chunks(fake_glm, fake_client):
+    fake_glm.responses.append(ScriptedStream(VLLM_CHUNKS, send_done=True, stall=None))
+
+    completion = await fake_client.complete([{"role": "user", "content": "x"}], POLICY, TOKEN_FIELDS)
+
+    tokens = served_tokens(completion)
+    assert (tokens.prompt, tokens.response) == ((151331, 151333, 2001), (34592, 1012, 151336))
+    assert tokens.logprobs == (-0.0123, -0.5, -1.25)
+    stored = [json.loads(event) for event in completion.attempts[0].events]
+    assert stored[2]["choices"][0]["logprobs"]["content"][0]["bytes"] == [111, 107]
 
 
 def live_task():
@@ -327,38 +371,25 @@ def live_task():
 
 
 def turn_record(rollout: RolloutData) -> list[dict[str, Any]]:
-    turns = []
-    served: tuple[int, ...] = ()
-    for step in rollout.steps:
-        turn = step.turn
-        turns.append(
-            {
-                "prompt_ids": len(turn.prompt_token_ids),
-                "response_ids": len(turn.response_token_ids),
-                "logprobs": None if turn.logprobs is None else len(turn.logprobs),
-                "stop_reason": turn.stop_reason,
-                "prefix_preserved": turn.prompt_token_ids[: len(served)] == served,
-                "served_prefix_len": len(served),
-                "usage": turn.metadata["usage"],
-                "reasoning_chars": len(turn.message.get("reasoning_content") or ""),
-                "tool_calls": [call["function"]["arguments"] for call in turn.message.get("tool_calls") or []],
-            }
-        )
-        served = turn.prompt_token_ids + turn.response_token_ids
-    return turns
+    return [
+        {
+            "prompt_ids": len(step.turn.prompt_token_ids),
+            "response_ids": len(step.turn.response_token_ids),
+            "logprobs": None if step.turn.logprobs is None else len(step.turn.logprobs),
+            "stop_reason": step.turn.stop_reason,
+            "usage": step.turn.metadata["usage"],
+            "reasoning_chars": len(step.turn.message.get("reasoning_content") or ""),
+            "tool_calls": [call["function"]["arguments"] for call in step.turn.message.get("tool_calls") or []],
+        }
+        for step in rollout.steps
+    ]
 
 
 def write_live_evidence(
-    evidence_dir: Path,
-    name: str,
-    purpose: str,
-    transport: RolloutTransport,
-    wall_time: float,
-    rollouts: list[RolloutData],
+    evidence_dir: Path, check: str, purpose: str, wall_time: float, rollouts: list[RolloutData]
 ) -> Path:
     record = {
         "purpose": purpose,
-        "transport": str(transport),
         "policy": repr(POLICY),
         "wall_time": wall_time,
         "turns": [turn_record(rollout) for rollout in rollouts],
@@ -366,57 +397,46 @@ def write_live_evidence(
         "rollouts": [asdict(rollout) for rollout in rollouts],
     }
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    path = evidence_dir / f"{name}{transport}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+    path = evidence_dir / f"{check}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps(record, indent=1, default=str))
     return path
 
 
 async def live_rollouts(
-    glm_source, live_provider, task: TaskSpec, transport: RolloutTransport, count: int, max_turns: int
+    glm_source, live_provider, task: TaskSpec, count: int, max_turns: int
 ) -> tuple[list[RolloutData], float]:
-    """``count`` concurrent rollouts of ``task`` on ``transport``, each under its own step, as trials run.
+    """``count`` concurrent rollouts of ``task``, each under its own step, as trials run.
 
-    Also asserts that the ledger holds one ``LLM_CALL`` per turn, plus on the token route one
-    ``purpose=render`` span per turn after the first.
+    Also asserts that the ledger holds one ``LLM_CALL`` per turn.
     """
     ledger = ListLedger()
     started = time.monotonic()
     async with GlmClient(glm_source, live_provider) as client:
-        model = GlmRolloutModel(client, POLICY, transport, call_ledger(ledger))
+        model = GlmRolloutModel(client, POLICY, call_ledger(ledger))
         lowered = shellsim(task, max_turns)
         rollouts = await asyncio.gather(
             *(rollout_engine(model.for_step(f"solver/{index}/0")).run(lowered) for index in range(count))
         )
     calls = [entry for entry in ledger.entries if entry.kind == EntryKind.LLM_CALL]
-    turns = [entry for entry in calls if entry.attrs.get("purpose") != "render"]
-    steps = sum(len(rollout.steps) for rollout in rollouts)
-    assert len(turns) == steps
-    assert len(calls) - len(turns) == (steps - count if transport is RolloutTransport.TOKEN_ROUTE else 0)
+    assert len(calls) == sum(len(rollout.steps) for rollout in rollouts)
     assert all(entry.cause is None and entry.tokens_out for entry in calls)
     return list(rollouts), time.monotonic() - started
 
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(1800)
-@TRANSPORTS
-async def test_live_multi_turn_shellsim_rollout_preserves_served_prefix(
-    glm_source, live_provider, evidence_dir, transport
-):
-    rollouts, wall_time = await live_rollouts(glm_source, live_provider, live_task(), transport, count=3, max_turns=10)
+async def test_live_multi_turn_shellsim_rollout_is_graded(glm_source, live_provider, evidence_dir):
+    rollouts, wall_time = await live_rollouts(glm_source, live_provider, live_task(), count=3, max_turns=10)
     path = write_live_evidence(
         evidence_dir,
-        "",
-        "multi-turn ShellSim rollouts through RolloutEngine: the engine's served-prefix check "
-        "passes on every turn (it raises RolloutContractError otherwise), with reasoning replayed and "
-        "prefix caching on",
-        transport,
+        "multi-turn",
+        "multi-turn ShellSim rollouts through RolloutEngine under the messages trace, with reasoning "
+        "replayed and prefix caching on",
         wall_time,
         rollouts,
     )
 
-    turns = [turn for rollout in rollouts for turn in turn_record(rollout)]
     assert all(len(rollout.steps) >= 2 for rollout in rollouts), path
-    assert all(turn["prefix_preserved"] and turn["logprobs"] == turn["response_ids"] for turn in turns), path
     assert any(step.turn.metadata["usage"]["cached_tokens"] > 0 for rollout in rollouts for step in rollout.steps), path
     assert all(rollout.grade.status == Outcome.GRADED for rollout in rollouts), path
 
@@ -446,26 +466,21 @@ def reasoning_task():
 
 @pytest.mark.live_glm
 @pytest.mark.timeout(3600)
-@TRANSPORTS
-async def test_live_reasoning_heavy_rollout_preserves_served_prefix(glm_source, live_provider, evidence_dir, transport):
-    rollouts, wall_time = await live_rollouts(
-        glm_source, live_provider, reasoning_task(), transport, count=3, max_turns=12
-    )
+async def test_live_reasoning_heavy_rollout_replays_long_reasoning(glm_source, live_provider, evidence_dir):
+    rollouts, wall_time = await live_rollouts(glm_source, live_provider, reasoning_task(), count=3, max_turns=12)
     path = write_live_evidence(
         evidence_dir,
-        "reasoning-",
-        "reasoning-heavy multi-turn ShellSim rollouts: long reasoning_content replayed on later turns and "
-        "multi-line heredoc tool arguments; the engine's served-prefix check passes on every turn",
-        transport,
+        "reasoning",
+        "reasoning-heavy multi-turn ShellSim rollouts under the messages trace: long reasoning_content "
+        "replayed on later turns and multi-line heredoc tool arguments",
         wall_time,
         rollouts,
     )
 
     turns = [turn for rollout in rollouts for turn in turn_record(rollout)]
-    assert all(turn["prefix_preserved"] and turn["logprobs"] == turn["response_ids"] for turn in turns), path
     assert all(len(rollout.steps) >= 3 for rollout in rollouts), path
-    # The prefix contract is exercised by long reasoning only once a later turn replays it, so some
-    # turn before a rollout's last must reason at length; how many do depends on the puzzles' luck.
+    # Long reasoning is replayed only once a later turn follows it, so some turn before a rollout's
+    # last must reason at length; how many do depends on the puzzles' luck.
     replayed = [turn for rollout in rollouts for turn in turn_record(rollout)[:-1]]
     assert any(turn["usage"]["reasoning_tokens"] >= LONG_REASONING_TOKENS for turn in replayed), path
     assert sum("\\n" in arguments for turn in turns for arguments in turn["tool_calls"]) >= 3, path

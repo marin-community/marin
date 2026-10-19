@@ -170,20 +170,13 @@ own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each a
 `ContextExhausted`, which ends the loop with `AgentStop.CONTEXT`; long loops set a smaller
 `max_tokens`.
 
-`llm.rollout_model.GlmRolloutModel(client, policy, transport, record)` is the RolloutEngine model
-callable. On `RolloutTransport.CHAT_COMPLETIONS` each turn is one streamed call with
-`return_token_ids`, and the served ids come from the chunks. On `RolloutTransport.TOKEN_ROUTE`
-every turn after the first renders the conversation once on the server (a one-token probe, its own
-`purpose=render` span), keeps the ids the template rendered after the previous assistant turn, and
-samples from the rollout's exact prefix plus those ids through `GlmClient.generate`, with header
-`x-routing-key: <item>:<round>:<step>`; the chat-completions calls and render probes carry the same
-key as `prompt_cache_key`, so every request of a rollout shares one node's prefix cache.
-`GlmRolloutModel.for_step(step)` derives the model of one rollout. The route returns each sampled id's bytes
-(`return_token_bytes`), and `llm.glm_format.parse_turn` joins them and splits the text into
-reasoning, answer and tool calls. A turn that cannot keep the exact prefix raises
-`TokenContractBreak` inside its span, which records `cause == "token_contract"`. A response whose
-ids, logprobs and bytes do not align raises `TokenEvidenceError`, which fails the run. Both
-transports send the same sampling fields, `LLMPolicy.sampling_params()`.
+`llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
+the messages trace. Each turn is one streamed chat-completions call with `return_token_ids`, and
+the turn reports the ids and logprobs the server sent in its chunks, and the call's usage; under
+`TraceMode.MESSAGES` the engine records them without checking them, and a stream without them gives
+a turn with empty ids. Every request of a rollout carries `prompt_cache_key: <item>:<round>:<step>`,
+so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
+one rollout.
 
 `llm.store.CallStore` caches `complete` and `complete_structured` calls on disk by the digest of
 the request and does not record to the ledger.
@@ -464,15 +457,13 @@ back.
 attempt under its own step. `TrialPlan.deadlines` and `EngineSettings`
 replace the builder's session limits, and `task_digest(lowered)` hashes what runs, answer format
 included. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
-`stage50_validate.classify.classify` is the only failure classifier. A trial is attempted again for
-a retryable cause, and for a broken token contract within `TrialPlan.token_contract_retries`;
+`stage50_validate.classify.classify` is the only failure classifier. Every trial runs under the
+engine's messages trace (`EngineSettings.apply`): a trial is graded, never trained on, so the engine
+does not hold its turns to exact tokens. A trial is attempted again for a retryable cause;
 `TrialPlan.first_attempt` numbers attempts after the ones on disk, so a re-entered trial continues
-where it stopped. Solver trials sample on `SOLVER_TRANSPORT`, the token-id route.
-`stage50_validate.evidence.Evidence(outcomes, contract_retries).reward_stats(kind)` totals the
-graded trials and the attempts a broken contract discarded.
-`stage50_validate.controls.replay(lowered, controls, plan, settings, tokenize)` replays each control
-as one `CONTROL` trial named by its id, with `llm.rollout_model.ServerRenderer` serving `tokenize`
-from the served chat template.
+where it stopped. `stage50_validate.evidence.Evidence(outcomes).reward_stats(kind)` totals the graded
+trials. `stage50_validate.controls.replay(lowered, controls, plan, settings)` replays each control as
+one `CONTROL` trial named by its id.
 
 ## Testing
 

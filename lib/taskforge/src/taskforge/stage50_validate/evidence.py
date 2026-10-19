@@ -36,14 +36,13 @@ def _solved(outcome: Graded) -> bool:
 
 @dataclass(frozen=True)
 class RewardStats:
-    """Statistics over graded outcomes only, and the attempts a broken token contract discarded.
+    """Statistics over graded outcomes only.
 
     ``solved`` counts grades that pass: ``GradeResult.passed`` when the grader reports it, else a
     reward at the grader's ``score_max``. ``timed_out`` counts the graded trials the total-turn
     deadline ended, and ``candidate_code_errors`` those whose candidate code did not load
     (``Graded.candidate_code_error``); both are included in ``graded`` and ``mean_reward``, and a
-    candidate code error is never ``solved``. ``contract_retries`` counts the attempts that broke the
-    exact-token contract (``Cause.TOKEN_CONTRACT``); they are not trials, so no other field counts them.
+    candidate code error is never ``solved``.
     """
 
     graded: int
@@ -51,19 +50,13 @@ class RewardStats:
     solved: int
     timed_out: int
     candidate_code_errors: int
-    contract_retries: int
 
 
 @dataclass(frozen=True)
 class Evidence:
-    """The final outcome of each trial by kind, and how many attempts of each kind broke the token contract.
-
-    ``contract_retries`` comes from the attempt files (``trials.contract_retries``), since a trial's
-    final outcome does not keep the attempts before it.
-    """
+    """The final outcome of each trial by kind."""
 
     outcomes: Mapping[TrialKind, tuple[Outcome, ...]]
-    contract_retries: Mapping[TrialKind, int]
 
     @property
     def status(self) -> Complete | Incomplete:
@@ -75,11 +68,8 @@ class Evidence:
     def reward_stats(self, kind: TrialKind) -> RewardStats:
         """Reward, solve and failure counts over the graded outcomes of ``kind``."""
         graded = [outcome for outcome in self.outcomes.get(kind, ()) if isinstance(outcome, Graded)]
-        retries = self.contract_retries.get(kind, 0)
         if not graded:
-            return RewardStats(
-                graded=0, mean_reward=None, solved=0, timed_out=0, candidate_code_errors=0, contract_retries=retries
-            )
+            return RewardStats(graded=0, mean_reward=None, solved=0, timed_out=0, candidate_code_errors=0)
         solved = sum(_solved(outcome) for outcome in graded)
         return RewardStats(
             graded=len(graded),
@@ -87,5 +77,4 @@ class Evidence:
             solved=solved,
             timed_out=sum(outcome.timed_out for outcome in graded),
             candidate_code_errors=sum(outcome.candidate_code_error for outcome in graded),
-            contract_retries=retries,
         )

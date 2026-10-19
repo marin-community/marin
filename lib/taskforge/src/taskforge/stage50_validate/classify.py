@@ -4,8 +4,7 @@
 """The one classifier from trial failures to ``Cause``, and the trial outcome built on it.
 
 A failure is either an exception (a ``RolloutInterrupted`` from the engine with the original error
-as its ``__cause__``, a ``RolloutContractError``, a ``ModelClient`` error, a shellbox error such as
-``MachineTerminated``) or a
+as its ``__cause__``, a ``ModelClient`` error, a shellbox error such as ``MachineTerminated``) or a
 rollout the engine returned without a usable grade. A recognized original error wins over the
 interrupted operation, so a ``ModelUnavailable`` during ``MODEL`` is ``MODEL_UNAVAILABLE``. Anything
 no rule matches is ``UNCLASSIFIED``, which ``Evidence`` counts like any other cause.
@@ -14,9 +13,6 @@ A rollout with a grade can still have a cause. A task without a grader (``NoGrad
 ``UNAVAILABLE``, which is ``VERIFIER_SKIPPED``. A verifyit ``pytest`` grader scores a candidate whose
 own code fails to import or be collected as reward 0; that is a failed attempt flagged
 ``Graded.candidate_code_error``, so the outcome needs the task.
-
-A ``TokenContractBreak`` (bare, or as the original error of a ``RolloutInterrupted``) carries the
-conversation up to the break; the ``TOKEN_CONTRACT`` outcome keeps it as ``Ungraded.contract_break``.
 
 Task setup failures are told apart from machine failures only by their message text
 (``_matches_rolloutengine_setup_message``), because the engine raises a bare ``RuntimeError`` or
@@ -33,7 +29,6 @@ from rolloutengine.contracts import (
     LENGTH_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     GenerationLimitReached,
-    RolloutContractError,
     RolloutData,
     RolloutInterrupted,
     RolloutOperation,
@@ -45,10 +40,9 @@ from taskcompendium.models import NoGrader, TaskSpec, VerifyitGrader
 from verifyit.spec import Mode
 
 from taskforge.llm.client import ContextExhausted, ModelRequestRejected, ModelUnavailable
-from taskforge.llm.rollout_model import TokenContractBreak
 from taskforge.sandbox.host_failures import machine_lost
 from taskforge.spec.verdict import reward_in_range
-from taskforge.stage50_validate.outcome import GRADED_STATUSES, Cause, ContractBreak, Graded, Outcome, Ungraded
+from taskforge.stage50_validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, Ungraded
 
 GRADING_FAILURES = {
     GradingFailure.TIMEOUT: Cause.GRADER_TIMEOUT,
@@ -113,24 +107,15 @@ def trial_outcome(result: RolloutData | Exception, task: TaskSpec) -> Outcome:
             return Graded(result, candidate_code_error(grade, task))
         if grade.status in GRADED_STATUSES:
             detail = f"reward {grade.reward} is outside the grader's score range [{grade.score_min}, {grade.score_max}]"
-            return Ungraded(classify(result, task), detail, result, None)
-        return Ungraded(classify(result, task), grade.error or str(grade.status), result, None)
+            return Ungraded(classify(result, task), detail, result)
+        return Ungraded(classify(result, task), grade.error or str(grade.status), result)
     cause = classify(result, task)
     detail = "".join(traceback.format_exception(result))
     rollout = result.rollout if isinstance(result, RolloutInterrupted) else None
-    return Ungraded(cause, detail, rollout, _contract_break(result))
-
-
-def _contract_break(error: Exception) -> ContractBreak | None:
-    original = error.__cause__ if isinstance(error, RolloutInterrupted) else error
-    if not isinstance(original, TokenContractBreak):
-        return None
-    return ContractBreak(original.turn, original.prefix_length, original.messages)
+    return Ungraded(cause, detail, rollout)
 
 
 def _exception_cause(error: BaseException) -> Cause:
-    if isinstance(error, RolloutContractError):
-        return Cause.TOKEN_CONTRACT
     if isinstance(error, GenerationLimitReached | ContextExhausted):
         return Cause.GENERATION_LIMIT
     if isinstance(error, ModelUnavailable):

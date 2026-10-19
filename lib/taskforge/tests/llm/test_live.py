@@ -28,7 +28,7 @@ from taskforge.llm.glm_client import GlmClient, request_kwargs
 from taskforge.llm.glm_format import parse_turn
 from taskforge.llm.policy import GLM_MAX_OUTPUT_TOKENS, LLMPolicy, Message, ReasoningEffort
 from taskforge.llm.recording import CallLedger
-from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel, RolloutTransport
+from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel
 from taskforge.llm.structured import response_format
 from tests.conftest import GLM_MODEL, unique_run_name
 
@@ -338,9 +338,7 @@ def test_rollout_model_turn_is_recorded_in_the_ledger(glm_source, live_provider,
 
     async def go():
         async with GlmClient(glm_source, live_provider) as client:
-            return await GlmRolloutModel(
-                client, LLMPolicy(max_continuations=0), RolloutTransport.TOKEN_ROUTE, record_to
-            )(request)
+            return await GlmRolloutModel(client, LLMPolicy(max_continuations=0), record_to)(request)
 
     turn = asyncio.run(go())
     [entry] = list(read_entries(ledger.path_for(record_to.workpiece_id)))

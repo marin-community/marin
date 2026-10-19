@@ -99,14 +99,7 @@ from taskforge.spec.draft import (
 )
 from taskforge.stage50_validate.evidence import Complete, Evidence
 from taskforge.stage50_validate.outcome import Graded, Outcome, TrialKind
-from taskforge.stage50_validate.trials import (
-    SOLVER_TRANSPORT,
-    Deadlines,
-    EngineSettings,
-    TrialPlan,
-    contract_retries,
-    run_trials,
-)
+from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
 
 GLM_MODEL = "glm-5.3"
 GLM_TOKEN_ENV = "GLM_HIGH_TOKEN"
@@ -149,7 +142,6 @@ CLEANUP_TIMEOUT = 120
 STARTUP_TIMEOUT = 900
 VERIFIER_TIMEOUT = 300
 DEADLINES = Deadlines(total_turn_timeout=1800, attempt_timeout=2400)
-TOKEN_CONTRACT_RETRIES = 2
 # The builder's session; EngineSettings and DEADLINES replace all but the verifier deadline.
 SESSION = session(
     max_turns=MAX_TURNS,
@@ -309,7 +301,7 @@ def outcome_summary(outcome: Outcome) -> dict[str, Any]:
     common: dict[str, Any] = {
         "turns": 0 if rollout is None else len(rollout.steps),
         "stop_reason": None if rollout is None else rollout.stop_reason,
-        "response_tokens": 0 if rollout is None else rollout.loss_mask.count(1),
+        "response_tokens": 0 if rollout is None else sum(len(step.turn.response_token_ids) for step in rollout.steps),
         "shell_calls": shell_calls(outcome),
         "final_message": final_message(outcome),
     }
@@ -338,11 +330,8 @@ def outcome_summary(outcome: Outcome) -> dict[str, Any]:
     }
 
 
-def evidence_summary(outcomes: list[Outcome], evidence_dir: Path) -> dict[str, Any]:
-    evidence = Evidence(
-        {TrialKind.SOLVER: tuple(outcomes)},
-        {TrialKind.SOLVER: contract_retries(evidence_dir, TrialKind.SOLVER)},
-    )
+def evidence_summary(outcomes: list[Outcome]) -> dict[str, Any]:
+    evidence = Evidence({TrialKind.SOLVER: tuple(outcomes)})
     status = evidence.status
     stats = evidence.reward_stats(TrialKind.SOLVER)
     return {
@@ -352,7 +341,6 @@ def evidence_summary(outcomes: list[Outcome], evidence_dir: Path) -> dict[str, A
         "solved": stats.solved,
         "timed_out": stats.timed_out,
         "candidate_code_errors": stats.candidate_code_errors,
-        "contract_retries": stats.contract_retries,
     }
 
 
@@ -368,7 +356,7 @@ async def run_phase(
     directory = results / str(phase)
     task = lowered.task
     ledger = JsonlLedger(directory / "ledger")
-    model = GlmRolloutModel(client, POLICY, SOLVER_TRANSPORT, CallLedger(ledger, task.id, 0, str(TrialKind.SOLVER)))
+    model = GlmRolloutModel(client, POLICY, CallLedger(ledger, task.id, 0, str(TrialKind.SOLVER)))
     timed = {backend: TimedFactory(factory) for backend, factory in factories.items()}
     settings = EngineSettings(
         factories=timed,
@@ -385,7 +373,6 @@ async def run_phase(
         k=k,
         deadlines=DEADLINES,
         max_retries=max_retries,
-        token_contract_retries=TOKEN_CONTRACT_RETRIES,
         retry_backoff=ExponentialBackoff(initial=5, maximum=60),
         evidence_dir=directory,
         ledger=ledger,
@@ -400,7 +387,7 @@ async def run_phase(
         "task_id": task.id,
         "wall_time": wall_time,
         "trials": [outcome_summary(outcome) for outcome in outcomes],
-        "evidence": evidence_summary(outcomes, directory),
+        "evidence": evidence_summary(outcomes),
         "machine_creates": {backend: factory.creates for backend, factory in timed.items() if factory.creates},
         "ledger": [entry.to_json() for path in ledger_files(directory / "ledger") for entry in read_entries(path)],
     }
