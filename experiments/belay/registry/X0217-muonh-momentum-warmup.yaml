@@ -15,7 +15,8 @@ knobs:
 - momentum_warmup
 - momentum
 trials:
-- variant: warmup 0.85->0.95 over 10%
+- id: t01
+  variant: warmup 0.85->0.95 over 10%
   rung: d512
   protocol: fixed_time
   batch: X0217
@@ -36,7 +37,8 @@ trials:
     momentum_warmup_start: '0.85'
     momentum_warmup: '0.1'
   commit: e8cd1b97ec
-- variant: warmup 0.85->0.98 over 10%
+- id: t02
+  variant: warmup 0.85->0.98 over 10%
   rung: d512
   protocol: fixed_time
   batch: X0217
@@ -58,7 +60,8 @@ trials:
     momentum_warmup_start: '0.85'
     momentum_warmup: '0.1'
   commit: e8cd1b97ec
-- variant: warmup 0.85->0.98 over 20%
+- id: t03
+  variant: warmup 0.85->0.98 over 20%
   rung: d512
   protocol: fixed_time
   batch: X0217
@@ -80,7 +83,8 @@ trials:
     momentum_warmup_start: '0.85'
     momentum_warmup: '0.2'
   commit: e8cd1b97ec
-- variant: constant momentum 0.98
+- id: t04
+  variant: constant momentum 0.98
   rung: d512
   protocol: fixed_time
   batch: X0217
