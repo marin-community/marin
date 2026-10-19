@@ -9,7 +9,11 @@ from experiments.post_training.sft_shootout.relay import Author
 
 def test_the_student_backend_waits_for_v0_and_uses_its_served_model_id(monkeypatch):
     url = "https://iris.example/proxy/t/cluster=c/token/serve.v0/v1"
-    replies = [httpx.ConnectError("refused"), httpx.Response(502), httpx.Response(200, json={"data": [{"id": "org/v0"}]})]
+    replies = [
+        httpx.ConnectError("refused"),
+        httpx.Response(502),
+        httpx.Response(200, json={"data": [{"id": "org/v0"}]}),
+    ]
     requested = []
 
     def get(target, timeout):

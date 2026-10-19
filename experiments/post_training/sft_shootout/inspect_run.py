@@ -34,7 +34,9 @@ def show_trial(result_path: StoragePath) -> None:
     phases = {k: seconds(v) for k, v in result.items() if isinstance(v, dict) and "started_at" in v}
     print(f"  seconds total {seconds(result)} phases {phases}")
     agent = result.get("agent_result") or {}
-    print(f"  agent tokens in {agent.get('n_input_tokens')} cached {agent.get('n_cache_tokens')} out {agent.get('n_output_tokens')}")
+    print(
+        f"  agent tokens in {agent.get('n_input_tokens')} cached {agent.get('n_cache_tokens')} out {agent.get('n_output_tokens')}"
+    )
     print(f"  agent metadata {json.dumps(agent.get('metadata'))[:600]}")
     stdout = (result.get("verifier_result") or {}).get("stdout") or ""
     print(f"  verifier stdout tail:\n{stdout[-1500:]}")
@@ -93,7 +95,9 @@ def main() -> None:
     ]
     print(f"  prompt-count mismatches (service, local): {[m for m in mismatch if m[0] != m[1]][:20]}")
     print(f"  latency_s sum {sum(r['latency_s'] for r in chats):.1f}")
-    print(f"  statuses: {sorted({r['status'] for r in records})}; errors: {[r.get('error') for r in records if r.get('error')][:5]}")
+    print(
+        f"  statuses: {sorted({r['status'] for r in records})}; errors: {[r.get('error') for r in records if r.get('error')][:5]}"
+    )
 
 
 if __name__ == "__main__":

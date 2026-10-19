@@ -74,7 +74,9 @@ def rebuild(records: list[dict]) -> tuple[list[dict], dict | None, list[str], li
                 conversation.append(pending)
                 new = new[1:]
         if any(m.get("role") == "assistant" for m in new):
-            problems.append(f"record at message {record['first_message']} adds an assistant message with no logged reply")
+            problems.append(
+                f"record at message {record['first_message']} adds an assistant message with no logged reply"
+            )
         conversation.extend(new)
         pending = assistant_turn(record) if record.get("status") == 200 else None
     if pending is not None:
@@ -183,7 +185,16 @@ def main() -> None:
     with StoragePath(output).open("w") as handle:
         for row in rows:
             handle.write(json.dumps(row) + "\n")
-    print(json.dumps({"trials": len(n_conversations), "conversations": len(rows), "with_problems": sum(1 for r in rows if r["problems"]), "output": output}))
+    print(
+        json.dumps(
+            {
+                "trials": len(n_conversations),
+                "conversations": len(rows),
+                "with_problems": sum(1 for r in rows if r["problems"]),
+                "output": output,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

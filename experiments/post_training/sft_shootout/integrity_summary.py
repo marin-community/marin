@@ -48,13 +48,17 @@ def main() -> None:
     with StoragePath(f"{prefix}/integrity.jsonl").open("w") as handle:
         for row in rows:
             handle.write(json.dumps(row) + "\n")
-    print(json.dumps({
-        "run": prefix,
-        "tasks": len(rows),
-        "as_expected": sum(row["as_expected"] for row in rows),
-        "rewards": Counter(str(row["reward"]) for row in rows),
-        "exceptions": Counter(row["exception"] for row in rows if row["exception"]),
-    }))
+    print(
+        json.dumps(
+            {
+                "run": prefix,
+                "tasks": len(rows),
+                "as_expected": sum(row["as_expected"] for row in rows),
+                "rewards": Counter(str(row["reward"]) for row in rows),
+                "exceptions": Counter(row["exception"] for row in rows if row["exception"]),
+            }
+        )
+    )
     for row in rows:
         if not row["as_expected"]:
             print(json.dumps(row))

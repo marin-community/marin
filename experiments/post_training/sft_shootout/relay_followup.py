@@ -73,7 +73,16 @@ def main() -> None:
         "runs": {task: runs[task] for task in shard["tasks"]},
     }
     StoragePath(args.out).write_text(json.dumps(record, indent=2) + "\n")
-    print(json.dumps({"shard": shard["shard"], "tasks": len(shard["tasks"]), "episodes": sum(episodes.values()), "runs": sum(runs.values())}))
+    print(
+        json.dumps(
+            {
+                "shard": shard["shard"],
+                "tasks": len(shard["tasks"]),
+                "episodes": sum(episodes.values()),
+                "runs": sum(runs.values()),
+            }
+        )
+    )
     print(len(remaining))
 
 

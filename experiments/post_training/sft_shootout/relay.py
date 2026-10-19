@@ -88,7 +88,9 @@ def is_completion_claim(reply: dict) -> bool:
     return False
 
 
-def route(state: TrialState, messages: list[dict], student_prompt_tokens: int, budget_tokens: int) -> tuple[Author, Trigger | None]:
+def route(
+    state: TrialState, messages: list[dict], student_prompt_tokens: int, budget_tokens: int
+) -> tuple[Author, Trigger | None]:
     """Choose who answers this request, before any reply is generated. Updates ``state`` on a takeover."""
     if state.takeover is not None:
         return Author.TEACHER, None

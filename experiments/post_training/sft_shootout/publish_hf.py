@@ -3,15 +3,15 @@
 
 """Publish rebuilt #212 traces to the Hub dataset open-athena/GLM-5.3-tmax-swesmith-k8-traces-2026.10.
 
-    python experiments/post_training/sft_shootout/publish_hf.py --list <traces root>
-        prints every run (plain shard or relay round) that has rebuilt.jsonl, one prefix per line.
-    python experiments/post_training/sft_shootout/publish_hf.py <prefix>... [--upload]
-        converts each run's rebuilt.jsonl to one parquet file (config "attempts" for plain runs, "relay" for
-        relay rounds), drops the excluded tasks, tags held-out tasks from the shard files, and counts capability
-        tokens in every row (scrub_run.count_tokens). Any token stops the script before anything is uploaded.
-        With --upload (needs HF_TOKEN in the env, never printed) it adds the files and the run provenance to
-        the repo in one commit, merges the runs into runs.json and regenerates README.md (hf_README.md plus a
-        section built from runs.json and the pool manifest); files already there are replaced by the same path.
+python experiments/post_training/sft_shootout/publish_hf.py --list <traces root>
+    prints every run (plain shard or relay round) that has rebuilt.jsonl, one prefix per line.
+python experiments/post_training/sft_shootout/publish_hf.py <prefix>... [--upload]
+    converts each run's rebuilt.jsonl to one parquet file (config "attempts" for plain runs, "relay" for
+    relay rounds), drops the excluded tasks, tags held-out tasks from the shard files, and counts capability
+    tokens in every row (scrub_run.count_tokens). Any token stops the script before anything is uploaded.
+    With --upload (needs HF_TOKEN in the env, never printed) it adds the files and the run provenance to
+    the repo in one commit, merges the runs into runs.json and regenerates README.md (hf_README.md plus a
+    section built from runs.json and the pool manifest); files already there are replaced by the same path.
 """
 
 import argparse
@@ -28,7 +28,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 
 sys.path.insert(0, str(Path(__file__).parent))
-from scrub_run import count_tokens  # noqa: E402
+from scrub_run import count_tokens
 
 REPO = "open-athena/GLM-5.3-tmax-swesmith-k8-traces-2026.10"
 README = Path(__file__).parent / "hf_README.md"
@@ -167,7 +167,15 @@ def main() -> None:
     for _, _, info in converted:
         print(json.dumps(info["summary"]))
     tokens = sum(info["summary"]["capability_tokens"] for _, _, info in converted)
-    print(json.dumps({"runs": len(converted), "rows": sum(i["summary"]["rows"] for _, _, i in converted), "capability_tokens": tokens}))
+    print(
+        json.dumps(
+            {
+                "runs": len(converted),
+                "rows": sum(i["summary"]["rows"] for _, _, i in converted),
+                "capability_tokens": tokens,
+            }
+        )
+    )
     if tokens:
         sys.exit("capability tokens found; nothing uploaded")
     if not args.upload:
@@ -188,7 +196,9 @@ def main() -> None:
     ]
     for name, data, info in converted:
         operations.append(CommitOperationAdd(f"data/{name}.parquet", data))
-        operations.append(CommitOperationAdd(f"provenance/{name}.json", json.dumps(info["provenance"], indent=2).encode()))
+        operations.append(
+            CommitOperationAdd(f"provenance/{name}.json", json.dumps(info["provenance"], indent=2).encode())
+        )
     commit = api.create_commit(
         REPO, operations=operations, repo_type="dataset", commit_message=f"Add {len(converted)} runs"
     )

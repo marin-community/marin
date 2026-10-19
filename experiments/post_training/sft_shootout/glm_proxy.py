@@ -63,6 +63,8 @@ class Backend:
     headers: dict[str, str]
     # Returns the backend's current base URL; set for a backend whose address can change while the proxy runs.
     resolve: Callable[[], str] | None = field(default=None, compare=False)
+    # Request fields the proxy sets on every request to this backend, over the agent's (e.g. the reasoning effort).
+    overrides: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -164,7 +166,9 @@ def build_proxy(
             url = base_urls[backend.author]
             try:
                 response = await client.post(
-                    f"{url}/chat/completions", json={**body, "model": backend.model}, headers=backend.headers
+                    f"{url}/chat/completions",
+                    json={**body, **backend.overrides, "model": backend.model},
+                    headers=backend.headers,
                 )
                 if (
                     response.status_code not in GATEWAY_STATUSES
@@ -187,7 +191,14 @@ def build_proxy(
                 await asyncio.sleep(RESOLVE_INTERVAL_S)
 
     def turn_record(backend: Backend, trigger: Trigger | None, response: httpx.Response, latency: float) -> dict:
-        record: dict = {"author": backend.author.value, "trigger": trigger, "status": response.status_code, "latency_s": latency}
+        record: dict = {
+            "author": backend.author.value,
+            "trigger": trigger,
+            "status": response.status_code,
+            "latency_s": latency,
+        }
+        if backend.overrides:
+            record["overrides"] = backend.overrides
         if response.status_code != 200:
             record["error"] = response.text[:2000]
             return record
@@ -255,7 +266,16 @@ def build_proxy(
                     turn = turn_record(teacher, Trigger.COMPLETION_CLAIM, response, latency)
         except Exception as error:  # an unlogged 500 hides proxy failures (#212 SWE relay shard-00 round 3)
             logger.exception("proxy failure for trial %s", trial)
-            log.write({**record, "author": backend.author.value, "trigger": trigger, "status": 502, "latency_s": None, "error": repr(error)[:2000]})
+            log.write(
+                {
+                    **record,
+                    "author": backend.author.value,
+                    "trigger": trigger,
+                    "status": 502,
+                    "latency_s": None,
+                    "error": repr(error)[:2000],
+                }
+            )
             return JSONResponse({"error": f"proxy failure: {type(error).__name__}"}, status_code=502)
         log.write({**record, **turn})
         return Response(response.content, response.status_code, media_type=response.headers.get("content-type"))

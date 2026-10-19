@@ -14,9 +14,9 @@ sampled folders are copied from ``--pool`` there, ready for ``harbor_glm.py --ta
 """
 
 import argparse
+import hashlib
 import json
 import random
-import hashlib
 import shutil
 from collections import defaultdict
 from pathlib import Path

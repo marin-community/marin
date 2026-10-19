@@ -135,8 +135,7 @@ def main() -> None:
         report["relay"] = relay_stats(rows, final)
     if args.manifest:
         repos = {
-            row["task_id"]: row["repo"]
-            for row in map(json.loads, StoragePath(args.manifest).read_text().splitlines())
+            row["task_id"]: row["repo"] for row in map(json.loads, StoragePath(args.manifest).read_text().splitlines())
         }
         per_repo: dict[str, list[list[bool]]] = defaultdict(list)
         for task, passes in by_task.items():

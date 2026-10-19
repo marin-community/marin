@@ -7,6 +7,7 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
+from experiments.post_training.sft_shootout import harbor_glm
 from experiments.post_training.sft_shootout.glm_proxy import Backend, RelayPolicy, RequestLog, build_proxy
 from experiments.post_training.sft_shootout.relay import (
     Author,
@@ -36,7 +37,9 @@ def reply(content: str, tool_calls: list | None = None) -> dict:
     return {
         "id": "r",
         "model": "m",
-        "choices": [{"message": {"role": "assistant", "content": content, "tool_calls": tool_calls}, "finish_reason": "stop"}],
+        "choices": [
+            {"message": {"role": "assistant", "content": content, "tool_calls": tool_calls}, "finish_reason": "stop"}
+        ],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
     }
 
@@ -47,7 +50,11 @@ TERMINUS_ERROR = [
     {"role": "user", "content": "Previous response had parsing errors:\nERROR: No valid JSON found"},
 ]
 # mini-swe-agent drops the reply without a tool call, so its error follows the previous turn's observation.
-MINI_CALL = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": "{}"}}]}
+MINI_CALL = {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": "{}"}}],
+}
 MINI_ERROR = [
     {"role": "user", "content": "task"},
     MINI_CALL,
@@ -68,9 +75,13 @@ def test_format_errors_from_both_harnesses():
 def test_completion_claims_from_both_harnesses():
     assert is_completion_claim({"content": '{"analysis": "", "commands": [], "task_complete": true}'})
     assert not is_completion_claim({"content": '{"commands": [], "task_complete": false}'})
-    submit = {"function": {"name": "bash", "arguments": json.dumps({"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"})}}
+    submit = {
+        "function": {"name": "bash", "arguments": json.dumps({"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"})}
+    }
     assert is_completion_claim({"content": "", "tool_calls": [submit]})
-    assert not is_completion_claim({"content": "", "tool_calls": [{"function": {"name": "bash", "arguments": '{"command": "ls"}'}}]})
+    assert not is_completion_claim(
+        {"content": "", "tool_calls": [{"function": {"name": "bash", "arguments": '{"command": "ls"}'}}]}
+    )
 
 
 def test_route_repairs_once_and_takes_over_on_budget():
@@ -161,7 +172,9 @@ def test_summarization_restart_and_retry_keep_conversations_apart(relay_app):
     from experiments.post_training.sft_shootout.rebuild_traces import rebuild
 
     test_client, student_replies, _, log_path = relay_app
-    student_replies.extend([reply("a1"), reply("a1 again"), reply("summary"), reply("b1"), reply("{\"task_complete\": true}")])
+    student_replies.extend(
+        [reply("a1"), reply("a1 again"), reply("summary"), reply("b1"), reply('{"task_complete": true}')]
+    )
     first = [{"role": "user", "content": "task"}]
     post(test_client, first)
     post(test_client, first)  # retried request: replaces the pending reply
@@ -182,7 +195,12 @@ def test_backend_failure_is_logged_and_returns_502(relay_app):
     response = post(test_client, [{"role": "user", "content": "fix the bug"}])
     assert response.status_code == 502
     (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
-    assert record["status"] == 502 and record["author"] == Author.STUDENT.value and record["trial"] == "t1" and record["error"]
+    assert (
+        record["status"] == 502
+        and record["author"] == Author.STUDENT.value
+        and record["trial"] == "t1"
+        and record["error"]
+    )
 
 
 def test_a_moved_student_is_re_resolved(tmp_path, monkeypatch):
@@ -205,7 +223,9 @@ def test_a_moved_student_is_re_resolved(tmp_path, monkeypatch):
     )
     log_path = tmp_path / "requests.jsonl"
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    app = build_proxy(backend(Author.TEACHER, "http://teacher/v1"), 100, RequestLog(log_path), RelayPolicy(student, 50), client=client)
+    app = build_proxy(
+        backend(Author.TEACHER, "http://teacher/v1"), 100, RequestLog(log_path), RelayPolicy(student, 50), client=client
+    )
     response = post(TestClient(app), [{"role": "user", "content": "fix the bug"}])
     assert response.status_code == 200
     assert calls == ["student-old", "student-new"]
@@ -227,8 +247,36 @@ def test_a_student_behind_a_capability_url_is_retried_through_gateway_errors(tmp
     )
     log_path = tmp_path / "requests.jsonl"
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    app = build_proxy(backend(Author.TEACHER, "http://teacher/v1"), 100, RequestLog(log_path), RelayPolicy(student, 50), client=client)
+    app = build_proxy(
+        backend(Author.TEACHER, "http://teacher/v1"), 100, RequestLog(log_path), RelayPolicy(student, 50), client=client
+    )
     response = post(TestClient(app), [{"role": "user", "content": "fix the bug"}])
     assert response.status_code == 200 and statuses == []
     (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert record["status"] == 200 and record["author"] == Author.STUDENT.value
+
+
+def test_teacher_overrides_are_sent_on_every_request_and_logged(tmp_path):
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json=reply("ls"))
+
+    overrides = harbor_glm.teacher_overrides("low")
+    teacher = Backend(
+        author=Author.TEACHER,
+        base_url="http://teacher/v1",
+        model="glm",
+        tokenizer=WordTokenizer(),
+        headers={},
+        overrides=overrides,
+    )
+    log_path = tmp_path / "requests.jsonl"
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = build_proxy(teacher, 100, RequestLog(log_path), None, client=client)
+    response = post(TestClient(app), [{"role": "user", "content": "fix the bug"}])
+    assert response.status_code == 200
+    assert sent[0]["chat_template_kwargs"] == {"reasoning_effort": "low"} and sent[0]["model"] == "glm"
+    (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert record["overrides"] == overrides
