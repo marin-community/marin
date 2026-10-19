@@ -56,10 +56,19 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from taskcompendium.submission import require_submission_compatibility
 from verifyit.candidate import IN_PROCESS_MODES
-from verifyit.spec import Spec, mode_of
+from verifyit.spec import JudgeSpec, Spec, mode_of
 
 from taskforge.sandbox.factories import MachineHost, container_backend, grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
+from taskforge.spec.judge import (
+    JUDGE_MODELS,
+    JUDGE_QUESTION,
+    JUDGE_SPEC_PATH,
+    JudgeRubricSpec,
+    JudgeStrength,
+    judge_spec_json,
+)
+from taskforge.spec.rubric import Rubric
 
 SHELL_CAPABILITY = "shell"
 NO_MACHINE = EnvironmentRequirements()
@@ -390,6 +399,31 @@ def answer_grader(spec: Spec, *, environment: EnvironmentRequirements | None = N
             "with python_grader"
         )
     return verifyit_package(spec, environment=environment)
+
+
+def judge_grader(rubric: Rubric, reference: str) -> GraderPackage:
+    """An LLM-as-judge grader: a model judge applies ``rubric`` to the answer, reading ``reference`` beside it.
+
+    For deliverables whose prose is the product. The grader is a verifyit ``JudgeSpec`` naming the judge of
+    the default strength (``spec.judge``, a stub the author never sets), with the rubric spec
+    (``JUDGE_SPEC_PATH``) as its context. It runs in a verifier machine on the grader base image.
+
+    Raises:
+        ValueError: ``reference`` is empty.
+    """
+    if not reference.strip():
+        raise ValueError("an LLM-as-judge grader needs a non-empty reference answer")
+    strength = JudgeStrength.DEFAULT
+    spec = JudgeRubricSpec(rubric=rubric, judge_strength=strength)
+    rubric_text = json.dumps(rubric.model_dump(mode="json"), indent=1)
+    judge = JudgeSpec(
+        references=(reference,),
+        question=f"Rubric:\n{rubric_text}\n\n{JUDGE_QUESTION}",
+        context=JUDGE_SPEC_PATH,
+        model=JUDGE_MODELS[strength],
+    )
+    files = (inline_resource(JUDGE_SPEC_PATH, judge_spec_json(spec)),)
+    return verifyit_package(judge, files, environment=grader_environment(None))
 
 
 def assemble(

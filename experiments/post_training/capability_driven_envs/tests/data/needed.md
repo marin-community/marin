@@ -6,6 +6,9 @@ null_reason: null
 environment: container
 solver_machine: null
 verification: composite
+composite:
+  - {kind: decision_model, weight: 0.6}
+  - {kind: code, weight: 0.4}
 research_need: needed
 research_reason: "Realism depends on actual federal statutes, regulations, and DOL guidance text, citations, and current status, which builders cannot derive from the capability record."
 research:

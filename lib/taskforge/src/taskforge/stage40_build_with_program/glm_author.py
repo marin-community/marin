@@ -40,7 +40,7 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
-from taskforge.spec import draft
+from taskforge.spec import draft, rubric
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author import program as program_module
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision
@@ -90,12 +90,20 @@ that purpose.
 `-> Sources`, that calls `research(context, proposal, i)` for every item and returns the findings; \
 `run_build` refuses a program without it ("a build that researches its proposal needs a 'sources' step \
 returning Sources"), even when you already know the facts. Never catch its `BuildFailure`.
-- Prefer `draft.answer_grader` with a verifyit mode that grades in process (exact, numeric, mcq, math, \
-ifeval, json_schema, xml_elements, csv_columns, structured_exact, predicted_action) whenever the \
-answer fits one. Every other verifyit mode, the LLM judge (`JudgeSpec`) included, runs `import verifyit` \
-in a verifier machine, and `GRADER_BASE_IMAGE` has no verifyit ("No module named 'verifyit'"); \
-`grade_candidate` calls no model, so a judge can never be prototyped. Task-specific checks, prose \
-included, belong in a deterministic grader program in a separate verifier machine: \
+- Build the grader of the kind the proposal's `verification` names; `run_build` refuses a draft whose \
+grader is another kind, and refuses a composite proposal outright (no composite grader exists yet). \
+decision_model has no grader in this SDK yet, so `run_build` refuses it too. llm_as_judge, for a reply \
+whose prose is the product: `draft.judge_grader(rubric, reference)`, a `Rubric` (the deliverable, and \
+one `RubricItem` per property a correct reply has: its meaning with the reference values, tolerances and \
+units, the equivalent forms it accepts, how negated or hedged statements count, its weight, and any gate \
+or cap) and the reference reply, nothing else: the judge is the host's choice. A judge runs `import \
+verifyit` in a verifier machine, and `GRADER_BASE_IMAGE` has no verifyit ("No module named \
+'verifyit'"); `grade_candidate` calls no model, so a judge can never be prototyped. Never keyword or \
+regex checks standing in for a judgement. answer_in_box: `draft.answer_grader` with a verifyit mode \
+that grades in process (exact, numeric, mcq, math, ifeval, json_schema, xml_elements, csv_columns, \
+structured_exact, predicted_action), for one value in an unambiguous format. code, only for what only \
+code can probe (running solver-written code, executing files): a deterministic grader program in a \
+separate verifier machine: \
 `draft.python_grader(script, config, environment=draft.grader_environment(image), answer_path=..., \
 timeout=...)` runs `python3 /tests/grade.py` after the attempt, in the task image for a task with one \
 (`publish_image(context, DockerBuild(...))`), otherwise on Taskforge's grader-base image (CPython \
@@ -279,6 +287,7 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "Resources",
             "file",
             "answer_grader",
+            "judge_grader",
             "grader_environment",
             "python_grader",
             "script_grader",
@@ -288,6 +297,7 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "GRADER_VERDICT_PATH",
         ),
     ),
+    ("Rubrics for `draft.judge_grader`", rubric, ("Rubric", "RubricItem", "ItemRole")),
     (
         "Verifyit specs for `draft.answer_grader`",
         verifyit_spec,

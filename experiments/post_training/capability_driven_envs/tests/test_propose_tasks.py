@@ -58,6 +58,7 @@ null_reason: null
 environment: reasoning
 solver_machine: shellsim
 verification: code
+composite: []
 research_need: not_needed
 research_reason: "the recipe and yields are synthetic"
 research: []

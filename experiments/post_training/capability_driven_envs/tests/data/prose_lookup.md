@@ -5,7 +5,8 @@ grounding: unverified
 null_reason: null
 environment: reasoning
 solver_machine: shellsim
-verification: simple
+verification: answer_in_box
+composite: []
 research_need: not_needed
 research_reason: "Baker's-percentage conventions and the arithmetic are standard culinary knowledge with synthetic fixture numbers."
 research: []

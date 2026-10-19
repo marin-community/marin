@@ -131,8 +131,10 @@ targeted changes can make the proposal sound and reject if its core premise cann
 Check for these observed author errors: forbidding code verification for reasoning or ShellSim
 because the SOLVER lacks processes (the private evaluator can execute code for both); claiming a
 custom native executable runs in ShellSim without a supported implementation (an environment
-feasibility failure). Consider whether an exact or code grader would replace an unnecessary judge,
-without forcing code onto genuinely qualitative deliverables.
+feasibility failure). Check the verification kind against the rule: decision_model wherever a perfect
+answer with its prose deleted can still be told from a wrong one; llm_as_judge only where the prose is
+the product; answer_in_box only for an answer whose format is unambiguous; code only for what code
+alone can probe (tests, running systems); composite only as a weighted list of those kinds.
 
 STRUCTURAL CHECKS lists deterministic checks that already ran on the document. FAIL means the
 property is false as stated; SKIP means the check did not apply and is never a pass. Advisory

@@ -124,14 +124,14 @@ def plan(slots: list[dict], excluded: list[dict]) -> dict:
 
 def test_slot_plan_requires_n_slots_and_rejects_using_an_excluded_pairing():
     plan_type = slot_plan_type(2, ALL_ENVIRONMENTS)
-    ok = plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "judge", "null")], []))
+    ok = plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "llm_as_judge", "null")], []))
     assert [s.status for s in ok.slots] == [SlotStatus.PROPOSE, SlotStatus.NULL]
 
     with pytest.raises(ValidationError):
         plan_type.model_validate(plan([slot(1, "reasoning", "code")], []))
-    excluded = [{"environment": "container", "verification": "judge", "reason": "x"}]
+    excluded = [{"environment": "container", "verification": "llm_as_judge", "reason": "x"}]
     with pytest.raises(ValidationError, match="excluded_combinations"):
-        plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "judge")], excluded))
+        plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "llm_as_judge")], excluded))
 
 
 @pytest.mark.parametrize(
@@ -146,11 +146,22 @@ def test_slot_plan_declares_a_solver_machine_exactly_for_an_imageless_slot(envir
 
 def test_slot_plan_caps_how_many_proposed_slots_share_a_pairing():
     plan_type = slot_plan_type(4, ALL_ENVIRONMENTS)
-    crowded = [slot(n, "reasoning", "code") for n in (1, 2, 3)] + [slot(4, "container", "judge")]
+    crowded = [slot(n, "reasoning", "code") for n in (1, 2, 3)] + [slot(4, "container", "llm_as_judge")]
     with pytest.raises(ValidationError, match="reasoning x code"):
         plan_type.model_validate(plan(crowded, []))
     crowded[2] = slot(3, "reasoning", "code", "null")
     assert plan_type.model_validate(plan(crowded, [])).slots[2].status is SlotStatus.NULL
+
+
+def test_decision_model_slots_share_an_environment_without_the_pairing_cap():
+    plan_type = slot_plan_type(2, ALL_ENVIRONMENTS)
+    both = plan_type.model_validate(
+        plan([slot(1, "reasoning", "decision_model"), slot(2, "reasoning", "decision_model")], [])
+    )
+    assert [s.verification for s in both.slots] == [Verification.DECISION_MODEL, Verification.DECISION_MODEL]
+
+    with pytest.raises(ValidationError, match="reasoning x code"):
+        plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "reasoning", "code")], []))
 
 
 def test_plan_with_a_slot_in_an_unavailable_environment_fails_validation():
@@ -192,7 +203,7 @@ def filled_document(idea, number: int, research_need: ResearchNeed = ResearchNee
         document_template(f"{CAPABILITY_ID}/{number}", idea)
         .replace("<reasoning | shellsim | container>", "shellsim")
         .replace("<none (reasoning only) | shellsim | cpython | packages, or null for container>", "cpython")
-        .replace("<simple | code | judge | composite>", "code")
+        .replace("<decision_model | answer_in_box | code | llm_as_judge | composite>", "decision_model")
         .replace("<needed | not_needed>", str(research_need))
         .replace("<web | github>", "github")
     )
@@ -217,13 +228,13 @@ def test_the_filled_template_is_a_document_the_regex_accepts_and_the_identity_is
 
 def test_null_slot_is_not_needed(ideas):
     idea = ideas[CAPABILITY_ID]
-    planned = PlannedSlot.model_validate({**slot(7, "reasoning", "judge", "null"), "solver_machine": "packages"})
+    planned = PlannedSlot.model_validate({**slot(7, "reasoning", "llm_as_judge", "null"), "solver_machine": "packages"})
     outcome = null_slot_proposal(idea, planned)
     assert outcome.completions == ()
     proposal = outcome.proposal
     assert proposal.header.null_reason == "no grader"
     assert proposal.header.solver_machine is SolverMachine.PACKAGES
-    assert proposal.header.verification is Verification.JUDGE
+    assert proposal.header.verification is Verification.LLM_AS_JUDGE
     assert proposal.header.research_need is ResearchNeed.NOT_NEEDED
     assert proposal.header.research_reason == "null slot: no grader"
     assert parse(render(proposal)) == proposal
@@ -326,7 +337,7 @@ def test_a_plan_still_invalid_after_its_repair_raises_before_any_document_is_wri
 def test_propose_returns_one_outcome_per_slot_in_order_without_calling_the_model_for_null_slots(ideas):
     idea = ideas[CAPABILITY_ID]
     model = ScriptedModel()
-    model.reply(json.dumps(plan([slot(1, "reasoning", "judge", "null"), slot(2, "shellsim", "code")], [])))
+    model.reply(json.dumps(plan([slot(1, "reasoning", "llm_as_judge", "null"), slot(2, "shellsim", "code")], [])))
     model.reply(filled_document(idea, 2))
 
     batch: ProposalBatch = asyncio.run(CapabilitySource(model, LLMPolicy(), ALL_ENVIRONMENTS).propose(idea, 2))

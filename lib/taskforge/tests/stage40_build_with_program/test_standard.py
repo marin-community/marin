@@ -21,7 +21,7 @@ from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import VERDICT_REWARD, answer_grader
-from taskforge.stage10_proposal.model import SolverMachine
+from taskforge.stage10_proposal.model import SolverMachine, TaskProposal, parse
 from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock
 from taskforge.stage40_build_with_program.outputs import Fixtures, Grader, Sources
@@ -45,6 +45,7 @@ from tests.sandbox.fixture_images import SlowGraderFactory
 from tests.stage40_build_with_program.conftest import (
     FACTORIES,
     IMAGE,
+    PROPOSAL,
     SAMPLING,
     WORKPIECE,
     RecordingImageBuilder,
@@ -74,6 +75,12 @@ REFERENCE_REPLY = "6 * 7 = 42\nANSWER = 42"
 SHELLSIM = draft.requirements(image=None, workdir=WORKDIR)
 
 
+@pytest.fixture
+def proposal() -> TaskProposal:
+    """The shared proposal, declaring the code verification the grader programs below implement."""
+    return parse(PROPOSAL.replace("verification: answer_in_box", "verification: code"))
+
+
 def file(path: str, content: str) -> dict:
     return {"path": path, "content": content, "executable": False}
 
@@ -82,6 +89,7 @@ def grader_call(script: str) -> dict:
     return {
         "kind": "script",
         "script": script,
+        "rubric": None,
         "private_files": [],
         "expected": "",
         "tolerance": 0.0,
