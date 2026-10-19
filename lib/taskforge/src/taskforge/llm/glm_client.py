@@ -111,8 +111,8 @@ ERROR_BODY_LIMIT = 2000
 CONNECT_TIMEOUT = 10.0
 WRITE_TIMEOUT = 30.0
 KEEPALIVE_EXPIRY = 30.0
-"""Seconds an idle pooled connection may be reused. A relay path can drop an idle connection without a RST, so a
-long author turn would otherwise write into a dead socket and read nothing until the read timeout."""
+"""Seconds an idle pooled connection may be reused, so a connection idle through a long author turn is not
+reused blindly; a stalled read also retires the whole pool (``_reset_pool``)."""
 POOL_RESET_INTERVAL = 30.0
 """Least seconds between two pool resets, so a burst of stalls on one bad path replaces the pool once."""
 HEALTH_TIMEOUT = 20.0
@@ -354,7 +354,11 @@ class GlmClient:
         )
 
     def _reset_pool(self) -> None:
-        """Open a fresh connection pool after a stalled read, so the retry cannot reuse a silently dead socket.
+        """Open a fresh connection pool after a stalled read, so the retry cannot reuse a connection that may be dead.
+
+        A stall has other causes the reset does not touch, such as the relay refusing connections or this process's
+        own event loop blocking for longer than the connect timeout; the bounded retry with backoff carries the call
+        through those, and the reset interval keeps the two from compounding into a reconnect storm.
 
         The old pool is retired, not closed: other calls may still be streaming on its live connections. Retired
         pools close with the client.
