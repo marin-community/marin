@@ -6,6 +6,7 @@
 import asyncio
 import base64
 import json
+import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -313,20 +314,36 @@ async def test_a_task_off_the_declared_solver_machine_fails_the_build_as_the_pro
 
     assert failure.value.step == "task"
     assert failure.value.message == (
-        f"the task machine is solver_machine shellsim, but the proposal declares {declared}; build the machine the "
+        f"the task runs on solver_machine shellsim, but the proposal declares {declared}; build the machine the "
         "proposal declares"
     )
     assert not (tmp_path / "round" / DRAFT_DIR).exists()
 
 
-async def test_a_task_without_a_machine_fails_the_build_when_the_proposal_declares_one(tmp_path, proposal, services):
-    @rl_env_build_sink
-    async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage) -> TaskSpec:
-        shell = toy_task(context.workpiece_id, numbers, grader, "Multiply 6 by 7.")
-        return shell.model_copy(update={"environment_requirements": EnvironmentRequirements()})
+@rl_env_build_sink
+async def machineless_task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage) -> TaskSpec:
+    shell = toy_task(context.workpiece_id, numbers, grader, "Multiply 6 by 7.")
+    return shell.model_copy(update={"environment_requirements": EnvironmentRequirements()})
 
-    with pytest.raises(BuildFailure, match="the task has no machine, but the proposal declares solver_machine shellsim"):
-        await build(tmp_path, proposal, services, rl_env_build_program(numbers, grader, sink=task))
+
+async def test_a_task_without_a_machine_fails_the_build_when_the_proposal_declares_one(tmp_path, proposal, services):
+    expected = (
+        "the task runs on no machine (solver_machine none), but the proposal declares solver_machine shellsim; build "
+        "the machine the proposal declares"
+    )
+
+    with pytest.raises(BuildFailure, match=re.escape(expected)):
+        await build(tmp_path, proposal, services, rl_env_build_program(numbers, grader, sink=machineless_task))
+
+
+async def test_a_task_without_a_machine_builds_when_the_proposal_declares_none(tmp_path, proposal, services):
+    """A reasoning proposal may pin no machine: the solver answers in the conversation and no sandbox starts."""
+    program = rl_env_build_program(numbers, grader, sink=machineless_task)
+
+    draft = await build(tmp_path, declaring(proposal, SolverMachine.NONE), services, program)
+
+    assert draft.task.environment_requirements == EnvironmentRequirements()
+    assert (tmp_path / "round" / DRAFT_DIR).exists()
 
 
 async def test_a_step_past_its_call_budget_fails_the_build_as_the_programs(

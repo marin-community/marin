@@ -304,6 +304,7 @@ async def test_a_container_task_publishes_its_image_and_grades_in_a_copy_of_it(c
 @pytest.mark.parametrize(
     ("machine", "packages", "facts"),
     [
+        (SolverMachine.NONE, [], "The solver has no machine"),
         (SolverMachine.SHELLSIM, [], "The task machine is ShellSim"),
         (SolverMachine.CPYTHON, [], "The task machine is a container with CPython 3.12"),
         (SolverMachine.PACKAGES, ["numpy"], "the PyPI packages you list"),

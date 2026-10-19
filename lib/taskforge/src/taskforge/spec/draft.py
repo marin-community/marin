@@ -62,6 +62,8 @@ from taskforge.sandbox.factories import MachineHost, container_backend, grading_
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 
 SHELL_CAPABILITY = "shell"
+NO_MACHINE = EnvironmentRequirements()
+"""The environment of a task without a machine: the solver answers in the conversation, with no tools."""
 FILESYSTEM_CAPABILITY = "filesystem"
 SHELLSIM_CPYTHON = PackageSpec(pypi_packages=())
 """The software of a task machine without an image: the ports catalog's CPython and no PyPI packages.
@@ -409,9 +411,10 @@ def assemble(
 
     ``answer_format`` says how the model is asked for its final answer and how the answer is read
     from its conversation; a file or workspace-state task carries one too, which grading never
-    reads. ``environment`` is the task machine (``requirements(...)``) or ``None`` for a task
-    without one. ``files`` are the agent-visible files installed relative to the machine root; the
-    grader's files stay private, so none of them may have the same bytes as an agent-visible file.
+    reads. ``environment`` is the task machine (``requirements(...)``), or ``NO_MACHINE`` or ``None``
+    for a task without one. ``files`` are the agent-visible files installed relative to the machine
+    root; the grader's files stay private, so none of them may have the same bytes as an
+    agent-visible file.
 
     Raises:
         ValueError: TaskSpec validation failed, files or output paths were given without a task
@@ -420,6 +423,8 @@ def assemble(
             grader content is agent-visible. TaskSpec validation covers output paths that are not
             absolute and normalized or that reach the grader's private directories.
     """
+    if environment == NO_MACHINE:
+        environment = None
     if environment is None and (files or output_paths):
         raise ValueError("Files and output paths require a task machine")
     if environment is not None and SHELL_CAPABILITY not in environment.capabilities:

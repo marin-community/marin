@@ -253,6 +253,11 @@ def test_a_declared_machine_the_host_cannot_provide_is_the_hosts_failure(service
     assert failure.value.cause == cause
 
 
+def test_a_proposal_that_declares_no_machine_needs_nothing_from_the_host(services, proposal):
+    """``services`` has no image builder and no local backend, and a machine-less task starts no sandbox."""
+    machine_available(services, declaring(proposal, SolverMachine.NONE))
+
+
 @pytest.mark.parametrize("machine", [None, *list(SolverMachine)])
 def test_a_host_with_an_image_builder_and_the_local_backend_provides_every_machine(services, proposal, machine):
     able = dataclasses.replace(

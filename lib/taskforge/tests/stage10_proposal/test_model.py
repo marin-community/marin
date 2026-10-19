@@ -120,9 +120,15 @@ def test_authored_document_parses_to_typed_header_and_canonical_form_is_stable()
     assert parse(canonical).digest == proposal.digest
 
 
-@pytest.mark.parametrize("machine", list(SolverMachine))
-def test_an_imageless_proposal_declares_its_solver_machine(machine):
-    text = AUTHORED.replace("environment: container", "environment: shellsim").replace(
+@pytest.mark.parametrize(
+    ("environment", "machine"),
+    [
+        *((Environment.REASONING, machine) for machine in SolverMachine),
+        *((Environment.SHELLSIM, machine) for machine in SolverMachine if machine is not SolverMachine.NONE),
+    ],
+)
+def test_an_imageless_proposal_declares_its_solver_machine(environment, machine):
+    text = AUTHORED.replace("environment: container", f"environment: {environment}").replace(
         "solver_machine: null", f"solver_machine: {machine}"
     )
 
@@ -132,6 +138,16 @@ def test_an_imageless_proposal_declares_its_solver_machine(machine):
     assert f"solver_machine: {machine}\n" in render(proposal)
     assert parse(render(proposal)) == proposal
     assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), render(proposal))
+
+
+def test_only_a_reasoning_proposal_declares_no_machine():
+    text = AUTHORED.replace("environment: container", "environment: shellsim").replace(
+        "solver_machine: null", "solver_machine: none"
+    )
+
+    with pytest.raises(ProposalFormatError, match="only a reasoning proposal may declare none"):
+        parse(text)
+    assert not re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), text)
 
 
 @pytest.mark.parametrize(

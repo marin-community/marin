@@ -70,8 +70,9 @@ round-trip it and `digest` is the sha256 of the canonical form. `parse` also che
 decision: `research_need: needed` lists at least one `research` item and `not_needed` none, and a
 non-null body cites every item, and only listed items, as `research[i]`. `solver_machine` pins the
 solver's machine: `null` for a container proposal, which runs in the image its build publishes, and
-`shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one. The proposer
-or triage writes it, and the build keeps it.
+`none`, `shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one, where
+`none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
+The proposer or triage writes it, and the build keeps it.
 `document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
 field that constrains a completion to the canonical layout for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
@@ -271,9 +272,10 @@ sources(proposal) -> fixtures(proposal, sources) -> requirements(proposal, fixtu
 `sources` researches each research item of the proposal on the web, and
 `run_build(research=ResearchRequirement.ENFORCED)` fails a build whose `Sources` lacks a finding for one of them.
 `fixtures` writes the files for the solver machine the proposal declares, listing PyPI packages only for
-a package machine, and `requirements` builds that machine. `run_build` refuses a task whose machine is
-not the declared one (`check_solver_machine`) as a `BuildFailure`, the program's, so no revision can
-move the solver between ShellSim, CPython and a container. Nor can the host: before anything runs,
+a package machine and no files for `none`, and `requirements` builds that machine (`draft.NO_MACHINE`
+for `none`). `run_build` refuses a task whose machine is not the declared one (`check_solver_machine`)
+as a `BuildFailure`, the program's, so no revision can move the solver between no machine, ShellSim,
+CPython and a container. Nor can the host: before anything runs,
 `run_build` and the agentic author's `author_round` call `infrastructure.machine_available`, which
 raises `NO_IMAGE_BUILDER` for a container proposal on a host without an image builder and `NO_FACTORY`
 for a package machine on a host without the local backend, so the item ends as the host's, with no

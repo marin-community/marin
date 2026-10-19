@@ -472,10 +472,12 @@ def test_python_grader_writes_its_program_and_config_under_tests():
     [
         ({"files": (file("workspace/a", "1"),)}, "require a task machine"),
         ({"output_paths": ("/workspace/answer",)}, "require a task machine"),
-        ({"environment": EnvironmentRequirements()}, "'shell' capability"),
+        ({"environment": EnvironmentRequirements(), "files": (file("workspace/a", "1"),)}, "require a task machine"),
+        ({"environment": EnvironmentRequirements(capabilities=(FILESYSTEM_CAPABILITY,))}, "'shell' capability"),
     ],
 )
 def test_assemble_rejects_machine_inputs_without_a_shell_task_machine(fields: dict[str, Any], message):
+    """``NO_MACHINE`` (an empty requirements) means no task machine, exactly as ``None`` does."""
     grader = answer_grader(ExactSpec(expected=("12",)))
     with pytest.raises(ValueError, match=message):
         arguments: dict[str, Any] = {"environment": None, **fields}

@@ -14,10 +14,11 @@ The steps, in run order:
 2. ``fixtures`` writes the solver-visible files and the private reference data for the solver
    machine the proposal declares (``solver_machine``), and lists the PyPI packages of a package
    machine.
-3. ``requirements`` returns the declared task machine: ShellSim, Taskforge's grader-base image for
-   CPython, or a package machine (``draft.requirements(packages=...)``), which needs no image. A
-   container proposal gets a ``DockerBuild``, which ``publish_image`` pushes; the step's output
-   memoizes the pinned reference. ``run_build`` refuses a task whose machine is not the declared one.
+3. ``requirements`` returns the declared task machine: none (``draft.NO_MACHINE``, the solver answers
+   in the conversation), ShellSim, Taskforge's grader-base image for CPython, or a package machine
+   (``draft.requirements(packages=...)``), which needs no image. A container proposal gets a
+   ``DockerBuild``, which ``publish_image`` pushes; the step's output memoizes the pinned reference.
+   ``run_build`` refuses a task whose machine is not the declared one.
 4. ``grader`` writes the grader: an in-process verifyit grader (exact, numeric, math, mcq) when the
    answer is one value, otherwise a Python grader program in a verifier machine. Before it returns,
    the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
@@ -116,6 +117,8 @@ async def requirements(
     context: RLEnvBuildContext, proposal: TaskProposal, fixtures: Fixtures
 ) -> EnvironmentRequirements:
     machine = proposal.header.solver_machine
+    if machine is SolverMachine.NONE:
+        return draft.NO_MACHINE
     if machine is not None:
         image = GRADER_BASE_IMAGE if machine is SolverMachine.CPYTHON else None
         return draft.requirements(image=image, packages=fixtures.packages, workdir=WORKDIR)

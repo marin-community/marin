@@ -191,7 +191,7 @@ def filled_document(idea, number: int, research_need: ResearchNeed = ResearchNee
     document = (
         document_template(f"{CAPABILITY_ID}/{number}", idea)
         .replace("<reasoning | shellsim | container>", "shellsim")
-        .replace("<shellsim | cpython | packages, or null for container>", "cpython")
+        .replace("<none (reasoning only) | shellsim | cpython | packages, or null for container>", "cpython")
         .replace("<simple | code | judge | composite>", "code")
         .replace("<needed | not_needed>", str(research_need))
         .replace("<web | github>", "github")

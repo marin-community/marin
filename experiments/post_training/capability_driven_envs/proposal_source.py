@@ -89,7 +89,8 @@ class PlannedSlot(BaseModel):
     workflow: str = Field(description="The real workflow the task reproduces.")
     environment: Environment = Field(description="The solver's workspace and tools.")
     solver_machine: SolverMachine | None = Field(
-        description="The solver's machine for a reasoning or shellsim slot; null for a container slot."
+        description="The solver's machine for a reasoning or shellsim slot (none, no machine, for reasoning only); "
+        "null for a container slot."
     )
     verification: Verification = Field(description="How the private evaluator grades the task.")
     distinctive_challenge: str = Field(description="What sets this task apart from the other slots.")
@@ -135,6 +136,10 @@ class SlotPlan(BaseModel):
                 raise ValueError(
                     f"slot {s.slot} is {s.environment} with solver_machine {s.solver_machine}; solver_machine is "
                     "null exactly for a container slot"
+                )
+            if s.solver_machine is SolverMachine.NONE and s.environment is not Environment.REASONING:
+                raise ValueError(
+                    f"slot {s.slot} is {s.environment} with solver_machine none; only a reasoning slot has no machine"
                 )
             if s.status is SlotStatus.NULL and not (s.reason and s.reason.strip()):
                 raise ValueError(f"slot {s.slot} is null and needs a substantive reason")
@@ -261,7 +266,7 @@ source: {{kind: capability, ref: "{ref}", hash: "{hash}"}}
 grounding: unverified
 null_reason: null
 environment: <reasoning | shellsim | container>
-solver_machine: <shellsim | cpython | packages, or null for container>
+solver_machine: <none (reasoning only) | shellsim | cpython | packages, or null for container>
 verification: <simple | code | judge | composite>
 research_need: <needed | not_needed>
 research_reason: "<one line: what does or does not require looking anything up>"

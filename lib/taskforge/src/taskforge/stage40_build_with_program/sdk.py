@@ -154,6 +154,12 @@ The task machine is a container started from the task image, without network. Th
 never installed in the solver's machine.\
 """
 
+NO_MACHINE_FACTS = """\
+The solver has no machine: it reads the instructions and replies in the conversation, with no tools and \
+no files. Everything the solver needs is in the instructions, so agent_files is empty; grader-only \
+reference data goes in private_files.\
+"""
+
 SCRIPT_CONTRACT = """\
 The grader is `python3 {tests}/{script}`, run after the solver finishes in a fresh machine from \
 Taskforge's grader-base image: CPython 3.12 with the standard library only, as root, working \
@@ -314,8 +320,10 @@ def files_text(files: Sequence[TaskResource], root: str) -> str:
 
 
 def solver_machine(requirements: EnvironmentRequirements) -> SolverMachine | None:
-    """The solver machine ``requirements`` (a ``draft.requirements`` result) describe, or ``None`` for the
-    task's own image."""
+    """The solver machine ``requirements`` (a ``draft.requirements`` result, or ``draft.NO_MACHINE``) describe,
+    or ``None`` for the task's own image."""
+    if draft.SHELL_CAPABILITY not in requirements.capabilities:
+        return SolverMachine.NONE
     if requirements.docker_image == GRADER_BASE_IMAGE:
         return SolverMachine.CPYTHON
     if requirements.docker_image is not None:
@@ -328,6 +336,8 @@ def solver_machine(requirements: EnvironmentRequirements) -> SolverMachine | Non
 def _facts(machine: SolverMachine | None, packages: str) -> str:
     if machine is None:
         return CONTAINER_FACTS.format(workdir=WORKDIR)
+    if machine is SolverMachine.NONE:
+        return NO_MACHINE_FACTS
     if machine is SolverMachine.PACKAGES:
         return PACKAGES_FACTS.format(workdir=WORKDIR, packages=packages)
     if machine is SolverMachine.CPYTHON:
@@ -385,10 +395,11 @@ async def structured[T: BaseModel](context: RLEnvBuildContext, messages: Sequenc
 
 
 def packages_declared(proposal: TaskProposal) -> Callable[[FixturesDraft], Awaitable[str | None]]:
-    """The fixtures check that sends back packages the proposal's declared machine does not install.
+    """The fixtures check that sends back fixtures the proposal's declared machine cannot hold.
 
     A proposal that declares ``solver_machine: packages`` needs at least one package; any other
-    proposal lists none, since its machine has no packages to install.
+    proposal lists none, since its machine has no packages to install. A proposal that declares
+    ``solver_machine: none`` has no machine to install files in, so it ships no solver-visible files.
     """
     machine = proposal.header.solver_machine
 
@@ -398,6 +409,11 @@ def packages_declared(proposal: TaskProposal) -> Callable[[FixturesDraft], Await
         if machine is not SolverMachine.PACKAGES and submitted.packages:
             declared = "a container" if machine is None else f"solver_machine: {machine}"
             return f"the proposal declares {declared}, which installs no packages; list none"
+        if machine is SolverMachine.NONE and submitted.agent_files:
+            return (
+                "the proposal declares solver_machine: none, so the solver has no machine and no files; put what "
+                "the solver needs in the instructions and list no agent_files"
+            )
         return None
 
     return problem
