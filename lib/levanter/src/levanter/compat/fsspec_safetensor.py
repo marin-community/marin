@@ -267,7 +267,7 @@ async def read_safetensors_fsspec(
                     offset=offset,
                 ).reshape(record.shape)
 
-                if dtype_override is not None and np.issubdtype(tensor_np.dtype, np.floating):
+                if dtype_override is not None and jnp.issubdtype(tensor_np.dtype, jnp.floating):
                     tensor_np = tensor_np.astype(np.dtype(dtype_override), copy=False)
 
                 sharding = sharding_map[record.key]
