@@ -65,12 +65,21 @@ def swe_exit_status(run: str, trial_name: str) -> str | None:
     return json.loads(path.read_text()).get("info", {}).get("exit_status") if path.exists() else None
 
 
-def read_run(run: str, tasks: set[str]) -> tuple[dict[str, dict], list[int], dict[str, int]]:
-    """({trial_id: trial}, reasoning tokens per teacher turn, {trial_id: context tokens}) for the listed tasks."""
+def read_run(run: str, tasks: set[str]) -> tuple[dict[str, dict], list[int], dict[str, int], int]:
+    """({trial_id: trial}, reasoning tokens per teacher turn, {trial_id: context tokens}) for the listed tasks.
+
+    rebuilt.jsonl holds every Harbor attempt of a trial (retries after a harness error); only the final attempt counts.
+    """
+    rows = [json.loads(line) for line in StoragePath(f"{run}/rebuilt.jsonl").read_text().splitlines()]
+    final: dict[str, int] = {}
+    for row in rows:
+        final[row["trial_name"]] = max(final.get(row["trial_name"], -1), row.get("retry", 0))
+    retried_attempts = len(
+        {row["trial_id"] for row in rows if row["task_id"] in tasks and row.get("retry", 0) < final[row["trial_name"]]}
+    )
     trials: dict[str, dict] = {}
-    for line in StoragePath(f"{run}/rebuilt.jsonl").read_text().splitlines():
-        row = json.loads(line)
-        if row["task_id"] not in tasks:
+    for row in rows:
+        if row["task_id"] not in tasks or row.get("retry", 0) != final[row["trial_name"]]:
             continue
         trial = trials.setdefault(
             row["trial_id"],
@@ -100,7 +109,7 @@ def read_run(run: str, tasks: set[str]) -> tuple[dict[str, dict], list[int], dic
         usage = record["usage"]
         reasoning.append((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
         context[record["trial"]] = max(context[record["trial"]], usage["prompt_tokens"] + usage["completion_tokens"])
-    return trials, reasoning, context
+    return trials, reasoning, context, retried_attempts
 
 
 def main() -> None:
@@ -120,9 +129,10 @@ def main() -> None:
             runs += sorted(str(p).rstrip("/") for p in StoragePath(run[:-2]).ls() if (p / "rebuilt.jsonl").exists())
         else:
             runs.append(run.rstrip("/"))
-    trials, reasoning, context = {}, [], {}
+    trials, reasoning, context, retried = {}, [], {}, 0
     with ThreadPoolExecutor(8) as pool:
-        for run_trials, run_reasoning, run_context in pool.map(lambda r: read_run(r, tasks), runs):
+        for run_trials, run_reasoning, run_context, run_retried in pool.map(lambda r: read_run(r, tasks), runs):
+            retried += run_retried
             trials.update(run_trials)
             reasoning += run_reasoning
             context.update(run_context)
@@ -167,6 +177,7 @@ def main() -> None:
                 "tasks_clean_passed": len({t["task_id"] for t in clean}),
                 "cut_by_window": round(sum(t["cut"] for t in values) / len(values), 4),
                 "exceptions": sum(bool(t["exception"]) for t in values),
+                "retried_attempts": retried,
                 "reasoning_per_turn": summary(reasoning),
                 "zero_reasoning_turn_share": (
                     round(sum(r == 0 for r in reasoning) / len(reasoning), 4) if reasoning else None
