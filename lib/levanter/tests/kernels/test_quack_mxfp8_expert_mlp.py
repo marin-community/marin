@@ -329,7 +329,7 @@ def test_mxfp8_expert_backward_wgrads_stay_within_mxfp8_error_of_the_exact_mlp(g
     reference = _exact_swiglu_experts if gated else _exact_relu2_experts
     fused, (dx, row_dot), bf16_wgrads, unfused_wgrads = jax.jit(run)(rows, w_up, w_down, dy)
     active = slice(0, _NUM_TOKENS)
-    _, exact_dw_up, exact_dw_down = jax.jit(lambda *a: _reference_run(reference, *a))(
+    _, _, exact_dw_up, exact_dw_down = jax.jit(lambda *a: _reference_run(reference, *a))(
         x[active], w_up, w_down, dy[active]
     )
     # The fused backward's input gradient is the activation-only path's: its row quantization is the same.
