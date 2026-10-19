@@ -36,9 +36,7 @@ SHORTEST_SOURCE_QUOTA_TABLE_PATH = (
 )
 POOLED_TABLE = "__all__"
 # Token-weighted ridge-score quantiles per source, from the ridge scored pool of the 10.7B-token pool.
-RIDGE_SOURCE_QUOTA_TABLE_PATH = (
-    "s3://marin-us-east-02a/marin/fast-track/probe-tables/ridge_source_quota_table.json"
-)
+RIDGE_SOURCE_QUOTA_TABLE_PATH = "s3://marin-us-east-02a/marin/fast-track/probe-tables/ridge_source_quota_table.json"
 
 
 def inverted_ridge() -> DocumentQualityScorer:
