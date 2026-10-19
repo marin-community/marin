@@ -114,15 +114,14 @@ def test_apply_output_path_sets_run_specific_temp_checkpoints(trainer_config):
 
 
 @pytest.mark.parametrize(
-    ("previous_bucket", "temp_override", "write_bucket"),
+    ("temp_override", "write_bucket"),
     [
-        ("marin-us-east-02a", None, "marin-us-east-08a"),
-        ("hero-checkpoints", None, "marin-us-east-08a"),
-        ("marin-us-east-08a", "s3://hero-checkpoints", "hero-checkpoints"),
+        (None, "marin-us-east-08a"),
+        ("s3://marin-us-west-04a", "marin-us-west-04a"),
     ],
 )
-def test_coreweave_resume_across_scratch_cutover_finds_latest_checkpoint(
-    trainer_config, previous_bucket, temp_override, write_bucket, monkeypatch, tmp_path
+def test_coreweave_resume_searches_permanent_and_configured_scratch(
+    trainer_config, temp_override, write_bucket, monkeypatch, tmp_path
 ):
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     if temp_override is not None:
@@ -133,7 +132,7 @@ def test_coreweave_resume_across_scratch_cutover_finds_latest_checkpoint(
     permanent = f"{output_path}/checkpoints"
     key = f"marin-us-east-02a/marin/{tmp_path.name}/checkpoints"
     destination = f"s3://{write_bucket}/tmp/ttl=14d/checkpoints-temp/{key}"
-    previous = f"s3://{previous_bucket}/tmp/ttl=14d/checkpoints-temp/{key}"
+    previous = f"s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/{key}"
     filesystem = MemoryFileSystem()
     for root, step in [(permanent, 10), (destination, 20), (previous, 30)]:
         checkpoint = prefix_join(root, f"step-{step}")
@@ -144,7 +143,8 @@ def test_coreweave_resume_across_scratch_cutover_finds_latest_checkpoint(
         )
 
     paths = trainer.checkpoint_search_paths("test-run")
-    assert discover_checkpoint_candidates(*paths, fs=filesystem)[-1].path == f"{previous}/step-30"
+    assert paths == [permanent, destination]
+    assert discover_checkpoint_candidates(*paths, fs=filesystem)[-1].path == f"{destination}/step-20"
     assert trainer.checkpointer.temporary_base_path == destination
 
 
