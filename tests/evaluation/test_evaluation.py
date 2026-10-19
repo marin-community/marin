@@ -24,8 +24,10 @@ from finestore.eval import (
 )
 from finestore.reader import ReadView
 from finestore.store import DataStore
+from fray.types import CpuConfig, JobStatus, ResourceConfig, create_environment
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
+from levanter.model_cache import DEFAULT_COMPLETE_MARKER
 from marin.evaluation.eval_policy import HARBOR_COMMIT, SEPTEMBER_16_VERSION, source_config_digest
 from marin.evaluation.evalchemy.runner import (
     EvalchemyExecutor,
@@ -73,11 +75,16 @@ from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFil
 from marin.external_dependencies import EVALCHEMY, HARBOR
 from marin.inference.config import (
     EffectiveServing,
+    IrisConfig,
+    RemoteInferenceConfig,
     ResolvedModelLocator,
+    ServedModelConfig,
     SpeculativeMethod,
     SpeculativeServingConfig,
+    VllmEngineConfig,
 )
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
+from marin.inference.model_preparation import model_cache_entry, resolve_model_path
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.storage_path import StoragePath
@@ -290,6 +297,7 @@ def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
         ),
     )
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
+    monkeypatch.setattr("marin.evaluation.runner._prepare_inference_model", lambda config, *_args: config)
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
         lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
@@ -344,12 +352,96 @@ def _evaluate_with_session(
         patch("marin.evaluation.runner.configure_coreweave_s3", lambda: None),
         patch("marin.evaluation.runner.iris_ctx", lambda: context),
         patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
+        patch("marin.evaluation.runner._prepare_inference_model", lambda config, *_args: config),
         patch(
             "marin.evaluation.runner.inference_config_for_model",
             lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
         ),
     ):
         return _run_test_batch(batch)
+
+
+@pytest.mark.parametrize("cache_state", ["miss", "hit", "failure"])
+def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypatch, cache_state):
+    revision = "a" * 40
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "cache"))
+    monkeypatch.setenv("HF_TOKEN", "test-token")
+    entry = model_cache_entry("org/candidate", 14, revision)
+    assert entry is not None
+    marker = StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
+    if cache_state == "hit":
+        marker.parent.mkdirs()
+        marker.write_text("{}")
+
+    events: list[str] = []
+
+    class FakePrepareJob:
+        job_id = "/prepare/candidate"
+
+        def wait(self, timeout=None, *, raise_on_failure=True):
+            if cache_state == "failure":
+                raise RuntimeError("download failed")
+            marker.parent.mkdirs()
+            marker.write_text("{}")
+            return JobStatus.SUCCEEDED
+
+        def logs(self, max_lines=0):
+            return ("download failed",)
+
+        def terminate(self):
+            events.append("prepare stopped")
+
+    class FakeClient:
+        def submit(self, request):
+            events.append("prepare")
+            assert isinstance(request.resources.device, CpuConfig)
+            assert request.resources.regions == ["us-east1"]
+            assert request.resources.target_cluster == "cw-rno2a"
+            assert request.resources.disk == "80g"
+            assert request.environment.env_vars["HF_TOKEN"] == "test-token"
+            assert request.entrypoint.callable_entrypoint.args == ("org/candidate", 14, revision)
+            return FakePrepareJob()
+
+    config = RemoteInferenceConfig(
+        model=ServedModelConfig(weights="org/candidate", revision=revision),
+        engine=VllmEngineConfig(),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_gpu("H100", count=1, regions=["us-east1"], target_cluster="cw-rno2a"),
+            worker_environment=create_environment(),
+        ),
+    )
+
+    def remote(prepared):
+        events.append("gpu")
+        assert marker.exists()
+        assert prepared.model.revision == revision
+        resolved = resolve_model_path(prepared.model.weights, prepared.iris.cache_ttl_days, prepared.model.revision)
+        assert (StoragePath(resolved) / DEFAULT_COMPLETE_MARKER).exists()
+        return nullcontext(_remote_session())
+
+    monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
+    monkeypatch.setattr("marin.evaluation.runner.current_client", FakeClient)
+    monkeypatch.setattr("marin.evaluation.runner.inference_config_for_model", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+    batch = replace(
+        _hosted_judge_batch(tmp_path, (_evaluation(tmp_path, cache_state, _successful_evaluation),)),
+        judge=None,
+    )
+
+    if cache_state == "failure":
+        with pytest.raises(RuntimeError):
+            _run_test_batch(batch)
+        record = read_record(record_path(batch.records_prefix, f"run-{cache_state}"))
+        assert record.status is RunStatus.INFRA_FAILED
+        assert record.jobs["prepare"] == "/prepare/candidate"
+        assert events == ["prepare", "prepare stopped"]
+    else:
+        _run_test_batch(batch)
+        record = read_record(record_path(batch.records_prefix, f"run-{cache_state}"))
+        assert record.status is RunStatus.SUCCEEDED
+        assert events == (["gpu"] if cache_state == "hit" else ["prepare", "gpu"])
 
 
 def test_evaluation_steps_share_candidate_and_judge(tmp_path, monkeypatch):

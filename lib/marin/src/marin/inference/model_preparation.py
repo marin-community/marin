@@ -7,13 +7,20 @@ import json
 from urllib.parse import unquote, urlsplit
 
 from levanter.compat.hf_checkpoints import load_tokenizer
-from levanter.model_cache import resolve_cached_model_path
+from levanter.model_cache import HfModelCacheEntry, hf_model_cache_entry, resolve_cached_model_path
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoConfig, PreTrainedTokenizerBase
 
 from marin.inference.vllm_server import _is_object_store_path
 
 _MODEL_CACHE_PREFIX = "quick-serve-models"
+
+
+def model_cache_entry(model: str, cache_ttl_days: int, revision: str | None = None) -> HfModelCacheEntry | None:
+    """Return the cache entry used by serving, without downloading model weights."""
+    if revision is not None and not _is_object_store_path(model):
+        model = f"{model}@{revision}"
+    return hf_model_cache_entry(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
 
 
 def _tool_template_probe() -> list[dict[str, object]]:
