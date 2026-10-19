@@ -39,6 +39,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import tomllib
 import uuid
 from collections.abc import Iterator
 from dataclasses import replace
@@ -427,6 +428,9 @@ def main() -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
     provenance = {
         "args": vars(args),
+        "harbor_source": tomllib.loads((Path(HARBOR_PROJECT) / "pyproject.toml").read_text())["tool"]["uv"]["sources"][
+            "harbor"
+        ],
         # The shootout base and relay student, recorded for plain runs too.
         "student_model": student_provenance(args.student),
         "harbor": config,
