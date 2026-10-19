@@ -59,6 +59,5 @@ def evalchemy_runtime_source_hash() -> str:
 
 
 def evalchemy_runtime_descriptor(extras: tuple[str, ...], source_hash: str) -> str:
-    """Describe the evaluator content and selected benchmark dependencies."""
     selected = ",".join(sorted(set(extras)))
     return f"evalchemy[{selected}] @ {EVALCHEMY_RUNTIME_PROJECT}#sha256={source_hash}"
