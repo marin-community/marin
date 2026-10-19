@@ -42,7 +42,7 @@ from rolloutengine.contracts import (
     Transition,
     TransitionCompleted,
 )
-from rolloutengine.harness import Harness, HarnessContext
+from rolloutengine.harness.core import Harness, HarnessContext
 from rolloutengine.spec import TRACE_METRIC, RolloutLimits, TraceMode
 from rolloutengine.trace import _token_trace
 

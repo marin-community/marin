@@ -30,7 +30,7 @@ from rolloutengine.contracts import (
 )
 from rolloutengine.event_delivery import _EventDelivery
 from rolloutengine.grading import _grade_rollout
-from rolloutengine.harness import Harness, HarnessContext
+from rolloutengine.harness.core import Harness, HarnessContext
 from rolloutengine.machines import _prepare_machine
 from rolloutengine.recorder import _CleanupScope, _Recorder, _run_harness
 from rolloutengine.spec import TaskRolloutSpec

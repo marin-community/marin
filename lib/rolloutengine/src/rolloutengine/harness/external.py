@@ -12,8 +12,8 @@ from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _retain_task
 from rolloutengine.contracts import ModelTurn, Prompt, RolloutEnded
-from rolloutengine.harness import HarnessContext, RolloutRecorder
-from rolloutengine.shell import task_prompt
+from rolloutengine.harness.core import HarnessContext, RolloutRecorder
+from rolloutengine.harness.shell import task_prompt
 from rolloutengine.spec import RolloutLimits
 
 

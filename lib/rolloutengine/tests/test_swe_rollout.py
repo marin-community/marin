@@ -16,7 +16,7 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TaskSpec, TextMessage
 
-from rolloutengine.shell import WORKSPACE_INSTRUCTION
+from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION
 from rolloutengine.test_support import ReplayModel, engine, machine_runtime, rollout_spec
 
 

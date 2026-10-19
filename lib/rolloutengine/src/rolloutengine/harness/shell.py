@@ -39,7 +39,7 @@ from taskcompendium.submission import (
 )
 
 from rolloutengine.contracts import LENGTH_STOP_REASON, EventSink, ModelTurn, Prompt, ToolCallCompleted, Transition
-from rolloutengine.harness import HarnessContext, RolloutRecorder
+from rolloutengine.harness.core import HarnessContext, RolloutRecorder
 from rolloutengine.spec import RolloutLimits
 
 UNKNOWN_TOOL_ERROR = "Unknown tool"

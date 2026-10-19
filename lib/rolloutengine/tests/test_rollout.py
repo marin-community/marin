@@ -59,7 +59,6 @@ from verifyit.grade import grade as verifyit_grade
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import RUBRIC_LABELS, FunctionCall, JudgeSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
 
-from rolloutengine.agent import AgentHarness
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.contracts import (
     AttemptEnded,
@@ -87,10 +86,11 @@ from rolloutengine.contracts import (
     TransitionCompleted,
 )
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness import StepHarness
+from rolloutengine.harness.external import AgentHarness
+from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
+from rolloutengine.harness.step import StepHarness
 from rolloutengine.machines import task_machine
 from rolloutengine.recorder import harness_rollout
-from rolloutengine.shell import WORKSPACE_INSTRUCTION, ToolCallResult, ToolContext, ShellHarness
 from rolloutengine.spec import TaskRolloutSpec, TraceMode
 from rolloutengine.test_support import (
     SHELL,
@@ -478,9 +478,9 @@ async def test_agent_harness_receives_engine_turns_and_controls_next_history(com
         finished.set()
 
     model = ReplayModel([shell_call("echo 12 > answer"), {"role": "assistant", "content": "12"}])
-    result = await engine(
-        model, harnesses={"agent": AgentHarness(lambda _context, complete: agent(complete))}
-    ).run_task(rollout_spec(arithmetic_task(), harness="agent"))
+    result = await engine(model, harnesses={"agent": AgentHarness(lambda _context, complete: agent(complete))}).run_task(
+        rollout_spec(arithmetic_task(), harness="agent")
+    )
 
     assert finished.is_set()
     assert result.grade.reward == 1.0

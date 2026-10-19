@@ -6,7 +6,7 @@ outputs, and its grade.
 
 ```python
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.shell import ShellHarness
+from rolloutengine.harness.shell import ShellHarness
 
 engine = RolloutEngine(machine_factories, {"shellbox": ShellHarness(command_timeout=30)})
 result = await engine.run_task(spec, model)
