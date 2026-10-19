@@ -482,41 +482,44 @@ def _prepare_inference_model(
 ) -> RemoteInferenceConfig:
     """Mirror a cold Hugging Face checkpoint on CPU before starting inference."""
     model = config.model
-    entry = model_cache_entry(model.weights, config.iris.cache_ttl_days, model.revision)
-    if entry is None:
-        return config
+    try:
+        entry = model_cache_entry(model.weights, config.iris.cache_ttl_days, model.revision)
+        if entry is None:
+            return config
 
-    pinned_model = replace(model, weights=entry.repo, revision=entry.revision, api_model=model.model_id)
-    pinned_config = replace(config, model=pinned_model)
-    marker = StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
-    if marker.exists():
-        logger.info("model cache hit: %s", entry.path)
-        return pinned_config
+        pinned_model = replace(model, weights=entry.repo, revision=entry.revision, api_model=model.model_id)
+        pinned_config = replace(config, model=pinned_model)
+        marker = StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
+        if marker.exists():
+            logger.info("model cache hit: %s", entry.path)
+            return pinned_config
 
-    worker_resources = config.iris.worker_resources
-    job = current_client().submit(
-        JobRequest(
-            name=f"prepare-{run_id}",
-            entrypoint=Entrypoint.from_callable(
-                resolve_model_path,
-                args=(entry.repo, config.iris.cache_ttl_days, entry.revision),
-            ),
-            resources=ResourceConfig.with_cpu(
-                cpu=4,
-                ram="16g",
-                disk=_MODEL_PREPARE_DISK,
-                preemptible=False,
-                regions=worker_resources.regions,
-                target_cluster=worker_resources.target_cluster,
-            ),
-            environment=create_environment(
-                setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars=dict(env_vars),
-            ),
-            priority=config.iris.priority,
-            timeout=Duration.from_hours(_MODEL_PREPARE_TIMEOUT_HOURS),
+        worker_resources = config.iris.worker_resources
+        job = current_client().submit(
+            JobRequest(
+                name=f"prepare-{run_id}",
+                entrypoint=Entrypoint.from_callable(
+                    resolve_model_path,
+                    args=(entry.repo, config.iris.cache_ttl_days, entry.revision),
+                ),
+                resources=ResourceConfig.with_cpu(
+                    cpu=4,
+                    ram="16g",
+                    disk=_MODEL_PREPARE_DISK,
+                    preemptible=False,
+                    regions=worker_resources.regions,
+                    target_cluster=worker_resources.target_cluster,
+                ),
+                environment=create_environment(
+                    setup_scripts=[default_setup_script(packages=["marin-core"])],
+                    env_vars=dict(env_vars),
+                ),
+                priority=config.iris.priority,
+                timeout=Duration.from_hours(_MODEL_PREPARE_TIMEOUT_HOURS),
+            )
         )
-    )
+    except Exception as exc:
+        raise RemoteInferenceStartupError(f"Model cache preparation failed: {exc}", jobs=()) from exc
     try:
         status = job.wait(timeout=_MODEL_PREPARE_WAIT_TIMEOUT_SECONDS)
         if status is not JobStatus.SUCCEEDED:

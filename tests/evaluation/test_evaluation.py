@@ -361,7 +361,7 @@ def _evaluate_with_session(
         return _run_test_batch(batch)
 
 
-@pytest.mark.parametrize("cache_state", ["miss", "hit", "failure"])
+@pytest.mark.parametrize("cache_state", ["miss", "hit", "failure", "submit-failure"])
 def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypatch, cache_state):
     revision = "a" * 40
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "cache"))
@@ -400,6 +400,8 @@ def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypat
             assert request.resources.disk == "80g"
             assert request.environment.env_vars["HF_TOKEN"] == "test-token"
             assert request.entrypoint.callable_entrypoint.args == ("org/candidate", 14, revision)
+            if cache_state == "submit-failure":
+                raise RuntimeError("Iris submission failed")
             return FakePrepareJob()
 
     config = RemoteInferenceConfig(
@@ -430,13 +432,17 @@ def test_evaluation_prepares_hf_weights_before_gpu_inference(tmp_path, monkeypat
         judge=None,
     )
 
-    if cache_state == "failure":
+    if cache_state in ("failure", "submit-failure"):
         with pytest.raises(RuntimeError):
             _run_test_batch(batch)
         record = read_record(record_path(batch.records_prefix, f"run-{cache_state}"))
         assert record.status is RunStatus.INFRA_FAILED
-        assert record.jobs["prepare"] == "/prepare/candidate"
-        assert events == ["prepare", "prepare stopped"]
+        if cache_state == "failure":
+            assert record.jobs["prepare"] == "/prepare/candidate"
+            assert events == ["prepare", "prepare stopped"]
+        else:
+            assert record.jobs == {"orchestrator": "/orchestrator"}
+            assert events == ["prepare"]
     else:
         _run_test_batch(batch)
         record = read_record(record_path(batch.records_prefix, f"run-{cache_state}"))
