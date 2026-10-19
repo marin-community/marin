@@ -25,7 +25,6 @@ telemetry settings before the job takes a GPU.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from types import MappingProxyType
@@ -88,7 +87,7 @@ ANSWERS_PER_PROMPT = 4
 # Freeze requests at weight sync and re-prefill their prefix under the new weights.
 PAUSE_MODE = "keep"
 # Keep two resumable checkpoints in the temporary bucket, which deletes objects after 14 days. The
-# terminal export does not expire.
+# probe keeps its measurements in logs.
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
 
 
@@ -482,9 +481,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     trainer = config["trainer"]
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
-    trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
-    # Enable terminal export without an earlier periodic export; its interval must align with checkpoints.
-    trainer["hf_save_interval"] = math.ceil(trainer["max_steps"] / trainer["ckpt_interval"]) * trainer["ckpt_interval"]
+    trainer["ckpt_interval"] = -1
+    trainer["hf_save_interval"] = -1
     check_loop_shape(config)
     return config
 
@@ -499,7 +497,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     """Assemble the RL step and its evaluation for one policy and preset."""
     recipe = SNOWBALL_RECIPE
     config = training_config(preset, settings)
-    pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
+    pool = pool_step(f"{POOL_ARTIFACT_NAME}-thundersync-gsm8k", "2026.10.19", gsm8k_only=True)
     model = policy.adopted_model or model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
     # A --set run gets its own address: the name carries a hash of its settings.
     changes = "\n".join(settings)
@@ -535,16 +533,16 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             memory=recipe.host_memory,
             disk="2TB",
             priority="interactive",
-            # One automatic retry, then fail; a healthy run resumes from its latest checkpoint on resubmission.
-            max_retries=1,
+            max_retries=0,
             target_cluster=policy.cluster,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=72,
+            coordinator_timeout_hours=2,
+            job_timeout_seconds=2880,
             # The W&B key decides the entity; a hard-coded one fails at runtime for a key that
             # cannot write there.
             wandb_entity=None,
         ),
-        export_hf=True,
+        export_hf=False,
     )
     # The evaluation serves the rendered window, so a --set on the budget reaches the server.
     # evaluation_model_config adds max_new_tokens to request_window_tokens, so it gets the prompt share.

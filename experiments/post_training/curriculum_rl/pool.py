@@ -252,6 +252,7 @@ VALIDATION_REASONING_GYM_BINS = (
 @dataclass(frozen=True)
 class PoolParquetConfig:
     output_path: str
+    gsm8k_only: bool = False
 
 
 def boxed_answer(solution: str) -> str | None:
@@ -574,6 +575,15 @@ def _drop_over_length_records(records: list[dict[str, object]]) -> list[dict[str
 
 def write_pool_parquet(config: PoolParquetConfig) -> None:
     """Write the graded train pool and the fixed validation set."""
+    if config.gsm8k_only:
+        train = _drop_over_length_records(_gsm8k_records("train", 4096))
+        if len(train) < 3072:
+            raise ValueError(f"GSM8K probe needs at least 3072 rows, got {len(train)}")
+        validation = _gsm8k_records("test", GSM8K_VALIDATION_ROWS, data_source=VALIDATION_GSM8K_SOURCE)
+        for records, filename in ((train, TRAIN_FILENAME), (validation, VALIDATION_FILENAME)):
+            write_parquet_file(records, prefix_join(config.output_path, filename))
+            logger.info("Wrote %d GSM8K probe rows to %s", len(records), filename)
+        return
     omni_train, omni_validation = _omni_math_records()
     numina_train, numina_validation = _numina_records()
     theoremqa_train, theoremqa_validation = _theoremqa_records()
@@ -605,7 +615,7 @@ def write_pool_parquet(config: PoolParquetConfig) -> None:
         logger.info("Wrote %d rows to %s", len(records), destination)
 
 
-def pool_step(name: str, version: str) -> ArtifactStep[Artifact]:
+def pool_step(name: str, version: str, *, gsm8k_only: bool = False) -> ArtifactStep[Artifact]:
     return ArtifactStep(
         name=name,
         version=version,
@@ -617,5 +627,5 @@ def pool_step(name: str, version: str) -> ArtifactStep[Artifact]:
             # score identically.
             pip_packages=["reasoning-gym==0.1.25"],
         ),
-        build_config=lambda ctx: PoolParquetConfig(output_path=ctx.output_path),
+        build_config=lambda ctx: PoolParquetConfig(output_path=ctx.output_path, gsm8k_only=gsm8k_only),
     )
