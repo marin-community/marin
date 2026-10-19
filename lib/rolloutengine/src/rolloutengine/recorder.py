@@ -55,10 +55,7 @@ FAILURE_ERROR_LIMIT = 2_000
 
 
 def _failure_record(operation: RolloutOperation, cause: BaseException) -> RolloutFailure:
-    """The failure of an interrupted attempt: the failed operation, and the cause's type, message, and notes.
-
-    The record keeps the message because the exception does not cross a process boundary with the rollout.
-    """
+    """The failure of an interrupted attempt: its operation, and the cause's type, message, and notes."""
     diagnostics: dict[str, Any] = {"operation": operation.value, "error": str(cause)[:FAILURE_ERROR_LIMIT]}
     notes = getattr(cause, "__notes__", ())
     if notes:

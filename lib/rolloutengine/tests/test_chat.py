@@ -78,6 +78,7 @@ class Lookup:
         return self
 
     async def call(self, name: str, arguments: dict[str, Any]) -> ToolCallResult:
+        assert name == LOOKUP.name
         return ToolCallResult(self.values[str(arguments["key"])])
 
     async def close(self) -> None:
