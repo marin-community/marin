@@ -33,7 +33,7 @@ _SAMPLES = 800
 EVAL_LOSS_METRIC = "eval_dropless/paloma/macro_loss"
 
 WANDB_CHARTS = {
-    "train-loss": ("Train cross-entropy loss", "train/cross_entropy_loss"),
+    "train-loss": ("Train language-model loss", "train/loss"),
     "paloma-macro-loss": ("Paloma macro loss (dropless)", EVAL_LOSS_METRIC),
     "mfu": ("MFU (%)", "throughput/mfu"),
 }

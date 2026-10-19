@@ -3,8 +3,9 @@
 
 """Fused linear softmax cross-entropy for grug.
 
-This wraps the shared fused kernel API for TPU and falls back to a full-logits
-reference implementation on non-TPU backends.
+This delegates to the shared fused kernel API, including streaming XLA,
+TPU Pallas, and full-logits reference implementations. The EP hero selects
+streaming XLA with the optimized backward explicitly.
 """
 
 import jax

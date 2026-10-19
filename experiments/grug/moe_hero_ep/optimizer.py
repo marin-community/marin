@@ -73,6 +73,8 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
+        # The trained recipe preserves one norm per layer. On 4D expert weights this couples
+        # the entire expert bank, although Newton-Schulz orthogonalizes each expert separately.
         axes = tuple(range(1, param.ndim))
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
@@ -177,6 +179,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """
 
     adam_lr: float = 6e-4
+    weight_decay: float = 0.0
     momentum: float = 0.95
     nesterov: bool = True
     backend_steps: int = 5
@@ -190,6 +193,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     gate_router_weight_decay: float = 0.0
 
     def build(self, num_train_steps):
+        if self.weight_decay != 0 or self.weight_decay_modules is not None or self.default_weight_decay_mask is not None:
+            raise ValueError("MuonH does not use global weight decay or masks; set gate_router_weight_decay instead")
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 

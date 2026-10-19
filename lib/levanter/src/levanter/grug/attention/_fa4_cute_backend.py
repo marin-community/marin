@@ -68,9 +68,8 @@ def _import_cutlass_cute() -> _CutlassCuteModules:
 
 def _optional_dependency_error() -> RuntimeError:
     return RuntimeError(
-        "gpu_fa4_cute_attention requires nvidia-cutlass-dsl with JAX support, and backward requires "
-        "flash-attn-4. Install the CUDA 13 CUTLASS DSL extra, for example "
-        "`nvidia-cutlass-dsl[cu13]>=4.4`, plus `flash-attn-4`."
+        "FA4 attention requires nvidia-cutlass-dsl with JAX support and flash-attn-4 for backward "
+        "and native SM100 forward. Install this project's GPU extra for compatible dependency versions."
     )
 
 

@@ -4,7 +4,8 @@
 """Expert-parallel hero MoE grug variant model.
 
 Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
-No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
+No load-balancing loss; router z-loss is logged only. The training objective can
+include a final-logit z-loss. All layers are MoE (no dense layers).
 """
 
 import dataclasses
@@ -19,14 +20,9 @@ from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call, tree_checkpoint_name
 from haliax.nn import ArrayStacked
-from jax import core, random
+from jax import core, random, shard_map
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
-
-try:
-    from jax.shard_map import shard_map
-except ModuleNotFoundError:
-    from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
@@ -112,6 +108,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 RematMode = Literal["recompute_all", "save_moe", "offload_carry"]
 OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
+LM_LOSS_METRIC = "train/lm_loss"
 
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
@@ -120,9 +117,9 @@ LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
 # 402 MB per layer, 18 GiB of HBM across 48 layers. With the QuACK expert MLP, the ragged backend
 # takes the routing-weight gradient on the expert side, so its backward reads neither the expert
 # down projection nor the return transport, and saving this value leaves the recompute only the
-# dispatch and the gate/up projection. The routing weights are positive renormalized sigmoids and
-# the cotangents bf16, so that gradient loses precision only where an output cotangent element is
-# below 2^-126 / w.
+# dispatch and the gate/up projection. This changes ordinary bf16 rounding in the routing-weight
+# gradient. Separately, a weighted cotangent below 2^-126 can underflow
+# and lose its contribution before division by the positive routing weight.
 MOE_OUTPUT_REMAT_NAME = "grug_moe_routed_output"
 
 
@@ -282,6 +279,10 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    """Checkpoint rotary convention: fused adjacent pairs when true, split halves otherwise.
+
+    This changes the model function, not just execution speed. Preserve it when restoring weights.
+    """
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -739,8 +740,7 @@ class GatedNorm(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
-        # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
-        # (e.g. compare no activation, relu, etc.).
+        # The recipe uses SiLU following Qwen; its benefit within GatedNorm has not been isolated by an ablation.
         gate_hidden = jax.nn.silu(gate_hidden)
         gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
         return x * gate.astype(x.dtype)
@@ -1025,7 +1025,9 @@ class MoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
         token_valid_flat = reshard(rearrange(token_valid, "b s -> (b s)"), _token_spec())
-        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
+        # The compute policy rounds the projection output and router bias to bf16. Widen the
+        # logits for bias addition, top-k, sigmoid/softmax, and QB statistics; this does not undo
+        # projection rounding. Preserve this precision convention when resuming the hero.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
@@ -1429,7 +1431,7 @@ class Transformer(eqx.Module):
         # against an older run, this is why. Set LEVANTER_CE_XLA_FAST_BWD=0 to
         # force the old backward back on without editing code, or swap this to
         # implementation="xla" for a code-level A/B.
-        cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
+        lm_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
             labels,
@@ -1441,10 +1443,11 @@ class Transformer(eqx.Module):
             block_sizes=_CE_BLOCK_SIZES,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
-        loss = cross_entropy_loss
+        loss = lm_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
-            summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+            # Includes the optional final-logit z-loss; it is not an unregularized CE metric.
+            summarized_metrics[LM_LOSS_METRIC] = lm_loss
             num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
             summarized_metrics["train/router/z_loss_logging_only"] = (
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
