@@ -41,6 +41,12 @@ a machine spec the backend refuses (``UnsupportedMachineSpec`` or ``ValueError``
 controller refuses for the request itself (a code outside ``HOST_RPC_CODES``), and setup or grader
 commands that fail. Shellbox raises a bare ``RuntimeError`` for both a failed Docker build and an
 unreachable Docker daemon, so those stay the program's too.
+
+The proposal pins the solver's machine, so the host never chooses it: ``machine_available`` raises
+``NO_FACTORY`` for a package machine on a host without the local backend and ``NO_IMAGE_BUILDER`` for
+a container proposal on a host without an image builder. ``run_build`` and the agentic author's
+``author_round`` call it before anything runs, so such an item ends as the host's before its author
+or its program spends a model call.
 """
 
 from collections.abc import Callable, Iterator, Mapping
@@ -56,7 +62,9 @@ from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, M
 
 from taskforge.sandbox.factories import MachineHost, container_backend
 from taskforge.sandbox.host_failures import machine_create_failed, machine_lost
+from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage40_build_with_program.context import BuildInfrastructureFailure
+from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 
 HOST_RPC_CODES = frozenset(
     {
@@ -92,6 +100,25 @@ HOST_REJECTIONS = frozenset({InfrastructureCause.NO_FACTORY, InfrastructureCause
 """Causes that hold for as long as the host is unchanged: the item is abandoned at once, not retried."""
 DEADLINE_OPERATIONS = frozenset({RolloutOperation.START, RolloutOperation.GRADE})
 """The engine operations whose deadline only a slow sandbox can exhaust: machine start and grading."""
+
+
+def machine_available(services: RLEnvBuildServices, proposal: TaskProposal) -> None:
+    """Raise the host's failure when ``services`` cannot provide the solver machine ``proposal`` declares.
+
+    Raises:
+        BuildInfrastructureFailure: ``NO_IMAGE_BUILDER`` for a container proposal on a host without an
+            image builder, ``NO_FACTORY`` for a package machine on a host without the local backend.
+    """
+    machine = proposal.header.solver_machine
+    if machine is None and services.images is None:
+        raise BuildInfrastructureFailure(
+            InfrastructureCause.NO_IMAGE_BUILDER, "the proposal declares a container and this host cannot publish images"
+        )
+    if machine is SolverMachine.PACKAGES and Backend.LOCAL.value not in services.factories:
+        raise BuildInfrastructureFailure(
+            InfrastructureCause.NO_FACTORY,
+            f"the proposal declares solver_machine {machine} and this host has no {Backend.LOCAL} machine factory",
+        )
 
 
 def _chain(error: BaseException) -> Iterator[BaseException]:

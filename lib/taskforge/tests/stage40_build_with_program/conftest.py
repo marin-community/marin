@@ -8,6 +8,7 @@
 so a grader program the fake GLM writes is sh.
 ``context`` is a step context for calling SDK functions outside a program; its model is the
 ``glm_client`` on ``fake_glm``. ``web_tool`` is a ``web_search`` tool that records its queries.
+``declaring`` changes the proposal's solver machine, and ``RecordingImageBuilder`` publishes no image.
 """
 
 from collections.abc import Callable, Mapping
@@ -19,7 +20,8 @@ from shellbox.machine import Backend
 from taskforge.llm.agent import AgentTool, ReasoningReplay
 from taskforge.llm.policy import LLMPolicy
 from taskforge.sandbox.factories import MachineHost
-from taskforge.stage10_proposal.model import TaskProposal, parse
+from taskforge.sandbox.images import DockerBuild
+from taskforge.stage10_proposal.model import Environment, SolverMachine, TaskProposal, parse
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
 from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory
@@ -64,9 +66,29 @@ FACTORIES = {Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.v
 LIMITS = AgentLimits(max_turns=8, max_tokens=4096, max_calls=16)
 
 
+IMAGE = f"registry.example/taskforge-tasks/d00@sha256:{'2' * 64}"
+
+
 @pytest.fixture
 def proposal() -> TaskProposal:
     return parse(PROPOSAL)
+
+
+def declaring(proposal: TaskProposal, machine: SolverMachine | None) -> TaskProposal:
+    """``proposal`` declaring ``machine``, as a container proposal when ``machine`` is ``None``."""
+    environment = Environment.CONTAINER if machine is None else proposal.header.environment
+    return replace(proposal, header=replace(proposal.header, environment=environment, solver_machine=machine))
+
+
+class RecordingImageBuilder:
+    """An ``ImageBuilder`` that records each build and returns ``IMAGE`` without building it."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[DockerBuild, str]] = []
+
+    async def publish(self, build: DockerBuild, repository: str) -> str:
+        self.published.append((build, repository))
+        return IMAGE
 
 
 @pytest.fixture

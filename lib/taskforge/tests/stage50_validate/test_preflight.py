@@ -228,3 +228,17 @@ async def test_a_host_without_the_local_backend_is_not_probed():
     assert result.fallback is None
     assert result.lowered.runtime.task_machine is not None
     assert result.lowered.runtime.task_machine.backend == Backend.DOCKER.value
+
+
+async def test_a_package_machine_is_neither_probed_nor_moved_off_the_local_backend():
+    """A package machine has no container form, so a fallback would change the solver's declared machine."""
+    local = CountingFactory(ReadOnlyLocalFactory())
+    engine = settings(local)
+    environment = draft.requirements(image=None, packages=("numpy",), setup=("mkdir -p /opt/gen",), workdir="/workspace")
+    task = cpython_task(()).model_copy(update={"environment_requirements": environment})
+
+    result = await preflight(task, MachineHost.LAPTOP, engine.factories, engine, DEADLINES)
+
+    assert result.fallback is None and local.creates == 0
+    assert result.lowered.runtime.task_machine is not None
+    assert result.lowered.runtime.task_machine.backend == Backend.LOCAL.value

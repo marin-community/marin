@@ -27,10 +27,11 @@ from taskforge.ledger.records import EntryKind
 from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
+from taskforge.stage10_proposal.model import SolverMachine
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build_with_program import sandbox_effects
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
-from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
+from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause, machine_available
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, run_build
 from taskforge.stage40_build_with_program.sandbox_effects import (
     GRADE_CANDIDATE_MACHINE,
@@ -42,7 +43,7 @@ from taskforge.stage40_build_with_program.sandbox_effects import (
 from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
 from taskforge.stage50_validate.lowering import VERIFIER_TIMEOUT
 from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory, shell_grader
-from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING
+from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING, RecordingImageBuilder, declaring
 
 SHELLSIM = draft.requirements(image=None)
 DOCKER = draft.requirements(image=f"registry.example/task@sha256:{'0' * 64}")
@@ -237,6 +238,56 @@ async def test_a_host_without_an_image_builder_is_infrastructure(context):
         await publish_image(context(), build)
 
     assert failure.value.cause == InfrastructureCause.NO_IMAGE_BUILDER
+
+
+@pytest.mark.parametrize(
+    ("machine", "cause"),
+    [(None, InfrastructureCause.NO_IMAGE_BUILDER), (SolverMachine.PACKAGES, InfrastructureCause.NO_FACTORY)],
+    ids=["container-without-an-image-builder", "packages-without-the-local-backend"],
+)
+def test_a_declared_machine_the_host_cannot_provide_is_the_hosts_failure(services, proposal, machine, cause):
+    """The host raises rather than sending the model a machine it can run, so it never chooses the solver's."""
+    with pytest.raises(BuildInfrastructureFailure) as failure:
+        machine_available(services, declaring(proposal, machine))
+
+    assert failure.value.cause == cause
+
+
+@pytest.mark.parametrize("machine", [None, *list(SolverMachine)])
+def test_a_host_with_an_image_builder_and_the_local_backend_provides_every_machine(services, proposal, machine):
+    able = dataclasses.replace(
+        services,
+        images=RecordingImageBuilder(),
+        factories={**FACTORIES, Backend.LOCAL.value: ShellSimMachineFactory()},
+    )
+
+    machine_available(able, declaring(proposal, machine))
+
+
+async def test_run_build_ends_a_build_whose_declared_machine_the_host_lacks_before_any_step(
+    proposal, services, glm_client, tmp_path, ledger
+):
+    @rl_env_build_sink
+    async def task(context: RLEnvBuildContext) -> TaskSpec:
+        raise AssertionError("no step runs on a host that cannot provide the machine")
+
+    with pytest.raises(BuildInfrastructureFailure) as failure:
+        await run_build(
+            rl_env_build_program(sink=task),
+            declaring(proposal, SolverMachine.PACKAGES),
+            WORKPIECE,
+            tmp_path / "round",
+            str(tmp_path / "store"),
+            glm_client,
+            SAMPLING,
+            services,
+            0,
+            research=ResearchRequirement.OFF,
+        )
+
+    assert failure.value.cause == InfrastructureCause.NO_FACTORY
+    assert not ledger.entries
+    assert not (tmp_path / "round").exists()
 
 
 @pytest.mark.parametrize(

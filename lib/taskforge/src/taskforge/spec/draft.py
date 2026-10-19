@@ -13,8 +13,8 @@ limits, user, deadlines) is the ``LoweredTaskSpec`` RolloutEngine executes, and
 ``lower`` alone builds one, choosing each machine's backend for the host. A
 lowered spec is therefore bound to the host whose factories it names, and its
 task may name the software differently from the ``TaskSpec``: on a host with
-the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``, and on one
-without it a package machine becomes ``GRADER_BASE_IMAGE`` (``host_requirements``).
+the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``; on one
+without it a package machine has no backend (``host_requirements``).
 
 Only ``_presentation`` builds the presented context, concrete tools and answer
 format, and only ``lower`` builds a ``LoweredTaskSpec``, so moving either is a

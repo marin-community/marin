@@ -50,7 +50,7 @@ from taskforge.stage40_build_with_program.context import (
     ExpiredClock,
     RLEnvBuildContext,
 )
-from taskforge.stage40_build_with_program.infrastructure import infrastructure_failure
+from taskforge.stage40_build_with_program.infrastructure import infrastructure_failure, machine_available
 from taskforge.stage40_build_with_program.outputs import SOURCES_STEP, Sources
 from taskforge.stage40_build_with_program.sdk import solver_machine
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
@@ -365,9 +365,11 @@ async def run_build(
             solver machine the proposal declares.
         BuildExpired: a step ran past ``STEP_TIMEOUT``, or raised one (the standard grader step does for a grader
             that timed out twice).
-        BuildInfrastructureFailure: a step failed because of the host.
+        BuildInfrastructureFailure: this host cannot provide the declared solver machine
+            (``machine_available``), before any step runs, or a step failed because of the host.
         ValueError: ``check_workpiece_id`` refused ``workpiece_id``.
     """
+    machine_available(services, proposal)
     researches = research is ResearchRequirement.ENFORCED and bool(proposal.header.research)
     if researches and (SOURCES_STEP not in program.steps or program.steps[SOURCES_STEP].output_type is not Sources):
         raise BuildFailure(f"a build that researches its proposal needs a {SOURCES_STEP!r} step returning Sources")

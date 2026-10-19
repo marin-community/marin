@@ -27,7 +27,10 @@ record, so the round spends no revision and a relaunch hands the workspace to a 
 retry, and ends the round the same way, so the driver holds the item as abandoned instead of asking
 for a rewrite. A failed build still writes its ``run.json``, ``status: "infrastructure"`` for the
 host's and ``status: "expired"`` with its ``clock`` for an expiry. A loader child the host killed
-(``LoaderProcessFailed``) raises the same failure with cause ``BUILD_PROCESS``.
+(``LoaderProcessFailed``) raises the same failure with cause ``BUILD_PROCESS``. A proposal whose
+solver machine the session's services cannot provide (``infrastructure.machine_available``: a
+container on a host without an image builder, a package machine without the local backend) raises
+before the session starts, so the author never adapts the task to the host.
 
 ``author_round`` is the author stage. It writes the AUTHORED record from the submitted file's bytes
 into ``rounds/<n>/authored/<k>/`` (``program.py``, ``program.json``, ``author.json``, ``record.json``),
@@ -86,7 +89,7 @@ from taskforge.stage30_author.load_process import LoaderProcessFailed, ProgramMa
 from taskforge.stage30_author.loader import GRADER_STEP
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build_with_program.glm_author import RECORD_FILE, REVISION_PROMPT, author_messages, sdk_reference
-from taskforge.stage40_build_with_program.infrastructure import HOST_REJECTIONS, InfrastructureCause
+from taskforge.stage40_build_with_program.infrastructure import HOST_REJECTIONS, InfrastructureCause, machine_available
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
 from taskforge.stage40_build_with_program.run import TaskDraft, step_output
 from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate
@@ -293,7 +296,9 @@ class SessionBuild:
         store_root: The step store the builder uses; ``step_output`` reads the grader from it.
         client: The in-process model of ``grade_candidate``'s context (grading never calls it).
         policy: The sampling policy of that context.
-        services: ``grade_candidate``'s services (factories, host, ledger, web tools).
+        services: The build's services: ``grade_candidate``'s factories, host, ledger and web tools, and the
+            image builder the in-session builds publish with (``None`` when they cannot). ``author_round``
+            checks the proposal's solver machine against them before the session starts.
         session_ledger: The ledger file in-session builds append to (``<root>/<item>.jsonl``); a build's step
             statuses are the ``STEP`` spans appended to it during the build.
         loader: Loads a program for ``run_loader``, ``run_build`` and ``submit``; ``load_in_child`` unless the
@@ -1190,9 +1195,12 @@ async def author_round(
 
     Raises:
         ModelUnavailable: the model or an in-session build or grade ran out of retries.
-        BuildInfrastructureFailure: the host failed an in-session load, or a build or grade past its retries.
+        BuildInfrastructureFailure: the host cannot provide the proposal's solver machine
+            (``machine_available``), before the session starts or writes a record; or the host failed an
+            in-session load, or a build or grade past its retries.
         BuildExpired: an in-session build ran past a wall, step or grader clock.
     """
+    machine_available(build.services, proposal)
     plan = plan_session(item_dir, round_no, proposal, revision, config)
     rdir = _round_dir(item_dir, round_no)
     k = len(_numbered(rdir / AGENTIC_DIR))

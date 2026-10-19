@@ -273,7 +273,11 @@ sources(proposal) -> fixtures(proposal, sources) -> requirements(proposal, fixtu
 `fixtures` writes the files for the solver machine the proposal declares, listing PyPI packages only for
 a package machine, and `requirements` builds that machine. `run_build` refuses a task whose machine is
 not the declared one (`check_solver_machine`) as a `BuildFailure`, the program's, so no revision can
-move the solver between ShellSim, CPython and a container.
+move the solver between ShellSim, CPython and a container. Nor can the host: before anything runs,
+`run_build` and the agentic author's `author_round` call `infrastructure.machine_available`, which
+raises `NO_IMAGE_BUILDER` for a container proposal on a host without an image builder and `NO_FACTORY`
+for a package machine on a host without the local backend, so the item ends as the host's, with no
+revision spent and no author adapting the task to the host.
 `grader` grades its own reference answer and the empty answer with `grade_candidate` before it returns,
 sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
 grader that rejects its own reference, returns a reward outside its score range, or credits the
@@ -448,15 +452,16 @@ graded, other than the reference and the empty answer, goes back to the model. A
 reward lies outside the grader's declared score range is `Ungraded(GRADER_REWARD_RANGE)`.
 
 `stage50_validate.preflight.preflight(task, host, factories, settings, deadlines)` lowers the task
-and, when its task machine lands on the local backend, runs the engine's own preparation once (machine
-start, resources, setup commands) with a probe that answers at once. A setup command that fails or a
+and, when its grader-base task machine lands on the local backend, runs the engine's own preparation
+once (machine start, resources, setup commands) with a probe that answers at once. A setup command that fails or a
 spec the backend refuses (`FALLBACK_CAUSES`) moves the task machine alone to the container backend,
 the verifier and its grader requirements staying as first lowered, and the result carries a
 `BackendFallback` (backends, cause, detail) for the lower record. A machine that did not start, or not
 in time, is as often the host's state as the task's, so the probe runs once more and a second such
 failure raises `BuildInfrastructureFailure` rather than moving the solver's machine. Any other probe
 outcome keeps the first lowering, and the probe records no evidence. A verifier machine never falls
-back.
+back, and a package machine, which runs on the local backend alone, is not probed: the fallback only
+ever moves the grader-base CPython between the two backends that run it, never the declared machine.
 
 `stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
 `LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on

@@ -50,7 +50,7 @@ from taskforge.stage40_build_with_program.infrastructure import InfrastructureCa
 from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft, run_build
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.template import standard
-from tests.stage40_build_with_program.conftest import WORKPIECE, SAMPLING
+from tests.stage40_build_with_program.conftest import WORKPIECE, SAMPLING, declaring
 
 PROGRAM = '''"""Grades 6 * 7 in process."""
 
@@ -473,6 +473,22 @@ async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(
     assert outcome.status is AuthorStatus.ACCEPTED and flaky.calls == 2
     assert tool_outputs(model)[1].startswith("built: program ")
     assert read(agentic(item, 0, 0) / "runs" / "0" / "run.json")["status"] == "built"
+
+
+async def test_a_container_proposal_on_a_host_without_an_image_builder_ends_before_the_author_runs(
+    tmp_path, services, proposal, ledger
+):
+    container = declaring(proposal, None)
+    item = tmp_path / "item"
+    model = ScriptedModel()
+    build = session_build(tmp_path, model, services, container, 0)
+
+    with pytest.raises(BuildInfrastructureFailure) as raised:
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, item, WORKPIECE, 0, container, None)
+
+    assert raised.value.cause == InfrastructureCause.NO_IMAGE_BUILDER
+    assert not model.requests, "the author never ran"
+    assert not item.exists(), "the round wrote no record and spent no revision"
 
 
 @pytest.mark.parametrize(

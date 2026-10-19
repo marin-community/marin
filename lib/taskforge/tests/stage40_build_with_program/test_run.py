@@ -12,6 +12,8 @@ from dataclasses import replace
 
 import pytest
 from pydantic import BaseModel
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend
 from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.models import (
     AnswerType,
@@ -33,7 +35,7 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.stage10_proposal.model import Environment, ResearchNeed, SolverMachine, TaskProposal
+from taskforge.stage10_proposal.model import ResearchNeed, SolverMachine, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program import run as run_module
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
@@ -50,7 +52,7 @@ from taskforge.stage40_build_with_program.run import (
 from taskforge.stage40_build_with_program.sdk import research, structured
 from taskforge.stage40_build_with_program.services import AgentLimits
 from taskforge.stage40_build_with_program.step_store import CacheStatus, RLEnvBuildStepStore
-from tests.stage40_build_with_program.conftest import WORKPIECE, SAMPLING, web_tool
+from tests.stage40_build_with_program.conftest import FACTORIES, WORKPIECE, SAMPLING, RecordingImageBuilder, declaring, web_tool
 
 
 class Hint(BaseModel):
@@ -291,21 +293,23 @@ async def test_a_failing_sink_raises_a_build_failure_carrying_its_step_name(tmp_
 
 
 @pytest.mark.parametrize(
-    ("environment", "machine", "declared"),
+    ("machine", "declared"),
     [
-        (Environment.REASONING, SolverMachine.CPYTHON, "solver_machine cpython"),
-        (Environment.SHELLSIM, SolverMachine.PACKAGES, "solver_machine packages"),
-        (Environment.CONTAINER, None, "the task's own image"),
+        (SolverMachine.CPYTHON, "solver_machine cpython"),
+        (SolverMachine.PACKAGES, "solver_machine packages"),
+        (None, "the task's own image"),
     ],
 )
 async def test_a_task_off_the_declared_solver_machine_fails_the_build_as_the_programs(
-    tmp_path, proposal, services, environment, machine, declared
+    tmp_path, proposal, services, machine, declared
 ):
-    """The toy program builds a ShellSim task whatever the proposal declares."""
-    header = replace(proposal.header, environment=environment, solver_machine=machine)
+    """The toy program builds a ShellSim task whatever the proposal declares, on a host that provides every machine."""
+    able = replace(
+        services, images=RecordingImageBuilder(), factories={**FACTORIES, Backend.LOCAL.value: ShellSimMachineFactory()}
+    )
 
     with pytest.raises(BuildFailure) as failure:
-        await build(tmp_path, replace(proposal, header=header), services)
+        await build(tmp_path, declaring(proposal, machine), able)
 
     assert failure.value.step == "task"
     assert failure.value.message == (
