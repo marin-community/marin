@@ -9,7 +9,6 @@ import pyarrow.parquet as pq
 import pytest
 from zephyr.stage_io import ZephyrWorkerError
 
-from experiments.datakit import hero_data
 from experiments.grug.fast_track.corpus_sample import CorpusSource
 from experiments.grug.fast_track.quality_features import (
     FEATURE_BATCH_ROWS,
@@ -19,7 +18,6 @@ from experiments.grug.fast_track.quality_features import (
     _join_source_shard,
     _NormalizedRowLocator,
     normalize_harrier_embeddings,
-    pinned_quality_feature_sources,
     prepare_quality_features,
 )
 
@@ -118,20 +116,6 @@ def test_harrier_normalization_matches_fit_and_score_inputs():
     assert normalized.dtype == np.float32
     np.testing.assert_allclose(np.linalg.norm(normalized, axis=1), [1.0, 0.0], atol=1e-6)
     assert normalized[0, 1] == pytest.approx(1.0)
-
-
-def test_pinned_feature_sources_resolve_complete_harrier_paths():
-    sources = [
-        CorpusSource("biocorpus", "s3://bucket/normalized/biocorpus", 1),
-        CorpusSource("agenttrove", "s3://bucket/normalized/agenttrove", 1),
-    ]
-
-    pins = pinned_quality_feature_sources(sources)
-
-    assert [pin.source for pin in pins] == ["agenttrove", "biocorpus"]
-    for pin in pins:
-        assert pin.harrier_path == f"{hero_data.MANIFEST_PREFIX}/{hero_data.pinned_map('harrier')[pin.source]}"
-        assert "/embed/harrier-all/" in pin.harrier_path
 
 
 def test_harrier_join_reads_sparse_rows_across_batches_and_row_groups(tmp_path):

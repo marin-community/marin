@@ -64,7 +64,9 @@ class RunScores:
     """Per-example correct-answer BPB by task, in example-ID order, and the long-context loss."""
 
     gold_bpb: dict[str, np.ndarray]
+    example_ids: dict[str, tuple[str, ...]]
     long_context_loss: float
+    version: str
 
 
 @dataclass(frozen=True)
@@ -80,16 +82,20 @@ def read_run_scores(downstream_dir: str) -> RunScores:
     with StoragePath(prefix_join(downstream_dir, RECORDS_FILE)).open("rb") as stream:
         records = pq.read_table(stream).to_pandas()
     with StoragePath(prefix_join(downstream_dir, METRICS_FILE)).open("r") as stream:
-        text = json.load(stream)["text"]
+        metrics = json.load(stream)
     correct = records[records.choice == records.label].sort_values(["task", "example_id"])
     bpb = -correct.log_likelihood / (math.log(2) * correct["bytes"].clip(lower=1))
     gold_bpb = {task: bpb[correct.task == task].to_numpy() for task in correct.task.unique()}
+    example_ids = {task: tuple(correct.example_id[correct.task == task]) for task in gold_bpb}
     long_sets = [
         values[LONG_CONTEXT_LOSS_KEY]
-        for values in text.values()
+        for values in metrics["text"].values()
         if LONG_CONTEXT_LOSS_KEY in values and values["fixed_target_documents"] >= LONG_CONTEXT_MIN_DOCUMENTS
     ]
-    return RunScores(gold_bpb, float(np.mean(long_sets)))
+    if not long_sets:
+        raise ValueError(f"{downstream_dir} has no held-out set with long documents; score it without --skip-text")
+    version = f"{metrics['tasks_version']}/{metrics['scorer_version']}"
+    return RunScores(gold_bpb, example_ids, float(np.mean(long_sets)), version)
 
 
 def _group_value(run: RunScores, tasks: Sequence[str], index: dict[str, np.ndarray] | None) -> float:
@@ -125,6 +131,9 @@ def judge(
     """Compare matched runs with a bootstrap over runs and paired evaluation examples."""
     if len(candidate) < 2 or len(control) < 2:
         raise ValueError("the judge needs at least two candidate runs and two control runs")
+    runs = [*candidate, *control]
+    if len({run.version for run in runs}) != 1 or any(run.example_ids != runs[0].example_ids for run in runs):
+        raise ValueError("all runs must come from the same task copy and scorer version")
     rng = np.random.default_rng(seed)
     example_counts = {task: len(values) for task, values in control[0].gold_bpb.items()}
     draws = []

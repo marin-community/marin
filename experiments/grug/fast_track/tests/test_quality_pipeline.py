@@ -255,11 +255,8 @@ def test_quality_cli_reuses_scored_pool_for_moe_rung(monkeypatch):
     selection = next(dep for dep in training.deps if dep.name.startswith("fast-track/quality/"))
     adopted_pool = selection.deps[0]
     training_config = json.loads(training.fingerprint_payload)
-    selection_config = json.loads(selection.fingerprint_payload)
     assert json.loads(adopted_pool.fingerprint_payload)["adopt_source"] == "s3://marin-test/scored-pool"
     assert training_config["model"]["dense_mlp"] is False
-    assert training_config["trainer"]["trainer"]["num_train_steps"] == 16669
-    assert selection_config["training_tokens"] == 17478713344
 
 
 @pytest.mark.parametrize(

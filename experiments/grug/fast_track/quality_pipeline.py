@@ -102,6 +102,12 @@ class ScorerSpec:
     def __post_init__(self) -> None:
         quality_classifier_identity(self.identity)
 
+    @property
+    def factory_name(self) -> str:
+        """``module:qualname`` of the factory, so two factories with one identity get different artifacts."""
+        function = self.factory.func if isinstance(self.factory, partial) else self.factory
+        return f"{function.__module__}:{function.__qualname__}"
+
 
 @dataclass(frozen=True)
 class SelectedQualityPool:
@@ -782,7 +788,9 @@ def build_scored_pool(
         "raw_pool": raw_pool.name,
         "raw_pool_version": raw_pool.version,
         "classifier_identity": candidate.identity,
+        "scorer_factory": candidate.factory_name,
         "incumbent_identity": None if incumbent is None else incumbent.identity,
+        "incumbent_factory": None if incumbent is None else incumbent.factory_name,
         "label_exclusion": label_exclusion.identity(),
         "token_budget": token_budget,
         "prepared_features": (

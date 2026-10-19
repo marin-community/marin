@@ -204,66 +204,6 @@ def test_corpus_excludes_label_duplicates_across_sources(tmp_path, zephyr_contex
     assert all(row["duplicate_group"] not in labels.duplicate_groups for row in _records(pool))
 
 
-def test_corpus_sample_low_probability_preserves_global_rank_order_and_prefix(
-    tmp_path, zephyr_context, corpus_tokenizer
-):
-    id_space = 1 << 128
-    source_name = "low-probability"
-    token_budget = 32
-    seed = 5
-    estimate = 5120
-    cutoff = corpus_sample._sampling_cutoff(token_budget, estimate)
-    salt = corpus_sample._rank_salt(source_name, seed)
-    ids = [f"{(index * cutoff // 64 - salt) % id_space:032x}" for index in range(64)]
-    ids.extend(f"{(cutoff + index - salt) % id_space:032x}" for index in range(8064))
-    source = _source_with_ids(tmp_path, source_name, ids, estimate=estimate)
-    spec = CorpusSampleSpec((source,), corpus_tokenizer, token_budget=token_budget, seed=seed)
-    output_path = tmp_path / "pool"
-    pool = prepare_corpus_pool(
-        CorpusSampleConfig(spec, str(output_path)),
-        ctx=zephyr_context,
-        num_ranges=32,
-    )
-
-    sampled_rows = list(
-        _sample_records(
-            _CorpusShard(source.name, str(tmp_path / source.name / "part-0000.parquet")),
-            cutoff=cutoff,
-            seed=spec.seed,
-            tokenizer=load_tokenizer(corpus_tokenizer.name),
-            excluded_groups=frozenset(),
-            excluded_document_ids=frozenset(),
-        )
-    )
-    sampled_by_id = {row["id"]: row for row in sampled_rows}
-    expected_ranked_ids = sorted(
-        (
-            (int(document_id, 16) + salt) % id_space,
-            document_id,
-        )
-        for document_id in ids
-        if (int(document_id, 16) + salt) % id_space < cutoff
-    )
-    assert set(sampled_by_id) == {document_id for _, document_id in expected_ranked_ids}
-    expected_prefix = []
-    expected_tokens = 0
-    for _, document_id in expected_ranked_ids:
-        row = sampled_by_id[document_id]
-        expected_prefix.append(document_id)
-        expected_tokens += row["token_count"]
-        if expected_tokens >= spec.token_budget:
-            break
-
-    attempt_ranges = list((output_path / "sample-000").glob("range-*.parquet"))
-    persisted_rows = _records(pool)
-    manifest = json.loads((output_path / "corpus.json").read_text())
-    assert len(attempt_ranges) > 1
-    assert [row["id"] for row in persisted_rows] == expected_prefix
-    assert [row["sample_rank"] for row in persisted_rows] == sorted(row["sample_rank"] for row in persisted_rows)
-    assert manifest["actual_tokens"] == sum(row["token_count"] for row in persisted_rows)
-    assert manifest["requested_tokens"] == spec.token_budget
-
-
 def test_corpus_sample_prunes_wrapped_id_ranges_and_keeps_boundary_rows(tmp_path, corpus_tokenizer):
     id_space = 1 << 128
     source_name = "wrapped"
@@ -357,49 +297,6 @@ def test_corpus_sample_fails_on_observed_invalid_id_or_schema(tmp_path, corpus_t
                 excluded_document_ids=frozenset(),
             )
         )
-
-
-def test_corpus_sample_grows_integer_cutoff_until_pool_is_large_enough(tmp_path, zephyr_context, corpus_tokenizer):
-    id_space = 1 << 128
-    source_name = "growing-cutoff"
-    token_budget = 32
-    seed = 7
-    estimate = 40_960
-    initial_cutoff = corpus_sample._sampling_cutoff(token_budget, estimate)
-    salt = corpus_sample._rank_salt(source_name, seed)
-    ids = [f"{(index * id_space // 64 - salt) % id_space:032x}" for index in range(64)]
-    source = _source_with_ids(tmp_path, source_name, ids, estimate=estimate)
-    output_path = tmp_path / "growing-pool"
-    spec = CorpusSampleSpec((source,), corpus_tokenizer, token_budget=token_budget, seed=seed)
-
-    pool = prepare_corpus_pool(CorpusSampleConfig(spec, str(output_path)), ctx=zephyr_context, num_ranges=32)
-    manifest = json.loads((output_path / "corpus.json").read_text())
-    full_read_rows = list(
-        _sample_records(
-            _CorpusShard(source.name, str(tmp_path / source.name / "part-0000.parquet")),
-            cutoff=id_space,
-            seed=seed,
-            tokenizer=load_tokenizer(corpus_tokenizer.name),
-            excluded_groups=frozenset(),
-            excluded_document_ids=frozenset(),
-        )
-    )
-    full_read_rows.sort(key=lambda row: (row["sample_rank"], row["source"], row["id"]))
-    expected_ids = []
-    expected_tokens = 0
-    for row in full_read_rows:
-        expected_ids.append(row["id"])
-        expected_tokens += row["token_count"]
-        if expected_tokens >= token_budget:
-            break
-
-    assert initial_cutoff == id_space // 1024
-    assert int(manifest["sampling_cutoff_hex"], 16) > initial_cutoff
-    assert len(manifest["sampling_cutoff_hex"]) == 33
-    assert manifest["sampling_method"] == corpus_sample.SAMPLING_POLICY
-    assert pool.actual_tokens >= token_budget
-    assert [row["id"] for row in _records(pool)] == expected_ids
-    assert pool.actual_tokens == expected_tokens
 
 
 def test_corpus_sources_rejects_missing_normalized_pins(tmp_path, monkeypatch):

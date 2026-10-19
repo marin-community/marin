@@ -14,7 +14,8 @@ def _run(rng: np.random.Generator, level: dict[str, float], long_context_loss: f
     for group, tasks in GROUP_TASKS.items():
         for task in tasks:
             gold_bpb[task] = level[group] + 0.3 * rng.standard_normal(EXAMPLES) + 0.01 * rng.standard_normal()
-    return RunScores(gold_bpb, long_context_loss + 0.002 * rng.standard_normal())
+    example_ids = {task: tuple(str(i) for i in range(EXAMPLES)) for task in gold_bpb}
+    return RunScores(gold_bpb, example_ids, long_context_loss + 0.002 * rng.standard_normal(), "tasks/scorer")
 
 
 def _runs(level: dict[str, float], long_context_loss: float, *, seed: int) -> list[RunScores]:
