@@ -596,8 +596,8 @@ A managed agent is one `run_task` call. A registered harness is the agent progra
 the task holds the work. A task with `NoGrader` gets an unavailable grade. An `AgentHarness` program reads
 `context.limits`.
 
-`ChatModel` from `rolloutengine.chat` (extra `marin-rolloutengine[chat]`) serves an OpenAI-compatible chat
-endpoint and needs `trace=TraceMode.MESSAGES`. Prompt options replace its `max_tokens` and its `extra_body` keys.
+`ChatModel` from `rolloutengine.chat` serves an OpenAI-compatible chat endpoint and needs
+`trace=TraceMode.MESSAGES`. Prompt options replace its `max_tokens` and its `extra_body` keys.
 It sets `model`, `messages`, `stream`, and `n` itself. A response without `usage` is a model failure.
 
 ```python

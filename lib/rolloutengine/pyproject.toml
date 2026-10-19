@@ -11,10 +11,8 @@ dependencies = [
     "pydantic>=2",
     "marin-taskcompendium",
     "marin-shellbox",
+    "openai>=1.59.9",
 ]
-
-[project.optional-dependencies]
-chat = ["openai>=1.59.9"]
 
 [dependency-groups]
 test = [
@@ -22,7 +20,6 @@ test = [
     "pytest-asyncio",
     "pytest-timeout",
     "marin-shellbox[daytona,shellsim]",
-    "openai>=1.59.9",
 ]
 
 [tool.hatch.build.targets.wheel]
