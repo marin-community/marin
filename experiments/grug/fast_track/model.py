@@ -4084,6 +4084,15 @@ def _attn_res_source_logits(
     return dots * inv_rms[None]
 
 
+def _single_query_logit(source: Float[Array, "B S D"], query: Float[Array, " D"], eps: float) -> Float[Array, "B S"]:
+    """``_attn_res_source_logits`` for one query as one pass over ``source``: the dot product and the RMS are
+    reductions over the same row, which XLA fuses into one kernel (an einsum against one query becomes a
+    separate matrix-vector product)."""
+    x = source.astype(jnp.float32)
+    inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x), axis=-1) + eps)
+    return jnp.sum(x * query.astype(source.dtype).astype(jnp.float32), axis=-1) * inv_rms
+
+
 def _token_query_logit(source: Float[Array, "B S D"], rows: Float[Array, "B S D"], eps: float) -> Float[Array, "B S"]:
     """``rows . rms_norm(source)`` per token, in float32 (``attn_res_token_query``)."""
     inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(source.astype(jnp.float32)), axis=-1) + eps)
@@ -4835,7 +4844,7 @@ def _scan_history_layer(
         assert inter is not None and attn_gate == (j == 0)
         normed, lse, inter_weights = inter
         query = jax.lax.dynamic_index_in_dim(queries, gate_index, axis=0, keepdims=True)
-        partial_logit = _attn_res_source_logits(p, query, eps)[0]  # [B, S]
+        partial_logit = _single_query_logit(p, query[0], eps)  # [B, S]
         if attn_gate:
             partial_logit = jnp.where(boundary, -jnp.inf, partial_logit)
         total = jnp.logaddexp(lse[j], partial_logit)
