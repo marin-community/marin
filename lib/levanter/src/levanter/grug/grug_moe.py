@@ -55,7 +55,11 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     MoeOverlapWork,
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
 )
-from levanter.grug._moe.ep_ragged_all_to_all import DEFAULT_RAGGED_EXPERT_CHUNKS, _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import (
+    DEFAULT_RAGGED_EXPERT_CHUNKS,
+    OverlapWindow,
+    _moe_mlp_ep_ragged_a2a_local,
+)
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug.mxfp8 import ExpertMxfp8
 from levanter.grug._moe.local import _moe_mlp_local
@@ -534,6 +538,7 @@ def moe_mlp(
     overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK,
     ragged_expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     ragged_overlap_weight_grads: bool = False,
+    ragged_overlap_window: OverlapWindow = OverlapWindow.FIRST_DISPATCH,
     ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     ragged_expert_mxfp8_dispatch: bool = False,
     expert_serial_pair: bool = False,
@@ -577,6 +582,7 @@ def moe_mlp(
     `overlap_param_gather` places the all-gather of the FSDP-sharded overlap parameters (``OverlapParamGather``).
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
+    `ragged_overlap_window` (``ragged_all_to_all``) picks the forward all-to-all the overlap work runs under.
     `ragged_overlap_weight_grads` (``ragged_all_to_all``) pins each round's expert weight gradients under its
     input cotangent's return all-to-all (same math).
     `expert_serial_pair` (``ragged_all_to_all`` ungated experts only) runs each expert's two neuron halves
@@ -760,6 +766,7 @@ def moe_mlp(
                 expert_chunks=ragged_expert_chunks,
                 serial_pair=expert_serial_pair,
                 overlap_weight_grads=ragged_overlap_weight_grads,
+                overlap_window=ragged_overlap_window,
                 mxfp8=ragged_expert_mxfp8,
                 mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
             )

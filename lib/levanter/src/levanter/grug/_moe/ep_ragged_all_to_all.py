@@ -25,7 +25,7 @@ import functools
 import logging
 import math
 from collections.abc import Callable
-from enum import auto, IntEnum
+from enum import IntEnum, StrEnum, auto
 from typing import Any, NamedTuple, Protocol
 
 import jax
@@ -653,6 +653,16 @@ class _ExpertRouting(NamedTuple):
     shard_id: Int[Array, ""]
 
 
+class OverlapWindow(StrEnum):
+    """Which forward all-to-all of the ragged EP layer the ``MoeOverlapWork`` runs under (the backward always runs
+    it under the first return-cotangent transfer). Same math."""
+
+    FIRST_DISPATCH = "first_dispatch"
+    """Under the first chunk's dispatch."""
+    LAST_RETURN = "last_return"
+    """Under the last chunk's return, which nothing else in the layer can hide."""
+
+
 @dataclasses.dataclass(frozen=True)
 class _ExpertLayout:
     """Static shapes of the chunked expert pipeline on one shard."""
@@ -667,6 +677,7 @@ class _ExpertLayout:
     expert_mlp: _ExpertMlp
     # Pin each chunk's expert weight gradients under its input cotangent's return all-to-all.
     overlap_weight_grads: bool = False
+    overlap_window: OverlapWindow = OverlapWindow.FIRST_DISPATCH
     # Dispatch the rows as MXFP8 bytes (``mx_pack_rows``) for an expert MLP that takes them so; the backward's
     # transports stay in the rows' dtype (quantization is straight-through).
     mxfp8_dispatch: bool = False
@@ -773,7 +784,7 @@ def _routed_experts_forward(
                 # to it. (Dispatching chunk c+1 during chunk c's MLP measured 3 ms per layer
                 # slower in a rematted four-GPU layer scan.)
                 source, _ = jax.lax.optimization_barrier((send, chunk_residuals[-1].expert_mlp))
-            if overlap is not None and chunk_index == 0:
+            if overlap is not None and chunk_index == 0 and layout.overlap_window == OverlapWindow.FIRST_DISPATCH:
                 # Optimization barriers tie the overlap's inputs to the dispatch source and its output to the
                 # dispatched rows, so it runs while the dispatch all-to-all is in flight (as the pooled-wave path).
                 source, tokens = jax.lax.optimization_barrier((source, overlap.tokens))
@@ -794,7 +805,15 @@ def _routed_experts_forward(
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes, with
             # no expansion step.
-            returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
+            last = chunk_index == layout.chunks - 1
+            if overlap is not None and last and layout.overlap_window == OverlapWindow.LAST_RETURN:
+                out_dispatch, tokens = jax.lax.optimization_barrier((out_dispatch, overlap.tokens))
+                returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
+                with jax.named_scope("overlap"):
+                    side, side_vjp = jax.vjp(overlap.fn, tokens, overlap.params)
+                returned, side = jax.lax.optimization_barrier((returned, side))
+            else:
+                returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
             chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
 
     with jax.named_scope("combine"):
@@ -1018,6 +1037,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     token_sharding_axes: tuple[str, ...],
     expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     overlap_weight_grads: bool = False,
+    overlap_window: OverlapWindow = OverlapWindow.FIRST_DISPATCH,
     mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     mxfp8_dispatch: bool = False,
     serial_pair: bool = False,
@@ -1114,6 +1134,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         input_dim=x_local.shape[1],
         expert_mlp=expert_mlp,
         overlap_weight_grads=overlap_weight_grads,
+        overlap_window=overlap_window,
         mxfp8_dispatch=mxfp8_dispatch,
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten

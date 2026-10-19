@@ -38,6 +38,7 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
+from levanter.grug._moe.ep_ragged_all_to_all import OverlapWindow
 from levanter.grug.attention import (
     AttentionMask,
     RotaryConfig,
@@ -965,6 +966,9 @@ class GrugModelConfig:
     moe_overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK
     """``moe_shared_placement=overlap``: where the EP shard all-gathers the shared experts' FSDP-sharded weights,
     which places their gradients' reduce-scatter (``OverlapParamGather``). Same math."""
+    moe_overlap_window: OverlapWindow = OverlapWindow.FIRST_DISPATCH
+    """``moe_shared_placement=overlap`` on ``ragged_all_to_all``: the forward all-to-all the shared experts run under
+    (``OverlapWindow``). Same math."""
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
@@ -3769,6 +3773,7 @@ def _run_expert_bank(
             expert_remat=em.expert_remat,
             overlap=overlap,
             overlap_param_gather=cfg.moe_overlap_param_gather,
+            ragged_overlap_window=cfg.moe_overlap_window,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
             expert_serial_pair=cfg.moe_serial_pair,
             ragged_overlap_weight_grads=cfg.moe_overlap_weight_grads,

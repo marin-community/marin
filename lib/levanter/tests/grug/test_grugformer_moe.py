@@ -1594,8 +1594,9 @@ def test_fp8_dispatch_matches_full_precision_dispatch_across_shards():
 @pytest.mark.parametrize("implementation", ["fixed_pooled_wave_all_to_all", "ragged_all_to_all"])
 @pytest.mark.parametrize("side_w_spec", [(None, None), ("expert", None)])
 @pytest.mark.parametrize("gather", ["in_work", "before_transport"])
+@pytest.mark.parametrize("window", ["first_dispatch", "last_return"])
 def test_overlap_work_matches_running_it_separately(
-    implementation: MoeImplementation, side_w_spec: tuple, gather: str
+    implementation: MoeImplementation, side_w_spec: tuple, gather: str, window: str
 ):
     """Work scheduled under the dispatch all-to-all (``MoeOverlapWork``) keeps the values and gradients of
     running it outside the MoE, and is pinned by barriers in both the forward and the backward. A parameter
@@ -1608,6 +1609,7 @@ def test_overlap_work_matches_running_it_separately(
         IMPLEMENTATION = {implementation!r}
         SIDE_W_SPEC = {side_w_spec!r}
         GATHER = {gather!r}
+        WINDOW = {window!r}
     """
         + """
         import jax
@@ -1616,6 +1618,7 @@ def test_overlap_work_matches_running_it_separately(
         from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
         from levanter.grug.grug_moe import MoeOverlapWork, OverlapParamGather, moe_mlp
+        from levanter.grug._moe.ep_ragged_all_to_all import OverlapWindow
 
         mesh = Mesh(
             np.asarray(jax.devices()).reshape(1, 4, 1),
@@ -1662,6 +1665,7 @@ def test_overlap_work_matches_running_it_separately(
                     w_down,
                     overlap=overlap,
                     overlap_param_gather=OverlapParamGather(GATHER),
+                    ragged_overlap_window=OverlapWindow(WINDOW),
                     **kwargs,
                 )
             else:
