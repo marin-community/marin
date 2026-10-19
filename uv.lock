@@ -7735,6 +7735,7 @@ dependencies = [
     { name = "marin-verifyit" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -7758,6 +7759,7 @@ requires-dist = [
     { name = "marin-verifyit", editable = "lib/verifyit" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [package.metadata.requires-dev]

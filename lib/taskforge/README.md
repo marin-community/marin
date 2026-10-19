@@ -20,6 +20,8 @@ src/taskforge/
   sandbox/                     MachineFactory selection per host, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
+  stage10_proposal/            model.py: the TaskProposal document and its generation regex;
+                               source.py: ProposalBatch, SlotFailure, the ProposalSource protocol
   stage20_triage/              verdict.py: TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
@@ -42,6 +44,25 @@ import of it from any other package, along with the other wrong-way imports.
 `scripts/build_image_job.py` runs on Iris and documents its submit command in its docstring: it
 builds a directory's `DockerBuild` context with `taskforge.sandbox.image_builder` and prints the
 pinned registry digest.
+
+## Proposals
+
+A proposal source implements `stage10_proposal.source.ProposalSource[IdeaT]`:
+`async propose(idea, n) -> ProposalBatch`. A batch holds the planning request and completions and
+one `SlotProposal` or `SlotFailure` per slot, in slot order, so a failed slot does not drop its
+siblings. `stage10_proposal.model.TaskProposal` is YAML front matter (`ProposalHeader`, keys in
+`HEADER_KEYS` order) plus a markdown body with required section headings. `parse` and `render`
+round-trip it and `digest` is the sha256 of the canonical form. `parse` also checks the research
+decision: `research_need: needed` lists at least one `research` item and `not_needed` none, and a
+non-null body cites every item, and only listed items, as `research[i]`. `solver_machine` pins the
+solver's machine: `null` for a container proposal, which runs in the image its build publishes, and
+`none`, `shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one, where
+`none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
+The proposer or triage writes it, and the build keeps it.
+`document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
+field that constrains a completion to the canonical layout for that id and source. A reply cut off
+by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
+built from `DOCUMENT_REPAIR_PROMPT`.
 
 ## Task specs
 
