@@ -267,13 +267,15 @@ def stage1_program(contract: dict) -> str:
     # after the actor has stopped, through stdin, with the private contract embedded.
     return """import hashlib, importlib, importlib.metadata, json, os, pathlib, subprocess
 c = CONTRACT
-root = pathlib.Path('/testbed')
+root = pathlib.Path(c['workspace'])
 def git(*args):
     p = subprocess.run(['/usr/bin/git', '-C', str(root), *args], capture_output=True, text=True)
     return p.stdout.strip() if p.returncode == 0 else None
+def repository_url(value):
+    return None if value is None else value.rstrip('/').removesuffix('.git')
 checks = {
     'workspace': root.is_dir() and not root.is_symlink(),
-    'origin': git('config', '--get', 'remote.origin.url') == c['origin'],
+    'origin': repository_url(git('config', '--get', 'remote.origin.url')) == repository_url(c['origin']),
     'branch': git('symbolic-ref', '--short', 'HEAD') == c['branch'],
     'commit': git('rev-parse', 'HEAD') == c['commit'],
     'pristine_tracked_files': all(

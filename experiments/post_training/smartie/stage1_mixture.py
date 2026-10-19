@@ -29,16 +29,27 @@ def stage1_package(record: dict, directory: Path, image: str) -> None:
     contract = json.loads(base64.b64decode(contract_resource.source.content_base64))
     if contract["stage"] != "stage1":
         raise ValueError("Only setup tasks belong in this experiment")
-    instruction = original.task.context.events[0].content
+    instruction = original.task.context.events[0].content.replace(
+        "Finish with a final response when ready.",
+        "When ready, submit with a separate bash call: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT.",
+    )
+    agent_config = Path(__file__).with_name("stage1-agent.yaml").read_bytes()
+    agent_sha256 = hashlib.sha256(agent_config).hexdigest()
     directory.mkdir(parents=True, exist_ok=False)
     (directory / "tests").mkdir()
     (directory / "environment").mkdir()
+    (directory / "agent").mkdir()
+    (directory / "agent/setup.yaml").write_bytes(agent_config)
     (directory / "instruction.md").write_text(instruction)
     (directory / "environment/Dockerfile").write_text(f"FROM {image}\nWORKDIR /testbed\n")
     (directory / "task.toml").write_text(
         'version = "1.0"\n[agent]\ntimeout_sec = 1800.0\n'
         "[verifier]\ntimeout_sec = 120.0\n[environment]\n"
         f'docker_image = "{image}"\ncpus = 2\nmemory_mb = 3072\nallow_internet = true\n'
+        '\n[metadata.agent_profile]\nschema_version = 1\nconfig_file = "agent/setup.yaml"\n'
+        f'config_sha256 = "{agent_sha256}"\n'
+        '[metadata.agent_profile.agent]\nname = "mini-swe-agent"\n'
+        '[metadata.agent_profile.agent.kwargs]\nversion = "2.1.0"\n'
     )
     (directory / "tests/readiness_check.py").write_text(stage1_program(contract))
     (directory / "tests/test.sh").write_text(
@@ -95,7 +106,7 @@ def build(staged: Path, previous: Path, output: Path, image: str, seed: int) -> 
             dataset=original.task.source.dataset,
             revision=staged_revision,
             row=original.task.id.split(":", 1)[1],
-            importer_revision="smartie-stage1-harbor-v1",
+            importer_revision="smartie-stage1-harbor-v2-agent-profile",
         )
         task = harbor_trial_task(directory, source=source)
         assert task.id == original.task.id
@@ -107,6 +118,29 @@ def build(staged: Path, previous: Path, output: Path, image: str, seed: int) -> 
         raise ValueError("Mixed training identities repeat or overlap validation")
     pq.write_table(pa.Table.from_pylist(rows), output / "train.parquet")
     shutil.copyfile(previous / "validation.parquet", output / "validation.parquet")
+    (output / "README.md").write_text(
+        "# SWE-Smith repository setup and structural retention\n\n"
+        f"This revision contains {len(records):,} repository-setup tasks and an equal number of structural tasks. "
+        "Setup tasks require the specified fork, named branch and commit in `/testbed`, unchanged "
+        "tracked source, and an editable installation importable outside the checkout. No bug repair "
+        "is requested. The verifier accepts the optional `.git` suffix for the same remote URL; "
+        "other forks, detached HEAD and changed tracked files still fail.\n\n"
+        "## Source-owned agent profile\n\n"
+        "Every Stage 1 Harbor package contains `agent/setup.yaml` and a "
+        "`metadata.agent_profile` declaration in `task.toml`. The profile selects Mini SWE Agent "
+        "2.1.0 and binds the prompt file by SHA-256. The same files are embedded in each Parquet "
+        "task's host-private resources, so the profile survives export and relocation.\n\n"
+        "MarinSkyRL's source-agent-profile loader reads these defaults separately for each task. "
+        "Use the full Harbor trial session and installed-agent runtime; do not apply the Stage 1 "
+        "prompt globally to other sources. Explicit run overrides win and are recorded in trial "
+        "results. Missing or corrupted prompt files fail preflight. Other training systems must "
+        "read this declaration or pass the bundled YAML through Harbor's agent `kwargs.config_file`. "
+        "The YAML overrides Mini SWE Agent's system and instance templates while retaining its bash "
+        "tool and submission protocol. Submit using a separate bash call containing only "
+        "`echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`.\n\n"
+        "Validation rows are copied unchanged from the previous cohort. This is a private release; "
+        "publishing task packages or trace content requires a separate redistribution review.\n"
+    )
     report = {
         "seed": seed,
         "image": image,
@@ -118,6 +152,12 @@ def build(staged: Path, previous: Path, output: Path, image: str, seed: int) -> 
         "ordered_train_ids": ids,
         "validation_rows": len(validation_rows),
         "validation_payload_changed": False,
+        "agent_profile": {
+            "schema_version": 1,
+            "name": "mini-swe-agent",
+            "version": "2.1.0",
+            "config_sha256": hashlib.sha256(Path(__file__).with_name("stage1-agent.yaml").read_bytes()).hexdigest(),
+        },
         "runtime_validation": "pending; local qualification does not certify AMD64 Daytona execution",
         "inputs_sha256": {
             str(p): hashlib.sha256(p.read_bytes()).hexdigest()
