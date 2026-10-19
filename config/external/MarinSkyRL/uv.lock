@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -1411,7 +1411,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?branch=main" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fstartup-quick-fixes" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1630,7 +1630,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#32edb00f784dac6995136d034ad7231a9b985bc0" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=atqamar%2Fstartup-quick-fixes#b9bbf18d3dbf3480ab4a0ebeedbc495f365ebc2e" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
