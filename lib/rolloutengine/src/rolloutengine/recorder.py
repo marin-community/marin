@@ -131,6 +131,10 @@ class _CleanupScope:
 class _Deadlines:
     total: asyncio.Timeout
     tool: asyncio.Timeout
+    attempt: asyncio.Timeout | None
+
+    def attempt_expired(self) -> bool:
+        return self.attempt is not None and self.attempt.expired()
 
 
 @dataclass(frozen=True)
@@ -152,9 +156,9 @@ class _Recorder:
 
     It is outside the attempt deadline, so an interrupted attempt keeps all that it recorded. A request
     changes the record only when the model answers or fails. Thus a request that is cancelled while the
-    model generates changes nothing, and the harness can send it again. When the harness ends or a turn
-    deadline expires, the record is final: the recorder stops an open model call, ignores its result, and
-    records a sent request that has no answer. Final observations replace such a request.
+    model generates changes nothing, and the harness can send it again. When the harness ends or a turn or
+    attempt deadline expires, the record is final: the recorder stops an open model call, ignores its result,
+    and records a sent request that has no answer. Final observations replace such a request.
     """
 
     def __init__(self, model: Model, limits: RolloutLimits, mode: TraceMode, events: EventSink):
@@ -235,7 +239,7 @@ class _Recorder:
         metrics: Mapping[str, Any] | None = None,
     ) -> None:
         if self._ended():
-            raise RolloutEnded("The harness ended, or a turn deadline expired")
+            raise RolloutEnded("The harness ended, or a deadline expired")
         if self.model_call is not None:
             raise RuntimeError("A harness records step data only between model requests")
         if self.stopped or self.model_error is not None:
@@ -280,6 +284,10 @@ class _Recorder:
         if refusal is not None:
             # Yield first, so that a harness that catches the refusal and asks again cannot block a deadline.
             await asyncio.sleep(0)
+            deadlines = self.deadlines
+            if deadlines is not None and deadlines.attempt_expired():
+                # The harness caught the cancellation at the attempt deadline. Its requests are cancelled all the same.
+                raise asyncio.CancelledError
             raise refusal
         if self.model_call is not None:
             raise RuntimeError("A harness sends only one model request at a time")
@@ -291,12 +299,12 @@ class _Recorder:
         if self.model_error is not None:
             return RolloutEnded("The rollout ended after a failed model request")
         if self._ended():
-            return RolloutEnded("The harness ended, or a turn deadline expired")
+            return RolloutEnded("The harness ended, or a deadline expired")
         return None
 
     def _ended(self) -> bool:
         deadlines = self.deadlines
-        return deadlines is None or deadlines.tool.expired() or deadlines.total.expired()
+        return deadlines is None or deadlines.tool.expired() or deadlines.total.expired() or deadlines.attempt_expired()
 
     def _stop_at_limit(self, observations: tuple[dict[str, Any], ...], token_ids: tuple[int, ...] | None) -> NoReturn:
         """Refuse the request at a limit, and record the observations as the end of the last turn's step."""
@@ -335,7 +343,7 @@ class _Recorder:
             # Also when the transport caught the deadline's cancellation and answered or failed in another way.
             outcome = TimeoutError("The model turn deadline expired")
         if self._ended():
-            raise RolloutEnded("The harness ended, or a turn deadline expired, while the model generated")
+            raise RolloutEnded("The harness ended, or a deadline expired, while the model generated")
         self._record_request(request)
         conversation = self.conversation
         assert conversation is not None
@@ -453,16 +461,20 @@ class _Recorder:
 
 
 async def _run_harness(
-    harness: Harness, context: HarnessContext, recorder: _Recorder
+    harness: Harness, context: HarnessContext, recorder: _Recorder, *, attempt_deadline: asyncio.Timeout | None
 ) -> tuple[RolloutOperation, BaseException] | None:
-    """Run the harness under the turn deadlines, and return its failure. A token-contract violation propagates."""
+    """Run the harness under the turn deadlines, and return its failure. A token-contract violation propagates.
+
+    After the engine's ``attempt_deadline`` expires, the session refuses requests, and the attempt fails also
+    when the harness caught the cancellation.
+    """
     failure: Exception | None = None
     recorder.turn_ended = time.monotonic()
     # The recorder sets both deadlines: the total one at the first request, the tool one after each turn.
     total, tool = asyncio.timeout(None), asyncio.timeout(None)
     try:
         async with total, tool:
-            recorder.deadlines = _Deadlines(total, tool)
+            recorder.deadlines = _Deadlines(total, tool, attempt_deadline)
             try:
                 await harness.run(context, recorder)
             except Exception as error:
@@ -480,6 +492,8 @@ async def _run_harness(
         raise recorder.model_error
     if isinstance(failure, RolloutContractError):
         raise failure
+    if refused and attempt_deadline is not None and attempt_deadline.expired():
+        return RolloutOperation.ATTEMPT, TimeoutError("Attempt deadline expired")
     if recorder.model_error is not None and refused:
         return RolloutOperation.MODEL, recorder.model_error
     if refused and total.expired():
@@ -518,7 +532,7 @@ async def harness_rollout(
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as resources:
         context = HarnessContext(task, machine, events, _CleanupScope(resources, cleanup), run_id)
-        failure = await _run_harness(harness, context, recorder)
+        failure = await _run_harness(harness, context, recorder, attempt_deadline=None)
     rollout = recorder.rollout(run_id, {})
     if cleanup.errors:
         rollout = replace(rollout, metrics={**rollout.metrics, "cleanup_error_count": float(len(cleanup.errors))})
