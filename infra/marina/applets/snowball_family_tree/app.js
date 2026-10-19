@@ -177,6 +177,11 @@ function render() {
     applyFilter();
   });
 }
+function edgePath(from, to, d) {
+  const color =
+    from.org === "community" ? "var(--community)" : "var(--athena)";
+  return `<path class="edge ${to.confidence === "inferred" ? "inferred" : ""}" style="stroke:${color}" data-from="${esc(from.id)}" data-to="${esc(to.id)}" d="${d}" marker-end="url(#arrow)"><title>${esc(from.title)} → ${esc(to.title)}</title></path>`;
+}
 function layout() {
   const world = $("#world"),
     pad = 32,
@@ -284,11 +289,7 @@ function layout() {
             rowIndex === 0
               ? `M${sx},${sy} V${bus} H${tx} V${ty}`
               : `M${sx},${sy} V${firstBus} H${rail} V${bus} H${tx} V${ty}`;
-          const color =
-            n.org === "community" ? "var(--community)" : "var(--athena)";
-          paths.push(
-            `<path class="edge ${c.confidence === "inferred" ? "inferred" : ""}" style="stroke:${color}" data-from="${esc(n.id)}" data-to="${esc(c.id)}" d="${d}" marker-end="url(#arrow)"><title>${esc(n.title)} → ${esc(c.title)}</title></path>`,
-          );
+          paths.push(edgePath(n, c, d));
         }
         colLeft += block.columnWidths[col] + gap;
       });
@@ -307,11 +308,7 @@ function layout() {
       b = positions.get(to.id);
     if (!a || !b) continue;
     const d = `M${a.x + a.width / 2},${a.y + a.height} V${b.y - levelGap / 2} H${b.x + b.width / 2} V${b.y}`;
-    const color =
-      from.org === "community" ? "var(--community)" : "var(--athena)";
-    paths.push(
-      `<path class="edge ${to.confidence === "inferred" ? "inferred" : ""}" style="stroke:${color}" data-from="${esc(from.id)}" data-to="${esc(to.id)}" d="${d}" marker-end="url(#arrow)"><title>${esc(from.title)} → ${esc(to.title)}</title></path>`,
-    );
+    paths.push(edgePath(from, to, d));
   }
   canvasWidth = cursor - gap + pad;
   canvasHeight =

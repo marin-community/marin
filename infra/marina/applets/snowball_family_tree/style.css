@@ -433,22 +433,22 @@ select {
 }
 .edge {
   fill: none;
-  stroke-width: 2.4;
+  stroke-width: 1.5;
   opacity: 0.52;
 }
 .edge.inferred {
   stroke-dasharray: 5 4;
 }
 .edge.highlight {
-  stroke-width: 3.4;
+  stroke-width: 2;
   opacity: 1;
 }
 .edge.subtree {
-  stroke-width: 3;
+  stroke-width: 2;
   opacity: 0.95;
 }
 .edge.dim {
-  opacity: 0.12;
+  opacity: 0.25;
 }
 .detail {
   background: var(--white);
@@ -874,16 +874,6 @@ h1 {
 }
 .world.overview-dense .node.collapsed .node-brief {
   display: none;
-}
-.edge {
-  stroke-width: 1.5;
-}
-.edge.highlight,
-.edge.subtree {
-  stroke-width: 2;
-}
-.edge.dim {
-  opacity: 0.25;
 }
 .tree-nodes > .node.ancestor,
 .tree-nodes > .node.descendant {
