@@ -8,7 +8,7 @@ import pytest
 # These tests run in the marin-taskforge package environment; environments without it skip them.
 pytest.importorskip("taskforge")
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel
 from taskcompendium.models import TaskSpec
@@ -41,7 +41,9 @@ WORKPIECE = f"{CAPABILITY}--00"
 class UnusedModel:
     model = "unused"
 
-    async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
+    async def complete(
+        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
+    ) -> Completion:
         raise AssertionError("the example program calls no model")
 
     async def complete_structured[T: BaseModel](

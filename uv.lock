@@ -7725,8 +7725,11 @@ source = { editable = "lib/taskforge" }
 dependencies = [
     { name = "click" },
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
+    { name = "marin-rolloutengine" },
+    { name = "marin-shellbox", extra = ["shellsim"] },
     { name = "marin-taskcompendium" },
     { name = "openai" },
     { name = "pydantic" },
@@ -7743,8 +7746,11 @@ test = [
 requires-dist = [
     { name = "click" },
     { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "jsonschema", specifier = ">=4.20" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
+    { name = "marin-shellbox", extras = ["shellsim"], editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2.0" },

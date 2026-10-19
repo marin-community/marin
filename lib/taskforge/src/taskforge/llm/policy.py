@@ -52,21 +52,32 @@ class ReasoningEffort(StrEnum):
 class LLMPolicy:
     """Sampling settings for a logical call.
 
+    ``temperature`` and ``top_p`` default to GLM-5.3's published ``generation_config.json``
+    (temperature 1.0, top_p 0.95, no top_k), so an unset policy samples as the model publishes.
+    Chat completions and the token-id route both send exactly ``sampling_params()``, so the two
+    transports sample the same distribution.
+
     Attributes:
         max_tokens: Output budget per request. Defaults to the model maximum.
         reasoning_effort: Passed to the chat template as ``reasoning_effort``.
         temperature: Sampling temperature.
+        top_p: Nucleus-sampling probability mass.
         max_continuations: Continuation rounds after ``finish_reason == "length"``; 0 disables.
     """
 
     max_tokens: int = GLM_MAX_OUTPUT_TOKENS
     reasoning_effort: ReasoningEffort = ReasoningEffort.HIGH
-    temperature: float = 0.7
+    temperature: float = 1.0
+    top_p: float = 0.95
     max_continuations: int = 4
 
     def template_kwargs(self) -> dict[str, object]:
         """The ``chat_template_kwargs`` this policy sends."""
         return {"reasoning_effort": str(self.reasoning_effort)}
+
+    def sampling_params(self) -> dict[str, float]:
+        """The sampling fields every request sends, on either transport."""
+        return {"temperature": self.temperature, "top_p": self.top_p}
 
 
 @dataclass(frozen=True)
