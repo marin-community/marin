@@ -396,7 +396,7 @@ When the selected set does not change, the run gives no new treatment. Use the m
 ## Compare data-track runs
 
 Do not gate a selection on one held-out loss: a selection moves the domain mix, and Paloma rewards web text and long context.
-In the [validation study](https://claude.ai/artifact/46KvN5W9qp7rMnMPCdcNc9), Paloma macro ordered selection pairs like the downstream target on 32–35% of pairs.
+In the [validation study](https://claude.ai/artifact/46KvN5W9qp7rMnMPCdcNc9), Paloma macro ordered selection pairs like the downstream target on 20–41% of pairs, and no single held-out loss passed at every rung.
 
 Train the candidate and the random control with `--dense --save-checkpoints` and three matched seeds each.
 Score each checkpoint on one H100, then judge:
