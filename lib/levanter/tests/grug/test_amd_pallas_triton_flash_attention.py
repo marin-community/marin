@@ -245,3 +245,112 @@ def test_flash_attention_reads_precomputed_fa4_bounds(window):
     expected_grads = jax.grad(lambda *a: loss(segment_mask, *a), argnums=(0, 1, 2))(q, k, v)
     actual_grads = jax.grad(lambda *a: loss(bounds_mask, *a), argnums=(0, 1, 2))(q, k, v)
     _assert_gradients_match(actual_grads, expected_grads, tol=1e-6)
+
+
+# The moe_hero_ep layer scan: bounds for the full causal and the windowed layers are computed once outside the scan
+# and sharded over the batch, and each layer selects its bounds with jnp.where on a scanned flag. Every layer attends
+# the same q/k/v, so each one compares directly against the reference under its own mask.
+_SHARDED_SCAN_SCRIPT = """
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from jax import lax
+    from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P, reshard
+
+    from levanter.grug.attention import AttentionMask, fa4_cute_segment_bounds, reference_attention
+    from levanter.grug.attention._amd_pallas_triton_flash import TritonFlashBlockSizes, pallas_triton_flash_attention
+
+    blocks = TritonFlashBlockSizes(block_q=32, block_k=16, block_q_dq=32, block_k_dq=16, block_q_dkv=16, block_k_dkv=32)
+    window = 40
+    # Each segment ID is one contiguous run, the only layout precomputed bounds describe.
+    segments = np.concatenate([np.zeros(50), np.ones(60), -np.ones(18)]).astype(np.int32)
+    rolled = np.roll(segments, 20)
+    rolled[:20] = 0
+    segments = jnp.asarray(np.stack([segments, rolled] * 2))
+    use_long = jnp.asarray([False, True, False])
+    kq, kk, kv, kc = jax.random.split(jax.random.key(0), 4)
+    q = jax.random.normal(kq, (4, 128, 8, 32))
+    k = jax.random.normal(kk, (4, 128, 2, 32))
+    v = jax.random.normal(kv, (4, 128, 2, 32))
+    # Padding queries attend only to themselves under precomputed bounds, so they get no cotangent.
+    valid_rows = (segments >= 0)[:, :, None, None]
+    cotangents = jnp.where(valid_rows, jax.random.normal(kc, (3, *q.shape)), 0.0)
+
+    def reference_loss(q, k, v):
+        total = 0.0
+        for layer_long, cotangent in zip(use_long.tolist(), cotangents):
+            mask = AttentionMask.causal(sliding_window=None if layer_long else window).with_segment_ids(segments)
+            total += jnp.sum(reference_attention(q, k, v, mask, logits_dtype=jnp.float32) * cotangent)
+        return total
+
+    with jax.default_matmul_precision("highest"):
+        expected_loss, expected_grads = jax.value_and_grad(reference_loss, argnums=(0, 1, 2))(q, k, v)
+
+    def loss(q, k, v, segment_ids, cotangents):
+        mask = AttentionMask.causal().with_segment_ids(segment_ids, jnp.copy(segment_ids))
+        long_lower, valid = fa4_cute_segment_bounds(mask, batch_size=4, seq_len=128, sliding_window=None)
+        short_lower, _ = fa4_cute_segment_bounds(mask, batch_size=4, seq_len=128, sliding_window=window)
+        bounds_spec = P("data", None)
+        long_lower, short_lower, valid = (reshard(x, bounds_spec) for x in (long_lower, short_lower, valid))
+
+        def layer(total, scan_inputs):
+            layer_long, cotangent = scan_inputs
+            layer_mask = mask.with_fa4_bounds(jnp.where(layer_long, long_lower, short_lower), valid)
+            out = pallas_triton_flash_attention(q, k, v, layer_mask, block_sizes=blocks, interpret=True)
+            return total + jnp.sum(out * cotangent), None
+
+        total, _ = lax.scan(layer, jnp.zeros((), jnp.float32), (use_long, cotangents))
+        return total
+
+    mesh = Mesh(np.asarray(jax.devices()).reshape(2, 2), ("data", "model"), axis_types=(AxisType.Explicit,) * 2)
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+        sharding = NamedSharding(mesh, P("data", None, "model", None))
+        q, k, v = (jax.device_put(x, sharding) for x in (q, k, v))
+        cotangents = jax.device_put(cotangents, NamedSharding(mesh, P(None, "data", None, "model", None)))
+        ids = jax.device_put(segments, NamedSharding(mesh, P("data", None)))
+        actual_loss, grads = jax.jit(jax.value_and_grad(loss, argnums=(0, 1, 2)))(q, k, v, ids, cotangents)
+
+    assert all(g.sharding.spec == sharding.spec for g in grads)
+    np.testing.assert_allclose(np.asarray(actual_loss), np.asarray(expected_loss), atol=1e-3, rtol=1e-5)
+    for name, got, want in zip("qkv", grads, expected_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(got), np.asarray(want), atol=1e-4, rtol=1e-4, err_msg=f"d{name}")
+"""
+
+
+def test_flash_attention_sharded_layer_scan_over_precomputed_bounds_matches_reference():
+    run_on_cpu_devices(_SHARDED_SCAN_SCRIPT, device_count=4)
+
+
+@pytest.mark.skipif(INTERPRET, reason="production tiles and shapes are too slow for the Pallas interpreter")
+def test_flash_attention_bf16_default_tiles_on_precomputed_bounds_matches_reference():
+    # The moe_hero_ep attention at its production sequence length and window, through the precomputed-bounds path
+    # with the default tile sizes that a training run compiles.
+    seq_len, window = 4096, 2048
+    kq, kk, kv, kc = jax.random.split(jax.random.key(0), 4)
+    q = jax.random.normal(kq, (2, seq_len, 8, 128), jnp.float32).astype(jnp.bfloat16)
+    k = jax.random.normal(kk, (2, seq_len, 2, 128), jnp.float32).astype(jnp.bfloat16)
+    v = jax.random.normal(kv, (2, seq_len, 2, 128), jnp.float32).astype(jnp.bfloat16)
+    segments = jnp.concatenate([jnp.zeros(1500), jnp.ones(2300), -jnp.ones(296)]).astype(jnp.int32)
+    segment_ids = jnp.stack([segments, jnp.roll(segments, 700).at[:700].set(0)])
+    reference_mask = AttentionMask.causal(sliding_window=window).with_segment_ids(segment_ids)
+    lower, valid = fa4_cute_segment_bounds(reference_mask, batch_size=2, seq_len=seq_len, sliding_window=window)
+    bounds_mask = AttentionMask.causal().with_segment_ids(segment_ids).with_fa4_bounds(lower, valid)
+    valid_rows = (segment_ids >= 0)[:, :, None, None]
+    cotangent = jnp.where(valid_rows, jax.random.normal(kc, q.shape, jnp.float32), 0.0)
+
+    def flash(q, k, v):
+        return pallas_triton_flash_attention(q, k, v, bounds_mask)
+
+    def loss(attend, q, k, v):
+        return jnp.sum(attend(q, k, v).astype(jnp.float32) * cotangent)
+
+    def reference(q, k, v):
+        return _reference(q, k, v, reference_mask)
+
+    actual = jnp.where(valid_rows, jax.jit(flash)(q, k, v).astype(jnp.float32), 0.0)
+    expected = jnp.where(valid_rows, reference(q, k, v), 0.0)
+    tol = TOLERANCE[jnp.bfloat16]
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=tol, rtol=tol)
+    actual_grads = jax.jit(jax.grad(lambda *a: loss(flash, *a), argnums=(0, 1, 2)))(q, k, v)
+    expected_grads = jax.grad(lambda *a: loss(reference, *a), argnums=(0, 1, 2))(q, k, v)
+    _assert_gradients_match(actual_grads, expected_grads, tol=tol)

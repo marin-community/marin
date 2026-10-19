@@ -59,6 +59,8 @@ class AttentionMask(eqx.Module):
     # When set, ``gpu_fa4_cute_attention`` and the AMD Triton flash kernels use these directly instead of
     # rebuilding from ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
     # ``lax.scan`` and select a per-layer sliding window (a static field the scan body cannot vary).
+    # Build them with ``fa4_cute_segment_bounds``: the AMD kernels require the bounds of valid tokens to be
+    # nondecreasing and at most the token's own position, as contiguous packed documents give, and do not check it.
     fa4_bounds: tuple[jax.Array, jax.Array] | None = None
 
     @classmethod
