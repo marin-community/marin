@@ -41,7 +41,7 @@ from verifyit.spec import Mode
 
 from taskforge.llm.client import ContextExhausted, ModelRequestRejected, ModelUnavailable
 from taskforge.sandbox.host_failures import machine_lost
-from taskforge.spec.decision import task_decision_grader
+from taskforge.spec.decision import DecisionUnavailable, task_decision_grader
 from taskforge.spec.verdict import reward_in_range
 from taskforge.stage50_validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, Ungraded
 
@@ -117,6 +117,8 @@ def trial_outcome(result: RolloutData | Exception, task: TaskSpec) -> Outcome:
 
 
 def _exception_cause(error: BaseException) -> Cause:
+    if isinstance(error, DecisionUnavailable):
+        return Cause.DECISION_UNAVAILABLE
     if isinstance(error, GenerationLimitReached | ContextExhausted):
         return Cause.GENERATION_LIMIT
     if isinstance(error, ModelUnavailable):

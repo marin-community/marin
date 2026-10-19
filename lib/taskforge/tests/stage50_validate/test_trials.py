@@ -22,7 +22,8 @@ from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
-from taskforge.spec import draft
+from taskforge.spec import decision, draft
+from taskforge.spec.decision import DecisionUnavailable
 from taskforge.spec.rubric import Rubric, RubricItem
 from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.stage50_validate.trials import (
@@ -406,3 +407,18 @@ async def test_a_decision_task_on_a_host_without_a_decision_client_is_refused(tm
 
     with pytest.raises(ValueError, match="no decision client"):
         await run_trial(decision_task(relower), plan(tmp_path, k=1), host, fakes.script_model([]), "0")
+
+
+async def test_a_decision_model_down_twice_is_decision_unavailable_and_the_trial_is_not_rerun(
+    tmp_path, relower, fakes, monkeypatch
+):
+    monkeypatch.setattr(decision, "DECISION_RETRY_BACKOFF", 0.0)
+    client = FakeDecisionClient({DECISION_REPLY: 3.4}, failures=[DecisionUnavailable("503"), DecisionUnavailable("503")])
+    model = fakes.script_model([fakes.text(DECISION_REPLY)])
+    host = replace(settings(fakes.flaky_factory(0, RuntimeError)), decision=client)
+
+    outcomes = await run_trials(decision_task(relower), plan(tmp_path, k=1, max_retries=2), host, model)
+
+    assert isinstance(outcomes[0], Ungraded) and outcomes[0].cause is Cause.DECISION_UNAVAILABLE
+    assert (len(model.requests), len(client.requests)) == (1, 2)
+    assert [e.cause for e in ledger(tmp_path)] == [Cause.DECISION_UNAVAILABLE]

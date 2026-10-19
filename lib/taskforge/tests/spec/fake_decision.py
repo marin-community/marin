@@ -3,6 +3,7 @@
 
 """A decision client for tests: each candidate text reads at a fixed level, and every request is kept."""
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -25,18 +26,27 @@ def level_probabilities(level: float) -> tuple[float, ...]:
 class FakeDecisionClient:
     """Reads ``levels[candidate]`` for a known candidate and ``default`` for any other.
 
-    The candidate is the state's ``candidate_key`` value, the default template's solver output.
+    The candidate is the state's ``candidate_key`` value, the default template's solver output. The leading
+    calls raise ``failures`` in order, and each call first waits ``delay`` seconds; ``timeouts`` keeps the
+    deadline every call was given.
     """
 
     levels: Mapping[str, float]
     default: float = 0.0
     candidate_key: str = "z_candidate_answer"
+    failures: list[Exception] = field(default_factory=list)
+    delay: float = 0.0
     requests: list[tuple[Mapping[str, JsonValue], Mapping[str, ScoreQuestion]]] = field(default_factory=list)
+    timeouts: list[float] = field(default_factory=list)
 
     async def decide(
-        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion]
+        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion], *, timeout: float
     ) -> Mapping[str, tuple[float, ...]]:
         self.requests.append((state, questions))
+        self.timeouts.append(timeout)
+        await asyncio.sleep(self.delay)
+        if self.failures:
+            raise self.failures.pop(0)
         candidate = state[self.candidate_key]
         assert isinstance(candidate, str)
         level = self.levels.get(candidate, self.default)
