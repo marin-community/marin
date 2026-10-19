@@ -4,9 +4,10 @@
 """Plot per-eval BPB for the 67B-A2B 65k and 262k checkpoints against Qwen3.5-35B-A3B-Base and Gemma 4 26B-A4B.
 
 Marin numbers come from the W&B runs written by ``eval_67b_a2b_step156k_paloma_lm_eval_rolling.py``.
-Qwen and Gemma numbers come from the lm-eval results published with issue #8824. All use lm-eval 0.4.12
-``loglikelihood_rolling`` semantics on the same documents (Paloma test split, 7 legacy UncheatableEval subsets).
-Gemma was only run on the newer 15-subset UncheatableEval snapshot, so its UncheatableEval panels are empty.
+Qwen numbers and Gemma's Paloma numbers come from the lm-eval results published with issue #8824. #8824 scored
+Gemma only on the newer 15-subset UncheatableEval snapshot, so its 7-subset numbers come from our own rerun with the
+same lm-eval setup (W&B run ``GEMMA_UNCHEATABLE_RUN``). All use lm-eval 0.4.12 ``loglikelihood_rolling`` semantics
+on the same documents (Paloma test split, 7 legacy UncheatableEval subsets).
 
 Run::
 
@@ -29,6 +30,7 @@ WANDB_PROJECT = "marin-community/marin_moe"
 RESULTS_BASE = "https://storage.googleapis.com/marin-public/held/hero-open-weight-ppl/2026.09.05.1"
 QWEN_RESULTS_URL = f"{RESULTS_BASE}/qwen-results.json"
 GEMMA_RESULTS_URL = f"{RESULTS_BASE}/gemma-4-results.json"
+GEMMA_UNCHEATABLE_RUN = "mv3surut"
 CHECKPOINTS = (
     ("Marin 67B-A2B 65k ckpt (step 156k)", "step156k"),
     ("Marin 67B-A2B 262k ckpt (qk 1.75, skew8, step 157k)", "ctxext_qk175_skew8_step157k"),
@@ -83,18 +85,18 @@ def _qwen_bpb() -> dict[str, float]:
     return {task: metrics["bits_per_byte,none"] for task, metrics in results.items()}
 
 
-def _gemma_paloma_bpb() -> dict[str, float]:
+def _gemma_bpb() -> dict[str, float]:
     with urllib.request.urlopen(GEMMA_RESULTS_URL) as f:
-        return json.load(f)["paloma"]
+        paloma = json.load(f)["paloma"]
+    run = wandb.Api(timeout=60).run(f"{WANDB_PROJECT}/{GEMMA_UNCHEATABLE_RUN}")
+    uncheatable = {key: run.summary[f"bpb/uncheatable_marin_{key}"] for _, key in UNCHEATABLE}
+    return paloma | uncheatable
 
 
 def panels(
     marin: dict[str, dict[str, float]], qwen: dict[str, float], gemma: dict[str, float]
-) -> list[tuple[str, list[float | None]]]:
-    """One (title, [ckpt values..., qwen, gemma]) entry per eval, plus a macro entry per suite.
-
-    Gemma is None on UncheatableEval.
-    """
+) -> list[tuple[str, list[float]]]:
+    """One (title, [ckpt values..., qwen, gemma]) entry per eval, plus a macro entry per suite."""
 
     def ours(suite: str, key: str) -> list[float]:
         return [marin[f"{tag}/{suite}"][f"lm_eval_rolling/{suite}/{key}"] for _, tag in CHECKPOINTS]
@@ -114,7 +116,10 @@ def panels(
         )
     )
     out += [
-        (f"Uncheatable · {label}", [*ours("uncheatable_eval", f"{key}/bpb"), qwen[f"uncheatable_eval_hero_{key}"], None])
+        (
+            f"Uncheatable · {label}",
+            [*ours("uncheatable_eval", f"{key}/bpb"), qwen[f"uncheatable_eval_hero_{key}"], gemma[key]],
+        )
         for label, key in UNCHEATABLE
     ]
     out.append(
@@ -123,31 +128,25 @@ def panels(
             [
                 *ours("uncheatable_eval", "macro_bpb"),
                 statistics.mean(qwen[f"uncheatable_eval_hero_{key}"] for _, key in UNCHEATABLE),
-                None,
+                statistics.mean(gemma[key] for _, key in UNCHEATABLE),
             ],
         )
     )
     return out
 
 
-def plot(rows: list[tuple[str, list[float | None]]], path: str) -> None:
+def plot(rows: list[tuple[str, list[float]]], path: str) -> None:
     fig, axes = plt.subplots(5, 5, figsize=(17, 15.5))
     for ax, (title, vals) in zip(axes.flat, rows, strict=True):
         is_macro = "MACRO" in title
-        present = [v for v in vals if v is not None]
-        top = max(present)
+        top = max(vals)
         for x, v in enumerate(vals):
-            if v is None:
-                ax.text(x, top * 0.04, "n/a", ha="center", va="bottom", fontsize=8.5, color=MUTED)
-                continue
             ax.bar(x, v, color=COLORS[x], width=0.72, edgecolor="white", linewidth=2)
             ax.text(x, v + top * 0.02, f"{v:.3f}", ha="center", va="bottom", fontsize=8.5, color=INK)
         ax.set_xlim(-0.6, len(vals) - 0.4)
         ax.set_ylim(0, top * 1.3)
         ours, qwen, gemma = vals[0], vals[2], vals[3]
-        deltas = [f"65k vs Qwen {(ours / qwen - 1) * 100:+.1f}%"]
-        if gemma is not None:
-            deltas.append(f"65k vs Gemma {(ours / gemma - 1) * 100:+.1f}%")
+        deltas = [f"65k vs Qwen {(ours / qwen - 1) * 100:+.1f}%", f"65k vs Gemma {(ours / gemma - 1) * 100:+.1f}%"]
         ax.text(
             0.98,
             0.97,
@@ -181,8 +180,8 @@ def plot(rows: list[tuple[str, list[float | None]]], path: str) -> None:
     fig.suptitle(
         "Bits per byte (lower is better), lm-eval 0.4.12 loglikelihood_rolling, max_length=4096; "
         "Paloma test split (154,440 docs), UncheatableEval 7 subsets (7,052 docs).\n"
-        "Gemma was only run on the newer 15-subset UncheatableEval snapshot, "
-        "so it has no comparable UncheatableEval numbers.",
+        "Gemma UncheatableEval numbers are our rerun with the same lm-eval setup; "
+        "all other open-model numbers are from #8824.",
         fontsize=11,
         color=MUTED,
         y=0.962,
@@ -192,4 +191,4 @@ def plot(rows: list[tuple[str, list[float | None]]], path: str) -> None:
 
 
 if __name__ == "__main__":
-    plot(panels(_marin_summaries(), _qwen_bpb(), _gemma_paloma_bpb()), sys.argv[1])
+    plot(panels(_marin_summaries(), _qwen_bpb(), _gemma_bpb()), sys.argv[1])
