@@ -107,6 +107,14 @@ All projects share these conventions:
   environment-sealed Actions ciphertext together with its public-key ID; the
   plaintext must never enter Pulumi config, arguments, or state.
 
+  The `marin` stack publishes the `iris-principal-directory` secret in Secret Manager.
+  Its payload is marked with `pulumi.Output.secret`, so previews redact it and the
+  stack's KMS secrets provider encrypts the payload stored in Pulumi state. IAM
+  bindings already record principal email addresses in state as identity metadata.
+  Secret-level read grants are assigned to the Iris controller and deployment CI
+  accounts; project-level IAM permissions can also allow other principals to read
+  the secret.
+
 ## Picking a pattern for new work
 
 1. Add cluster-scoped or shared GCP infrastructure to `infra/pulumi`. Put

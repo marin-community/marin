@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from finestore.reader import ReadView
 from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from taskcompendium.convert.answers import answer_task, exact_answer_task
 from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
@@ -27,7 +28,7 @@ from experiments.post_training.task_curation.campaign import CampaignFailed, Cam
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
-from experiments.post_training.task_curation.local import local_artifact_prefix, run_local_steps
+from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
@@ -52,6 +53,7 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
         output_root,
         runtime=runtime,
         max_workers=max_workers,
+        worker_resources=ResourceConfig(cpu=1, ram="4g"),
         cache_dir=cache_dir,
         source_ids={name: source.info.id for name, source in sources.items()},
     )
@@ -104,7 +106,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     grader = cast(VerifyitGrader, task.grader)
     assert verifyit_spec(grader) == ExactSpec(("two",), ignore_case=False)
     environment = cast(EnvironmentRequirements, grader.environment)
-    with local_artifact_prefix(str(tmp_path / "downloads")):
+    with artifact_prefix(str(tmp_path / "downloads")):
         assert environment.packages_lock == planned_lock_url(source.grader)
     catalog = ReadView(str(output / "catalog"))
     recorded = list(catalog.iter_rows("sources"))

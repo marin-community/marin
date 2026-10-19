@@ -12,6 +12,10 @@ or frontend bundles. A restart loads the same selected packages from Postgres.
 See [Building Marina apps](../../docs/references/marina.md) for product guidance and
 [RL Data Atlas](../../docs/references/rl-data-atlas.md) for Atlas's separate data loader.
 
+The [Python playground](applets/python_playground/README.md) provides trusted Python
+execution with saved files and report previews. Its README covers local previews,
+storage limits, examples, the agent pane and project uploads.
+
 ## Source and package layout
 
 Maintained sources live in `apps/<name>/` or `applets/<name>/`. Both directories use
@@ -71,10 +75,18 @@ uv run marina release my-app --base-version CURRENT_VERSION --json
 
 Use `--base-version 0` for the first release of the declared UUID. It succeeds only
 if that UUID is absent. Updates require the exact inspected current revision and
-owner/operator authorization; concurrent changes return a conflict. A successful
+internal Marina authentication; concurrent changes return a conflict. A successful
 release builds, validates imports, uploads the package, runs its migration and
 atomically selects the new revision. A failed migration rolls back its database
 changes and leaves the previous revision current.
+
+Any user admitted by Marina's internal IAP authentication can update, change the
+access mode, roll back or archive an existing application. Releases, mode changes
+and rollback require the inspected current revision; archive does not take a
+revision. Production releases attribute each revision to the verified caller.
+The directory shows the selected revision's publisher. Publisher identity does
+not restrict access. The registry retains its original-publisher `owner` column
+as historical metadata, avoiding a destructive schema migration during rollout.
 
 Frontend builds start with empty `dist/`. The builder restores existing local
 output after packaging, including on failure. Production releases always build;
@@ -109,7 +121,7 @@ The first command allocates a UUID. Record it before updating. Maintained source
 should declare `applet_id` in `applet.toml` so ordinary releases cannot
 accidentally select another application. A declared UUID must match the upload
 target, including direct API uploads. Source checks are client safeguards; server
-owner/operator and version checks still apply to direct uploads and older clients.
+authentication and version checks still apply to direct uploads and older clients.
 
 Merging source does not release it. Changing shared browser components requires
 releasing the applications that consume them. Dataset loading is a separate
@@ -382,10 +394,10 @@ prerequisites while the existing service and workers still run:
   access. The Marina stack does not grant impersonation. Arrange an approved
   binding through the global `marin` IAM workflow before attempting bootstrap.
 - Copy the `user` value from `/api/marina/me` on the deployed authenticated
-  service for `OWNER_ID`. The default operator list is empty: only that exact
-  publisher ID can update or archive the four named apps after bootstrap.
-  To share those operations, commit the intended verified user IDs in the stack's
-  `applet_operators` configuration and apply that configuration during cutover.
+  service for `PUBLISHER_ID`. This records attribution for the bootstrap releases.
+  After registration, any authenticated internal Marina user can update or
+  archive these apps. `applet_operators` controls initial named registration and
+  host bindings; it does not restrict updates to existing applications.
 - Inspect schema and relation ownership through an administrative SQL connection.
   The following query must return no rows; resolve any other owners explicitly
   before release:
@@ -422,7 +434,7 @@ gcloud run jobs executions list --job marina-evaldash --region us-central1 --pro
 
 Run the following commands from the repository root in a clean current-main
 checkout. The new kernel runs locally as the service account against the existing
-database. Replace the literal `OWNER_ID` with the verified value collected above:
+database. Replace the literal `PUBLISHER_ID` with the verified value collected above:
 
 ```bash
 gcloud auth application-default login \
@@ -432,14 +444,14 @@ export PGDATABASE=marina
 export PGUSER=marina@hai-gcp-models.iam
 export MARINA_DATA_ROOT=gs://marin-marina
 uv run marina migrate
-uv run marina serve --host 127.0.0.1 --local-publisher OWNER_ID
+uv run marina serve --host 127.0.0.1 --local-publisher PUBLISHER_ID
 ```
 
 The Postgres connection must use that service role, which owns the existing schemas;
 the operator's personal database login cannot adopt them. Do not run the bootstrap
 with `K_SERVICE` or `MARINA_IAP_AUDIENCE` set. `--local-publisher` is rejected with
 IAP, in Cloud Run, or on a non-loopback bind. The local kernel admits loopback
-callers only; the owner ID is the operator's explicit assignment.
+callers only; the publisher ID records the operator's explicit attribution.
 Ownership changes wait at most five seconds for database locks. On lock contention,
 leave the old service serving, identify the holder and retry after it finishes.
 

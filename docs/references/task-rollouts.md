@@ -35,7 +35,7 @@ Lowering preserves the task definition and adds these deployment settings:
 | --- | --- |
 | `MachineRuntimeSpec` | `backend`, `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`, `user`, `startup_timeout`, `cleanup_timeout` |
 | `TaskRuntimeSpec` | Optional `task_machine` and `verifier_machine` selections |
-| `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout`, `trace`, `max_total_tokens`, `tool_output_spill_bytes` |
+| `TaskSessionSpec` | `task_session`, `shell_tool`, `max_turns`, `model_turn_timeout`, `command_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout`, `trace`, `max_total_tokens` |
 | `LoweredTaskSpec` | `task: TaskSpec`, `runtime: TaskRuntimeSpec`, `session: TaskSessionSpec` |
 
 `rolloutengine.lowering.lower_task(task, runtime, session, factories=..., sessions=..., providers=...)` constructs and validates the lowered record.
@@ -47,7 +47,6 @@ Optional fields accept `None`.
 `TaskSessionSpec.cleanup_timeout` requires a finite, positive value.
 Other deadlines accept `None` or a finite, positive value.
 `max_total_tokens` accepts `None` or a positive integer.
-`tool_output_spill_bytes` accepts `None`, which turns spilling off, or a positive integer up to the default machine output limit.
 
 The engine resolves three registries by key:
 
@@ -250,22 +249,11 @@ flowchart LR
 
 RolloutEngine and curation share call decoding, execution, and JSON observations: stdout,
 stderr, exit code, reason, and separate stdout/stderr truncation flags. Each stream holds at most
-the machine output limit, 1 MiB in RolloutEngine; output past it is lost. The episode runner
+the machine output limit, 1 MiB in RolloutEngine; output past it is lost, and its truncation flag is set.
+The engine does not keep the rest: a model that expects long output redirects it to a file in the
+workspace and reads it with later commands, and a harness that wants a safety net provides one. The episode runner
 advertises the tools its environment supplies. Trajectories retain the chosen names and call
 IDs. Graders consume the resulting submission independently of the tool interface.
-
-Set `TaskSessionSpec.tool_output_spill_bytes` to keep large output in the task machine.
-Each shell command then writes its stdout and stderr to files under `/tmp/tool-output/`, with a
-fresh name for each call. A stream longer than the limit keeps its file. Its observation field holds
-the first `tool_output_spill_bytes` bytes, its truncation flag is true, and `stdout_path` or
-`stderr_path` names the file, so the model can read the rest with later commands. Shorter streams
-appear in full, their files are removed, and their path is `null`. A timed-out command reports both
-paths, because its files can hold output the machine did not return. The limit must not exceed 1 MiB. When the field is `None`, observations have no path fields and are unchanged.
-
-Each file keeps at most the first 64 MiB of its stream (`taskcompendium.runtime.shell.SPILL_FILE_BYTES`);
-the rest is read and discarded, so the command keeps running. Kept files stay until the attempt ends, so each
-spilled call can use up to 128 MiB of the task machine's storage. Choose a storage allocation with that in mind.
-Only the shell tool spills. Provider tools run on the host and return their observations in full, so a provider bounds its own output.
 
 The model receives only public context, answer-format instructions, tool definitions, and task observations.
 The serialized task and lowered record contain the grader and verifier resources. Do not send them to the model.
@@ -319,12 +307,19 @@ Durations are wall-clock seconds.
 | --- | --- | --- |
 | `AttemptStarted` | After validation, before machine acquisition | |
 | `MachineReady` | After task-machine setup; not emitted without a task machine | `duration` |
-| `SessionPrepared` | After `prepare()` | `message_count`, `duration` |
-| `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, `stop_reason`, prompt and response token counts (as reported and unchecked under `TraceMode.MESSAGES`), `ModelTurn.metadata`, `duration` |
-| `ToolCallCompleted` | By a session, per tool call that returns an observation | `name`, `observation_bytes`, `duration` |
-| `TransitionCompleted` | After `advance(turn)` | `turn_index`, `done`, `observation_count`, `duration` |
-| `Graded` | After the session's `grade()` returns | `status`, `reward` |
-| `AttemptEnded` | After cleanup, when `run()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` |
+| `SessionPrepared` | After `prepare()` | first request's `messages` and `options`, `duration` |
+| `ModelTurnCompleted` | After a model turn passes the token checks | `turn_index`, assistant `message`, `stop_reason`, prompt and response token counts (as reported and unchecked under `TraceMode.MESSAGES`), `usage`, `ModelTurn.metadata`, `duration` |
+| `ToolCallCompleted` | By a session, per tool call that returns an observation | `call_id`, `name`, `observation_bytes`, `done`, `duration` |
+| `TransitionCompleted` | After `advance(turn)` | `turn_index`, `done`, `observations`, `reset_conversation`, `duration` |
+| `Graded` | After the session's `grade()` returns | `status`, `reward`, `error`, `failure`, `duration` of output capture and grading |
+| `AttemptEnded` | After cleanup, when `run()` returns or raises `RolloutInterrupted` | `stop_reason`, or the interrupted `operation` and its `error`; `duration` of the whole attempt |
+
+The engine's events carry the conversation: `SessionPrepared` the first request, then for each turn
+`ModelTurnCompleted` the assistant message and `TransitionCompleted` the observations or the new conversation
+of a reset, so an observer can follow the transcript for any session. `TransitionCompleted` reports a reset even
+when the turn or token limit ends the rollout and the engine skips it.
+`ToolCallCompleted` carries per-call timing and outcome; its observation is the `TransitionCompleted` message with
+the same `tool_call_id`. Event fields reference the attempt's own messages, so delivery copies nothing.
 
 Sessions emit their own payloads through `TaskSessionContext.events`, an `EventSink` whose `emit` never blocks; the built-in `shellbox` session emits `ToolCallCompleted`.
 The engine never awaits the observer.

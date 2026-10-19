@@ -677,7 +677,9 @@ def journey(
 
 @cli.command()
 @click.option("--host", default="0.0.0.0", show_default=True)
-@click.option("--local-publisher", help="Owner ID for one-time bootstrap through a loopback operator kernel.")
+@click.option(
+    "--local-publisher", help="Publisher attribution for one-time bootstrap through a loopback operator kernel."
+)
 def serve(host: str, local_publisher: str | None) -> None:
     """Serve for production: configuration from the environment, bound on all interfaces."""
     config = MarinaConfig.from_env()

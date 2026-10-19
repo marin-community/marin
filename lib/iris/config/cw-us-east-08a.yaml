@@ -107,6 +107,9 @@ storage:
 # `iris cluster init-keys` and register this cluster's public half in the marin /
 # marin-dev federation_peers before first start.
 auth:
+  principal_directory:
+    - env:IRIS_PRINCIPAL_DIRECTORY
+    - gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
   signing_key:
     - env:IRIS_SIGNING_KEY
     - gcp-secret://projects/748532799086/secrets/iris-cw-us-east-08a-signing-key/versions/1
@@ -123,10 +126,12 @@ auth:
   # GitHub GPU workflows submit through the marin hub as github-iris; the
   # remaining non-openathena identities are interactive principals.
   allowed_submitters:
+    - principal:human-080
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris

@@ -19,7 +19,7 @@ config:
   marin-loom:pruneDeployment: "true"
   marin-loom:settings:
     auth.github_organizations: "Open-Athena:188075292"
-    browser.allowed_origins: https://marina.oa.dev
+    browser.allowed_origins: https://marina.oa.dev,https://applets.marina.oa.dev
     github.profile: github
     github.trigger_allowed_user_ids: "306337490"
     slack.effort: agent-default
@@ -71,7 +71,7 @@ config:
         groups:
           - messaging
           - watch
-    default:
+    default: &interactiveProfile
       agent: codex
       description: Interactive Marin work with repository-owned workflow instructions
       model: &codexModel gpt-6-sol
@@ -99,6 +99,10 @@ config:
           - permissions
           - session
           - watch
+    codex-6-1:
+      <<: *interactiveProfile
+      description: Interactive Marin work with GPT-6.1 Sol
+      model: gpt-6.1-sol
     marina:
       agent: codex
       description: Interactive questions over read-only Marina application APIs

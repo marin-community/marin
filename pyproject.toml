@@ -25,8 +25,8 @@ dependencies = [
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
     # republish. Its native companion marin-finelog-server (the in-process
     # log-server ext, module `finelog_server`, maturin lib/finelog/rust) is NOT a
-    # member: it ships as a pre-built wheel and reaches us transitively via
-    # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
+    # member: it ships as a pre-built wheel in marin-iris's `controller` extra
+    # and iris's test group. `scripts/rust_mode.py dev` swaps
     # marin-finelog-server to a local source build.
     "marin-finelog",
     "marin-deploy",
