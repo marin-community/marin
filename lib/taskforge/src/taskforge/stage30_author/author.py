@@ -3,12 +3,14 @@
 
 """Authors of build programs, the revisions they receive, and the program manifest.
 
-A caller asks an author for a program in round 0 with the proposal and ``None``. In each later
+A caller awaits an author for a program in round 0 with the proposal and ``None``. In each later
 round the caller passes the ``Revision`` describing what went wrong in the previous one. The
 author returns an ``AuthoredProgram``: the ``RLEnvBuildProgram`` to build next, with the Python
-source it loaded the program from. The coordinator writes that source to ``PROGRAM_FILE`` in a
-directory of the author call, and the build stage loads the program back from the file.
-``static_author`` turns a program written by hand into an author returning no source.
+source it loaded the program from. The coordinator writes that source to ``PROGRAM_FILE``, beside
+``PROGRAM_MANIFEST_FILE``, in a directory of the author call, and the build stage loads the program
+back from the file through ``loader.load_program_source``. A revision carries no program source:
+an author that revises its own program reads the ``PROGRAM_FILE`` it wrote. ``static_author``
+turns a program written by hand into an author returning no source.
 """
 
 from dataclasses import dataclass

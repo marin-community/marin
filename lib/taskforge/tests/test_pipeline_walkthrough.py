@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise the coordinator with a two-step toy workpiece and controlled stage failures.
+"""Exercise the coordinator with a three-step toy workpiece and controlled stage failures.
 
-``numbers`` writes a resource used by the ``task`` sink. ``SOURCE`` holds the same program as
-module text, as an author writing Python would return it.
+``numbers`` writes a resource and ``grader`` the grader, and the ``task`` sink uses both. ``SOURCE``
+holds the same program as module text, as an author writing Python would return it, and passes the
+restricted loader.
 """
 
 import base64
@@ -17,24 +18,13 @@ from typing import Any, NoReturn
 import pytest
 from pydantic import BaseModel
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import (
-    AnswerType,
-    CommandSemantics,
-    ConversationInput,
-    EnvironmentRequirements,
-    InlineFile,
-    PlainText,
-    ResourceGroups,
-    Source,
-    TaskResource,
-    TaskSpec,
-    TextMessage,
-)
+from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
 from verifyit.spec import NumericSpec
 
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.spec.draft import assemble, requirements
 from taskforge.stage20_triage.verdict import accept
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
 from taskforge.stage30_author.loader import load_program_source
@@ -45,6 +35,7 @@ from taskforge.stage30_author.program import (
     rl_env_build_step,
 )
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
+from taskforge.stage40_build_with_program.outputs import Grader
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, TASK_FILE, TaskDraft, run_build
 from taskforge.stage40_build_with_program.step_store import StoreCorruption, model_digest
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
@@ -92,22 +83,30 @@ async def numbers(context: RLEnvBuildContext) -> TaskResource:
     )
 
 
+@rl_env_build_step
+async def grader(context: RLEnvBuildContext) -> Grader:
+    return Grader(
+        package=verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0)),
+        answer_contract="Reply with the product alone.",
+        reference_reply="42",
+        reference_files=(),
+        secret_values=("42",),
+        rejection_ceiling=0.0,
+        prototyped=(),
+    )
+
+
 @rl_env_build_sink
-async def task(context: RLEnvBuildContext, numbers: TaskResource, proposal: dict[str, str]) -> TaskSpec:
-    grader = verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0))
-    return TaskSpec(
-        id=context.workpiece_id,
-        context=ConversationInput(events=(TextMessage(role="user", content=proposal["task"]),)),
-        environment_requirements=EnvironmentRequirements(
-            capabilities=("shell", "filesystem"),
-            command_semantics=CommandSemantics.SHELL_SIMULATOR,
-            working_directory="/workspace",
-        ),
-        answer_type=AnswerType.TEXT,
-        answer_format=PlainText(),
-        grader=grader.grader,
-        source=Source(dataset="taskforge", revision="test", row=context.workpiece_id, importer_revision="test"),
-        resources=ResourceGroups(worker=(numbers,), verifier=grader.resources),
+async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: Grader, proposal: dict[str, str]) -> TaskSpec:
+    return assemble(
+        context.workpiece_id,
+        proposal["task"],
+        AnswerType.TEXT,
+        PlainText(),
+        grader.package,
+        Source(dataset="taskforge", revision="test", row=context.workpiece_id, importer_revision="test"),
+        environment=requirements(image=None),
+        files=(numbers,),
     )
 
 
@@ -116,36 +115,27 @@ async def broken(context: RLEnvBuildContext, proposal: dict[str, str]) -> TaskSp
     raise BuildFailure("the numbers do not multiply to the answer")
 
 
-PROGRAM = rl_env_build_program(numbers, sink=task)
+PROGRAM = rl_env_build_program(numbers, grader, sink=task)
 FAILING = rl_env_build_program(sink=broken)
 SOURCE_IMPORTS = """\
 import base64
 
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import (
-    AnswerType,
-    CommandSemantics,
-    ConversationInput,
-    EnvironmentRequirements,
-    InlineFile,
-    PlainText,
-    ResourceGroups,
-    Source,
-    TaskResource,
-    TaskSpec,
-    TextMessage,
-)
+from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
 from verifyit.spec import NumericSpec
 
+from taskforge.spec.draft import assemble, requirements
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
+from taskforge.stage40_build_with_program.outputs import Grader
 """
 SOURCE = "\n\n".join(
     [
         SOURCE_IMPORTS,
         inspect.getsource(numbers.fn),
+        inspect.getsource(grader.fn),
         inspect.getsource(task.fn),
-        "PROGRAM = rl_env_build_program(numbers, sink=task)\n",
+        "PROGRAM = rl_env_build_program(numbers, grader, sink=task)\n",
     ]
 )
 """``PROGRAM`` as module text. The steps keep their text, so the loaded program has ``PROGRAM``'s digest."""
@@ -409,8 +399,12 @@ async def failure_first_lines(root: Path, source: str) -> tuple[str, str, str]:
 
 
 async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp_path):
-    source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)")
-    assert source != SOURCE
+    """The loader refuses a name that nothing binds, so the step declares it global and never assigns it."""
+    declared = "async def numbers(context: RLEnvBuildContext) -> TaskResource:\n"
+    source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)").replace(
+        declared, declared + "    global encoded_numbers\n", 1
+    )
+    assert source.count("global encoded_numbers") == 1
     expected = "NameError: name 'encoded_numbers' is not defined at numbers, " + program_line(
         source, "content_base64=encoded_numbers"
     )
@@ -418,8 +412,12 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
 
 
 async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
-    """A step opening a missing file is a program bug, not the storage fault the OSError pass-through covers."""
-    source = SOURCE.replace(NUMBERS_FILE, 'InlineFile(content_base64=open("/workspace/does-not-exist.txt").read())')
+    """A step raising a missing file's error is a program bug, not the storage fault the OSError pass-through covers.
+
+    The restricted loader gives a program no ``open``, so the step raises the error itself.
+    """
+    missing = '    raise FileNotFoundError(2, "No such file or directory", "/workspace/does-not-exist.txt")\n'
+    source = SOURCE.replace("    return TaskResource(\n", missing + "    return TaskResource(\n", 1)
     assert source != SOURCE
     expected = (
         "FileNotFoundError: [Errno 2] No such file or directory: '/workspace/does-not-exist.txt' at numbers, "

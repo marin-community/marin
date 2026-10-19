@@ -27,7 +27,7 @@ src/taskforge/
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
-                               loader.py: `load_program_source`, the plain loader of a program's source
+                               loader.py: `load_program_source`, the restricted loader of authored programs
   stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
                                step_store.py: step keys, memos, the memo store and `memoized`;
                                run.py: `run_program`, `run_build`, the draft and `WorkpieceBuildProvenance`
@@ -301,7 +301,7 @@ uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/p
 cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-`tests/test_pipeline_walkthrough.py` exercises `run_workpiece` with a two-step toy program.
+`tests/test_pipeline_walkthrough.py` exercises `run_workpiece` with a three-step toy program.
 
 Live tests carry `@pytest.mark.live_glm`. The default marker expression excludes them, and they
 skip with a reason when their inputs are missing. They call GLM-5.3's high pool through the router
