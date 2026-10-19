@@ -797,6 +797,11 @@ class GrugModelConfig:
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
     attn_res_num_blocks: int = 8
+    attn_res_block_starts: tuple[int, ...] = ()
+    """Layers at which Block AttnRes closes the running partial into a new history source (layer 0 rolls in
+    the embedding). Empty: every ``num_layers // attn_res_num_blocks``-th layer, at most ``attn_res_num_blocks``
+    sources. Otherwise exactly ``attn_res_num_blocks`` strictly increasing layers starting at 0, e.g.
+    (0, 2, 4, 6, 8, 10, 12, 13) at 14 layers: two-layer blocks with the last two layers kept apart."""
     attn_res_two_phase: bool = True
     """``scan_layers``: each layer mixes the history for its attention and MLP gates in one pass over the sources
     (Kimi's two-phase Block AttnRes: inter-block mix + log-sum-exp per gate, then an online-softmax merge with the
@@ -4316,10 +4321,9 @@ def _attn_res_layer(
             )
         # The leading layers' sources: the extra sources, then the blocks rolled at layers 0, seg, ... <= the
         # cutoff (each holds only earlier layers); the partial and later blocks are later layers' work.
-        seg = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
-        cap = cfg.attn_res_num_blocks
-        num_extra = len(blocks) - min(layer_index // seg + 1, cap)
-        keep = num_extra + min(cfg.kv_source_layers // seg + 1, cap)
+        starts = attn_res_block_starts(cfg)
+        num_extra = len(blocks) - sum(start <= layer_index for start in starts)
+        keep = num_extra + sum(start <= cfg.kv_source_layers for start in starts)
         return _attn_res_mix(
             blocks[:keep],
             block_logits[:keep],
@@ -4652,20 +4656,37 @@ def _split_leading(tree, sizes: tuple[int, ...], *, squeeze: bool = False) -> li
     ]
 
 
+def attn_res_block_starts(cfg: GrugModelConfig) -> tuple[int, ...]:
+    """The layers at which Block AttnRes rolls the partial into a new source (``attn_res_block_starts``)."""
+    num_blocks = cfg.attn_res_num_blocks
+    if not cfg.attn_res_block_starts:
+        seg = max(1, cfg.num_layers // num_blocks)
+        return tuple(k * seg for k in range(num_blocks) if k * seg < cfg.num_layers)
+    starts = tuple(cfg.attn_res_block_starts)
+    if len(starts) != num_blocks or starts[0] != 0 or starts != tuple(sorted(set(starts))):
+        raise ValueError(f"attn_res_block_starts must be {num_blocks} increasing layers from 0, got {starts}")
+    if starts[-1] >= cfg.num_layers:
+        raise ValueError(f"attn_res_block_starts {starts} must be < num_layers={cfg.num_layers}")
+    return starts
+
+
 class _BlockSchedule(NamedTuple):
-    """Where Block AttnRes rolls the running partial into a new block: at every ``seg_size``-th layer, for at
-    most ``block_cap`` blocks, stored after the ``num_extra`` extra sources."""
+    """Where Block AttnRes rolls the running partial into a new block: at each layer in ``starts``, stored
+    after the ``num_extra`` extra sources."""
 
     num_extra: int
-    seg_size: int
-    block_cap: int
+    starts: tuple[int, ...]
 
     def num_sources(self, layer_index: int) -> int:
         """History sources (extra sources, embedding, completed blocks) that layer ``layer_index`` reads."""
-        return self.num_extra + min(layer_index // self.seg_size + 1, self.block_cap)
+        return self.num_extra + sum(start <= layer_index for start in self.starts)
 
     def is_boundary(self, layer_index: int) -> bool:
-        return layer_index % self.seg_size == 0 and layer_index // self.seg_size < self.block_cap
+        return layer_index in self.starts
+
+    def block_index(self, layer_index: jax.Array) -> jax.Array:
+        """Traced: the index of the last block that starts at or before ``layer_index``."""
+        return jnp.sum(jnp.asarray(self.starts) <= layer_index) - 1
 
 
 class _AttnResHistory(NamedTuple):
@@ -4758,7 +4779,7 @@ def _scan_history_layer(
     its zero probe to its mix and returns its source weights, so the caller rebuilds the source cotangent
     as ``sum_gates weights * d_probe`` in one pass (``_accumulate_source_grads``)."""
     num_sources = history.sources.shape[0]
-    block = layer_index // schedule.seg_size
+    block = schedule.block_index(layer_index)
     boundary, slot = _roll_slot(schedule, layer_index)
 
     def roll(buffer: jax.Array, new: jax.Array) -> jax.Array:
@@ -4768,7 +4789,7 @@ def _scan_history_layer(
     sources = roll(history.sources, history.partial) if probes is None else history.sources
     logits = roll(history.logits, _attn_res_source_logits(history.partial, queries, eps))
     partial = jnp.where(boundary, jnp.zeros_like(history.partial), history.partial)
-    valid = jnp.arange(num_sources) < schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
+    valid = jnp.arange(num_sources) < schedule.num_extra + block + 1
     gate_weights: list[jax.Array] = []
     two_phase = layer.attn.cfg.attn_res_two_phase
     # Phase 1 (two_phase): the attention and MLP gates' mixes of the completed sources in one pass over them.
@@ -4840,9 +4861,8 @@ def _scan_history_layer(
 
 def _roll_slot(schedule: _BlockSchedule, layer_index: jax.Array) -> tuple[jax.Array, jax.Array]:
     """Whether layer ``layer_index`` rolls the partial into a new block, and that block's history slot."""
-    block = layer_index // schedule.seg_size
-    boundary = (layer_index % schedule.seg_size == 0) & (block < schedule.block_cap)
-    return boundary, schedule.num_extra + jnp.minimum(block, schedule.block_cap - 1)
+    boundary = jnp.any(jnp.asarray(schedule.starts) == layer_index)
+    return boundary, schedule.num_extra + schedule.block_index(layer_index)
 
 
 def _accumulate_source_grads(
@@ -5608,7 +5628,7 @@ class Transformer(eqx.Module):
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
         The residual history is a Python tuple of completed block sums (the token embedding is the
-        first, rolled in at layer 0) plus the running partial; every ``seg_size``-th layer rolls its
+        first, rolled in at layer 0) plus the running partial; each layer in ``attn_res_block_starts`` rolls its
         incoming partial into a new block. Completed blocks are immutable, so each block's logits
         against the queries of every gate that reads it (layer ``i``'s onwards and the final gate) are
         computed once when it is rolled, and each gate then only scores the partial. Blocks are shared
@@ -5627,10 +5647,8 @@ class Transformer(eqx.Module):
         cfg = self.config
         assert self.attn_res_query_final is not None
         eps = cfg.layer_norm_eps
-        num_layers, passes = cfg.num_layers, (1)
-        seg_size = max(1, num_layers // cfg.attn_res_num_blocks)
-        block_cap = cfg.attn_res_num_blocks * passes
-        schedule = _BlockSchedule(len(extra_sources), seg_size, block_cap)
+        num_layers = cfg.num_layers
+        schedule = _BlockSchedule(len(extra_sources), attn_res_block_starts(cfg))
         scan = _layer_scan(cfg, schedule) if cfg.scan_layers else None
         dtype = self.token_embed.dtype
         if scan is not None and scan.num_units:

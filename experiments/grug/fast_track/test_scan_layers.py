@@ -46,6 +46,8 @@ def _per_layer_leaves(grads):
     [
         # Every layer scanned, two layers per AttnRes block (the boundary falls mid-unit).
         dict(num_layers=8, attn_res_num_blocks=4),
+        # Explicit block starts: two-layer blocks, with the last two layers kept apart.
+        dict(num_layers=8, attn_res_num_blocks=5, attn_res_block_starts=(0, 2, 4, 6, 7)),
         # The d512 layout: one scanned unit, then the latent_out_full tail layers unrolled.
         dict(num_layers=6, latent_out_full_layers=(4, 5)),
         # Two scanned units, then one layer in the rest stack ahead of the tail.
