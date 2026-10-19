@@ -60,6 +60,7 @@ from levanter.grug.grug_moe import (
     validate_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
+from levanter.grug.mxfp8 import ExpertMxfp8
 from levanter.grug.sharding import unshard
 from levanter.kernels.triton.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
@@ -225,7 +226,8 @@ class Fp8Recipe(StrEnum):
 
     NONE = "none"
     MXFP8_EXPERTS = "mxfp8_experts"
-    """Routed experts only (activation-path GEMMs; the expert weight gradients stay bf16)."""
+    """Routed experts only (activation-path GEMMs; the expert weight gradients stay bf16 unless
+    ``mxfp8_expert_wgrad``)."""
     MXFP8_DENSE = "mxfp8_dense"
     """Dense projections only: attention q/k/v/o, shared experts, and the LatentMoE down/up projections."""
     MXFP8 = "mxfp8"
@@ -234,6 +236,12 @@ class Fp8Recipe(StrEnum):
 
 _EXPERT_FP8 = (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8)
 _DENSE_FP8 = (Fp8Recipe.MXFP8_DENSE, Fp8Recipe.MXFP8)
+
+
+def _expert_mxfp8(cfg: "GrugModelConfig") -> ExpertMxfp8:
+    if cfg.fp8_recipe not in _EXPERT_FP8:
+        return ExpertMxfp8.NONE
+    return ExpertMxfp8.ALL if cfg.mxfp8_expert_wgrad else ExpertMxfp8.ACTIVATIONS
 
 
 class QbEstimator(StrEnum):
@@ -301,6 +309,9 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
     fp8_recipe: Fp8Recipe = Fp8Recipe.NONE
+    mxfp8_expert_wgrad: bool = False
+    """Also run the routed-expert weight gradients block-scaled (operands quantized along the token axis per
+    expert). Needs an ``fp8_recipe`` with MXFP8 routed experts."""
     ungated_relu2: bool = False
     """Routed and shared experts are ungated ``relu(x @ W_up)^2 @ W_down`` (no gate projection). At equal
     parameters, their widths are 1.5x the gated SwiGLU widths. Routed experts need the ``ragged_all_to_all``
@@ -308,6 +319,8 @@ class GrugModelConfig:
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
+        if self.mxfp8_expert_wgrad and self.fp8_recipe not in _EXPERT_FP8:
+            raise ValueError(f"mxfp8_expert_wgrad needs MXFP8 routed experts, got fp8_recipe={self.fp8_recipe}")
         if self.num_heads % self.stored_kv_heads != 0:
             raise ValueError("num_heads must be divisible by the stored KV-head count")
         if (self.local_kv_heads is None) != (self.global_kv_heads is None):
@@ -1192,7 +1205,7 @@ class MoEMLP(eqx.Module):
             token_valid=token_valid_flat,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=self.cfg.report_capacity_overflow,
-            mxfp8=self.cfg.fp8_recipe in _EXPERT_FP8,
+            mxfp8=_expert_mxfp8(self.cfg),
         )
         if self.cfg.report_capacity_overflow:
             routed_flat, capacity_overflow = moe_out

@@ -15,7 +15,7 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plt
 
-from levanter.grug.mxfp8 import MX_BLOCK, mx_quantize_cols, mx_quantize_rows
+from levanter.grug.mxfp8 import MX_BLOCK, mx_quantize_cols, mx_quantize_row_blocks, mx_quantize_rows
 
 _E4M3_MAX = 448.0
 ROW_TILE = 16
@@ -181,3 +181,56 @@ def quantize_rows_cols(x: jax.Array):
     if t % MX_BLOCK or k % COL_TILE or x.size > _MAX_CALL_ELEMENTS:
         return quantize_rows(x), quantize_cols(x)
     return mx_quantize_rows_cols_pallas(x)
+
+
+def _row_blocks_kernel(starts_ref, counts_ref, x_ref, values_ref, exponents_ref, *, rows: int):
+    j = pl.program_id(0)
+    cols = pl.ds(pl.program_id(1) * COL_TILE, COL_TILE)
+    start = starts_ref[j]
+    count = counts_ref[j]
+    # Read a full 32-row window that stays in bounds and mask the block's rows inside it: interpret mode clamps an
+    # out-of-bounds dynamic slice instead of masking it.
+    window = jnp.minimum(start, rows - MX_BLOCK)
+    offset = window + jnp.arange(MX_BLOCK, dtype=jnp.int32)
+    mask = ((offset >= start) & (offset < start + count))[:, None]
+    block = plt.load(x_ref.at[pl.ds(window, MX_BLOCK), cols], mask=mask, other=0).astype(jnp.float32)
+    block = jnp.where(mask, block, 0.0)
+    exponent = _exponent(jnp.max(jnp.abs(block), axis=0))  # [C]
+    scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
+    plt.store(
+        values_ref.at[pl.ds(window, MX_BLOCK), cols], (block / scale[None, :]).astype(values_ref.dtype), mask=mask
+    )
+    exponents_ref[0, :] = exponent.astype(exponents_ref.dtype)
+
+
+@functools.partial(jax.jit, static_argnames=("interpret",))
+def mx_quantize_row_blocks_pallas(
+    x: jax.Array, block_starts: jax.Array, block_rows: jax.Array, *, interpret: bool = False
+) -> tuple[jax.Array, jax.Array]:
+    """``mx_quantize_row_blocks`` in one pass: each program quantizes one row block of one ``COL_TILE`` column
+    slice. ``x`` and the values are addressed whole, so rows in no block are never written."""
+    t, k = x.shape
+    num_blocks = block_starts.shape[0]
+    if t < MX_BLOCK or k % COL_TILE:
+        raise ValueError(f"mx_quantize_row_blocks_pallas needs T >= {MX_BLOCK} and K % {COL_TILE} == 0, got {x.shape}")
+    return pl.pallas_call(
+        functools.partial(_row_blocks_kernel, rows=t),
+        grid=(num_blocks, k // COL_TILE),
+        in_specs=[pl.no_block_spec, pl.no_block_spec, pl.no_block_spec],
+        out_specs=[pl.no_block_spec, pl.BlockSpec((1, COL_TILE), lambda j, c: (j, c))],
+        out_shape=[
+            jax.ShapeDtypeStruct((t, k), jnp.float8_e4m3fn),
+            jax.ShapeDtypeStruct((num_blocks, k), jnp.uint8),
+        ],
+        compiler_params=plt.CompilerParams(num_warps=2, num_stages=1),
+        interpret=interpret,
+        name="mx_quantize_row_blocks",
+    )(block_starts.astype(jnp.int32), block_rows.astype(jnp.int32), x)
+
+
+def quantize_row_blocks(x: jax.Array, block_starts: jax.Array, block_rows: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """``mx_quantize_row_blocks`` of a local 2-D ``x``: the single-pass kernel when it fits, else XLA's."""
+    t, k = x.shape
+    if t < MX_BLOCK or k % COL_TILE or x.size > _MAX_CALL_ELEMENTS:
+        return mx_quantize_row_blocks(x, block_starts, block_rows)
+    return mx_quantize_row_blocks_pallas(x, block_starts, block_rows)

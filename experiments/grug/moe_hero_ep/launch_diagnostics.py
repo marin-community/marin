@@ -136,6 +136,7 @@ def build_diagnostic_run(
     intermediate_dim: int | None = None,
     shared_expert_intermediate_dim: int | None = None,
     fp8_recipe: Fp8Recipe = Fp8Recipe.NONE,
+    mxfp8_expert_wgrad: bool = False,
     ungated_relu2: bool = False,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
@@ -220,7 +221,13 @@ def build_diagnostic_run(
         if eval_every > 0:
             raise ValueError("the v16384 data source has no validation sets; pass eval_every=0")
         overrides["vocab_size"] = V16384_VOCAB_SIZE
-    model = dataclasses.replace(model, **overrides, fp8_recipe=fp8_recipe, ungated_relu2=ungated_relu2)
+    model = dataclasses.replace(
+        model,
+        **overrides,
+        fp8_recipe=fp8_recipe,
+        mxfp8_expert_wgrad=mxfp8_expert_wgrad,
+        ungated_relu2=ungated_relu2,
+    )
     model = with_transport_remat_mode(model)
     if batch_size is None:
         batch_size = hero_rack_batch_size(model.max_seq_len)
@@ -477,6 +484,12 @@ def build_diagnostic_run(
     help="MXFP8 projections: routed experts, dense projections, or both.",
 )
 @click.option(
+    "--mxfp8-expert-wgrad/--no-mxfp8-expert-wgrad",
+    default=False,
+    show_default=True,
+    help="Also run the routed-expert weight gradients in MXFP8 (needs an --fp8-recipe with MXFP8 experts).",
+)
+@click.option(
     "--ungated-relu2/--no-ungated-relu2",
     default=False,
     show_default=True,
@@ -642,6 +655,7 @@ def main(
     intermediate_dim: int | None,
     shared_expert_intermediate_dim: int | None,
     fp8_recipe: str,
+    mxfp8_expert_wgrad: bool,
     ungated_relu2: bool,
     capacity_factor: float | None,
     latent_dim: int | None,
@@ -679,6 +693,7 @@ def main(
         intermediate_dim=intermediate_dim,
         shared_expert_intermediate_dim=shared_expert_intermediate_dim,
         fp8_recipe=Fp8Recipe(fp8_recipe),
+        mxfp8_expert_wgrad=mxfp8_expert_wgrad,
         ungated_relu2=ungated_relu2,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,

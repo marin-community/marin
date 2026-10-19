@@ -33,6 +33,7 @@ from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.utils.activation import ActivationFunctionEnum
+from levanter.grug.mxfp8 import ExpertMxfp8
 from levanter.grug._moe.common import (
     _assignment_validity,
     _deinterleave_gate_up,
@@ -256,16 +257,24 @@ class _CuteRelu2ExpertMlp:
         return _relu2_expert_mlp_quack_backward(residuals, cotangent)
 
 
+def _mxfp8_wgrads_fn():
+    from levanter.grug._moe.quack_mxfp8 import expert_mlp_mxfp8_wgrads  # noqa: PLC0415
+
+    return expert_mlp_mxfp8_wgrads
+
+
 @dataclasses.dataclass(frozen=True)
 class _CuteRelu2Mxfp8ExpertMlp:
     """``_CuteRelu2ExpertMlp`` with MXFP8 operands in the three activation-path GEMMs (QuACK block-scaled SM100).
 
     The bf16 dispatched rows are quantized here; ReLU^2 and the quantization of ``post`` are fused into the
     up-projection's epilogue, and dReLU^2 with the quantization of ``d pre`` into the ``d post`` GEMM's. The
-    weights are quantized in their stored layout. The weight gradients stay bf16.
+    weights are quantized in their stored layout. ``mxfp8_wgrads`` runs the weight gradients block-scaled too
+    (operands quantized along the token axis per expert); otherwise they stay bf16.
     """
 
     routing_weight_gradient: _RoutingWeightGradient
+    mxfp8_wgrads: bool
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
@@ -286,7 +295,8 @@ class _CuteRelu2Mxfp8ExpertMlp:
         from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_wgrads  # noqa: PLC0415
 
         dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_input(residuals, cotangent)
-        dw_up, dw_down = _relu2_expert_mlp_quack_wgrads(*wgrad_args)
+        wgrads = _mxfp8_wgrads_fn() if self.mxfp8_wgrads else _relu2_expert_mlp_quack_wgrads
+        dw_up, dw_down = wgrads(*wgrad_args)
         return dx, dw_up, dw_down, output_dot
 
 
@@ -296,10 +306,12 @@ class _CuteSwigluMxfp8ExpertMlp:
 
     The bf16 dispatched rows are quantized here. SwiGLU and the quantization of ``h`` are fused into the gate/up
     GEMM's epilogue; the SwiGLU backward runs in XLA and ``d gu`` is quantized by the Pallas row quantizer. The
-    weights are quantized in their stored layout. The weight gradients stay bf16.
+    weights are quantized in their stored layout. ``mxfp8_wgrads`` runs the weight gradients block-scaled too
+    (operands quantized along the token axis per expert); otherwise they stay bf16.
     """
 
     routing_weight_gradient: _RoutingWeightGradient
+    mxfp8_wgrads: bool
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
@@ -321,7 +333,8 @@ class _CuteSwigluMxfp8ExpertMlp:
         from levanter.grug._moe.sonic_cute import _swiglu_expert_mlp_quack_wgrads  # noqa: PLC0415
 
         dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_input(residuals, cotangent)
-        dw13_interleaved, dw2 = _swiglu_expert_mlp_quack_wgrads(*wgrad_args)
+        wgrads = _mxfp8_wgrads_fn() if self.mxfp8_wgrads else _swiglu_expert_mlp_quack_wgrads
+        dw13_interleaved, dw2 = wgrads(*wgrad_args)
         return dx, _deinterleave_gate_up(dw13_interleaved), dw2, output_dot
 
 
@@ -355,7 +368,7 @@ _RELU2_FN = ActivationFunctionEnum.relu2.to_jax_fn()
 
 
 def _select_expert_mlp(
-    activation_fn: Callable[[jax.Array], jax.Array], dtype: jnp.dtype, *, ungated: bool, mxfp8: bool
+    activation_fn: Callable[[jax.Array], jax.Array], dtype: jnp.dtype, *, ungated: bool, mxfp8: ExpertMxfp8
 ) -> _ExpertMlp:
     """Pick the fastest expert-MLP kernel this process can actually run, and its routing-weight gradient.
 
@@ -377,19 +390,22 @@ def _select_expert_mlp(
     ``y`` for the row dot, so the expert-side gradient would save it only the returned ``[TK, H]``
     buffer and the return transport. It takes the exact gradient, which holds for every weight and
     dtype.
-    ``mxfp8`` selects the MXFP8 variant of the QuACK kernel (block-scaled e4m3 operands in the activation-path
-    GEMMs, bf16 weight gradients) and raises where there is none.
+    ``mxfp8`` other than ``NONE`` selects the MXFP8 variant of the QuACK kernel (block-scaled e4m3 operands in the
+    activation-path GEMMs, and with ``ALL`` in the weight gradients too) and raises where there is none.
     """
     gradient = _RoutingWeightGradient.EXACT if dtype == jnp.float16 else _RoutingWeightGradient.EXPERT_SIDE
-    quack_kernel = None
+    use_mxfp8 = mxfp8 != ExpertMxfp8.NONE
     if _quack_grouped_gemm_available():
+        mxfp8_kernel = None
         if ungated and activation_fn is _RELU2_FN:
-            quack_kernel = _CuteRelu2Mxfp8ExpertMlp if mxfp8 else _CuteRelu2ExpertMlp
+            mxfp8_kernel, bf16_kernel = _CuteRelu2Mxfp8ExpertMlp, _CuteRelu2ExpertMlp
         elif not ungated and activation_fn is jax.nn.silu:
-            quack_kernel = _CuteSwigluMxfp8ExpertMlp if mxfp8 else _CuteExpertMlp
-    if quack_kernel is not None:
-        return quack_kernel(routing_weight_gradient=gradient)
-    if mxfp8:
+            mxfp8_kernel, bf16_kernel = _CuteSwigluMxfp8ExpertMlp, _CuteExpertMlp
+        if mxfp8_kernel is not None and use_mxfp8:
+            return mxfp8_kernel(routing_weight_gradient=gradient, mxfp8_wgrads=mxfp8 == ExpertMxfp8.ALL)
+        if mxfp8_kernel is not None:
+            return bf16_kernel(routing_weight_gradient=gradient)
+    if use_mxfp8:
         raise ValueError(
             "MXFP8 experts need QuACK's SM100 kernels and gated SiLU or ungated ReLU^2 experts; "
             f"got activation={activation_fn}, ungated={ungated}"
@@ -864,7 +880,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
-    mxfp8: bool,
+    mxfp8: ExpertMxfp8,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:

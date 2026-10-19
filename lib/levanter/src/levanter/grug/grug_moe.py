@@ -58,6 +58,7 @@ from levanter.grug._moe.ep_ring import (
     _scatter_add_dispatch_combine,
 )
 from levanter.grug._moe.local import _moe_mlp_local
+from levanter.grug.mxfp8 import ExpertMxfp8
 from levanter.grug.sharding import (
     _axis_names,
     _token_spec_from_x,
@@ -415,7 +416,7 @@ class MoEExpertMlp(eqx.Module):
         token_valid: Bool[Array, "T"] | None = None,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
-        mxfp8: bool = False,
+        mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
         w_gate_up = self.w_up if self.w_gate is None else jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
@@ -454,7 +455,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
-    expert_mxfp8: bool = False,
+    expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -493,7 +494,8 @@ def moe_mlp(
     ``activation(x @ w_up) @ w_down``; only the ``ragged_all_to_all`` backend runs it.
 
     `expert_mxfp8` runs the ``ragged_all_to_all`` expert MLP on QuACK's MXFP8 block-scaled SM100 kernels
-    (gated SiLU or ungated ReLU^2 experts; weight gradients stay bf16).
+    (gated SiLU or ungated ReLU^2 experts): the activation-path GEMMs, and with ``ExpertMxfp8.ALL`` the weight
+    gradients too.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -544,7 +546,7 @@ def moe_mlp(
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
     ungated = w_up_gate.shape[-1] == w_down.shape[1]
-    if (ungated or expert_mxfp8) and not (
+    if (ungated or expert_mxfp8 != ExpertMxfp8.NONE) and not (
         resolved_implementation == "ragged_all_to_all" and has_expert_axis and expert_axis_size > 1
     ):
         raise ValueError(

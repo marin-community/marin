@@ -36,7 +36,7 @@ from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
-from levanter.grug.mxfp8_pallas import quantize_cols, quantize_rows, quantize_rows_cols
+from levanter.grug.mxfp8_pallas import quantize_cols, quantize_row_blocks, quantize_rows, quantize_rows_cols
 from levanter.grug.mxfp8 import MX_BLOCK, mx_dequantize_rows, mx_quantize_cols, mx_quantize_rows, mx_unpack_rows
 from levanter.grug._moe.common import _swiglu_gate_up_backward, _unpack_pairs_u32
 from levanter.grug._moe.quack_moe_cute import _ACC, _QUACK_USE_PDL, _max_active_clusters, _mint_epilogue_gemm
@@ -410,6 +410,105 @@ def swiglu_expert_mlp_mxfp8_backward_input(res, dy):
     if x.dtype == jnp.uint8:
         x = mx_dequantize_rows(*mx_unpack_rows(x, w13_il.shape[1]), dy.dtype)
     return dx, output_dot, (x, d_gu, h.astype(dy.dtype), dy, cu)
+
+
+def token_scale_blocks(cu_seqlens: jax.Array, rows: int) -> tuple[jax.Array, jax.Array]:
+    """The token-axis 32-row blocks of a varlen-k operand, in the order of its blocked scale columns.
+
+    QuACK's varlen-k GEMM reads group ``e``'s scales from scale tile ``cu[e] // 128 + e`` on (4 blocks of 32
+    contraction rows per tile), so group ``e``'s block ``k`` covers rows ``cu[e] + 32 k`` onward, clipped to the
+    group: no block mixes groups or reads rows past ``cu[-1]``. Returns ``(block_starts, block_rows)`` over the
+    ``4 * padded_scale_tiles(rows, E)`` scale columns; columns past a group's last block have zero rows."""
+    num_groups = cu_seqlens.shape[0] - 1
+    num_blocks = _SCALE_ATOM_COLS * padded_scale_tiles(rows, num_groups)
+    cu = cu_seqlens.astype(jnp.int32)
+    first_block = _SCALE_ATOM_COLS * (cu[:-1] // SCALE_TILE_ROWS + jnp.arange(num_groups, dtype=jnp.int32))
+    column = jnp.arange(num_blocks, dtype=jnp.int32)
+    group = jnp.clip(jnp.searchsorted(first_block, column, side="right").astype(jnp.int32) - 1, 0, num_groups - 1)
+    starts = cu[group] + MX_BLOCK * (column - first_block[group])
+    counts = jnp.clip(cu[group + 1] - starts, 0, MX_BLOCK)
+    return jnp.minimum(starts, rows), counts
+
+
+def quantize_token_blocks(x: jax.Array, cu_seqlens: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """MXFP8 ``x[T, N]`` along ``T`` for a varlen-k GEMM: e4m3 ``[T, N]`` in place (rows past ``cu[-1]``
+    unspecified) and blocked e8m0 scales ``[1, ceil(N / 128), padded_scale_tiles(T, E), 32, 4, 4]``."""
+    values, exponents = quantize_row_blocks(x, *token_scale_blocks(cu_seqlens, x.shape[0]))
+    return values, blocked_scales(exponents.T[None])
+
+
+@cute_launcher_factory
+def _build_wgrad_launcher(*, tile_mn, cluster_mnk, max_active_clusters, max_swizzle):
+    @cute.jit
+    def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mD):
+        gemm = GemmDefaultSm100(
+            _ACC,
+            cutlass.Float8E4M3FN,
+            tile_mn,
+            cluster_mnk,
+            sf_vec_size=MX_BLOCK,
+            gather_A=False,
+            use_clc_persistence=False,
+            use_pdl=_QUACK_USE_PDL,
+        )
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        varlen_args = make_varlen_args(None, mCuSeqlens, None)
+        gemm(
+            mA, mB, mD, None, GemmDefaultEpiMixin.EpilogueArguments(), scheduler_args, varlen_args, stream, mSFA, mSFB
+        )
+
+    return launcher
+
+
+# varlen-k wants A m-major and B n-major: [T, M] and [T, N] as stored. Logical (M, K) / (N, K) / (L, M, N).
+_TOKEN_MAJOR = _TS(mode=(1, 0), divisibility=(1, 16), static=False)
+_WGRAD_OUT_SPEC = _TS(divisibility=(1, 1, 8), static=False)
+MXFP8_WGRAD_TILE_MN = (256, 256)
+MXFP8_WGRAD_CLUSTER = (2, 1, 1)
+
+
+def mxfp8_grouped_wgrad(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    cu_seqlens: jax.Array,
+    *,
+    out_dtype=jnp.bfloat16,
+    tile_mn=MXFP8_WGRAD_TILE_MN,
+    cluster_mnk=MXFP8_WGRAD_CLUSTER,
+    max_swizzle=8,
+) -> jax.Array:
+    """Per-group ``lhs.T @ rhs`` (``[E, M, N]``) with both operands MXFP8 along the token axis, the block-scaled
+    counterpart of ``quack_grouped_wgrad``: per-group 32-row scale blocks (``token_scale_blocks``), fp32
+    accumulation, rows past ``cu[-1]`` never read, and an empty group yields zeros."""
+    if lhs.shape[0] != rhs.shape[0]:
+        raise ValueError(f"lhs and rhs row counts must match, got lhs={lhs.shape}, rhs={rhs.shape}")
+    a, a_scales = quantize_token_blocks(lhs, cu_seqlens)
+    b, b_scales = quantize_token_blocks(rhs, cu_seqlens)
+    launcher = _build_wgrad_launcher(
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+    )
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=jax.ShapeDtypeStruct((cu_seqlens.shape[0] - 1, lhs.shape[1], rhs.shape[1]), out_dtype),
+        input_spec=(_TOKEN_MAJOR, _TOKEN_MAJOR, _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC),
+        output_spec=(_WGRAD_OUT_SPEC,),
+        use_static_tensors=False,
+    )
+    return call(a, b, a_scales, b_scales, cu_seqlens.astype(jnp.int32))
+
+
+def expert_mlp_mxfp8_wgrads(x, d_up, act, dy, cu):
+    """``(dW_up, dW_down)`` of an MXFP8 expert MLP from its ``wgrad_args``: ``x^T d_up`` and ``act^T dy`` per
+    expert, block-scaled. ``d_up`` is the up-projection's preactivation cotangent (``d gu`` interleaved for SwiGLU,
+    ``d pre`` for ReLU^2) and ``act`` its postactivation (``h`` / ``post``); the gradients come out in ``dy``'s
+    dtype, as the bf16 wgrads do."""
+    return (
+        mxfp8_grouped_wgrad(x, d_up, cu, out_dtype=dy.dtype),
+        mxfp8_grouped_wgrad(act, dy, cu, out_dtype=dy.dtype),
+    )
 
 
 @cute_launcher_factory

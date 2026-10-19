@@ -52,6 +52,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
+from levanter.grug.mxfp8 import ExpertMxfp8
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
@@ -1543,12 +1544,16 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize(("expert_mxfp8", "max_relative"), [(False, 2e-2), (True, 0.1)], ids=["bf16", "mxfp8"])
+@pytest.mark.parametrize(
+    ("expert_mxfp8", "max_relative"),
+    [(ExpertMxfp8.NONE, 2e-2), (ExpertMxfp8.ACTIVATIONS, 0.1), (ExpertMxfp8.ALL, 0.1)],
+    ids=["bf16", "mxfp8", "mxfp8_wgrads"],
+)
 def test_ragged_ungated_relu2_experts_match_dense_value_and_gradients_on_gpu(expert_mxfp8, max_relative):
     mesh = _make_ep_mesh_or_none()
     if mesh is None or jax.devices()[0].platform != "gpu":
         pytest.skip("requires an even number of >=2 GPUs (ragged_all_to_all is not implemented on XLA:CPU)")
-    if expert_mxfp8 and float(jax.devices()[0].compute_capability) < 10.0:
+    if expert_mxfp8 != ExpertMxfp8.NONE and float(jax.devices()[0].compute_capability) < 10.0:
         pytest.skip("MXFP8 experts require SM100")
     tokens, hidden_dim, width, topk = len(jax.devices()) * 64, 256, 384, 2
     num_experts = 2 * mesh.shape["expert"]
