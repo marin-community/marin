@@ -9,9 +9,8 @@ from typing import Protocol
 
 from taskcompendium.models import TaskSpec
 
-from rolloutengine.contracts import ModelTurn, Prompt, Transition
 from rolloutengine.harness.core import HarnessContext, RolloutRecorder
-from rolloutengine.spec import RolloutLimits
+from rolloutengine.models import ModelTurn, Prompt, RolloutLimits, Transition
 
 
 class Episode(Protocol):

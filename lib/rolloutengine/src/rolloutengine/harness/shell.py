@@ -38,9 +38,16 @@ from taskcompendium.submission import (
     submission_instruction,
 )
 
-from rolloutengine.contracts import LENGTH_STOP_REASON, EventSink, ModelTurn, Prompt, ToolCallCompleted, Transition
 from rolloutengine.harness.core import HarnessContext, RolloutRecorder
-from rolloutengine.spec import RolloutLimits
+from rolloutengine.models import (
+    LENGTH_STOP_REASON,
+    EventSink,
+    ModelTurn,
+    Prompt,
+    RolloutLimits,
+    ToolCallCompleted,
+    Transition,
+)
 
 UNKNOWN_TOOL_ERROR = "Unknown tool"
 DEFAULT_SHELL_TOOL = ShellToolConfig()

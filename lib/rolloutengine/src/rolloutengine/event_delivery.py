@@ -6,7 +6,7 @@
 import asyncio
 import logging
 
-from rolloutengine.contracts import RolloutEvent, RolloutEventPayload, RolloutObserver
+from rolloutengine.models import RolloutEvent, RolloutEventPayload, RolloutObserver
 
 logger = logging.getLogger(__name__)
 

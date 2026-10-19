@@ -5,8 +5,7 @@
 
 from typing import Protocol
 
-from rolloutengine.contracts import ModelTurn, RolloutContractError
-from rolloutengine.spec import TraceMode
+from rolloutengine.models import ModelTurn, RolloutContractError, TraceMode
 
 
 class _TokenTrace(Protocol):

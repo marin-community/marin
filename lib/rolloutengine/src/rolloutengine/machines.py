@@ -36,7 +36,7 @@ from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.resources import resource_bytes
 
 from rolloutengine.cleanup import _Cleanup, _retain_task
-from rolloutengine.spec import MachineRuntimeSpec
+from rolloutengine.models import MachineRuntimeSpec
 
 SETUP_OUTPUT_CHARS = 2000
 """How much of a failed setup command's stdout and stderr the error keeps, from the end."""

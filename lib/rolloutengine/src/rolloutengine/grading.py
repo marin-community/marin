@@ -27,7 +27,7 @@ from verifyit.spec import JudgeSpec
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
-from rolloutengine.spec import TaskRolloutSpec
+from rolloutengine.models import TaskRolloutSpec
 
 
 def judge_connection(spec: TaskRolloutSpec) -> JudgeConnection:

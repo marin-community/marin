@@ -15,8 +15,7 @@ from typing import Any, Protocol
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
-from rolloutengine.contracts import EventSink, ModelTurn, Prompt
-from rolloutengine.spec import RolloutLimits
+from rolloutengine.models import EventSink, ModelTurn, Prompt, RolloutLimits
 
 
 class HarnessCleanup(Protocol):

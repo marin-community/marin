@@ -11,10 +11,9 @@ from typing import Any, Protocol
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _retain_task
-from rolloutengine.contracts import ModelTurn, Prompt, RolloutEnded
 from rolloutengine.harness.core import HarnessContext, RolloutRecorder
 from rolloutengine.harness.shell import task_prompt
-from rolloutengine.spec import RolloutLimits
+from rolloutengine.models import ModelTurn, Prompt, RolloutEnded, RolloutLimits
 
 
 class AgentCompletion(Protocol):

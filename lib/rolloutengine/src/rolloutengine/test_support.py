@@ -19,10 +19,17 @@ from taskcompendium.models import (
 )
 from verifyit.spec import NumericSpec
 
-from rolloutengine.contracts import GradedRollout, Model, ModelRequest, ModelTurn
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.spec import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
+from rolloutengine.models import (
+    GradedRollout,
+    MachineRuntimeSpec,
+    Model,
+    ModelRequest,
+    ModelTurn,
+    RolloutLimits,
+    TaskRolloutSpec,
+)
 
 TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
 SHELL = "shell"

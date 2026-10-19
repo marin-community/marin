@@ -16,7 +16,11 @@ from taskcompendium.runtime.output_capture import captured_output_files
 
 from rolloutengine.checks import check_spec
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.contracts import (
+from rolloutengine.event_delivery import _EventDelivery
+from rolloutengine.grading import _grade_rollout
+from rolloutengine.harness.core import Harness, HarnessContext
+from rolloutengine.machines import _prepare_machine
+from rolloutengine.models import (
     AttemptEnded,
     AttemptStarted,
     Graded,
@@ -27,13 +31,9 @@ from rolloutengine.contracts import (
     RolloutFailure,
     RolloutObserver,
     RolloutOperation,
+    TaskRolloutSpec,
 )
-from rolloutengine.event_delivery import _EventDelivery
-from rolloutengine.grading import _grade_rollout
-from rolloutengine.harness.core import Harness, HarnessContext
-from rolloutengine.machines import _prepare_machine
 from rolloutengine.recorder import _CleanupScope, _Recorder, _run_harness
-from rolloutengine.spec import TaskRolloutSpec
 
 
 class _Interrupted(Exception):

@@ -15,11 +15,13 @@ from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.contracts import (
+from rolloutengine.harness.core import Harness, HarnessContext
+from rolloutengine.models import (
     BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
+    TRACE_METRIC,
     Continuation,
     ConversationRecord,
     ConversationStarted,
@@ -37,13 +39,13 @@ from rolloutengine.contracts import (
     RolloutEventPayload,
     RolloutFailure,
     RolloutInterrupted,
+    RolloutLimits,
     RolloutOperation,
     RolloutStep,
+    TraceMode,
     Transition,
     TransitionCompleted,
 )
-from rolloutengine.harness.core import Harness, HarnessContext
-from rolloutengine.spec import TRACE_METRIC, RolloutLimits, TraceMode
 from rolloutengine.trace import _token_trace
 
 ADVANCE_INCOMPLETE = "advance_incomplete"

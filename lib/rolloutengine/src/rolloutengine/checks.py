@@ -21,7 +21,7 @@ from taskcompendium.runtime.environment import validate_machine_spec
 
 from rolloutengine.grading import judge_connection
 from rolloutengine.machines import _machine_spec
-from rolloutengine.spec import TaskRolloutSpec
+from rolloutengine.models import TaskRolloutSpec
 
 WORKSPACE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE})
 

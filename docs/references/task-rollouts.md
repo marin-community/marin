@@ -198,7 +198,7 @@ for example an installed agent behind an HTTP proxy. `agent(context, complete)` 
 
 ```python
 from rolloutengine.harness.external import AgentHarness
-from rolloutengine.contracts import Prompt
+from rolloutengine.models import Prompt
 from rolloutengine.engine import RolloutEngine
 
 
@@ -382,7 +382,7 @@ A `RolloutEvent` carries the attempt's `run_id`, the task's `task_id`, and a `pa
 `run_task(spec, model, run_id=...)` sets the run ID. Without one, each attempt gets a new random ID, so the events
 of repeated attempts of a task stay apart. `Rollout.run_id` returns the ID, so a caller can match a rollout with
 its events.
-Each payload is a frozen dataclass from `rolloutengine.contracts` whose `type` field is a `RolloutEventType`, so a payload serialized with `dataclasses.asdict` keeps its type.
+Each payload is a frozen dataclass from `rolloutengine.models` whose `type` field is a `RolloutEventType`, so a payload serialized with `dataclasses.asdict` keeps its type.
 Durations are wall-clock seconds.
 
 | Payload | Emitted | Fields |
@@ -598,10 +598,10 @@ Construct a `TaskRolloutSpec`, and check it with `RolloutEngine.check` before yo
 One engine serves every attempt; each run passes its model:
 
 ```python
-from rolloutengine.contracts import GradedRollout
+from rolloutengine.models import GradedRollout
 from rolloutengine.engine import Model, RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
-from rolloutengine.spec import TaskRolloutSpec
+from rolloutengine.models import TaskRolloutSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 
