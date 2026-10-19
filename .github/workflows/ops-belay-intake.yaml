@@ -1,6 +1,7 @@
 name: "Ops - Belay Intake"
 
-# Copies Marin Belay suggestions approved on the intake issue (#9514) into the main Belay issue (#9451).
+# Copies Marin Belay suggestions approved on the intake issue (#9514) into the current weekly Belay issue (the open
+# issue labeled belay-weekly), after giving each one a registry id.
 # Logic lives in scripts/ci/belay_intake.py.
 
 on:
@@ -36,5 +37,4 @@ jobs:
         run: >-
           python3 scripts/ci/belay_intake.py
           --intake-issue 9514
-          --target-issue 9451
           --approver-ids "$BELAY_APPROVER_IDS"
