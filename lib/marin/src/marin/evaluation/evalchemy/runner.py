@@ -16,6 +16,8 @@ from enum import StrEnum
 from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
+from marin.evaluation.eval_measurements import task_item_count
+from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
@@ -25,9 +27,13 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_REQUIREMENT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
-from marin.evaluation.metric_selection import declared_metric
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalTaskRef, RunStatus, TaskCoverage
+from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
+from marin.evaluation.records import (
+    EVALCHEMY_INFRASTRUCTURE_ERROR,
+    EvalTaskRef,
+    RunStatus,
+    TaskCoverage,
+)
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
@@ -35,7 +41,7 @@ from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_NUM_CONCURRENT = 16
+DEFAULT_NUM_CONCURRENT = 64
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
@@ -100,6 +106,7 @@ class EvalchemyRunConfig:
     name: str
     tasks: tuple[EvalTaskConfig, ...]
     apply_chat_template: bool = False
+    debug: bool = False
     # None passes no generation cap to Evalchemy, which then sizes each benchmark's responses from the
     # served context window minus its stored longest prompt (evalchemy#132).
     max_gen_toks: int | None = None
@@ -108,6 +115,7 @@ class EvalchemyRunConfig:
     batch_size: str | None = None
     seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | None] = field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeConfig | None = None
@@ -116,54 +124,46 @@ class EvalchemyRunConfig:
 
 @dataclass(frozen=True)
 class EvalchemyOutcome:
-    """A completed FineStore archive, child job identity, coverage, and recovered partial-task metrics."""
+    """Validated evaluator metrics, sample coverage, and child job identity."""
 
     jobs: dict[str, str]
-    result: FineStoreEvalchemyResult
+    metrics: dict[str, dict[str, float]]
     coverage: dict[str, TaskCoverage]
-    recovered_metrics: dict[str, dict[str, float]]
     canonical_metrics: dict[str, dict[str, float]]
     tasks: tuple[EvalTaskRef, ...]
 
 
-def _apply_recovered_metrics(
-    metrics: dict[str, dict[str, float]], recovered_metrics: Mapping[str, dict[str, float]]
-) -> None:
-    """Replace affected leaf metrics and drop lm-eval group aggregates built from failed rows."""
-    group_children = {aggregate: {task for task in metrics if task.startswith(f"{aggregate}_")} for aggregate in metrics}
-    for task, recovered in recovered_metrics.items():
-        if recovered:
-            metrics[task] = recovered
-        else:
-            metrics.pop(task, None)
-    for aggregate, children in group_children.items():
-        if children & recovered_metrics.keys():
-            # The aggregate came from the original lm-eval result, which includes failed requests.
-            # Recovered leaves contain successful samples for the measurement adapter to roll up.
-            metrics.pop(aggregate, None)
+def _coverage_with_aggregate_counts(
+    coverage: Mapping[str, TaskCoverage], metrics: Mapping[str, Mapping[str, float]]
+) -> dict[str, TaskCoverage]:
+    """Use a harness-reported total when custom tasks omit per-sample score fields.
 
-
-def _apply_recovered_canonical_metrics(
-    canonical_metrics: dict[str, dict[str, float]],
-    recovered_metrics: Mapping[str, dict[str, float]],
-    tasks: tuple[EvalTaskRef, ...],
-) -> None:
-    """Project recovered source metrics through the evaluator-recorded vocabulary."""
-    benchmarks = {task.benchmark.task: task.benchmark for task in tasks if task.benchmark is not None}
-    for task_key, recovered in recovered_metrics.items():
-        benchmark = benchmarks.get(task_key.rsplit("/", 1)[-1])
-        if benchmark is None:
-            canonical_metrics.pop(task_key, None)
+    Some Evalchemy custom tasks compute their scores outside lm-eval and emit only provenance in
+    ``samples_*.jsonl``. An aggregate item count still proves how many items were scored.
+    It may replace an all-ungraded sample summary only when it exactly matches the attempted extent;
+    partial or contradictory evidence remains ungraded.
+    """
+    reconciled = dict(coverage)
+    for task, entry in coverage.items():
+        if entry.n_scored != 0 or entry.n_attempted is None or entry.errors != {UNGRADED_ERROR: entry.n_attempted}:
             continue
-        normalized: dict[str, float] = {}
-        for metric in benchmark.metrics:
-            picked = declared_metric(recovered, metric.source_name)
-            if picked is not None:
-                normalized[metric.name] = picked[1]
-        if normalized:
-            canonical_metrics[task_key] = normalized
-        else:
-            canonical_metrics.pop(task_key, None)
+        task_metrics = metrics.get(task, {})
+        if (
+            SCORED_COUNT_METRIC in task_metrics
+            and task_item_count({SCORED_COUNT_METRIC: task_metrics[SCORED_COUNT_METRIC]}) != entry.n_attempted
+        ):
+            continue
+        reported = task_item_count(task_metrics)
+        if reported is None or reported != entry.n_attempted:
+            continue
+        reconciled[task] = TaskCoverage(
+            n_benchmark=entry.n_benchmark,
+            n_attempted=entry.n_attempted,
+            n_scored=entry.n_attempted,
+            n_correct=None,
+            n_unanswered=entry.n_unanswered,
+        )
+    return reconciled
 
 
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
@@ -191,8 +191,10 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             ],
             "out_path": output_dir,
             "apply_chat_template": config.apply_chat_template,
+            "debug": config.debug,
             "max_gen_toks": config.max_gen_toks,
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
+            "chat_template_kwargs": dict(config.chat_template_kwargs),
             "max_eval_instances": config.max_eval_instances,
             "num_concurrent": config.num_concurrent,
             "batch_size": config.batch_size,
@@ -286,29 +288,25 @@ def run_evalchemy(
     *,
     env_vars: Mapping[str, str],
 ) -> EvalchemyOutcome:
-    """Run Evalchemy and validate its results artifacts and normalized samples in FineStore."""
+    """Run Evalchemy and read its result and sample tables from FineStore."""
     if not config.tasks:
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
+    return read_evalchemy_outcome(config, output_dir, eval_job)
+
+
+def read_evalchemy_outcome(config: EvalchemyRunConfig, output_dir: str, eval_job: str) -> EvalchemyOutcome:
+    """Validate and normalize saved Evalchemy outputs without repeating inference."""
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
-        result.task_metrics()
+        metrics = result.task_metrics()
         summary = summarize_native_eval_samples(
             output_dir,
             tasks=config.tasks,
-        )
-        rebuild_lm_eval_samples(
-            output_dir,
-            tasks=summary.tasks,
-            writer_id=f"marin-evalchemy-samples-{uuid.uuid4().hex}",
         )
         normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
-        summary = summarize_native_eval_samples(
-            output_dir,
-            tasks=config.tasks,
-        )
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),
@@ -316,6 +314,34 @@ def run_evalchemy(
             jobs={_EVAL_JOB_ROLE: eval_job},
             log_tails={},
         ) from exc
+    coverage = _coverage_with_aggregate_counts(summary.coverage, metrics)
+    inconsistent_tasks = sorted(
+        task
+        for task, entry in coverage.items()
+        if entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR) and summary.scored_counts.get(task) != entry.n_scored
+    )
+    if inconsistent_tasks:
+        raise EvaluationError(
+            f"Evalchemy must aggregate the scored samples after infrastructure failures: {inconsistent_tasks}",
+            status=RunStatus.INFRA_FAILED,
+            jobs={_EVAL_JOB_ROLE: eval_job},
+            coverage=coverage,
+        )
+    if not metrics:
+        infrastructure_failures = sum(entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values())
+        if not infrastructure_failures:
+            raise EvaluationError(
+                f"eval finished but no task metrics were readable under {output_dir!r}",
+                status=RunStatus.ARTIFACT_FAILED,
+                jobs={_EVAL_JOB_ROLE: eval_job},
+                coverage=coverage,
+            )
+        raise EvaluationError(
+            f"eval finished with no successful inference responses under {output_dir!r}",
+            status=RunStatus.INFRA_FAILED,
+            jobs={_EVAL_JOB_ROLE: eval_job},
+            coverage=coverage,
+        )
     logger.info(
         "Evalchemy run %s wrote %d sample(s) to the finestore archive under %s, covering %d task(s)",
         config.name,
@@ -325,9 +351,8 @@ def run_evalchemy(
     )
     return EvalchemyOutcome(
         jobs={_EVAL_JOB_ROLE: eval_job},
-        result=result,
-        coverage=summary.coverage,
-        recovered_metrics=summary.recovered_metrics,
+        metrics=metrics,
+        coverage=coverage,
         canonical_metrics=summary.canonical_metrics,
         tasks=summary.tasks,
     )
@@ -344,6 +369,8 @@ class EvalchemyExecutor:
         session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
         try:
             outcome = run_evalchemy(session.model, self.config, output_dir, env_vars=env_vars)
@@ -355,30 +382,9 @@ class EvalchemyExecutor:
                 jobs=exc.jobs,
                 log_tails=exc.log_tails,
             ) from exc
-        metrics = outcome.result.task_metrics()
-        _apply_recovered_metrics(metrics, outcome.recovered_metrics)
-        canonical_metrics = dict(outcome.canonical_metrics)
-        _apply_recovered_canonical_metrics(canonical_metrics, outcome.recovered_metrics, outcome.tasks)
-        if not metrics:
-            infrastructure_failures = sum(
-                coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for coverage in outcome.coverage.values()
-            )
-            if not infrastructure_failures:
-                raise EvaluationError(
-                    f"eval finished but no task metrics were readable under {output_dir!r}",
-                    status=RunStatus.ARTIFACT_FAILED,
-                    jobs=outcome.jobs,
-                    coverage=outcome.coverage,
-                )
-            raise EvaluationError(
-                f"eval finished with no successful inference responses under {output_dir!r}",
-                status=RunStatus.INFRA_FAILED,
-                jobs=outcome.jobs,
-                coverage=outcome.coverage,
-            )
         return EvaluationOutcome(
-            metrics=metrics,
-            canonical_metrics=canonical_metrics,
+            metrics=outcome.metrics,
+            canonical_metrics=outcome.canonical_metrics,
             tasks=outcome.tasks,
             jobs=outcome.jobs,
             coverage=outcome.coverage,

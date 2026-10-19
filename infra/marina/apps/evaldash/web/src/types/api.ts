@@ -25,6 +25,7 @@ export interface RunRow {
   accelerator: string | null
   region: string | null
   status: string
+  step_status: string | null
   results_path: string | null
   git_sha: string | null
   image_digest: string | null
@@ -141,12 +142,20 @@ export interface PanelFamily {
   default: string
 }
 
+export interface PolicyRejection {
+  run_id: string
+  model: string
+  benchmark: string
+  reasons: string[]
+}
+
 export interface Panel {
   benchmarks: string[]
   protocols: Record<string, { metric: string; kind: string }>
   panel: string[]
   families: PanelFamily[]
   rows: PanelRow[]
+  policy_rejections: PolicyRejection[]
   request: PanelRequest
 }
 
@@ -173,6 +182,7 @@ export interface Comparison {
   benchmarks: string[]
   shared: string[]
   rows: ComparisonRow[]
+  policy_rejections: PolicyRejection[]
   aggregates: Record<string, PanelAggregate | null>
 }
 
@@ -189,6 +199,8 @@ export interface EvalFamily {
 
 export interface Meta {
   models: string[]
+  default_cohort: string
+  verified_cohorts: string[]
   evals: string[]
   suites: EvalSuite[]
   families: EvalFamily[]
@@ -270,9 +282,11 @@ export interface EvalRecord {
   created_at: string
   user: string
   model: { name: string; location: string; backend: string }
+  comparison_model: string
   eval: { name: string; mechanism: string; tasks: EvalTask[] }
   hardware: { platform: string; accelerator: string; region_or_cluster: string }
   status: string
+  step_status?: string | null
   error: string | null
   results_path: string
   metrics: Record<string, Record<string, number>>
@@ -289,6 +303,7 @@ export interface EvalRecord {
     extra: Record<string, string>
   } | null
   headline: PanelCell | null
+  policy_violations: string[]
 }
 
 // --- Live Iris/finelog protobuf JSON (cluster.py) ---
@@ -545,9 +560,11 @@ export interface ModelRun {
   run_id: string
   eval_name: string
   status: string
+  step_status: string | null
   created_at: string | null
   version: string | null
   headline: PanelCell | null
+  policy_violations: string[]
   /** Why the run produced no headline; null when it did. */
   gap_reason: string | null
 }
@@ -596,6 +613,7 @@ export interface GroupMember {
   run_id: string
   eval_name: string
   status: string
+  step_status: string | null
   created_at: string
   headline: PanelCell | null
 }
@@ -609,7 +627,7 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: RunStatus | 'mixed'
+  status: RunStatus | 'mixed' | 'running' | 'step_failed'
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]

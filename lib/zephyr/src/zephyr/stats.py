@@ -3,13 +3,14 @@
 
 """Finelog stats schemas and counter-key constants for Zephyr pipelines.
 
-Three namespaces are written:
+Four namespaces are written:
 
 - ``zephyr.stage`` — one row per stage at completion, emitted by the
   coordinator. Contains throughput and aggregated resource usage.
 - ``zephyr.worker`` — one row per shard at START, each sample interval
   (RUNNING), and END, emitted by the long-lived worker actor.
-- ``zephyr.shuffle`` — optional target placeholders and reducer input sizes.
+- ``zephyr.shuffle`` — target placeholders and reducer input sizes.
+- ``zephyr.execution`` — one physical plan per execution, linked to its Iris job.
 
 Runners sample CPU and memory counters. Worker heartbeats write per-shard rows
 and send aggregated counters to the coordinator for stage stats.
@@ -27,7 +28,9 @@ from typing import ClassVar
 from finelog.client import LogClient, Table
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
+from iris.runtime import telemetry as runtime_telemetry
+from rigging import telemetry
 from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -35,6 +38,7 @@ logger = logging.getLogger(__name__)
 ZEPHYR_STAGE_STATS_NAMESPACE = "zephyr.stage"
 ZEPHYR_WORKER_STATS_NAMESPACE = "zephyr.worker"
 ZEPHYR_SHUFFLE_STATS_NAMESPACE = "zephyr.shuffle"
+ZEPHYR_EXECUTION_STATS_NAMESPACE = "zephyr.execution"
 WORKER_STATS_INTERVAL = 5.0
 MAX_METRIC_STAGE_SERIES = 256
 METRIC_BIN_SECONDS = 15
@@ -166,6 +170,22 @@ class StatsConfig:
     finelog_url: str
 
 
+def configure_coordinator_telemetry(config: StatsConfig | None) -> None:
+    """Export coordinator counters with Iris identity; leave local processes inert."""
+    try:
+        runtime = runtime_telemetry.resolve(attributes={"role": telemetry.TelemetryRole.COORDINATOR.value})
+        if runtime is None:
+            return
+        url = config.finelog_url if config is not None else runtime.resolver(runtime.endpoint)
+        telemetry.configure(
+            endpoint=url.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
+            service="zephyr",
+            attributes=runtime.attributes,
+        )
+    except Exception:
+        logger.warning("Could not configure coordinator telemetry", exc_info=True)
+
+
 @dataclass
 class ZephyrShuffleStat:
     """Initial target placeholder or input size observed by a reducer.
@@ -189,6 +209,24 @@ class ZephyrShuffleStat:
     job_id: str
 
 
+@dataclass
+class ZephyrExecutionStat:
+    """Execution plan metadata for historical queries, without source values.
+
+    ``ts`` is when the coordinator emits this record, before stage execution
+    begins.
+    """
+
+    key_column: ClassVar[str] = "root_job_id"
+
+    execution_id: str
+    root_job_id: str
+    coordinator_job_id: str
+    ts: datetime
+    input_shards: int
+    stages_json: str
+
+
 class StatsWriter:
     """Manages finelog connections and emits Zephyr stat rows.
 
@@ -202,6 +240,7 @@ class StatsWriter:
         self._stage_table: Table | None = None
         self._worker_table: Table | None = None
         self._shuffle_table: Table | None = None
+        self._execution_table: Table | None = None
         if log_client is not None:
             with suppress(Exception):
                 self._stage_table = log_client.get_table(ZEPHYR_STAGE_STATS_NAMESPACE, ZephyrStageStat)
@@ -400,6 +439,17 @@ LIMIT {max_points + MAX_METRIC_STAGE_SERIES}
             for row in rows
         ]
         return PipelineMetricsResult(_complete_metric_bins(points, max_points))
+
+    def emit_execution_stat(self, record: ZephyrExecutionStat) -> None:
+        """Enqueue execution metadata without waiting for a flush."""
+        if self._log_client is None:
+            return
+        try:
+            if self._execution_table is None:
+                self._execution_table = self._log_client.get_table(ZEPHYR_EXECUTION_STATS_NAMESPACE, ZephyrExecutionStat)
+            self._execution_table.write([record])
+        except Exception:
+            logger.warning("Failed to write execution plan to finelog", exc_info=True)
 
     def emit_shuffle_stats(self, records: list[ZephyrShuffleStat]) -> None:
         """Append target placeholders or measurements; create the table on demand."""

@@ -13,6 +13,7 @@ import threading
 import typing
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, List, Optional, TypedDict, Union
 
 import fsspec
@@ -21,6 +22,7 @@ import numpy as np
 import wandb
 from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
+from rigging.provenance import Provenance
 
 from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
@@ -301,18 +303,40 @@ def _set_nested(target: dict[str, Any], path: list[str], value: Any) -> None:
     cur[path[-1]] = value
 
 
+# Device-to-host copies kept in flight while a payload is fetched. PJRT's GPU client finishes
+# pending copies on a work queue that starts a thread whenever queued work exceeds its idle
+# threads and never stops one, so starting thousands of copies at once leaves hundreds of idle
+# threads in every process. A short lookahead keeps most of the overlap and bounds that pool.
+_HOST_FETCH_WINDOW = 8
+
+
+def _fetch_arrays_to_host(tree: Any) -> None:
+    """Copy every ``jax.Array`` leaf to host with at most ``_HOST_FETCH_WINDOW`` copies in flight.
+
+    Each array caches its host value, so the conversion that follows reads host memory only.
+    """
+    arrays = [leaf for leaf in jax.tree.leaves(tree) if isinstance(leaf, jax.Array)]
+    for leaf in arrays[:_HOST_FETCH_WINDOW]:
+        leaf.copy_to_host_async()
+    for i, leaf in enumerate(arrays):
+        if i + _HOST_FETCH_WINDOW < len(arrays):
+            arrays[i + _HOST_FETCH_WINDOW].copy_to_host_async()
+        np.asarray(leaf)
+
+
 def _convert_metrics_to_wandb_loggable(metrics: typing.Mapping[str, Any]) -> dict[str, Any]:
     """Flatten metrics into a wandb-ready dict.
 
     Expands every :class:`SummaryStats` value into its individual loggable keys
-    (computing ``mean``/``variance``/``rms`` and building ``wandb.Histogram`` as
-    needed) and passes every other value through
+    (building ``wandb.Histogram`` as needed) and passes every other value through
     :func:`_convert_value_to_loggable_rec`.
 
     Pure conversion: no wandb run state is touched. Safe to call on the producer
     thread before handing off to a :class:`BackgroundTracker` worker, and
     idempotent when called a second time on an already-flat dict.
     """
+    _fetch_arrays_to_host(dict(metrics))
+
     to_log: dict[str, Any] = {}
     for k, v in metrics.items():
         if isinstance(v, SummaryStats):
@@ -443,9 +467,10 @@ class WandbConfig(TrackerConfig):
             mode = "disabled"
 
         git_settings = self._git_settings()
-
-        if "git_commit" in git_settings:
-            hparams_to_save["git_commit"] = git_settings["git_commit"]
+        git_config = _git_run_config(git_settings.get("git_commit"), self._code_dir() or ".")
+        hparams_to_save.update(git_config)
+        if "git_commit" in git_config:
+            git_settings["git_commit"] = git_config["git_commit"]
 
         process_count = jax.process_count()
         initialization_error = None
@@ -558,9 +583,11 @@ class WandbConfig(TrackerConfig):
                 suppress_logging=not is_primary_process,
                 minimum_log_step=minimum_log_step,
             ),
-            # Only the primary process actually logs; a suppressed tracker no-ops every
-            # call, so wrapping it in a background thread is pure overhead — and would
-            # make non-primary hosts stage (copy) large profile artifacts they discard.
+            # Only the primary process sends anything to W&B. A suppressed tracker still
+            # materializes log payloads on the calling thread, keeping device work
+            # symmetric across hosts, and has no I/O to move to a worker. A
+            # background wrapper would also make non-primary hosts stage (copy) large
+            # profile artifacts they discard.
             enabled=self.background and is_primary_process,
             max_queue_size=self.background_max_queue_size,
             finish_timeout=self.background_finish_timeout,
@@ -580,14 +607,17 @@ class WandbConfig(TrackerConfig):
 
         return self.fork_from
 
+    def _code_dir(self) -> Optional[str]:
+        """The source directory to capture, or ``None`` when source capture is off."""
+        if isinstance(self.save_code, str):
+            return self.save_code
+        if self.save_code:
+            return infer_experiment_git_root() or "."  # type: ignore
+        return None
+
     def _git_settings(self):
         other_settings = dict()
-        if isinstance(self.save_code, str):
-            code_dir = self.save_code
-        elif self.save_code:
-            code_dir = infer_experiment_git_root() or "."  # type: ignore
-        else:
-            code_dir = None
+        code_dir = self._code_dir()
         if code_dir is not None:
             try:
                 _validate_wandb_artifact_size(code_dir, artifact_name="source code")
@@ -597,18 +627,21 @@ class WandbConfig(TrackerConfig):
                     "source directory.",
                     exc,
                 )
-                return other_settings
-            logger.info(f"Setting wandb code_dir to {code_dir}")
-            other_settings["code_dir"] = code_dir
-            other_settings["git_root"] = code_dir
-            # for some reason, wandb isn't populating the git commit, so we do it here
-            try:
-                sha = self._get_git_sha(code_dir)
-            except:  # noqa: E722
-                logger.warning(f"Could not get git sha for {code_dir}. Will not log git commit.")
-                sha = None
-            if sha is not None:
-                other_settings["git_commit"] = sha
+            else:
+                logger.info(f"Setting wandb code_dir to {code_dir}")
+                other_settings["code_dir"] = code_dir
+                other_settings["git_root"] = code_dir
+        # The commit is run metadata, so record it whether or not the source is captured.
+        # wandb doesn't populate it on its own.
+        commit_dir = code_dir or "."
+        try:
+            sha = self._get_git_sha(commit_dir)
+        except Exception as exc:
+            # The commit is optional metadata; a broken checkout must not stop training.
+            logger.warning("Could not get git sha for %s (%s). Will not log git commit.", commit_dir, exc)
+            sha = None
+        if sha is not None:
+            other_settings["git_commit"] = sha
 
         return other_settings
 
@@ -637,6 +670,32 @@ class WandbConfig(TrackerConfig):
                 raise e
 
         return git_sha
+
+
+def _git_run_config(commit: Optional[str], source_dir: str) -> dict[str, Any]:
+    """Run-config entries for the commit and working-tree state of the launch.
+
+    A job submitted through Iris runs from a bundle without ``.git``, but inherits the
+    submitter's git provenance in ``MARIN_PROVENANCE``. Only the commit, the dirty flag,
+    and the tree hash are recorded: the full provenance also holds the submitter's
+    username, command line, and remote URL, which do not belong in a W&B config.
+
+    Args:
+        commit: The commit from ``GIT_COMMIT`` or a local checkout, if one was found.
+        source_dir: The checkout the commit was read from. Without ``MARIN_PROVENANCE``, the
+            dirty flag is read from this checkout, which can differ from the working directory.
+    """
+    provenance = Provenance.capture(Path(source_dir))
+    if not provenance.base_commit:
+        return {"git_commit": commit} if commit else {}
+    if commit is not None and not commit.startswith(provenance.base_commit):
+        # The provenance describes a different checkout, so its dirty flag does not apply.
+        return {"git_commit": commit}
+    return {
+        "git_commit": commit or provenance.base_commit,
+        "git_dirty": provenance.dirty,
+        "git_tree_hash": provenance.tree_hash,
+    }
 
 
 def _truncate_wandb_artifact_name(name: Optional[str]) -> Optional[str]:

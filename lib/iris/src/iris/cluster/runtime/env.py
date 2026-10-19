@@ -17,6 +17,7 @@ from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.setup_scripts import DEFAULT_UV_LINK_MODE, UV_LINK_MODE_ENV
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -25,6 +26,8 @@ logger = logging.getLogger(__name__)
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 IRIS_ATTEMPT_UID_ENV = "IRIS_ATTEMPT_UID"
+# Bearer token the task's Iris client presents to the controller as the job's owner.
+IRIS_TASK_TOKEN_ENV = "IRIS_TASK_TOKEN"
 IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
@@ -48,7 +51,7 @@ HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
 # Unclaimed node-local scratch, for anything that needs a real directory on the
 # node rather than a bucket. Tasks pick their own subdirectory; nothing prunes
-# it. `iris.runtime.jax_init` puts XLA's per-fusion autotune cache under
+# it. `iris.jax.init` puts XLA's per-fusion autotune cache under
 # `/cache/xla` because XLA opens that directory from C++ through `tsl::Env`,
 # which has no object-store filesystem.
 SCRATCH_CACHE_PATH = "/cache"
@@ -220,6 +223,7 @@ def build_common_iris_env(
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
+    task_token: str | None,
     environment: job_pb2.EnvironmentConfig,
     constraints: Sequence[job_pb2.Constraint],
     ports: Sequence[str],
@@ -251,6 +255,8 @@ def build_common_iris_env(
     if controller_address:
         env["IRIS_CONTROLLER_ADDRESS"] = controller_address
         env["IRIS_CONTROLLER_URL"] = controller_address
+    if task_token:
+        env[IRIS_TASK_TOKEN_ENV] = task_token
 
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"
@@ -268,6 +274,8 @@ def build_common_iris_env(
     # must not land on a node directory every other task can read. HF_HUB_CACHE
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
     env["UV_CACHE_DIR"] = UV_CACHE_PATH
+    # Kubernetes may clean the shared cache while tasks run, so its venvs own copies.
+    env[UV_LINK_MODE_ENV] = DEFAULT_UV_LINK_MODE
     env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
     env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
     # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain

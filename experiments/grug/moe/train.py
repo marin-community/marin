@@ -41,7 +41,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import GrugModelConfig, Transformer, long_layer_flags
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -98,7 +98,7 @@ class GrugRunConfig:
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
-    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
+    # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
 
 
@@ -216,6 +216,8 @@ def _compute_flops(
         num_experts=model_config.num_experts,
         num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
         num_experts_per_tok=model_config.num_experts_per_token,
+        sliding_window=model_config.sliding_window,
+        num_full_attention_layers=sum(long_layer_flags(model_config.num_layers)),
     )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 

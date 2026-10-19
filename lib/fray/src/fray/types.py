@@ -427,6 +427,10 @@ class ResourceConfig:
 
     `target_cluster` routes an Iris job to a named peer cluster. Other backends
     may ignore it.
+
+    `container_profile` names the Iris container security profile for the task,
+    such as `CONTAINER_PROFILE_PRIVILEGED` for tasks that build sandboxes of
+    their own. None keeps the cluster default. Other backends may ignore it.
     """
 
     cpu: float = 1
@@ -446,6 +450,7 @@ class ResourceConfig:
     replicas: int = 1
     device_alternatives: Sequence[str] | None = None
     image: str | None = None
+    container_profile: str | None = None
 
     def chip_count(self) -> int:
         """Total accelerator chips across all replicas."""
@@ -703,7 +708,7 @@ class JobRequest:
         environment: Environment configuration (dependencies, env vars)
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         processes_per_task: GPU processes to run inside each task (default 1). When
-            > 1, fray composes the ``iris.hooks.multigpu_main`` supervisor into the command
+            > 1, fray composes the ``iris.jax.multigpu_main`` supervisor into the command
             (one process per GPU group); iris runs it verbatim. ``1`` is a no-op.
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption

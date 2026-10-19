@@ -6,16 +6,16 @@
 These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
 the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
 task do not collide), the lm-eval command the child runs per task (route selection between the
-completions and chat APIs included), and the empty-results guard. Everything else (job submission,
+completions and chat APIs included), and the FineStore output target. Everything else (job submission,
 serving, the eval itself) is exercised by the cluster smoke.
 """
 
+import base64
 import json
-import os
 from types import SimpleNamespace
 
 import pytest
-from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
+from marin.evaluation.evalchemy.client import build_command, build_model_args
 from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
@@ -89,13 +89,32 @@ def test_file_config_fields_reach_the_evalchemy_command():
         )
     )
 
-    command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 32768)
+    command = build_command(config, config["tasks"][0], "/opt/py", 32768)
 
     assert command[command.index("--batch_size") + 1] == "1"
     assert command[command.index("--seed") + 1] == "1234"
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
     assert model_args["max_length"] == "32768"
+
+
+def test_explicit_thinking_mode_is_serialized_for_chat_endpoint():
+    template_kwargs = {"enable_thinking": True, "add_generation_prompt": False}
+    config = _payload(
+        _config(
+            tasks=(EvalTaskConfig("MATH500", 0, generation=True),),
+            apply_chat_template=True,
+            chat_template_kwargs=template_kwargs,
+        )
+    )
+
+    command = build_command(config, config["tasks"][0], "/opt/py", 32768)
+    assert command[command.index("--model") + 1] == "local-chat-completions"
+    model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
+    assert (
+        json.loads(base64.urlsafe_b64decode(model_args["chat_template_kwargs"].removeprefix("base64:")))
+        == template_kwargs
+    )
 
 
 def test_parent_rejects_endpoint_model_arg_overrides():
@@ -212,12 +231,11 @@ def test_task_dirs_distinguish_shot_variants_of_one_task():
 
 def test_build_command_completion_route_with_fewshot_and_limit():
     config = _payload(_config(max_eval_instances=7))
-    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
+    cmd = build_command(config, config["tasks"][1], "/opt/py", None)
 
     assert cmd[:3] == ["/opt/evalchemy", "--model", "local-completions"]
     assert "--apply_chat_template" not in cmd
     assert cmd[cmd.index("--tasks") + 1] == "gsm8k"
-    assert cmd[cmd.index("--output_path") + 1] == "/tmp/out"
     assert cmd[cmd.index("--finestore_output_path") + 1] == config["out_path"]
     assert cmd[cmd.index("--finestore_output_prefix") + 1] == "gsm8k_cot"
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
@@ -230,12 +248,13 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert model_args["base_url"] == "http://10.0.0.1:30000/v1/completions"
     assert model_args["model"] == "Qwen/Qwen3-0.6B"
     assert model_args["tokenizer"] == "Qwen/Qwen3-0.6B"
+    assert float(model_args["transport_retry_budget"]) > float(model_args["timeout"])
 
 
 def test_build_command_uses_evaluator_default_when_fewshot_is_unset():
     config = _payload(_config(tasks=(EvalTaskConfig("ifeval", None, generation=True),)))
 
-    command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", None)
+    command = build_command(config, config["tasks"][0], "/opt/py", None)
 
     assert "--num_fewshot" not in command
 
@@ -244,13 +263,13 @@ def test_extra_gen_kwargs_ride_on_gen_kwargs():
     # A thinking model (snowball-sft) needs skip_special_tokens=false so its delimiters survive scoring
     # plus a light repetition penalty; both ride on --gen_kwargs alongside the budget, on every task.
     config = _payload(_config(extra_gen_kwargs={"skip_special_tokens": "false", "repetition_penalty": "1.1"}))
-    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
+    cmd = build_command(config, config["tasks"][1], "/opt/py", None)
     gen_kwargs = cmd[cmd.index("--gen_kwargs") + 1]
     assert gen_kwargs == "max_gen_toks=2048,skip_special_tokens=false,repetition_penalty=1.1"
 
 
 def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
-    cmd = build_command(_payload(), _payload()["tasks"][1], "/tmp/out", "/opt/py", None)
+    cmd = build_command(_payload(), _payload()["tasks"][1], "/opt/py", None)
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
 
 
@@ -259,7 +278,7 @@ def test_unset_budget_lets_evalchemy_size_its_own_benchmark(monkeypatch):
     # and its stored longest prompt; an explicit max_gen_toks or --max_tokens would override that.
     monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: name == "AIME24")
     config = _payload(_config(max_gen_toks=None, tasks=(EvalTaskConfig("AIME24", 0, generation=True),)))
-    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 40960)
+    cmd = build_command(config, config["tasks"][0], "/opt/py", 40960)
 
     assert "--max_tokens" not in cmd
     assert "--gen_kwargs" not in cmd
@@ -281,7 +300,7 @@ def test_unset_budget_sizes_native_generation_task_from_served_context(monkeypat
     # an Evalchemy-only knob.
     monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
     config = _payload(_config(max_gen_toks=None, extra_gen_kwargs={"skip_special_tokens": "false"}))
-    cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", max_length)
+    cmd = build_command(config, config["tasks"][1], "/opt/py", max_length)
 
     assert cmd[cmd.index("--gen_kwargs") + 1] == expected_gen_kwargs
     assert "--max_tokens" not in cmd
@@ -290,7 +309,7 @@ def test_unset_budget_sizes_native_generation_task_from_served_context(monkeypat
 def test_unset_budget_loglikelihood_task_gets_no_gen_kwargs(monkeypatch):
     monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
     config = _payload(_config(max_gen_toks=None))
-    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 40960)  # arc_easy, loglikelihood
+    cmd = build_command(config, config["tasks"][0], "/opt/py", 40960)  # arc_easy, loglikelihood
 
     assert "--gen_kwargs" not in cmd
     assert "--max_tokens" not in cmd
@@ -301,7 +320,7 @@ def test_build_command_chat_route_needs_template_and_generation():
     generative, mcq = config["tasks"][1], config["tasks"][0]
 
     # A generation task of a chat-template model runs through the chat API...
-    cmd = build_command(config, generative, "/tmp/out", "/opt/py", None)
+    cmd = build_command(config, generative, "/opt/py", None)
     assert cmd[cmd.index("--model") + 1] == "local-chat-completions"
     assert "--apply_chat_template" in cmd
     chat_args = dict(pair.split("=", 1) for pair in build_model_args(config, True, None).split(","))
@@ -317,7 +336,7 @@ def test_build_command_chat_route_needs_template_and_generation():
 
     # ...but a loglikelihood (MCQ) task always uses completions: chat endpoints cannot echo prompt
     # logprobs, and lm-eval rejects loglikelihood over chat completions.
-    cmd = build_command(config, mcq, "/tmp/out", "/opt/py", None)
+    cmd = build_command(config, mcq, "/opt/py", None)
     assert cmd[cmd.index("--model") + 1] == "local-completions"
     assert "--apply_chat_template" not in cmd
 
@@ -334,7 +353,7 @@ def test_completion_only_pins_completions_route_and_forwards_unsafe_code():
         ),
     )
     config = _payload(config)
-    cmd = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", None)
+    cmd = build_command(config, config["tasks"][0], "/opt/py", None)
 
     assert cmd[cmd.index("--model") + 1] == "local-completions"
     assert "--apply_chat_template" not in cmd
@@ -401,25 +420,3 @@ def test_auto_serve_overrides_reads_local_model_config(tmp_path):
 
     assert extra_args == ("--gdn-prefill-backend", "triton")
     assert max_model_len == 16384
-
-
-def _write_results(local_out: str, results: dict) -> None:
-    """Write a results file in lm-eval's nested ``<task_dir>/<model>/results_<ts>.json`` layout."""
-    task_dir = os.path.join(local_out, "mmlu_5shot", "local-completions")
-    os.makedirs(task_dir, exist_ok=True)
-    with open(os.path.join(task_dir, "results_2026-07-19T00-00-00.json"), "w") as f:
-        json.dump({"results": results}, f)
-
-
-def test_scored_results_rejects_empty_results_dict(tmp_path):
-    # Evalchemy exits 0 and still writes results_*.json with an empty "results" dict when every
-    # endpoint request fails; the client must treat that as an unscored task.
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    _write_results(str(empty), {})
-    assert scored_results(str(empty)) is False
-
-    scored = tmp_path / "scored"
-    scored.mkdir()
-    _write_results(str(scored), {"mmlu": {"acc,none": 0.42}})
-    assert scored_results(str(scored)) is True

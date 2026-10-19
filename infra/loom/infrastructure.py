@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import pulumi
 import pulumi_cloudflare as cloudflare
@@ -62,6 +63,7 @@ REMOTE_MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 REMOTE_MCP_AUTH_NONE = "none"
 REMOTE_MCP_AUTH_ENVIRONMENT = "environment"
 REMOTE_MCP_AUTH_IAP = "iap"
+BUILTIN_WATCH_PROFILE = "watch"
 
 
 def _positive_config_int(value: int, name: str) -> int:
@@ -88,6 +90,145 @@ def _git_context_at_revision(revision: str) -> str:
 
 
 SECRET_REF = re.compile(r"^projects/[a-z0-9-]+/secrets/[A-Za-z0-9_-]+/versions/(?:latest|[0-9]+)$")
+
+
+@dataclass(frozen=True)
+class CronWatchSchedule:
+    cron: str
+    timezone: str
+
+    def manifest(self) -> dict[str, str]:
+        return {"cron": self.cron, "timezone": self.timezone}
+
+
+@dataclass(frozen=True)
+class IntervalWatchSchedule:
+    every: str
+
+    def manifest(self) -> dict[str, str]:
+        return {"every": self.every}
+
+
+@dataclass(frozen=True)
+class AgentWatchTarget:
+    profile: str
+    repo: str
+    prompt: str
+    slack_channels: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, name: str, value: Mapping[str, object]) -> AgentWatchTarget:
+        profile = str(value.get("profile", "")).strip()
+        repo = str(value.get("repo", "")).strip()
+        if not profile or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+            raise ValueError("agent watches require a profile and owner/name repository")
+        inline, source = value.get("prompt"), value.get("promptFile")
+        if (inline is None) == (source is None):
+            raise ValueError(f"watch {name!r} requires exactly one of prompt or promptFile")
+        prompt = _instruction_text(inline, source, f"watch {name!r}")
+        if not prompt or len(prompt.encode()) > 65536:
+            raise ValueError("watch prompt must be 1..65536 bytes")
+        channels = _string_tuple(value.get("slackChannels", []), "slackChannels", f"watch {name!r}")
+        if len(channels) > 32 or any(not re.fullmatch(r"[CG][A-Za-z0-9]{1,63}", channel) for channel in channels):
+            raise ValueError("slackChannels must contain at most 32 Slack channel IDs")
+        return cls(profile, repo, prompt, channels)
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "agent": {
+                "profile": self.profile,
+                "repo": self.repo,
+                "prompt": self.prompt,
+                "slack_channels": list(self.slack_channels),
+            }
+        }
+
+
+@dataclass(frozen=True)
+class ScriptWatchTarget:
+    program: str
+    profile: str
+    params: Mapping[str, object]
+    scope: Mapping[str, object]
+    capabilities: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, name: str, value: Mapping[str, object]) -> ScriptWatchTarget:
+        if any(field in value for field in ("prompt", "promptFile", "repo", "slackChannels")):
+            raise ValueError("script watches use program, params, and scope; agent fields do not apply")
+        program = value.get("program")
+        if not isinstance(program, str) or not (program.startswith("builtin:") or Path(program).is_absolute()):
+            raise ValueError("script program must be builtin:name or an absolute server path")
+        params, scope = value.get("params", {}), value.get("scope", {})
+        if not isinstance(params, dict) or not isinstance(scope, dict):
+            raise ValueError("script params and scope must be objects")
+        capabilities = _string_tuple(value.get("capabilities", ["observe"]), "capabilities", f"watch {name!r}")
+        if any(
+            capability not in {"observe", "mark", "escalate", "nudge", "interrupt", "launch", "judge"}
+            for capability in capabilities
+        ):
+            raise ValueError("script capabilities must be known watch capabilities")
+        return cls(program, str(value.get("profile", BUILTIN_WATCH_PROFILE)).strip(), params, scope, capabilities)
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "program": self.program,
+            "profile": self.profile,
+            "params": dict(self.params),
+            "scope": dict(self.scope),
+            "capabilities": list(self.capabilities),
+        }
+
+
+def _watch_target(name: str, value: Mapping[str, object]) -> AgentWatchTarget | ScriptWatchTarget:
+    if "program" in value:
+        return ScriptWatchTarget.parse(name, value)
+    return AgentWatchTarget.parse(name, value)
+
+
+@dataclass(frozen=True)
+class WatchConfig:
+    name: str
+    trigger: CronWatchSchedule | IntervalWatchSchedule
+    target: AgentWatchTarget | ScriptWatchTarget
+    enabled: bool
+    run_timeout_secs: int | None
+
+    @classmethod
+    def parse(cls, name: str, value: Mapping[str, object]) -> WatchConfig:
+        if not name.strip():
+            raise ValueError("watch requires a name")
+        target = _watch_target(name, value)
+        cron, every = value.get("cron"), value.get("every")
+        if (cron is None) == (every is None):
+            raise ValueError("watch requires exactly one of cron or every")
+        if cron is not None:
+            if not isinstance(cron, str) or len(cron.split()) != 5:
+                raise ValueError("cron requires five fields")
+            timezone = str(value.get("timezone", "UTC"))
+            ZoneInfo(timezone)
+            trigger: CronWatchSchedule | IntervalWatchSchedule = CronWatchSchedule(cron, timezone)
+        else:
+            match = re.fullmatch(r"([0-9]+)([smh])", str(every))
+            if match is None or not 1 <= int(match[1]) * {"s": 1, "m": 60, "h": 3600}[match[2]] <= 31622400:
+                raise ValueError("every must be positive, use s/m/h, and be at most 366 days")
+            trigger = IntervalWatchSchedule(str(every))
+        enabled = value.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be boolean")
+        timeout = _optional_int(value.get("runTimeoutSeconds"), "runTimeoutSeconds", f"watch {name!r}")
+        if timeout is not None and (isinstance(timeout, bool) or not 1 <= timeout <= 86400):
+            raise ValueError("runTimeoutSeconds must be 1..86400 seconds")
+        return cls(name.strip(), trigger, target, enabled, timeout)
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "trigger": self.trigger.manifest(),
+            "enabled": self.enabled,
+            **self.target.manifest(),
+            **({"run_timeout_secs": self.run_timeout_secs} if self.run_timeout_secs is not None else {}),
+        }
 
 
 @dataclass(frozen=True)
@@ -269,36 +410,34 @@ def _parse_profile_env(name: str, value: object, profile: str) -> ProfileEnvConf
     return ProfileSecretConfig(name, secret_ref)
 
 
-def _string_tuple(value: object, field: str, profile: str) -> tuple[str, ...]:
+def _string_tuple(value: object, field: str, owner: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"profile {profile!r} {field} must be a list of strings")
+        raise ValueError(f"{owner} {field} must be a list of strings")
     return tuple(value)
 
 
-def _optional_int(value: object, field: str, profile: str) -> int | None:
+def _optional_int(value: object, field: str, owner: str) -> int | None:
     if value is None:
         return None
     if not isinstance(value, int):
-        raise ValueError(f"profile {profile!r} {field} must be an integer")
+        raise ValueError(f"{owner} {field} must be an integer")
     return value
 
 
-def _profile_instructions(value: Mapping[str, object], profile: str) -> str:
-    inline = value.get("instructions")
-    source = value.get("instructionsFile")
+def _instruction_text(inline: object, source: object, owner: str) -> str:
     if inline is not None and source is not None:
-        raise ValueError(f"profile {profile!r} must use only one of instructions or instructionsFile")
+        raise ValueError(f"{owner} must use only one inline instruction or instruction file")
     if source is None:
         if inline is None:
             return ""
         if not isinstance(inline, str):
-            raise ValueError(f"profile {profile!r} instructions must be a string")
+            raise ValueError(f"{owner} instructions must be a string")
         return inline.strip()
     if not isinstance(source, str) or not source.strip():
-        raise ValueError(f"profile {profile!r} instructionsFile must be a relative path")
+        raise ValueError(f"{owner} instruction file must be a relative path")
     path = (ROOT / source).resolve()
     if not path.is_relative_to(ROOT) or not path.is_file():
-        raise ValueError(f"profile {profile!r} instructionsFile must name a file under {ROOT}")
+        raise ValueError(f"{owner} instruction file must name a file under {ROOT}")
     return path.read_text().strip()
 
 
@@ -312,7 +451,7 @@ class McpAccessConfig:
         if not isinstance(value, dict):
             raise ValueError(f"profile {profile!r} mcpAccess must be an object")
         mode = str(value.get("mode", MCP_ACCESS_NONE)).strip()
-        groups = _string_tuple(value.get("groups", []), "mcpAccess.groups", profile)
+        groups = _string_tuple(value.get("groups", []), "mcpAccess.groups", f"profile {profile!r}")
         if mode not in MCP_ACCESS_MODES:
             raise ValueError(f"profile {profile!r} mcpAccess.mode must be none, all, or groups")
         if mode != MCP_ACCESS_GROUPS and groups:
@@ -371,15 +510,19 @@ class ProfileConfig:
             session_class=str(value.get("class", "interactive")),
             strict=bool(value.get("strict", False)),
             env_clear=bool(value.get("envClear", False)),
-            ambient_allowlist=_string_tuple(value.get("ambientAllowlist", []), "ambientAllowlist", name),
-            idle_archive_secs=_optional_int(value.get("idleArchiveSeconds"), "idleArchiveSeconds", name),
+            ambient_allowlist=_string_tuple(value.get("ambientAllowlist", []), "ambientAllowlist", f"profile {name!r}"),
+            idle_archive_secs=_optional_int(value.get("idleArchiveSeconds"), "idleArchiveSeconds", f"profile {name!r}"),
             max_concurrent=int(value.get("maxConcurrent", 0)),
-            turn_budget=_optional_int(value.get("turnBudget"), "turnBudget", name),
+            turn_budget=_optional_int(value.get("turnBudget"), "turnBudget", f"profile {name!r}"),
             prelude=str(value.get("prelude", "weaver")),
-            instructions=_profile_instructions(value, name),
+            instructions=_instruction_text(
+                value.get("instructions"), value.get("instructionsFile"), f"profile {name!r}"
+            ),
             restricted=bool(value.get("restricted", False)),
-            github_repositories=_string_tuple(value.get("githubRepositories", []), "githubRepositories", name),
-            allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", name),
+            github_repositories=_string_tuple(
+                value.get("githubRepositories", []), "githubRepositories", f"profile {name!r}"
+            ),
+            allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", f"profile {name!r}"),
             mcp_access=McpAccessConfig.parse(value.get("mcpAccess", {}), name),
             env=env,
         )
@@ -509,6 +652,7 @@ class DeploymentConfig:
     profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
+    watches: tuple[WatchConfig, ...] = ()
 
     def __post_init__(self) -> None:
         if self.domain != self.domain.strip().rstrip(".") or "://" in self.domain or "/" in self.domain:
@@ -532,6 +676,22 @@ class DeploymentConfig:
                 raise ValueError(f"duplicate remote MCP identity {remote.identity!r}")
             remote_identities.add(remote.identity)
         profile_names = {profile.name for profile in self.profiles}
+        watch_names: set[str] = set()
+        for watch in self.watches:
+            profiles = (
+                profile_names | {BUILTIN_WATCH_PROFILE} if isinstance(watch.target, ScriptWatchTarget) else profile_names
+            )
+            _validate_profile_reference("watch", watch.name, watch.target.profile, watch_names, profiles)
+            if isinstance(watch.target, ScriptWatchTarget) and watch.target.profile == BUILTIN_WATCH_PROFILE:
+                continue
+            profile = next(profile for profile in self.profiles if profile.name == watch.target.profile)
+            if (
+                profile.session_class != "automation"
+                or not profile.strict
+                or not profile.env_clear
+                or profile.protocol != "acp"
+            ):
+                raise ValueError(f"watch {watch.name!r} profile must be automation-safe ACP")
         workload_names: set[str] = set()
         for workload in self.workloads:
             _validate_profile_reference("workload", workload.name, workload.profile, workload_names, profile_names)
@@ -541,7 +701,12 @@ class DeploymentConfig:
                 "GitHub federation", federation.name, federation.profile, federation_names, profile_names
             )
         if self.prune_deployment and not (
-            self.settings or self.remote_mcps or self.profiles or self.workloads or self.github_federations
+            self.settings
+            or self.remote_mcps
+            or self.profiles
+            or self.workloads
+            or self.github_federations
+            or self.watches
         ):
             raise ValueError("pruneDeployment requires a non-empty runtime policy")
 
@@ -562,6 +727,14 @@ class DeploymentConfig:
                 raise ValueError(f"buildContext does not contain a Dockerfile: {local_source}")
             source = str(local_source)
         region = config.require("region")
+        raw_watches = config.get_object("watches") or {}
+        if not isinstance(raw_watches, dict):
+            raise ValueError("watches must be an object")
+        watches = []
+        for name, value in raw_watches.items():
+            if not isinstance(value, dict):
+                raise ValueError(f"watch {name!r} must be an object")
+            watches.append(WatchConfig.parse(str(name), value))
         raw_profiles = config.get_object("profiles") or {}
         if not isinstance(raw_profiles, dict):
             raise ValueError("profiles must be an object")
@@ -627,6 +800,7 @@ class DeploymentConfig:
             profiles=tuple(profiles),
             workloads=tuple(workloads),
             github_federations=tuple(github_federations),
+            watches=tuple(watches),
         )
 
 
@@ -834,6 +1008,7 @@ def _deployment_manifest(
 ) -> str:
     return json.dumps(
         {
+            "watches": [watch.manifest() for watch in sorted(config.watches, key=lambda watch: watch.name)],
             "settings": dict(config.settings),
             "remote_mcps": [remote.manifest() for remote in config.remote_mcps],
             "profiles": profiles,

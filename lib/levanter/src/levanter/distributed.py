@@ -16,7 +16,7 @@ import jax
 from jax._src import clusters
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
+from iris.jax.init import initialize_jax as initialize_iris_jax
 
 from levanter.megascale import configure_megascale_from_iris
 
@@ -245,7 +245,7 @@ class DistributedConfig:
 
         job_info = get_job_info()
         if job_info is not None:
-            logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
+            logger.info("Detected Iris job context; initializing jax.distributed via iris.jax.init.")
             configure_megascale_from_iris()
             initialize_iris_jax()
             if jax.process_index() == 0:

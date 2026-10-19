@@ -60,7 +60,7 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 
 from iris.cluster.client.job_info import get_job_info
-from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 
 logger = logging.getLogger("iris.nsys")
 
@@ -91,7 +91,7 @@ class TaskSelector(StrEnum):
 def selection_index() -> int:
     """The index ``--tasks`` selects on, from the task env.
 
-    Two scopes, one rule: when this process is a multigpu child (``iris.hooks.multigpu_main``
+    Two scopes, one rule: when this process is a multigpu child (``iris.jax.multigpu_main``
     stamped ``IRIS_MULTIGPU_PROCESS_INDEX``), that global rank is the unit — one report
     per selected *process*. Otherwise the whole task is the unit (its ``task_index``) —
     one report per selected *task*, covering every rank the task runs. Which one applies
@@ -216,7 +216,7 @@ def _supervise(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
     Returns the child's exit code, with a signal death normalized to the conventional
     ``128 + signum``. ``Popen.wait`` reports those as a negative code, which ``sys.exit``
     would turn into a wrapping status (``-15`` becomes 241, not 143) and hide the
-    termination behind a bogus application failure. ``iris.hooks.multigpu_main``
+    termination behind a bogus application failure. ``iris.jax.multigpu_main``
     normalizes the same way for the same reason.
     """
     proc = subprocess.Popen([*nsys_argv, *command])

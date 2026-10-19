@@ -23,7 +23,7 @@ from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.composer import make_backend
-from iris.cluster.config import IrisClusterConfig, load_config, resolve_config_secrets
+from iris.cluster.config import IrisClusterConfig, load_config, resolve_config_secrets, resolve_principal_references
 from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import (
@@ -186,6 +186,7 @@ def run_controller_serve(
     This is the shared implementation used by both the standalone daemon
     entrypoint and the ``iris cluster controller serve`` CLI command.
     """
+    cluster_config = resolve_principal_references(resolve_config_secrets(cluster_config))
     logger.info("Initializing Iris controller (%s)", provenance_from_env())
 
     remote_state_dir = cluster_config.storage.remote_state_dir
@@ -227,10 +228,6 @@ def run_controller_serve(
 
     db = ControllerDB(db_dir=db_dir)
 
-    # Resolve reference-based secrets (SecretRefSpec fields) at the controller
-    # runtime — the deploy/render path renders references verbatim and never
-    # resolves. A configured-but-erroring source fails fast here.
-    cluster_config = resolve_config_secrets(cluster_config)
     signing_key_pem = (
         cluster_config.auth.signing_key if (cluster_config.auth and cluster_config.auth.signing_key) else None
     )
@@ -249,7 +246,7 @@ def run_controller_serve(
         log_service_address=log_service_address,
         local_log_dir=local_state_dir / "log-server",
         host=host,
-        worker_token=auth.worker_token if auth.worker_token else None,
+        worker_token_provider=auth.worker_token_provider,
     )
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS

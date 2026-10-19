@@ -1,76 +1,89 @@
 {
   "uid": "marin-rl-runs",
-  "title": "RL Post-training (sync)",
-  "description": "One reinforcement-learning run, across every process that reports it. Runs are identified by run_id, which the MarinSkyRL driver, trainer and Ray controller all stamp. Accelerator and engine series carry no run_id of their own and are joined to the run through the nodes and the Iris job its own rows name. Everything here is read from telemetry_v1, so it answers after the run's pods are gone; W&B keeps the full-fidelity experiment record.",
+  "title": "RL Post-training",
+  "description": "Training progress, rollout timing and Megatron updates for sync and async runs. Select the training type, run, job and executions to inspect. Panels labelled run-wide cover the whole run. Missing telemetry is unknown.",
   "tags": [
     "marin",
-    "generated"
+    "rl"
   ],
   "timezone": "utc",
   "editable": false,
   "schemaVersion": 39,
-  "refresh": "1m",
+  "refresh": "5m",
   "time": {
-    "from": "now-24h",
+    "from": "now-3h",
     "to": "now"
   },
   "links": [
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
       "title": "Home",
+      "url": "/d/marin-home",
       "type": "link",
-      "url": "/d/marin-home"
-    },
-    {
-      "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "asDropdown": false
+    },
+    {
       "title": "Runs",
+      "url": "/d/marin-runs",
       "type": "link",
-      "url": "/d/marin-runs"
-    },
-    {
-      "linkRef": "async_rl"
-    },
-    {
-      "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Inference",
-      "type": "link",
-      "url": "/d/marin-inference"
+      "asDropdown": false
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
       "title": "Jobs",
+      "url": "/d/marin-jobs",
       "type": "link",
-      "url": "/d/marin-jobs"
-    },
-    {
-      "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Fleet accelerators",
+      "asDropdown": false
+    },
+    {
+      "title": "Inference",
+      "url": "/d/marin-inference",
       "type": "link",
-      "url": "/d/marin-accel"
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "asDropdown": false
+    },
+    {
+      "title": "Fleet accelerators",
+      "url": "/d/marin-accel",
+      "type": "link",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "asDropdown": false
     }
   ],
   "templating": {
     "list": [
+      {
+        "name": "training_type",
+        "label": "Training type",
+        "description": "A run is async when any lifecycle, policy-step or rollout-call record in the selected clusters and window carries training_type=async. Every other run is sync, including a run with no stamp.",
+        "type": "custom",
+        "query": "sync,async",
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": true,
+          "text": "sync",
+          "value": "sync"
+        },
+        "options": [],
+        "hide": 0
+      },
       {
         "name": "cluster",
         "label": "Cluster",
@@ -87,7 +100,8 @@
             "$__all"
           ]
         },
-        "options": []
+        "options": [],
+        "hide": 0
       },
       {
         "name": "run",
@@ -107,7 +121,7 @@
           "queryType": "infinity",
           "refId": "variable-run",
           "infinityQuery": {
-            "refId": "variable-run",
+            "refId": "A",
             "type": "json",
             "source": "url",
             "format": "table",
@@ -118,7 +132,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND COALESCE(json_get(resource_attributes_json, 'training_loop'), '') <> 'async' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL GROUP BY 1 ORDER BY MAX(timestamp_ms) DESC"
+                  "value": "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('lifecycle', 'policy_step', 'rollout_call') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL GROUP BY run_id HAVING (CASE WHEN MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) = 1 THEN 'async' ELSE 'sync' END) = ${training_type:sqlstring} ORDER BY MAX(timestamp_ms) DESC"
                 },
                 {
                   "key": "from",
@@ -138,287 +152,565 @@
               }
             ]
           }
-        }
+        },
+        "hide": 0
+      },
+      {
+        "name": "job",
+        "label": "Job",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": [],
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-job",
+          "infinityQuery": {
+            "refId": "A",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT job_id AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring})) GROUP BY job_id HAVING job_id IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "hide": 0
+      },
+      {
+        "name": "execution",
+        "label": "Execution",
+        "description": "All includes every identified execution of the selected job. Run-wide panels ignore this picker and Job.",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "multi": true,
+        "includeAll": true,
+        "refresh": 2,
+        "sort": 0,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-execution",
+          "infinityQuery": {
+            "refId": "A",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT execution_uid AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring})) GROUP BY execution_uid HAVING execution_uid IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "hide": 0,
+        "allValue": "__all"
       }
     ]
   },
   "panels": [
     {
-      "type": "row",
-      "title": "Alive and moving?",
-      "collapsed": false,
-      "id": 100,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "panels": []
-    },
-    {
-      "id": 3,
-      "type": "timeseries",
-      "title": "Optimizer step and policy lag",
-      "description": "The trainer's optimizer step, and the newest policy version whose rollouts the trainer used in the same bucket.\n\nThe gap between the lines is the policy lag in optimizer steps. A widening gap means generation is falling behind.\n\nBoth lines are counters and only rise, so a flat line is the failure signal. The gap is a per-bucket maximum and reads as a best case. The measured staleness distribution is on RL Post-training (async), which charts the asynchronous loop. Data from telemetry_v1.marinskyrl.",
+      "id": 150,
+      "type": "stat",
+      "title": "Current step",
+      "description": "Most recently observed completed optimizer step in the selected executions. A flat value can mean progress stopped; compare the step and record ages. The newest reporting execution wins after a restart, even if its step number is lower.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 1
-      },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "step number"
-          },
-          "min": 0,
-          "noValue": "No policy_step rows in this window. The run picker only offers runs that emitted one, so this means the trainer stopped; check Services reporting this run to the right.",
           "unit": "none",
-          "displayName": "${__field.labels.series}"
+          "noValue": "No matching execution observations in this window.",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
       },
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "policy_step"
-              }
-            ]
-          },
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
+          "view": "status",
+          "format": "table",
           "columns": [
             {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
+              "selector": "current_step",
+              "text": "Current step",
               "type": "number"
             }
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
     },
     {
-      "id": 4,
-      "type": "timeseries",
-      "title": "Rollouts, samples and tokens completed",
-      "description": "Rollouts, samples and generated tokens the trainer finished in each time bucket.\n\nGenerated tokens divided by rollouts is the mean trajectory length. Blank means the trainer finished nothing in this window.\n\nA rollout is one completed trajectory. A sample is one generated response segment, so a multi-turn rollout counts as several samples and one rollout. These are counter deltas, so no line is a running total. Data from telemetry_v1.marinskyrl.",
+      "id": 151,
+      "type": "stat",
+      "title": "Steps / hour",
+      "description": "Observed step progress per hour for the latest step-reporting execution in the selected window. A falling rate means updates are slowing. The rate needs two different observation times and includes pauses between them.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 1
-      },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "count per time bucket"
+          "unit": "short",
+          "noValue": "No matching execution observations in this window.",
+          "color": {
+            "mode": "thresholds"
           },
-          "min": 0,
-          "unit": "short"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "generated tokens"
-            },
-            "properties": [
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               {
-                "id": "custom.axisPlacement",
-                "value": "right"
+                "color": "text",
+                "value": null
               }
             ]
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
       },
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "rollout_progress"
-              }
-            ]
-          },
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
+          "view": "status",
+          "format": "table",
           "columns": [
             {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "rollouts",
-              "text": "rollouts",
-              "type": "number"
-            },
-            {
-              "selector": "samples",
-              "text": "samples",
-              "type": "number"
-            },
-            {
-              "selector": "generated_tokens",
-              "text": "generated tokens",
+              "selector": "steps_per_hour",
+              "text": "Steps / hour",
               "type": "number"
             }
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
     },
     {
-      "id": 1,
-      "type": "table",
-      "title": "Services reporting this run",
-      "description": "One row per service, role and metric source that stamped this run id, with the time each last reported.\n\nA healthy run shows several marinskyrl rows, one vllm row, and one harbor row. A missing row is the only evidence that a service failed to start telemetry.\n\nThe Iris node agent never appears here, because it stamps no run id. Rows come from the marinskyrl, vllm and harbor tables in telemetry_v1.",
+      "id": 152,
+      "type": "stat",
+      "title": "Latest raw reward",
+      "description": "Latest raw training reward in the selected executions. Compare its trend and evaluation scores before judging learning. The latest observation wins regardless of reward magnitude; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching execution observations in this window.",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
+          "view": "status",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "raw_reward",
+              "text": "Latest raw reward",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "id": 153,
+      "type": "stat",
+      "title": "Generated tokens / s",
+      "description": "Generated response tokens per second in the latest display bucket. Falling throughput with an empty buffer suggests generation pressure. Bucket width grows with the selected range, and bursty completions or a partial final bucket affect this rate.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tps",
+          "noValue": "No matching execution observations in this window.",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
+          "view": "status",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "generated_tokens_per_second",
+              "text": "Generated tokens / s",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "id": 154,
+      "type": "stat",
+      "title": "Since last step",
+      "description": "Age of the latest completed optimizer step relative to the selected window end. Green is under 300 seconds, orange is 300–899 and red is at least 900. Compare record age: fresh records with an old step can indicate a stalled trainer. Age is measured to the end of the selected range, so a finished run also reads as old; check its terminal event in Diagnostics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching execution observations in this window.",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 900
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
+          "view": "status",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "since_last_step",
+              "text": "Since last step",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "id": 155,
+      "type": "stat",
+      "title": "Since last record",
+      "description": "Age of the latest record across every record type in the selected executions. Old steps with fresh records suggest a trainer stall; both ages rising suggests missing telemetry. Green is under 300 seconds, orange is 300–899 and red is at least 900. Age is measured to the end of the selected range, so a finished run also reads as old; check its terminal event in Diagnostics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching execution observations in this window.",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 900
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
+          "view": "status",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "since_last_record",
+              "text": "Since last record",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "gridPos": {
+        "x": 6,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      }
+    },
+    {
+      "id": 156,
+      "type": "stat",
+      "title": "Services reporting (run-wide)",
+      "description": "Distinct services reporting this run in the selected clusters and window. A lower count can explain blank panels; inspect the service table in Diagnostics to see which exporter is absent. Run-wide: this count uses the Run and Cluster pickers.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 1
+        "x": 12,
+        "y": 4,
+        "w": 6,
+        "h": 4
       },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "align": "auto"
-          },
-          "noValue": "No services under this run_id in this window."
+          "unit": "short",
+          "noValue": "No services reporting this run."
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "last_record_ms"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "dateTimeAsIso"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
+        "reduceOptions": {
+          "calcs": [
+            "distinctCount"
+          ],
+          "fields": "/^service$/",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
       },
       "targets": [
         {
@@ -454,68 +746,792 @@
               "selector": "producer",
               "text": "service",
               "type": "string"
-            },
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 157,
+      "type": "stat",
+      "title": "Staleness p95",
+      "description": "Policy-staleness p95 in the newest bucket from the newest reporting execution. Zero means current-policy data; rising values approach the configured staleness allowance. Sync observations yield zero, and absent observations remain empty; rejected groups are excluded.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching execution observations in this window.",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
+          "view": "status",
+          "format": "table",
+          "columns": [
             {
-              "selector": "role",
-              "text": "role",
-              "type": "string"
-            },
-            {
-              "selector": "attempt",
-              "text": "attempt",
-              "type": "string"
-            },
-            {
-              "selector": "metric_source",
-              "text": "metric_source",
-              "type": "string"
-            },
-            {
-              "selector": "signals",
-              "text": "signals",
-              "type": "number"
-            },
-            {
-              "selector": "records",
-              "text": "records",
-              "type": "number"
-            },
-            {
-              "selector": "last_record_ms",
-              "text": "last_record_ms",
+              "selector": "staleness_p95",
+              "text": "Staleness p95",
               "type": "number"
             }
           ]
         }
-      ]
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "gridPos": {
+        "x": 18,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      }
     },
     {
+      "id": 201,
       "type": "row",
-      "title": "Where did the wall clock go?",
+      "title": "Is it moving?",
       "collapsed": false,
-      "id": 101,
       "gridPos": {
-        "h": 1,
-        "w": 24,
         "x": 0,
-        "y": 9
+        "y": 8,
+        "w": 24,
+        "h": 1
       },
       "panels": []
     },
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Rollout wait vs train step (critical path)",
-      "description": "Mean seconds per optimizer step the trainer spent waiting for rollouts, and inside the step itself.\n\nRollout wait above train step means generation is the bottleneck.\n\nBoth spans contain everything inside them, so they never stack. Each series is split by outcome, because a phase that failed recorded only how long it ran before failing. Blank means no critical-path spans arrived. Data from telemetry_v1.marinskyrl.",
+      "title": "Optimizer step, synced and producing policy",
+      "description": "Completed optimizer steps, synchronized model versions and the policy version producing new work. A widening gap means generation is using older weights; a flat optimizer line means progress stopped. Series stay separate by execution; synced versions require trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
         "x": 0,
-        "y": 10
+        "y": 9,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No policy_step rows in this window. Check the selected Job and Execution, then Services reporting.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisLabel": "step number"
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "policy_step"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Generated and consumed response tokens / s",
+      "description": "Generated response tokens and consumed response/loss tokens per second. Sustained generation below consumption drains the buffer; generation above consumption fills it. Rates use display buckets and completions, so short bursts need a longer window; consumed-token series require trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 9,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tps",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "token_rates"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 104,
+      "type": "timeseries",
+      "title": "Rollouts and samples completed",
+      "description": "Completed trajectories and generated response segments per display bucket. Falling completions can explain a draining training buffer; compare samples with rollouts to spot changes in trajectory structure. Each counter advances when its work completes.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 9,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "count per time bucket"
+          },
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "rollouts",
+              "text": "rollouts",
+              "type": "number"
+            },
+            {
+              "selector": "samples",
+              "text": "samples",
+              "type": "number"
+            }
+          ],
+          "targetRef": "rl_execution",
+          "view": "rollout_progress"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 207,
+      "type": "row",
+      "title": "Is it learning?",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Training reward and informative groups",
+      "description": "Raw training reward, reward/avg_pass_at_{n} and the fraction of informative groups. Compare sustained reward changes with held-out evaluation; an informative-group fraction near zero means most groups provide little relative training signal. Reward scales depend on the task, and pass-at-n depends on group size; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "reward"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Evaluation scores",
+      "description": "Held-out evaluation scores by metric and execution. Use repeated evaluations to check whether training reward improvements generalize. Evaluations are sparse and task scales differ; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 18,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "evaluation"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 49,
+      "type": "timeseries",
+      "title": "Evaluation response length and stop coverage",
+      "description": "Mean/maximum evaluation response length and stop-class fractions. Rising length-stop fractions can explain score changes caused by truncation; compare fractions only at complete stop-reason coverage. Evaluations are sparse and incomplete fractions stay blank; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No supplemental evaluation observations",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*(fraction|coverage).*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Fraction"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "evaluation_lengths"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 50,
+      "type": "timeseries",
+      "title": "Evaluation score contributions by stop class",
+      "description": "Evaluation score contributions from length-stopped and completed responses, alongside the overall score. Each contribution is the sum of scores in its stop class divided by the total evaluated response count. Compare them to identify which class drives a score change. Contributions require complete stop-reason coverage; other stop classes can contribute to the overall score. Requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 18,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No supplemental evaluation observations",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "evaluation_contributions"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Length stops and coverage in trained groups",
+      "description": "Fraction of consumed responses stopped by a length limit, alongside stop-reason coverage. A rising fraction can mean truncation is discarding useful response tails. The fraction is blank unless coverage is complete; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "max": 1,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "length_stops"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Optimizer loss and KL",
+      "description": "Policy loss, final loss and policy KL by optimizer step. Sudden changes can reveal an unstable update; compare KL with the configured target and loss with its recent range. Each series uses the sign and scale of its objective; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 26,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "optimizer"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "pattern": "/(^time$|policy\\/(policy_loss|final_loss|policy_kl))/"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 158,
+      "type": "timeseries",
+      "title": "Gradient norm and policy entropy",
+      "description": "Gradient norm and policy entropy by optimizer step. Sudden norm spikes can precede unstable updates; collapsing entropy can indicate reduced policy diversity. These quantities have different scales and separate axes; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 26,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*policy_entropy.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "optimizer"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "pattern": "/(^time$|policy\\/(raw_grad_norm|policy_entropy))/"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 202,
+      "type": "row",
+      "title": "Where does the step’s wall clock go?",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 102,
+      "type": "timeseries",
+      "title": "Rollout wait vs train step (critical path)",
+      "description": "Mean rollout-wait and optimizer-step wall time, separated by outcome. Rollout wait above training wall suggests generation is limiting progress. Each inclusive wall includes its nested work; failed spans cover time through the failure. Run-wide: this panel ignores the Job and Execution pickers.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 6,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -548,75 +1564,29 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "critical_path"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
+          "targetRef": "rl_run",
+          "view": "critical_path"
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
-      "id": 8,
+      "id": 108,
       "type": "timeseries",
       "title": "GPU utilization on this run's nodes",
-      "description": "Mean GPU busy percentage on the nodes this run occupied.\n\nA long step with low GPU busy is stranded accelerator time. Read it beside the critical-path panel.\n\nThe node agent stamps no run id, so nodes are matched by name. Each node is credited to whichever run reported most from it in that bucket. A node shared by two runs goes entirely to one of them. Data from telemetry_v1.node_agent, joined to node names in telemetry_v1.marinskyrl.",
+      "description": "Mean busy percentage across the GPUs on nodes attributed to this run. Long steps with low busy percentage suggest devices are waiting; compare with driver wall and generation waits. Attribution assigns an entire node bucket to the run with the most observations; requires node-agent reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 10
+        "x": 6,
+        "y": 35,
+        "w": 6,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -631,7 +1601,68 @@
           "min": 0,
           "unit": "percent",
           "max": 100,
-          "noValue": "No node join. Trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “GPUs idle”.",
+          "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. This is never “GPUs idle”.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/gpu",
+          "targetRef": "rl_run",
+          "view": "gpu_utilization"
+        }
+      ],
+      "interval": "1m",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 121,
+      "type": "timeseries",
+      "title": "Step composition: exclusive seconds per span",
+      "description": "Mean exclusive wall seconds per full driver step and span, separated by execution. Growing components identify where a step spends more wall time; signed negative residuals reveal overlapping observations. Each execution has separate unstacked series. Requires inclusive-wall step spans from telemetry export.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "mean seconds per step",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "unit": "s",
+          "noValue": "No inclusive-wall driver rows under root='step'. This build publishes no step timings.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -651,88 +1682,1176 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "gpu_utilization"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
+          "targetRef": "rl_execution",
+          "url": "/v1/rl/execution",
+          "view": "step_composition",
+          "format": "timeseries"
         }
       ],
-      "interval": "1m"
+      "interval": "30s",
+      "maxDataPoints": 360
     },
     {
-      "type": "row",
-      "title": "Why is generation slow?",
-      "collapsed": false,
-      "id": 102,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 18
-      },
-      "panels": []
-    },
-    {
-      "id": 9,
+      "id": 6,
       "type": "timeseries",
-      "title": "vLLM token throughput",
-      "description": "Prompt and generated tokens per second, summed across the run's inference engines.\n\nA prompt-heavy ratio means prefill is being paid repeatedly. The prefix-cache panel says whether the cache is catching it.\n\nRates are differenced per engine from cumulative counters. Under GRPO all n samples of a group share one prompt, so a high prompt share is expected. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
+      "title": "Driver step, preparation and policy walls",
+      "description": "Mean driver step and nested preparation/training walls. Compare changes in the outer step with its child spans to locate a growing wait. Each parent wall includes its children, waits and asynchronous device launches; telemetry export enables these spans.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
+        "x": 18,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "driver_walls"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Weight sync and policy offload walls",
+      "description": "Weight synchronization and related policy walls by outcome and execution. Growth here reduces time available for useful training or generation. The elapsed walls include optimizer offload inside sync_weights and startup-only synchronization-state initialization.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
         "x": 0,
-        "y": 19
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "sync_walls"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 53,
+      "type": "state-timeline",
+      "title": "Weight-sync stages",
+      "description": "Training and weight-sync intervals with completion markers for synchronized weights. Longer or irregular sync intervals identify distribution delays between useful updates. Intervals require trainer.rollout_spans and completion markers require trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 70
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "training": {
+                  "text": "training",
+                  "color": "#5794F2",
+                  "index": 0
+                },
+                "weight sync": {
+                  "text": "weight sync",
+                  "color": "#B877D9",
+                  "index": 1
+                },
+                "weights synced": {
+                  "text": "weights synced",
+                  "color": "#FADE2A",
+                  "index": 2
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": false,
+        "showValue": "auto",
+        "rowHeight": 0.9,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "url": "/v1/rl/execution",
+          "columns": [
+            {
+              "selector": "start",
+              "text": "start",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "finish",
+              "text": "finish",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            }
+          ],
+          "targetRef": "rl_execution",
+          "view": "weight_sync_stages"
+        }
+      ],
+      "interval": "30s",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "start": 0,
+              "finish": 1,
+              "execution": 2,
+              "state": 3
+            }
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "execution"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "maxDataPoints": 360
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Core and cycle duration",
+      "description": "Core training-loop wall and full cycle wall, including time outside the core. A growing cycle/core gap points to evaluation, checkpoint or callback work. The core includes buffer wait, training and weight sync; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "core_cycle"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "Core wall fractions",
+      "description": "Buffer-wait, training and weight-sync shares of the async core wall. A large wait share suggests generation starvation; rising sync share identifies weight-distribution cost. These core-normalized fractions differ from the full-step exclusive seconds above; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "core_fractions"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 203,
+      "type": "row",
+      "title": "Is generation the bottleneck?",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Generation worker await duration",
+      "description": "Mean and maximum generation-worker waits for prompts, admission slots, queues, model calls and environments. Rising model waits suggest serving pressure; slot waits with a full buffer can be expected backpressure. The mean divides wait seconds by await counts; requires trainer.rollout_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "worker_waits"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Completed buffer depth and capacity",
+      "description": "Completed rollout groups waiting for training, against configured buffer capacity. Repeatedly empty buffers point to a generation shortfall; sustained full buffers point to slower consumption. Sampled zeros can miss short bursts; telemetry export enables these gauges.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 52,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "buffer"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Buffer dwell of trained groups",
+      "description": "Median, p95 and maximum time consumed groups waited between completion and trainer admission. A growing tail means useful work is sitting in the buffer and may become stale. Rejected groups are excluded; requires trainer.rollout_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 52,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "buffer_dwell"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Successful rollout-call latency",
+      "description": "Median, p95 and maximum wall time of successful rollout calls. A widening tail means a few calls are holding up generation; compare worker waits to distinguish serving from environment time. Failed calls are excluded; requires trainer.rollout_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 60,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "rollout_latency"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Policy staleness at training",
+      "description": "Optimizer steps between generation and consumption of admitted groups. Zero means current-policy data; a rising tail approaches the configured staleness limit. Rejected groups are excluded, and a sync run shows zero only; telemetry export enables these observations.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 60,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "policy_staleness"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 113,
+      "type": "timeseries",
+      "title": "Straggler proxy: rollout wait p99 ÷ p50",
+      "description": "Rollout-wait p99 divided by its median in each 30-minute bucket. A ratio near one means similar waits; a large ratio identifies unusually slow steps. This measures step-to-step spread across the run’s executions, and partial buckets use only observations inside the selected window. Run-wide: this panel ignores the Job and Execution pickers.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 60,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "p99 ÷ p50"
+          },
+          "min": 0,
+          "unit": "none",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/overview",
+          "targetRef": "rl_run",
+          "view": "straggler"
+        }
+      ],
+      "maxDataPoints": 360,
+      "interval": "1m"
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Group dispositions / bucket",
+      "description": "Groups reaching each terminal disposition per display bucket. More consumed groups mean useful admission; rising rejected or stale-enqueue counts mean completed work is discarded. Each group is counted at disposition; requires trainer.rollout_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 68,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "group_dispositions"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Tokens by group disposition / bucket",
+      "description": "Response tokens attached to each terminal group disposition per display bucket. Consumed tokens are useful work; rejected or stale tokens show the cost of discarded work. Compare with group counts to distinguish larger responses from more groups; requires trainer.rollout_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 68,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "group_tokens"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 18,
+      "type": "barchart",
+      "title": "Rollouts completing during policy training",
+      "description": "Successful rollout calls finishing during the newest 50 observed execution/step training windows. More completed calls show generation overlapping the update; zero with complete coverage means no calls finished then. Window finish time selects the newest steps, including restarts; clipped intervals or missing rollout records leave counts empty. Requires trainer.rollout_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 68,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+          "custom": {
+            "fillOpacity": 80,
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "vertical",
+        "xField": "step",
+        "showValue": "auto",
+        "stacking": "none",
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "url": "/v1/rl/execution",
+          "columns": [
+            {
+              "selector": "execution_uid",
+              "text": "execution_uid",
+              "type": "string"
+            },
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
+            },
+            {
+              "selector": "coverage",
+              "text": "coverage",
+              "type": "string"
+            },
+            {
+              "selector": "completed_calls",
+              "text": "completed_calls",
+              "type": "number"
+            },
+            {
+              "selector": "returned_tokens",
+              "text": "returned_tokens",
+              "type": "number"
+            }
+          ],
+          "targetRef": "rl_execution",
+          "view": "training_overlap"
+        }
+      ],
+      "maxDataPoints": 360,
+      "interval": "30s",
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "step",
+                "execution_uid",
+                "completed_calls"
+              ]
+            }
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "execution_uid"
+            ],
+            "keepFields": false
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "step",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "step",
+                "desc": false
+              }
+            ]
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "step",
+                "destinationType": "string"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "type": "barchart",
+      "title": "Inference sampled throughput by learner phase",
+      "description": "Sampled vLLM token throughput during each learner phase, separated by execution, collector, engine, model and counter. Compare generation during training and weight sync to locate interference. Sample coverage on a separate percentage axis shows the fraction of each phase represented by valid counter intervals. Resets and boundary-crossing intervals are excluded; phase attribution requires trainer.rollout_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 68,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tps",
+          "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+          "custom": {
+            "fillOpacity": 80,
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^coverage_fraction/"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "sample coverage"
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "phase",
+        "showValue": "auto",
+        "stacking": "none",
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "url": "/v1/rl/execution",
+          "columns": [
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "collector",
+              "text": "collector",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "engine",
+              "text": "engine",
+              "type": "string"
+            },
+            {
+              "selector": "model",
+              "text": "model",
+              "type": "string"
+            },
+            {
+              "selector": "counter",
+              "text": "counter",
+              "type": "string"
+            },
+            {
+              "selector": "tokens_per_sampled_second",
+              "text": "tokens_per_sampled_second",
+              "type": "number"
+            },
+            {
+              "selector": "coverage_fraction",
+              "text": "coverage_fraction",
+              "type": "number"
+            },
+            {
+              "selector": "intervals",
+              "text": "intervals",
+              "type": "number"
+            },
+            {
+              "selector": "phase_seconds",
+              "text": "phase_seconds",
+              "type": "number"
+            }
+          ],
+          "targetRef": "rl_execution",
+          "view": "inference_service"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "phase",
+                "execution",
+                "collector",
+                "engine",
+                "model",
+                "counter",
+                "tokens_per_sampled_second",
+                "coverage_fraction"
+              ]
+            }
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "execution",
+              "collector",
+              "engine",
+              "model",
+              "counter"
+            ],
+            "keepFields": false
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "phase",
+            "mode": "outerTabular"
+          }
+        }
+      ]
+    },
+    {
+      "id": 204,
+      "type": "row",
+      "title": "vLLM engines (run-wide)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 76,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 109,
+      "type": "timeseries",
+      "title": "vLLM token throughput",
+      "description": "Prompt and generated-token throughput summed across inference engines. Rising prompt share can mean more prefill work; compare prefix-cache hit rate and the task’s sampling pattern before calling it inefficient. Rates use reset-aware per-engine counter deltas; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 77,
+        "w": 8,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -765,40 +2884,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "engine_tokens"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -815,25 +2902,28 @@
               "text": "prompt",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_run",
+          "view": "engine_tokens"
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
-      "id": 10,
+      "id": 110,
       "type": "timeseries",
       "title": "vLLM queue and KV-cache usage",
-      "description": "Requests running and queued in vLLM, with KV-cache usage on the right axis.\n\nA growing queue with low KV-cache usage can suggest a scheduling or compute limit; high KV-cache usage and preemptions support cache pressure. Neither pattern alone identifies the cause or the right concurrency setting. A draining queue may be an intentional rollout boundary, not upstream starvation.\n\nValues here are averaged across engines, unlike the fleet sums in Inference overview and diagnostics. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
+      "description": "Running/queued engine requests, with mean KV-cache occupancy on the right axis. A persistent queue with high occupancy and preemptions supports cache pressure; low occupancy can suggest scheduling or compute limits. Queue draining can be an intentional rollout boundary, and values are engine means; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
         "x": 8,
-        "y": 19
+        "y": 77,
+        "w": 8,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -891,40 +2981,8 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "engine_queue"
-              }
-            ]
-          },
           "columns": [
             {
               "selector": "t",
@@ -946,25 +3004,28 @@
               "text": "kv_cache",
               "type": "number"
             }
-          ]
+          ],
+          "targetRef": "rl_run",
+          "view": "engine_queue"
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
-      "id": 11,
+      "id": 111,
       "type": "timeseries",
       "title": "vLLM request latency (mean by stage)",
-      "description": "Mean seconds per finished request at each stage: queue, prefill, decode, time to first token, and end to end.\n\nA rising decode stage means generation itself slowed. A rising queue stage means requests waited to start.\n\nThis is a mean and cannot show a tail; the straggler panel carries that. End to end and time to first token contain the other stages, so these series neither stack nor sum. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
+      "description": "Mean queue, prefill, decode, first-token and end-to-end latency per finished request. Rising queue time means requests wait to start; rising decode time can reflect longer responses or slower decoding. Means hide tails, and first-token/end-to-end stages overlap the other stages; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
         "x": 16,
-        "y": 19
+        "y": 77,
+        "w": 8,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -998,176 +3059,29 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "engine_latency"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
+          "targetRef": "rl_run",
+          "view": "engine_latency"
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
-      "id": 16,
-      "type": "timeseries",
-      "title": "Prefix-cache hit rate",
-      "description": "Cached prompt tokens divided by queried prompt tokens, across the run's inference engines.\n\nA low rate with a prompt-heavy throughput ratio means prefill is being recomputed for prompts the engines already hold.\n\nBoth counters are in tokens, so this is not the share of requests that hit. Under GRPO all n samples of a group share one prompt. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 27
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "min": 0,
-          "noValue": "No vLLM rows for this run. If the whole rank is blank, the engine exporter is down rather than six separate faults.",
-          "unit": "percentunit",
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "engine_prefix_cache"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 17,
+      "id": 117,
       "type": "timeseries",
       "title": "vLLM KV-cache preemptions",
-      "description": "Requests the engine evicted from its KV-cache and had to recompute, per time bucket.\n\nAny value above zero means KV-cache pressure cost real work. High KV-cache occupancy with zero here cost nothing.\n\nThis is vLLM's own scheduler preemption. It is unrelated to Kubernetes pod preemption or Iris job preemption. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
+      "description": "Engine requests evicted from KV cache and recomputed per bucket. Nonzero values identify work lost to cache pressure; compare occupancy and queue growth. Zero means no preemption was recorded. Engine telemetry supplies these observations. Run-wide: this panel ignores the Job and Execution pickers.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
+        "x": 0,
+        "y": 85,
         "w": 8,
-        "x": 8,
-        "y": 27
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -1201,189 +3115,29 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "engine_preemptions"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
+          "targetRef": "rl_run",
+          "view": "engine_preemptions"
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
-      "id": 13,
-      "type": "timeseries",
-      "title": "Straggler proxy: rollout wait p99 ÷ p50",
-      "description": "The 99th percentile of the trainer's rollout wait divided by its median, over the steps in each bucket.\n\nAbove about 2 the slowest rollouts are stretching every synchronous step.\n\nOne row is one optimizer step, so this measures step-to-step spread. The per-rollout distribution needs a per-rollout record, which no producer emits. This panel forces a 30-minute minimum bucket and ignores shorter dashboard ranges, because the ratio needs many steps per bucket. Data from telemetry_v1.marinskyrl.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 27
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "p99 ÷ p50"
-          },
-          "min": 0,
-          "unit": "none",
-          "displayName": "${__field.labels.series}"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "straggler"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "30m"
-    },
-    {
-      "type": "row",
-      "title": "Is it learning, and can the reward be trusted?",
-      "collapsed": false,
-      "id": 103,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 35
-      },
-      "panels": []
-    },
-    {
-      "id": 18,
+      "id": 118,
       "type": "timeseries",
       "title": "Why vLLM requests finished",
-      "description": "Finished engine requests per time bucket, split by the reason vLLM recorded.\n\nA rising length share means responses are being truncated, and the verifier scores the truncation anyway.\n\nThe reason set is open; the pinned build emits stop, length, abort, error and repetition. One rollout is several requests when a group is sampled n ways. Blank means the engines finished nothing in this window. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
+      "description": "Completed engine requests by finish reason per bucket. A growing length-limited share can explain changes in reward or response coverage. Finish reasons depend on the engine version and one rollout can create several requests; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 36
+        "x": 8,
+        "y": 85,
+        "w": 8,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -1420,88 +3174,29 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "engine_finish"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
+          "targetRef": "rl_run",
+          "view": "engine_finish"
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
-      "type": "row",
-      "title": "Plumbing: Ray object store",
-      "collapsed": false,
-      "id": 104,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 44
-      },
-      "panels": []
-    },
-    {
-      "id": 6,
+      "id": 116,
       "type": "timeseries",
-      "title": "Ray object store occupancy · needs the Ray collector",
-      "description": "Share of the Ray object store in use across the run's nodes.\n\nClimbing toward 1 means the store is about to spill. Spill shows up as rollout latency before it shows up as a failure.\n\nThe ratio is used divided by used plus free, so it does not move when the node count does. This is Ray plumbing and is unrelated to the engines' KV-cache. Ray produces these counters; MarinSkyRL scrapes them into telemetry_v1.marinskyrl.",
+      "title": "Prefix-cache hit rate",
+      "description": "Cached prompt tokens divided by queried prompt tokens across inference engines. A low rate with high prompt throughput suggests repeated prefill work. The fraction weights cache reuse by prompt tokens, and sampling patterns affect it; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 45
+        "x": 16,
+        "y": 85,
+        "w": 8,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -1513,104 +3208,8 @@
             "spanNulls": false
           },
           "min": 0,
+          "noValue": "No vLLM rows for this run. If the whole rank is blank, the engine exporter is down rather than six separate faults.",
           "unit": "percentunit",
-          "max": 1,
-          "noValue": "No Ray rows for this run. Non-Ray deployment, or the Ray metric bridge is off."
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "ray_object_store"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "object_store_used_fraction",
-              "text": "object store used",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 7,
-      "type": "timeseries",
-      "title": "Ray spill manager bytes by state · needs the Ray collector",
-      "description": "Bytes the Ray spill manager holds, averaged across the run's nodes and split by state.\n\nA pending-spill line that stops draining means the spill path has stalled. A spilled line that steepens means trajectories are bigger than budgeted.\n\nThe states are separate quantities. Pinned, pending spill and pending restore are current occupancy. Spilled and restored are lifetime totals and only climb. Ray produces these counters; MarinSkyRL scrapes them into telemetry_v1.marinskyrl.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 45
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "min": 0,
-          "unit": "bytes",
-          "noValue": "No Ray rows for this run. Non-Ray deployment, or the Ray metric bridge is off.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -1630,60 +3229,2307 @@
       "targets": [
         {
           "refId": "A",
-          "type": "json",
-          "source": "url",
           "format": "timeseries",
-          "parser": "backend",
           "url": "/v1/rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
+          "targetRef": "rl_run",
+          "view": "engine_prefix_cache"
+        }
+      ],
+      "interval": "1m",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 210,
+      "type": "row",
+      "title": "What staleness is training using? (async; sync shows 0 only)",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 93,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 51,
+          "type": "timeseries",
+          "title": "Staleness of trained groups: groups per step",
+          "description": "Admitted group counts by optimizer step and policy staleness. Growth in older buckets means more training work uses older weights; compare with reward and mismatch. Rejected groups are excluded and sync runs show zero only; telemetry export enables these observations.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 94,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+              "custom": {
+                "drawStyle": "bars",
+                "lineWidth": 0,
+                "fillOpacity": 70,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "normal",
+                  "group": "A"
+                }
+              },
+              "min": 0,
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "staleness_groups"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 52,
+          "type": "timeseries",
+          "title": "Staleness of trained groups: tokens per step",
+          "description": "Consumed response tokens by optimizer step and policy staleness. Larger older buckets mean more of the batch’s tokens come from older policies. Token counts differ from group counts when response lengths differ; sync runs show zero only. Requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 8,
+            "y": 94,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "bars",
+                "lineWidth": 0,
+                "fillOpacity": 70,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "normal",
+                  "group": "A"
+                }
+              },
+              "min": 0,
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "staleness_tokens"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 54,
+          "type": "timeseries",
+          "title": "Trainer/vLLM logprob mismatch ρ (staleness 0)",
+          "description": "Trainer/vLLM probability mismatch on staleness-zero loss tokens. Large log-ratio tails or low ESS reveal a mismatch even without policy aging. Missing rollout logprobs leave gaps; sync runs have only the zero-staleness comparison. Requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 16,
+            "y": 94,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "mismatch_staleness0"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 55,
+          "type": "timeseries",
+          "title": "Trainer/vLLM logprob mismatch by staleness bucket",
+          "description": "Mean absolute trainer/vLLM log-ratio across staleness buckets. A larger error in older buckets suggests aging policy data contributes to mismatch. Compare with the zero-staleness baseline; async-only buckets are absent for sync runs. Requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 102,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "mismatch_by_staleness"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "description": "Share of consumed loss tokens represented by complete uniform-staleness diagnostics. Higher coverage makes comparisons by staleness more representative; low coverage limits the conclusions. No observed tokens gives null, and sync runs have staleness zero only; requires trainer.training_metrics.",
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 1,
+              "max": 1,
+              "min": 0,
+              "noValue": "No valid token denominator",
+              "unit": "percentunit"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "x": 8,
+            "y": 102,
+            "w": 8,
+            "h": 8
+          },
+          "id": 48,
+          "options": {
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "/uniform_staleness_token_fraction/",
+              "values": false
+            },
+            "textMode": "value"
+          },
+          "targets": [
+            {
+              "columns": [
+                {
+                  "selector": "uniform_staleness_token_fraction",
+                  "text": "uniform_staleness_token_fraction",
+                  "type": "number"
+                },
+                {
+                  "selector": "observed_loss_tokens",
+                  "text": "observed_loss_tokens",
+                  "type": "number"
+                },
+                {
+                  "selector": "represented_loss_tokens",
+                  "text": "represented_loss_tokens",
+                  "type": "number"
+                },
+                {
+                  "selector": "mixed_staleness_loss_tokens",
+                  "text": "mixed_staleness_loss_tokens",
+                  "type": "number"
+                },
+                {
+                  "selector": "uniform_updates",
+                  "text": "uniform_updates",
+                  "type": "number"
+                },
+                {
+                  "selector": "excluded_updates",
+                  "text": "excluded_updates",
+                  "type": "number"
+                }
+              ],
+              "format": "table",
+              "refId": "A",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "uniform_staleness_coverage"
+            }
+          ],
+          "title": "Uniform-staleness diagnostic token coverage",
+          "type": "stat",
+          "maxDataPoints": 360,
+          "interval": "30s"
+        },
+        {
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "description": "Response length, token-weighted log-ratio error, minimum ESS and mean reward for uniform-staleness batches. Compare rows at different staleness to see whether older data is less useful. Mixed-staleness or incomplete batches are excluded; sync runs can contribute staleness zero only. Requires trainer.training_metrics.",
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No matching diagnostics.",
+              "unit": "none"
+            },
+            "overrides": [
               {
-                "key": "clusters",
-                "value": "${cluster:csv}"
+                "matcher": {
+                  "id": "byName",
+                  "options": "Token-weighted MSLR"
+                },
+                "properties": [
+                  {
+                    "id": "decimals",
+                    "value": 6
+                  }
+                ]
               },
               {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
-                "key": "view",
-                "value": "ray_spill"
+                "matcher": {
+                  "id": "byName",
+                  "options": "Minimum batch ESS fraction"
+                },
+                "properties": [
+                  {
+                    "id": "decimals",
+                    "value": 6
+                  }
+                ]
               }
             ]
           },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
+          "gridPos": {
+            "x": 16,
+            "y": 102,
+            "w": 8,
+            "h": 8
+          },
+          "id": 47,
+          "options": {
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
             },
+            "showHeader": true
+          },
+          "targets": [
             {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
+              "columns": [
+                {
+                  "selector": "status",
+                  "text": "Coverage status",
+                  "type": "string"
+                },
+                {
+                  "selector": "execution",
+                  "text": "Execution",
+                  "type": "string"
+                },
+                {
+                  "selector": "staleness",
+                  "text": "Exact group age",
+                  "type": "number"
+                },
+                {
+                  "selector": "updates",
+                  "text": "Updates",
+                  "type": "number"
+                },
+                {
+                  "selector": "mean_response_tokens",
+                  "text": "Response tokens / sequence",
+                  "type": "number"
+                },
+                {
+                  "selector": "token_weighted_mslr",
+                  "text": "Token-weighted MSLR",
+                  "type": "number"
+                },
+                {
+                  "selector": "minimum_ess_fraction",
+                  "text": "Minimum batch ESS fraction",
+                  "type": "number"
+                },
+                {
+                  "selector": "mean_update_raw_reward",
+                  "text": "Mean update raw reward",
+                  "type": "number"
+                }
+              ],
+              "format": "table",
+              "refId": "A",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "uniform_staleness"
+            }
+          ],
+          "title": "Uniform-staleness batch diagnostics",
+          "type": "table",
+          "maxDataPoints": 360,
+          "interval": "30s"
+        }
+      ]
+    },
+    {
+      "id": 205,
+      "type": "row",
+      "title": "Where does Megatron policy-update time go?",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 94,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 26,
+          "type": "timeseries",
+          "title": "Megatron policy wall across ranks",
+          "description": "Minimum, mean and maximum policy-update wall across observed rank-steps. A growing maximum above the mean suggests rank imbalance. Megatron phases are CPU wall time around asynchronous CUDA launches (clock_domain=cpu_dispatch_wall), so a phase can end before its GPU work does; requires trainer.policy_train_spans.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 95,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "No learner phase observations. Check trainer.policy_train_spans and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "min": 0,
+              "displayName": "${__field.labels.series}"
             },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
             {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "megatron_policy_wall"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 41,
+          "type": "barchart",
+          "title": "Learner memory by phase",
+          "description": "Largest observed allocated and reserved learner-memory peaks per phase, with maximum device capacity as a reference. Peaks near capacity leave little headroom; a widening reserved/allocated gap can indicate allocator pressure. Maxima can come from different selected ranks, executions and times; values are GiB. Requires trainer.policy_train_spans.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 8,
+            "y": 95,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "gbytes",
+              "noValue": "No learner phase observations. Check trainer.policy_train_spans and the selected Job/Execution.",
+              "custom": {
+                "fillOpacity": 80,
+                "axisPlacement": "auto"
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "/^device_total_gib/"
+                },
+                "properties": [
+                  {
+                    "id": "displayName",
+                    "value": "Maximum device capacity"
+                  },
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "gray"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "orientation": "horizontal",
+            "xField": "phase",
+            "showValue": "auto",
+            "stacking": "none",
+            "legend": {
+              "showLegend": true,
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "url": "/v1/rl/execution",
+              "columns": [
+                {
+                  "selector": "execution",
+                  "text": "execution",
+                  "type": "string"
+                },
+                {
+                  "selector": "host",
+                  "text": "host",
+                  "type": "string"
+                },
+                {
+                  "selector": "rank",
+                  "text": "rank",
+                  "type": "string"
+                },
+                {
+                  "selector": "gpu",
+                  "text": "gpu",
+                  "type": "string"
+                },
+                {
+                  "selector": "phase",
+                  "text": "phase",
+                  "type": "string"
+                },
+                {
+                  "selector": "observations",
+                  "text": "observations",
+                  "type": "number"
+                },
+                {
+                  "selector": "peak_allocated_gib",
+                  "text": "peak_allocated_gib",
+                  "type": "number"
+                },
+                {
+                  "selector": "peak_reserved_gib",
+                  "text": "peak_reserved_gib",
+                  "type": "number"
+                },
+                {
+                  "selector": "sampled_allocated_gib",
+                  "text": "sampled_allocated_gib",
+                  "type": "number"
+                },
+                {
+                  "selector": "sampled_free_gib",
+                  "text": "sampled_free_gib",
+                  "type": "number"
+                },
+                {
+                  "selector": "device_total_gib",
+                  "text": "device_total_gib",
+                  "type": "number"
+                }
+              ],
+              "targetRef": "rl_execution",
+              "view": "learner_memory"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360,
+          "transformations": [
+            {
+              "id": "groupBy",
+              "options": {
+                "fields": {
+                  "phase": {
+                    "operation": "groupby",
+                    "aggregations": []
+                  },
+                  "peak_allocated_gib": {
+                    "operation": "aggregate",
+                    "aggregations": [
+                      "max"
+                    ]
+                  },
+                  "peak_reserved_gib": {
+                    "operation": "aggregate",
+                    "aggregations": [
+                      "max"
+                    ]
+                  },
+                  "device_total_gib": {
+                    "operation": "aggregate",
+                    "aggregations": [
+                      "max"
+                    ]
+                  }
+                }
+              }
             }
           ]
+        },
+        {
+          "id": 27,
+          "type": "table",
+          "title": "Megatron phase detail (newest 8 steps)",
+          "description": "Phase walls for each rank’s newest eight observed optimizer steps. Compare the same phase across ranks to find dispatch or synchronization outliers. At most 5,000 phase rows are shown. Megatron phases are CPU wall time around asynchronous CUDA launches (clock_domain=cpu_dispatch_wall), so a phase can end before its GPU work does; requires trainer.policy_train_spans.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 16,
+            "y": 95,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No learner phase observations. Check trainer.policy_train_spans and the selected Job/Execution."
+            },
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "url": "/v1/rl/execution",
+              "columns": [
+                {
+                  "selector": "execution_uid",
+                  "text": "execution_uid",
+                  "type": "string"
+                },
+                {
+                  "selector": "step",
+                  "text": "step",
+                  "type": "number"
+                },
+                {
+                  "selector": "rank",
+                  "text": "rank",
+                  "type": "string"
+                },
+                {
+                  "selector": "phase",
+                  "text": "phase",
+                  "type": "string"
+                },
+                {
+                  "selector": "outcome",
+                  "text": "outcome",
+                  "type": "string"
+                },
+                {
+                  "selector": "seconds",
+                  "text": "seconds",
+                  "type": "number"
+                }
+              ],
+              "targetRef": "rl_execution",
+              "view": "megatron_phases"
+            }
+          ],
+          "maxDataPoints": 360,
+          "interval": "30s"
         }
-      ],
-      "interval": "1m"
+      ]
+    },
+    {
+      "id": 206,
+      "type": "row",
+      "title": "What are this run’s GPUs doing? (run-wide)",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 95,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 122,
+          "type": "timeseries",
+          "title": "SM and tensor-pipe activity on this run's nodes",
+          "description": "SM-active and tensor-active fractions on this run’s attributed nodes. High SM activity with low tensor activity suggests kernels doing little matrix work. Node-level values include other workloads and ranks; requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 96,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 8,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisLabel": "active"
+              },
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster.",
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "targetRef": "rl_run",
+              "url": "/v1/rl/gpu",
+              "view": "sm_activity",
+              "format": "timeseries"
+            }
+          ],
+          "interval": "1m",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 123,
+          "type": "timeseries",
+          "title": "GPU memory in use on this run's nodes",
+          "description": "Mean and peak framebuffer bytes across attributed GPUs. Peaks near capacity mean little device-memory headroom. The node-level values include every process on each card; requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 6,
+            "y": 96,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 8,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisLabel": "framebuffer in use"
+              },
+              "unit": "bytes",
+              "min": 0,
+              "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster."
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "targetRef": "rl_run",
+              "url": "/v1/rl/gpu",
+              "view": "gpu_memory",
+              "format": "timeseries",
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "mean_used_bytes",
+                  "text": "mean_used_bytes",
+                  "type": "number"
+                },
+                {
+                  "selector": "peak_used_bytes",
+                  "text": "peak_used_bytes",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "interval": "1m",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 124,
+          "type": "timeseries",
+          "title": "NVLink against PCIe receive traffic",
+          "description": "NVLink and PCIe receive throughput summed across attributed GPUs. Compare changes with synchronization and step wall to identify transfer pressure. Counters cover links within the host; missing counters remain absent. Requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 96,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 8,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisLabel": "throughput"
+              },
+              "unit": "Bps",
+              "min": 0,
+              "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. Or no NVLink or PCIe counters from this cluster's node agent.",
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "targetRef": "rl_run",
+              "url": "/v1/rl/gpu",
+              "view": "fabric_receive",
+              "format": "timeseries"
+            }
+          ],
+          "interval": "1m",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 125,
+          "type": "table",
+          "title": "PCIe replay errors and power on this run's GPUs",
+          "description": "GPUs with a positive PCIe replay-counter increase, alongside peak board power. Replays can identify link faults worth checking against host diagnostics. A counter reset contributes its new value; use the utilization panel to check GPU activity. Requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 18,
+            "y": 96,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No positive PCIe replay increase on this run's attributed GPUs in this window."
+            },
+            "overrides": []
+          },
+          "options": {},
+          "targets": [
+            {
+              "refId": "A",
+              "targetRef": "rl_run",
+              "url": "/v1/rl/gpu",
+              "view": "pcie_faults",
+              "format": "table",
+              "columns": [
+                {
+                  "selector": "node",
+                  "text": "node",
+                  "type": "string"
+                },
+                {
+                  "selector": "gpu",
+                  "text": "gpu",
+                  "type": "string"
+                },
+                {
+                  "selector": "peak_power_watts",
+                  "text": "peak power (W)",
+                  "type": "number"
+                },
+                {
+                  "selector": "pcie_replay_increase",
+                  "text": "PCIe replays in window",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "maxDataPoints": 360,
+          "interval": "1m"
+        }
+      ]
+    },
+    {
+      "id": 208,
+      "type": "row",
+      "title": "Do trainer and vLLM logprobs agree?",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 96,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 30,
+          "type": "timeseries",
+          "title": "Pre-update model log-ratio drift",
+          "description": "Trainer-minus-generation logprob drift before the policy update. Values near zero mean the trainer reproduces rollout probabilities; growing magnitude suggests policy drift or a serving/training mismatch. Only finite loss tokens contribute; requires rollout logprobs and trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 97,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "drift"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 31,
+          "type": "timeseries",
+          "title": "Pre-update PPO-window pressure",
+          "description": "Fractions of finite loss tokens below and above the configured PPO ratio window before the update. Rising fractions mean more tokens encounter the clipping bounds; compare with staleness and logprob drift. These fractions measure pressure against the configured bounds; the correction panels show applied weights. Requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 6,
+            "y": 97,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "clip_pressure"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 32,
+          "type": "timeseries",
+          "title": "Drift coverage and token-weight concentration",
+          "description": "Finite logprob coverage, missing rollout logprobs and importance-weight ESS fraction. High finite coverage and ESS are desirable; missing behavior data or concentrated weights weaken the comparison. ESS describes concentration of eligible token weights; requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 97,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "drift_coverage"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 44,
+          "type": "timeseries",
+          "title": "Mean squared model log-ratio",
+          "description": "Mean squared trainer-minus-vLLM logprob difference before the update. A rising value means larger probability mismatch, even when signed drift averages near zero. Only finite loss tokens contribute; requires rollout logprobs and trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 18,
+            "y": 97,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "log_ratio_squared"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 46,
+          "type": "timeseries",
+          "title": "Mean correction weight",
+          "description": "Mean off-policy correction weight over eligible tokens, including masked zeros. A falling mean means correction suppresses more of the batch’s effective contribution. Missing series mean correction is unconfigured or unobserved; requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 105,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "min": 0,
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "correction_weights"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 59,
+          "type": "timeseries",
+          "title": "Correction activity",
+          "description": "Fractions of eligible tokens masked or truncated by correction, alongside policy-loss clipping. Rising fractions mean more proposed update weight is suppressed; compare with ESS and mismatch. Correction series are absent when correction is unconfigured; requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 6,
+            "y": 105,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "corrections"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 56,
+          "type": "timeseries",
+          "title": "Trainer logprob drift within the update",
+          "description": "Trainer logprob change within its own update, against probabilities recomputed at consumption. Growing tails or falling ESS show a larger update relative to that starting policy. This differs from rollout-time serving mismatch; requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 105,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "learner_drift"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 57,
+          "type": "timeseries",
+          "title": "Position dependence of |log ρ|",
+          "description": "Absolute log-ratio drift near the first and last response tokens and in the middle. Larger errors late in responses can reveal position-dependent drift hidden by pooled averages. Serving mismatch and within-update drift have separate series and coverage; requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 18,
+            "y": 105,
+            "w": 6,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "position_dependence"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        }
+      ]
+    },
+    {
+      "id": 209,
+      "type": "row",
+      "title": "How much useful work do the configured resources produce?",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 97,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 35,
+          "type": "stat",
+          "title": "Loss tokens trained per second",
+          "description": "Latest useful loss-token throughput using core and full-cycle denominators. Higher is better at comparable workloads; a wide gap shows work outside the core reducing overall throughput. Each series shows its latest observed step; requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 98,
+            "w": 6,
+            "h": 6
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "loss_token_rates"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 38,
+          "type": "stat",
+          "title": "Useful tokens per configured role GPU-second",
+          "description": "Latest useful tokens per configured policy or inference GPU-second. Compare like workloads to spot declining resource efficiency. Denominators use GPU counts from the placement config; requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 6,
+            "y": 98,
+            "w": 6,
+            "h": 6
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "role_gpu_tokens"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 39,
+          "type": "stat",
+          "title": "Configured role GPU counts",
+          "description": "Configured policy and inference GPU counts from the placement config, for the latest observed step. Use them to interpret per-GPU rates and check placement assumptions. Requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 98,
+            "w": 6,
+            "h": 6
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "role_gpus"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 43,
+          "type": "stat",
+          "title": "Cumulative core GPU-hours in selected window",
+          "description": "Cumulative configured GPU-hours in complete core-step observations inside the selected window, per execution. Compare useful work against this cost at matched configurations. Coverage is limited to complete core steps; requires trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 18,
+            "y": 98,
+            "w": 6,
+            "h": 6
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "core_gpu_hours"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        }
+      ]
+    },
+    {
+      "id": 211,
+      "type": "row",
+      "title": "Is Ray spilling or filling its object store? (run-wide)",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 98,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 106,
+          "type": "timeseries",
+          "title": "Ray object store occupancy",
+          "description": "Used share of the Ray object store across attributed nodes. Values approaching one indicate limited space and can precede spills or admission delays. The denominator is used plus free bytes, distinct from vLLM KV cache; requires Ray metric collection. Run-wide: this panel ignores the Job and Execution pickers.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 99,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 8,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0,
+              "unit": "percentunit",
+              "max": 1,
+              "noValue": "No Ray rows for this run. Non-Ray deployment, or the Ray metric bridge is off."
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/overview",
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "object_store_used_fraction",
+                  "text": "object store used",
+                  "type": "number"
+                }
+              ],
+              "targetRef": "rl_run",
+              "view": "ray_object_store"
+            }
+          ],
+          "interval": "1m",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 107,
+          "type": "timeseries",
+          "title": "Ray spill bytes",
+          "description": "Ray spill-manager bytes by state, averaged across attributed nodes. Persistent pending spill or restore suggests a stalled storage path. Pinned and pending values describe occupancy; spilled and restored values are lifetime totals. Requires Ray metric collection. Run-wide: this panel ignores the Job and Execution pickers.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 99,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 8,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0,
+              "unit": "bytes",
+              "noValue": "No Ray rows for this run. Non-Ray deployment, or the Ray metric bridge is off.",
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/overview",
+              "targetRef": "rl_run",
+              "view": "ray_spill"
+            }
+          ],
+          "interval": "1m",
+          "maxDataPoints": 360
+        }
+      ]
+    },
+    {
+      "id": 212,
+      "type": "row",
+      "title": "Which diagnostics explain missing or stalled work?",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 99,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 101,
+          "type": "table",
+          "title": "Services reporting this run",
+          "description": "Services, roles and metric sources reporting this run, with their latest observation times. Missing expected services or old records can explain blank panels; the expected set depends on the workload and whether engines report independently or through the trainer. The node agent has no run id and is absent here. Run-wide: this panel ignores the Job and Execution pickers.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 100,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto"
+              },
+              "noValue": "No services under this run_id in this window."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "last_record_ms"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "dateTimeAsIso"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "parser": "backend",
+              "url": "/v1/rl/producers",
+              "url_options": {
+                "method": "GET",
+                "params": [
+                  {
+                    "key": "run",
+                    "value": "${run}"
+                  },
+                  {
+                    "key": "clusters",
+                    "value": "${cluster:csv}"
+                  },
+                  {
+                    "key": "from",
+                    "value": "${__from}"
+                  },
+                  {
+                    "key": "to",
+                    "value": "${__to}"
+                  }
+                ]
+              },
+              "columns": [
+                {
+                  "selector": "producer",
+                  "text": "service",
+                  "type": "string"
+                },
+                {
+                  "selector": "role",
+                  "text": "role",
+                  "type": "string"
+                },
+                {
+                  "selector": "attempt",
+                  "text": "attempt",
+                  "type": "string"
+                },
+                {
+                  "selector": "metric_source",
+                  "text": "metric_source",
+                  "type": "string"
+                },
+                {
+                  "selector": "signals",
+                  "text": "signals",
+                  "type": "number"
+                },
+                {
+                  "selector": "records",
+                  "text": "records",
+                  "type": "number"
+                },
+                {
+                  "selector": "last_record_ms",
+                  "text": "last_record_ms",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "maxDataPoints": 360
+        },
+        {
+          "id": 4,
+          "type": "table",
+          "title": "Process lifecycle and terminal export counts",
+          "description": "Latest lifecycle or terminal event per process, with lost and queued record counts from its terminal event. A missing terminal event leaves the counts empty.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 8,
+            "y": 100,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No lifecycle or terminal events. Check the window, Job/Execution and Services reporting."
+            },
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "url": "/v1/rl/execution",
+              "columns": [
+                {
+                  "selector": "execution_uid",
+                  "text": "execution_uid",
+                  "type": "string"
+                },
+                {
+                  "selector": "role",
+                  "text": "role",
+                  "type": "string"
+                },
+                {
+                  "selector": "process",
+                  "text": "process",
+                  "type": "string"
+                },
+                {
+                  "selector": "event",
+                  "text": "event",
+                  "type": "string"
+                },
+                {
+                  "selector": "status",
+                  "text": "status",
+                  "type": "string"
+                },
+                {
+                  "selector": "reason",
+                  "text": "reason",
+                  "type": "string"
+                },
+                {
+                  "selector": "export_lost_records",
+                  "text": "export lost records",
+                  "type": "number"
+                },
+                {
+                  "selector": "export_queued_records",
+                  "text": "export queued records",
+                  "type": "number"
+                },
+                {
+                  "selector": "last_record_ms",
+                  "text": "last_record_ms",
+                  "type": "timestamp_epoch"
+                }
+              ],
+              "targetRef": "rl_execution",
+              "view": "lifecycle"
+            }
+          ],
+          "maxDataPoints": 360,
+          "interval": "30s"
+        },
+        {
+          "id": 120,
+          "type": "table",
+          "title": "Span coverage: clock domain and failed steps",
+          "description": "Observed steps and failed steps by role and timing clock domain. Use coverage to check which timing panels represent the selected executions; higher failure counts identify interrupted work. Missing outcomes leave failure counts empty.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 16,
+            "y": 100,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "noValue": "No spans. The run reported a policy_step, so the trainer's timing sink is not reaching Finelog."
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failed_steps"
+                },
+                "properties": [
+                  {
+                    "id": "noValue",
+                    "value": "-"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {},
+          "targets": [
+            {
+              "refId": "A",
+              "targetRef": "rl_execution",
+              "url": "/v1/rl/execution",
+              "view": "span_coverage",
+              "format": "table",
+              "columns": [
+                {
+                  "selector": "role",
+                  "text": "sink role",
+                  "type": "string"
+                },
+                {
+                  "selector": "clock_domain",
+                  "text": "clock domain",
+                  "type": "string"
+                },
+                {
+                  "selector": "steps",
+                  "text": "steps",
+                  "type": "number"
+                },
+                {
+                  "selector": "failed_steps",
+                  "text": "steps that failed",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "maxDataPoints": 360,
+          "interval": "30s"
+        },
+        {
+          "id": 28,
+          "type": "table",
+          "title": "Exporter and nonfinite observations",
+          "description": "Lost/rejected export records and nonfinite training values by process. Increasing export counts mean observations are missing; nonfinite values can signal an invalid update. Nonfinite values sum deltas, while exporter counters use their maximum cumulative reading; nonfinite observations require trainer.training_metrics.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 108,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "noValue": "No exporter or nonfinite observations. Check the window, Job/Execution and Services reporting."
+            },
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "table",
+              "url": "/v1/rl/execution",
+              "columns": [
+                {
+                  "selector": "execution_uid",
+                  "text": "execution_uid",
+                  "type": "string"
+                },
+                {
+                  "selector": "process",
+                  "text": "process",
+                  "type": "string"
+                },
+                {
+                  "selector": "name",
+                  "text": "name",
+                  "type": "string"
+                },
+                {
+                  "selector": "observed_value",
+                  "text": "observed_value",
+                  "type": "number"
+                },
+                {
+                  "selector": "last_record_ms",
+                  "text": "last_record_ms",
+                  "type": "timestamp_epoch"
+                }
+              ],
+              "targetRef": "rl_execution",
+              "view": "exporter"
+            }
+          ],
+          "maxDataPoints": 360,
+          "interval": "30s"
+        },
+        {
+          "id": 16,
+          "type": "timeseries",
+          "title": "Signed timing residuals",
+          "description": "Signed rollout-call and Megatron residual walls after named child phases. Large positive residuals identify unassigned time; negative values indicate overlapping observations and remain visible. Rollout residuals require trainer.rollout_spans; Megatron residuals require trainer.policy_train_spans. Megatron phases are CPU wall time around asynchronous CUDA launches (clock_domain=cpu_dispatch_wall), so a phase can end before its GPU work does.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 8,
+            "y": 108,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "residuals"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        },
+        {
+          "id": 15,
+          "type": "timeseries",
+          "title": "Driver event-loop lag",
+          "description": "Worst observed delay of the driver event loop in each bucket. Sustained lag can delay admission, telemetry and control work even when device work continues. The monitor samples once per second; requires trainer.rollout_spans.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "x": 16,
+            "y": 108,
+            "w": 8,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 5,
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              "min": 0,
+              "displayName": "${__field.labels.series}"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "format": "timeseries",
+              "url": "/v1/rl/execution",
+              "targetRef": "rl_execution",
+              "view": "event_loop_lag"
+            }
+          ],
+          "interval": "30s",
+          "maxDataPoints": 360
+        }
+      ]
     }
-  ]
+  ],
+  "version": 2
 }

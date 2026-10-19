@@ -1,4 +1,13 @@
-import { INTERVAL_KIND, type IntervalKind, type PanelCell, type PanelRow } from '@/types/api'
+import { INTERVAL_KIND, type IntervalKind, type Meta, type PanelCell, type PanelRow } from '@/types/api'
+import { compareCells } from './ranking'
+
+export function cohortWarning(cohort: string, meta: Meta): string | null {
+  if (cohort === 'all') return 'All cohorts may mix evaluation settings. Check run configurations before comparing scores.'
+  if (!meta.verified_cohorts.includes(cohort)) {
+    return 'This historical cohort has no verified settings contract. Check run configurations before comparing scores.'
+  }
+  return null
+}
 
 // The fleet best on one benchmark and the model that holds it — the rail caret and the panel column
 // marker. Ranked by the score, as the panel sorts; Compare is where an ordering claim is made and it
@@ -14,12 +23,6 @@ export function cellsByModel(rows: PanelRow[]): Record<string, Record<string, Pa
   const out: Record<string, Record<string, PanelCell>> = {}
   for (const row of rows) out[row.model] = row.cells
   return out
-}
-
-// Orders two cells on one benchmark: the higher score first, and on a tie the higher lower bound. The
-// panel's column sort and the fleet-best marker both use this rule, so they cannot disagree.
-export function compareCells(a: PanelCell, b: PanelCell): number {
-  return b.value - a.value || b.low - a.low
 }
 
 // For each benchmark, the model whose cell leads under compareCells across the given rows.

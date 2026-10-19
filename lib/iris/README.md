@@ -11,8 +11,9 @@ Distributed job orchestration for Marin.
 uv run iris --cluster=marin cluster start
 
 # Start a local cluster for testing (mimics the config without GCP)
-# Dashboard is available at the printed URL; press Ctrl+C to stop.
-uv run iris --cluster=marin cluster start --local
+# Dashboard is available at the printed URL; press Ctrl+C to stop. The local
+# controller embeds the native log server from the `controller` extra.
+uv run --package marin-iris --extra controller iris --cluster=marin cluster start --local
 
 # Check cluster status
 uv run iris --cluster=marin cluster status
@@ -54,6 +55,23 @@ For accelerator jobs, request the accelerator on the task itself with `--tpu ...
 `--reserve <accel>` is a hard constraint that confines the job to a zone where `<accel>` has actually
 been obtained (a live, non-erroring slice in the region), and the job waits otherwise; it does not
 attach accelerator devices (use `--tpu`/`--gpu` for that) and does not hold capacity.
+
+### JAX GPU processes
+
+Call `iris.jax.init.initialize_jax()` before JAX initializes its backend. It configures
+the compilation and GPU autotune caches, discovers the coordinator through Iris,
+and installs the distributed GPU compile guard after joining the JAX process
+group. The cache setup lives in `iris.jax.compile_cache`.
+
+For multiple JAX processes in one GPU task, wrap the command with
+`iris.jax.multigpu.MultiGpuHook` or invoke the supervisor directly:
+
+```bash
+python -m iris.jax.multigpu_main --nproc 8 -- python train.py
+```
+
+The supervisor assigns each child a process index and local device IDs. Iris
+runs the submitted command as given, so callers must add the wrapper themselves.
 
 ## Architecture
 
@@ -105,6 +123,22 @@ Resolver options:
 
 The actor system also provides `ActorPool` for round-robin calls and broadcast
 RPCs across all resolved endpoints.
+
+Actor RPC uses `cloudpickle` for arguments, results, and exceptions. Deserializing
+these payloads can execute Python code, so clients must trust servers and servers
+must trust clients. `ActorServer` has no authentication middleware and binds to
+`0.0.0.0` by default: restrict direct listeners to trusted networks. Expose a
+controller endpoint proxy externally only with authentication enforced. Null-auth
+proxies are permissive and must stay on trusted networks. A token or share link
+that exposes an actor RPC endpoint grants code execution in the actor process;
+give it only to trusted recipients. This also applies when the actor serves a web
+application.
+
+Run model-controlled or other untrusted jobs with
+[`CONTAINER_PROFILE_SANDBOX`](docs/container-profiles.md#sandbox-jobs) and
+`INTERNET` or `NONE` egress. Sandbox jobs reject `CLUSTER` egress, which permits
+access to actor listeners and other trusted cluster services. On Kubernetes, the
+network plugin must enforce NetworkPolicy for the egress restriction to take effect.
 
 Example:
 
@@ -259,6 +293,19 @@ This enables JAX and other TPU-aware frameworks to initialize correctly inside j
 ## Bundle Storage (Required)
 
 Jobs can include a `bundle_blob` containing workspace files. The controller stores these in a shared location accessible to all workers.
+
+Workspace bundles have a 25 MiB limit on the compressed ZIP. Iris collects tracked
+and untracked files using `git ls-files --cached --others --exclude-standard`,
+then excludes these paths at any depth: `docs/`, `tests/`, `.agents/`, `.claude/`,
+`.codex/`, `.github/`, Rust `target/` directories, and `journeys-out/` directories.
+It also excludes notebooks, native `.so` files, and `AGENTS.md`, `TESTING.md`, and
+`OPS.md`. The same exclusions apply when Git is unavailable.
+Package metadata, lockfiles, runtime resources, and generated Iris RPC modules
+remain eligible for inclusion. Use `extra_bundle_includes` (or CLI `--include`)
+to add required files excluded by default, such as a validation job's tests and
+`conftest.py` files or a Git-ignored frontend `dist/`. Explicit `bundle_exclude`
+patterns (CLI `--exclude`) and build/cache exclusions, including Rust `target/`
+directories and native `.so` files, still apply to these includes.
 
 **Configuration** (required):
 

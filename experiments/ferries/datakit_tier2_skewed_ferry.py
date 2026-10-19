@@ -12,180 +12,89 @@ smoke ferry doesn't cover.
 
 The download step uses ``download_hf_step`` so it cache-hits on a region-local
 staged copy when one exists at ``$MARIN_PREFIX/raw/<...>``, and falls back to a
-fresh HuggingFace download otherwise. Iris supplies the region-local stable
-prefix; pipeline outputs use absolute one-day TTL paths.
+fresh HuggingFace download otherwise. Every later stage is the reference Datakit
+DAG with one-day TTL outputs; see :mod:`experiments.ferries.datakit_reference_ferry`.
 """
 
-import logging
 import os
 
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.normalize import NormalizedData, normalize_step
-from marin.execution.artifact import read_artifact
-from marin.execution.step_runner import StepRunner
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
-from marin.processing.classification.consolidate import (
-    FilterConfig,
-    FilterType,
-    consolidate,
-)
-from marin.processing.classification.deduplication.fuzzy_dups import (
-    FUZZY_DUPS_ATTR_DATA_VERSION,
-    FuzzyDupsAttrData,
-    compute_fuzzy_dups_attrs,
-)
-from marin.processing.classification.deduplication.fuzzy_minhash import (
-    MinHashAttrData,
-    compute_minhash_attrs,
-)
-from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
-from marin.processing.classification.deduplication.verify_fuzzy_dups import (
-    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
-    FuzzyVerificationStoreConfig,
-    VerifiedFuzzyDupsAttrData,
-    verify_fuzzy_dups,
-)
-from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
-from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
+from marin.processing.classification.deduplication.cluster_text import ClusterTextParams
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
-from rigging.timing import log_time
 
-from infra.ci.run_status import run_status
+from experiments.datakit.reference_pipeline import (
+    ClusterConfig,
+    FuzzyClusterConfig,
+    PipelineScale,
+    PoolConfig,
+    StoreConfig,
+)
+from experiments.ferries.datakit_reference_ferry import ferry_output_prefix, run_reference_ferry
 
-logger = logging.getLogger(__name__)
-
+FERRY_NAME = "datakit-tier2-skewed-smoke"
+SOURCE_NAME = "tier2-skewed"
 HF_DATASET_ID = "ravwojdyla/datakit-tier2-skewed-v2"
 HF_REVISION = "de656ef7cc7c84ceb9892c75a77347d9003c1273"
 # Short prefix used in the cache directory so a revision bump produces a fresh
 # cache key without invalidating prior versions.
 HF_REVISION_SHORT = HF_REVISION[:7]
-FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
-    recovery_timeout=1_800,
-    ready_timeout=1_800,
-    lookup_batch_size=64,
+
+# ~98 source shards / ~46 GiB, with documents up to 256 MB, so tasks get more RAM
+# and disk than the tier-1 FineWeb-Edu ferry.
+TIER2_SCALE = PipelineScale(
+    cluster=ClusterConfig(k_train=64, k_views=(8, 16), cluster_view=8),
+    pool=PoolConfig(
+        n_workers=128,
+        worker=ResourceConfig(cpu=2, ram="32g", disk="32g"),
+        task=ResourceConfig(cpu=2, ram="32g", disk="32g"),
+    ),
+    fuzzy=FuzzyClusterConfig(
+        text=ClusterTextParams(output_shards=256),
+        worker=ResourceConfig(cpu=8, ram="64g", disk="64g"),
+        map_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
+        reduce_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
+        max_workers=16,
+    ),
+    store=StoreConfig(task_count=None, worker=ResourceConfig(cpu=4, ram="64g", disk="64g")),
+    dedup_max_parallelism=64,
+    train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="16g"),
 )
 
 
-def build_steps(run_id: str) -> list[StepSpec]:
-    ttl_base = marin_temp_bucket(ttl_days=1, prefix=f"datakit-tier2-skewed-smoke/{run_id}")
-
+def build_sources(output_prefix: str) -> dict[str, StepSpec]:
     download = download_hf_step(
-        "datakit-tier2-skewed-smoke/download",
+        f"{FERRY_NAME}/download",
         hf_dataset_id=HF_DATASET_ID,
         revision=HF_REVISION,
         hf_urls_glob=["data/*.parquet"],
         override_output_path=f"raw/datakit-tier2-skewed-v2-{HF_REVISION_SHORT}",
     )
-
     normalized = normalize_step(
-        name="datakit-tier2-skewed-smoke/normalize",
+        name=f"{FERRY_NAME}/normalize",
         download=download,
         text_field="content",
         id_field="id",
         relative_input_path="data",
         file_extensions=(".parquet",),
-        override_output_path=f"{ttl_base}/normalize",
+        override_output_path=prefix_join(output_prefix, "normalize"),
     )
-
-    minhash = StepSpec(
-        name="datakit-tier2-skewed-smoke/minhash",
-        deps=[normalized],
-        fn=lambda output_path: compute_minhash_attrs(
-            source=read_artifact(normalized.output_path, NormalizedData),
-            output_path=output_path,
-        ),
-        override_output_path=f"{ttl_base}/minhash",
-    )
-
-    # ~98 source shards / ~46 GiB; modest fan-out for fuzzy_dups CC.
-    candidates = StepSpec(
-        name="datakit-tier2-skewed-smoke/fuzzy_dups",
-        deps=[minhash],
-        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
-        fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
-            output_path=output_path,
-            max_parallelism=64,
-            cc_max_iterations=3,
-        ),
-        override_output_path=f"{ttl_base}/fuzzy_dups",
-    )
-
-    verification_params = FuzzyVerificationParams()
-    verified = StepSpec(
-        name="datakit-tier2-skewed-smoke/verify_fuzzy_dups",
-        deps=[normalized, minhash, candidates],
-        hash_attrs={
-            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
-            "verification": verification_params.model_dump(mode="json"),
-            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
-        },
-        fn=lambda output_path: verify_fuzzy_dups(
-            normalized_sources={"source": read_artifact(normalized.output_path, NormalizedData)},
-            minhash_sources={"source": read_artifact(minhash.output_path, MinHashAttrData)},
-            candidates=read_artifact(candidates.output_path, FuzzyDupsAttrData),
-            output_path=output_path,
-            verification_params=verification_params,
-            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            store_config=FUZZY_VERIFICATION_STORE_CONFIG,
-            worker_resources=ResourceConfig(cpu=2, ram="16g", disk="64g"),
-        ),
-        override_output_path=prefix_join(ttl_base, "verify_fuzzy_dups"),
-    )
-
-    consolidated = StepSpec(
-        name="datakit-tier2-skewed-smoke/consolidate",
-        deps=[normalized, verified],
-        fn=lambda output_path: consolidate(
-            input_path=read_artifact(normalized.output_path, NormalizedData).main_output_dir,
-            output_path=output_path,
-            filetype="parquet",
-            filters=[
-                FilterConfig(
-                    type=FilterType.REMOVE_DOC,
-                    attribute_path=read_artifact(verified.output_path, VerifiedFuzzyDupsAttrData).attr_dir_for_source(
-                        read_artifact(normalized.output_path, NormalizedData).main_output_dir
-                    ),
-                    name="dup_doc",
-                    attribute_filetype="parquet",
-                    keep_if_missing=True,
-                ),
-            ],
-        ),
-        override_output_path=f"{ttl_base}/consolidate",
-    )
-
-    tokenized = StepSpec(
-        name="datakit-tier2-skewed-smoke/tokenize",
-        deps=[consolidated],
-        hash_attrs={"tokenizer": "gpt2"},
-        fn=lambda output_path: tokenize(
-            TokenizeConfig(
-                train_paths=[consolidated.output_path],
-                validation_paths=[],
-                cache_path=output_path,
-                tokenizer="gpt2",
-            )
-        ),
-        override_output_path=f"{ttl_base}/tokens",
-    )
-
-    return [download, normalized, minhash, candidates, verified, consolidated, tokenized]
+    return {SOURCE_NAME: normalized}
 
 
 def main() -> None:
     configure_logging()
-    prefix = marin_prefix()
-    logger.info("MARIN_PREFIX=%s", prefix)
-    logger.info("HF source: %s @ %s", HF_DATASET_ID, HF_REVISION)
-    run_id = os.environ["SMOKE_RUN_ID"]
-
-    with run_status(os.environ.get("FERRY_STATUS_PATH"), marin_prefix=prefix):
-        with log_time("Datakit tier2-skewed ferry total wall time"):
-            StepRunner().run(build_steps(run_id))
+    output_prefix = ferry_output_prefix(FERRY_NAME, os.environ["SMOKE_RUN_ID"])
+    run_reference_ferry(
+        ferry_name=FERRY_NAME,
+        sources=build_sources(output_prefix),
+        scale=TIER2_SCALE,
+        output_prefix=output_prefix,
+        status_path=os.environ.get("FERRY_STATUS_PATH"),
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,55 @@
+name: Loom Canary Triage
+description: Launch a Loom session to diagnose a failed canary run
+
+inputs:
+  profile:
+    description: Loom profile bound to the calling workflow
+    required: true
+  lane:
+    description: Canary lane identifier
+    required: true
+  job-id:
+    description: Iris job ID under triage
+    required: true
+  run-id:
+    description: W&B run ID
+    required: true
+  iris-config:
+    description: Iris config path
+    required: true
+  gha-run-url:
+    description: GitHub Actions run URL
+    required: true
+  wandb-entity:
+    description: W&B entity
+    required: true
+  wandb-project:
+    description: W&B project
+    required: true
+  iris-namespace:
+    description: Kubernetes namespace for CoreWeave lanes
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Launch Loom canary triage
+      uses: ./.github/actions/launch-loom-run
+      with:
+        profile: ${{ inputs.profile }}
+        idempotency-key: canary-triage:${{ github.run_id }}:${{ github.run_attempt }}:${{ inputs.lane }}
+        title: "Canary triage: ${{ inputs.lane }} ${{ github.run_id }}"
+        goal: >-
+          Diagnose the failed ${{ inputs.lane }} canary in
+          ${{ github.repository }}. Use the triage-canary, use-iris, and
+          query-finelog skills as applicable. Context: CANARY_LANE=${{ inputs.lane }},
+          CANARY_JOB_ID=${{ inputs.job-id }}, CANARY_RUN_ID=${{ inputs.run-id }},
+          IRIS_CONFIG=${{ inputs.iris-config }},
+          IRIS_NAMESPACE=${{ inputs.iris-namespace }},
+          WANDB_ENTITY=${{ inputs.wandb-entity }},
+          WANDB_PROJECT=${{ inputs.wandb-project }},
+          GHA_RUN_URL=${{ inputs.gha-run-url }}. Use uploaded diagnostics and
+          durable logs because the Actions runner may have exited. File a
+          concise issue with evidence and publish a typed result. The Actions
+          workflow sends its immediate Slack failure notification.
+        base: ${{ github.sha }}

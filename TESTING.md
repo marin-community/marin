@@ -32,6 +32,24 @@ A formatter-only mechanical edit does not require another test run. Rerun the
 repository formatting and lint checks after the edit; rerun tests only when the
 follow-up changes executable behavior or test expectations.
 
+## Adding a New Library
+
+When adding a new `lib/<name>/` package, run its unit tests through
+[unified-unit.yaml](.github/workflows/unified-unit.yaml). Add its short name to
+`SCOPES` and its uv package name to `UV_PACKAGE` in
+[select_tests.py](infra/ci/select_tests.py). The selector uses
+`lib/<name>/tests` by default; update `TEST_DIRS` if its tests live elsewhere.
+These registrations include the library in pull request, push, and full-suite
+runs.
+
+Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
+Levanter TPU lane runs for those changes when the resolved dependencies of
+`marin-levanter` with its `tpu` extra and `test` group change, including
+transitive dependencies. If the selector cannot compare the base and head
+lockfiles, it runs the TPU lane. Levanter or Haliax source changes also select
+the lane. The Levanter Torch lane retains its root manifest trigger. Scheduled
+or manual runs without a base ref run every suite.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an
@@ -89,6 +107,8 @@ Delete or rewrite tests with negative value:
   and assert that construction raises. Keep one only for a reported regression
   or a compatibility-critical public contract.
 - Tests for Python language semantics.
+- Shellsim guest interpreter or ports acceptance tests. Keep that coverage in Shellsim;
+  Marin CI should exercise caller contracts with shell-only fixtures or existing machine fakes.
 - Registration tests: Tests that check that specific items are registered in global registries.
 - Configuration projections: assertions that a lowered or constructed field equals the same value
   supplied by the test or checked-in config. Test validation, merge conflicts, observable behavior,
@@ -168,6 +188,10 @@ the implementation is not useful.
 ## Pytest Style
 
 - Prefer top-level `def test_*` functions with fixtures over test classes.
+- Do not import helpers or constants from another `test_*.py` module. Put shared
+  pytest fixtures in the nearest `conftest.py`, and shared importable helpers in
+  a named support module. Its import must work in package-only and repository-wide
+  runs without adding test directories to the root pytest configuration.
 - Name tests as `test_<subject>_<scenario>_<expected_outcome>`.
 - Use parameterization for meaningful behavior variation.
 - Extend existing test files before creating new ones.

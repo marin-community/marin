@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from itertools import batched
 
 import sqlalchemy
 from marin.evaluation.records import EvalRunRecord
@@ -41,8 +42,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
-
-from .db_migrations import apply_migrations
 
 logger = logging.getLogger(__name__)
 
@@ -227,12 +226,6 @@ class CatalogSnapshot:
 class _CatalogSource:
     run_id: str | None
     missing_since: datetime | None
-
-
-def migrate_schema(engine: Engine) -> None:
-    """Upgrade the schema to what this EvalDash build requires, then check the result."""
-    apply_migrations(engine)
-    verify_schema(engine)
 
 
 def _own_schema(engine: Engine) -> str | None:
@@ -529,7 +522,17 @@ def _catalog_run_ids(conn: Connection, run_ids: set[str]) -> set[str]:
     )
 
 
+_MATERIALIZE_BATCH_SIZE = 128
+
+
 def _materialize_runs(conn: Connection, run_ids: set[str]) -> bool:
+    changed = False
+    for run_batch in batched(run_ids, _MATERIALIZE_BATCH_SIZE):
+        changed = _materialize_run_batch(conn, set(run_batch)) or changed
+    return changed
+
+
+def _materialize_run_batch(conn: Connection, run_ids: set[str]) -> bool:
     if not run_ids:
         return False
     active_sources = record_sources.join(record_prefixes, record_sources.c.prefix == record_prefixes.c.prefix)

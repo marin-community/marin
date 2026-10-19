@@ -45,7 +45,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.hooks.multigpu import build_multigpu_hook
+from iris.jax.multigpu import build_multigpu_hook
 from iris.resources.state import JobState as IrisJobState
 from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
@@ -161,6 +161,13 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
             all_variants = [resources.device.variant, *resources.device_alternatives]
             constraints.append(device_variant_constraint(all_variants))
     return constraints
+
+
+def convert_container_profile(resources: ResourceConfig) -> int:
+    """The Iris profile enum value for ``resources.container_profile``, UNSPECIFIED when unset."""
+    if resources.container_profile is None:
+        return job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+    return job_pb2.ContainerProfile.Value(resources.container_profile)
 
 
 def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
@@ -697,6 +704,7 @@ class FrayIrisClient:
                 max_task_failures=request.max_task_failures,
                 existing_job_policy=policy,
                 task_image=request.resources.image,
+                container_profile=convert_container_profile(request.resources),
                 priority_band=request.priority,
                 timeout=request.timeout,
             )
@@ -805,6 +813,7 @@ class FrayIrisClient:
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
             task_image=resources.image,
+            container_profile=convert_container_profile(resources),
             priority_band=actor_config.priority,
             **retry_kwargs,
         )

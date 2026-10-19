@@ -55,6 +55,13 @@ all. A peer that reports no band split
 (a worker-daemon backend, or one predating the field) reclaims nothing and is gated on its free
 amount alone.
 
+A `--reserve H100` marker on a CPU job requires an H100 peer but carries no numeric capacity
+gate. When other placement scores tie, the job prefers the peer with the most effective `h100`
+capacity. The CPU job does not reserve that capacity and can still be placed when every eligible
+peer reports zero; later GPU child jobs have no capacity guarantee. A peer without a readable
+capacity metric ranks after measured peers, and a peer reporting no `h100` capacity scores zero.
+A hash of the job id and peer id breaks ties, so different jobs need not choose the same peer.
+
 Three properties keep placement honest without pretending to be exact:
 
 - **Never summed across backends.** A job pins to one backend, so 6 free on one backend plus 4
@@ -183,6 +190,13 @@ configured peer (an unknown tag is a 404). A root-relative redirect from the ser
 will not round-trip today, because the child rewrites `Location` against its own
 `/proxy/t/<token>/<name>` prefix without the cluster tag; direct-API endpoints (an
 OpenAI-style `/v1/*` server) are unaffected.
+
+For relay 502s, use the JSON error body to identify the failing path.
+`upstream transport error: client error (Connect)` is emitted by the native proxy
+when it cannot connect to its upstream. Compare `proxy_responses_total` with `scope=total` in Finelog's
+`telemetry_v1.iris.rpc` for the hub (`cluster` is empty) and the peer. A peer 502
+increase shows that requests reached the peer proxy, where its upstream is the
+registered endpoint. The `scope=total` counter is exact; per-endpoint series are capped.
 
 ## Observing federation
 

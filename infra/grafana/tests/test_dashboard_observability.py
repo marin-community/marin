@@ -9,14 +9,14 @@ from types import SimpleNamespace as Record
 import duckdb
 import pytest
 from accelerator_observability import accelerator_overview_dataset
-from async_rl_observability import async_rl_overview_dataset
 from config import ClusterTarget
 from conftest import bridge_config
 from dashboard_dataset import DashboardDataset
 from dashboard_stitch import stitch_all
 from jobs_observability import jobs_overview_dataset
 from node_observability import node_overview_dataset
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_execution_observability import rl_execution_dataset
+from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
 from runs_observability import runs_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
@@ -33,7 +33,8 @@ def _source_and_queries(database: duckdb.DuckDBPyConnection):
     def query(sql: str, *, max_rows: int):
         queries.append(sql)
         query_limits.append(max_rows)
-        table = database.execute(sql).fetch_arrow_table()
+        # DuckDB calls DataFusion's ordered FIRST_VALUE aggregate FIRST.
+        table = database.execute(sql.replace("FIRST_VALUE(", "FIRST(")).fetch_arrow_table()
         if table.num_rows > max_rows:
             raise AssertionError(f"query returned {table.num_rows} rows with a {max_rows}-row cap")
         return table
@@ -216,11 +217,12 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "training": frozenset(training_overview_dataset("run", start_ms, end_ms, 15_000).views),
         "runs": frozenset(runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000).views),
         "rl": frozenset(rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
+        "rl_gpu": frozenset(rl_gpu_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
         "accelerator": frozenset(accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000).views),
         "jobs": frozenset(jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000).views),
         "recent_rl": frozenset(recent_rl_runs_dataset(start_ms, end_ms).views),
-        "async_rl": frozenset(
-            async_rl_overview_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000).views
+        "rl_execution": frozenset(
+            rl_execution_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000).views
         ),
     }
     expected = {
@@ -228,8 +230,11 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "zephyr.json": {"/v1/zephyr/overview": (4, sections["zephyr"])},
         "training.json": {"/v1/training/overview": (16, sections["training"])},
         "runs.json": {"/v1/runs/overview": (8, sections["runs"])},
-        "rl_runs.json": {"/v1/rl/overview": (13, sections["rl"])},
-        "async_rl.json": {"/v1/async-rl/overview": (48, sections["async_rl"])},
+        "rl_runs.json": {
+            "/v1/rl/overview": (10, sections["rl"]),
+            "/v1/rl/gpu": (5, sections["rl_gpu"]),
+            "/v1/rl/execution": (58, sections["rl_execution"]),
+        },
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},
         "home.json": {
@@ -257,6 +262,14 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
                 for target in endpoint_targets
             }
             assert len(dataset_keys) == 1, filename
+            if any(param["key"] == "bucket_ms" for param in endpoint_targets[0]["url_options"]["params"]):
+                point_limits = {
+                    nested.get("maxDataPoints")
+                    for panel in dashboards[filename]["panels"]
+                    for nested in (panel, *panel.get("panels", []))
+                    if any(target.get("url") == endpoint for target in nested.get("targets", []))
+                }
+                assert len(point_limits) == 1 and None not in point_limits, filename
             views = {
                 param["value"]
                 for target in endpoint_targets
@@ -274,21 +287,23 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "training": training_overview_dataset("run", start_ms, end_ms, 15_000),
         "runs": runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000),
         "rl": rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
+        "rl_gpu": rl_gpu_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
         "accelerator": accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000),
         "jobs": jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000),
         "recent_rl": recent_rl_runs_dataset(start_ms, end_ms),
-        "async_rl": async_rl_overview_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000),
+        "rl_execution": rl_execution_dataset(("cw-a",), "run", "job", ("execution",), start_ms, end_ms, 15_000),
     }
     assert {name: len(dataset.sources) for name, dataset in datasets.items()} == {
         "node": 1,
         "zephyr": 1,
-        "training": 3,
+        "training": 4,
         "runs": 2,
-        "rl": 3,
+        "rl": 2,
+        "rl_gpu": 1,
         "accelerator": 3,
         "jobs": 5,
         "recent_rl": 1,
-        "async_rl": 9,
+        "rl_execution": 10,
     }
 
 
@@ -425,3 +440,79 @@ def test_runs_views_use_run_wide_cardinality_training_freshness_and_global_node_
     assert active[0]["processes"] == 2
     assert active[0]["sample_age_seconds"] == 100.0
     assert _result_rows(database, dataset.views["power"]) == []
+
+
+@pytest.fixture
+def training_database():
+    with duckdb.connect() as database:
+        database.execute(
+            """CREATE TABLE "levanter.metrics" (
+                run_id VARCHAR, cluster VARCHAR, execution_uid VARCHAR, job_id VARCHAR,
+                process_index BIGINT, name VARCHAR, value DOUBLE, step BIGINT,
+                timestamp_ms BIGINT, seq BIGINT)"""
+        )
+        database.execute(
+            """INSERT INTO "levanter.metrics" VALUES
+                ('hero', 'cw-a', 'old', '/old/train', 0, 'phase', 1, 1, 10000, 1),
+                ('hero', 'cw-a', 'new', '/new/train', 0, 'phase', 1, 2, 31000, 2),
+                ('hero', 'cw-a', 'new', '/new/train', 0, 'phase', 0, 2, 31000, 3),
+                ('hero', 'cw-a', 'new', '/new/train', 0, 'train_loss', 2, 2, 40000, 4),
+                ('hero', 'cw-a', 'new', '/new/train', 1, 'train_loss', 4, 2, 40000, 5),
+                ('other', 'cw-a', 'foreign', '/foreign/train', 0, 'train_loss', 100, 2, 40000, 6)"""
+        )
+        yield database
+
+
+def test_training_charts_load_without_execution_sources(training_database):
+    source, queries, _ = _source_and_queries(training_database)
+    params = {"run": "hero", "from": 30000, "to": 60000, "bucket_ms": 15000}
+    with TestClient(_app(source)) as client:
+        loss = client.get("/finelog/marin/v1/training/overview", params={**params, "view": "loss"})
+        status = client.get("/finelog/marin/v1/training/overview", params={**params, "view": "status"})
+    assert loss.status_code == status.status_code == 200
+    assert loss.json() == [{"section": "loss", "t": 30000, "series": "new", "train_loss": 3.0}]
+    assert status.json()[0]["train_loss"] == 3.0
+    # This store has no Iris tables; chart loading must not depend on them.
+    assert len(queries) == 1
+
+
+def test_training_attempt_history_shares_queries_across_panel_ranges(training_database):
+    source, queries, _ = _source_and_queries(training_database)
+    params = {"run": "hero", "from": 30000, "to": 60000, "bucket_ms": 15000}
+    with TestClient(_app(source)) as client:
+        attempt = client.get(
+            "/finelog/marin/v1/training/overview",
+            params={**params, "view": "execution_attempt"},
+        )
+        history = client.get(
+            "/finelog/marin/v1/training/overview",
+            params={**params, "from": 45000, "bucket_ms": 30000, "view": "attempts"},
+        )
+    assert attempt.json() == [
+        {
+            "section": "execution_attempt",
+            "attempt_age_seconds": 29.0,
+            "initialization_age_seconds": 29.0,
+        }
+    ]
+    assert [row["job"] for row in history.json()] == ["/new/train", "/old/train"]
+    assert len(queries) == 1
+
+
+def test_training_source_cache_reuses_data_across_combined_and_panel_requests(training_database):
+    training_database.execute("CREATE MACRO to_timestamp_millis(x) AS to_timestamp(x / 1000.0)")
+    training_database.execute(
+        """CREATE TABLE "iris.task_state" (cluster VARCHAR, root_job_id VARCHAR, ts TIMESTAMPTZ,
+            pending BIGINT, assigned BIGINT, building BIGINT, running BIGINT)"""
+    )
+    training_database.execute(
+        """CREATE TABLE "iris.task_event" (cluster VARCHAR, task_id VARCHAR, reason VARCHAR, ts TIMESTAMPTZ)"""
+    )
+    source, queries, _ = _source_and_queries(training_database)
+    params = {"run": "hero", "from": 30000, "to": 60000, "bucket_ms": 15000}
+    with TestClient(_app(source)) as client:
+        combined = client.get("/finelog/marin/v1/training/overview", params=params)
+        panel = client.get("/finelog/marin/v1/training/overview", params={**params, "view": "loss"})
+    assert combined.status_code == panel.status_code == 200
+    assert panel.json() == [row for row in combined.json() if row["section"] == "loss"]
+    assert len(queries) == 4

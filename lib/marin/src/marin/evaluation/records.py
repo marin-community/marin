@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
@@ -68,7 +68,7 @@ class MetricKind(StrEnum):
 class BenchmarkMetricRef(BaseModel):
     """One evaluator metric in its canonical and source vocabularies."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     name: str
     source_name: str
@@ -76,8 +76,39 @@ class BenchmarkMetricRef(BaseModel):
     higher_is_better: bool
 
 
+class BenchmarkSourceRef(TypedDict):
+    """The dataset, split, and revision used by a benchmark."""
+
+    dataset: str
+    split: str
+    revision: str | None
+
+
+class BenchmarkReducerRef(TypedDict):
+    """The reduction and metric names used to aggregate benchmark grades."""
+
+    name: str
+    accuracy: str
+    stderr: str
+    repeat_ddof: int
+    groups: dict[str, str]
+    group_suffix: str
+    group_weights: dict[str, float]
+    trial_metric: str | None
+    selected_trial: int | None
+
+
+class BenchmarkPromptLengthRef(TypedDict):
+    """The size and digest of a benchmark's measured prompt corpus."""
+
+    distinct_prompt_count: int
+    longest_prompt_chars: int
+    longest_prompt_tokens: int
+    sha256: str
+
+
 class BenchmarkMetadataRef(BaseModel):
-    """The benchmark protocol emitted by an evaluation harness."""
+    """The benchmark protocol and evaluator provenance."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -88,6 +119,10 @@ class BenchmarkMetadataRef(BaseModel):
     metrics: tuple[BenchmarkMetricRef, ...]
     n_benchmark: int | None = Field(ge=0)
     n_attempted: int | None = Field(ge=0)
+    source: BenchmarkSourceRef | None = None
+    reducers: tuple[BenchmarkReducerRef, ...] = ()
+    prompt_length: BenchmarkPromptLengthRef | None = None
+    requires_judge: bool = False
 
     @model_validator(mode="after")
     def validate_protocol(self) -> "BenchmarkMetadataRef":
@@ -107,7 +142,7 @@ class BenchmarkMetadataRef(BaseModel):
 class ModelResourceConfig(BaseModel):
     """Normalized placement and inference-worker resources for an evaluated model."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     hbm_gb: int | None
     gpu: dict[str, int]
@@ -119,7 +154,7 @@ class ModelResourceConfig(BaseModel):
 class ModelLocatorRef(BaseModel):
     """The immutable URI and producer identity of a resolved model artifact."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     uri: str
     identity: str
@@ -128,7 +163,7 @@ class ModelLocatorRef(BaseModel):
 class SpeculativeServingRef(BaseModel):
     """The draft model and speculative-decoding policy used by vLLM."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     method: str
     model: ModelLocatorRef
@@ -138,7 +173,7 @@ class SpeculativeServingRef(BaseModel):
 class ModelServeConfig(BaseModel):
     """Normalized model-server configuration preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     backend: str
     tensor_parallel_size: int | None
@@ -163,16 +198,17 @@ class ModelServeConfig(BaseModel):
 class ModelGenerationConfig(BaseModel):
     """Normalized generation overrides preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     max_gen_toks: int | None
     extra_gen_kwargs: dict[str, str]
+    chat_template_kwargs: dict[str, bool | None] = Field(default_factory=dict)
 
 
 class ModelAgentConfig(BaseModel):
     """Normalized agent request arguments preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     agent_kwargs: dict[str, str]
 
@@ -180,18 +216,18 @@ class ModelAgentConfig(BaseModel):
 class ModelConfigRef(BaseModel):
     """The complete normalized model catalog schema used by one launch.
 
-    These blocks mirror the launcher's ``ModelConfig`` dataclasses. A key none of them names is
-    dropped, so a record a newer launcher wrote still reads.
+    These blocks mirror the launcher's ``ModelConfig`` dataclasses. Most blocks retain unknown
+    keys, while resource hints use the launcher's strict schema.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     name: str
     location: str
     identity: str | None = None
     revision: str | None
     tokenizer: str | None
-    tokenizer_revision: str | None
+    tokenizer_revision: str | None = None
     apply_chat_template: bool
     resource_hint: ModelResourceConfig
     serve: ModelServeConfig
@@ -212,6 +248,8 @@ class ModelRef(BaseModel):
     location: str
     backend: str
     config: ModelConfigRef | None = None
+    source_config: ModelConfigRef | None = Field(default=None, exclude_if=lambda value: value is None)
+    config_digest: str | None = None
 
 
 class EvalTaskRef(BaseModel):
@@ -248,12 +286,14 @@ class EvalchemyRef(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     apply_chat_template: bool
+    debug: bool = False
     max_gen_toks: int | None
     max_eval_instances: int | None
     num_concurrent: int
     batch_size: str | None
     seed: int | None
     extra_gen_kwargs: dict[str, str] = Field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | None] = Field(default_factory=dict, exclude_if=lambda value: not value)
     extra_model_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeRef | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -306,6 +346,9 @@ class EvalRef(BaseModel):
 
     name: str
     mechanism: str
+    source_digest: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$", exclude_if=lambda value: value is None
+    )
     family: str | None = Field(
         default=None,
         description="Benchmark this eval is a setting of, for the leaderboard column it shares",
@@ -317,7 +360,7 @@ class EvalRef(BaseModel):
 
 
 class HardwareRef(BaseModel):
-    """The slice the model was served on. ``region_or_cluster`` is the GCP region or CW cluster name."""
+    """Serving allocation: ``task_count`` slices per instance, placed in a GCP region or CW cluster."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -325,6 +368,16 @@ class HardwareRef(BaseModel):
     accelerator: str
     region_or_cluster: str | None
     task_count: int = 1
+    instances: int = 1
+
+
+class HostedJudgeRef(BaseModel):
+    """The model and hardware used for verifier-only hosted inference."""
+
+    model_config = ConfigDict(frozen=True)
+
+    model: ModelRef
+    hardware: HardwareRef
 
 
 class Provenance(BaseModel):
@@ -462,9 +515,12 @@ class EvalRunRecord(BaseModel):
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""
     model: ModelRef
+    judge: HostedJudgeRef | None = None
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef
     status: RunStatus
+    step_status: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """StepSpec state observed by a dashboard reader. Absent on records from older launchers."""
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]

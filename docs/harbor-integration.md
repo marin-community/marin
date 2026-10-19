@@ -1,7 +1,7 @@
 # Harbor evaluation
 
-Marin runs Harbor benchmarks through the shared evaluation launcher. The launcher starts one model
-server, gives Harbor its Iris capability URL, normalizes completed trials into v2
+Marin runs Harbor benchmarks through the shared evaluation launcher. The launcher starts the model
+server and, when requested, a second shared judge server; gives Harbor their Iris capability URLs; and normalizes completed trials into v2
 `EvalRunRecord`/`EvalSample` artifacts, and tears inference down after the selected evaluations
 finish.
 
@@ -38,6 +38,24 @@ uv run python -m experiments.evaluation.cli launch \
 
 Use `--limit N` to cap the number of trials and `--no-wait` to return after submission.
 
+For a Harbor verifier that uses the OpenAI API, add a hosted judge to the same launch:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --platform gpu \
+  --judge-model qwen3.5-122b-a10b-fp8 \
+  --judge-accelerator H100x8 \
+  --harbor-config experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml \
+  --federated_cluster cw-rno2a \
+  --limit 2
+```
+
+The launcher keeps one judge session alive and shares it across every evaluation in the batch. It
+overrides only the verifier's `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `MODEL_NAME`; the evaluated
+agent continues to use the candidate endpoint. Candidate and judge placement must resolve to the
+same cluster or region. The durable run record pins the judge model configuration and hardware.
+
 Launch a Harbor `JobConfig` without adding it to the catalog:
 
 ```bash
@@ -71,7 +89,8 @@ Do not put resolved credentials in model YAMLs, runner configs, or evaluation ar
 
 ## Endpoint lifecycle
 
-Harbor receives a `RunningModel` whose base URL is an Iris link endpoint. The inference runner
+Harbor receives a candidate `RunningModel` whose base URL is an Iris link endpoint. A hosted judge
+uses a separate capability URL injected into the verifier environment. The inference runner
 chooses the opaque endpoint name, registers either the direct server or broker proxy with Iris, and
 mints the capability URL. Daytona never receives a worker address.
 
@@ -122,9 +141,9 @@ secret source declarations in `experiments/evaluation/evals.py`.
 
 ## Ownership boundary
 
-Marin does not install or import Harbor, `harbor_config`, Daytona, or Harbor's path runtime. The
-root workspace lock contains none of those packages. `marin.external_dependencies.HARBOR` identifies
-the exact Git revision used by two isolated calls:
+Marin's Harbor evaluation runs in isolated uv environments. The root workspace also locks an
+optional Harbor dependency for TaskCompendium's adapters. Evaluation uses the exact Git revision
+identified by `marin.external_dependencies.HARBOR` for two isolated calls:
 
 1. Preflight parses YAML or JSON with Harbor's Pydantic models, rejects unsupported launch shapes,
    validates a placeholder model/endpoint overlay, loads the dataset through Harbor to count tasks,
@@ -140,7 +159,7 @@ Temporary policy and overlay files are owner-readable and removed after each iso
 ### Trial error taxonomy
 
 Preflight snapshots Harbor's infrastructure, agent, passthrough, and undecided error categories from
-the pinned `harbor-config` environment. Marin uses that snapshot to classify trial results and records
+the pinned Harbor runtime in the isolated environment. Marin uses that snapshot to classify trial results and records
 the Harbor commit SHA in `record.json`. Undecided errors are known to Harbor but have no default scoring
 policy; Marin leaves them ungraded and counts them against the completion gate. Names absent from all
 four categories fail the run as an infrastructure failure, so taxonomy changes cannot silently alter

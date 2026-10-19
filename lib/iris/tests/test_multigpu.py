@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.hooks.multigpu_main in-task GPU process supervisor (a user-invoked
+"""Tests for the iris.jax.multigpu_main in-task GPU process supervisor (a user-invoked
 runtime helper, not something the scheduler injects). None of this imports jax."""
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ import textwrap
 
 import pytest
 from iris.cluster.types import ResourceSpec, gpu_device
-from iris.hooks import multigpu_main as multigpu
-from iris.hooks.multigpu import MultiGpuHook, build_multigpu_hook
-from iris.hooks.multigpu_main import main, run
+from iris.jax import multigpu_main as multigpu
+from iris.jax.multigpu import MultiGpuHook, build_multigpu_hook
+from iris.jax.multigpu_main import main, run
 from rigging.timing import Duration
 
 
@@ -88,7 +88,7 @@ def test_external_sigterm_returns_128_plus_signum() -> None:
     supervisor_src = textwrap.dedent(
         """
         import sys
-        from iris.hooks.multigpu_main import run
+        from iris.jax.multigpu_main import run
         child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
         sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
         """

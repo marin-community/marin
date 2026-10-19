@@ -34,7 +34,7 @@ from marin.datakit.download.rollout_transforms import (
     render_role_message,
     text_document,
 )
-from marin.datakit.download.terminus import terminus_protocol_messages
+from marin.datakit.download.terminus import ThinkTokens, terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -44,6 +44,11 @@ OPENCODE_TOKENIZER_REVISION = "a099dee70ccfcd8d5dda56aaa0b60cb8ecadabc9"
 CHAT_QUARANTINE_COUNTER_PREFIXES = {
     "minimax-m27-131k": "penfever_rollouts/minimax/chat",
     "qwen35-122b-32k": "penfever_rollouts/qwen32k/chat",
+}
+THINK_TOKENS_BY_COHORT = {
+    "minimax-m27-131k": ThinkTokens("<think>", "</think>"),
+    "qwen35-122b-32k": ThinkTokens("<think>", "</think>"),
+    "glm52-terminus2": None,
 }
 
 
@@ -1150,7 +1155,7 @@ def row_to_chat_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
                 return []
             messages, metadata = converted
         else:
-            messages = terminus_protocol_messages(conversations)
+            messages = terminus_protocol_messages(conversations, THINK_TOKENS_BY_COHORT[dataset.cohort_name])
             if messages is None:
                 return []
             metadata = {}
@@ -1258,7 +1263,14 @@ def _rollout_chat_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
                 }.get(dataset.cohort_name, "2026.09.05.4.explicit-tools")
             ),
             "schema_tokenizer": (OPENCODE_TOKENIZER, OPENCODE_TOKENIZER_REVISION),
-            "terminus_version": "2026.09.17.native-json",
+            "terminus_version": (
+                "2026.09.17.native-json" if dataset.cohort_name == "qwen35-122b-131k-opencode" else "2026.09.25"
+            ),
+            **(
+                {"think_tokens": THINK_TOKENS_BY_COHORT[dataset.cohort_name]}
+                if dataset.cohort_name != "qwen35-122b-131k-opencode"
+                else {}
+            ),
             "conversion_version": "2026.09.11.review-fixes",
             "teacher": dataset.teacher,
             "task_source": dataset.task_source,

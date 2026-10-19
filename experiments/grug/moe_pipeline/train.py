@@ -21,7 +21,7 @@ import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from fray.device_flops import device_flops
-from iris.runtime.jax_init import initialize_jax
+from iris.jax.init import initialize_jax
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig

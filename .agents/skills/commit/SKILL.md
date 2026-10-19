@@ -111,6 +111,7 @@ gh pr create --title "<title>" --body-file "<body-file>" \
 
 - Always add the `agent-generated` label.
 - Add `agentic-lint` only after step 6 ran and every finding was fixed or answered.
+  The label records that lint pass; without it, CI launches a Loom lint review.
 - Never credit yourself in commits or PR descriptions.
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
 

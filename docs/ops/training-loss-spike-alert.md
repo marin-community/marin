@@ -4,7 +4,7 @@
 
 It pages because a hero run diverging unwatched costs more than a false page does, and a silence answers a false page. Expect benign firings at mixture stage boundaries; silence the run for that window rather than widening the band for every run.
 
-Enrollment uses the [`TrainingProgressStalled`](training-stall-alert-contract.md) contract. A root matches `%/hero-%-coord` or `%/hero-%-coord-%`. The two rules share one `iris.task_state` query in each bridge cache interval.
+Enrollment uses the [`TrainingProgressStalled`](training-stall-alert-contract.md) contract. A root matches `/marin/hero-%-coord` or `/marin/hero-%-coord-%`. The two rules share one `iris.task_state` query in each bridge cache interval.
 
 ## What fires it
 
@@ -21,7 +21,7 @@ Reducing the recent window to its floor is the load-bearing choice. A single exc
 
 The baseline is the run's own trailing history, so the band moves with training. Early in a run, loss falls quickly and its trailing standard deviation is wide, which is when a lone excursion means least. Late in a run the band tightens and a smaller persistent rise clears it.
 
-A run reports `warming_up` with fewer than 20 baseline or 5 recent samples, and `healthy` otherwise. Both are zero-valued rows, which resolves a firing instance. With no eligible roots the bridge returns an explicit zero-valued `fleet` row; `noDataState: Alerting` is reserved for a malformed or unavailable response.
+A run reports `warming_up` with fewer than 20 baseline or 5 recent samples, and `healthy` when enough samples show no spike. Both are zero-valued rows, which resolves a firing instance. With no eligible roots the bridge returns an explicit zero-valued `fleet` row. A retryable Finelog query failure also returns a non-firing row; `FinelogFleetUnhealthy` reports the shared query-path failure. Grafana's `noDataState: Alerting` and `execErrState: Alerting` cover empty and invalid bridge responses.
 
 `spiking` and `not_finite` are separate alert instances. The route groups by logical run. Thus, retries and reason changes use one notification group.
 
@@ -32,19 +32,37 @@ A run reports `warming_up` with fewer than 20 baseline or 5 recent samples, and 
 3. Check whether the optimizer absorbed it. Steps skipped during the window mean the update was rejected and the weights did not take the spike; a spike with no skipped steps entered the weights.
 4. Decide. Resuming from the last checkpoint before the rise costs the steps since it; letting a diverged run continue costs everything after it. `manage-hero-run` covers the rollback.
 
-Verify what the rule saw with a bounded Finelog query:
+Check the rule's baseline and recent windows for the alert's cluster and run ID:
 
 ```sql
+WITH samples AS (
+  SELECT
+    value,
+    timestamp_ms,
+    CAST(EXTRACT(EPOCH FROM now() - INTERVAL '5 minutes') * 1000 AS BIGINT) AS recent_start
+  FROM "levanter.metrics"
+  WHERE name = 'train_loss'
+    AND run_id = '<hero-run-id>'
+    AND COALESCE(NULLIF(cluster, ''), 'unknown') = '<cluster>'
+    AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '60 minutes') * 1000 AS BIGINT)
+    AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT)
+)
 SELECT
-  to_timestamp_millis(timestamp_ms) AS observed_at,
-  value AS train_loss
-FROM "levanter.metrics"
-WHERE name = 'train_loss'
-  AND run_id = '<hero-run-id>'
-  AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '60 minutes') * 1000 AS BIGINT)
-ORDER BY timestamp_ms DESC
-LIMIT 50;
+  SUM(CASE WHEN timestamp_ms < recent_start THEN 1 ELSE 0 END) AS baseline_samples,
+  AVG(CASE WHEN timestamp_ms < recent_start THEN value END) AS baseline_mean,
+  STDDEV(CASE WHEN timestamp_ms < recent_start THEN value END) AS baseline_stddev,
+  SUM(CASE WHEN timestamp_ms >= recent_start THEN 1 ELSE 0 END) AS recent_samples,
+  AVG(CASE WHEN timestamp_ms >= recent_start THEN value END) AS recent_mean,
+  MIN(CASE WHEN timestamp_ms >= recent_start THEN value END) AS recent_floor,
+  MAX(CASE WHEN timestamp_ms >= recent_start THEN value END) AS recent_peak
+FROM samples;
 ```
+
+With at least 20 baseline and 5 recent samples, the rule fires when `recent_floor`
+exceeds `baseline_mean + max(0.05, 6 * baseline_stddev)`. It treats a missing or
+non-finite standard deviation as zero and also fires when `recent_mean` or
+`recent_peak` is non-finite. Retries keep the same run ID, so these windows can
+include samples from multiple attempts within the hour.
 
 ## Tuning
 

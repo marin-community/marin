@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import tracemalloc
 from types import SimpleNamespace
 
 import pyarrow as pa
@@ -24,6 +25,7 @@ from finestore.eval import (
     write_sample_parquet,
 )
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from fsspec.core import url_to_fs
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import (
@@ -32,6 +34,7 @@ from marin.evaluation.lm_eval_samples import (
     rebuild_lm_eval_samples,
     run_artifacts,
     sample_from_lm_eval,
+    samples_from_lm_eval,
     summarize_native_eval_samples,
 )
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
@@ -91,31 +94,60 @@ def test_archive_row_round_trips_each_sample_kind():
         assert sample_from_archive_row(row) == sample
 
 
-def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        {},
+        {
+            "source": {"dataset": "openai/gsm8k", "split": "test", "revision": None},
+            "reducers": [
+                {
+                    "name": "mean",
+                    "accuracy": "exact_match",
+                    "stderr": "exact_match_stderr",
+                    "repeat_ddof": 0,
+                    "groups": {},
+                    "group_suffix": "",
+                    "group_weights": {},
+                    "trial_metric": "accuracy",
+                    "selected_trial": None,
+                }
+            ],
+            "prompt_length": {
+                "distinct_prompt_count": 1,
+                "longest_prompt_chars": 100,
+                "longest_prompt_tokens": 25,
+                "sha256": "a" * 64,
+            },
+            "requires_judge": False,
+        },
+    ],
+    ids=["core", "provenance"],
+)
+def test_native_summary_reads_evalchemy_normalized_rows(tmp_path, provenance):
     root = str(tmp_path / "run" / "results")
-    store = EvaluationStore.open(root, writer_id="evalchemy")
+    contract = _result_contract("gsm8k", "exact_match", "accuracy", 1.0, n_benchmark=1, n_attempted=1)
+    benchmark = {**contract["benchmark_metadata"]["gsm8k"], **provenance}
+    data_store = DataStore.open(root, writer_id="evalchemy")
+    store = EvaluationStore(data_store)
     try:
         store.add_source_artifact(
             "evalchemy/gsm8k_5shot/native/samples_gsm8k_native.jsonl",
             b'{"doc_id": 999}\n',
             content_type="application/x-ndjson",
         )
-        store.add_source_artifact(
-            "evalchemy/gsm8k_5shot/native/results_gsm8k.json",
-            json.dumps(
-                {
-                    "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
-                    **_result_contract(
-                        "gsm8k",
-                        "exact_match",
-                        "accuracy",
-                        1.0,
-                        n_benchmark=1,
-                        n_attempted=1,
-                    ),
-                }
-            ).encode(),
-            content_type="application/json",
+        data_store.table("evalchemy_results", primary_key=("source_prefix",)).append(
+            {
+                "source_prefix": "gsm8k_5shot",
+                "document": json.dumps(
+                    {
+                        "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
+                        **contract,
+                        "benchmark_metadata": {"gsm8k": benchmark},
+                    }
+                ),
+                "scored": True,
+            }
         )
         store.add_sample(
             EvalSample(
@@ -146,13 +178,20 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path):
         )
     }
     assert summary.canonical_metrics == {"gsm8k_5shot": {"accuracy": 1.0}}
-    assert summary.tasks[0].benchmark is not None
-    assert summary.tasks[0].benchmark.primary_metric == "accuracy"
+    task = EvalTaskRef.model_validate_json(summary.tasks[0].model_dump_json())
+    assert task.model_dump(mode="json")["benchmark"] == {
+        "source": None,
+        "reducers": [],
+        "prompt_length": None,
+        "requires_judge": False,
+        **benchmark,
+    }
 
 
 def test_native_summary_partitions_repeated_task_configurations(tmp_path):
     root = str(tmp_path / "run" / "results")
-    store = EvaluationStore.open(root, writer_id="evalchemy")
+    data_store = DataStore.open(root, writer_id="evalchemy")
+    store = EvaluationStore(data_store)
     try:
         for task, score in (("hellaswag_0shot", 0.0), ("hellaswag_10shot", 1.0)):
             store.add_source_artifact(
@@ -160,22 +199,24 @@ def test_native_summary_partitions_repeated_task_configurations(tmp_path):
                 b'{"doc_id": 0}\n',
                 content_type="application/x-ndjson",
             )
-            store.add_source_artifact(
-                f"evalchemy/{task}/native/results_hellaswag.json",
-                json.dumps(
-                    {
-                        "results": {"hellaswag": {"acc,none": score}},
-                        **_result_contract(
-                            "hellaswag",
-                            "acc",
-                            "accuracy",
-                            score,
-                            n_benchmark=1,
-                            n_attempted=1,
-                        ),
-                    }
-                ).encode(),
-                content_type="application/json",
+            data_store.table("evalchemy_results", primary_key=("source_prefix",)).append(
+                {
+                    "source_prefix": task,
+                    "document": json.dumps(
+                        {
+                            "results": {"hellaswag": {"acc,none": score}},
+                            **_result_contract(
+                                "hellaswag",
+                                "acc",
+                                "accuracy",
+                                score,
+                                n_benchmark=1,
+                                n_attempted=1,
+                            ),
+                        }
+                    ),
+                    "scored": True,
+                }
             )
             store.add_sample(
                 EvalSample(
@@ -243,6 +284,41 @@ def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
     sample = sample_from_archive_row(row)
     assert sample.prompt_messages is not None
     assert sample.prompt_messages[0].content == content
+
+
+def test_export_lm_eval_samples_bounds_peak_python_memory(tmp_path):
+    results = tmp_path / "run" / "results"
+    sample_path = results / "mmlu_pro" / "model" / "samples_mmlu_pro_20260807.jsonl"
+    sample_path.parent.mkdir(parents=True)
+    prompt = "Read the question and choose one answer. " + ("context " * 1_024)
+    rows = []
+    for doc_id in range(2_048):
+        rows.append(
+            json.dumps(
+                {
+                    "doc_id": doc_id,
+                    "doc": {"question": "Which answer is correct?", "choices": ["A", "B"]},
+                    "target": 0,
+                    "arguments": [[prompt, "A"], [prompt, "B"]],
+                    "resps": [[-1.0, True], [-2.0, True]],
+                    "filtered_resps": [0],
+                    "acc": 1.0,
+                }
+            )
+        )
+    sample_path.write_text("\n".join(rows) + "\n")
+    del rows
+
+    source_size = sample_path.stat().st_size
+    tracemalloc.start()
+    try:
+        exported = export_lm_eval_samples(str(results))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert exported.samples == 2_048
+    assert peak < source_size * 5 / 2
 
 
 def test_native_evalchemy_generation_preserves_prompt():
@@ -345,6 +421,69 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
     assert by_filter["strict-match"].grading.filter == "strict-match"
 
 
+def test_ungraded_extraction_filters_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    rows = [
+        {
+            key: value
+            for key, value in _lm_eval_row(0, name, 0.0, response).items()
+            if key not in {"metrics", "exact_match"}
+        }
+        for name, response in (("strict-match", "[invalid]"), ("flexible-extract", "4"))
+    ]
+    _write_jsonl(results, rows)
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).output for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
+def test_ungraded_filter_variants_keep_distinct_archive_rows(tmp_path):
+    results = tmp_path / "run" / "results"
+    raw = _lm_eval_row(0, "none", 0.0, "4")
+    del raw["filter"], raw["metrics"], raw["exact_match"]
+    raw["filter_variants"] = [
+        {"filter": "strict-match", "filtered_resps": ["[invalid]"], "metrics": {}},
+        {"filter": "flexible-extract", "filtered_resps": ["4"], "metrics": {}},
+    ]
+    _write_jsonl(results, [raw])
+
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["filter"]: sample_from_archive_row(row).extracted for row in stored} == {
+        "strict-match": "[invalid]",
+        "flexible-extract": "4",
+    }
+
+
+def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
+    results = tmp_path / "run" / "results"
+    rows = []
+    for repeat, score in enumerate((1.0, 0.0, 1.0)):
+        row = _lm_eval_row(0, "none", score, str(repeat))
+        row["sample_repeat"] = repeat
+        row["source_id"] = 2
+        row["sample_ordinal"] = 0
+        rows.append(row)
+    source = _write_jsonl(results, rows)
+
+    assert export_lm_eval_samples(str(results)).samples == 3
+    source.unlink()
+    assert rebuild_lm_eval_samples(str(results)) == 3
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["trial_id"]: sample_from_archive_row(row).metrics for row in stored} == {
+        "0": {"exact_match": 1.0},
+        "1": {"exact_match": 0.0},
+        "2": {"exact_match": 1.0},
+    }
+
+
 def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
     # lm-eval stamps each row with its own numeric schema_version; it is not a score.
     results = tmp_path / "run" / "results"
@@ -353,6 +492,38 @@ def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
 
     [row] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(row).metrics == {"exact_match": 1.0}
+
+
+def test_sample_metrics_exclude_evalchemy_provenance_indices(tmp_path):
+    # Custom Evalchemy tasks can omit per-sample metrics while adding numeric provenance fields.
+    # Treating those row indices as scores makes every item after the first look correct.
+    results = tmp_path / "run" / "results"
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("metrics")
+    row.pop("exact_match")
+    row.update(
+        {
+            "sample_id": "MMLUPro:0:0:0",
+            "sample_namespace": "MMLUPro",
+            "sample_ordinal": 17,
+            "sample_repeat": 0,
+            "sample_shard": 0,
+            "source_id": 17,
+        }
+    )
+    _write_jsonl(results, [row])
+
+    coverage = export_lm_eval_samples(str(results)).coverage
+
+    [archived] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(archived)
+    assert archived["filter"] == "none"
+    assert sample.metrics == {}
+    assert sample.grading is None
+    assert sample.correct is None
+    assert coverage == {
+        "gsm8k_5shot": TaskCoverage(n_attempted=1, n_scored=0, n_correct=None, n_unanswered=0, errors={"ungraded": 1})
+    }
 
 
 def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
@@ -685,11 +856,36 @@ def test_export_uses_evaluator_metadata_for_chat_native_task(tmp_path):
     results = tmp_path / "run" / "results"
     directory = results / "math500" / "model"
     directory.mkdir(parents=True)
+    contract = _result_contract("MATH500", "accuracy", "accuracy", 1.0, n_benchmark=500, n_attempted=10)
+    source_metadata = {
+        "source": {"dataset": "HuggingFaceH4/MATH-500", "split": "test", "revision": None},
+        "reducers": [
+            {
+                "name": "mean",
+                "accuracy": "accuracy",
+                "stderr": "accuracy_stderr",
+                "repeat_ddof": 0,
+                "groups": {},
+                "group_suffix": "",
+                "group_weights": {},
+                "trial_metric": "accuracy",
+                "selected_trial": None,
+            }
+        ],
+        "prompt_length": {
+            "distinct_prompt_count": 500,
+            "longest_prompt_chars": 8192,
+            "longest_prompt_tokens": 2048,
+            "sha256": "b" * 64,
+        },
+        "requires_judge": False,
+    }
+    contract["benchmark_metadata"]["MATH500"].update(source_metadata)
     (directory / "results_20260807.json").write_text(
         json.dumps(
             {
                 "results": {"MATH500": {"accuracy": 1.0}},
-                **_result_contract("MATH500", "accuracy", "accuracy", 1.0, n_benchmark=500, n_attempted=10),
+                **contract,
             }
         )
     )
@@ -697,14 +893,19 @@ def test_export_uses_evaluator_metadata_for_chat_native_task(tmp_path):
     row["accuracy"] = row.pop("exact_match")
     (directory / "samples_MATH500_20260807.jsonl").write_text(json.dumps(row) + "\n")
 
-    [coverage] = export_lm_eval_samples(
+    exported = export_lm_eval_samples(
         str(results),
         tasks=(EvalTaskRef(name="MATH500", num_fewshot=0, task_alias="math500"),),
-    ).coverage.values()
+    )
+    [coverage] = exported.coverage.values()
 
     assert coverage.n_benchmark == 500
     assert coverage.n_attempted == 10
     assert coverage.n_scored == 1
+    benchmark = exported.tasks[0].benchmark
+    assert benchmark is not None
+    persisted = benchmark.model_dump(mode="json")
+    assert {key: persisted[key] for key in source_metadata} == source_metadata
 
 
 def test_export_records_aggregate_only_benchmark_metadata(tmp_path):
@@ -785,6 +986,31 @@ def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):
     sample = sample_from_archive_row(stored)
     assert sample.grading.metric == "f1"
     assert sample.correct
+
+
+def test_rebuild_preserves_native_evalchemy_repeat_keys(tmp_path):
+    results = str(tmp_path / "results")
+    rows = [_lm_eval_row(0, "none", score, output) for score, output in ((1.0, "4"), (0.0, "5"), (1.0, "4"))]
+    for repeat, row in enumerate(rows):
+        row["sample_repeat"] = repeat
+
+    store = EvaluationStore.open(results, writer_id="native-evalchemy-test")
+    try:
+        store.add_source_artifact(
+            "evalchemy/gsm8k/native/samples_gsm8k_native.jsonl",
+            ("\n".join(json.dumps(row) for row in rows) + "\n").encode(),
+            content_type="application/x-ndjson",
+        )
+        for row in rows:
+            for sample in samples_from_lm_eval("gsm8k", row):
+                store.add_sample(sample, trial_id=str(row["sample_repeat"]))
+        store.seal()
+    finally:
+        store.close()
+
+    assert rebuild_lm_eval_samples(results) == 3
+    archived = ReadView(results).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {(row["doc_id"], row["trial_id"]) for row in archived} == {("0", "0"), ("0", "1"), ("0", "2")}
 
 
 def test_rebuild_chat_native_samples_from_recorded_task_declaration(tmp_path):

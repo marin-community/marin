@@ -14,7 +14,7 @@ from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
 from iris.cluster.runtime.env import IRIS_NODE_NAME_ENV
-from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 
 logger = logging.getLogger(__name__)
 

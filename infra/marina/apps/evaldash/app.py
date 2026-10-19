@@ -43,7 +43,7 @@ from typing import Protocol
 import google.auth
 from fastapi import APIRouter, FastAPI
 from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_measurements import measurements_from_records
+from marin.evaluation.eval_policy import SEPTEMBER_24_VERSION, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
@@ -51,6 +51,7 @@ from marin.evaluation.eval_stats import (
     SelectionRequest,
     declared_protocols,
 )
+from marin.evaluation.model_identity import comparison_model_name
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
@@ -63,32 +64,31 @@ from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.server_auth import get_verified_identity
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import review, samples
+from .db_migrations import apply_migrations
 from .metrics import (
     RUN_FACETS,
     build_comparison,
     build_meta,
     build_model_detail,
     build_panel,
+    dashboard_measurements,
+    display_status,
     panel_request,
     record_headline,
 )
-from .record_reconciliation import VerificationSchedule, inspect_record_paths
+from .record_reconciliation import VerificationSchedule, inspect_record_paths, step_status_for_record
 from .results_db import (
-    PrefixStatus,
-    RecordObservation,
-    SourceState,
     catalog_generation,
     configure_prefixes,
     fetch_archived_models,
     fetch_snapshot,
     mark_prefix_failed,
-    migrate_schema,
     prefix_statuses,
     prune_untracked_records,
     reconcile_prefix,
@@ -205,17 +205,27 @@ class MetricProtocolResponse(BaseModel):
     kind: str
 
 
+class PolicyRejectionResponse(BaseModel):
+    run_id: str
+    model: str
+    benchmark: str
+    reasons: list[str]
+
+
 class PanelResponse(BaseModel):
     benchmarks: list[str]
     protocols: dict[str, MetricProtocolResponse]
     panel: list[str]
     families: list[PanelFamilyResponse]
     rows: list[PanelRowResponse]
+    policy_rejections: list[PolicyRejectionResponse]
     request: PanelRequestResponse
 
 
 class RunDetailResponse(EvalRunRecord):
     headline: PanelCellResponse | None
+    comparison_model: str
+    policy_violations: list[str]
 
 
 class LogEntryResponse(BaseModel):
@@ -339,7 +349,7 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "created_at": record.created_at,
         "version": record.version,
         "user_name": record.user,
-        "model_name": record.model.name,
+        "model_name": comparison_model_name(record.model),
         "model_location": record.model.location,
         "eval_name": record.evaluation.name,
         "mechanism": record.evaluation.mechanism,
@@ -347,7 +357,8 @@ def record_to_row(record: EvalRunRecord) -> dict:
         "platform": record.hardware.platform,
         "accelerator": record.hardware.accelerator,
         "region": record.hardware.region_or_cluster,
-        "status": record.status.value,
+        "status": display_status(record),
+        "step_status": record.step_status,
         "results_path": record.results_path,
         "git_sha": record.provenance.git_sha,
         "image_digest": record.provenance.eval_runtime,
@@ -362,8 +373,8 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
-        "model_name": record.model.name,
-        "status": record.status.value,
+        "model_name": comparison_model_name(record.model),
+        "status": display_status(record),
         "created_at": record.created_at,
     }
 
@@ -422,7 +433,11 @@ class RecordStore:
     def get_record(self, run_id: str) -> dict | None:
         _records, by_id = self._snapshot()
         record = by_id.get(run_id)
-        return record.model_dump(mode="json", by_alias=True) if record is not None else None
+        return (
+            {**record.model_dump(mode="json", by_alias=True), "comparison_model": comparison_model_name(record.model)}
+            if record is not None
+            else None
+        )
 
     def fetch_runs(
         self,
@@ -457,7 +472,11 @@ class RecordStore:
         records, _by_id = self._snapshot()
         archived = self.archived_models()
         if not include_archived:
-            records = [record for record in records if record.model.name not in archived]
+            records = [
+                record
+                for record in records
+                if record.model.name not in archived and comparison_model_name(record.model) not in archived
+            ]
         return build_panel(records, request, frozenset(archived), aggregate)
 
     def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
@@ -484,18 +503,18 @@ class RecordStore:
         records, _by_id = self._snapshot()
         by_group: dict[str, list[EvalRunRecord]] = {}
         for record in records:
-            if (model and record.model.name != model) or (user and record.user != user):
+            if (model and comparison_model_name(record.model) != model) or (user and record.user != user):
                 continue
             by_group.setdefault(record.group_id, []).append(record)
         groups: list[dict] = []
         for group_id, members in by_group.items():
             ordered = sorted(members, key=lambda record: record.created_at or "")
             newest = ordered[-1]
-            statuses = {record.status.value for record in members}
+            statuses = {display_status(record) for record in members}
             groups.append(
                 {
                     "group_id": group_id,
-                    "model_name": newest.model.name,
+                    "model_name": comparison_model_name(newest.model),
                     "version": newest.version,
                     "description": newest.description,
                     "user_name": newest.user,
@@ -503,7 +522,7 @@ class RecordStore:
                     "created_at": newest.created_at,
                     "status": _status_rollup(statuses),
                     "n_evals": len(members),
-                    "n_succeeded": sum(1 for record in members if record.status.value == "succeeded"),
+                    "n_succeeded": sum(1 for record in members if display_status(record) == "succeeded"),
                     "evals": [_group_member(record) for record in ordered],
                 }
             )
@@ -517,9 +536,17 @@ class RecordStore:
         primary metric, each carrying its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
-        task_records = [record for record in records if record.model.name == model and record.evaluation.name == task]
-        protocol_records = [record for record in records if record.evaluation.name == task]
-        protocols = declared_protocols(measurements_from_records(protocol_records))
+        task_records = [
+            record
+            for record in records
+            if comparison_model_name(record.model) == model
+            and record.evaluation.name == task
+            and not record_policy_violations(record)
+        ]
+        protocol_records = [
+            record for record in records if record.evaluation.name == task and not record_policy_violations(record)
+        ]
+        protocols = declared_protocols(dashboard_measurements(protocol_records))
         points = []
         for record in task_records:
             headline = record_headline(record, protocols.get(task))
@@ -643,39 +670,9 @@ class PgRecordStore(RecordStore):
         with self._lock:
             self._catalog_error = error
 
-    def configure_prefixes(self, prefixes: tuple[str, ...]) -> None:
-        configure_prefixes(self._engine, prefixes)
-        self.reload_if_changed()
-
-    def source_states(self, prefix: str) -> dict[str, SourceState]:
-        return source_states(self._engine, prefix)
-
-    def reconcile_prefix(
-        self,
-        prefix: str,
-        paths: list[str],
-        observations: list[RecordObservation],
-        probe_at: datetime,
-        confirm_missing_after: float,
-    ) -> None:
-        reconcile_prefix(
-            self._engine,
-            prefix,
-            paths,
-            observations,
-            probe_at,
-            confirm_missing_after,
-        )
-
-    def mark_prefix_failed(self, prefix: str, probe_at: datetime, error: str) -> None:
-        mark_prefix_failed(self._engine, prefix, probe_at, error)
-
-    def finish_reconciliation(self, prefixes: tuple[str, ...]) -> None:
-        prune_untracked_records(self._engine, prefixes)
-        self.reload_if_changed()
-
-    def prefix_statuses(self) -> list[PrefixStatus]:
-        return prefix_statuses(self._engine)
+    @property
+    def engine(self) -> Engine:
+        return self._engine
 
     def archived_models(self) -> set[str]:
         return fetch_archived_models(self._engine)
@@ -790,7 +787,10 @@ class Ingestor:
                 probe.last_probe_time = _utcnow_iso()
                 try:
                     scan = await asyncio.to_thread(scan_records, prefix, self._record_cache[prefix])
-                    found = list(scan.records)
+                    found = [
+                        record.model_copy(update={"step_status": step_status_for_record(path)})
+                        for path, record in scan.records_by_path.items()
+                    ]
                     failures = list(scan.failures)
                 except Exception as exc:
                     # One unreachable store (missing CW keys, transient outage) must not hide the
@@ -837,29 +837,29 @@ class PostgresIngestor:
 
     def __init__(
         self,
-        store: PgRecordStore,
+        engine: Engine,
         prefixes: tuple[str, ...],
         interval: float,
         revalidate_after: float,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        self._store = store
+        self._engine = engine
         self._prefixes = prefixes
         self.interval = interval
         self.revalidate_after = revalidate_after
         self._now = now
-        store.configure_prefixes(prefixes)
 
     async def run_once(self) -> tuple[str, ...]:
         """Run one reconciliation pass and return the prefixes whose listings failed."""
         if not self._prefixes:
             return ()
+        await asyncio.to_thread(configure_prefixes, self._engine, self._prefixes)
         failed_prefixes: list[str] = []
         for prefix in self._prefixes:
             probe_at = self._now()
             try:
                 paths = await asyncio.to_thread(list_record_paths, prefix)
-                states = await asyncio.to_thread(self._store.source_states, prefix)
+                states = await asyncio.to_thread(source_states, self._engine, prefix)
                 observations = await asyncio.to_thread(
                     inspect_record_paths,
                     paths,
@@ -870,16 +870,9 @@ class PostgresIngestor:
                         revalidate_after=self.revalidate_after,
                     ),
                 )
-                failures = {
-                    path: state.error for path, state in states.items() if path in paths and state.error is not None
-                }
-                for observation in observations:
-                    if observation.error is None:
-                        failures.pop(observation.path, None)
-                    else:
-                        failures[observation.path] = observation.error
                 await asyncio.to_thread(
-                    self._store.reconcile_prefix,
+                    reconcile_prefix,
+                    self._engine,
                     prefix,
                     paths,
                     observations,
@@ -889,22 +882,21 @@ class PostgresIngestor:
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 logger.exception("reconcile: %s failed; keeping its committed catalog rows", prefix)
-                await asyncio.to_thread(self._store.mark_prefix_failed, prefix, probe_at, error)
+                await asyncio.to_thread(mark_prefix_failed, self._engine, prefix, probe_at, error)
                 failed_prefixes.append(prefix)
                 continue
             logger.info(
-                "reconcile: %d candidates, %d checked, %d invalid from %s",
+                "reconcile: %d candidates, %d checked from %s",
                 len(paths),
                 len(observations),
-                len(failures),
                 prefix,
             )
-        await asyncio.to_thread(self._store.finish_reconciliation, self._prefixes)
+        await asyncio.to_thread(prune_untracked_records, self._engine, self._prefixes)
         return tuple(failed_prefixes)
 
     def status(self) -> dict:
         probes = []
-        rows = {row.prefix: row for row in self._store.prefix_statuses()}
+        rows = {row.prefix: row for row in prefix_statuses(self._engine)}
         for prefix in self._prefixes:
             row = rows.get(prefix)
             probe = PrefixProbe(prefix=prefix)
@@ -915,7 +907,7 @@ class PostgresIngestor:
                 probe.error = row.error
             probe.parse_failures = [
                 RecordParseFailure(path=path, error=state.error)
-                for path, state in sorted(self._store.source_states(prefix).items())
+                for path, state in sorted(source_states(self._engine, prefix).items())
                 if state.error is not None
             ]
             probes.append(probe)
@@ -1057,11 +1049,11 @@ def _status_rollup(statuses: set[str]) -> str:
     return "mixed"
 
 
-def _run_headline(record: dict) -> dict | None:
-    """The run's overall grade for the detail header: its rolled-up primary metric with the interval
-    and coverage behind it, or None when nothing scored (an infra or eval failure that never produced
-    metrics)."""
-    return record_headline(EvalRunRecord.model_validate(record))
+def _run_headline(record: EvalRunRecord) -> dict | None:
+    """Return an admitted run's primary grade, or None when it scored nothing or violates policy."""
+    if record_policy_violations(record):
+        return None
+    return record_headline(record)
 
 
 def _group_member(record: EvalRunRecord) -> dict:
@@ -1069,9 +1061,10 @@ def _group_member(record: EvalRunRecord) -> dict:
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
-        "status": record.status.value,
+        "status": display_status(record),
+        "step_status": record.step_status,
         "created_at": record.created_at,
-        "headline": record_headline(record),
+        "headline": _run_headline(record),
     }
 
 
@@ -1099,7 +1092,7 @@ def _ingestor_and_loop(
 ) -> tuple[IngestorLike, Callable[[], Awaitable[None]] | None]:
     ingestor: IngestorLike
     if isinstance(store, PgRecordStore):
-        ingestor = PostgresIngestor(store, config.prefixes, config.ingest_interval, config.revalidate_after)
+        ingestor = PostgresIngestor(store.engine, config.prefixes, config.ingest_interval, config.revalidate_after)
         return ingestor, None
     local_ingestor = Ingestor(store, config.prefixes, config.ingest_interval)
     return local_ingestor, local_ingestor.run_loop
@@ -1134,7 +1127,10 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         record = await asyncio.to_thread(store.get_record, run_id)
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
-        return RunDetailResponse.model_validate({**record, "headline": _run_headline(record)})
+        parsed = EvalRunRecord.model_validate(record)
+        return RunDetailResponse.model_validate(
+            {**record, "headline": _run_headline(parsed), "policy_violations": list(record_policy_violations(parsed))}
+        )
 
     @router.get("/runs/{run_id}/jobs")
     async def api_run_jobs(request: Request) -> JSONResponse:
@@ -1274,9 +1270,10 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
 
 def _selection(params: Mapping[str, str]) -> SelectionRequest:
     """Return the panel selection requested by panel or comparison query parameters."""
+    cohort = params.get("cohort") or SEPTEMBER_24_VERSION
     return panel_request(
         benchmarks=_parse_names(params.get("benchmarks")),
-        cohort_version=params.get("cohort") or None,
+        cohort_version=None if cohort == "all" else cohort,
         completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
         min_coverage=_parse_coverage(params.get("min_coverage")),
         min_benchmark_coverage=_parse_coverage(params.get("min_benchmark_coverage"), "min_benchmark_coverage"),
@@ -1364,6 +1361,8 @@ def _analysis_router(store: RecordStore) -> APIRouter:
             selection = _selection(params)
         except BadRequest as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        if selection.cohort_version is None:
+            return JSONResponse({"error": "Choose one cohort before comparing models."}, status_code=400)
         payload = await asyncio.to_thread(store.comparison, selection, models)
         return JSONResponse(payload)
 
@@ -1448,7 +1447,7 @@ def create_api(services: Services) -> RegisteredApi:
     """The kernel's entry point for the JSON API mounted at ``/evaldash/api/``.
 
     Configuration is resolved from the environment once, here. Nothing in this path writes to the
-    database: ``marina migrate`` has already applied the schema when the deploy reaches this point.
+    database: package release has already applied the schema before selecting this revision.
     """
     config = EvaldashConfig.from_env(os.environ)
     gateway: ClusterGatewayLike
@@ -1467,6 +1466,6 @@ def create_api(services: Services) -> RegisteredApi:
     return build_api(create_store(services, config), gateway, config, trigger_ingest)
 
 
-def migrate(engine: Engine) -> None:
-    """Bring the app's schema up to this build, under an advisory lock. Run by ``marina migrate``."""
-    migrate_schema(engine)
+def migrate(connection: Connection) -> None:
+    """Apply schema changes within the locked package release transaction."""
+    apply_migrations(connection)

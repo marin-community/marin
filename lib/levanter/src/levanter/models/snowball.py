@@ -134,6 +134,8 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 
 
 _GATED_NORM_RANK = 128
+# June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
+_LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
 _EP_CAPACITY_FACTOR = 1.0
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
@@ -289,7 +291,6 @@ class SnowballConfig(HFCompatConfig):
             initializer_std=float(_hf_attr(hf_config, ("initializer_std", "initializer_range"), 0.0098821)),
             qk_mult=float(_hf_attr(hf_config, ("qk_mult",), _DEFAULT_QK_MULT)),
             rope=rope,
-            attention_implementation="gpu_fa4_cute" if jax.default_backend() == "gpu" else None,
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[dict] = None) -> GrugMoeHfConfig:
@@ -468,7 +469,10 @@ class SnowballAttention(eqx.Module):
             q = _reshard_sequence(q, context)
             k = _reshard_sequence(k, None)
             v = _reshard_sequence(v, None)
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        implementation = self.cfg.attention_implementation
+        if implementation is None and jax.default_backend() == "gpu":
+            implementation = "gpu_fa4_cute"
+        attn_out = attention(q, k, v, mask, implementation=implementation)
         if context is not None:
             attn_out = _reshard_sequence(attn_out, context)
         aligned_v = align_kv_heads(local_v, num_q_heads=attn_out.shape[2])
@@ -643,6 +647,21 @@ class SnowballBlock(eqx.Module):
         return x + mlp_out
 
 
+def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
+    """Bool[num_layers], True where a layer runs full-causal attention instead of the sliding window."""
+    idx = jnp.arange(num_layers)
+    return ((idx % _LONG_ATTENTION_INTERVAL) == _LONG_ATTENTION_INTERVAL - 1) | (idx == num_layers - 1)
+
+
+def num_long_attention_layers(num_layers: int) -> int:
+    """Number of layers that run full-causal attention, counted without JAX for FLOP estimates."""
+    return sum(
+        1
+        for i in range(num_layers)
+        if i % _LONG_ATTENTION_INTERVAL == _LONG_ATTENTION_INTERVAL - 1 or i == num_layers - 1
+    )
+
+
 class SnowballTransformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
@@ -693,8 +712,7 @@ class SnowballTransformer(eqx.Module):
         # schedule feed a single uniform scan body (June recipe: long layers = every 4th + the last).
         num_blocks = len(self.blocks)
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
-        idx = jnp.arange(num_blocks)
-        long_schedule = ((idx % 4) == 3) | (idx == num_blocks - 1)
+        long_schedule = long_attention_layer_mask(num_blocks)
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
             layer, use_long = layer_and_flag
@@ -753,7 +771,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return hax.named(hidden, out_axes)
 
     def get_lm_head(self) -> NamedArray:
-        return hax.named(self.transformer.output_proj, (self.Embed, self.Vocab))
+        return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "SnowballLMHeadModel":
         old = self._config.vocab_size

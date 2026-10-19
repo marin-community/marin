@@ -15,8 +15,8 @@ import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
 from marin.evaluation.records import write_record
-from marina.apps import Services
 from marina.db import UrlDatabase, engine_for
+from marina.testing import SourceServices
 from starlette.testclient import TestClient
 
 APP = "evaldash"
@@ -46,7 +46,8 @@ def test_an_unmigrated_schema_is_named_rather_than_failing_on_the_first_query(en
 
 
 def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, database_url, monkeypatch):
-    evaldash_app.migrate(engine)
+    with engine.begin() as migration_connection:
+        evaldash_app.migrate(migration_connection)
     monkeypatch.setenv("RECORDS_PREFIXES", records)
     monkeypatch.delenv("EVALDASH_STORE", raising=False)
     monkeypatch.setenv("EVALDASH_INGEST_JOB", "projects/hai-gcp-models/locations/us-central1/jobs/marina-evaldash")
@@ -56,15 +57,14 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
         "trigger_cloud_run_job",
         lambda job: triggered.append(job) or "operations/evaldash-ingest",
     )
-    services = Services(name=APP, data_url="memory://evaldash", database=UrlDatabase(url=database_url))
+    services = SourceServices(name=APP, data_url="memory://evaldash", database=UrlDatabase(url=database_url))
 
     api = evaldash_app.create_api(services)
     with TestClient(api.app) as client:
         assert client.get("/runs").json() == []
         config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
-        writer = evaldash_app.PgRecordStore(engine)
         ingestor = evaldash_app.PostgresIngestor(
-            writer, config.prefixes, config.ingest_interval, config.revalidate_after
+            engine, config.prefixes, config.ingest_interval, config.revalidate_after
         )
         assert asyncio.run(ingestor.run_once()) == ()
         response = client.post("/refresh")
@@ -77,17 +77,20 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
         assert client.get("/runs/snowball-2026.07.20-mmlu").json()["status"] == "succeeded"
         assert client.get("/status").json()["store"]["catalog_generation"] > 0
 
-        snowball = next(row for row in client.get("/panel").json()["rows"] if row["model"] == "snowball")
+        snowball = next(
+            row for row in client.get("/panel", params={"cohort": "all"}).json()["rows"] if row["model"] == "snowball"
+        )
         assert snowball["last_updated"] == max(cell["created_at"] for cell in snowball["cells"].values())
 
 
 def test_a_second_instance_serves_the_generation_the_first_committed(engine, records):
-    evaldash_app.migrate(engine)
+    with engine.begin() as migration_connection:
+        evaldash_app.migrate(migration_connection)
     config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
     writer = evaldash_app.PgRecordStore(engine)
     now = [0.0]
     reader = evaldash_app.PgRecordStore(engine, now=lambda: now[0])
-    ingestor = evaldash_app.PostgresIngestor(writer, config.prefixes, config.ingest_interval, config.revalidate_after)
+    ingestor = evaldash_app.PostgresIngestor(engine, config.prefixes, config.ingest_interval, config.revalidate_after)
     assert reader.store_info().record_count == 0
 
     asyncio.run(ingestor.run_once())
@@ -109,12 +112,12 @@ def test_a_second_instance_serves_the_generation_the_first_committed(engine, rec
 
 
 def test_catalog_check_failure_serves_cached_snapshot_until_retry(engine, records, monkeypatch):
-    evaldash_app.migrate(engine)
+    with engine.begin() as migration_connection:
+        evaldash_app.migrate(migration_connection)
     config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
-    writer = evaldash_app.PgRecordStore(engine)
     asyncio.run(
         evaldash_app.PostgresIngestor(
-            writer, config.prefixes, config.ingest_interval, config.revalidate_after
+            engine, config.prefixes, config.ingest_interval, config.revalidate_after
         ).run_once()
     )
     now = [0.0]

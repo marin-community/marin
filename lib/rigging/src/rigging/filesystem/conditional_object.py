@@ -25,6 +25,7 @@ from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
 import rigging.filesystem.factory as factory
+from rigging.filesystem.atomic import unique_temp_path
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff, retry_with_backoff
@@ -110,21 +111,42 @@ class LocalConditionalObject:
     def write(self, data: bytes, *, expected_version: str | None) -> str:
         local_path = self._local_path()
         os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-        existed = os.path.exists(local_path)
-        with open(local_path, "a+b") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            handle.seek(0)
-            current = handle.read()
-            found_version = _local_version(current) if existed or current else None
-            if found_version != expected_version:
-                raise ConditionalWriteError(
-                    f"conditional write failed for {self.path}: expected {expected_version!r}, found {found_version!r}"
-                )
-            handle.seek(0)
-            handle.truncate()
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
+        if expected_version is None:
+            # Publish the initialized inode at once: opening the destination before flock
+            # lets a concurrent reader acquire its shared lock while the file is empty.
+            temp_path = unique_temp_path(local_path)
+            with open(temp_path, "xb") as handle:
+                try:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    try:
+                        os.link(temp_path, local_path)
+                    except FileExistsError as error:
+                        raise ConditionalWriteError(
+                            f"conditional create failed for {self.path}: object exists"
+                        ) from error
+                finally:
+                    os.unlink(temp_path)
+            return _local_version(data)
+        try:
+            with open(local_path, "r+b") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                handle.seek(0)
+                current = handle.read()
+                found_version = _local_version(current)
+                if found_version != expected_version:
+                    raise ConditionalWriteError(
+                        f"conditional write failed for {self.path}: "
+                        f"expected {expected_version!r}, found {found_version!r}"
+                    )
+                handle.seek(0)
+                handle.truncate()
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except FileNotFoundError as error:
+            raise ConditionalWriteError(f"conditional update failed for {self.path}: object is absent") from error
         return _local_version(data)
 
 

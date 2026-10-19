@@ -112,6 +112,7 @@ Key behaviors:
 - `defaults.inject_env` values are *defaults*: a literal `defaults.task_env` entry of the same name and a per-job `-e`/`env_vars` both override them.
 - Child jobs inherit parent env vars automatically (child values take precedence).
 - The CLI also loads env vars from `.marin.yaml`'s `env:` section.
+- A `CONTAINER_PROFILE_SANDBOX` job gets none of the above except its own explicit `env_vars` (`docs/container-profiles.md`).
 - The submitting user for top-level jobs resolves as: explicit `user`/`--user` → `IRIS_USER` env var → the enclosing job's user → OS user → `root` (`resolve_job_user`). Export `IRIS_USER` when your OS username is uninformative (e.g. a shared `marin` account). Submissions from inside a job become child jobs of the enclosing job and skip this resolution entirely.
 
 See https://github.com/marin-community/marin/issues/3859 for context.
@@ -129,6 +130,10 @@ against (notably `$IRIS_VENV`, the venv the run phase activates), child
 inheritance, and the Docker gotcha (setup runs in a separate container, so
 `export` does not reach the command — use `env_vars`) all live in
 `iris.cluster.setup_scripts`. See https://github.com/marin-community/marin/issues/6595.
+
+Iris-managed uv installs use symlinks on TPU worker hosts, including CPU tasks
+scheduled there. Other hosts default to copy mode. Kubernetes keeps copies because its
+node agent may clean the shared uv cache while tasks run.
 
 ## Architecture Notes
 

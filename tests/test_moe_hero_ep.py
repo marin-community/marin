@@ -41,7 +41,7 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
-from experiments.grug.checkpointing import LEGACY_STATE_KEY, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_master, restore_grug_state_from_checkpoint
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
@@ -127,8 +127,8 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         "ragged_all_to_all",
         model.QbEstimator.HIST,
         10_000,
-        1024,
-        4096,
+        256,
+        16384,
         4,
         10,
         1_000_000_000,
@@ -201,7 +201,7 @@ def test_hero_batch_validation_matches_default_mesh():
         default_mesh_trainer._validate_and_set_defaults()
 
     assert data_axis_size == default_mesh_trainer.data_axis_size == 64
-    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 16
+    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 4
     assert trainer.per_device_eval_parallelism == default_mesh_trainer.per_device_eval_parallelism
 
 
@@ -272,11 +272,13 @@ def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_st
 
 
 def test_data_parallel_racks_keep_the_global_batch_explicit():
+    one_rack = launch.build_diagnostic_run(run_id="one-rack", dp_racks=1, num_steps=1, version="dev")
     step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
+    one_rack_config = one_rack.build_config(StepContext.for_fingerprint(one_rack.runtime_args, one_rack.deps))
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.trainer.replica_axis_size == 2
-    assert config.trainer.trainer.train_batch_size == launch.HERO_EP_BATCH_SIZE
+    assert config.trainer.trainer.train_batch_size == one_rack_config.trainer.trainer.train_batch_size
     assert step.runtime_args["train_resources"].replicas == 2 * launch.HERO_EP_NODES
 
 
@@ -493,7 +495,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     state = _tiny_state(jnp.zeros(4), None)
     master_less = str(tmp_path / "step-1")
     save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
-    assert not train.checkpoint_stores_master(master_less)
+    assert not checkpoint_stores_master(master_less)
     assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DEVICE) is state
     with pytest.raises(ValueError, match="Synthesizing a master"):
         train.template_for_candidate_layout(state, master_less, train.MasterParamMode.FP32_PINNED_HOST)
@@ -502,7 +504,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     save_checkpoint(
         {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
     )
-    assert train.checkpoint_stores_master(master_bearing)
+    assert checkpoint_stores_master(master_bearing)
     assert train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) is state
     migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DEVICE)
     assert migrating.params is None and migrating.master_params is state.params
@@ -518,7 +520,7 @@ def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_p
         checkpoint_path=checkpoint,
     )
 
-    assert train.checkpoint_stores_master(checkpoint)
+    assert checkpoint_stores_master(checkpoint)
 
 
 def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore(tmp_path, monkeypatch):
@@ -1226,7 +1228,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
         metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
         return (loss, metrics), grads
 
-    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
     monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
     train_step = train._make_train_step(
         optimizer,
@@ -1329,7 +1331,7 @@ def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
         metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
         return (loss, metrics), grads
 
-    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
     monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
     train_step = train._make_train_step(
         optimizer,

@@ -11,8 +11,10 @@ browser fetches use relative URLs (``new URL(path, location.href)``) — the pro
 does not rewrite HTML bodies, so an absolute path like ``/v1/chat/completions``
 would escape the prefix.
 
-``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
-slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
+``/v1/*`` requests and the root ``/tokenize`` route are reverse-proxied to whichever
+serving backend runs on the slice (see :mod:`marin.inference.backend`). Harbor uses
+``/tokenize`` for context accounting with the live model's chat template.
+Direct sessions preserve server-sent
 events end to end; brokered sessions return buffered JSON and reject streaming.
 ``/tools`` returns model-facing JSON schemas for dashboard-authored Python,
 ``/tools/{name}`` validates and runs one function, and ``/shell`` executes a
@@ -33,6 +35,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 
 import httpx
+import shellsim
 import uvicorn
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
@@ -48,6 +51,7 @@ from marin.inference.python_tool_routes import (
     shell_workspace_response,
 )
 from marin.inference.repository_snapshot import repository_snapshot_response
+from marin.inference.shellsim_runtime import prepare_tool_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -112,15 +116,19 @@ def build_dashboard_app(
     model_id: str,
     info: ServingInfo,
     request_timeout_seconds: float = 600.0,
+    shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
 ) -> Starlette:
-    """Build the Starlette app fronting a local serving backend.
+    """Prepare tool ports and build the app fronting a local serving backend.
 
     Args:
         upstream_base_url: Root URL of the backend's OpenAI server (without ``/v1``).
         model_id: The model id the backend reports; surfaced to the dashboard.
         info: Static serving metadata returned from ``/info``.
         request_timeout_seconds: Per-request timeout for upstream proxying.
+        shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
     """
+    logger.info("Preparing dashboard CPython and NumPy from %s", shellsim_catalog)
+    prepare_tool_runtime(shellsim_catalog)
     state: dict[str, httpx.AsyncClient] = {}
     chat_shares = _ChatShareStore()
 
@@ -185,7 +193,7 @@ def build_dashboard_app(
             media_type=upstream_response.headers.get("content-type"),
         )
 
-    return Starlette(
+    app = Starlette(
         routes=[
             Route("/", index),
             Route("/dashboard", index),
@@ -198,10 +206,13 @@ def build_dashboard_app(
             Route("/shell", shell_workspace_response, methods=["POST"]),
             Route("/shell/repository", repository_snapshot_response, methods=["POST"]),
             Route("/metrics", proxy, methods=["GET"]),
+            Route("/tokenize", proxy, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],
         lifespan=lifespan,
     )
+    app.state.shellsim_catalog = shellsim_catalog
+    return app
 
 
 def bind_serving_socket(host: str, port: int) -> socket.socket:

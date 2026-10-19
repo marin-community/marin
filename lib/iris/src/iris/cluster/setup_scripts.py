@@ -24,23 +24,11 @@ from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
-# This branch diverges from main here. Main uses `--link-mode copy` (#9366): copied
-# files keep an environment usable after `uv cache clean` removes its cache entries,
-# and on CoreWeave's node-local XFS a copy shares extents with the cache, so it costs
-# little space. Clone mode would do the same, but the task image's uv 0.10.3 drops
-# executable bits when it makes reflinks.
-#
-# On GCP hosts a copy shares nothing: each task's workdir holds a full ~6.5 GB vllm
-# environment. In September 2026 that filled 215 GB TPU v4 hosts in us-central2-b at
-# ~29 tasks; the disk health check then failed, Iris removed those workers, and every
-# task on them was killed. This branch restores `symlink`, main's mode before #9340:
-# tasks link to one copy in the node's uv cache, and symlinks keep executable bits.
-# The cost is main's first concern: a symlinked environment breaks if the cache is
-# cleaned while its task runs. GCP workers do not clean it automatically; CoreWeave's
-# node agent does, so do not submit CoreWeave jobs from this branch. Drop this
-# divergence if main starts choosing the link mode per platform.
-# Evidence: .agents/projects/joint_decode_worker_only_vllm/design.md.
-_UV_LINK_MODE_FLAG = "--link-mode symlink"
+UV_LINK_MODE_ENV = "UV_LINK_MODE"
+DEFAULT_UV_LINK_MODE = "copy"
+# The worker selects symlink mode on TPU hosts. Copy is the default for direct
+# callers and for Kubernetes, where the node agent can clean the shared cache.
+_UV_LINK_MODE_FLAG = f'--link-mode "${{{UV_LINK_MODE_ENV}:-{DEFAULT_UV_LINK_MODE}}}"'
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -114,16 +102,6 @@ def default_setup_script(
         'cd "$IRIS_WORKDIR"',
         "echo 'syncing deps'",
         sync_cmd,
-        # uv sync writes .pth links for editable path sources but does not invoke
-        # the build backend, so rust-dev mode (editable = true) leaves native
-        # extensions unbuilt. Build every maturin member explicitly.
-        "if grep -q 'editable = true' pyproject.toml 2>/dev/null; then"
-        " echo 'rust-dev mode: building native extensions';"
-        " for crate in lib/*/pyproject.toml; do"
-        ' grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null &&'
-        ' uv pip install -e "$(dirname "$crate")";'
-        " done;"
-        " fi",
     ]
     if pip_packages:
         pip_args = " ".join(shlex.quote(p) for p in pip_packages)
