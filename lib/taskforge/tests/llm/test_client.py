@@ -4,6 +4,7 @@
 import asyncio
 import json
 import socket
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
@@ -34,6 +35,7 @@ from taskforge.llm.policy import (
     LLMProviderConfig,
     Message,
 )
+from tests.conftest import ScriptedStream
 
 MESSAGES: list[Message] = [{"role": "user", "content": "hi"}]
 CONTEXT_ERROR = json.dumps(
@@ -423,3 +425,28 @@ def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_p
     assert completion.content == "second try"
     assert outcomes(completion) == [AttemptOutcome.STALLED, AttemptOutcome.COMPLETED]
     assert replaced_and_retired
+
+
+def test_a_long_reply_with_per_token_logprobs_streams_in_linear_time(fake_glm, run):
+    """The SDK's stream accumulator rebuilds the snapshot's whole logprobs list on every chunk, so a 4,000-token
+    reply took about 11 s of event-loop CPU; the client keeps logprobs in the raw events only."""
+    tokens = 4000
+
+    def token_chunk(finish_reason: str | None) -> dict:
+        logprobs = {"content": [{"token": "w", "logprob": -0.1, "bytes": [119], "top_logprobs": []}]}
+        return {
+            "choices": [{"index": 0, "delta": {"content": "w "}, "logprobs": logprobs, "finish_reason": finish_reason}]
+        }
+
+    events: list[dict | str] = [
+        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]},
+        *(token_chunk(None) for _ in range(tokens - 1)),
+        token_chunk("stop"),
+        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": tokens}},
+    ]
+    fake_glm.responses.append(ScriptedStream(events, True, None))
+    started = time.monotonic()
+    completion = run()
+    assert time.monotonic() - started < 4.0
+    assert completion.content == "w " * tokens
+    assert sum('"logprob"' in event for event in completion.attempts[-1].events) == tokens
