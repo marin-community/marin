@@ -15,7 +15,8 @@ papers:
 knobs:
 - shared_expert_gate
 trials:
-- variant: 2*sigmoid(x.w) per token, zero-init
+- id: t01
+  variant: 2*sigmoid(x.w) per token, zero-init
   rung: d512
   protocol: equal_steps
   batch: '47'

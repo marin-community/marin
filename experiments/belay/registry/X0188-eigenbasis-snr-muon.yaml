@@ -21,7 +21,8 @@ details:
 knobs:
 - eig_families
 trials:
-- variant: one-step held-out probe (no training)
+- id: t01
+  variant: one-step held-out probe (no training)
   rung: d512
   protocol: unknown
   batch: '141'
@@ -29,7 +30,8 @@ trials:
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5920413112
   baseline: Muon direction
   note: eig_snr overshoots far less mid-run (MLA +1.8 vs +26.2 e-4); Muon best early/late
-- variant: eig-muon control (no rails/Nesterov/MuonEq)
+- id: t02
+  variant: eig-muon control (no rails/Nesterov/MuonEq)
   rung: d512
   protocol: equal_steps
   batch: '144'
@@ -47,7 +49,8 @@ trials:
   step_time_change: 204 ms vs 184.3 ms
   tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
   note: plumbing control
-- variant: eig-snr
+- id: t03
+  variant: eig-snr
   rung: d512
   protocol: equal_steps
   batch: '144'
@@ -65,7 +68,8 @@ trials:
   step_time_change: 201 ms vs 184.3 ms
   tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
   note: -0.0039 vs eig-muon
-- variant: eig-snr, LR x1.5
+- id: t04
+  variant: eig-snr, LR x1.5
   rung: d512
   protocol: equal_steps
   batch: '144'
@@ -84,7 +88,8 @@ trials:
   step_time_change: 203 ms vs 184.3 ms
   tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
   note: +0.0118 vs eig-muon
-- variant: eig-soap (SOAP)
+- id: t05
+  variant: eig-soap (SOAP)
   rung: d512
   protocol: equal_steps
   batch: '144'
@@ -102,7 +107,8 @@ trials:
   step_time_change: 198 ms vs 184.3 ms
   tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
   note: -0.0037 vs eig-muon
-- variant: eig-soap, LR x1.5
+- id: t06
+  variant: eig-soap, LR x1.5
   rung: d512
   protocol: equal_steps
   batch: '144'
@@ -121,7 +127,8 @@ trials:
   step_time_change: 200 ms vs 184.3 ms
   tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
   note: +0.0097 vs eig-muon
-- variant: eig-mw (Muon dir, |SNR| weighted)
+- id: t07
+  variant: eig-mw (Muon dir, |SNR| weighted)
   rung: d512
   protocol: equal_steps
   batch: '144'
@@ -139,7 +146,8 @@ trials:
   step_time_change: 203 ms vs 184.3 ms
   tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
   note: -0.0016 vs eig-muon
-- variant: eig-pw (NS of L^-1/4 M pre-whitening)
+- id: t08
+  variant: eig-pw (NS of L^-1/4 M pre-whitening)
   rung: d512
   protocol: equal_steps
   batch: '144'
@@ -157,7 +165,8 @@ trials:
   step_time_change: 203 ms vs 184.3 ms
   tuned: snr/soap/mw/pw directions, LR x1 vs x1.5
   note: -0.0031 vs eig-muon
-- variant: eig-snr incl. routed experts
+- id: t09
+  variant: eig-snr incl. routed experts
   rung: d512
   protocol: equal_steps
   batch: '144'

@@ -13,7 +13,8 @@ tags:
 papers:
 - title: modded-nanogpt track 3
 trials:
-- variant: scale 0.3 / 0.6
+- id: t01
+  variant: scale 0.3 / 0.6
   rung: d512
   protocol: equal_steps
   batch: '98'

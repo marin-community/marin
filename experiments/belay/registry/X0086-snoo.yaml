@@ -17,7 +17,8 @@ papers:
 knobs:
 - snoo_period
 trials:
-- variant: K=20, eta 0.5, mu 0.5
+- id: t01
+  variant: K=20, eta 0.5, mu 0.5
   rung: d512
   protocol: equal_steps
   batch: '45'
@@ -37,7 +38,8 @@ trials:
     mu: '0.5'
   tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
   note: mid-run -0.017
-- variant: K=10
+- id: t02
+  variant: K=10
   rung: d512
   protocol: equal_steps
   batch: '45'
@@ -55,7 +57,8 @@ trials:
     snoo_period: '10'
   tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
   note: mid-run -0.008
-- variant: K=50
+- id: t03
+  variant: K=50
   rung: d512
   protocol: equal_steps
   batch: '45'
@@ -73,7 +76,8 @@ trials:
     snoo_period: '50'
   tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
   note: mid-run -0.025
-- variant: K=20, eta 0.8
+- id: t04
+  variant: K=20, eta 0.8
   rung: d512
   protocol: equal_steps
   batch: '45'
@@ -91,7 +95,8 @@ trials:
     snoo_period: '20'
     eta: '0.8'
   tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
-- variant: K=20, mu 0.25
+- id: t05
+  variant: K=20, mu 0.25
   rung: d512
   protocol: equal_steps
   batch: '45'
@@ -109,7 +114,8 @@ trials:
     snoo_period: '20'
     mu: '0.25'
   tuned: K 10/20/50; eta 0.5/0.8; mu 0.5/0.25
-- variant: K=50, outer LR 0.3
+- id: t06
+  variant: K=50, outer LR 0.3
   rung: d512
   protocol: equal_steps
   batch: '87'
@@ -131,7 +137,8 @@ trials:
     outer LR: '0.3'
   tuned: K 50/20
   note: closed
-- variant: K=20, outer LR 0.3
+- id: t07
+  variant: K=20, outer LR 0.3
   rung: d512
   protocol: equal_steps
   batch: '87'

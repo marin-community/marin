@@ -23,7 +23,8 @@ knobs:
 - norm_gain_overrides=final:exp
 - sigmoid_gain_norms=embed,embed2
 trials:
-- variant: e^w gains
+- id: t01
+  variant: e^w gains
   rung: d512
   protocol: equal_steps
   batch: '181'
@@ -39,7 +40,8 @@ trials:
     norm_gain_fn: exp
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
   note: final_norm climbs to 15
-- variant: softplus gains, LR x1.6
+- id: t02
+  variant: softplus gains, LR x1.6
   rung: d512
   protocol: equal_steps
   batch: '181'
@@ -55,7 +57,8 @@ trials:
     norm_gain_fn: softplus
     norm_gain_lr_mult: '1.6'
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
-- variant: 2*sigmoid gains, LR x2
+- id: t03
+  variant: 2*sigmoid gains, LR x2
   rung: d512
   protocol: equal_steps
   batch: '181'
@@ -72,7 +75,8 @@ trials:
     norm_gain_lr_mult: '2'
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
   note: pins final_norm at cap 2
-- variant: sigmoid gains on embed and embed2 norms
+- id: t04
+  variant: sigmoid gains on embed and embed2 norms
   rung: d512
   protocol: equal_steps
   batch: '182'
@@ -88,7 +92,8 @@ trials:
     sigmoid_gain_norms: embed,embed2
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
   note: neutral
-- variant: e^w gains, 2 seeds
+- id: t05
+  variant: e^w gains, 2 seeds
   rung: d512
   protocol: equal_steps
   batch: 185-187
@@ -106,7 +111,8 @@ trials:
     norm_gain_fn: exp
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
   note: does not replicate
-- variant: e^w gains, gain LR x0.5
+- id: t06
+  variant: e^w gains, gain LR x0.5
   rung: d512
   protocol: equal_steps
   batch: 185-187
@@ -122,7 +128,8 @@ trials:
     norm_gain_fn: exp
     norm_gain_lr_mult: '0.5'
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
-- variant: e^w gains, gain LR x2
+- id: t07
+  variant: e^w gains, gain LR x2
   rung: d512
   protocol: equal_steps
   batch: 185-187
@@ -138,7 +145,8 @@ trials:
     norm_gain_fn: exp
     norm_gain_lr_mult: '2'
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
-- variant: e^w on final_norm only
+- id: t08
+  variant: e^w on final_norm only
   rung: d512
   protocol: equal_steps
   batch: 185-187
@@ -153,7 +161,8 @@ trials:
   settings:
     norm_gain_overrides: final:exp
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
-- variant: e^w gains + no combine renorm
+- id: t09
+  variant: e^w gains + no combine renorm
   rung: d512
   protocol: equal_steps
   batch: 185-187

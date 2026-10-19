@@ -20,7 +20,8 @@ knobs:
 - mtp_mode=deepseek
 - future_aux
 trials:
-- variant: MTP depth 1, weight 0.3, linear head
+- id: t01
+  variant: MTP depth 1, weight 0.3, linear head
   rung: d512
   protocol: fixed_time
   batch: '18'
@@ -39,7 +40,8 @@ trials:
     weight: '0.3'
     head: shared lm_head + W norm(embed(t+1))
   step_time_change: -8.6% ex/s
-- variant: DeepSeek-style MTP lambda 0.3, half positions
+- id: t02
+  variant: DeepSeek-style MTP lambda 0.3, half positions
   rung: d512
   protocol: equal_steps
   batch: '99'
@@ -54,7 +56,8 @@ trials:
     positions: half
   step_time_change: -8 to -10% ex/s
   tuned: lambda 0.3 / 0.1
-- variant: DeepSeek-style MTP lambda 0.1, half positions
+- id: t03
+  variant: DeepSeek-style MTP lambda 0.1, half positions
   rung: d512
   protocol: equal_steps
   batch: '99'
@@ -70,7 +73,8 @@ trials:
     positions: half
   step_time_change: -8 to -10% ex/s
   tuned: lambda 0.3 / 0.1
-- variant: DeepSeek MTP weight 0.2
+- id: t04
+  variant: DeepSeek MTP weight 0.2
   rung: d512
   protocol: equal_steps
   batch: '163'
@@ -89,7 +93,8 @@ trials:
     weight: '0.2'
   step_time_change: +10% (188.4 ms)
   tuned: all positions vs 25%
-- variant: MTP weight 0.2 on 25% of positions
+- id: t05
+  variant: MTP weight 0.2 on 25% of positions
   rung: d512
   protocol: equal_steps
   batch: '163'
@@ -107,7 +112,8 @@ trials:
     positions: random 25%
   step_time_change: 179.1 ms (no PGLE)
   tuned: all positions vs 25%
-- variant: hash of t+2, w 0.05
+- id: t06
+  variant: hash of t+2, w 0.05
   rung: d512
   protocol: equal_steps
   batch: '205'
@@ -124,7 +130,8 @@ trials:
     weight: '0.05'
   step_time_change: 205.9 ms vs 190.9
   tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
-- variant: hash of (t+1,t+2) bigram, w 0.05
+- id: t07
+  variant: hash of (t+1,t+2) bigram, w 0.05
   rung: d512
   protocol: equal_steps
   batch: '205'
@@ -141,7 +148,8 @@ trials:
     weight: '0.05'
   step_time_change: 204.6 ms vs 190.9
   tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
-- variant: hash of t+1..t+3 trigram, w 0.05
+- id: t08
+  variant: hash of t+1..t+3 trigram, w 0.05
   rung: d512
   protocol: equal_steps
   batch: '205'
@@ -158,7 +166,8 @@ trials:
     weight: '0.05'
   step_time_change: 203.2 ms vs 190.9
   tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
-- variant: t+2 hash via 128 bottleneck
+- id: t09
+  variant: t+2 hash via 128 bottleneck
   rung: d512
   protocol: equal_steps
   batch: '205'
@@ -175,7 +184,8 @@ trials:
     weight: '0.05'
   step_time_change: 198.0 ms vs 190.9
   tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
-- variant: cosine regression on mean embed t+2,t+3
+- id: t10
+  variant: cosine regression on mean embed t+2,t+3
   rung: d512
   protocol: equal_steps
   batch: '205'
@@ -192,7 +202,8 @@ trials:
     weight: '0.05'
   step_time_change: 190.2 ms vs 190.9
   tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
-- variant: bigram hash, w 0.1 decay to 0 mid-run
+- id: t11
+  variant: bigram hash, w 0.1 decay to 0 mid-run
   rung: d512
   protocol: equal_steps
   batch: '205'
@@ -209,7 +220,8 @@ trials:
     weight: '0.1'
   step_time_change: 203.7 ms vs 190.9
   tuned: target (t+2 hash, bigram, trigram, bottleneck, embed regression); weight decay
-- variant: bigram hash, w 0.05 decay to 0 at end
+- id: t12
+  variant: bigram hash, w 0.05 decay to 0 at end
   rung: d512
   protocol: equal_steps
   batch: '205'

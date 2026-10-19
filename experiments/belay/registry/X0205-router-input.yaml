@@ -16,7 +16,8 @@ knobs:
 - router_on_latent
 - router_on_embed
 trials:
-- variant: router on RMS-normed MoE latent (256)
+- id: t01
+  variant: router on RMS-normed MoE latent (256)
   rung: d512
   protocol: equal_steps
   batch: '182'
@@ -31,7 +32,8 @@ trials:
   settings:
     router_on_latent: 'true'
   step_time_change: ~0 (179.2 vs 178.1 ms)
-- variant: router on token embedding only
+- id: t02
+  variant: router on token embedding only
   rung: d512
   protocol: equal_steps
   batch: '182'

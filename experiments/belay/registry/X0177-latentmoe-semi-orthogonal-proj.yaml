@@ -26,7 +26,8 @@ intake:
   author: RavnaBergsndot
   approved_by: ClassicLarry
 trials:
-- variant: semi-orthogonal init, trained by MuonH (ortho)
+- id: t01
+  variant: semi-orthogonal init, trained by MuonH (ortho)
   rung: d512
   protocol: equal_steps
   batch: '123'
@@ -41,7 +42,8 @@ trials:
     latent_orthogonal_init: 'true'
   step_time_change: ex/s 674 / 654
   tuned: ortho init / frozen / Skewon
-- variant: 'option B: orthogonal init, projections frozen (orthofrz)'
+- id: t02
+  variant: 'option B: orthogonal init, projections frozen (orthofrz)'
   rung: d512
   protocol: equal_steps
   batch: '123'
@@ -57,7 +59,8 @@ trials:
     latent_proj_update: frozen
   step_time_change: ex/s 672 / 664
   tuned: ortho init / frozen / Skewon
-- variant: 'option A: orthogonal init, Skewon Stiefel updates'
+- id: t03
+  variant: 'option A: orthogonal init, Skewon Stiefel updates'
   rung: d512
   protocol: equal_steps
   batch: '123'

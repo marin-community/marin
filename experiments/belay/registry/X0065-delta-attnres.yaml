@@ -17,7 +17,8 @@ knobs:
 - attn_res_additive
 - attn_res_source_delta
 trials:
-- variant: Delta AttnRes as specified (full + additive, no final gate)
+- id: t01
+  variant: Delta AttnRes as specified (full + additive, no final gate)
   rung: d512
   protocol: equal_steps
   batch: '28'
@@ -35,7 +36,8 @@ trials:
     attn_res_additive: 'true'
     attn_res_final_mode: sum
   note: additive routing cannot suppress sources
-- variant: Delta Block (block AttnRes + additive)
+- id: t02
+  variant: Delta Block (block AttnRes + additive)
   rung: d512
   protocol: equal_steps
   batch: '28'
@@ -52,7 +54,8 @@ trials:
   settings:
     attn_res_additive: 'true'
     attn_res_final_mode: sum
-- variant: full AttnRes + plain residual as extra source
+- id: t03
+  variant: full AttnRes + plain residual as extra source
   rung: d512
   protocol: equal_steps
   batch: '28'
@@ -66,7 +69,8 @@ trials:
   - 3.0789
   wandb:
   - lc1-b28-fullstream-r
-- variant: output-delta sources (consecutive differences)
+- id: t04
+  variant: output-delta sources (consecutive differences)
   rung: d512
   protocol: equal_steps
   batch: '29'

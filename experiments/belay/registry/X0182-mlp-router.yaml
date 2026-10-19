@@ -12,7 +12,8 @@ tags:
 details:
 - 32 hidden neurons, SiLU, W_b zero-init
 trials:
-- variant: residual 32-neuron MLP router, zero-init output (rmlp32)
+- id: t01
+  variant: residual 32-neuron MLP router, zero-init output (rmlp32)
   rung: d512
   protocol: equal_steps
   batch: '133'

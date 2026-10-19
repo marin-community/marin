@@ -13,7 +13,8 @@ tags:
 knobs:
 - --pipeline-depth
 trials:
-- variant: pipeline depth 1
+- id: t01
+  variant: pipeline depth 1
   rung: d512
   protocol: equal_steps
   batch: 157-160

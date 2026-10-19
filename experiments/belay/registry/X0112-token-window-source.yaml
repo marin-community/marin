@@ -15,7 +15,8 @@ knobs:
 - window_embed_dim
 - window_embed_mode=add_embed
 trials:
-- variant: own AttnRes source, n=16 (32 tokens)
+- id: t01
+  variant: own AttnRes source, n=16 (32 tokens)
   rung: d512
   protocol: equal_steps
   batch: '65'
@@ -34,7 +35,8 @@ trials:
   step_time_change: -3% ex/s
   tuned: n=16 vs 32
   note: gates starved it; 704 vs 728 ex/s
-- variant: own AttnRes source, n=32 (16 tokens)
+- id: t02
+  variant: own AttnRes source, n=32 (16 tokens)
   rung: d512
   protocol: equal_steps
   batch: '65'
@@ -53,7 +55,8 @@ trials:
   step_time_change: -3% ex/s
   tuned: n=16 vs 32
   note: 706 ex/s
-- variant: added into embedding source, n=16
+- id: t03
+  variant: added into embedding source, n=16
   rung: d512
   protocol: equal_steps
   batch: '65'
@@ -72,7 +75,8 @@ trials:
     window_embed_mode: add_embed
   tuned: n=16 vs 32
   note: neutral
-- variant: added into embedding source, n=32
+- id: t04
+  variant: added into embedding source, n=32
   rung: d512
   protocol: equal_steps
   batch: '65'

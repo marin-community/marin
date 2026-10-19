@@ -17,7 +17,8 @@ papers:
 knobs:
 - coefficient_type=aol
 trials:
-- variant: AOL NS (buggy first version)
+- id: t01
+  variant: AOL NS (buggy first version)
   rung: d512
   protocol: equal_steps
   batch: '77'
@@ -34,7 +35,8 @@ trials:
   settings:
     coefficient_type: aol
   note: 'diverged: implementation bug flipped singular values'
-- variant: Turbo-Muon AOL preconditioning + 4 NS steps (fixed)
+- id: t02
+  variant: Turbo-Muon AOL preconditioning + 4 NS steps (fixed)
   rung: d512
   protocol: equal_steps
   batch: '78'

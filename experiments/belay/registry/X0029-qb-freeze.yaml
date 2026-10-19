@@ -13,7 +13,8 @@ tags:
 knobs:
 - qb_freeze_step
 trials:
-- variant: freeze QB router bias at step 1408
+- id: t01
+  variant: freeze QB router bias at step 1408
   rung: d512
   protocol: equal_steps
   batch: '5'

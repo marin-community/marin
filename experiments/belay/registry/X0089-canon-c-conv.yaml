@@ -16,7 +16,8 @@ papers:
 knobs:
 - sconv_sites=attn,mlp,mlp_in
 trials:
-- variant: conv on normed MoE input
+- id: t01
+  variant: conv on normed MoE input
   rung: d512
   protocol: equal_steps
   batch: '47'

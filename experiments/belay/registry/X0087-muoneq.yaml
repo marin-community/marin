@@ -19,7 +19,8 @@ details:
 knobs:
 - muon_pre_norm=in
 trials:
-- variant: per-output-unit normalization
+- id: t01
+  variant: per-output-unit normalization
   rung: d512
   protocol: equal_steps
   batch: '46'
@@ -36,7 +37,8 @@ trials:
   settings:
     muon_pre_norm: out
   tuned: in vs out
-- variant: per-input-unit normalization
+- id: t02
+  variant: per-input-unit normalization
   rung: d512
   protocol: equal_steps
   batch: '46'
@@ -57,7 +59,8 @@ trials:
     muon_pre_norm: in
   tuned: in vs out
   note: free; carried into stack runs
-- variant: per-input, d768
+- id: t03
+  variant: per-input, d768
   rung: d768
   protocol: data_matched
   batch: '56'
@@ -74,7 +77,8 @@ trials:
   settings:
     muon_pre_norm: in
   note: 66% log-k retention
-- variant: MuonEq off (ablation)
+- id: t04
+  variant: MuonEq off (ablation)
   rung: d512
   protocol: equal_steps
   batch: '153'

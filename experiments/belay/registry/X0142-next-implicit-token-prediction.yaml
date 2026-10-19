@@ -14,7 +14,8 @@ papers:
 - arxiv: '2605.24956'
   title: NITP
 trials:
-- variant: NITP lambda 1
+- id: t01
+  variant: NITP lambda 1
   rung: d512
   protocol: equal_steps
   batch: '88'
@@ -35,7 +36,8 @@ trials:
     NITP lambda: '1'
   tuned: lambda 1/0.3/0.1
   note: cosine 0.77
-- variant: NITP lambda 0.3
+- id: t02
+  variant: NITP lambda 0.3
   rung: d512
   protocol: equal_steps
   batch: '88'
@@ -55,7 +57,8 @@ trials:
   settings:
     NITP lambda: '0.3'
   tuned: lambda 1/0.3/0.1
-- variant: NITP lambda 0.1
+- id: t03
+  variant: NITP lambda 0.1
   rung: d512
   protocol: equal_steps
   batch: '88'

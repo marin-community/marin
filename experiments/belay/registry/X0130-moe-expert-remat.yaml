@@ -13,7 +13,8 @@ tags:
 knobs:
 - moe_expert_remat=false
 trials:
-- variant: no expert recompute
+- id: t01
+  variant: no expert recompute
   rung: d512
   protocol: equal_steps
   batch: '79'

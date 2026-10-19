@@ -16,7 +16,8 @@ papers:
 knobs:
 - adam_cautious
 trials:
-- variant: all plain-Adam groups
+- id: t01
+  variant: all plain-Adam groups
   rung: d512
   protocol: equal_steps
   batch: '58'

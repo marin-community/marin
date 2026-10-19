@@ -14,7 +14,8 @@ tags:
 knobs:
 - moe_expert_waves
 trials:
-- variant: 2 dispatch waves (profile)
+- id: t01
+  variant: 2 dispatch waves (profile)
   rung: d512
   protocol: unknown
   batch: '74'
@@ -29,7 +30,8 @@ trials:
   step_time_change: -1% (171.0 ms)
   tuned: waves 1/2/4
   note: little all-to-all overlap
-- variant: 4 dispatch waves (profile)
+- id: t02
+  variant: 4 dispatch waves (profile)
   rung: d512
   protocol: unknown
   batch: '74'
@@ -43,7 +45,8 @@ trials:
     moe_expert_waves: '4'
   step_time_change: +4% (179.1 ms)
   tuned: waves 1/2/4
-- variant: PGLE + 2 waves
+- id: t03
+  variant: PGLE + 2 waves
   rung: d512
   protocol: equal_steps
   batch: '74'

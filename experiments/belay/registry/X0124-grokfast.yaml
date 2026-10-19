@@ -13,7 +13,8 @@ papers:
 - arxiv: '2405.20233'
   title: Grokfast
 trials:
-- variant: lambda 2, every group
+- id: t01
+  variant: lambda 2, every group
   rung: d512
   protocol: equal_steps
   batch: '77'
@@ -36,7 +37,8 @@ trials:
   tuned: lambda 2 all groups vs 1 Adam only
   note: delta computed from losses vs base; acts like higher Muon momentum
   derived: true
-- variant: lambda 1, Adam groups only
+- id: t02
+  variant: lambda 1, Adam groups only
   rung: d512
   protocol: equal_steps
   batch: '78'

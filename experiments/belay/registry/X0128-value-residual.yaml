@@ -14,7 +14,8 @@ papers:
 - arxiv: '2410.17897'
   title: ResFormer
 trials:
-- variant: all layers 1-5, lambda init 0.5/0.5
+- id: t01
+  variant: all layers 1-5, lambda init 0.5/0.5
   rung: d512
   protocol: equal_steps
   batch: '77'
@@ -36,7 +37,8 @@ trials:
     lambda1/lambda2 init: 0.5/0.5
   tuned: all layers vs MLA only
   note: KDA layers switch it off; MLA L5 uses mostly layer-0 values
-- variant: MLA layers only
+- id: t02
+  variant: MLA layers only
   rung: d512
   protocol: equal_steps
   batch: '77'

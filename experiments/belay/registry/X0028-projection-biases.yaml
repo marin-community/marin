@@ -14,7 +14,8 @@ details:
 - 'sites: KDA q/k/v, MLA q, KV latent, attn out, MoE out'
 - zero init, Adam
 trials:
-- variant: q/k/v + attn out + MoE out biases
+- id: t01
+  variant: q/k/v + attn out + MoE out biases
   rung: d512
   protocol: equal_steps
   batch: '5'

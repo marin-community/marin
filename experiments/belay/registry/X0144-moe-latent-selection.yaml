@@ -21,7 +21,8 @@ knobs:
 - latent_select_layers
 - latent_select_plus_proj
 trials:
-- variant: first-half read selection at d768
+- id: t01
+  variant: first-half read selection at d768
   rung: d768
   protocol: equal_steps
   batch: '102'
@@ -37,7 +38,8 @@ trials:
   settings:
     read: first half channels
   note: mean delta; neutral at d768
-- variant: first 256 hidden channels, routed width 1x (384)
+- id: t02
+  variant: first 256 hidden channels, routed width 1x (384)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -55,7 +57,8 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- variant: first 256 hidden channels, routed width 2x (768)
+- id: t03
+  variant: first 256 hidden channels, routed width 2x (768)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -73,7 +76,8 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- variant: first 256 hidden channels, routed width 4x (1536)
+- id: t04
+  variant: first 256 hidden channels, routed width 4x (1536)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -91,7 +95,8 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- variant: first 256 hidden channels, routed width 8x (3072)
+- id: t05
+  variant: first 256 hidden channels, routed width 8x (3072)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -109,7 +114,8 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- variant: first 256 hidden channels, routed width 16x (6144)
+- id: t06
+  variant: first 256 hidden channels, routed width 16x (6144)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -128,7 +134,8 @@ trials:
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
   note: 'vs projection: within 0.002 to 8x, +0.0038 at 16x'
-- variant: select first half, all layers
+- id: t07
+  variant: select first half, all layers
   rung: d512
   protocol: equal_steps
   batch: '95'
@@ -150,7 +157,8 @@ trials:
     latent_select_pattern: first
   tuned: first/random/rotating, layers, +proj
   note: removes w_latent_down (~2% FLOPs)
-- variant: random half per layer
+- id: t08
+  variant: random half per layer
   rung: d512
   protocol: equal_steps
   batch: '95'
@@ -173,7 +181,8 @@ trials:
   step_time_change: 1-4% slower
   tuned: first/random/rotating, layers, +proj
   note: same half every layer is better
-- variant: rotating window per layer
+- id: t09
+  variant: rotating window per layer
   rung: d512
   protocol: equal_steps
   batch: '95'
@@ -195,7 +204,8 @@ trials:
     latent_select_pattern: rotating
   step_time_change: 1-4% slower
   tuned: first/random/rotating, layers, +proj
-- variant: select in KDA layers only
+- id: t10
+  variant: select in KDA layers only
   rung: d512
   protocol: equal_steps
   batch: '95'
@@ -216,7 +226,8 @@ trials:
     latent_select: 'true'
     latent_select_layers: kda
   tuned: first/random/rotating, layers, +proj
-- variant: select in global layers only
+- id: t11
+  variant: select in global layers only
   rung: d512
   protocol: equal_steps
   batch: '95'
@@ -237,7 +248,8 @@ trials:
     latent_select: 'true'
     latent_select_layers: global
   tuned: first/random/rotating, layers, +proj
-- variant: select first half + learned projection
+- id: t12
+  variant: select first half + learned projection
   rung: d512
   protocol: equal_steps
   batch: '95'
@@ -259,7 +271,8 @@ trials:
     latent_select_plus_proj: 'true'
   tuned: first/random/rotating, layers, +proj
   note: most consistent but same FLOPs as candidate 8
-- variant: d768 select first half (widths scaled to hidden)
+- id: t13
+  variant: d768 select first half (widths scaled to hidden)
   rung: d768
   protocol: equal_steps
   batch: '95'
@@ -284,7 +297,8 @@ trials:
     --ema-last-steps: '2600'
   tuned: selection vs projection at d768
   note: no delta column given; reference arm is the projection run
-- variant: write selection (first 256 channels, no w_latent_up)
+- id: t14
+  variant: write selection (first 256 channels, no w_latent_up)
   rung: d512
   protocol: equal_steps
   batch: '96'
@@ -305,7 +319,8 @@ trials:
     latent_write_select: 'true'
     routed output scale: '0.32'
   tuned: write vs read+write selection
-- variant: read + write selection
+- id: t15
+  variant: read + write selection
   rung: d512
   protocol: equal_steps
   batch: '96'

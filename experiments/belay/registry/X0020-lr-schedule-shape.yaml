@@ -31,7 +31,8 @@ knobs:
 - min_lr_ratio
 - lr_schedule=cosine
 trials:
-- variant: min LR ratio 0 (vs 0.05)
+- id: t01
+  variant: min LR ratio 0 (vs 0.05)
   rung: d512
   protocol: equal_steps
   batch: '3'
@@ -47,7 +48,8 @@ trials:
   - lc1-b03-min0
   settings:
     min LR ratio: 0 (vs 0.05)
-- variant: cosine decay to 0
+- id: t02
+  variant: cosine decay to 0
   rung: d512
   protocol: equal_steps
   batch: '4'
@@ -63,7 +65,8 @@ trials:
   - lc1-b04-cos0b
   settings:
     schedule: cosine decay to 0
-- variant: WSD 20% cooldown, peak x1.0
+- id: t03
+  variant: WSD 20% cooldown, peak x1.0
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -82,7 +85,8 @@ trials:
     decay: '0.2'
     peak LR: x1.0
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
-- variant: WSD 20% cooldown, peak x0.7
+- id: t04
+  variant: WSD 20% cooldown, peak x0.7
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -101,7 +105,8 @@ trials:
     decay: '0.2'
     peak LR: x0.7
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
-- variant: WSD 20% cooldown, peak x1.4
+- id: t05
+  variant: WSD 20% cooldown, peak x1.4
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -120,7 +125,8 @@ trials:
     decay: '0.2'
     peak LR: x1.4
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
-- variant: WSD 20% cooldown, peak x0.5
+- id: t06
+  variant: WSD 20% cooldown, peak x0.5
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -139,7 +145,8 @@ trials:
     decay: '0.2'
     peak LR: x0.5
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
-- variant: WSD 20% cooldown, peak x0.35
+- id: t07
+  variant: WSD 20% cooldown, peak x0.35
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -158,7 +165,8 @@ trials:
     decay: '0.2'
     peak LR: x0.35
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
-- variant: WSD 50% cooldown, peak x0.7
+- id: t08
+  variant: WSD 50% cooldown, peak x0.7
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -177,7 +185,8 @@ trials:
     decay: '0.5'
     peak LR: x0.7
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
-- variant: WSD 50% cooldown, peak x1.0
+- id: t09
+  variant: WSD 50% cooldown, peak x1.0
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -196,7 +205,8 @@ trials:
     decay: '0.5'
     peak LR: x1.0
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
-- variant: cosine to 0.05x, peak x0.8
+- id: t10
+  variant: cosine to 0.05x, peak x0.8
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -215,7 +225,8 @@ trials:
     min LR: 0.05x
     peak LR: x0.8
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
-- variant: cosine to 0.05x, peak x1.25
+- id: t11
+  variant: cosine to 0.05x, peak x1.25
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -234,7 +245,8 @@ trials:
     min LR: 0.05x
     peak LR: x1.25
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
-- variant: cosine to 0.05x, peak x1.0
+- id: t12
+  variant: cosine to 0.05x, peak x1.0
   rung: d512
   protocol: equal_steps
   batch: 16-17
@@ -257,7 +269,8 @@ trials:
     peak LR: x1.0
   tuned: WSD 20% x0.35-x1.4; WSD 50% x0.7/x1.0; cosine x0.8/x1.0/x1.25
   note: mean -0.002, within noise; linear stays
-- variant: final LR ratio 0.3, no EMA
+- id: t13
+  variant: final LR ratio 0.3, no EMA
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -274,7 +287,8 @@ trials:
   settings:
     min_lr_ratio: '0.3'
   tuned: floor 0.05/0.1/0.15/0.3
-- variant: LR floor 0 (min_lr_ratio 0)
+- id: t14
+  variant: LR floor 0 (min_lr_ratio 0)
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -291,7 +305,8 @@ trials:
   settings:
     min_lr_ratio: '0'
   tuned: floor 0 vs 0.05
-- variant: LR floor 10% of peak (min_lr_ratio 0.1)
+- id: t15
+  variant: LR floor 10% of peak (min_lr_ratio 0.1)
   rung: d512
   protocol: equal_steps
   batch: '64'
@@ -312,7 +327,8 @@ trials:
     min_lr_ratio: '0.1'
   tuned: 0.1 vs base 0.05
   note: does not replicate
-- variant: cosine Adam schedule
+- id: t16
+  variant: cosine Adam schedule
   rung: d512
   protocol: equal_steps
   batch: '87'
@@ -332,7 +348,8 @@ trials:
   settings:
     lr_schedule: cosine
   note: free; to next consolidation
-- variant: warmup 5% (about 141 steps)
+- id: t17
+  variant: warmup 5% (about 141 steps)
   rung: d512
   protocol: equal_steps
   batch: '127'
@@ -347,7 +364,8 @@ trials:
     warmup: 5%
   tuned: warmup 1% (base) / 5% / 15%
   note: tests whether early MuonH overshoot costs loss
-- variant: warmup 15% (about 423 steps)
+- id: t18
+  variant: warmup 15% (about 423 steps)
   rung: d512
   protocol: equal_steps
   batch: '127'
@@ -362,7 +380,8 @@ trials:
     warmup: 15%
   tuned: warmup 1% (base) / 5% / 15%
   note: removes overshoot during warmup, returns to same regime by step 700, ends worse
-- variant: PowerCool MuonH LR, flat to 18%
+- id: t19
+  variant: PowerCool MuonH LR, flat to 18%
   rung: d512
   protocol: equal_steps
   batch: '154'
@@ -381,7 +400,8 @@ trials:
   step_time_change: 171.9 vs 171.6 ms
   tuned: flat to 18% vs 35%
   note: from modded-nanogpt track 3
-- variant: PowerCool MuonH LR, flat to 35%
+- id: t20
+  variant: PowerCool MuonH LR, flat to 35%
   rung: d512
   protocol: equal_steps
   batch: '154'
@@ -399,7 +419,8 @@ trials:
     MuonH LR: flat to 35%, then power-1.2 cooldown
   step_time_change: 172.1 vs 171.6 ms
   tuned: flat to 18% vs 35%
-- variant: min LR ratio 0.1, EMA 0.995/1000
+- id: t21
+  variant: min LR ratio 0.1, EMA 0.995/1000
   rung: d512
   protocol: equal_steps
   batch: '199'
@@ -415,7 +436,8 @@ trials:
     min LR ratio: '0.1'
   tuned: floor 0.05 vs 0.1
   note: raw final 2.9694, blend 2.9542
-- variant: Adam warmup 3.5%, peak x1
+- id: t22
+  variant: Adam warmup 3.5%, peak x1
   rung: d512
   protocol: equal_steps
   batch: '203'
@@ -430,7 +452,8 @@ trials:
     Adam peak: x1
   tuned: warmup 3.5%/10% x peak x1/x1.5/x2
   note: nothing to adopt
-- variant: Adam warmup 3.5%, peak x1.5
+- id: t23
+  variant: Adam warmup 3.5%, peak x1.5
   rung: d512
   protocol: equal_steps
   batch: '203'
@@ -445,7 +468,8 @@ trials:
     Adam peak: x1.5
   tuned: warmup 3.5%/10% x peak x1/x1.5/x2
   note: nothing to adopt
-- variant: Adam warmup 3.5%, peak x2
+- id: t24
+  variant: Adam warmup 3.5%, peak x2
   rung: d512
   protocol: equal_steps
   batch: '203'
@@ -460,7 +484,8 @@ trials:
     Adam peak: x2
   tuned: warmup 3.5%/10% x peak x1/x1.5/x2
   note: nothing to adopt
-- variant: Adam warmup 10%, peak x1
+- id: t25
+  variant: Adam warmup 10%, peak x1
   rung: d512
   protocol: equal_steps
   batch: '203'
@@ -475,7 +500,8 @@ trials:
     Adam peak: x1
   tuned: warmup 3.5%/10% x peak x1/x1.5/x2
   note: nothing to adopt
-- variant: Adam warmup 10%, peak x1.5
+- id: t26
+  variant: Adam warmup 10%, peak x1.5
   rung: d512
   protocol: equal_steps
   batch: '203'
@@ -490,7 +516,8 @@ trials:
     Adam peak: x1.5
   tuned: warmup 3.5%/10% x peak x1/x1.5/x2
   note: nothing to adopt
-- variant: Adam warmup 10%, peak x2
+- id: t27
+  variant: Adam warmup 10%, peak x2
   rung: d512
   protocol: equal_steps
   batch: '203'

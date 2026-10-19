@@ -14,7 +14,8 @@ knobs:
 - attn_res_pull
 - attn_res_pull_embed
 trials:
-- variant: 'pull AttnRes: static keys, residual-stream query'
+- id: t01
+  variant: 'pull AttnRes: static keys, residual-stream query'
   rung: d512
   protocol: equal_steps
   batch: '18'
@@ -33,7 +34,8 @@ trials:
     key init: zero
     key LR: Adam 0.1x
   step_time_change: -4% ex/s
-- variant: push AttnRes + pulled embedding logit
+- id: t02
+  variant: push AttnRes + pulled embedding logit
   rung: d512
   protocol: equal_steps
   batch: '18'

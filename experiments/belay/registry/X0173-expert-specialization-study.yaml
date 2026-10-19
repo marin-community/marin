@@ -27,7 +27,8 @@ knobs:
 - router_bias_seed=L:E:V:b
 - --routing-dump-steps
 trials:
-- variant: 'analysis model: top-1 of 8 x 3072 wide, sigmoid_raw'
+- id: t01
+  variant: 'analysis model: top-1 of 8 x 3072 wide, sigmoid_raw'
   rung: d512
   protocol: equal_steps
   batch: '110'
@@ -46,7 +47,8 @@ trials:
     expert width: '3072'
     router_combine: sigmoid_raw
   note: I(tok;e)/H(e) 0.51-0.73, ~2.5x prev-token; specialization set by ~10% of training
-- variant: tie expert 3 to token "1" in every layer
+- id: t02
+  variant: tie expert 3 to token "1" in every layer
   rung: d512
   protocol: equal_steps
   batch: '111'
@@ -61,7 +63,8 @@ trials:
     router_embed_tie: '*:3:1 (id 24)'
   tuned: tied token digit / newline / LaTeX / control; tie vs bias
   note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
-- variant: tie expert 3 to newline in every layer
+- id: t03
+  variant: tie expert 3 to newline in every layer
   rung: d512
   protocol: equal_steps
   batch: '111'
@@ -76,7 +79,8 @@ trials:
     router_embed_tie: '*:3:\n (id 206)'
   tuned: tied token digit / newline / LaTeX / control; tie vs bias
   note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
-- variant: tie expert 3 to "mathbf" in every layer
+- id: t04
+  variant: tie expert 3 to "mathbf" in every layer
   rung: d512
   protocol: equal_steps
   batch: '111'
@@ -91,7 +95,8 @@ trials:
     router_embed_tie: '*:3:mathbf (id 3169)'
   tuned: tied token digit / newline / LaTeX / control; tie vs bias
   note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
-- variant: tie expert 3 to " table" in every layer (control)
+- id: t05
+  variant: tie expert 3 to " table" in every layer (control)
   rung: d512
   protocol: equal_steps
   batch: '111'
@@ -106,7 +111,8 @@ trials:
     router_embed_tie: '*:3: table (id 3708)'
   tuned: tied token digit / newline / LaTeX / control; tie vs bias
   note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
-- variant: fixed +4 logit bias on expert 3 for token "1"
+- id: t06
+  variant: fixed +4 logit bias on expert 3 for token "1"
   rung: d512
   protocol: equal_steps
   batch: '111'
@@ -121,7 +127,8 @@ trials:
     router_bias_seed: expert 3, token 1, +4
   tuned: tie vs bias
   note: weak seed; QB and router override it
-- variant: digit '1' tie, layer 0 only
+- id: t07
+  variant: digit '1' tie, layer 0 only
   rung: d512
   protocol: equal_steps
   batch: '113'
@@ -133,7 +140,8 @@ trials:
   - -0.0003
   - 0.0003
   note: P(e3|class) L0 0.97/0.80; deeper layers free
-- variant: newline tie, layer 0 only
+- id: t08
+  variant: newline tie, layer 0 only
   rung: d512
   protocol: equal_steps
   batch: '113'
@@ -145,7 +153,8 @@ trials:
   - -0.0014
   - -0.0016
   note: P(e3|class) L0 1.00/1.00
-- variant: two ties (digit, newline), every layer
+- id: t09
+  variant: two ties (digit, newline), every layer
   rung: d512
   protocol: equal_steps
   batch: '113'
@@ -157,7 +166,8 @@ trials:
   - 0.032
   - 0.042
   note: fixing a quarter of experts in every layer costs loss
-- variant: top-1 of 8 study model
+- id: t10
+  variant: top-1 of 8 study model
   rung: d512
   protocol: equal_steps
   batch: '113'
@@ -169,7 +179,8 @@ trials:
   - 0.107
   - 0.11
   note: I(token;expert)/H(expert) 0.51-0.73 by layer
-- variant: top-1 of 32 study model
+- id: t11
+  variant: top-1 of 32 study model
   rung: d512
   protocol: equal_steps
   batch: '113'
@@ -181,7 +192,8 @@ trials:
   - 0.067
   - 0.068
   note: I/H 0.54-0.73
-- variant: top-2 of 64 study model
+- id: t12
+  variant: top-2 of 64 study model
   rung: d512
   protocol: equal_steps
   batch: '113'
@@ -193,7 +205,8 @@ trials:
   - 0.047
   - 0.048
   note: I/H 0.43-0.55
-- variant: LaTeX class-centroid tie, every layer
+- id: t13
+  variant: LaTeX class-centroid tie, every layer
   rung: d512
   protocol: equal_steps
   batch: '116'
@@ -206,7 +219,8 @@ trials:
   - 0.0007
   tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
   note: P(e3|class) L0 0.80/0.96
-- variant: LaTeX class-centroid tie, layer 0 only
+- id: t14
+  variant: LaTeX class-centroid tie, layer 0 only
   rung: d512
   protocol: equal_steps
   batch: '116'
@@ -219,7 +233,8 @@ trials:
   - -0.0029
   tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
   note: P(e3|class) L0 0.98/0.97; seed 1 from follow-up comment
-- variant: digit class-centroid tie, every layer
+- id: t15
+  variant: digit class-centroid tie, every layer
   rung: d512
   protocol: equal_steps
   batch: '116'
@@ -232,7 +247,8 @@ trials:
   - -0.0024
   tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
   note: holds digit class in every layer, no loss cost
-- variant: digit '1' tie every layer, released at step 250
+- id: t16
+  variant: digit '1' tie every layer, released at step 250
   rung: d512
   protocol: equal_steps
   batch: '116'
@@ -245,7 +261,8 @@ trials:
   - 0.0
   tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
   note: seeded partition persists after release
-- variant: digit '1' tie every layer, released at step 1000
+- id: t17
+  variant: digit '1' tie every layer, released at step 1000
   rung: d512
   protocol: equal_steps
   batch: '116'

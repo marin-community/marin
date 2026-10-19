@@ -22,7 +22,8 @@ details:
 knobs:
 - logit_soft_cap=10
 trials:
-- variant: tanh cap 15
+- id: t01
+  variant: tanh cap 15
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -42,7 +43,8 @@ trials:
   settings:
     logit_soft_cap: '15'
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: tanh cap 30
+- id: t02
+  variant: tanh cap 30
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -59,7 +61,8 @@ trials:
   settings:
     logit_soft_cap: '30'
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: tanh cap 15, d768
+- id: t03
+  variant: tanh cap 15, d768
   rung: d768
   protocol: data_matched
   batch: '32'
@@ -76,7 +79,8 @@ trials:
   settings:
     logit_soft_cap: '15'
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: tanh cap 10
+- id: t04
+  variant: tanh cap 10
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -96,7 +100,8 @@ trials:
   settings:
     logit_soft_cap: '10'
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: tanh cap 7
+- id: t05
+  variant: tanh cap 7
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -113,7 +118,8 @@ trials:
   settings:
     logit_soft_cap: '7'
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: tanh cap 5
+- id: t06
+  variant: tanh cap 5
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -131,7 +137,8 @@ trials:
     logit_soft_cap: '5'
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
   note: cap this tight breaks training
-- variant: tanh cap 10, d768
+- id: t07
+  variant: tanh cap 10, d768
   rung: d768
   protocol: data_matched
   batch: '32'
@@ -148,7 +155,8 @@ trials:
   settings:
     logit_soft_cap: '10'
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: tanh cap 12
+- id: t08
+  variant: tanh cap 12
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -165,7 +173,8 @@ trials:
   settings:
     logit_soft_cap: '12'
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: tanh cap 20
+- id: t09
+  variant: tanh cap 20
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -182,7 +191,8 @@ trials:
   settings:
     logit_soft_cap: '20'
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: asymmetric 23*sigmoid((z+5)/7.5)
+- id: t10
+  variant: asymmetric 23*sigmoid((z+5)/7.5)
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -199,7 +209,8 @@ trials:
   settings:
     form: 23*sigmoid((z+5)/7.5)
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: asymmetric 15*sigmoid((z+5)/7.5)
+- id: t11
+  variant: asymmetric 15*sigmoid((z+5)/7.5)
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -216,7 +227,8 @@ trials:
   settings:
     form: 15*sigmoid((z+5)/7.5)
   tuned: tanh cap 5/7/10/12/15/20/30; asymmetric 15/23
-- variant: tanh cap 9
+- id: t12
+  variant: tanh cap 9
   rung: d512
   protocol: equal_steps
   batch: '43'
@@ -233,7 +245,8 @@ trials:
   settings:
     logit_soft_cap: '9'
   tuned: cap 9/10/11
-- variant: tanh cap 11
+- id: t13
+  variant: tanh cap 11
   rung: d512
   protocol: equal_steps
   batch: '43'
@@ -250,7 +263,8 @@ trials:
   settings:
     logit_soft_cap: '11'
   tuned: cap 9/10/11
-- variant: cap 8
+- id: t14
+  variant: cap 8
   rung: d512
   protocol: equal_steps
   batch: '67'
@@ -267,7 +281,8 @@ trials:
   settings:
     logit_soft_cap: '8'
   tuned: cap 8/10/12
-- variant: cap 12
+- id: t15
+  variant: cap 12
   rung: d512
   protocol: equal_steps
   batch: '67'
@@ -284,7 +299,8 @@ trials:
   settings:
     logit_soft_cap: '12'
   tuned: cap 8/10/12
-- variant: tanh cap 10, d1024 gate 2
+- id: t16
+  variant: tanh cap 10, d1024 gate 2
   rung: d1024
   protocol: data_matched
   batch: gate-2-softcap
@@ -301,7 +317,8 @@ trials:
   settings:
     logit_soft_cap: '10'
   note: -0.0195 vs clean KMA 2.5934 (k ~1.18x); cap gain shrinks with scale
-- variant: tanh 10 fresh control
+- id: t17
+  variant: tanh 10 fresh control
   rung: d512
   protocol: equal_steps
   batch: '175'
@@ -315,7 +332,8 @@ trials:
     logit_soft_cap: '10'
   tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
   note: fresh control run
-- variant: tanh 11
+- id: t18
+  variant: tanh 11
   rung: d512
   protocol: equal_steps
   batch: '175'
@@ -332,7 +350,8 @@ trials:
   settings:
     logit_soft_cap: '11'
   tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
-- variant: sigma(22,0,5.5) = tanh 11 via asym path
+- id: t19
+  variant: sigma(22,0,5.5) = tanh 11 via asym path
   rung: d512
   protocol: equal_steps
   batch: '175'
@@ -348,7 +367,8 @@ trials:
     form: sigma(22,0,5.5)
   tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
   note: same math; run-to-run noise
-- variant: asym shift -4
+- id: t20
+  variant: asym shift -4
   rung: d512
   protocol: equal_steps
   batch: '175'
@@ -365,7 +385,8 @@ trials:
     form: sigma(22,-4,5.5)
   tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
   note: mean delta
-- variant: asym shift +4
+- id: t21
+  variant: asym shift +4
   rung: d512
   protocol: equal_steps
   batch: '175'
@@ -382,7 +403,8 @@ trials:
     form: sigma(22,+4,5.5)
   tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
   note: mean delta
-- variant: asym gain 0.8
+- id: t22
+  variant: asym gain 0.8
   rung: d512
   protocol: equal_steps
   batch: '175'
@@ -399,7 +421,8 @@ trials:
     form: sigma(22,0,6.875)
   tuned: tanh 10/11; asym shift +-4, gain 0.8/1.25 at cap 11
   note: mean delta
-- variant: asym gain 1.25
+- id: t23
+  variant: asym gain 1.25
   rung: d512
   protocol: equal_steps
   batch: '175'

@@ -14,7 +14,8 @@ tags:
 knobs:
 - global_layers
 trials:
-- variant: MLA at layers 3 and 6 (0-idx 2, 5)
+- id: t01
+  variant: MLA at layers 3 and 6 (0-idx 2, 5)
   rung: d512
   protocol: equal_steps
   batch: '15'
@@ -33,7 +34,8 @@ trials:
   - lc1-b15-mla25-s1
   settings:
     global_layers: 2,5
-- variant: layer 0 as MLA (global 0,3,5)
+- id: t02
+  variant: layer 0 as MLA (global 0,3,5)
   rung: d512
   protocol: equal_steps
   batch: '19'

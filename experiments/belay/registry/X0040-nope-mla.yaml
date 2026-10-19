@@ -17,7 +17,8 @@ papers:
 knobs:
 - inkling_relpos=false
 trials:
-- variant: NoPE, qk_mult 2.5
+- id: t01
+  variant: NoPE, qk_mult 2.5
   rung: d512
   protocol: fixed_time
   batch: '11'
@@ -36,7 +37,8 @@ trials:
     qk_mult: '2.5'
   step_time_change: +2.4% ex/s
   tuned: qk_mult 2.0 / 2.5 / 3.5
-- variant: NoPE, qk_mult 2.0
+- id: t02
+  variant: NoPE, qk_mult 2.0
   rung: d512
   protocol: fixed_time
   batch: '11'
@@ -54,7 +56,8 @@ trials:
     inkling_relpos: 'false'
     qk_mult: '2.0'
   tuned: qk_mult 2.0 / 2.5 / 3.5
-- variant: NoPE, qk_mult 3.5
+- id: t03
+  variant: NoPE, qk_mult 3.5
   rung: d512
   protocol: fixed_time
   batch: '11'
@@ -72,7 +75,8 @@ trials:
     inkling_relpos: 'false'
     qk_mult: '3.5'
   tuned: qk_mult 2.0 / 2.5 / 3.5
-- variant: NoPE, token-matched
+- id: t04
+  variant: NoPE, token-matched
   rung: d512
   protocol: equal_steps
   batch: '11'
@@ -89,7 +93,8 @@ trials:
   settings:
     inkling_relpos: 'false'
   note: Inkling worth about 0.009 per step
-- variant: NoPE + ShortConv on MLA q, qk_mult 2.5
+- id: t05
+  variant: NoPE + ShortConv on MLA q, qk_mult 2.5
   rung: d512
   protocol: fixed_time
   batch: '11'
@@ -107,7 +112,8 @@ trials:
     inkling_relpos: 'false'
     MLA q ShortConv: 'on'
     qk_mult: '2.5'
-- variant: NoPE + ShortConv on MLA q, qk_mult 3.0
+- id: t06
+  variant: NoPE + ShortConv on MLA q, qk_mult 3.0
   rung: d512
   protocol: fixed_time
   batch: '11'
@@ -125,7 +131,8 @@ trials:
     inkling_relpos: 'false'
     MLA q ShortConv: 'on'
     qk_mult: '3.0'
-- variant: no Inkling (retry)
+- id: t07
+  variant: no Inkling (retry)
   rung: d512
   protocol: equal_steps
   batch: '87'

@@ -17,7 +17,8 @@ papers:
 knobs:
 - coefficient_type=polar_express
 trials:
-- variant: Polar Express NS coefficients
+- id: t01
+  variant: Polar Express NS coefficients
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -33,7 +34,8 @@ trials:
   - lc1-b32-polar-r
   settings:
     variant: Polar Express NS coefficients
-- variant: Polar Express NS coefficients
+- id: t02
+  variant: Polar Express NS coefficients
   rung: d512
   protocol: equal_steps
   batch: '77'

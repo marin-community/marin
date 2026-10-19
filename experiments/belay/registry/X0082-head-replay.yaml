@@ -14,7 +14,8 @@ tags:
 knobs:
 - --head-replay SLOTS PERIOD SCALE
 trials:
-- variant: 2 slots x 100 (lag 100-200), scale 0.1
+- id: t01
+  variant: 2 slots x 100 (lag 100-200), scale 0.1
   rung: d512
   protocol: equal_steps
   batch: '42'
@@ -32,7 +33,8 @@ trials:
     head-replay: 2 100 0.1
   step_time_change: 738 ex/s
   tuned: slots x period 2x20/2x100/4x250; scale 0.1/0.3
-- variant: 2 x 100, scale 0.3
+- id: t02
+  variant: 2 x 100, scale 0.3
   rung: d512
   protocol: equal_steps
   batch: '42'
@@ -49,7 +51,8 @@ trials:
   settings:
     head-replay: 2 100 0.3
   tuned: slots x period 2x20/2x100/4x250; scale 0.1/0.3
-- variant: 2 x 20 (lag 20-40), scale 0.1
+- id: t03
+  variant: 2 x 20 (lag 20-40), scale 0.1
   rung: d512
   protocol: equal_steps
   batch: '42'
@@ -66,7 +69,8 @@ trials:
   settings:
     head-replay: 2 20 0.1
   tuned: slots x period 2x20/2x100/4x250; scale 0.1/0.3
-- variant: 4 x 250 (lag 750-1000), scale 0.1
+- id: t04
+  variant: 4 x 250 (lag 750-1000), scale 0.1
   rung: d512
   protocol: equal_steps
   batch: '42'

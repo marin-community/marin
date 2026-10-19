@@ -21,7 +21,8 @@ knobs:
 - trigram_gate
 - embed2_head_orders
 trials:
-- variant: separate trigram source, 524k rows
+- id: t01
+  variant: separate trigram source, 524k rows
   rung: d512
   protocol: equal_steps
   batch: '59'
@@ -40,7 +41,8 @@ trials:
   step_time_change: -7% ex/s
   tuned: 524k vs 262k
   note: 694 vs 744 ex/s, about +0.012 at fixed time
-- variant: separate trigram source, 262k rows
+- id: t02
+  variant: separate trigram source, 262k rows
   rung: d512
   protocol: equal_steps
   batch: '59'
@@ -58,7 +60,8 @@ trials:
     embed3_rows: '262144'
   tuned: 524k vs 262k
   note: 710 ex/s
-- variant: content-gated trigram 262k
+- id: t03
+  variant: content-gated trigram 262k
   rung: d512
   protocol: equal_steps
   batch: '72'
@@ -80,7 +83,8 @@ trials:
     trigram_gate: 'true'
   step_time_change: -4% ex/s
   note: gate makes it positive but second table costs ~+0.007 at fixed time
-- variant: mixed orders (2,2,3,3) in one table
+- id: t04
+  variant: mixed orders (2,2,3,3) in one table
   rung: d512
   protocol: equal_steps
   batch: '72'
@@ -100,7 +104,8 @@ trials:
   settings:
     embed2_head_orders: 2,2,3,3
   tuned: head orders 2233 / 2223
-- variant: mixed orders (2,2,2,3) in one table
+- id: t05
+  variant: mixed orders (2,2,2,3) in one table
   rung: d512
   protocol: equal_steps
   batch: '72'

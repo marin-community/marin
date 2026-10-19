@@ -26,7 +26,8 @@ knobs:
 - --ema-last-steps
 - --ema-blend 0.5
 trials:
-- variant: b0.99 last 500, floor 0.05
+- id: t01
+  variant: b0.99 last 500, floor 0.05
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -46,7 +47,8 @@ trials:
     min_lr_ratio: '0.05'
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
   note: 'best blend 0.75: 3.0788'
-- variant: b0.99 last 500, floor 0.3
+- id: t02
+  variant: b0.99 last 500, floor 0.3
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -65,7 +67,8 @@ trials:
     ema-last-steps: '500'
     min_lr_ratio: '0.3'
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
-- variant: b0.995 last 1000, floor 0.3
+- id: t03
+  variant: b0.995 last 1000, floor 0.3
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -85,7 +88,8 @@ trials:
     min_lr_ratio: '0.3'
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
   note: 'best blend 0.75: 3.1083'
-- variant: b0.95 last 200, floor 0.3
+- id: t04
+  variant: b0.95 last 200, floor 0.3
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -104,7 +108,8 @@ trials:
     ema-last-steps: '200'
     min_lr_ratio: '0.3'
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
-- variant: b0.99 last 1000, floor 0.3
+- id: t05
+  variant: b0.99 last 1000, floor 0.3
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -123,7 +128,8 @@ trials:
     ema-last-steps: '1000'
     min_lr_ratio: '0.3'
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
-- variant: b0.995 last 1000, floor 0.15
+- id: t06
+  variant: b0.995 last 1000, floor 0.15
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -142,7 +148,8 @@ trials:
     ema-last-steps: '1000'
     min_lr_ratio: '0.15'
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
-- variant: b0.995 last 1000, floor 0.05
+- id: t07
+  variant: b0.995 last 1000, floor 0.05
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -162,7 +169,8 @@ trials:
     min_lr_ratio: '0.05'
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
   note: 0.5 blend 3.0750 (-0.0083); best setting
-- variant: b0.998 last 1500, floor 0.05
+- id: t08
+  variant: b0.998 last 1500, floor 0.05
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -182,7 +190,8 @@ trials:
     min_lr_ratio: '0.05'
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
   note: 'blend 0.25-0.5: 3.0770'
-- variant: b0.995 last 1000, floor 0.1
+- id: t09
+  variant: b0.995 last 1000, floor 0.1
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -202,7 +211,8 @@ trials:
     min_lr_ratio: '0.1'
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
   note: best blend -0.0055
-- variant: b0.995 last 1000, per-group blend probe
+- id: t10
+  variant: b0.995 last 1000, per-group blend probe
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -218,7 +228,8 @@ trials:
   - lc1-b33-emagrp
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
   note: global 0.5-0.75 blend within 0.001 of best per-group; per-group not worth it
-- variant: b0.995 last 1000, seed 1
+- id: t11
+  variant: b0.995 last 1000, seed 1
   rung: d512
   protocol: equal_steps
   batch: '31'
@@ -234,7 +245,8 @@ trials:
   - lc1-b33-ema-s1
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
   note: 50/50 blend 3.0849, -0.0102 vs seed-1 recipe
-- variant: soft-cap 10 + EMA blend
+- id: t12
+  variant: soft-cap 10 + EMA blend
   rung: d512
   protocol: equal_steps
   batch: '34'
@@ -249,7 +261,8 @@ trials:
   - lc1-b34-cap10-ema
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
   note: 0.75 blend 3.0531 (-0.0302); stack of cap 10 + EMA
-- variant: soft-cap 10 + EMA (b0.995 last 2460), d768
+- id: t13
+  variant: soft-cap 10 + EMA (b0.995 last 2460), d768
   rung: d768
   protocol: data_matched
   batch: '34'
@@ -265,7 +278,8 @@ trials:
   - lc1-b34-d768-cap10-ema
   tuned: beta 0.95/0.99/0.995/0.998; window 200/500/1000/1500; floor 0.05/0.1/0.15/0.3
   note: 0.75 blend 2.7885 (-0.0229); EMA adds -0.0044 at d768
-- variant: cap 10 + ema, seed 1
+- id: t14
+  variant: cap 10 + ema, seed 1
   rung: d512
   protocol: equal_steps
   batch: '43'
@@ -282,7 +296,8 @@ trials:
   settings:
     ema-beta: '0.995'
     ema-last-steps: '1000'
-- variant: beta 0.998, last 1500 steps
+- id: t15
+  variant: beta 0.998, last 1500 steps
   rung: d512
   protocol: equal_steps
   batch: '55'
@@ -300,7 +315,8 @@ trials:
     ema beta: '0.998'
     ema last steps: '1500'
   tuned: 0.998/1500 vs 0.99/700 (base 0.995/1000)
-- variant: beta 0.99, last 700 steps
+- id: t16
+  variant: beta 0.99, last 700 steps
   rung: d512
   protocol: equal_steps
   batch: '55'
@@ -318,7 +334,8 @@ trials:
     ema beta: '0.99'
     ema last steps: '700'
   tuned: 0.998/1500 vs 0.99/700 (base 0.995/1000)
-- variant: EMA over last 700 steps
+- id: t17
+  variant: EMA over last 700 steps
   rung: d512
   protocol: equal_steps
   batch: '67'
@@ -335,7 +352,8 @@ trials:
   settings:
     ema last steps: '700'
   tuned: 700/1000/1400
-- variant: EMA over last 1400 steps
+- id: t18
+  variant: EMA over last 1400 steps
   rung: d512
   protocol: equal_steps
   batch: '67'
@@ -352,7 +370,8 @@ trials:
   settings:
     ema last steps: '1400'
   tuned: 700/1000/1400
-- variant: EMA scaled to steps (last 2600, beta 0.998)
+- id: t19
+  variant: EMA scaled to steps (last 2600, beta 0.998)
   rung: d768
   protocol: equal_steps
   batch: '85'
@@ -371,7 +390,8 @@ trials:
     --ema-beta: '0.998'
   tuned: EMA d512 setting vs scaled
   note: gain sits in EMA-weighted evals; blend-0 only -0.0017
-- variant: 50/50 EMA/final blend (ctrl weights)
+- id: t20
+  variant: 50/50 EMA/final blend (ctrl weights)
   rung: d512
   protocol: equal_steps
   batch: '199'
@@ -389,7 +409,8 @@ trials:
     blend: '0.5'
   tuned: EMA beta 0.99/0.995/0.998; last 500/1000/1500; blend
   note: vs pure EMA 2.9535
-- variant: floor 0.1, EMA beta 0.99
+- id: t21
+  variant: floor 0.1, EMA beta 0.99
   rung: d512
   protocol: equal_steps
   batch: '199'
@@ -405,7 +426,8 @@ trials:
     ema_last_steps: '1000'
   tuned: EMA beta 0.99/0.995/0.998; last 500/1000/1500; blend
   note: blend 2.9570
-- variant: floor 0.1, EMA beta 0.998
+- id: t22
+  variant: floor 0.1, EMA beta 0.998
   rung: d512
   protocol: equal_steps
   batch: '199'
@@ -421,7 +443,8 @@ trials:
     ema_last_steps: '1000'
   tuned: EMA beta 0.99/0.995/0.998; last 500/1000/1500; blend
   note: blend 2.9512
-- variant: floor 0.1, last 500
+- id: t23
+  variant: floor 0.1, last 500
   rung: d512
   protocol: equal_steps
   batch: '199'
@@ -437,7 +460,8 @@ trials:
     ema_last_steps: '500'
   tuned: EMA beta 0.99/0.995/0.998; last 500/1000/1500; blend
   note: blend 2.9570
-- variant: floor 0.1, last 1500
+- id: t24
+  variant: floor 0.1, last 1500
   rung: d512
   protocol: equal_steps
   batch: '199'
@@ -453,7 +477,8 @@ trials:
     ema_last_steps: '1500'
   tuned: EMA beta 0.99/0.995/0.998; last 500/1000/1500; blend
   note: blend 2.9554
-- variant: floor 0.1, beta 0.998 last 1500
+- id: t25
+  variant: floor 0.1, beta 0.998 last 1500
   rung: d512
   protocol: equal_steps
   batch: '199'

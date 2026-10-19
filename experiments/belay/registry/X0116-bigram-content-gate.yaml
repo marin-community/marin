@@ -20,7 +20,8 @@ knobs:
 - bigram_gate=true
 - bigram_gate_rank=16
 trials:
-- variant: scalar Engram-style gate on candidate 2
+- id: t01
+  variant: scalar Engram-style gate on candidate 2
   rung: d512
   protocol: equal_steps
   batch: '69'
@@ -42,7 +43,8 @@ trials:
     w init: '0'
     c init: '+2'
   note: gate nearly bimodal per token (std 0.34)
-- variant: scalar gate on candidate 3
+- id: t02
+  variant: scalar gate on candidate 3
   rung: d512
   protocol: equal_steps
   batch: '70'
@@ -63,7 +65,8 @@ trials:
     bigram_gate: 'true'
   tuned: scalar vs rank 16
   note: median step 178.5 vs 176.1 ms, likely host variance
-- variant: rank-16 per-channel gate on candidate 3
+- id: t03
+  variant: rank-16 per-channel gate on candidate 3
   rung: d512
   protocol: equal_steps
   batch: '70'
@@ -85,7 +88,8 @@ trials:
     bigram_gate_rank: '16'
   tuned: scalar vs rank 16
   note: mean -0.0036; adopted as candidate 4
-- variant: bf16 gate (cheaper, no renorms)
+- id: t04
+  variant: bf16 gate (cheaper, no renorms)
   rung: d512
   protocol: equal_steps
   batch: '71'
@@ -109,7 +113,8 @@ trials:
   step_time_change: -0.7% (175.0 vs 176.2 ms)
   tuned: fp32 vs bf16 gate
   note: fp32 gate was -0.0036 mean at +1.7% step; bf16 gate becomes candidate 4
-- variant: d768 remove bigram content gate
+- id: t05
+  variant: d768 remove bigram content gate
   rung: d768
   protocol: equal_steps
   batch: '84'
@@ -127,7 +132,8 @@ trials:
     bigram_gate: 'false'
   tuned: leave-one-out over candidate 6 pieces
   note: leave-one-out over candidate 6, sign flipped to 'adding the piece' (negative = piece helps)
-- variant: bigram content gate off at d768
+- id: t06
+  variant: bigram content gate off at d768
   rung: d768
   protocol: data_matched
   batch: '131'
@@ -141,7 +147,8 @@ trials:
   settings:
     bigram_gate: 'false'
   note: gate still helps a little with the rule-A table
-- variant: SiLU in gate
+- id: t07
+  variant: SiLU in gate
   rung: d512
   protocol: equal_steps
   batch: '167'
@@ -160,7 +167,8 @@ trials:
   step_time_change: 0% (174.1 ms)
   tuned: SiLU / GELU / 0.1 logit scale
   note: most consistent, not a win alone
-- variant: GELU in gate
+- id: t08
+  variant: GELU in gate
   rung: d512
   protocol: equal_steps
   batch: '167'
@@ -178,7 +186,8 @@ trials:
     gate: sigmoid(GELU((e*b)A)B + c)
   step_time_change: 0%
   tuned: SiLU / GELU / 0.1 logit scale
-- variant: 0.1 logit scale
+- id: t09
+  variant: 0.1 logit scale
   rung: d512
   protocol: equal_steps
   batch: '167'

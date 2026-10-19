@@ -21,7 +21,8 @@ knobs:
 - mla_key_offset=true
 - mla_tie_prev_qk
 trials:
-- variant: half of key channels from previous token
+- id: t01
+  variant: half of key channels from previous token
   rung: d512
   protocol: equal_steps
   batch: '44'
@@ -41,7 +42,8 @@ trials:
   settings:
     mla_key_offset: 'true'
   step_time_change: 779 / 795 ex/s (no cost)
-- variant: key offset, d768
+- id: t02
+  variant: key offset, d768
   rung: d768
   protocol: data_matched
   batch: '44'
@@ -58,7 +60,8 @@ trials:
   settings:
     mla_key_offset: 'true'
   note: about 45% of d512 mean
-- variant: tie shifted query half to key (mla_tie_prev_qk)
+- id: t03
+  variant: tie shifted query half to key (mla_tie_prev_qk)
   rung: d512
   protocol: equal_steps
   batch: '236'

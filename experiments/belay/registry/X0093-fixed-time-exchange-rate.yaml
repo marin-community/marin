@@ -13,7 +13,8 @@ tags:
 details:
 - 1% of steps ~ 0.0017 loss at d512
 trials:
-- variant: base at 90% of steps
+- id: t01
+  variant: base at 90% of steps
   rung: d512
   protocol: unknown
   batch: '51'

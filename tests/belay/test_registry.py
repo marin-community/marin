@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import pytest
 
 from experiments.belay import registry as R
@@ -18,6 +20,7 @@ def _experiment(**overrides) -> R.Experiment:
         status=R.Status.DONE,
         trials=(
             R.Trial(
+                id="t01",
                 variant="raw",
                 rung="d512",
                 protocol="equal_steps",
@@ -65,6 +68,19 @@ def test_validate_rejects_malformed_entries(overrides):
         R.validate([_experiment(**overrides)])
 
 
+@pytest.mark.parametrize("trial_ids", [("t1",), ("T01",), ("01",), ("t01", "t01"), ("t02", "t01")])
+def test_validate_rejects_malformed_repeated_or_out_of_order_trial_ids(trial_ids):
+    (trial,) = _experiment().trials
+    trials = tuple(dataclasses.replace(trial, id=i) for i in trial_ids)
+    with pytest.raises(ValueError):
+        R.validate([_experiment(trials=trials)])
+
+
+def test_validate_accepts_gaps_in_trial_ids():
+    (trial,) = _experiment().trials
+    R.validate([_experiment(trials=(trial, dataclasses.replace(trial, id="t03")))])
+
+
 def test_validate_rejects_duplicate_slugs():
     with pytest.raises(ValueError):
         R.validate([_experiment(), _experiment(id="X0002")])
@@ -97,6 +113,7 @@ def test_intake_bot_entries_are_valid_registry_files(tmp_path):
 
 def test_placeholder_bpb_scales_losses_and_signed_deltas_only():
     trial = R.Trial(
+        id="t01",
         variant="beta (0.95, 0.999), sigma 0.005",
         rung="d512",
         protocol="equal_steps",

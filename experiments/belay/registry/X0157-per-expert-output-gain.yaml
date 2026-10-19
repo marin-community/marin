@@ -11,7 +11,8 @@ tags:
 - gain
 - muonh
 trials:
-- variant: per-expert learnable output gain
+- id: t01
+  variant: per-expert learnable output gain
   rung: d512
   protocol: equal_steps
   batch: '98'

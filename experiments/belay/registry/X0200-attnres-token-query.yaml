@@ -22,7 +22,8 @@ intake:
   author: RavnaBergsndot
   approved_by: ClassicLarry
 trials:
-- variant: shared table
+- id: t01
+  variant: shared table
   rung: d512
   protocol: equal_steps
   batch: '164'
@@ -40,7 +41,8 @@ trials:
   step_time_change: +2.5% (175.9 ms)
   tuned: shared vs per-gate tables
   note: seed 1 still running
-- variant: per-gate tables
+- id: t02
+  variant: per-gate tables
   rung: d512
   protocol: equal_steps
   batch: '164'
@@ -59,7 +61,8 @@ trials:
     params: 109M
   step_time_change: +8.6% (186.3 ms)
   tuned: shared vs per-gate tables
-- variant: shared table, LR x0.1
+- id: t03
+  variant: shared table, LR x0.1
   rung: d512
   protocol: equal_steps
   batch: '168'
@@ -79,7 +82,8 @@ trials:
   step_time_change: +3.6% (180.5 ms)
   tuned: LR x0.1 / x0.01, shared vs per-gate
   note: token term ~25% of static query
-- variant: shared table, LR x0.01
+- id: t04
+  variant: shared table, LR x0.01
   rung: d512
   protocol: equal_steps
   batch: '168'
@@ -99,7 +103,8 @@ trials:
   step_time_change: +3%
   tuned: LR x0.1 / x0.01, shared vs per-gate
   note: near no-op
-- variant: per-gate tables, LR x0.01
+- id: t05
+  variant: per-gate tables, LR x0.01
   rung: d512
   protocol: equal_steps
   batch: '168'

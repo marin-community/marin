@@ -14,7 +14,8 @@ tags:
 knobs:
 - hyperball_per_expert=true
 trials:
-- variant: per-expert MuonH hyperball
+- id: t01
+  variant: per-expert MuonH hyperball
   rung: d512
   protocol: equal_steps
   batch: '15'
@@ -31,7 +32,8 @@ trials:
   settings:
     hyperball_per_expert: 'true'
   step_time_change: -1% ex/s
-- variant: retest on candidate 2
+- id: t02
+  variant: retest on candidate 2
   rung: d512
   protocol: equal_steps
   batch: '65'
@@ -48,7 +50,8 @@ trials:
   settings:
     hyperball_per_expert: 'true'
   note: neutral; stays off (was +0.0017 on old base in batch 15)
-- variant: per-expert hyperball
+- id: t03
+  variant: per-expert hyperball
   rung: d512
   protocol: equal_steps
   batch: '140'

@@ -11,7 +11,8 @@ tags:
 - all-to-all
 - shared-expert
 trials:
-- variant: shared GEMM pinned under EP all-to-all
+- id: t01
+  variant: shared GEMM pinned under EP all-to-all
   rung: d512
   protocol: equal_steps
   batch: '98'

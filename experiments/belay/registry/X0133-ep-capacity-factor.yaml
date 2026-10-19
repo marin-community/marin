@@ -14,7 +14,8 @@ tags:
 knobs:
 - capacity_factor
 trials:
-- variant: capacity 1.05
+- id: t01
+  variant: capacity 1.05
   rung: d512
   protocol: equal_steps
   batch: '105'
@@ -37,7 +38,8 @@ trials:
   step_time_change: -1.8% median step
   tuned: capacity 1.05 / 1.10 / 1.15
   note: drops 4.2 / 4.7%
-- variant: capacity 1.10
+- id: t02
+  variant: capacity 1.10
   rung: d512
   protocol: equal_steps
   batch: '105'
@@ -59,7 +61,8 @@ trials:
     moe_drop_renorm: 'true'
   step_time_change: -0.9% median step
   tuned: capacity 1.05 / 1.10 / 1.15
-- variant: EP capacity factor 1.0 (from 1.15)
+- id: t03
+  variant: EP capacity factor 1.0 (from 1.15)
   rung: d512
   protocol: fixed_time
   batch: '81'
@@ -79,7 +82,8 @@ trials:
   settings:
     capacity factor: '1.0'
   note: delta computed from losses; big loss from drops
-- variant: capacity 1.3
+- id: t04
+  variant: capacity 1.3
   rung: d512
   protocol: equal_steps
   batch: '87'

@@ -14,7 +14,8 @@ papers:
 - arxiv: '2503.10622'
   title: DyT
 trials:
-- variant: DyT pre-norms (alpha init 0.8 attn / 0.2 MLP)
+- id: t01
+  variant: DyT pre-norms (alpha init 0.8 attn / 0.2 MLP)
   rung: d512
   protocol: equal_steps
   batch: '77'
@@ -37,7 +38,8 @@ trials:
   step_time_change: ~+1%
   note: delta reported in batch 80; MLP alpha grows 0.2 -> 1.9-3.0
   derived: true
-- variant: DyT alpha init 1.2 attn / 2.2 MLP
+- id: t02
+  variant: DyT alpha init 1.2 attn / 2.2 MLP
   rung: d512
   protocol: equal_steps
   batch: '80'

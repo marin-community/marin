@@ -10,7 +10,8 @@ tags:
 - router
 - weight-decay
 trials:
-- variant: router WD 0
+- id: t01
+  variant: router WD 0
   rung: d512
   protocol: equal_steps
   batch: '98'
@@ -24,7 +25,8 @@ trials:
     router WD: '0'
   tuned: 0 / 0.02 / 0.1
   note: seed mean
-- variant: router WD 0.1
+- id: t02
+  variant: router WD 0.1
   rung: d512
   protocol: equal_steps
   batch: '98'

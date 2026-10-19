@@ -25,7 +25,8 @@ knobs:
 - bimaxwell_start_frac
 - bimaxwell_slow_from_start
 trials:
-- variant: from 1/3 of training (jnp.where)
+- id: t01
+  variant: from 1/3 of training (jnp.where)
   rung: d512
   protocol: equal_steps
   batch: '60'
@@ -47,7 +48,8 @@ trials:
     start: 1/3 of training
   step_time_change: +1.4%
   note: net about -0.003 at fixed time
-- variant: lax.cond regime switch
+- id: t02
+  variant: lax.cond regime switch
   rung: d512
   protocol: equal_steps
   batch: '60'
@@ -66,7 +68,8 @@ trials:
     switch: lax.cond
   step_time_change: +1.4% to +2%
   note: median step 175.8 ms, different host
-- variant: leave-out from candidate 2 (no Bi-Maxwell)
+- id: t03
+  variant: leave-out from candidate 2 (no Bi-Maxwell)
   rung: d512
   protocol: equal_steps
   batch: '63'
@@ -85,7 +88,8 @@ trials:
     muon_bimaxwell: 'false'
     muonh_decay_power: '0.7'
   note: Bi-Maxwell adds -0.0023 on top for about +0.5% step
-- variant: start at 1/4 of training
+- id: t04
+  variant: start at 1/4 of training
   rung: d512
   protocol: equal_steps
   batch: '67'
@@ -102,7 +106,8 @@ trials:
   settings:
     bimaxwell_start_frac: '0.25'
   tuned: 1/4, 1/3, 1/2
-- variant: start at 1/2 of training
+- id: t05
+  variant: start at 1/2 of training
   rung: d512
   protocol: equal_steps
   batch: '67'
@@ -119,7 +124,8 @@ trials:
   settings:
     bimaxwell_start_frac: '0.5'
   tuned: 1/4, 1/3, 1/2
-- variant: d768 remove Bi-Maxwell and decay power 0.7
+- id: t06
+  variant: d768 remove Bi-Maxwell and decay power 0.7
   rung: d768
   protocol: equal_steps
   batch: '84'
@@ -138,7 +144,8 @@ trials:
     muonh_decay_power: 'off'
   tuned: leave-one-out over candidate 6 pieces
   note: leave-one-out over candidate 6, sign flipped to 'adding the piece' (negative = piece helps)
-- variant: routed slow rail beta 0.995
+- id: t07
+  variant: routed slow rail beta 0.995
   rung: d512
   protocol: equal_steps
   batch: '142'
@@ -157,7 +164,8 @@ trials:
     slow weight: '0.5615'
     engage step: '939'
   tuned: slow rail rate 0.005/0.01, weight, engage step
-- variant: routed slow rail beta 0.995, slow weight 0.8
+- id: t08
+  variant: routed slow rail beta 0.995, slow weight 0.8
   rung: d512
   protocol: equal_steps
   batch: '142'
@@ -176,7 +184,8 @@ trials:
     slow weight: '0.8'
     engage step: '939'
   tuned: slow rail rate 0.005/0.01, weight, engage step
-- variant: routed slow rail beta 0.99, engage step 300
+- id: t09
+  variant: routed slow rail beta 0.99, engage step 300
   rung: d512
   protocol: equal_steps
   batch: '142'
@@ -195,7 +204,8 @@ trials:
     slow weight: '0.5615'
     engage step: '300'
   tuned: slow rail rate 0.005/0.01, weight, engage step
-- variant: rails engage at step 1
+- id: t10
+  variant: rails engage at step 1
   rung: d512
   protocol: equal_steps
   batch: '151'
@@ -212,7 +222,8 @@ trials:
   settings:
     engage: step 1
   tuned: engage step 1/10%/20%/33%, slow rail from start
-- variant: rails engage at 10%
+- id: t11
+  variant: rails engage at 10%
   rung: d512
   protocol: equal_steps
   batch: '151'
@@ -229,7 +240,8 @@ trials:
   settings:
     engage: 10% (step 282)
   tuned: engage step 1/10%/20%/33%, slow rail from start
-- variant: rails engage at 20%
+- id: t12
+  variant: rails engage at 20%
   rung: d512
   protocol: equal_steps
   batch: '151'
@@ -246,7 +258,8 @@ trials:
   settings:
     engage: 20% (step 563)
   tuned: engage step 1/10%/20%/33%, slow rail from start
-- variant: slow rail accumulates from step 0
+- id: t13
+  variant: slow rail accumulates from step 0
   rung: d512
   protocol: equal_steps
   batch: '151'
@@ -263,7 +276,8 @@ trials:
     bimaxwell_slow_from_start: 'true'
   tuned: engage step 1/10%/20%/33%, slow rail from start
   note: 'slow0: seed 1 only (seed 0 crashed)'
-- variant: slow rail from step 0, engage 10%
+- id: t14
+  variant: slow rail from step 0, engage 10%
   rung: d512
   protocol: equal_steps
   batch: '151'

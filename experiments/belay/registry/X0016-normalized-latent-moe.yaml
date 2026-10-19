@@ -13,7 +13,8 @@ tags:
 details:
 - learnable RMSNorm before W_latent_up
 trials:
-- variant: RMSNorm before W_latent_up (K3)
+- id: t01
+  variant: RMSNorm before W_latent_up (K3)
   rung: d512
   protocol: equal_steps
   batch: '2'

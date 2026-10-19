@@ -14,7 +14,8 @@ tags:
 details:
 - sync every 30 min, exit sync publishes new files
 trials:
-- variant: 'fix 1: upload only new autotune files'
+- id: t01
+  variant: 'fix 1: upload only new autotune files'
   rung: d512
   protocol: equal_steps
   batch: '128'
@@ -29,7 +30,8 @@ trials:
     FineStoreDirectory: count files present at open as known
   step_time_change: mean vs median +15.7% / +11.5% (worse)
   note: removed uploads but not directory walks
-- variant: 'fix 2: sync the autotune cache every 30 min'
+- id: t02
+  variant: 'fix 2: sync the autotune cache every 30 min'
   rung: d512
   protocol: equal_steps
   batch: '128'

@@ -14,7 +14,8 @@ knobs:
 - wide_expert_layers
 - wide_expert_intermediate_dim
 trials:
-- variant: layer 5 experts 576
+- id: t01
+  variant: layer 5 experts 576
   rung: d512
   protocol: equal_steps
   batch: '150'
@@ -32,7 +33,8 @@ trials:
   step_time_change: +3% (190.2 ms)
   tuned: layer 5 vs layers 4+5
   note: seed 1 crashed
-- variant: layers 4,5 experts 576
+- id: t02
+  variant: layers 4,5 experts 576
   rung: d512
   protocol: equal_steps
   batch: '150'

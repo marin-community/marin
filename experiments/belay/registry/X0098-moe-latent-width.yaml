@@ -17,7 +17,8 @@ details:
 knobs:
 - latent_dim=None
 trials:
-- variant: no MoE latent, SwiGLU, d768
+- id: t01
+  variant: no MoE latent, SwiGLU, d768
   rung: d768
   protocol: data_matched
   batch: '57'
@@ -37,7 +38,8 @@ trials:
   step_time_change: -23% ex/s
   tuned: latent vs no latent
   note: 246 vs 318 ex/s (23% slower); roughly compute-neutral, latent stays
-- variant: latent 384 (0.75d)
+- id: t02
+  variant: latent 384 (0.75d)
   rung: d512
   protocol: equal_steps
   batch: '87'
@@ -56,7 +58,8 @@ trials:
   step_time_change: +14%
   tuned: 256 vs 384
   note: seed 1 only; not adopted, latent stays 0.5d
-- variant: no latent, routed width 1x (384)
+- id: t03
+  variant: no latent, routed width 1x (384)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -75,7 +78,8 @@ trials:
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
   note: about 0.03 below latent; 2x expert input cost
-- variant: no latent, routed width 2x (768)
+- id: t04
+  variant: no latent, routed width 2x (768)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -94,7 +98,8 @@ trials:
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
   note: about 0.03 below latent; 2x expert input cost
-- variant: no latent, routed width 4x (1536)
+- id: t05
+  variant: no latent, routed width 4x (1536)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -113,7 +118,8 @@ trials:
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
   note: about 0.03 below latent; 2x expert input cost
-- variant: no latent, routed width 8x (3072)
+- id: t06
+  variant: no latent, routed width 8x (3072)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -132,7 +138,8 @@ trials:
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
   note: about 0.03 below latent; 2x expert input cost
-- variant: no latent, routed width 16x (6144)
+- id: t07
+  variant: no latent, routed width 16x (6144)
   rung: d512
   protocol: equal_steps
   batch: '91'

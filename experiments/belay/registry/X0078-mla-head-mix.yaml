@@ -17,7 +17,8 @@ papers:
 knobs:
 - mla_head_mix
 trials:
-- variant: post-FA4 dynamic cross-head output mix (DC stand-in)
+- id: t01
+  variant: post-FA4 dynamic cross-head output mix (DC stand-in)
   rung: d512
   protocol: equal_steps
   batch: '39'

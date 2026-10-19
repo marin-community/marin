@@ -16,7 +16,8 @@ knobs:
 - embed_norm_mode
 - embed_scale
 trials:
-- variant: raw table row, no norm
+- id: t01
+  variant: raw table row, no norm
   rung: d512
   protocol: equal_steps
   batch: '38'
@@ -35,7 +36,8 @@ trials:
     init std: '0.02'
   tuned: embed norm raw/rms_nogain; embed_scale 0.5/2
   note: RMS norm on embedding stays
-- variant: RMS without gain
+- id: t02
+  variant: RMS without gain
   rung: d512
   protocol: equal_steps
   batch: '38'
@@ -52,7 +54,8 @@ trials:
   settings:
     embed_norm_mode: rms_nogain
   tuned: embed norm raw/rms_nogain; embed_scale 0.5/2
-- variant: embed scale 0.5
+- id: t03
+  variant: embed scale 0.5
   rung: d512
   protocol: equal_steps
   batch: '38'
@@ -69,7 +72,8 @@ trials:
   settings:
     embed_scale: '0.5'
   tuned: embed norm raw/rms_nogain; embed_scale 0.5/2
-- variant: embed scale 2
+- id: t04
+  variant: embed scale 2
   rung: d512
   protocol: equal_steps
   batch: '38'

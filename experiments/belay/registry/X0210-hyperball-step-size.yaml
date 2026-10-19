@@ -17,7 +17,8 @@ details:
 knobs:
 - muonh_step
 trials:
-- variant: spectral alpha 0.25
+- id: t01
+  variant: spectral alpha 0.25
   rung: d512
   protocol: equal_steps
   batch: 202/204
@@ -34,7 +35,8 @@ trials:
     alpha: '0.25'
   tuned: spectral alpha 0.25/0.5/1; grad ref 100/500
   note: closed
-- variant: spectral alpha 0.5
+- id: t02
+  variant: spectral alpha 0.5
   rung: d512
   protocol: equal_steps
   batch: 202/204
@@ -51,7 +53,8 @@ trials:
     alpha: '0.5'
   tuned: spectral alpha 0.25/0.5/1; grad ref 100/500
   note: closed
-- variant: spectral alpha 1
+- id: t03
+  variant: spectral alpha 1
   rung: d512
   protocol: equal_steps
   batch: 202/204
@@ -68,7 +71,8 @@ trials:
     alpha: '1'
   tuned: spectral alpha 0.25/0.5/1; grad ref 100/500
   note: closed
-- variant: grad-norm reference first 100 steps
+- id: t04
+  variant: grad-norm reference first 100 steps
   rung: d512
   protocol: equal_steps
   batch: 202/204
@@ -85,7 +89,8 @@ trials:
     reference steps: '100'
   tuned: spectral alpha 0.25/0.5/1; grad ref 100/500
   note: closed
-- variant: grad-norm reference first 500 steps
+- id: t05
+  variant: grad-norm reference first 500 steps
   rung: d512
   protocol: equal_steps
   batch: 202/204

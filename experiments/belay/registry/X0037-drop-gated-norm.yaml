@@ -15,7 +15,8 @@ knobs:
 - embed_gated_norm=false
 - final_gated_norm=false
 trials:
-- variant: no GatedNorm on embedding
+- id: t01
+  variant: no GatedNorm on embedding
   rung: d512
   protocol: equal_steps
   batch: '10'
@@ -32,7 +33,8 @@ trials:
   settings:
     embed_gated_norm: 'false'
   tuned: embed / final / both
-- variant: no GatedNorm before lm_head
+- id: t02
+  variant: no GatedNorm before lm_head
   rung: d512
   protocol: equal_steps
   batch: '10'
@@ -49,7 +51,8 @@ trials:
   settings:
     final_gated_norm: 'false'
   tuned: embed / final / both
-- variant: both removed (embed + lm_head input)
+- id: t03
+  variant: both removed (embed + lm_head input)
   rung: d512
   protocol: equal_steps
   batch: '10'

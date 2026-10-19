@@ -16,7 +16,8 @@ papers:
 knobs:
 - muon_head_dim=128
 trials:
-- variant: head-wise Muon on attention projections (retest)
+- id: t01
+  variant: head-wise Muon on attention projections (retest)
   rung: d512
   protocol: equal_steps
   batch: '66'

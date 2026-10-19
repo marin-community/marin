@@ -11,7 +11,8 @@ tags:
 - adam
 - muonh
 trials:
-- variant: Adam for routed experts
+- id: t01
+  variant: Adam for routed experts
   rung: d512
   protocol: equal_steps
   batch: '140'

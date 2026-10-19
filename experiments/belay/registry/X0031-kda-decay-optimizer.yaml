@@ -12,7 +12,8 @@ tags:
 - adam
 - lr
 trials:
-- variant: KDA decay params at 0.3x Adam LR
+- id: t01
+  variant: KDA decay params at 0.3x Adam LR
   rung: d512
   protocol: equal_steps
   batch: '7'
@@ -30,7 +31,8 @@ trials:
     params: dt_bias, A_log, W_a
     LR: 0.3x Adam
   tuned: 0.3x LR vs beta (0.95, 0.999)
-- variant: KDA decay params Adam beta (0.95, 0.999)
+- id: t02
+  variant: KDA decay params Adam beta (0.95, 0.999)
   rung: d512
   protocol: equal_steps
   batch: '7'

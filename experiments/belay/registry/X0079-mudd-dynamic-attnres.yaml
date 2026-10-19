@@ -16,7 +16,8 @@ papers:
 knobs:
 - attn_res_dynamic_rank=64
 trials:
-- variant: dynamic AttnRes logits, width 64
+- id: t01
+  variant: dynamic AttnRes logits, width 64
   rung: d512
   protocol: equal_steps
   batch: '39'

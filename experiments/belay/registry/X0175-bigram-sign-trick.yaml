@@ -18,7 +18,8 @@ details:
 knobs:
 - embed2_sign_trick
 trials:
-- variant: count-sketch +-1 per n-gram, pool 8192
+- id: t01
+  variant: count-sketch +-1 per n-gram, pool 8192
   rung: d512
   protocol: equal_steps
   batch: '118'

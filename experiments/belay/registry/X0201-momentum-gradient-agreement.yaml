@@ -14,7 +14,8 @@ tags:
 details:
 - P = NS(M) + alpha*P*sym(P^T g), rescaled to alpha*|P|
 trials:
-- variant: alpha 0.25 (held-out probe)
+- id: t01
+  variant: alpha 0.25 (held-out probe)
   rung: d512
   protocol: unknown
   batch: '172'

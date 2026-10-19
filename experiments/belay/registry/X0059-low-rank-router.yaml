@@ -12,7 +12,8 @@ tags:
 - silu
 - rmsnorm
 trials:
-- variant: rank 32, identity
+- id: t01
+  variant: rank 32, identity
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -30,7 +31,8 @@ trials:
     router rank: '32'
     f: identity
   tuned: rank 32/128 x identity/RMSNorm/SiLU
-- variant: rank 128, identity
+- id: t02
+  variant: rank 128, identity
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -48,7 +50,8 @@ trials:
     router rank: '128'
     f: identity
   tuned: rank 32/128 x identity/RMSNorm/SiLU
-- variant: rank 32, RMSNorm
+- id: t03
+  variant: rank 32, RMSNorm
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -66,7 +69,8 @@ trials:
     router rank: '32'
     f: RMSNorm
   tuned: rank 32/128 x identity/RMSNorm/SiLU
-- variant: rank 128, RMSNorm
+- id: t04
+  variant: rank 128, RMSNorm
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -84,7 +88,8 @@ trials:
     router rank: '128'
     f: RMSNorm
   tuned: rank 32/128 x identity/RMSNorm/SiLU
-- variant: rank 32, SiLU
+- id: t05
+  variant: rank 32, SiLU
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -102,7 +107,8 @@ trials:
     router rank: '32'
     f: SiLU
   tuned: rank 32/128 x identity/RMSNorm/SiLU
-- variant: rank 128, SiLU
+- id: t06
+  variant: rank 128, SiLU
   rung: d512
   protocol: equal_steps
   batch: 23-24

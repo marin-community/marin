@@ -26,7 +26,8 @@ knobs:
 - embed_group=sinkhorn
 - lm_head_group=sinkhornh
 trials:
-- variant: embed + lm_head, 5 passes, b0.95
+- id: t01
+  variant: embed + lm_head, 5 passes, b0.95
   rung: d512
   protocol: equal_steps
   batch: '35'
@@ -45,7 +46,8 @@ trials:
     lm_head_group: sinkhornh
     passes: '5'
   tuned: groups, passes 1/5, LR x0.5/x2, momentum 0.9/0.95
-- variant: lm_head only
+- id: t02
+  variant: lm_head only
   rung: d512
   protocol: equal_steps
   batch: '35'
@@ -63,7 +65,8 @@ trials:
     embed_group: adam
     lm_head_group: sinkhornh
   tuned: groups, passes 1/5, LR x0.5/x2, momentum 0.9/0.95
-- variant: embedding only
+- id: t03
+  variant: embedding only
   rung: d512
   protocol: equal_steps
   batch: '35'
@@ -80,7 +83,8 @@ trials:
   settings:
     embed_group: sinkhorn
   tuned: groups, passes 1/5, LR x0.5/x2, momentum 0.9/0.95
-- variant: both, 1 pass
+- id: t04
+  variant: both, 1 pass
   rung: d512
   protocol: equal_steps
   batch: '35'
@@ -99,7 +103,8 @@ trials:
     lm_head_group: sinkhornh
     passes: '1'
   tuned: groups, passes 1/5, LR x0.5/x2, momentum 0.9/0.95
-- variant: both, LR x0.5
+- id: t05
+  variant: both, LR x0.5
   rung: d512
   protocol: equal_steps
   batch: '35'
@@ -118,7 +123,8 @@ trials:
     lm_head_group: sinkhornh
     LR mult: '0.5'
   tuned: groups, passes 1/5, LR x0.5/x2, momentum 0.9/0.95
-- variant: both, LR x2
+- id: t06
+  variant: both, LR x2
   rung: d512
   protocol: equal_steps
   batch: '35'
@@ -137,7 +143,8 @@ trials:
     lm_head_group: sinkhornh
     LR mult: '2'
   tuned: groups, passes 1/5, LR x0.5/x2, momentum 0.9/0.95
-- variant: both, momentum 0.9
+- id: t07
+  variant: both, momentum 0.9
   rung: d512
   protocol: equal_steps
   batch: '35'
@@ -156,7 +163,8 @@ trials:
     lm_head_group: sinkhornh
     momentum: '0.9'
   tuned: groups, passes 1/5, LR x0.5/x2, momentum 0.9/0.95
-- variant: embed-only, momentum 0.9
+- id: t08
+  variant: embed-only, momentum 0.9
   rung: d512
   protocol: equal_steps
   batch: '38'
@@ -174,7 +182,8 @@ trials:
     embed_group: sinkhorn
     momentum: '0.9'
   tuned: groups, momentum 0.9/0.95, LR x0.75/x1.5, passes 1/3/5
-- variant: embed-only, LR x1.5
+- id: t09
+  variant: embed-only, LR x1.5
   rung: d512
   protocol: equal_steps
   batch: '38'
@@ -192,7 +201,8 @@ trials:
     embed_group: sinkhorn
     LR mult: '1.5'
   tuned: groups, momentum 0.9/0.95, LR x0.75/x1.5, passes 1/3/5
-- variant: embed-only, 3 passes
+- id: t10
+  variant: embed-only, 3 passes
   rung: d512
   protocol: equal_steps
   batch: '38'
@@ -210,7 +220,8 @@ trials:
     embed_group: sinkhorn
     passes: '3'
   tuned: groups, momentum 0.9/0.95, LR x0.75/x1.5, passes 1/3/5
-- variant: both, momentum 0.9, LR x0.75
+- id: t11
+  variant: both, momentum 0.9, LR x0.75
   rung: d512
   protocol: equal_steps
   batch: '38'
@@ -230,7 +241,8 @@ trials:
     momentum: '0.9'
     LR mult: '0.75'
   tuned: groups, momentum 0.9/0.95, LR x0.75/x1.5, passes 1/3/5
-- variant: embed-only, d768
+- id: t12
+  variant: embed-only, d768
   rung: d768
   protocol: data_matched
   batch: '38'
@@ -247,7 +259,8 @@ trials:
   settings:
     embed_group: sinkhorn
   tuned: groups, momentum 0.9/0.95, LR x0.75/x1.5, passes 1/3/5
-- variant: embed-only, momentum 0.9, seed 1
+- id: t13
+  variant: embed-only, momentum 0.9, seed 1
   rung: d512
   protocol: equal_steps
   batch: '43'
@@ -265,7 +278,8 @@ trials:
     embed_group: sinkhorn
     momentum: '0.9'
     seed: '1'
-- variant: Sinkhorn momentum on the bigram table instead of AdEMAMix (e2sink)
+- id: t14
+  variant: Sinkhorn momentum on the bigram table instead of AdEMAMix (e2sink)
   rung: d512
   protocol: equal_steps
   batch: '129'

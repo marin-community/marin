@@ -18,7 +18,8 @@ papers:
 details:
 - 'dropped: breaks absorbed W_uk at inference under MLA'
 trials:
-- variant: MLA QK-norm, learnable qk_mult init 1.0
+- id: t01
+  variant: MLA QK-norm, learnable qk_mult init 1.0
   rung: d512
   protocol: equal_steps
   batch: '30'
@@ -36,7 +37,8 @@ trials:
     q,k norm: per-head RMSNorm
     qk_mult init: '1.0'
   tuned: qk_mult init 1.0/2.5
-- variant: MLA QK-norm, learnable qk_mult init 2.5
+- id: t02
+  variant: MLA QK-norm, learnable qk_mult init 2.5
   rung: d512
   protocol: equal_steps
   batch: '30'
@@ -58,7 +60,8 @@ trials:
     qk_mult init: '2.5'
   tuned: qk_mult init 1.0/2.5
   note: mean paired -0.0112; learned qk_mult barely moves
-- variant: d768 MLA QK-norm, qk_mult init 2.5
+- id: t03
+  variant: d768 MLA QK-norm, qk_mult init 2.5
   rung: d768
   protocol: data_matched
   batch: '30'
@@ -74,7 +77,8 @@ trials:
   - lc1-b30-d768-qkn25
   settings:
     qk_mult init: '2.5'
-- variant: QK-norm on MLA + soft-cap 10
+- id: t04
+  variant: QK-norm on MLA + soft-cap 10
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -92,7 +96,8 @@ trials:
     qk-norm: MLA
     logit_soft_cap: '10'
   note: vs cap 10 alone -0.0242
-- variant: QK-norm on MLA + soft-cap 15
+- id: t05
+  variant: QK-norm on MLA + soft-cap 15
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -110,7 +115,8 @@ trials:
     qk-norm: MLA
     logit_soft_cap: '15'
   note: vs cap 15 alone -0.0184; QK-norm alone at d768 -0.0035
-- variant: soft-cap 10 + QK-norm + EMA blend
+- id: t06
+  variant: soft-cap 10 + QK-norm + EMA blend
   rung: d512
   protocol: equal_steps
   batch: '34'

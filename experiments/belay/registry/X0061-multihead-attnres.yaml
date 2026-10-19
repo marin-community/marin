@@ -17,7 +17,8 @@ knobs:
 - attn_res_heads
 - attn_res_head_sub
 trials:
-- variant: 4 heads
+- id: t01
+  variant: 4 heads
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -34,7 +35,8 @@ trials:
   settings:
     attn_res_heads: '4'
   tuned: heads 4/8
-- variant: 8 heads
+- id: t02
+  variant: 8 heads
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -51,7 +53,8 @@ trials:
   settings:
     attn_res_heads: '8'
   tuned: heads 4/8
-- variant: 4 heads + V gate
+- id: t03
+  variant: 4 heads + V gate
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -68,7 +71,8 @@ trials:
   settings:
     attn_res_heads: '4'
     attn_res_v_gate: 'true'
-- variant: d768 4 heads
+- id: t04
+  variant: d768 4 heads
   rung: d768
   protocol: data_matched
   batch: '28'
@@ -85,7 +89,8 @@ trials:
   settings:
     attn_res_heads: '4'
   tuned: query LR x3/x1/3, temperature, per-head norm
-- variant: d768 4 heads, query LR x3
+- id: t05
+  variant: d768 4 heads, query LR x3
   rung: d768
   protocol: data_matched
   batch: '28'
@@ -103,7 +108,8 @@ trials:
     attn_res_heads: '4'
     attn_res_query_lr_scale: '0.3'
   tuned: query LR x3/x1/3, temperature, per-head norm
-- variant: d768 4 heads, query LR x1/3
+- id: t06
+  variant: d768 4 heads, query LR x1/3
   rung: d768
   protocol: data_matched
   batch: '28'
@@ -121,7 +127,8 @@ trials:
     attn_res_heads: '4'
     attn_res_query_lr_scale: '0.03'
   tuned: query LR x3/x1/3, temperature, per-head norm
-- variant: d768 4 heads + learnable temperature
+- id: t07
+  variant: d768 4 heads + learnable temperature
   rung: d768
   protocol: data_matched
   batch: '28'
@@ -139,7 +146,8 @@ trials:
     attn_res_heads: '4'
     temperature: learnable, init 1
   tuned: query LR x3/x1/3, temperature, per-head norm
-- variant: d768 4 heads + per-head RMSNorm
+- id: t08
+  variant: d768 4 heads + per-head RMSNorm
   rung: d768
   protocol: data_matched
   batch: '28'
@@ -157,7 +165,8 @@ trials:
     attn_res_heads: '4'
     key norm: per-head RMSNorm
   tuned: query LR x3/x1/3, temperature, per-head norm
-- variant: hierarchical 4-head, slice sub-queries (128 wide)
+- id: t09
+  variant: hierarchical 4-head, slice sub-queries (128 wide)
   rung: d512
   protocol: equal_steps
   batch: '29'
@@ -175,7 +184,8 @@ trials:
     attn_res_head_sub: slice
     heads: '4'
   tuned: slice vs full sub-queries
-- variant: hierarchical 4-head, full-width sub-queries
+- id: t10
+  variant: hierarchical 4-head, full-width sub-queries
   rung: d512
   protocol: equal_steps
   batch: '29'
@@ -193,7 +203,8 @@ trials:
     attn_res_head_sub: full
     heads: '4'
   tuned: slice vs full sub-queries
-- variant: 4 heads + V gate
+- id: t11
+  variant: 4 heads + V gate
   rung: d512
   protocol: equal_steps
   batch: '87'

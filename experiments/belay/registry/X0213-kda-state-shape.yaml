@@ -21,7 +21,8 @@ knobs:
 - kda_value_dim=256
 - kda_state_block_v=64
 trials:
-- variant: 8 x (64x128), chunk 64
+- id: t01
+  variant: 8 x (64x128), chunk 64
   rung: d512
   protocol: equal_steps
   batch: df
@@ -41,7 +42,8 @@ trials:
     kda_chunk_size: '64'
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: mean delta
-- variant: 16 x (64x64)
+- id: t02
+  variant: 16 x (64x64)
   rung: d512
   protocol: equal_steps
   batch: df
@@ -60,7 +62,8 @@ trials:
   step_time_change: +8.6% (207.4 ms)
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: needs packed prep kernel
-- variant: 4 x (64x256) + MLA and KDA content gates
+- id: t03
+  variant: 4 x (64x256) + MLA and KDA content gates
   rung: d512
   protocol: equal_steps
   batch: df
@@ -80,7 +83,8 @@ trials:
     content gates: MLA H-gate + KDA
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: KDA content gate not additive
-- variant: 4 x (64x256)
+- id: t04
+  variant: 4 x (64x256)
   rung: d768
   protocol: data_matched
   batch: df-d768
@@ -98,7 +102,8 @@ trials:
     kda_value_dim: '256'
   step_time_change: +1.9% before block_v fix
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
-- variant: 8 x (64x128)
+- id: t05
+  variant: 8 x (64x128)
   rung: d512
   protocol: equal_steps
   batch: df14-df17
@@ -118,7 +123,8 @@ trials:
   step_time_change: +4.4% (198.0 ms)
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: mean delta; best per step
-- variant: 8 x (64x128), fixed time
+- id: t06
+  variant: 8 x (64x128), fixed time
   rung: d512
   protocol: fixed_time
   batch: df14-df17
@@ -138,7 +144,8 @@ trials:
   step_time_change: 198.8 ms
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: mean delta
-- variant: 4 x (64x256) + MLA H-gate (kv-hg)
+- id: t07
+  variant: 4 x (64x256) + MLA H-gate (kv-hg)
   rung: d512
   protocol: equal_steps
   batch: df14-df17
@@ -159,7 +166,8 @@ trials:
   step_time_change: 195.9 ms
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: mean delta
-- variant: 4 x (64x256), block_v 64 (df21)
+- id: t08
+  variant: 4 x (64x256), block_v 64 (df21)
   rung: d512
   protocol: fixed_time
   batch: df21
@@ -181,7 +189,8 @@ trials:
   step_time_change: ~0 (191.0-191.7 vs 191.3 ms)
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: equal steps is equal time; candidate 13 proposal
-- variant: 8 x (64x128), fixed time (df21)
+- id: t09
+  variant: 8 x (64x128), fixed time (df21)
   rung: d512
   protocol: fixed_time
   batch: df21
@@ -201,7 +210,8 @@ trials:
   step_time_change: +2%
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: mean delta
-- variant: 256 x 64 (wider keys)
+- id: t10
+  variant: 256 x 64 (wider keys)
   rung: d512
   protocol: equal_steps
   batch: df5
@@ -219,7 +229,8 @@ trials:
     kda_value_dim: '64'
   step_time_change: +20% (227.9 ms)
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
-- variant: 4 x (64x256)
+- id: t11
+  variant: 4 x (64x256)
   rung: d512
   protocol: equal_steps
   batch: df5-df10
@@ -240,7 +251,8 @@ trials:
   step_time_change: +1.7% (193.3 ms)
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: mean -0.0067
-- variant: 32 x 512
+- id: t12
+  variant: 32 x 512
   rung: d512
   protocol: equal_steps
   batch: df7-df10
@@ -260,7 +272,8 @@ trials:
   step_time_change: +42% (270 ms)
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
   note: mean; kernel-bound
-- variant: 2 heads x (128x256), same total state
+- id: t13
+  variant: 2 heads x (128x256), same total state
   rung: d512
   protocol: equal_steps
   batch: df8
@@ -278,7 +291,8 @@ trials:
     kda_value_dim: '256'
   step_time_change: 187.7 ms
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
-- variant: 2 heads x (64x512), half state
+- id: t14
+  variant: 2 heads x (64x512), half state
   rung: d512
   protocol: equal_steps
   batch: df8
@@ -296,7 +310,8 @@ trials:
     kda_value_dim: '512'
   step_time_change: 194.3 ms
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
-- variant: 4 x (64x256), fixed time
+- id: t15
+  variant: 4 x (64x256), fixed time
   rung: d512
   protocol: fixed_time
   batch: df9
@@ -316,7 +331,8 @@ trials:
     kda_value_dim: '256'
   step_time_change: 194.4 ms
   tuned: key x value 32x512 .. 256x64; heads 2/4/8/16
-- variant: 128 x 256 (2x state, diagnostic)
+- id: t16
+  variant: 128 x 256 (2x state, diagnostic)
   rung: d512
   protocol: equal_steps
   batch: df9

@@ -12,7 +12,8 @@ tags:
 - kernel
 - mfu
 trials:
-- variant: unrolled router top-k + gate/up split view (lc1-mfu1)
+- id: t01
+  variant: unrolled router top-k + gate/up split view (lc1-mfu1)
   rung: d512
   protocol: equal_steps
   batch: mfu-pass-1
