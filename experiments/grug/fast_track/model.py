@@ -1771,7 +1771,8 @@ class CausalSelfAttention(eqx.Module):
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
         assert self.w_o is not None
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec), stats
+        # Under an MXFP8 ``fp8_recipe`` the output projection is MXFP8 like q/k/v (as in moe_hero_ep).
+        return _proj(self.cfg, attn_out, self.w_o, out_sharding=batch_spec), stats
 
 
 # FoX key bias channels: a bf16 hi/mid/lo split of -c_j (bf16 alone is off by ~|c| * 2^-9 logits; with three
