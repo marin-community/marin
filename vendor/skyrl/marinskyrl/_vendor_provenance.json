@@ -26,9 +26,9 @@
     "cloud/iris/rl_config_translation.py": "e2e47a0fb5948e2891ab5dd29d9de2ee42e043c40b599d7e6d42b00dd646a916",
     "cloud/iris/rl_data.py": "aa660280d64d550510992a1b357e4937421347c3fa5790dade0139b8e9eea20c",
     "cloud/iris/role_plan.py": "3d5f06411c2a7ac4a3407436312380b8768793c8ff66736f149334ac678c5c04",
-    "cloud/iris/runtime_bundle.py": "2449cf8455e6497a0f6068aa056f8df14a1493fc01af78e98ee4489227ddba02",
+    "cloud/iris/runtime_bundle.py": "9ce457d969f1efbbda2634e18e63b9ff1ef62144bd795e12c4585f1585e2dd4d",
     "cloud/iris/runtime_bundle_files.txt": "e4414ca3d126f21635494383b9de704e6595231bd1db421c39f9c64eae56c771",
-    "cloud/iris/runtime_environment.py": "594498cf2156da03c8b84adb5c6d9a4224173aaf24940974d4da2139b57b0fed",
+    "cloud/iris/runtime_environment.py": "c881fef40987a3764c6c83b8015df15f29620031bc1c4dbafcc81cf98a33312f",
     "cloud/iris/secrets_env.py": "174ddbac79baa4784be4726fcbc648dfa82c6963d97a237c037f8f10956f9f7f",
     "cloud/iris/skyrl_entrypoint.py": "1e17efc02427f3d038b14928048ff6a3dbaf0d41eeaf2651466cee817c5c001d",
     "cloud/iris/task_runtime.py": "d495977b19987e8e4f93f6ed86797bc86e9de274680a77960c6588def89fa9f7",
@@ -69,6 +69,7 @@
     "cloud/iris/tests/test_tinker_opd_training_submission.py": "23934e94927e17e8074f067df06b17b6e303446ca72cd3abadedcc08c4b2be79",
     "cloud/iris/tests/test_training_driver.py": "8c5fba86c60de0f1d341f99b5102f52f3d4b63d31ff053d08040779390090841",
     "cloud/iris/tests/test_training_driver_outcome.py": "d99decc7c3df5f6da342b6b55f38d8a1817c23f05b321f7dc4497784fe591079",
+    "cloud/iris/tests/test_vendored_runtime_bundle.py": "7f30dfde17cf02d427b50b66296582fac603996a635c3321c67eb7345dbf4751",
     "cloud/iris/tilelang_cache_sync.py": "ef7a8a5bba4ccb58dc5bfd3e068a9f5694255b2e2937bbf91daaca940ff53ec7",
     "cloud/iris/training_driver.py": "c0135b832d29dfcbcc9ab520fe3172a5f4d1aeb5aac37793dee378756837648d",
     "docker/Dockerfile.open-mopd": "f009b85081d3c9516eaad6dc1656ed077bc480f997af1b3d0d5b9142f873b2e0",
@@ -500,6 +501,10 @@
     {
       "path": "skyrl-migration/runtime-fixes.patch",
       "sha256": "7d15aa13ff0cf6427fcf5f48ed69c1f96591d3e8e5b0c7e8925e3ad21ed1fec7"
+    },
+    {
+      "path": "skyrl-migration/nested-runtime.patch",
+      "sha256": "59b5fd6c5848d617b6b43b667b166746eafb89480bfaf9eb38cc54b043813238"
     }
   ],
   "source": "marin-community/MarinSkyRL",

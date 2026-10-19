@@ -6,8 +6,7 @@ import shlex
 from enum import StrEnum
 
 
-MARINSKYRL_REPOSITORY = "https://github.com/marin-community/MarinSkyRL.git"
-MARINSKYRL_TASK_ROOT = "/app/marinskyrl"
+MARINSKYRL_TASK_ROOT = "/app"
 MARINSKYRL_ACTIVATION_FILE = f"{MARINSKYRL_TASK_ROOT}/.iris-runtime-env"
 MARINSKYRL_BOOTSTRAP_SCRIPT = "cloud/iris/bootstrap_runtime.sh"
 CHECKPOINT_EXPORT_ENTRYPOINT = "skyrl_train.entrypoints.checkpoint_export"
@@ -45,17 +44,14 @@ def runtime_profile_for_strategy(
 
 
 def task_setup_script(commit: str, profile: RuntimeProfile) -> str:
-    """Build the Iris setup script for a frozen SkyRL checkout and dependency profile."""
+    """Verify bundled source and install its independently frozen dependency profile."""
     checkout = MARINSKYRL_TASK_ROOT
     activation_file = MARINSKYRL_ACTIVATION_FILE
     bootstrap_script = f"{checkout}/{MARINSKYRL_BOOTSTRAP_SCRIPT}"
     return f"""set -euo pipefail
 checkout={shlex.quote(checkout)}
-git init -q "$checkout"
-git -C "$checkout" remote add origin {shlex.quote(MARINSKYRL_REPOSITORY)}
-git -C "$checkout" fetch --depth=1 origin {shlex.quote(commit)}
-git -C "$checkout" checkout -q --detach FETCH_HEAD
-test "$(git -C "$checkout" rev-parse HEAD)" = {shlex.quote(commit)}
+cd "$checkout"
+python3.12 -c {shlex.quote('from cloud.iris.runtime_bundle import validate_bundled_runtime; assert validate_bundled_runtime() == ' + repr(commit))}
 bash {shlex.quote(bootstrap_script)} \
   "$checkout" \
   "$IRIS_VENV" \

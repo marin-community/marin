@@ -27,7 +27,7 @@ This is a source candidate. Runtime bootstrap and nightly acceptance remain requ
 | [#986](https://github.com/marin-community/MarinSkyRL/pull/986) |  | conflict | 31 |
 | [#992](https://github.com/marin-community/MarinSkyRL/pull/992) |  | conflict | 4 |
 | [#998](https://github.com/marin-community/MarinSkyRL/pull/998) |  | unmapped-base | 0 |
-| [#1001](https://github.com/marin-community/MarinSkyRL/pull/1001) |  | needs-decision | 8 |
+| [#1001](https://github.com/marin-community/MarinSkyRL/pull/1001) |  | conflict | 8 |
 | [#1008](https://github.com/marin-community/MarinSkyRL/pull/1008) |  | excluded | 2 |
 | [#1019](https://github.com/marin-community/MarinSkyRL/pull/1019) |  | excluded | 2 |
 | [#1022](https://github.com/marin-community/MarinSkyRL/pull/1022) |  | needs-decision | 2 |

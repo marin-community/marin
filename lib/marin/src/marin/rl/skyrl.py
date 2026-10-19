@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -28,7 +30,6 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
-from marin.external_dependencies import MARIN_SKYRL
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
@@ -40,6 +41,16 @@ _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
+SKYRL_PROJECT = Path("vendor/skyrl")
+SKYRL_PROVENANCE = Path("marinskyrl/_vendor_provenance.json")
+
+
+def skyrl_runtime_revision() -> str:
+    """Identify the independently locked source without importing SkyRL into Marin."""
+    workspace = find_project_root(Path(__file__))
+    if workspace is None:
+        raise RuntimeError("The SkyRL runtime requires a Marin checkout")
+    return hashlib.sha256((workspace / SKYRL_PROJECT / SKYRL_PROVENANCE).read_bytes()).hexdigest()
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -57,10 +68,10 @@ class SkyRLRuntimeProfile(StrEnum):
 
 @dataclass(frozen=True)
 class SkyRLRuntime:
-    """Identity-bearing SkyRL revision and locked dependency profile."""
+    """Content-addressed SkyRL source and independently locked dependency profile."""
 
     profile: SkyRLRuntimeProfile
-    commit: str = field(init=False, default=MARIN_SKYRL.commit)
+    commit: str = field(init=False, default_factory=skyrl_runtime_revision)
 
 
 @dataclass(frozen=True)
@@ -646,8 +657,10 @@ def _launcher_command(config_path: str) -> list[str]:
         "run",
         "--isolated",
         "--project",
-        str(workspace_root / "config/external" / MARIN_SKYRL.config_name),
+        str(workspace_root / SKYRL_PROJECT),
         "--frozen",
+        "--no-group",
+        "dev",
         "marinskyrl",
         "iris",
         "launch",
@@ -659,9 +672,14 @@ def _launcher_command(config_path: str) -> list[str]:
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
     """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
     tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
+    environment = dict(os.environ)
+    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        environment.pop(key, None)
     with (
         tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as response,
-        subprocess.Popen(command, stdout=response, stderr=subprocess.PIPE, text=True, errors="replace") as process,
+        subprocess.Popen(
+            command, stdout=response, stderr=subprocess.PIPE, text=True, errors="replace", env=environment
+        ) as process,
     ):
         try:
             assert process.stderr is not None

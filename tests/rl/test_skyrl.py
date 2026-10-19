@@ -16,7 +16,6 @@ import pytest
 import yaml
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -31,6 +30,7 @@ from marin.rl.skyrl import (
     TaskTroveSelection,
     TaskTroveTagMatch,
     run_skyrl,
+    skyrl_runtime_revision,
     skyrl_step,
     skyrl_temporary_run_path,
 )
@@ -53,6 +53,20 @@ def _data_step() -> ArtifactStep[Artifact]:
         "2026.08.01",
         "s3://test/iceball-gsm8k",
     )
+
+
+def test_nested_launcher_does_not_inherit_parent_python_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYTHONPATH", "/parent/workspace")
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/parent/environment")
+    command = [
+        sys.executable,
+        "-c",
+        "import json, os; print(json.dumps({key: os.environ.get(key) for key in "
+        "['PYTHONPATH', 'UV_PROJECT_ENVIRONMENT']}))",
+    ]
+    result = run_launcher_for_test(command)
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {"PYTHONPATH": None, "UV_PROJECT_ENVIRONMENT": None}
 
 
 class _FakeLauncherProcess:
@@ -462,7 +476,7 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert launch["iris"]["timeout"] == 1800
     assert launch["schema_version"] == 1
     assert launch["run"]["export_hf"] is True
-    assert launch["runtime"]["launcher_commit"] == MARIN_SKYRL.commit
+    assert launch["runtime"]["launcher_commit"] == skyrl_runtime_revision()
     assert launch["iris"]["allocation"] == {
         "num_nodes": 1,
         "gpus_per_node": 4,
