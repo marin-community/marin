@@ -205,6 +205,21 @@ def test_wiki_process_record_with_html():
     assert len(result["text"]) > 0
 
 
+def test_wiki_process_record_defaults_keep_ordinary_prose():
+    row = {
+        "identifier": "wiki_prose",
+        "url": "https://en.wikipedia.org/wiki/Prose",
+        "name": "Prose",
+        "article_body": {"html": f"<p>{'Article prose ' * 80}</p>"},
+    }
+
+    result = wiki_process_record(row, extract_config=ResiliparseConfig())
+
+    assert result is not None
+    assert result["id"] == "wiki_prose"
+    assert result["text"].count("Article prose") == 80
+
+
 # Critical filtering
 def test_wiki_process_record_filters_bad_content():
     row = {
