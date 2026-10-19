@@ -606,6 +606,9 @@ def run_evaluation_steps(
     with ExitStack() as stack:
         try:
             prepared = _prepare_inference_model(inference, batch.group_id, runtime_env)
+            prepared_judge = None
+            if judge_inference is not None:
+                prepared_judge = _prepare_inference_model(judge_inference, f"judge-{batch.group_id}", runtime_env)
         except RemoteInferenceStartupError as exc:
             run(
                 partial(
@@ -617,21 +620,6 @@ def run_evaluation_steps(
                 )
             )
             return
-        prepared_judge = None
-        if judge_inference is not None:
-            try:
-                prepared_judge = _prepare_inference_model(judge_inference, f"judge-{batch.group_id}", runtime_env)
-            except RemoteInferenceStartupError as exc:
-                run(
-                    partial(
-                        _record_startup_failure,
-                        batch=batch,
-                        orchestrator_job_id=orchestrator_job_id,
-                        exc=exc,
-                        role=_PREPARE_ROLE,
-                    )
-                )
-                return
         try:
             session = stack.enter_context(remote_inference(prepared))
         except RemoteInferenceStartupError as exc:
