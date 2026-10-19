@@ -133,6 +133,9 @@ class _Deadlines:
     tool: asyncio.Timeout
     attempt: asyncio.Timeout | None
 
+    def attempt_expired(self) -> bool:
+        return self.attempt is not None and self.attempt.expired()
+
 
 @dataclass(frozen=True)
 class _Request:
@@ -281,6 +284,10 @@ class _Recorder:
         if refusal is not None:
             # Yield first, so that a harness that catches the refusal and asks again cannot block a deadline.
             await asyncio.sleep(0)
+            deadlines = self.deadlines
+            if deadlines is not None and deadlines.attempt_expired():
+                # The harness caught the cancellation at the attempt deadline. Its requests are cancelled all the same.
+                raise asyncio.CancelledError
             raise refusal
         if self.model_call is not None:
             raise RuntimeError("A harness sends only one model request at a time")
@@ -297,10 +304,7 @@ class _Recorder:
 
     def _ended(self) -> bool:
         deadlines = self.deadlines
-        if deadlines is None:
-            return True
-        attempt = deadlines.attempt
-        return deadlines.tool.expired() or deadlines.total.expired() or (attempt is not None and attempt.expired())
+        return deadlines is None or deadlines.tool.expired() or deadlines.total.expired() or deadlines.attempt_expired()
 
     def _stop_at_limit(self, observations: tuple[dict[str, Any], ...], token_ids: tuple[int, ...] | None) -> NoReturn:
         """Refuse the request at a limit, and record the observations as the end of the last turn's step."""

@@ -138,9 +138,10 @@ The session applies these rules:
   failed model request, or a turn that breaks the token contract, raises `RolloutEnded` with the error as its
   cause. The harness lets both propagate. For a token-contract violation, the engine then raises
   `RolloutContractError`. A harness that catches a refusal and asks again gets the same refusal, until a turn
-  or attempt deadline stops it. After a refusal, `record(data=..., metrics=...)` still adds to the step of the
-  last turn until the record is final, for example to attach a final reward. If no turn exists, `record` raises
-  the refusal again, so the refusal stays the outcome of the attempt.
+  or attempt deadline stops it. After the attempt deadline, each request raises `CancelledError`, also in a
+  harness that caught the first cancellation. After a refusal, `record(data=..., metrics=...)` still adds to the
+  step of the last turn until the record is final, for example to attach a final reward. If no turn exists,
+  `record` raises the refusal again, so the refusal stays the outcome of the attempt.
 - The record is final when `run` returns or raises, or when a turn or attempt deadline expires. The session
   then cancels a model call that is still open, for example in an agent's HTTP handler, and ignores its result.
   Thus the grader and the returned rollout see the same record.
