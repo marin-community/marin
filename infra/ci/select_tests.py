@@ -157,6 +157,13 @@ DEFAULT_LEG_TIMEOUT = 15
 # smoke drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "skyrl-wheel": (
+        "vendor/skyrl/",
+        "config/skyrl-migration",
+        "scripts/skyrl_migration.py",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ),
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
     "shellbox-unit": (
         "lib/shellbox/",

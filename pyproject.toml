@@ -219,7 +219,7 @@ members = [
 #   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
 #   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
-exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*", "vendor/skyrl", "vendor/skyrl/**"]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
@@ -275,6 +275,7 @@ preview = true
 extend-exclude = """
 (
     scripts/
+    | vendor/skyrl/
 )
 """
 
@@ -286,7 +287,7 @@ target-version = "py312"
 # Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` and
 # `scripts/cost_manager/**` hold scripts invoked directly by `.github/workflows`
 # and stay under ruff.
-extend-exclude = ["scripts/"]
+extend-exclude = ["scripts/", "vendor/skyrl/"]
 extend-include = ["scripts/ci/**/*.py", "scripts/cost_manager/**/*.py"]
 
 [tool.ruff.lint]
@@ -456,6 +457,7 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
+    "vendor/skyrl/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",

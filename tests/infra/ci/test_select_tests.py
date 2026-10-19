@@ -291,6 +291,10 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
+        ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
+        ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
+        ("config/skyrl-migration.toml", ["skyrl-wheel"]),
+        ("config/skyrl-migration/runtime-fixes.patch", ["skyrl-wheel"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
@@ -312,15 +316,16 @@ def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Pat
     assert "taskforge-unit" in selection.suites
 
 
+@pytest.mark.parametrize("suite", ["shellbox", "skyrl"])
 @pytest.mark.parametrize(
-    "shellbox_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
+    "suite_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
 )
-def test_required_unit_check_propagates_shellbox_result(shellbox_result: str, expected_exit: int) -> None:
+def test_required_unit_check_propagates_isolated_suite_result(suite: str, suite_result: str, expected_exit: int) -> None:
     workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
     aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]
     results = dict.fromkeys(aggregate["needs"], "success")
-    if "shellbox" in results:
-        results["shellbox"] = shellbox_result
+    assert suite in results
+    results[suite] = suite_result
     script = re.sub(
         r"\$\{\{ needs\.(\w+)\.result \}\}",
         lambda match: results.get(match.group(1), ""),

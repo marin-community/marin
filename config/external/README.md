@@ -109,3 +109,8 @@ directory, distribution, and generated constant in `config/update-external.py`,
 then add a `migration.toml` section for it. Consumers should use the generated
 `ExternalDependency.requirement()` rather than reading a lockfile or copying its
 commit.
+
+The [SkyRL migration tool](../../docs/dev-guide/skyrl-migration.md) stages a
+pruned vendored source candidate and active fork work. Its candidate remains a
+`marinskyrl` executable with independent resolution; the live pin stays on
+the fork until the documented runtime and CI cutover is complete.

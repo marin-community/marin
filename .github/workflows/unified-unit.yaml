@@ -479,9 +479,25 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  skyrl:
+    name: skyrl-wheel
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'skyrl-wheel') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "vendor/skyrl/uv.lock"
+      - name: Check independent lock, source provenance, and built wheel
+        run: uv run --no-project python -m scripts.skyrl_migration check-vendor
+
   unit_tests:
     name: unit-tests
-    needs: [select, unit, levanter_torch, levanter_tpu, shellbox, taskcompendium, rolloutengine, taskforge, iris_e2e_smoke]
+    needs: [select, unit, levanter_torch, levanter_tpu, shellbox, taskcompendium, rolloutengine, taskforge, iris_e2e_smoke, skyrl]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -495,6 +511,7 @@ jobs:
             "${{ needs.taskcompendium.result }}" \
             "${{ needs.rolloutengine.result }}" \
             "${{ needs.taskforge.result }}" \
+            "${{ needs.skyrl.result }}" \
             "${{ needs.iris_e2e_smoke.result }}"
           do
             case "$result" in

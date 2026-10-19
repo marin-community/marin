@@ -106,6 +106,14 @@ Pull requests without `agent-generated` receive
 committable suggestions and no push. The holistic session ignores a head whose
 delta is only `Deslop` commits, which closes the review-then-deslop loop.
 
+## SkyRL migration checks
+
+`Marin - Unit` selects `skyrl-wheel` for SkyRL source, migration manifest, or
+tooling changes. It checks the nested project's lock, source provenance, and
+built-wheel assets without installing SkyRL in Marin's workspace. GPU smoke
+tests and the production launcher cutover remain separate gates; see
+`docs/dev-guide/skyrl-migration.md`.
+
 ## External dependency updates
 
 `ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
