@@ -50,6 +50,10 @@ def summary(values: list[float]) -> dict:
     }
 
 
+def share(values: list[int], test) -> float | None:
+    return round(sum(map(test, values)) / len(values), 4) if values else None
+
+
 def clean_completion(row: dict) -> bool:
     assistant = [m for m in row["messages"] if m["role"] == "assistant"]
     if not assistant:
@@ -93,11 +97,13 @@ def read_run(run: str, tasks: set[str]) -> tuple[dict[str, dict], list[int], dic
                 "n_conversations": row.get("n_conversations", 1),
                 "seconds": row.get("trial_seconds"),
                 "completion": 0,
+                "turns": 0,
                 "clean": False,
                 "problems": False,
             },
         )
         trial["completion"] += sum(author["completion"] for author in row["tokens"].values())
+        trial["turns"] += sum(author["turns"] for author in row["tokens"].values())
         trial["problems"] |= bool(row["problems"])
         if row["conversation"] == row.get("n_conversations", 1) - 1:
             trial["clean"] = clean_completion(row)
@@ -154,7 +160,7 @@ def main() -> None:
         )
     values = list(trials.values())
     if args.trials_out:
-        keys = ("task_id", "passed", "clean_pass", "cut", "completion", "seconds")
+        keys = ("task_id", "passed", "clean_pass", "cut", "completion", "turns", "seconds")
         lines = [
             json.dumps({"trial_id": k, **{key: t[key] for key in keys}, "context": context.get(k)})
             for k, t in trials.items()
@@ -179,9 +185,10 @@ def main() -> None:
                 "exceptions": sum(bool(t["exception"]) for t in values),
                 "retried_attempts": retried,
                 "reasoning_per_turn": summary(reasoning),
-                "zero_reasoning_turn_share": (
-                    round(sum(r == 0 for r in reasoning) / len(reasoning), 4) if reasoning else None
-                ),
+                "zero_reasoning_turn_share": share(reasoning, lambda r: r == 0),
+                "turns_over_2k_reasoning": share(reasoning, lambda r: r > 2000),
+                "turns_over_8k_reasoning": share(reasoning, lambda r: r > 8000),
+                "steps_per_passing_trial": summary([t["turns"] for t in passing]),
                 "completion_per_passing_trial": summary([t["completion"] for t in passing]),
                 "completion_per_clean_pass": summary([t["completion"] for t in clean]),
                 "context_per_trial": summary([context[k] for k in trials if k in context]),
