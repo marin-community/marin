@@ -185,7 +185,9 @@ def check_relay(uri: str, arm: ArmCheck, plain_manifest: dict) -> dict:
     if len(trials) != len(set(trials)) or set(trials) != {item["trial_id"] for item in arm.selection}:
         raise ValueError(f"{uri}: relay trials repeat or differ from the selection")
     supervised = {
-        item["trial_id"]: (item["family"], item["supervised_tokens"]) for item in arm.index if item["epoch"] == 0
+        item["trial_id"]: (item["family"], item["supervised_tokens"])
+        for item in arm.index
+        if item["epoch"] == 0 and item["family"] != "replay"
     }
     report = {}
     for family in families:
