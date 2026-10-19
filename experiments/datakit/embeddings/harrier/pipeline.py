@@ -27,11 +27,13 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.input_file import InputFileSpec
-from zephyr.readers import load_file
+from zephyr.reader import Reader, flat_map_reader
+from zephyr.readers import load_file, load_parquet_batch
 from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx
 
 from experiments.datakit.embeddings.harrier.tei_client import TeiEmbeddingClient
+from experiments.datakit.embeddings.luxical.pipeline import rows_per_chunk
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +138,24 @@ def _load_tei_embedder(endpoint_name: str) -> TeiEmbeddingClient:
     return TeiEmbeddingClient(endpoint_name, HARRIER_DIM)
 
 
+def _truncated_records(batch: pa.RecordBatch) -> Iterator[dict]:
+    per_chunk = rows_per_chunk(batch.num_rows, batch.nbytes)
+    for offset in range(0, batch.num_rows, per_chunk):
+        for record in batch.slice(offset, per_chunk).to_pylist():
+            record["text"] = record["text"][:HARRIER_MAX_RAW_TEXT_CHARS]
+            yield record
+
+
+def _load_truncated_documents(spec: InputFileSpec) -> Reader[dict]:
+    """Read ``id``/``text`` records, keeping the first HARRIER_MAX_RAW_TEXT_CHARS of each text.
+
+    Truncating here, before ``window``, bounds the reader, the window and the TEI call by
+    the cap rather than by raw document size. Slicing each row group into ``rows_per_chunk``
+    pieces keeps ``to_pylist`` from materializing a whole row group of untruncated text.
+    """
+    return flat_map_reader(load_parquet_batch(spec), _truncated_records)
+
+
 def _embed_shard(batches: Iterator[list[dict]], shard: ShardInfo) -> Iterator[dict]:
     endpoint_name: str = zephyr_worker_ctx().get_shared(_TEI_ENDPOINT_SHARED_KEY)
     embedder = _load_tei_embedder(endpoint_name)
@@ -143,7 +163,7 @@ def _embed_shard(batches: Iterator[list[dict]], shard: ShardInfo) -> Iterator[di
     byte_count = 0
     for batch in batches:
         ids = [record["id"] for record in batch]
-        texts = [record["text"][:HARRIER_MAX_RAW_TEXT_CHARS] for record in batch]
+        texts = [record["text"] for record in batch]
         document_count += len(ids)
         byte_count += sum(len(text.encode()) for text in texts)
         embeddings = embedder.embed(texts)
@@ -196,7 +216,7 @@ def embed_source(
         return str(StoragePath(output_path) / basenames[shard_index])
 
     source_specs = [InputFileSpec(path=path, columns=["id", "text"]) for path in source_shards]
-    documents = Dataset.from_list(source_specs).flat_map(load_file)
+    documents = Dataset.from_list(source_specs).flat_map(_load_truncated_documents)
     if dedup_attr_dir is not None:
         dedup_specs = [
             InputFileSpec(
