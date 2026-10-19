@@ -8,7 +8,11 @@ import numpy as np
 import pytest
 from haliax import Axis
 
-from levanter.layers.gated_deltanet import chunk_gated_delta_rule, recurrent_gated_delta_rule
+from levanter.layers.gated_deltanet import (
+    chunk_gated_delta_rule,
+    recurrent_gated_delta_rule,
+    unit_lower_triangular_inverse,
+)
 from levanter.testing.helpers import skip_if_no_torch
 
 
@@ -213,6 +217,31 @@ def test_gradients_exist_small_kernel_graph():
     g2 = jax.grad(loss_recur)(q.array)
     assert jnp.all(jnp.isfinite(g1))
     assert jnp.all(jnp.isfinite(g2))
+
+
+def _strictly_lower(key, shape):
+    # Off-diagonal magnitudes near the chunk operator's: beta * <k_i, k_j> for unit keys in ~100 dims.
+    return jnp.tril(0.1 * jax.random.normal(key, shape, dtype=jnp.float32), k=-1)
+
+
+@pytest.mark.parametrize("n", [1, 7, 16, 48, 64])
+def test_unit_lower_triangular_inverse_matches_dense_inverse(n):
+    a = _strictly_lower(jax.random.PRNGKey(0), (2, 3, n, n))
+    expected = np.linalg.inv(np.eye(n) - np.asarray(a, dtype=np.float64))
+    np.testing.assert_allclose(np.asarray(unit_lower_triangular_inverse(a)), expected, rtol=1e-5, atol=1e-5)
+
+
+def test_unit_lower_triangular_inverse_gradient_matches_dense_inverse():
+    n = 24  # not a power of two
+    a = _strictly_lower(jax.random.PRNGKey(1), (2, n, n))
+    w = jax.random.normal(jax.random.PRNGKey(2), (2, n, n), dtype=jnp.float32)
+
+    def dense_inverse(x):
+        return jnp.linalg.inv(jnp.eye(n, dtype=x.dtype) - jnp.tril(x, k=-1))
+
+    grad = jax.grad(lambda x: jnp.sum(unit_lower_triangular_inverse(x) * w))(a)
+    expected = jax.grad(lambda x: jnp.sum(dense_inverse(x) * w))(a)
+    np.testing.assert_allclose(np.asarray(grad), np.asarray(expected), rtol=1e-5, atol=1e-5)
 
 
 @skip_if_no_torch

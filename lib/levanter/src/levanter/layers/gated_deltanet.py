@@ -226,7 +226,7 @@ def _tri_upper_eq_mask(Ci: Axis, Cj: Axis) -> NamedArray:
     """Mask for i <= j (upper-triangular incl. diagonal) in (Ci, Cj) coordinates.
 
     Used to zero-out invalid contributions when building strictly lower-triangular
-    in-chunk operators for the UT forward substitution.
+    in-chunk operators for the UT transform.
     """
     ii = hax.arange(Ci)
     jj = hax.arange(Cj)
@@ -241,6 +241,45 @@ def _diag_mask(Ci: Axis, Cj: Axis) -> NamedArray:
     I = ii.broadcast_axis(Cj)
     J = jj.broadcast_axis(Ci)
     return cast(NamedArray, I == J)
+
+
+def unit_lower_triangular_inverse(a: jnp.ndarray) -> jnp.ndarray:
+    """Return T = (I - a)^{-1} for a batch of strictly lower-triangular matrices a: (..., n, n).
+
+    Entries of ``a`` on or above the diagonal are ignored. Instead of an n-step serial forward
+    substitution, this merges inverted diagonal blocks pairwise, starting from 1x1 blocks:
+
+        inv([[I - A11, 0], [-A21, I - A22]]) = [[T11, 0], [T22 A21 T11, T22]]
+
+    so each of the ceil(log2 n) levels is two batched matmuls over all blocks of that size.
+    Non-power-of-two n is zero-padded; the leading block of a block-lower-triangular inverse
+    is the inverse of the leading block, so slicing recovers the exact result.
+    """
+    n = a.shape[-1]
+    size = 1 << (n - 1).bit_length()
+    if size != n:
+        a = jnp.pad(a, [(0, 0)] * (a.ndim - 2) + [(0, size - n), (0, size - n)])
+    lead = a.shape[:-2]
+
+    def mm(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+        return jnp.matmul(x, y, precision=lax.Precision.HIGHEST)
+
+    # t: (..., blocks, b, b), the inverted diagonal blocks of size b.
+    t = jnp.ones((*lead, size, 1, 1), dtype=a.dtype)
+    b = 1
+    while b < size:
+        pairs = size // (2 * b)
+        # Row/col index p*2b + r*b + i; the coupling block of pair p sits at (p, 1) x (p, 0).
+        grid = a.reshape(*lead, pairs, 2, b, pairs, 2, b)
+        a21 = jnp.moveaxis(jnp.diagonal(grid[..., 1, :, :, 0, :], axis1=-4, axis2=-2), -1, -3)
+        t11 = t[..., 0::2, :, :]
+        t22 = t[..., 1::2, :, :]
+        t21 = mm(mm(t22, a21), t11)
+        top = jnp.concatenate([t11, jnp.zeros_like(t11)], axis=-1)
+        bottom = jnp.concatenate([t21, t22], axis=-1)
+        t = jnp.concatenate([top, bottom], axis=-2)
+        b *= 2
+    return t[..., 0, :n, :n]
 
 
 # ---------- Kernels ----------
@@ -375,7 +414,7 @@ def chunk_gated_delta_rule(
       1) Split the length-L sequence into Nc = ceil(L/C) chunks of size C.
       2) Inside each chunk, form a strictly lower-triangular operator encoding
          the rank-1 updates and the *relative decays* between positions.
-      3) Compute T = (I - A)^{-1} via *forward substitution*.
+      3) Compute T = (I - A)^{-1} by blockwise doubling (see unit_lower_triangular_inverse).
       4) Obtain "pseudo values" U = T (β V) and a decayed key summary K̂ = T (β K ⊙ exp(g)).
       5) Bridge chunks with the cross-chunk state S (decayed carry and innovation).
       6) Produce outputs by combining inter-chunk (from S) and intra-chunk terms.
@@ -456,33 +495,9 @@ def chunk_gated_delta_rule(
     A = A_raw * decay
     A = hax.where(_tri_upper_eq_mask(Ci, Cj), jnp.asarray(0.0, dtype=A.dtype), A)
 
-    # --- Forward substitution (UT transform) to get T = (I - A)^{-1} ---
+    # --- UT transform: T = (I - A)^{-1} ---
     A_bhcc = hax.rearrange(A, (Batch, Heads, Chunks, Ci, Cj)).array
-    eyeC = jnp.eye(C.size, dtype=A_bhcc.dtype)
-
-    def body(i, attn):
-        """Perform y[i] ← y[i] + sum_{j<i} y[i,j] * y[j,:]  (forward-subst)
-
-        This loop computes the implicit lower-triangular transform so that
-        'attn + I' acts like T above
-        """
-        row_i = lax.dynamic_slice_in_dim(attn, i, 1, axis=-2)  # (...,1,C)
-        row_i = jnp.squeeze(row_i, axis=-2)  # (...,C)
-
-        # Masks for the strict lower sub-block up to row i
-        ar = jnp.arange(C.size, dtype=attn.dtype)
-        m1 = (ar < i).astype(attn.dtype)  # vector mask
-        m2 = ((ar[:, None] < i) & (ar[None, :] < i)).astype(attn.dtype)  # matrix mask
-
-        row_pref = row_i * m1
-        sub_pref = attn * m2
-        incr = jnp.sum(row_pref[..., None] * sub_pref, axis=-2)
-        new_row = jnp.expand_dims(row_i + incr, axis=-2)
-
-        return lax.dynamic_update_slice_in_dim(attn, new_row, i, axis=-2)
-
-    attn_low = lax.fori_loop(1, C.size, body, A_bhcc)
-    T = attn_low + eyeC  # lower-triangular with ones on diagonal; acts like (I - A)^-1
+    T = unit_lower_triangular_inverse(A_bhcc)
 
     # --- Pseudo values and decayed key summaries (intra-chunk) ---
     # v_pseudo = T @ (β V)
