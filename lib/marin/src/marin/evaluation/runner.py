@@ -481,7 +481,7 @@ def _prepare_inference_models(
     run_id: str,
     env_vars: Mapping[str, str],
 ) -> tuple[RemoteInferenceConfig, RemoteInferenceConfig | None]:
-    """Mirror cold Hugging Face checkpoints on CPU before starting inference."""
+    """Return candidate and judge configs after preparing any Hugging Face cache entries."""
     configs = [(candidate, run_id)]
     if judge is not None:
         configs.append((judge, f"judge-{run_id}"))
