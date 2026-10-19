@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, reshard, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
 from levanter.grug.attention import AttentionMask, fa4_cute_segment_bounds, reference_attention
@@ -137,33 +137,51 @@ def test_flash_attention_batch_sharded_mesh_keeps_output_and_gradient_sharding()
     assert [g.sharding for g in grads] == [sharding] * 3
 
 
-def test_flash_attention_on_single_device_grug_mesh_matches_reference():
-    # A one-device Grug mesh keeps its length-1 axes, so every spec names mesh axes that partition nothing.
+@pytest.mark.parametrize("precomputed_bounds", [False, True])
+def test_flash_attention_on_single_device_grug_mesh_matches_reference(precomputed_bounds):
+    # A one-device Grug mesh keeps its length-1 axes, so every spec names mesh axes that partition nothing. With
+    # precomputed bounds, moe_hero_ep reshards them over the batch axes too, so they name those axes as well.
     names = ("replica_dcn", "data", "context", "expert", "model")
     mesh = Mesh(np.asarray(jax.devices()[:1]).reshape((1,) * 5), names, axis_types=(AxisType.Explicit,) * 5)
     batch_axes = ("replica_dcn", "data", "expert")
     q, k, v = _qkv(jnp.bfloat16)
     mask = MASKS["window_segments"]
-    cotangent = jax.random.normal(jax.random.key(1), q.shape, jnp.float32)
-    expected = _reference(q, k, v, mask)
+    # Padding queries attend only to themselves under precomputed bounds, so they get no cotangent and their
+    # outputs are left out of the comparison.
+    valid_rows = (mask.segment_ids[0] >= 0)[:, :, None, None] if precomputed_bounds else jnp.ones((), bool)
+    cotangent = jnp.where(valid_rows, jax.random.normal(jax.random.key(1), q.shape, jnp.float32), 0.0)
+    expected = jnp.where(valid_rows, _reference(q, k, v, mask), 0.0)
     expected_grads = jax.grad(lambda *a: jnp.sum(_reference(*a, mask) * cotangent), argnums=(0, 1, 2))(q, k, v)
 
     with jax.set_mesh(mesh):
         sharding = NamedSharding(mesh, P(batch_axes, None, "model", None))
         q, k, v, cotangent = (jax.device_put(x, sharding) for x in (q, k, v, cotangent))
         ids = jax.device_put(mask.segment_ids[0], NamedSharding(mesh, P(batch_axes, None)))
-        # Separate q and kv arrays, as a batch from the data loader carries them.
-        sharded_mask = AttentionMask.causal(sliding_window=mask.sliding_window).with_segment_ids(ids, jnp.copy(ids))
 
-        def loss(q, k, v):
-            return jnp.sum(_flash(q, k, v, sharded_mask).astype(jnp.float32) * cotangent)
+        def attend(q, k, v, ids):
+            # Separate q and kv arrays, as a batch from the data loader carries them.
+            sharded_mask = AttentionMask.causal(sliding_window=mask.sliding_window).with_segment_ids(
+                ids, jnp.copy(ids)
+            )
+            if precomputed_bounds:
+                lower, valid = fa4_cute_segment_bounds(
+                    sharded_mask, batch_size=2, seq_len=SEQ_LEN, sliding_window=mask.sliding_window
+                )
+                bounds_spec = P(batch_axes, None)
+                sharded_mask = AttentionMask.causal().with_segment_ids(ids, jnp.copy(ids))
+                sharded_mask = sharded_mask.with_fa4_bounds(reshard(lower, bounds_spec), reshard(valid, bounds_spec))
+            return _flash(q, k, v, sharded_mask)
 
-        actual = jax.jit(_flash)(q, k, v, sharded_mask)
-        actual_grads = jax.jit(jax.grad(loss, argnums=(0, 1, 2)))(q, k, v)
+        def loss(q, k, v, ids):
+            return jnp.sum(attend(q, k, v, ids).astype(jnp.float32) * cotangent)
+
+        actual = jax.jit(attend)(q, k, v, ids)
+        actual_grads = jax.jit(jax.grad(loss, argnums=(0, 1, 2)))(q, k, v, ids)
 
     assert actual.sharding.spec == sharding.spec
     tol = TOLERANCE[jnp.bfloat16]
-    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), atol=tol, rtol=tol)
+    actual = jnp.where(valid_rows, np.asarray(actual, np.float32), 0.0)
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=tol, rtol=tol)
     _assert_gradients_match(actual_grads, expected_grads, tol=tol)
 
 
