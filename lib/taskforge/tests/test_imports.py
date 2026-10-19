@@ -5,9 +5,11 @@
 
 The test parses every module under ``src/taskforge`` and collects each ``taskforge.<package>``
 import, in any form and at any depth. A stage package ``stageNN_<name>`` may import stages with a
-lower number and the shared modules in ``SHARED``. A shared module may import other shared modules
-but no stage. A package in ``TOP`` coordinates the stages, so it may import every stage and shared
-module, and no package may import it.
+lower number and the shared modules in ``SHARED``. Two packages may share a stage number when they
+are alternative ways of running that stage; ``BUILDS_ON`` names the same-number packages each one may
+import, so the agent-driven build drives the program build and never the reverse. A shared module may
+import other shared modules but no stage. A package in ``TOP`` coordinates the stages, so it may
+import every stage and shared module, and no package may import it.
 """
 
 import ast
@@ -19,6 +21,7 @@ import taskforge
 
 SHARED = ("child_process", "content_hash", "ledger", "llm", "sandbox", "spec")
 TOP = ("stage_coordinator",)
+BUILDS_ON = {"stage40_build_with_agent": ("stage40_build_with_program",)}
 STAGE = re.compile(r"stage(\d+)_[a-z0-9_]+")
 ROOT = Path(taskforge.__file__).parent
 
@@ -58,6 +61,8 @@ def import_allowed(importer: str, imported: str) -> bool:
         return True
     if importer in TOP:
         return stage_number(imported) is not None
+    if imported in BUILDS_ON.get(importer, ()):
+        return True
     imported_number = stage_number(imported)
     importer_number = stage_number(importer)
     return imported_number is not None and importer_number is not None and imported_number < importer_number
@@ -98,6 +103,8 @@ def test_every_import_form_counts_and_an_upward_import_is_refused(tmp_path):
     ]
     assert not import_allowed("stage30_author", "stage40_build_with_program")
     assert import_allowed("stage40_build_with_program", "stage30_author")
+    assert import_allowed("stage40_build_with_agent", "stage40_build_with_program")
+    assert not import_allowed("stage40_build_with_program", "stage40_build_with_agent")
     assert not import_allowed("llm", "stage30_author")
     assert import_allowed("stage_coordinator", "stage60_review")
     assert not import_allowed("stage60_review", "stage_coordinator")

@@ -28,7 +28,10 @@ src/taskforge/
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
-  stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure, BuildExpired;
+  stage40_build_with_agent/    agentic_author.py: `author_round`, the agent session that writes, loads,
+                               builds and grades a program through the program build
+  stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure,
+                               BuildExpired;
                                services.py: RLEnvBuildServices, AgentLimits;
                                outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
                                sandbox_effects.py: `build_machine`, `grade_candidate`, `publish_image`;
@@ -37,7 +40,8 @@ src/taskforge/
                                template/standard.py: the standard six-step program;
                                glm_author.py: GlmAuthor and its prompts;
                                step_store.py: step keys, memos, the memo store and `memoized`;
-                               run.py: `run_program`, `run_build`, `build_model_digest`, the draft and `WorkpieceBuildProvenance`
+                               run.py: `run_program`, `run_build`, `build_model_digest`, the draft and
+                               `WorkpieceBuildProvenance`
   stage50_validate/            trials.py: trials on RolloutEngine; classify.py: the failure classifier;
                                lowering.py: `lower`, a task lowered for the validating host;
                                control_drafts.py: `write_controls`, the controls of a draft round;
@@ -48,13 +52,16 @@ src/taskforge/
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
-modules (`content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and the shared modules import no
-stage. The coordinator package, `stage_coordinator`, runs the stages in order and is unnumbered. It
-may import any stage and shared module, and `tests/test_imports.py` refuses an import of it from any
-other package, along with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time
-and tokens per kind and step over JSONL ledgers. The cluster scripts run on Iris and document their
-submit commands in their docstrings: `scripts/build_image_job.py` builds a directory's `DockerBuild`
-context with `taskforge.sandbox.image_builder` and prints the pinned registry digest, and
+modules (`child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and the shared
+modules import no stage. Build has two packages: `stage40_build_with_program` runs a build program's
+steps, and `stage40_build_with_agent` runs the agentic author, whose session builds through the
+program build, so it may import `stage40_build_with_program` and not the reverse. The coordinator
+package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import any stage
+and shared module, and `tests/test_imports.py` refuses an import of it from any other package, along
+with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
+and step over JSONL ledgers. The cluster scripts run on Iris and document their submit commands in
+their docstrings: `scripts/build_image_job.py` builds a directory's `DockerBuild` context with
+`taskforge.sandbox.image_builder` and prints the pinned registry digest, and
 `scripts/iris_machine_probe.py` probes the shellbox Iris backend, and
 `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved from
 a relay job.
@@ -302,7 +309,7 @@ refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `
 program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
 the author receives.
 
-`stage40_build_with_program.agentic_author.author_round` is the agentic author: one agent session (`run_agent`,
+`stage40_build_with_agent.agentic_author.author_round` is the agentic author: one agent session (`run_agent`,
 reasoning replay KEEP) per program round, working in a workspace that starts with the template as
 `program.py`, the proposal, the SDK reference and the template under the read-only `reference/`, and
 an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`, `read_reference`,
