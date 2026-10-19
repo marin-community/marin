@@ -94,7 +94,7 @@ AGENT_DOMAIN_ALLOW_LIST = "iris.oa.dev"
 HARBOR_PROJECT = "config/external/harbor"
 AGENTS_PATH = Path(__file__).parent / "harbor_agents"
 MINI_SWE_CONSTRAINTS = AGENTS_PATH / "mini-swe-agent-2.1.0-constraints.txt"
-# Relay students: each one's eval serving config and pinned revision.
+# Relay students: each one's eval serving config and pinned Hub revision (None when the config names a fixed copy).
 STUDENTS = {
     # Snowball v0 (4eeb756b has the same weights as the config's 271c4b3c; the later commit only corrects the card).
     "v0": (
@@ -104,8 +104,8 @@ STUDENTS = {
         ),
         "4eeb756b404db25bc04e4daf49dfb9817bceb741",
     ),
-    # Snowball v0.1 (head fbc8c3a0 differs from 6783e974 only in the README).
-    "v0.1": (Path(__file__).parent / "students" / "snowball-v0.1.yaml", "6783e9743478bd25a9ce03ab3460e84d6a9814b0"),
+    # Snowball v0.1 @ 6783e974, from a verified bucket copy (see the YAML).
+    "v0.1": (Path("experiments/post_training/sft_shootout/students/snowball-v0.1.yaml"), None),
 }
 # The relay student's OpenAI base URL: a capability URL (a bearer credential) for serve_student.py's endpoint,
 # passed only through the environment.
@@ -180,7 +180,19 @@ def capability_endpoint(app: Starlette, name: str) -> Iterator[str]:
 
 def student_model(student: str) -> ModelConfig:
     config, revision = STUDENTS[student]
-    return replace(load_model_config(config), revision=revision)
+    model = load_model_config(config)
+    return model if revision is None else replace(model, revision=revision)
+
+
+def student_provenance(student: str) -> dict:
+    model = student_model(student)
+    return {
+        "config": str(STUDENTS[student][0]),
+        "location": model.location,
+        "revision": model.revision,
+        "tokenizer": model.tokenizer or model.location,
+        "tokenizer_revision": model.effective_tokenizer_revision,
+    }
 
 
 def student_inference_config(student: str, cluster: str) -> RemoteInferenceConfig:
@@ -219,7 +231,7 @@ def served_student(student: str) -> Backend:
         author=Author.STUDENT,
         base_url=base_url,
         model=served["id"],
-        tokenizer=load_tokenizer(model.tokenizer or model.location, model.revision),
+        tokenizer=load_tokenizer(model.tokenizer or model.location, model.effective_tokenizer_revision),
         headers={},
         # The URL names the endpoint, not a host: while Iris moves a preempted v0 the proxy answers with a gateway
         # error, and the same URL works again once v0 re-registers.
@@ -415,6 +427,8 @@ def main() -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
     provenance = {
         "args": vars(args),
+        # The shootout base and relay student, recorded for plain runs too.
+        "student_model": student_provenance(args.student),
         "harbor": config,
         "policy": str(POLICIES[args.family]),
         "policy_changes": (
@@ -484,7 +498,7 @@ def main() -> None:
             None
             if not args.relay
             else {
-                "student": f"{args.student}: {STUDENTS[args.student][0]}@{STUDENTS[args.student][1]}",
+                "student": args.student,
                 "student_serving": "serve_student.py root job, reached through its capability URL",
                 "budget_fraction": args.budget_fraction,
                 "budget_tokens": int(window * args.budget_fraction),
