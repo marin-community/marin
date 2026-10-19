@@ -18,7 +18,8 @@ details:
 knobs:
 - kda_kalman_beta
 trials:
-- variant: Kalman beta
+- id: t001
+  variant: Kalman beta
   rung: d512
   protocol: equal_steps
   batch: df9

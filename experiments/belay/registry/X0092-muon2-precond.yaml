@@ -17,7 +17,8 @@ papers:
 knobs:
 - muon_precond_beta2
 trials:
-- variant: Muon2 beta2 0.95
+- id: t001
+  variant: Muon2 beta2 0.95
   rung: d512
   protocol: equal_steps
   batch: '49'
@@ -34,7 +35,8 @@ trials:
   settings:
     muon_precond_beta2: '0.95'
   tuned: beta2 0.95/0.99
-- variant: Muon2 beta2 0.99
+- id: t002
+  variant: Muon2 beta2 0.99
   rung: d512
   protocol: equal_steps
   batch: '49'

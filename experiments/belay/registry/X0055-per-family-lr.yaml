@@ -26,7 +26,8 @@ knobs:
 - muonh_qk_scope=mla
 - rel_pos_lr_mult
 trials:
-- variant: attention MuonH LR x1.5
+- id: t001
+  variant: attention MuonH LR x1.5
   rung: d512
   protocol: equal_steps
   batch: '20'
@@ -43,7 +44,8 @@ trials:
   settings:
     muonh_attn_lr_mult: '1.5'
   tuned: x0.67/x1.5
-- variant: attention MuonH LR x0.67
+- id: t002
+  variant: attention MuonH LR x0.67
   rung: d512
   protocol: equal_steps
   batch: '20'
@@ -60,7 +62,8 @@ trials:
   settings:
     muonh_attn_lr_mult: '0.67'
   tuned: x0.67/x1.5
-- variant: routed-expert MuonH LR x1.5
+- id: t003
+  variant: routed-expert MuonH LR x1.5
   rung: d512
   protocol: equal_steps
   batch: '20'
@@ -77,7 +80,8 @@ trials:
   settings:
     muonh_routed_lr_mult: '1.5'
   tuned: x0.67/x1.5
-- variant: routed-expert MuonH LR x0.67
+- id: t004
+  variant: routed-expert MuonH LR x0.67
   rung: d512
   protocol: equal_steps
   batch: '20'
@@ -94,7 +98,8 @@ trials:
   settings:
     muonh_routed_lr_mult: '0.67'
   tuned: x0.67/x1.5
-- variant: KDA beta LR mult 1x (vs 2x)
+- id: t005
+  variant: KDA beta LR mult 1x (vs 2x)
   rung: d512
   protocol: equal_steps
   batch: '20'
@@ -110,7 +115,8 @@ trials:
   - lc1-b20-kbeta1
   settings:
     KDA beta LR mult: 1 (default 2)
-- variant: AttnRes query LR scale 0.3 (vs 0.1)
+- id: t006
+  variant: AttnRes query LR scale 0.3 (vs 0.1)
   rung: d512
   protocol: equal_steps
   batch: '20'
@@ -126,7 +132,8 @@ trials:
   - lc1-b20-arq03
   settings:
     attn_res_query_lr_scale: 0.3 (default 0.1)
-- variant: MLA q/k MuonH LR x0.5
+- id: t007
+  variant: MLA q/k MuonH LR x0.5
   rung: d512
   protocol: equal_steps
   batch: '176'
@@ -146,7 +153,8 @@ trials:
   step_time_change: '0'
   tuned: x0.5 / x0.25
   note: closed
-- variant: MLA q/k MuonH LR x0.25
+- id: t008
+  variant: MLA q/k MuonH LR x0.25
   rung: d512
   protocol: equal_steps
   batch: '176'
@@ -166,7 +174,8 @@ trials:
   step_time_change: '0'
   tuned: x0.5 / x0.25
   note: closed
-- variant: Inkling rel_pos r_proj Adam LR x0.7
+- id: t009
+  variant: Inkling rel_pos r_proj Adam LR x0.7
   rung: d512
   protocol: equal_steps
   batch: '177'
@@ -182,7 +191,8 @@ trials:
     rel_pos_lr_mult: '0.7'
   tuned: 0.7 / 0.5 / 0.3 / 0.1
   note: closed, within noise
-- variant: Inkling rel_pos r_proj Adam LR x0.5
+- id: t010
+  variant: Inkling rel_pos r_proj Adam LR x0.5
   rung: d512
   protocol: equal_steps
   batch: '177'
@@ -198,7 +208,8 @@ trials:
     rel_pos_lr_mult: '0.5'
   tuned: 0.7 / 0.5 / 0.3 / 0.1
   note: closed, within noise
-- variant: Inkling rel_pos r_proj Adam LR x0.3
+- id: t011
+  variant: Inkling rel_pos r_proj Adam LR x0.3
   rung: d512
   protocol: equal_steps
   batch: '177'
@@ -214,7 +225,8 @@ trials:
     rel_pos_lr_mult: '0.3'
   tuned: 0.7 / 0.5 / 0.3 / 0.1
   note: closed, within noise
-- variant: Inkling rel_pos r_proj Adam LR x0.1
+- id: t012
+  variant: Inkling rel_pos r_proj Adam LR x0.1
   rung: d512
   protocol: equal_steps
   batch: '177'

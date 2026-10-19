@@ -18,7 +18,8 @@ knobs:
 - second_embed=true
 - second_embed_mode=input
 trials:
-- variant: random 2nd table as AttnRes source (emb2)
+- id: t001
+  variant: random 2nd table as AttnRes source (emb2)
   rung: d512
   protocol: equal_steps
   batch: '1'
@@ -36,7 +37,8 @@ trials:
     second table: random init + learnable RMSNorm
     placement: extra AttnRes block
   step_time_change: -7% ex/s
-- variant: emb2 on fp32 base
+- id: t002
+  variant: emb2 on fp32 base
   rung: d512
   protocol: equal_steps
   batch: '2'
@@ -51,7 +53,8 @@ trials:
   wandb:
   - lc1-b02-emb2
   note: -0.004 vs new base mean
-- variant: emb2
+- id: t003
+  variant: emb2
   rung: d512
   protocol: equal_steps
   batch: '3'
@@ -65,7 +68,8 @@ trials:
   - 3.0954
   wandb:
   - lc1-b03-emb2
-- variant: second token table, per-layer input
+- id: t004
+  variant: second token table, per-layer input
   rung: d512
   protocol: equal_steps
   batch: '36'

@@ -25,7 +25,8 @@ knobs:
 - routing_sum_learnable
 - routing_renorm_sum=3.5
 trials:
-- variant: combine renorm sum 4.0
+- id: t001
+  variant: combine renorm sum 4.0
   rung: d512
   protocol: equal_steps
   batch: '2'
@@ -43,7 +44,8 @@ trials:
     combine renorm sum: 4.0 (vs 2.5)
   tuned: renorm sum 2.5 vs 4.0
   note: +0.003 vs new base mean
-- variant: renorm sum 2.0
+- id: t002
+  variant: renorm sum 2.0
   rung: d512
   protocol: equal_steps
   batch: '105'
@@ -63,7 +65,8 @@ trials:
   settings:
     combine sum: '2.0'
   tuned: sum 2.0 / 2.5 / 3.0
-- variant: renorm sum 3.0
+- id: t003
+  variant: renorm sum 3.0
   rung: d512
   protocol: equal_steps
   batch: '105'
@@ -83,7 +86,8 @@ trials:
   settings:
     combine sum: '3.0'
   tuned: sum 2.0 / 2.5 / 3.0
-- variant: sqrt-softplus, no renorm (csr)
+- id: t004
+  variant: sqrt-softplus, no renorm (csr)
   rung: d512
   protocol: equal_steps
   batch: '183'
@@ -99,7 +103,8 @@ trials:
     router_combine: sqrt_softplus_raw
   tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
   note: layer-5 latent outlier never forms
-- variant: sigmoid, no renorm (srw)
+- id: t005
+  variant: sigmoid, no renorm (srw)
   rung: d512
   protocol: equal_steps
   batch: '183'
@@ -114,7 +119,8 @@ trials:
   settings:
     router_combine: sigmoid_raw
   tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
-- variant: renorm + per-token MoE output gate (mog)
+- id: t006
+  variant: renorm + per-token MoE output gate (mog)
   rung: d512
   protocol: equal_steps
   batch: '183'
@@ -129,7 +135,8 @@ trials:
   settings:
     moe_out_gate: 'true'
   tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
-- variant: learnable per-layer sum (lsum)
+- id: t007
+  variant: learnable per-layer sum (lsum)
   rung: d512
   protocol: equal_steps
   batch: '183'
@@ -145,7 +152,8 @@ trials:
     routing_sum_learnable: true (init 2.5)
   tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
   note: learned sums rise to 2.7-3.6
-- variant: csr, 2 seeds
+- id: t008
+  variant: csr, 2 seeds
   rung: d512
   protocol: equal_steps
   batch: 185-187
@@ -163,7 +171,8 @@ trials:
     router_combine: sqrt_softplus_raw
   tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
   note: loss-neutral, cleaner design
-- variant: no renorm, total 3.5
+- id: t009
+  variant: no renorm, total 3.5
   rung: d512
   protocol: equal_steps
   batch: 185-187
@@ -178,7 +187,8 @@ trials:
   settings:
     routing_renorm_sum: '3.5'
   tuned: renorm vs raw; sum 2.5 / 3.5 / learnable
-- variant: no renorm + learnable sum
+- id: t010
+  variant: no renorm + learnable sum
   rung: d512
   protocol: equal_steps
   batch: 185-187

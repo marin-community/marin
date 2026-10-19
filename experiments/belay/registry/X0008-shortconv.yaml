@@ -18,7 +18,8 @@ details:
 knobs:
 - sconv_sites=
 trials:
-- variant: no ShortConv on attention outputs
+- id: t001
+  variant: no ShortConv on attention outputs
   rung: d512
   protocol: equal_steps
   batch: '18'
@@ -35,7 +36,8 @@ trials:
   settings:
     sconv_sites: mlp
   tuned: drop attn / MoE / both
-- variant: no ShortConv on MoE outputs
+- id: t002
+  variant: no ShortConv on MoE outputs
   rung: d512
   protocol: equal_steps
   batch: '18'
@@ -53,7 +55,8 @@ trials:
     sconv_sites: attn
   step_time_change: +1% ex/s
   tuned: drop attn / MoE / both
-- variant: no ShortConv on either branch output
+- id: t003
+  variant: no ShortConv on either branch output
   rung: d512
   protocol: equal_steps
   batch: '18'
@@ -71,7 +74,8 @@ trials:
     sconv_sites: (empty)
   step_time_change: +1% ex/s
   tuned: drop attn / MoE / both
-- variant: no branch-output ShortConvs
+- id: t004
+  variant: no branch-output ShortConvs
   rung: d768
   protocol: equal_steps
   batch: '19'

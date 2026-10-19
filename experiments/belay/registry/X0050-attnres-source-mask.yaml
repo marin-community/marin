@@ -13,7 +13,8 @@ tags:
 knobs:
 - attn_res_mask_attn_for
 trials:
-- variant: full AttnRes, L4 KDA gate blocked from earlier attn outputs
+- id: t001
+  variant: full AttnRes, L4 KDA gate blocked from earlier attn outputs
   rung: d512
   protocol: equal_steps
   batch: '18'

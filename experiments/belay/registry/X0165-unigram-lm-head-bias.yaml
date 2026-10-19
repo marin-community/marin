@@ -11,7 +11,8 @@ tags:
 - bias
 - unigram
 trials:
-- variant: log-unigram bias
+- id: t001
+  variant: log-unigram bias
   rung: d512
   protocol: equal_steps
   batch: '102'

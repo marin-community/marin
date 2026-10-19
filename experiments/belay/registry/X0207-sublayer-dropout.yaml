@@ -14,7 +14,8 @@ details:
 knobs:
 - sublayer_dropout
 trials:
-- variant: dropout 0.05
+- id: t001
+  variant: dropout 0.05
   rung: d512
   protocol: equal_steps
   batch: 185-187
@@ -29,7 +30,8 @@ trials:
   settings:
     sublayer_dropout: '0.05'
   tuned: 0.05 / 0.15
-- variant: dropout 0.15
+- id: t002
+  variant: dropout 0.15
   rung: d512
   protocol: equal_steps
   batch: 185-187

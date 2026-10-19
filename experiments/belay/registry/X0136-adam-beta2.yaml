@@ -15,7 +15,8 @@ details:
 knobs:
 - beta2=0.98
 trials:
-- variant: '0.99'
+- id: t001
+  variant: '0.99'
   rung: d512
   protocol: equal_steps
   batch: '87'
@@ -36,7 +37,8 @@ trials:
     beta2: '0.99'
   tuned: beta2 0.95/0.98/0.99/0.996/0.999
   note: free; to next consolidation
-- variant: '0.999'
+- id: t002
+  variant: '0.999'
   rung: d512
   protocol: equal_steps
   batch: '87'
@@ -56,7 +58,8 @@ trials:
   settings:
     beta2: '0.999'
   tuned: beta2 0.95/0.98/0.99/0.996/0.999
-- variant: '0.98'
+- id: t003
+  variant: '0.98'
   rung: d512
   protocol: equal_steps
   batch: '89'
@@ -77,7 +80,8 @@ trials:
     beta2: '0.98'
   tuned: beta2 0.95/0.98/0.99/0.996/0.999
   note: optimum near 0.98; goes into next consolidation
-- variant: '0.95'
+- id: t004
+  variant: '0.95'
   rung: d512
   protocol: equal_steps
   batch: '89'
@@ -97,7 +101,8 @@ trials:
   settings:
     beta2: '0.95'
   tuned: beta2 0.95/0.98/0.99/0.996/0.999
-- variant: beta2 0.98 -> 0.992 at d768 (horizon scaled)
+- id: t005
+  variant: beta2 0.98 -> 0.992 at d768 (horizon scaled)
   rung: d768
   protocol: data_matched
   batch: '131'

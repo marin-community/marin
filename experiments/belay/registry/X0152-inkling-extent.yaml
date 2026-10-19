@@ -11,7 +11,8 @@ tags:
 - relative-position
 - rel_extent
 trials:
-- variant: rel_extent 512
+- id: t001
+  variant: rel_extent 512
   rung: d512
   protocol: equal_steps
   batch: '98'
@@ -25,7 +26,8 @@ trials:
     rel_extent: '512'
   tuned: extent 512 / 2048, rel_dim 32
   note: seed mean
-- variant: rel_extent 2048
+- id: t002
+  variant: rel_extent 2048
   rung: d512
   protocol: equal_steps
   batch: '98'
@@ -39,7 +41,8 @@ trials:
     rel_extent: '2048'
   tuned: extent 512 / 2048, rel_dim 32
   note: seed mean
-- variant: rel_dim 32
+- id: t003
+  variant: rel_dim 32
   rung: d512
   protocol: equal_steps
   batch: '98'

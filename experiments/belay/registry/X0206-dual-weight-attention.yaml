@@ -17,7 +17,8 @@ details:
 knobs:
 - dual_attn_prev
 trials:
-- variant: dual_attn_prev
+- id: t001
+  variant: dual_attn_prev
   rung: d512
   protocol: equal_steps
   batch: '184'

@@ -18,7 +18,8 @@ knobs:
 - topk_layers
 - topk_layer_k
 trials:
-- variant: top-6 routed (MoE++ control)
+- id: t001
+  variant: top-6 routed (MoE++ control)
   rung: d512
   protocol: equal_steps
   batch: '78'
@@ -39,7 +40,8 @@ trials:
     top-k: '6'
   step_time_change: -8.0% (162.2 / 160.7 ms)
   tuned: top-k 8/6/5/4
-- variant: top-5, equal steps
+- id: t002
+  variant: top-5, equal steps
   rung: d512
   protocol: equal_steps
   batch: '79'
@@ -60,7 +62,8 @@ trials:
     top-k: '5'
   step_time_change: -11.3% (155.8 ms)
   tuned: top-k 8/6/5/4
-- variant: top-4, equal steps
+- id: t003
+  variant: top-4, equal steps
   rung: d512
   protocol: equal_steps
   batch: '79'
@@ -81,7 +84,8 @@ trials:
     top-k: '4'
   step_time_change: -14.6% (149.9 ms)
   tuned: top-k 8/6/5/4
-- variant: top-6, in-budget (2972 steps)
+- id: t004
+  variant: top-6, in-budget (2972 steps)
   rung: d512
   protocol: fixed_time
   batch: '79'
@@ -103,7 +107,8 @@ trials:
   step_time_change: -7.8% (162.0 ms)
   tuned: top-k 8/6/5/4
   note: 'vs over-budget 2817-step base: -0.0040 / -0.0030'
-- variant: top-5, in-budget (3080 steps)
+- id: t005
+  variant: top-5, in-budget (3080 steps)
   rung: d512
   protocol: fixed_time
   batch: '79'
@@ -123,7 +128,8 @@ trials:
   settings:
     top-k: '5'
   tuned: top-k 8/6/5/4
-- variant: top-4, in-budget (3200 steps)
+- id: t006
+  variant: top-4, in-budget (3200 steps)
   rung: d512
   protocol: fixed_time
   batch: '79'
@@ -144,7 +150,8 @@ trials:
     top-k: '4'
   tuned: top-k 8/6/5/4
   note: fixed-time plateau -0.010 to -0.013 for top-6..4
-- variant: candidate 6 with top-6, in budget
+- id: t007
+  variant: candidate 6 with top-6, in budget
   rung: d512
   protocol: fixed_time
   batch: '80'
@@ -167,7 +174,8 @@ trials:
     adam_ademamix_beta3: '0.98'
   tuned: top-k 6/5/4 at fixed time
   note: candidate 6 = cand 5 (no PGLE) + AdEMAMix + fewer routed experts
-- variant: candidate 6 with top-5, in budget
+- id: t008
+  variant: candidate 6 with top-5, in budget
   rung: d512
   protocol: fixed_time
   batch: '80'
@@ -190,7 +198,8 @@ trials:
     adam_ademamix_beta3: '0.98'
   tuned: top-k 6/5/4 at fixed time
   note: candidate 6 = cand 5 (no PGLE) + AdEMAMix + fewer routed experts
-- variant: candidate 6 with top-4, in budget
+- id: t009
+  variant: candidate 6 with top-4, in budget
   rung: d512
   protocol: fixed_time
   batch: '80'
@@ -213,7 +222,8 @@ trials:
     adam_ademamix_beta3: '0.98'
   tuned: top-k 6/5/4 at fixed time
   note: candidate 6 = cand 5 (no PGLE) + AdEMAMix + fewer routed experts
-- variant: d768 candidate 6 recipe, top-4 vs top-8
+- id: t010
+  variant: d768 candidate 6 recipe, top-4 vs top-8
   rung: d768
   protocol: equal_steps
   batch: '80'
@@ -231,7 +241,8 @@ trials:
     top-k: '4'
   step_time_change: -17.6% (324 -> 393 ex/s)
   note: delta from issue body scale table; top-8 is 2.7689 vs clean KMA 2.8234
-- variant: top-3, 3380 steps
+- id: t011
+  variant: top-3, 3380 steps
   rung: d512
   protocol: fixed_time
   batch: '81'
@@ -253,7 +264,8 @@ trials:
   step_time_change: 142-145 ms vs 148.6-149.9
   tuned: top-k 6/5/4/3
   note: mean -0.0033; seed 1 2% over budget
-- variant: layer 5 top-12
+- id: t012
+  variant: layer 5 top-12
   rung: d512
   protocol: equal_steps
   batch: '150'
@@ -273,7 +285,8 @@ trials:
   step_time_change: +5% (about 193 ms)
   tuned: layer-5 top-12 vs top-16
   note: within noise
-- variant: layer 5 top-16
+- id: t013
+  variant: layer 5 top-16
   rung: d512
   protocol: equal_steps
   batch: '150'

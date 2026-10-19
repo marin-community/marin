@@ -14,7 +14,8 @@ details:
 - weight transform (I - u u^T) W_up per expert, stop-gradient on u
 - 'variant: learned per-expert fraction alpha, zero-init'
 trials:
-- variant: project each expert's up-proj off its router direction (rortho)
+- id: t001
+  variant: project each expert's up-proj off its router direction (rortho)
   rung: d512
   protocol: equal_steps
   batch: '133'
@@ -28,7 +29,8 @@ trials:
   settings:
     stop-gradient on u_e: 'yes'
   note: router alignment is itself a useful input feature
-- variant: learned per-expert removal fraction alpha (zero-init)
+- id: t002
+  variant: learned per-expert removal fraction alpha (zero-init)
   rung: d512
   protocol: equal_steps
   batch: '134'

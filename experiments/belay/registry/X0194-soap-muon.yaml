@@ -12,7 +12,8 @@ tags:
 - modded-nanogpt
 - eigenbasis
 trials:
-- variant: non-routed matrices
+- id: t001
+  variant: non-routed matrices
   rung: d512
   protocol: equal_steps
   batch: '154'
@@ -31,7 +32,8 @@ trials:
   step_time_change: 190.3 vs 171.6 ms (+11%)
   tuned: with/without routed experts
   note: one seed; loses about 0.02 at fixed time
-- variant: incl. routed experts
+- id: t002
+  variant: incl. routed experts
   rung: d512
   protocol: equal_steps
   batch: '154'

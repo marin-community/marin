@@ -14,7 +14,8 @@ papers:
 - arxiv: '2608.30320'
   title: Qwen3.8-Next
 trials:
-- variant: gains 1+gamma, gain decay 0.1
+- id: t001
+  variant: gains 1+gamma, gain decay 0.1
   rung: d512
   protocol: equal_steps
   batch: '88'

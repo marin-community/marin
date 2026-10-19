@@ -14,7 +14,8 @@ tags:
 knobs:
 - moe_drop_renorm=true
 trials:
-- variant: drop-aware combine renorm
+- id: t001
+  variant: drop-aware combine renorm
   rung: d512
   protocol: equal_steps
   batch: '102'

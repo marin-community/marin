@@ -14,7 +14,8 @@ knobs:
 - attn_res_final_mode
 - attn_res_sum_inputs
 trials:
-- variant: final gate query fixed at 0 (uniform)
+- id: t001
+  variant: final gate query fixed at 0 (uniform)
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -31,7 +32,8 @@ trials:
   settings:
     attn_res_final_mode: uniform
   note: token-matched at full AttnRes fair steps
-- variant: final gate straight sum
+- id: t002
+  variant: final gate straight sum
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -48,7 +50,8 @@ trials:
   settings:
     attn_res_final_mode: sum
   note: token-matched at full AttnRes fair steps
-- variant: Q reads straight sum
+- id: t003
+  variant: Q reads straight sum
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -66,7 +69,8 @@ trials:
     attn_res_sum_inputs: q
   tuned: q/k/v/mlp
   note: token-matched at full AttnRes fair steps
-- variant: K reads straight sum
+- id: t004
+  variant: K reads straight sum
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -84,7 +88,8 @@ trials:
     attn_res_sum_inputs: k
   tuned: q/k/v/mlp
   note: token-matched at full AttnRes fair steps
-- variant: V reads straight sum
+- id: t005
+  variant: V reads straight sum
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -102,7 +107,8 @@ trials:
     attn_res_sum_inputs: v
   tuned: q/k/v/mlp
   note: token-matched at full AttnRes fair steps
-- variant: MoE input reads straight sum
+- id: t006
+  variant: MoE input reads straight sum
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -120,7 +126,8 @@ trials:
     attn_res_sum_inputs: mlp
   tuned: q/k/v/mlp
   note: token-matched at full AttnRes fair steps
-- variant: shared experts read straight sum
+- id: t007
+  variant: shared experts read straight sum
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -136,7 +143,8 @@ trials:
   - lc1-b23-sum-shared
   settings:
     straight-sum input: shared
-- variant: routed path (router+latent) reads straight sum
+- id: t008
+  variant: routed path (router+latent) reads straight sum
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -152,7 +160,8 @@ trials:
   - lc1-b23-sum-routed
   settings:
     straight-sum input: routed
-- variant: router alone reads straight sum
+- id: t009
+  variant: router alone reads straight sum
   rung: d512
   protocol: equal_steps
   batch: 23-24

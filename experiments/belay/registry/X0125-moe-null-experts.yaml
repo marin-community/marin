@@ -14,7 +14,8 @@ papers:
 - arxiv: '2410.07348'
   title: MoE++
 trials:
-- variant: MoE++ 4 zero, 2 copy, 2 constant, free split
+- id: t001
+  variant: MoE++ 4 zero, 2 copy, 2 constant, free split
   rung: d512
   protocol: equal_steps
   batch: '77'
@@ -37,7 +38,8 @@ trials:
     constant experts: '2'
   tuned: free split vs QB-forced 25% null
   note: router sends only 0.9-1.7% of slots to nulls
-- variant: MoE++ QB targets 25% null share
+- id: t002
+  variant: MoE++ QB targets 25% null share
   rung: d512
   protocol: equal_steps
   batch: '77'

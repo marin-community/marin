@@ -17,7 +17,8 @@ papers:
 - arxiv: '2511.17388'
   title: Selective RoPE
 trials:
-- variant: rank 16
+- id: t001
+  variant: rank 16
   rung: d512
   protocol: equal_steps
   batch: '88'

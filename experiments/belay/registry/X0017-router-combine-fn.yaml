@@ -20,7 +20,8 @@ details:
 knobs:
 - router_combine=sqrt_softplus_renorm
 trials:
-- variant: sigmoid combine, no renorm
+- id: t001
+  variant: sigmoid combine, no renorm
   rung: d512
   protocol: equal_steps
   batch: '2'
@@ -38,7 +39,8 @@ trials:
     combine: 2.5*sigmoid/(K/2), no renorm
   tuned: sigmoid-renorm / sigmoid-raw / softmax
   note: +0.001 vs new base mean
-- variant: softmax combine
+- id: t002
+  variant: softmax combine
   rung: d512
   protocol: equal_steps
   batch: '2'
@@ -56,7 +58,8 @@ trials:
     combine: softmax
   tuned: sigmoid-renorm / sigmoid-raw / softmax
   note: +0.011 vs new base mean; clearly worse
-- variant: sqrt-softplus combine (DeepSeek-V4)
+- id: t003
+  variant: sqrt-softplus combine (DeepSeek-V4)
   rung: d512
   protocol: equal_steps
   batch: '98'

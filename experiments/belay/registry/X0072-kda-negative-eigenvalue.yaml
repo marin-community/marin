@@ -23,7 +23,8 @@ details:
 knobs:
 - kda_beta_negative
 trials:
-- variant: beta in (0,2)
+- id: t001
+  variant: beta in (0,2)
   rung: d512
   protocol: equal_steps
   batch: '32'
@@ -39,7 +40,8 @@ trials:
   - lc1-b32-negbeta
   settings:
     variant: beta in (0,2)
-- variant: KDA beta in [0, 2] (kdaneg)
+- id: t002
+  variant: KDA beta in [0, 2] (kdaneg)
   rung: d512
   protocol: equal_steps
   batch: '132'

@@ -13,7 +13,8 @@ papers:
 - arxiv: '2506.02475'
   title: Comba
 trials:
-- variant: d init 0.02
+- id: t001
+  variant: d init 0.02
   rung: d512
   protocol: equal_steps
   batch: '88'
@@ -34,7 +35,8 @@ trials:
     Comba d init: '0.02'
   tuned: d init 0.02 vs 1.0
   note: d driven to ~0
-- variant: d init 1.0
+- id: t002
+  variant: d init 1.0
   rung: d512
   protocol: equal_steps
   batch: '88'

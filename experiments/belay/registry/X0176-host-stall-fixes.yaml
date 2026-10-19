@@ -12,7 +12,8 @@ tags:
 - gil
 - autotune-cache
 trials:
-- variant: numpy batch loader + per-task autotune cache dir (single-process)
+- id: t001
+  variant: numpy batch loader + per-task autotune cache dir (single-process)
   rung: d512
   protocol: equal_steps
   batch: '119'
@@ -28,7 +29,8 @@ trials:
     autotune cache: single-process/ subdir
   step_time_change: mean 204.3 -> 199.8 ms; time >1.3x median 3.70% -> 0.16%
   note: loss unchanged; 8-process default runs still lose about 8% mean step to stalls
-- variant: numpy batch loader, one process per GPU
+- id: t002
+  variant: numpy batch loader, one process per GPU
   rung: d512
   protocol: equal_steps
   batch: '119'

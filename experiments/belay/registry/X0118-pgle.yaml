@@ -19,7 +19,8 @@ details:
 knobs:
 - --pgle-runs 5
 trials:
-- variant: PGLE (--pgle-runs 5)
+- id: t001
+  variant: PGLE (--pgle-runs 5)
   rung: d512
   protocol: equal_steps
   batch: '74'
@@ -33,7 +34,8 @@ trials:
     --pgle-runs: '5'
   step_time_change: -3.4% (169.4 ms)
   note: crashed at mid-run eval; fixed in 1f39a1eeea
-- variant: candidate 5 with PGLE
+- id: t002
+  variant: candidate 5 with PGLE
   rung: d512
   protocol: equal_steps
   batch: '76'
@@ -54,7 +56,8 @@ trials:
     --pgle-runs: '5'
   step_time_change: -2.3% (170.5 ms)
   note: loss unchanged; CUDA_ERROR_LAUNCH_FAILED at step ~2562; not default yet
-- variant: candidate 6 + PGLE, 3230 steps
+- id: t003
+  variant: candidate 6 + PGLE, 3230 steps
   rung: d512
   protocol: fixed_time
   batch: '81'
@@ -74,7 +77,8 @@ trials:
   settings:
     --pgle-runs: '5'
   note: delta computed from losses vs base
-- variant: PGLE --pgle-runs 5 on candidate 9
+- id: t004
+  variant: PGLE --pgle-runs 5 on candidate 9
   rung: d512
   protocol: equal_steps
   batch: '124'

@@ -19,7 +19,8 @@ details:
 knobs:
 - muonh_cautious_wd
 trials:
-- variant: cautious WD
+- id: t001
+  variant: cautious WD
   rung: d512
   protocol: equal_steps
   batch: '102'
@@ -30,7 +31,8 @@ trials:
   delta:
   - 0.0007
   note: 2-seed mean
-- variant: lambda 1
+- id: t002
+  variant: lambda 1
   rung: d512
   protocol: equal_steps
   batch: 169-173
@@ -45,7 +47,8 @@ trials:
   step_time_change: '0'
   tuned: lambda 1 / 0.25
   note: closed, worse
-- variant: lambda 0.25
+- id: t003
+  variant: lambda 0.25
   rung: d512
   protocol: equal_steps
   batch: 169-173

@@ -15,7 +15,8 @@ knobs:
 - expert_read_subset
 - expert_read_groups
 trials:
-- variant: 2 blocks of 256
+- id: t001
+  variant: 2 blocks of 256
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -37,7 +38,8 @@ trials:
   step_time_change: ~8-10% slower (masked full read)
   tuned: slice 256/128/64, blocks vs random, with/without shared
   derived: true
-- variant: 4 blocks of 128
+- id: t002
+  variant: 4 blocks of 128
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -59,7 +61,8 @@ trials:
   step_time_change: ~8-10% slower (masked full read)
   tuned: slice 256/128/64, blocks vs random, with/without shared
   derived: true
-- variant: random 128-subsets
+- id: t003
+  variant: random 128-subsets
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -81,7 +84,8 @@ trials:
   step_time_change: ~8-10% slower (masked full read)
   tuned: slice 256/128/64, blocks vs random, with/without shared
   derived: true
-- variant: 8 blocks of 64
+- id: t004
+  variant: 8 blocks of 64
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -103,7 +107,8 @@ trials:
   step_time_change: ~8-10% slower (masked full read)
   tuned: slice 256/128/64, blocks vs random, with/without shared
   derived: true
-- variant: no shared, 2 blocks of 256
+- id: t005
+  variant: no shared, 2 blocks of 256
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -126,7 +131,8 @@ trials:
   step_time_change: ~8-10% slower (masked full read)
   tuned: slice 256/128/64, blocks vs random, with/without shared
   derived: true
-- variant: no shared, 4 blocks of 128
+- id: t006
+  variant: no shared, 4 blocks of 128
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -149,7 +155,8 @@ trials:
   step_time_change: ~8-10% slower (masked full read)
   tuned: slice 256/128/64, blocks vs random, with/without shared
   derived: true
-- variant: no shared, random 128-subsets
+- id: t007
+  variant: no shared, random 128-subsets
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -172,7 +179,8 @@ trials:
   step_time_change: ~8-10% slower (masked full read)
   tuned: slice 256/128/64, blocks vs random, with/without shared
   derived: true
-- variant: no shared, 8 blocks of 64
+- id: t008
+  variant: no shared, 8 blocks of 64
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -195,7 +203,8 @@ trials:
   step_time_change: ~8-10% slower (masked full read)
   tuned: slice 256/128/64, blocks vs random, with/without shared
   derived: true
-- variant: 'mask control: every expert reads same first 256'
+- id: t009
+  variant: 'mask control: every expert reads same first 256'
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -212,7 +221,8 @@ trials:
   settings:
     expert_read_subset_pattern: shared
   note: masking artifact ~+0.016; real per-expert split cost ~+0.019
-- variant: 'no shared, mask control: same first 256'
+- id: t010
+  variant: 'no shared, mask control: same first 256'
   rung: d512
   protocol: equal_steps
   batch: '104'
@@ -230,7 +240,8 @@ trials:
     expert_read_subset_pattern: shared
     shared_expert_intermediate_dim: '0'
   note: real split cost ~+0.015 after artifact
-- variant: gather, 2 groups of 256
+- id: t011
+  variant: gather, 2 groups of 256
   rung: d512
   protocol: equal_steps
   batch: '109'
@@ -251,7 +262,8 @@ trials:
     expert_read_groups: '2'
   step_time_change: ~+10% (201-203 vs 183.5 ms)
   tuned: G 2 / 4, with/without shared
-- variant: gather, 4 groups of 128
+- id: t012
+  variant: gather, 4 groups of 128
   rung: d512
   protocol: equal_steps
   batch: '109'
@@ -272,7 +284,8 @@ trials:
     expert_read_groups: '4'
   step_time_change: ~0 (182-185 ms)
   tuned: G 2 / 4, with/without shared
-- variant: no shared, gather, 2 groups of 256
+- id: t013
+  variant: no shared, gather, 2 groups of 256
   rung: d512
   protocol: equal_steps
   batch: '109'
@@ -293,7 +306,8 @@ trials:
     expert_read_groups: '2'
     shared_expert_intermediate_dim: '0'
   tuned: G 2 / 4, with/without shared
-- variant: no shared, gather, 4 groups of 128
+- id: t014
+  variant: no shared, gather, 4 groups of 128
   rung: d512
   protocol: equal_steps
   batch: '109'

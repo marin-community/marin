@@ -22,7 +22,8 @@ knobs:
 - embed2_fsdp=true
 - embed2_row_sharded_gather
 trials:
-- variant: row-shard table + Adam state (embed2_fsdp)
+- id: t001
+  variant: row-shard table + Adam state (embed2_fsdp)
   rung: d512
   protocol: equal_steps
   batch: '73'
@@ -43,7 +44,8 @@ trials:
     embed2_fsdp: 'true'
   step_time_change: -1.7% (175.0 -> 172.8 ms)
   note: same math; about -0.003 at fixed time
-- variant: row-sharded lookup (embed2_row_sharded_gather)
+- id: t002
+  variant: row-sharded lookup (embed2_row_sharded_gather)
   rung: d512
   protocol: equal_steps
   batch: '117'

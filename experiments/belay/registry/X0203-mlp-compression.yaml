@@ -21,7 +21,8 @@ details:
 knobs:
 - transfer_normed
 trials:
-- variant: transfer lambda 0.01
+- id: t001
+  variant: transfer lambda 0.01
   rung: d512
   protocol: equal_steps
   batch: '178'
@@ -36,7 +37,8 @@ trials:
   settings:
     lambda: '0.01'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
-- variant: transfer lambda 0.04
+- id: t002
+  variant: transfer lambda 0.04
   rung: d512
   protocol: equal_steps
   batch: '178'
@@ -51,7 +53,8 @@ trials:
   settings:
     lambda: '0.04'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
-- variant: transfer lambda 0.16
+- id: t003
+  variant: transfer lambda 0.16
   rung: d512
   protocol: equal_steps
   batch: '178'
@@ -66,7 +69,8 @@ trials:
   settings:
     lambda: '0.16'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
-- variant: gap loss lambda 0.04
+- id: t004
+  variant: gap loss lambda 0.04
   rung: d512
   protocol: equal_steps
   batch: '178'
@@ -82,7 +86,8 @@ trials:
     lambda: '0.04'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: duplicates paths
-- variant: gap loss lambda 0.16
+- id: t005
+  variant: gap loss lambda 0.16
   rung: d512
   protocol: equal_steps
   batch: '178'
@@ -98,7 +103,8 @@ trials:
     lambda: '0.16'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: duplicates paths
-- variant: routed penalty lambda 0.01
+- id: t006
+  variant: routed penalty lambda 0.01
   rung: d512
   protocol: equal_steps
   batch: '178'
@@ -114,7 +120,8 @@ trials:
     lambda: '0.01'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: destructive
-- variant: routed penalty lambda 0.04
+- id: t007
+  variant: routed penalty lambda 0.04
   rung: d512
   protocol: equal_steps
   batch: '178'
@@ -130,7 +137,8 @@ trials:
     lambda: '0.04'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: destructive
-- variant: shadow probe only
+- id: t008
+  variant: shadow probe only
   rung: d512
   protocol: equal_steps
   batch: '178'
@@ -143,7 +151,8 @@ trials:
   - 2.9631
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: detached probe; no effect on training
-- variant: transfer lambda 0.04 at 100x overtraining
+- id: t009
+  variant: transfer lambda 0.04 at 100x overtraining
   rung: d512
   protocol: equal_steps
   batch: '179'
@@ -160,7 +169,8 @@ trials:
     steps: '281700'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: routed share 0.00 in 5 of 6 layers
-- variant: gap lambda 0.16 at 100x overtraining
+- id: t010
+  variant: gap lambda 0.16 at 100x overtraining
   rung: d512
   protocol: equal_steps
   batch: '179'
@@ -177,7 +187,8 @@ trials:
     steps: '281700'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: cost grows with overtraining
-- variant: normalized transfer lambda 0.01
+- id: t011
+  variant: normalized transfer lambda 0.01
   rung: d512
   protocol: equal_steps
   batch: '180'
@@ -193,7 +204,8 @@ trials:
     lambda: '0.01'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: intake fix for norm stretching
-- variant: normalized transfer lambda 0.04
+- id: t012
+  variant: normalized transfer lambda 0.04
   rung: d512
   protocol: equal_steps
   batch: '180'
@@ -209,7 +221,8 @@ trials:
     lambda: '0.04'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: intake fix for norm stretching
-- variant: transfer 0.04 + counter force n=2
+- id: t013
+  variant: transfer 0.04 + counter force n=2
   rung: d512
   protocol: equal_steps
   batch: '180'
@@ -227,7 +240,8 @@ trials:
     n: '2'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: intake fix for norm stretching
-- variant: transfer 0.04 + counter force n=4
+- id: t014
+  variant: transfer 0.04 + counter force n=4
   rung: d512
   protocol: equal_steps
   batch: '180'

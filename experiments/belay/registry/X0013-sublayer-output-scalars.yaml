@@ -21,7 +21,8 @@ knobs:
 - sublayer_scales
 - sublayer_scale_fn
 trials:
-- variant: learnable scalar per sublayer output
+- id: t001
+  variant: learnable scalar per sublayer output
   rung: d512
   protocol: equal_steps
   batch: '1'
@@ -39,7 +40,8 @@ trials:
     scalar init: '1'
     optimizer: Adam
   note: vs 2-seed mean 3.1223 only -0.002; MoE output scalars grow to 1.2-2.1x
-- variant: osc on fp32 base
+- id: t002
+  variant: osc on fp32 base
   rung: d512
   protocol: equal_steps
   batch: '2'
@@ -54,7 +56,8 @@ trials:
   wandb:
   - lc1-b02-osc
   note: +0.004 vs new base mean
-- variant: linear, init 1
+- id: t003
+  variant: linear, init 1
   rung: d512
   protocol: equal_steps
   batch: '181'
@@ -69,7 +72,8 @@ trials:
   settings:
     sublayer_scales: linear init 1
   tuned: linear vs 2*sigmoid
-- variant: 2*sigmoid(w)
+- id: t004
+  variant: 2*sigmoid(w)
   rung: d512
   protocol: equal_steps
   batch: '181'

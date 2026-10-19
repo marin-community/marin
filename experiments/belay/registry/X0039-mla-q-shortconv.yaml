@@ -11,7 +11,8 @@ tags:
 - shortconv
 - query
 trials:
-- variant: ShortConv on MLA q, Inkling kept
+- id: t001
+  variant: ShortConv on MLA q, Inkling kept
   rung: d512
   protocol: equal_steps
   batch: '11'

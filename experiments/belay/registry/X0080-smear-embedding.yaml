@@ -14,7 +14,8 @@ details:
 - lambda init 0
 - gate reads first 12 dims
 trials:
-- variant: smear on embedding, lambda init 0
+- id: t001
+  variant: smear on embedding, lambda init 0
   rung: d512
   protocol: equal_steps
   batch: '39'

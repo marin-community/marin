@@ -12,7 +12,8 @@ tags:
 - moe-input
 - batch-stats
 trials:
-- variant: batch centering
+- id: t001
+  variant: batch centering
   rung: d512
   protocol: equal_steps
   batch: '25'
@@ -29,7 +30,8 @@ trials:
   settings:
     MoE input: subtract batch mean
   note: train/eval batch-stat mismatch; train loss also +0.06
-- variant: half-whitening p=0.5 (cancelled)
+- id: t002
+  variant: half-whitening p=0.5 (cancelled)
   rung: d512
   protocol: equal_steps
   batch: '25'

@@ -14,7 +14,8 @@ tags:
 papers:
 - title: modded-nanogpt
 trials:
-- variant: momentum warmup
+- id: t001
+  variant: momentum warmup
   rung: d512
   protocol: equal_steps
   batch: '102'
@@ -25,7 +26,8 @@ trials:
   delta:
   - 0.0012
   note: 2-seed mean
-- variant: Muon momentum 0.85 -> 0.95 over 300 steps
+- id: t002
+  variant: Muon momentum 0.85 -> 0.95 over 300 steps
   rung: d512
   protocol: equal_steps
   batch: '127'

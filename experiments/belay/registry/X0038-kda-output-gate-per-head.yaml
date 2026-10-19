@@ -13,7 +13,8 @@ tags:
 knobs:
 - kda_gate_per_head=true
 trials:
-- variant: KDA output gate per head
+- id: t001
+  variant: KDA output gate per head
   rung: d512
   protocol: equal_steps
   batch: '10'

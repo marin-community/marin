@@ -11,7 +11,8 @@ tags:
 - token-identity
 - low-rank
 trials:
-- variant: r=16 token bias
+- id: t001
+  variant: r=16 token bias
   rung: d512
   protocol: equal_steps
   batch: '102'

@@ -15,7 +15,8 @@ knobs:
 - muon_truncate_family
 - muon_truncate_frac
 trials:
-- variant: KDA, 5% removed
+- id: t001
+  variant: KDA, 5% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -30,7 +31,8 @@ trials:
     muon_truncate_family: KDA
     muon_truncate_frac: '0.05'
   tuned: X 5/20/50/80% per matrix type
-- variant: KDA, 20% removed
+- id: t002
+  variant: KDA, 20% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -45,7 +47,8 @@ trials:
     muon_truncate_family: KDA
     muon_truncate_frac: '0.2'
   tuned: X 5/20/50/80% per matrix type
-- variant: KDA, 50% removed
+- id: t003
+  variant: KDA, 50% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -60,7 +63,8 @@ trials:
     muon_truncate_family: KDA
     muon_truncate_frac: '0.5'
   tuned: X 5/20/50/80% per matrix type
-- variant: KDA, 80% removed
+- id: t004
+  variant: KDA, 80% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -75,7 +79,8 @@ trials:
     muon_truncate_family: KDA
     muon_truncate_frac: '0.8'
   tuned: X 5/20/50/80% per matrix type
-- variant: MLA, 5% removed
+- id: t005
+  variant: MLA, 5% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -90,7 +95,8 @@ trials:
     muon_truncate_family: MLA
     muon_truncate_frac: '0.05'
   tuned: X 5/20/50/80% per matrix type
-- variant: MLA, 20% removed
+- id: t006
+  variant: MLA, 20% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -105,7 +111,8 @@ trials:
     muon_truncate_family: MLA
     muon_truncate_frac: '0.2'
   tuned: X 5/20/50/80% per matrix type
-- variant: MLA, 50% removed
+- id: t007
+  variant: MLA, 50% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -120,7 +127,8 @@ trials:
     muon_truncate_family: MLA
     muon_truncate_frac: '0.5'
   tuned: X 5/20/50/80% per matrix type
-- variant: MLA, 80% removed
+- id: t008
+  variant: MLA, 80% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -135,7 +143,8 @@ trials:
     muon_truncate_family: MLA
     muon_truncate_frac: '0.8'
   tuned: X 5/20/50/80% per matrix type
-- variant: LatentMoE, 5% removed
+- id: t009
+  variant: LatentMoE, 5% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -150,7 +159,8 @@ trials:
     muon_truncate_family: LatentMoE
     muon_truncate_frac: '0.05'
   tuned: X 5/20/50/80% per matrix type
-- variant: LatentMoE, 20% removed
+- id: t010
+  variant: LatentMoE, 20% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -165,7 +175,8 @@ trials:
     muon_truncate_family: LatentMoE
     muon_truncate_frac: '0.2'
   tuned: X 5/20/50/80% per matrix type
-- variant: LatentMoE, 50% removed
+- id: t011
+  variant: LatentMoE, 50% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -180,7 +191,8 @@ trials:
     muon_truncate_family: LatentMoE
     muon_truncate_frac: '0.5'
   tuned: X 5/20/50/80% per matrix type
-- variant: LatentMoE, 80% removed
+- id: t012
+  variant: LatentMoE, 80% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -195,7 +207,8 @@ trials:
     muon_truncate_family: LatentMoE
     muon_truncate_frac: '0.8'
   tuned: X 5/20/50/80% per matrix type
-- variant: shared expert, 5% removed
+- id: t013
+  variant: shared expert, 5% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -210,7 +223,8 @@ trials:
     muon_truncate_family: shared expert
     muon_truncate_frac: '0.05'
   tuned: X 5/20/50/80% per matrix type
-- variant: shared expert, 20% removed
+- id: t014
+  variant: shared expert, 20% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -225,7 +239,8 @@ trials:
     muon_truncate_family: shared expert
     muon_truncate_frac: '0.2'
   tuned: X 5/20/50/80% per matrix type
-- variant: shared expert, 50% removed
+- id: t015
+  variant: shared expert, 50% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -240,7 +255,8 @@ trials:
     muon_truncate_family: shared expert
     muon_truncate_frac: '0.5'
   tuned: X 5/20/50/80% per matrix type
-- variant: shared expert, 80% removed
+- id: t016
+  variant: shared expert, 80% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -255,7 +271,8 @@ trials:
     muon_truncate_family: shared expert
     muon_truncate_frac: '0.8'
   tuned: X 5/20/50/80% per matrix type
-- variant: routed experts, 5% removed
+- id: t017
+  variant: routed experts, 5% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -270,7 +287,8 @@ trials:
     muon_truncate_family: routed experts
     muon_truncate_frac: '0.05'
   tuned: X 5/20/50/80% per matrix type
-- variant: routed experts, 20% removed
+- id: t018
+  variant: routed experts, 20% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -285,7 +303,8 @@ trials:
     muon_truncate_family: routed experts
     muon_truncate_frac: '0.2'
   tuned: X 5/20/50/80% per matrix type
-- variant: routed experts, 50% removed
+- id: t019
+  variant: routed experts, 50% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -300,7 +319,8 @@ trials:
     muon_truncate_family: routed experts
     muon_truncate_frac: '0.5'
   tuned: X 5/20/50/80% per matrix type
-- variant: routed experts, 80% removed
+- id: t020
+  variant: routed experts, 80% removed
   rung: d512
   protocol: equal_steps
   batch: '143'
@@ -315,7 +335,8 @@ trials:
     muon_truncate_family: routed experts
     muon_truncate_frac: '0.8'
   tuned: X 5/20/50/80% per matrix type
-- variant: kda, 20% removed, MuonEq off
+- id: t021
+  variant: kda, 20% removed, MuonEq off
   rung: d512
   protocol: equal_steps
   batch: '153'
@@ -334,7 +355,8 @@ trials:
     muon_truncate_frac: '0.2'
     muon_pre_norm: none
   tuned: per matrix type
-- variant: mla, 20% removed, MuonEq off
+- id: t022
+  variant: mla, 20% removed, MuonEq off
   rung: d512
   protocol: equal_steps
   batch: '153'
@@ -353,7 +375,8 @@ trials:
     muon_truncate_frac: '0.2'
     muon_pre_norm: none
   tuned: per matrix type
-- variant: latent, 20% removed, MuonEq off
+- id: t023
+  variant: latent, 20% removed, MuonEq off
   rung: d512
   protocol: equal_steps
   batch: '153'
@@ -372,7 +395,8 @@ trials:
     muon_truncate_frac: '0.2'
     muon_pre_norm: none
   tuned: per matrix type
-- variant: shared, 20% removed, MuonEq off
+- id: t024
+  variant: shared, 20% removed, MuonEq off
   rung: d512
   protocol: equal_steps
   batch: '153'
@@ -391,7 +415,8 @@ trials:
     muon_truncate_frac: '0.2'
     muon_pre_norm: none
   tuned: per matrix type
-- variant: routed, 20% removed, MuonEq off
+- id: t025
+  variant: routed, 20% removed, MuonEq off
   rung: d512
   protocol: equal_steps
   batch: '153'

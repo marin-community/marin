@@ -13,7 +13,8 @@ tags:
 papers:
 - arxiv: '2605.10504'
 trials:
-- variant: slow phase 25% of training
+- id: t001
+  variant: slow phase 25% of training
   rung: d512
   protocol: equal_steps
   batch: '102'
@@ -26,7 +27,8 @@ trials:
   settings:
     slow phase: 25%
   tuned: 25% / 4%
-- variant: slow phase 4% of training
+- id: t002
+  variant: slow phase 4% of training
   rung: d512
   protocol: equal_steps
   batch: '102'

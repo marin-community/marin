@@ -23,7 +23,8 @@ intake:
   author: RavnaBergsndot
   approved_by: ClassicLarry
 trials:
-- variant: q/k MuonH LR x0.5 (KDA w_q/w_k, MLA w_q/w_uk)
+- id: t001
+  variant: q/k MuonH LR x0.5 (KDA w_q/w_k, MLA w_q/w_uk)
   rung: d512
   protocol: equal_steps
   batch: '135'
@@ -37,7 +38,8 @@ trials:
   settings:
     muonh_qk LR mult: '0.5'
   tuned: q/k LR x0.5 / x2
-- variant: q/k MuonH LR x2
+- id: t002
+  variant: q/k MuonH LR x2
   rung: d512
   protocol: equal_steps
   batch: '135'

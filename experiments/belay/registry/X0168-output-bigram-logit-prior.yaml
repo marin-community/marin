@@ -11,7 +11,8 @@ tags:
 - lm-head
 - logit-prior
 trials:
-- variant: r=64, LR x1
+- id: t001
+  variant: r=64, LR x1
   rung: d512
   protocol: equal_steps
   batch: '99'
@@ -27,7 +28,8 @@ trials:
     W init: zero
   tuned: LR x1 / x10
   note: seed mean
-- variant: r=64, LR x10
+- id: t002
+  variant: r=64, LR x10
   rung: d512
   protocol: equal_steps
   batch: '99'

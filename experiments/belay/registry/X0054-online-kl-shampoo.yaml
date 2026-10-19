@@ -26,7 +26,8 @@ knobs:
 - okls_hyperball
 - okls_lr_mult
 trials:
-- variant: attn only, token-matched (hybrid MuonH step)
+- id: t001
+  variant: attn only, token-matched (hybrid MuonH step)
   rung: d512
   protocol: equal_steps
   batch: '19'
@@ -49,7 +50,8 @@ trials:
   step_time_change: -18% ex/s
   tuned: targets attn/routed/shared+latent/all
   note: per-step gain on attention projections
-- variant: routed experts only, fp16 CANS
+- id: t002
+  variant: routed experts only, fp16 CANS
   rung: d512
   protocol: equal_steps
   batch: '19'
@@ -68,7 +70,8 @@ trials:
     CANS: fp16
   step_time_change: -21% ex/s
   tuned: targets attn/routed/shared+latent/all
-- variant: shared + latent
+- id: t003
+  variant: shared + latent
   rung: d512
   protocol: equal_steps
   batch: '19'
@@ -86,7 +89,8 @@ trials:
     okls_targets: shared,latent
   step_time_change: -20% ex/s
   tuned: targets attn/routed/shared+latent/all
-- variant: all families, fp16 CANS
+- id: t004
+  variant: all families, fp16 CANS
   rung: d512
   protocol: equal_steps
   batch: '19'
@@ -105,7 +109,8 @@ trials:
     CANS: fp16
   step_time_change: -33% ex/s
   tuned: targets attn/routed/shared+latent/all
-- variant: attn only, roots every 10 steps, fp16 CANS
+- id: t005
+  variant: attn only, roots every 10 steps, fp16 CANS
   rung: d512
   protocol: fixed_time
   batch: '19'
@@ -129,7 +134,8 @@ trials:
   step_time_change: -4.4% ex/s
   tuned: root refresh every step vs 10
   note: gain does not survive fixed time; not added
-- variant: hybrid, q projections only
+- id: t006
+  variant: hybrid, q projections only
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -147,7 +153,8 @@ trials:
     okls_targets: q
     CANS: fp16
     roots: fresh every step
-- variant: hybrid, k projections only
+- id: t007
+  variant: hybrid, k projections only
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -165,7 +172,8 @@ trials:
     okls_targets: k
     CANS: fp16
     roots: fresh every step
-- variant: paper mode, attention
+- id: t008
+  variant: paper mode, attention
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -184,7 +192,8 @@ trials:
     okls_targets: attn
     peak LR: '0.09434'
   tuned: peak LR x0.5/x1
-- variant: paper mode, all hidden matrices
+- id: t009
+  variant: paper mode, all hidden matrices
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -202,7 +211,8 @@ trials:
     okls_hyperball: 'false'
     okls_targets: all hidden
   note: paper-all ran at 599 ex/s
-- variant: paper mode, attention, peak LR x0.5
+- id: t010
+  variant: paper mode, attention, peak LR x0.5
   rung: d512
   protocol: equal_steps
   batch: '21'
@@ -221,7 +231,8 @@ trials:
     okls_targets: attn
     okls peak LR: x0.5
   tuned: peak LR x0.5/x1
-- variant: on attention V
+- id: t011
+  variant: on attention V
   rung: d512
   protocol: equal_steps
   batch: '87'
@@ -243,7 +254,8 @@ trials:
   step_time_change: 180 vs 177 ms
   tuned: V only vs all attention
   note: neutral
-- variant: on all attention
+- id: t012
+  variant: on all attention
   rung: d512
   protocol: equal_steps
   batch: '87'
@@ -265,7 +277,8 @@ trials:
   step_time_change: 198 vs 177 ms
   tuned: V only vs all attention
   note: neutral; closed
-- variant: OKLS on attention, candidate 9 (gradient-capture run)
+- id: t013
+  variant: OKLS on attention, candidate 9 (gradient-capture run)
   rung: d512
   protocol: equal_steps
   batch: '120'
@@ -282,7 +295,8 @@ trials:
   step_time_change: +7%
   note: 'no gain on candidate 9, down from -0.0057 on the old base; deep dive: input-side factors very anisotropic, every
     dense step overshoots early'
-- variant: OKLS on attention, input-side damping lambda 1
+- id: t014
+  variant: OKLS on attention, input-side damping lambda 1
   rung: d512
   protocol: equal_steps
   batch: '130'
@@ -298,7 +312,8 @@ trials:
     input damping lambda: '1'
   step_time_change: 209 ms (vs 186)
   tuned: damping lambda 1 / 1000 (output-only)
-- variant: OKLS on attention, output-side only (lambda 1000)
+- id: t015
+  variant: OKLS on attention, output-side only (lambda 1000)
   rung: d512
   protocol: equal_steps
   batch: '130'

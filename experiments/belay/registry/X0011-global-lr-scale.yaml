@@ -14,7 +14,8 @@ tags:
 - sweep
 - bracket
 trials:
-- variant: LR x1.5
+- id: t001
+  variant: LR x1.5
   rung: d512
   protocol: equal_steps
   batch: '1'
@@ -32,7 +33,8 @@ trials:
     MuonH LR: '0.0336'
     Adam LR: '0.0078'
   tuned: LR x1.5 / x0.67
-- variant: LR x0.67
+- id: t002
+  variant: LR x0.67
   rung: d512
   protocol: equal_steps
   batch: '1'
@@ -50,7 +52,8 @@ trials:
     MuonH LR: '0.0150'
     Adam LR: '0.0035'
   tuned: LR x1.5 / x0.67
-- variant: LR x1.25 on bundle
+- id: t003
+  variant: LR x1.25 on bundle
   rung: d512
   protocol: equal_steps
   batch: '13'
@@ -68,7 +71,8 @@ trials:
     MuonH LR: '0.0268'
     Adam LR: '0.0062'
   tuned: x1.25 / x0.8
-- variant: LR x0.8 on bundle
+- id: t004
+  variant: LR x0.8 on bundle
   rung: d512
   protocol: equal_steps
   batch: '13'
@@ -86,7 +90,8 @@ trials:
     MuonH LR: '0.0172'
     Adam LR: '0.0040'
   tuned: x1.25 / x0.8
-- variant: MuonH LR x0.8
+- id: t005
+  variant: MuonH LR x0.8
   rung: d512
   protocol: equal_steps
   batch: '54'
@@ -103,7 +108,8 @@ trials:
   settings:
     MuonH LR: x0.8 (0.0214 base)
   tuned: MuonH x0.8/x1.25, Adam x0.7/x1.4
-- variant: MuonH LR x1.25
+- id: t006
+  variant: MuonH LR x1.25
   rung: d512
   protocol: equal_steps
   batch: '54'
@@ -120,7 +126,8 @@ trials:
   settings:
     MuonH LR: x1.25
   tuned: MuonH x0.8/x1.25, Adam x0.7/x1.4
-- variant: Adam LR x0.7
+- id: t007
+  variant: Adam LR x0.7
   rung: d512
   protocol: equal_steps
   batch: '54'
@@ -137,7 +144,8 @@ trials:
   settings:
     Adam LR: x0.7 (0.00495 base)
   tuned: MuonH x0.8/x1.25, Adam x0.7/x1.4
-- variant: Adam LR x1.4
+- id: t008
+  variant: Adam LR x1.4
   rung: d512
   protocol: equal_steps
   batch: '54'
@@ -154,7 +162,8 @@ trials:
   settings:
     Adam LR: x1.4
   tuned: MuonH x0.8/x1.25, Adam x0.7/x1.4
-- variant: MuonH LR x0.9
+- id: t009
+  variant: MuonH LR x0.9
   rung: d512
   protocol: equal_steps
   batch: '67'
@@ -171,7 +180,8 @@ trials:
   settings:
     MuonH LR: x0.9
   tuned: x0.9 vs x1.1
-- variant: MuonH LR x1.1
+- id: t010
+  variant: MuonH LR x1.1
   rung: d512
   protocol: equal_steps
   batch: '67'
@@ -188,7 +198,8 @@ trials:
   settings:
     MuonH LR: x1.1
   tuned: x0.9 vs x1.1
-- variant: MuonH LR x0.8
+- id: t011
+  variant: MuonH LR x0.8
   rung: d512
   protocol: equal_steps
   batch: '106'
@@ -208,7 +219,8 @@ trials:
   settings:
     muonh LR: x0.8
   tuned: MuonH and Adam LR x0.8 / x1.25
-- variant: MuonH LR x1.25
+- id: t012
+  variant: MuonH LR x1.25
   rung: d512
   protocol: equal_steps
   batch: '106'
@@ -228,7 +240,8 @@ trials:
   settings:
     muonh LR: x1.25
   tuned: MuonH and Adam LR x0.8 / x1.25
-- variant: Adam LR x0.8
+- id: t013
+  variant: Adam LR x0.8
   rung: d512
   protocol: equal_steps
   batch: '106'
@@ -248,7 +261,8 @@ trials:
   settings:
     adam LR: x0.8
   tuned: MuonH and Adam LR x0.8 / x1.25
-- variant: Adam LR x1.25
+- id: t014
+  variant: Adam LR x1.25
   rung: d512
   protocol: equal_steps
   batch: '106'

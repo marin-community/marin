@@ -20,7 +20,8 @@ knobs:
 - moe_bank2_topk
 - moe_bank2_scale
 trials:
-- variant: 'widths: 256x256 top-6 + 128x768 top-2'
+- id: t001
+  variant: 'widths: 256x256 top-6 + 128x768 top-2'
   rung: d512
   protocol: equal_steps
   batch: '68'
@@ -40,7 +41,8 @@ trials:
   step_time_change: +1.5% ex/s
   tuned: bank mixes; per-bank scale on/off
   note: neutral; 739 vs 728 ex/s (within host noise)
-- variant: 'activations: 192 ReLU2x384 top-4 + 192 SwiGLUx256 top-4'
+- id: t002
+  variant: 'activations: 192 ReLU2x384 top-4 + 192 SwiGLUx256 top-4'
   rung: d512
   protocol: equal_steps
   batch: '68'
@@ -59,7 +61,8 @@ trials:
     bank2: 192 SwiGLU x 256 top-4
   tuned: bank mixes; per-bank scale on/off
   note: SwiGLU bank gets about half the gradient
-- variant: 'one wide: 384x192 top-8 + 64x1536 top-1'
+- id: t003
+  variant: 'one wide: 384x192 top-8 + 64x1536 top-1'
   rung: d512
   protocol: equal_steps
   batch: '68'
@@ -78,7 +81,8 @@ trials:
     bank2: 64 x 1536 top-1
   tuned: bank mixes; per-bank scale on/off
   note: 700 ex/s
-- variant: 'split control: 2 identical ReLU2 banks, top-4 each'
+- id: t004
+  variant: 'split control: 2 identical ReLU2 banks, top-4 each'
   rung: d512
   protocol: equal_steps
   batch: '68'
@@ -97,7 +101,8 @@ trials:
     bank2: 192 ReLU2 x 384 top-4
   tuned: bank mixes; per-bank scale on/off
   note: forced per-bank split is free
-- variant: activations mix + per-bank output scale
+- id: t005
+  variant: activations mix + per-bank output scale
   rung: d512
   protocol: equal_steps
   batch: '68'
@@ -116,7 +121,8 @@ trials:
     mix: activations
   tuned: bank mixes; per-bank scale on/off
   note: both bank scales grow to about 2.3x
-- variant: widths mix + per-bank output scale
+- id: t006
+  variant: widths mix + per-bank output scale
   rung: d512
   protocol: equal_steps
   batch: '68'

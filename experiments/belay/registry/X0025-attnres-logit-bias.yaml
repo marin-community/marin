@@ -13,7 +13,8 @@ details:
 - zero init
 - Adam at 0.1x Adam LR
 trials:
-- variant: per (gate, source) bias, Adam 0.1x
+- id: t001
+  variant: per (gate, source) bias, Adam 0.1x
   rung: d512
   protocol: equal_steps
   batch: '5'

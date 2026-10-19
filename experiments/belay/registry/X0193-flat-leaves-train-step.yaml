@@ -13,7 +13,8 @@ tags:
 details:
 - same math; 184.3 -> 171.6 ms at d512
 trials:
-- variant: flat leaves
+- id: t001
+  variant: flat leaves
   rung: d512
   protocol: equal_steps
   batch: '152'

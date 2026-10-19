@@ -15,7 +15,8 @@ papers:
 - arxiv: '2503.02130'
   title: Forgetting Transformer
 trials:
-- variant: FoX bias 4
+- id: t001
+  variant: FoX bias 4
   rung: d512
   protocol: equal_steps
   batch: '102'

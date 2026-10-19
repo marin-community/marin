@@ -20,7 +20,8 @@ knobs:
 - loop_passes
 - loop_grow_step
 trials:
-- variant: loop x2 throughout (tied, input injection)
+- id: t001
+  variant: loop x2 throughout (tied, input injection)
   rung: d512
   protocol: fixed_time
   batch: '9'
@@ -39,7 +40,8 @@ trials:
     injection: alpha*e, alpha init 1 (Adam)
   step_time_change: 0.506x throughput
   tuned: 2x throughout / grow at 50% / grow at 70%
-- variant: grow 1->2 passes at 70% (step 1525)
+- id: t002
+  variant: grow 1->2 passes at 70% (step 1525)
   rung: d512
   protocol: fixed_time
   batch: '9'
@@ -57,7 +59,8 @@ trials:
     loop_passes: '2'
     loop_grow_step: '1525'
   tuned: 2x throughout / grow at 50% / grow at 70%
-- variant: grow 1->2 passes at 50% (step 946)
+- id: t003
+  variant: grow 1->2 passes at 50% (step 946)
   rung: d512
   protocol: fixed_time
   batch: '9'

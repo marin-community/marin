@@ -11,7 +11,8 @@ tags:
 - split
 - mfu
 trials:
-- variant: gate/up split as [...,2,I] view (with router top-k unroll)
+- id: t001
+  variant: gate/up split as [...,2,I] view (with router top-k unroll)
   rung: d512
   protocol: equal_steps
   batch: mfu-pass-1

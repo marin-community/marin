@@ -14,7 +14,8 @@ tags:
 knobs:
 - attn_res_v_gate
 trials:
-- variant: separate V-input gate
+- id: t001
+  variant: separate V-input gate
   rung: d512
   protocol: equal_steps
   batch: 23-24
@@ -30,7 +31,8 @@ trials:
   - lc1-b24-vgate
   settings:
     attn_res_v_gate: 'true'
-- variant: V gate on KDA layers, full AttnRes
+- id: t002
+  variant: V gate on KDA layers, full AttnRes
   rung: d512
   protocol: equal_steps
   batch: '28'
@@ -47,7 +49,8 @@ trials:
   settings:
     attn_res_v_gate: true (KDA only)
   note: V reads embedding heavily at L4 (0.32 vs 0.02)
-- variant: V gate alone
+- id: t003
+  variant: V gate alone
   rung: d512
   protocol: equal_steps
   batch: '87'
@@ -67,7 +70,8 @@ trials:
   settings:
     AttnRes V gate: 'on'
   step_time_change: +6%
-- variant: separate AttnRes value pseudo-query on candidate 9 (vgate)
+- id: t004
+  variant: separate AttnRes value pseudo-query on candidate 9 (vgate)
   rung: d512
   protocol: equal_steps
   batch: '129'

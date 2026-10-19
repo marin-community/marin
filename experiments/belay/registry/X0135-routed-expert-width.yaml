@@ -18,7 +18,8 @@ details:
 knobs:
 - intermediate_dim
 trials:
-- variant: top-4, routed experts 512 wide
+- id: t001
+  variant: top-4, routed experts 512 wide
   rung: d512
   protocol: fixed_time
   batch: '81'
@@ -41,7 +42,8 @@ trials:
   step_time_change: +3.4% (154 ms)
   tuned: routed width 384 vs 512
   note: mean -0.0120; ~-0.006 at true fixed time (over budget)
-- variant: top-4 x 512, in budget
+- id: t002
+  variant: top-4 x 512, in budget
   rung: d512
   protocol: fixed_time
   batch: '82'
@@ -63,7 +65,8 @@ trials:
     intermediate_dim: '512'
   tuned: top-k 3/4 x width 384/512/640
   note: delta computed per seed; round 2 cancelled when top-k<8 ruled out
-- variant: top-4 x 640, in budget
+- id: t003
+  variant: top-4 x 640, in budget
   rung: d512
   protocol: fixed_time
   batch: '82'
@@ -85,7 +88,8 @@ trials:
     intermediate_dim: '640'
   tuned: top-k 3/4 x width 384/512/640
   note: delta computed per seed; round 2 cancelled when top-k<8 ruled out
-- variant: top-3 x 512, in budget
+- id: t004
+  variant: top-3 x 512, in budget
   rung: d512
   protocol: fixed_time
   batch: '82'
@@ -107,7 +111,8 @@ trials:
     intermediate_dim: '512'
   tuned: top-k 3/4 x width 384/512/640
   note: delta computed per seed; round 2 cancelled when top-k<8 ruled out
-- variant: top-3 x 640, in budget
+- id: t005
+  variant: top-3 x 640, in budget
   rung: d512
   protocol: fixed_time
   batch: '82'
@@ -129,7 +134,8 @@ trials:
     intermediate_dim: '640'
   tuned: top-k 3/4 x width 384/512/640
   note: delta computed per seed; round 2 cancelled when top-k<8 ruled out
-- variant: routed 512 x 8, shared 384
+- id: t006
+  variant: routed 512 x 8, shared 384
   rung: d512
   protocol: equal_steps
   batch: '83'
@@ -151,7 +157,8 @@ trials:
     shared_expert_intermediate_dim: '384'
   step_time_change: +2.6% (181 ms)
   tuned: routed 384-768 x shared 0/384
-- variant: routed 640, shared 384
+- id: t007
+  variant: routed 640, shared 384
   rung: d512
   protocol: equal_steps
   batch: '85'
@@ -171,7 +178,8 @@ trials:
   step_time_change: 186 vs 177 ms
   tuned: routed 384-1280 x shared 0-384
   note: mean -0.0222
-- variant: routed 768, shared 384
+- id: t008
+  variant: routed 768, shared 384
   rung: d512
   protocol: equal_steps
   batch: '85'
@@ -191,7 +199,8 @@ trials:
   step_time_change: 191 vs 177 ms
   tuned: routed 384-1280 x shared 0-384
   note: mean -0.0260
-- variant: routed 768, shared 192
+- id: t009
+  variant: routed 768, shared 192
   rung: d512
   protocol: equal_steps
   batch: '85'
@@ -211,7 +220,8 @@ trials:
   step_time_change: 189 vs 177 ms
   tuned: routed 384-1280 x shared 0-384
   note: about -0.024 (seed 0); halving shared costs ~+0.0015
-- variant: routed 1024, shared 192
+- id: t010
+  variant: routed 1024, shared 192
   rung: d512
   protocol: equal_steps
   batch: '85'
@@ -231,7 +241,8 @@ trials:
   step_time_change: +11%
   tuned: routed 384-1280 x shared 0-384
   note: mean -0.0330; does not fit at d1024
-- variant: routed 1280, shared 192
+- id: t011
+  variant: routed 1280, shared 192
   rung: d512
   protocol: equal_steps
   batch: '85'
@@ -251,7 +262,8 @@ trials:
   step_time_change: +19%
   tuned: routed 384-1280 x shared 0-384
   note: mean -0.0376; 51.3 GiB
-- variant: routed 1024, shared 192
+- id: t012
+  variant: routed 1024, shared 192
   rung: d768
   protocol: equal_steps
   batch: '85'
@@ -269,7 +281,8 @@ trials:
     routed width: '1024'
     shared width: '192'
   tuned: fixed 1024 vs 2x hidden
-- variant: routed 1536, shared 288 (2x hidden)
+- id: t013
+  variant: routed 1536, shared 288 (2x hidden)
   rung: d768
   protocol: equal_steps
   batch: '85'
@@ -287,7 +300,8 @@ trials:
     routed width: '1536'
     shared width: '288'
   tuned: fixed 1024 vs 2x hidden
-- variant: latent 256 projection, routed width 1x (384)
+- id: t014
+  variant: latent 256 projection, routed width 1x (384)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -305,7 +319,8 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- variant: latent 256 projection, routed width 2x (768)
+- id: t015
+  variant: latent 256 projection, routed width 2x (768)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -323,7 +338,8 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- variant: latent 256 projection, routed width 4x (1536)
+- id: t016
+  variant: latent 256 projection, routed width 4x (1536)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -341,7 +357,8 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- variant: latent 256 projection, routed width 8x (3072)
+- id: t017
+  variant: latent 256 projection, routed width 8x (3072)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -359,7 +376,8 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- variant: latent 256 projection, routed width 16x (6144)
+- id: t018
+  variant: latent 256 projection, routed width 16x (6144)
   rung: d512
   protocol: equal_steps
   batch: '91'
@@ -377,7 +395,8 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- variant: latent 256, routed width 32x (12288) and no latent 32x
+- id: t019
+  variant: latent 256, routed width 32x (12288) and no latent 32x
   rung: d512
   protocol: equal_steps
   batch: '91'

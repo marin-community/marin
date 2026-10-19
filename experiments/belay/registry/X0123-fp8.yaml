@@ -22,7 +22,8 @@ details:
 knobs:
 - fp8_recipe=mxfp8_sim
 trials:
-- variant: FP8 (e4m3) MoE dispatch all-to-all
+- id: t001
+  variant: FP8 (e4m3) MoE dispatch all-to-all
   rung: d512
   protocol: equal_steps
   batch: '77'

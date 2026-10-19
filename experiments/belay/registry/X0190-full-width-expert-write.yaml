@@ -25,7 +25,8 @@ details:
 knobs:
 - latent_out_full_layers=4,5
 trials:
-- variant: layer 5 only
+- id: t001
+  variant: layer 5 only
   rung: d512
   protocol: equal_steps
   batch: '145'
@@ -44,7 +45,8 @@ trials:
   step_time_change: +5.2% (194 vs 184.3 ms)
   tuned: which layers (0..5, 4+5)
   note: est. fixed time about -0.002; +50M params
-- variant: layers 4,5
+- id: t002
+  variant: layers 4,5
   rung: d512
   protocol: equal_steps
   batch: '145'
@@ -63,7 +65,8 @@ trials:
   step_time_change: +11% (205 vs 184.3 ms)
   tuned: which layers (0..5, 4+5)
   note: est. fixed time about +0.005
-- variant: layer 0 only
+- id: t003
+  variant: layer 0 only
   rung: d512
   protocol: equal_steps
   batch: '146'
@@ -79,7 +82,8 @@ trials:
   step_time_change: 192 ms vs 184.3 ms
   tuned: which layers (0..5, 4+5)
   note: gain grows toward output
-- variant: layer 1 only
+- id: t004
+  variant: layer 1 only
   rung: d512
   protocol: equal_steps
   batch: '146'
@@ -95,7 +99,8 @@ trials:
   step_time_change: 193 ms vs 184.3 ms
   tuned: which layers (0..5, 4+5)
   note: gain grows toward output
-- variant: layer 2 only
+- id: t005
+  variant: layer 2 only
   rung: d512
   protocol: equal_steps
   batch: '146'
@@ -111,7 +116,8 @@ trials:
   step_time_change: 192 ms vs 184.3 ms
   tuned: which layers (0..5, 4+5)
   note: gain grows toward output
-- variant: layer 3 only
+- id: t006
+  variant: layer 3 only
   rung: d512
   protocol: equal_steps
   batch: '146'
@@ -127,7 +133,8 @@ trials:
   step_time_change: 192 ms vs 184.3 ms
   tuned: which layers (0..5, 4+5)
   note: gain grows toward output
-- variant: layer 4 only
+- id: t007
+  variant: layer 4 only
   rung: d512
   protocol: equal_steps
   batch: '146'
@@ -143,7 +150,8 @@ trials:
   step_time_change: 192 ms vs 184.3 ms
   tuned: which layers (0..5, 4+5)
   note: gain grows toward output
-- variant: layer 5, flat step
+- id: t008
+  variant: layer 5, flat step
   rung: d512
   protocol: equal_steps
   batch: '152'
@@ -161,7 +169,8 @@ trials:
     latent_out_full_layers: '5'
   step_time_change: +2.6% vs flat candidate 9 (176.1 ms)
   tuned: layer 5 vs 4+5
-- variant: layers 4,5, flat step, no PGLE
+- id: t009
+  variant: layers 4,5, flat step, no PGLE
   rung: d512
   protocol: equal_steps
   batch: 161-162
@@ -180,7 +189,8 @@ trials:
   step_time_change: +4.9% (184.0 ms no PGLE, 180.4 with)
   tuned: layer 5 vs 4+5
   note: largest equal-step gain since candidate 9; net about -0.006 at fixed time
-- variant: layers 4,5 (candidate 10)
+- id: t010
+  variant: layers 4,5 (candidate 10)
   rung: d512
   protocol: equal_steps
   batch: 169-173
@@ -196,7 +206,8 @@ trials:
   - 2.9664
   settings:
     latent_out_full_layers: 4,5
-- variant: layers 6,7 (candidate 10)
+- id: t011
+  variant: layers 6,7 (candidate 10)
   rung: d768
   protocol: data_matched
   batch: 169-173
@@ -212,7 +223,8 @@ trials:
   - 2.7177
   settings:
     latent_out_full_layers: 6,7
-- variant: last layer only (lof7)
+- id: t012
+  variant: last layer only (lof7)
   rung: d768
   protocol: data_matched
   batch: 169-173
@@ -226,7 +238,8 @@ trials:
   - 2.7269
   settings:
     latent_out_full_layers: '7'
-- variant: candidate 10 at own 480 s budget
+- id: t013
+  variant: candidate 10 at own 480 s budget
   rung: d512
   protocol: fixed_time
   batch: '171'

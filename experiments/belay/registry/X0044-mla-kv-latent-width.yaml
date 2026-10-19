@@ -14,7 +14,8 @@ tags:
 details:
 - kept 512 at d512
 trials:
-- variant: KV latent 256 (vs 512)
+- id: t001
+  variant: KV latent 256 (vs 512)
   rung: d512
   protocol: equal_steps
   batch: '14'
@@ -31,7 +32,8 @@ trials:
   settings:
     KV latent: '256'
   tuned: 512 / 256 / 128
-- variant: KV latent 128
+- id: t002
+  variant: KV latent 128
   rung: d512
   protocol: equal_steps
   batch: '14'
@@ -48,7 +50,8 @@ trials:
   settings:
     KV latent: '128'
   tuned: 512 / 256 / 128
-- variant: MLA KV latent 512 -> 384 (kv384)
+- id: t003
+  variant: MLA KV latent 512 -> 384 (kv384)
   rung: d512
   protocol: equal_steps
   batch: '139'
@@ -65,7 +68,8 @@ trials:
   settings:
     kv latent: '384'
   tuned: 512 / 384 / 256
-- variant: MLA KV latent 512 -> 256 (kv256)
+- id: t004
+  variant: MLA KV latent 512 -> 256 (kv256)
   rung: d512
   protocol: equal_steps
   batch: '139'

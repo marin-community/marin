@@ -13,7 +13,8 @@ tags:
 knobs:
 - expert_leaky_slope
 trials:
-- variant: slope 0.5
+- id: t001
+  variant: slope 0.5
   rung: d512
   protocol: equal_steps
   batch: '64'
@@ -34,7 +35,8 @@ trials:
     expert_leaky_slope: '0.5'
   tuned: slope 0.5 vs 0.3
   note: seed-0 gain was noise
-- variant: slope 0.3
+- id: t002
+  variant: slope 0.3
   rung: d512
   protocol: equal_steps
   batch: '64'
@@ -51,7 +53,8 @@ trials:
   settings:
     expert_leaky_slope: '0.3'
   tuned: slope 0.5 vs 0.3
-- variant: slope 0.5 + LR floor 10%
+- id: t003
+  variant: slope 0.5 + LR floor 10%
   rung: d512
   protocol: equal_steps
   batch: '64'

@@ -19,7 +19,8 @@ papers:
 knobs:
 - moe_shortcut=true
 trials:
-- variant: ScMoE shortcut (MoE reads pre-attention sources)
+- id: t001
+  variant: ScMoE shortcut (MoE reads pre-attention sources)
   rung: d512
   protocol: equal_steps
   batch: '79'

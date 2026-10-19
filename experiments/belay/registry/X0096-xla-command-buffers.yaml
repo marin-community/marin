@@ -13,7 +13,8 @@ tags:
 knobs:
 - XLA_FLAGS=--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CUDNN
 trials:
-- variant: XLA default command-buffer set, collectives eager
+- id: t001
+  variant: XLA default command-buffer set, collectives eager
   rung: d512
   protocol: equal_steps
   batch: mfu-pass-1

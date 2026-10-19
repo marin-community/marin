@@ -13,7 +13,8 @@ tags:
 knobs:
 - mla_share_kv_latent=true
 trials:
-- variant: L5 reuses L3 KV latent
+- id: t001
+  variant: L5 reuses L3 KV latent
   rung: d512
   protocol: equal_steps
   batch: '15'

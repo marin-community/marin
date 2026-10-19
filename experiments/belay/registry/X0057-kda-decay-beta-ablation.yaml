@@ -15,7 +15,8 @@ knobs:
 - kda_no_decay_layers
 - kda_no_beta_layers
 trials:
-- variant: no decay layer 0
+- id: t001
+  variant: no decay layer 0
   rung: d512
   protocol: equal_steps
   batch: '22'
@@ -32,7 +33,8 @@ trials:
   settings:
     kda_no_decay_layers: '0'
   tuned: one layer at a time, then several
-- variant: no decay layer 1
+- id: t002
+  variant: no decay layer 1
   rung: d512
   protocol: equal_steps
   batch: '22'
@@ -49,7 +51,8 @@ trials:
   settings:
     kda_no_decay_layers: '1'
   tuned: one layer at a time, then several
-- variant: no decay layer 2
+- id: t003
+  variant: no decay layer 2
   rung: d512
   protocol: equal_steps
   batch: '22'
@@ -66,7 +69,8 @@ trials:
   settings:
     kda_no_decay_layers: '2'
   tuned: one layer at a time, then several
-- variant: no decay layer 4
+- id: t004
+  variant: no decay layer 4
   rung: d512
   protocol: equal_steps
   batch: '22'
@@ -83,7 +87,8 @@ trials:
   settings:
     kda_no_decay_layers: '4'
   tuned: one layer at a time, then several
-- variant: no beta (beta=1) layer 0
+- id: t005
+  variant: no beta (beta=1) layer 0
   rung: d512
   protocol: equal_steps
   batch: '22'
@@ -100,7 +105,8 @@ trials:
   settings:
     kda_no_beta_layers: '0'
   tuned: one layer at a time, then several
-- variant: no beta layer 1
+- id: t006
+  variant: no beta layer 1
   rung: d512
   protocol: equal_steps
   batch: '22'
@@ -117,7 +123,8 @@ trials:
   settings:
     kda_no_beta_layers: '1'
   tuned: one layer at a time, then several
-- variant: no beta layer 2
+- id: t007
+  variant: no beta layer 2
   rung: d512
   protocol: equal_steps
   batch: '22'
@@ -134,7 +141,8 @@ trials:
   settings:
     kda_no_beta_layers: '2'
   tuned: one layer at a time, then several
-- variant: no beta layer 4
+- id: t008
+  variant: no beta layer 4
   rung: d512
   protocol: equal_steps
   batch: '22'
@@ -151,7 +159,8 @@ trials:
   settings:
     kda_no_beta_layers: '4'
   tuned: one layer at a time, then several
-- variant: no beta layers 0,1,4
+- id: t009
+  variant: no beta layers 0,1,4
   rung: d512
   protocol: equal_steps
   batch: '22'
@@ -168,7 +177,8 @@ trials:
   settings:
     kda_no_beta_layers: 0,1,4
   tuned: one layer at a time, then several
-- variant: no beta all KDA layers
+- id: t010
+  variant: no beta all KDA layers
   rung: d512
   protocol: equal_steps
   batch: '22'

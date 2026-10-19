@@ -28,7 +28,8 @@ knobs:
 - intermediate_dim=384
 - moe_fused_relu2 (off)
 trials:
-- variant: ReLU2 GLU (gated), routed + shared
+- id: t001
+  variant: ReLU2 GLU (gated), routed + shared
   rung: d512
   protocol: equal_steps
   batch: '30'
@@ -44,7 +45,8 @@ trials:
   - lc1-b30-relu2
   settings:
     expert_activation: relu2
-- variant: ungated ReLU2, 576/top-12 (param and FLOP matched, tied-gate emulation)
+- id: t002
+  variant: ungated ReLU2, 576/top-12 (param and FLOP matched, tied-gate emulation)
   rung: d512
   protocol: equal_steps
   batch: '41'
@@ -67,7 +69,8 @@ trials:
     top-k: '12'
   step_time_change: 660 ex/s (tied gate GEMM paid)
   tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
-- variant: ungated ReLU2, 384/top-8 (2/3 expert params)
+- id: t003
+  variant: ungated ReLU2, 384/top-8 (2/3 expert params)
   rung: d512
   protocol: equal_steps
   batch: '41'
@@ -86,7 +89,8 @@ trials:
     num_experts: '384'
     top-k: '8'
   tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
-- variant: ungated ReLU2 576/top-12, routed LR x1.25
+- id: t004
+  variant: ungated ReLU2 576/top-12, routed LR x1.25
   rung: d512
   protocol: equal_steps
   batch: '41'
@@ -106,7 +110,8 @@ trials:
     top-k: '12'
     routed LR mult: '1.25'
   tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
-- variant: ungated ReLU2 384/top-8, 1.5x wider experts
+- id: t005
+  variant: ungated ReLU2 384/top-8, 1.5x wider experts
   rung: d512
   protocol: equal_steps
   batch: '41'
@@ -126,7 +131,8 @@ trials:
   step_time_change: 759 ex/s
   tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
   note: ReLU2 alone beats SwiGLU by about -0.005
-- variant: shared experts ungated ReLU2, 1.5x wider
+- id: t006
+  variant: shared experts ungated ReLU2, 1.5x wider
   rung: d512
   protocol: equal_steps
   batch: '41'
@@ -145,7 +151,8 @@ trials:
     shared width: '384'
   step_time_change: 787 ex/s
   tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
-- variant: routed ReLU2 576/top-12 + shared ReLU2
+- id: t007
+  variant: routed ReLU2 576/top-12 + shared ReLU2
   rung: d512
   protocol: equal_steps
   batch: '41'
@@ -166,7 +173,8 @@ trials:
     top-k: '12'
   step_time_change: 648 ex/s
   tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
-- variant: routed 576/12 + shared ReLU2, d768
+- id: t008
+  variant: routed 576/12 + shared ReLU2, d768
   rung: d768
   protocol: data_matched
   batch: '43'
@@ -187,7 +195,8 @@ trials:
     top-k: '12'
   step_time_change: 264 ex/s
   note: about 80% of d512 size
-- variant: routed 576/12 + shared, ungated kernel
+- id: t009
+  variant: routed 576/12 + shared, ungated kernel
   rung: d512
   protocol: equal_steps
   batch: '48'
@@ -209,7 +218,8 @@ trials:
     top-k: '12'
   step_time_change: 678 vs 795 ex/s (-15%)
   tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
-- variant: 384/top-8, 1.5x wide experts + ungated shared, ungated kernel
+- id: t010
+  variant: 384/top-8, 1.5x wide experts + ungated shared, ungated kernel
   rung: d512
   protocol: equal_steps
   batch: '48'
@@ -231,7 +241,8 @@ trials:
   step_time_change: 791 ex/s (full speed)
   tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
   note: most gain comes from more, finer experts, not activation
-- variant: latent ReLU2 384/8, 1.5x width, d768
+- id: t011
+  variant: latent ReLU2 384/8, 1.5x width, d768
   rung: d768
   protocol: data_matched
   batch: '57'
@@ -252,7 +263,8 @@ trials:
   step_time_change: +2% ex/s
   tuned: latent vs no latent
   note: 325 vs 318 ex/s; k 1.028x
-- variant: no latent, ReLU2 384/8 1.5x width, d768
+- id: t012
+  variant: no latent, ReLU2 384/8 1.5x width, d768
   rung: d768
   protocol: data_matched
   batch: '57'
@@ -272,7 +284,8 @@ trials:
     width: 1.5x
   tuned: latent vs no latent
   note: no LatentMoE x ReLU2 interaction
-- variant: 384/8, 1.5x wide, fused Pallas kernel
+- id: t013
+  variant: 384/8, 1.5x wide, fused Pallas kernel
   rung: d512
   protocol: equal_steps
   batch: '61'
@@ -293,7 +306,8 @@ trials:
   step_time_change: +2.3% (176.0 vs 172.0 ms)
   tuned: fused vs unfused
   note: fused kernel +4.1 ms/step end to end; stays off
-- variant: 384/8, 1.5x wide, unfused
+- id: t014
+  variant: 384/8, 1.5x wide, unfused
   rung: d512
   protocol: equal_steps
   batch: '61'
@@ -317,7 +331,8 @@ trials:
   step_time_change: 0 (171.9 vs 172.0 ms)
   tuned: fused vs unfused
   note: free -0.005; same step time as SwiGLU
-- variant: ReLU2 1.5x + Bi-Maxwell
+- id: t015
+  variant: ReLU2 1.5x + Bi-Maxwell
   rung: d512
   protocol: equal_steps
   batch: '61'
@@ -335,7 +350,8 @@ trials:
     relu2 width: 1.5x
     muon_bimaxwell: 'true'
   note: stack additively; 719 ex/s with first Bi-Maxwell version
-- variant: d768 remove ReLU2 experts (SwiGLU 256)
+- id: t016
+  variant: d768 remove ReLU2 experts (SwiGLU 256)
   rung: d768
   protocol: equal_steps
   batch: '84'
