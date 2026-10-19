@@ -20,8 +20,8 @@ Each stage runs through an adapter in this module. The adapter calls the caller'
 the round's files, and returns the stage's event. The coordinator spends a build revision on:
 
 * a build raising ``BuildFailure`` or any other error, recorded as ``BUILD_FAILED``, unless the
-  error is a ``BuildInfrastructureFailure``, ``ModelUnavailable``, or an ``OSError`` raised outside
-  the program's own frames: a storage fault, a missing blob or memo, or a corrupt one
+  error is a ``BuildInfrastructureFailure``, a ``BuildExpired``, ``ModelUnavailable``, or an
+  ``OSError`` raised outside the program's own frames: a storage fault, a missing blob or memo, or a corrupt one
   (``StoreCorruption``). An ``OSError`` raised in the program, a step opening a file that is not
   there, is the program's and spends a revision like any other error of its code;
 * an author raising ``StructuredOutputError``, recorded as ``AUTHOR_FAILED``. The author's
@@ -65,9 +65,11 @@ from pydantic import TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
 
 from taskforge.content_hash import digest, pretty_json
+from taskforge.ledger.records import check_workpiece_id
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
@@ -77,9 +79,10 @@ from taskforge.stage30_author.author import (
     program_manifest,
 )
 from taskforge.stage30_author.program import RLEnvBuildProgram
-from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
-from taskforge.stage40_build_with_program.run import DRAFT_DIR, load_draft
-from taskforge.stage40_build_with_program.step_store import CacheStatus, check_workpiece_id
+from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure
+from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, load_draft
+from taskforge.stage40_build_with_program.services import RLEnvBuildServices
+from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, Retry
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
@@ -141,8 +144,11 @@ class StageCoordinator:
         event_store: The store each workpiece's events are saved to on reaching a terminal.
         model: The model build steps call.
         sampling: The sampling policy build steps pass to ``model``.
-        model_digest: The model part of every step key, usually ``step_store.model_digest(model, sampling)``.
-            ``OPENED`` records it.
+        services: The build host's machines, images, web tools, ledger and agent-loop settings, passed
+            to every build.
+        research: The research requirement of every build (``run_build``'s ``research``).
+        model_digest: The model part of every step key, usually
+            ``run.build_model_digest(model, sampling, services)``. ``OPENED`` records it.
     """
 
     stages: StageFunctions
@@ -151,6 +157,8 @@ class StageCoordinator:
     event_store: WorkpieceEventStore
     model: ModelClient
     sampling: LLMPolicy
+    services: RLEnvBuildServices
+    research: ResearchRequirement
     model_digest: str
 
 
@@ -158,7 +166,7 @@ class StageCoordinator:
 class _Workpiece:
     coordinator: StageCoordinator
     workpiece_id: str
-    proposal: object
+    proposal: TaskProposal
     log: WorkpieceEventLog
 
     @property
@@ -174,7 +182,7 @@ class _Workpiece:
 
 
 async def run_workpiece(
-    coordinator: StageCoordinator, workpiece_id: str, proposal: object, log: WorkpieceEventLog
+    coordinator: StageCoordinator, workpiece_id: str, proposal: TaskProposal, log: WorkpieceEventLog
 ) -> Terminal:
     """Run ``proposal`` as workpiece ``workpiece_id`` to a terminal, resuming from ``log`` or the event store.
 
@@ -185,10 +193,11 @@ async def run_workpiece(
 
     A build failure, or an author raising ``StructuredOutputError``, spends one of the workpiece's build
     revisions and sends the workpiece back to the author. When the build raises
-    ``BuildInfrastructureFailure``, ``ModelUnavailable`` or an ``OSError`` from outside the program's
-    frames, the workpiece fails in place with its revisions unspent, and the next ``run_workpiece`` builds the
-    same program again. Such an ``OSError`` is a storage fault, a missing blob or memo, or a corrupt
-    one (``StoreCorruption``); one raised by the program's own code is the program's.
+    ``BuildInfrastructureFailure``, ``BuildExpired``, ``ModelUnavailable`` or an ``OSError`` from
+    outside the program's frames, the workpiece fails in place with its revisions unspent, and the next
+    ``run_workpiece`` builds the same program again. Such an ``OSError`` is a storage fault, a missing
+    blob or memo, or a corrupt one (``StoreCorruption``); one raised by the program's own code is the
+    program's.
 
     Raises:
         ValueError: ``workpiece_id`` is unsafe as a directory name, the workpiece was opened for another
@@ -323,6 +332,8 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
     revision:
 
     * ``BuildInfrastructureFailure``, raised when the build host fails;
+    * ``BuildExpired``, raised when the build, a step or the grader ran past its clock, which is
+      neither the program's fault nor the host's until someone reads the record;
     * ``ModelUnavailable``, raised when the model stays unreachable;
     * ``OSError`` and its subclasses raised outside the program's frames (``_raised_in_program``): a
       storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``). An ``OSError``
@@ -339,10 +350,12 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
             str(coordinator.root / STORE_DIR),
             coordinator.model,
             coordinator.sampling,
-            coordinator.model_digest,
+            coordinator.services,
             state.round,
+            research=coordinator.research,
+            model_digest=coordinator.model_digest,
         )
-    except (BuildInfrastructureFailure, ModelUnavailable):
+    except (BuildInfrastructureFailure, BuildExpired, ModelUnavailable):
         raise
     except Exception as error:
         if isinstance(error, OSError) and not _raised_in_program(error, program):

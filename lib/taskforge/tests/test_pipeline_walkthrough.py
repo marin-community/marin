@@ -17,14 +17,19 @@ from typing import Any, NoReturn
 
 import pytest
 from pydantic import BaseModel
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
 from verifyit.spec import NumericSpec
 
+from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import assemble, requirements
+from taskforge.stage10_proposal.model import TaskProposal, parse
 from taskforge.stage20_triage.verdict import accept
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
 from taskforge.stage30_author.loader import load_program_source
@@ -34,10 +39,24 @@ from taskforge.stage30_author.program import (
     rl_env_build_sink,
     rl_env_build_step,
 )
-from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
+from taskforge.stage40_build_with_program.context import (
+    BuildExpired,
+    BuildFailure,
+    BuildInfrastructureFailure,
+    ExpiredClock,
+    RLEnvBuildContext,
+)
 from taskforge.stage40_build_with_program.outputs import Grader
-from taskforge.stage40_build_with_program.run import DRAFT_DIR, TASK_FILE, TaskDraft, run_build
-from taskforge.stage40_build_with_program.step_store import StoreCorruption, model_digest
+from taskforge.stage40_build_with_program.run import (
+    DRAFT_DIR,
+    TASK_FILE,
+    ResearchRequirement,
+    TaskDraft,
+    build_model_digest,
+    run_build,
+)
+from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
+from taskforge.stage40_build_with_program.step_store import StoreCorruption
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
 from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
@@ -54,9 +73,53 @@ from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import EXIT, Stage, Terminal, WorkpieceEvent, derive_state
 
 WORKPIECE = "toy-0"
-PROPOSAL = {"id": "toy/0", "task": "Multiply the two numbers in /workspace/numbers.txt."}
+PROPOSAL = parse(
+    """---
+id: "toy/0"
+source: {kind: capability, ref: "toy", hash: "0"}
+grounding: unverified
+null_reason: null
+environment: shellsim
+solver_machine: shellsim
+verification: simple
+research_need: not_needed
+research_reason: "the numbers are in the task's own file"
+research: []
+build:
+  - "numbers": "the file holding the two numbers"
+  - "grader": "checks the product"
+resources: ["workspace/numbers.txt"]
+---
+## Task
+Multiply the two numbers in /workspace/numbers.txt.
+
+## Realism and workflow
+A clerk checks a product.
+
+## Research plan
+None.
+
+## Build plan
+Write the numbers and the grader.
+
+## Grader design and controls
+Full credit only for 42.
+
+## Risks and null conditions
+None.
+"""
+)
 BUDGET = WorkpieceBudget(max_build_revisions=1, max_validation_retries=1)
 SAMPLING = LLMPolicy()
+SERVICES = RLEnvBuildServices(
+    host=MachineHost.LAPTOP,
+    factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
+    images=None,
+    web_tools=(),
+    ledger=None,
+    reasoning_replay=ReasoningReplay.KEEP,
+    agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
+)
 SUMMARY = {"graded": 4, "solved": 2}
 
 
@@ -97,10 +160,10 @@ async def grader(context: RLEnvBuildContext) -> Grader:
 
 
 @rl_env_build_sink
-async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: Grader, proposal: dict[str, str]) -> TaskSpec:
+async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: Grader, proposal: TaskProposal) -> TaskSpec:
     return assemble(
         context.workpiece_id,
-        proposal["task"],
+        proposal.body,
         AnswerType.TEXT,
         PlainText(),
         grader.package,
@@ -111,7 +174,7 @@ async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: Grader
 
 
 @rl_env_build_sink
-async def broken(context: RLEnvBuildContext, proposal: dict[str, str]) -> TaskSpec:
+async def broken(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec:
     raise BuildFailure("the numbers do not multiply to the answer")
 
 
@@ -125,6 +188,7 @@ from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, Tas
 from verifyit.spec import NumericSpec
 
 from taskforge.spec.draft import assemble, requirements
+from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
 from taskforge.stage40_build_with_program.outputs import Grader
@@ -161,7 +225,7 @@ STAGES = StageFunctions(
     validate=validate,
     review=review,
 )
-UNUSED_MODEL_DIGEST = model_digest(UnusedModel(), SAMPLING)
+UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
 
 class RecordingAuthor:
@@ -171,7 +235,7 @@ class RecordingAuthor:
         self.programs = list(programs)
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
         return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
 
@@ -183,7 +247,7 @@ class SourceAuthor:
         self.source = source
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
         return AuthoredProgram(load_program_source(self.source), self.source)
 
@@ -198,11 +262,11 @@ class FailsOnce:
         self.error = error
         self.calls = 0
 
-    async def __call__(self, *args: Any) -> TaskDraft:
+    async def __call__(self, *args: Any, **kwargs: Any) -> TaskDraft:
         self.calls += 1
         if self.calls == 1:
             raise self.error
-        return await run_build(*args)
+        return await run_build(*args, **kwargs)
 
 
 class SaveFailsOnce(JsonEventStore):
@@ -222,7 +286,9 @@ class SaveFailsOnce(JsonEventStore):
 def coordinator(
     root: Path, stages: StageFunctions = STAGES, budget: WorkpieceBudget = BUDGET, digest: str = UNUSED_MODEL_DIGEST
 ) -> StageCoordinator:
-    return StageCoordinator(stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, digest)
+    return StageCoordinator(
+        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, ResearchRequirement.OFF, digest
+    )
 
 
 def exits(log: InMemoryEventLog) -> list[tuple[str, str | None]]:
@@ -300,7 +366,12 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 @pytest.mark.parametrize(
     ("proposal", "budget", "digest", "refusal"),
     [
-        ({**PROPOSAL, "task": "Add the two numbers."}, BUDGET, UNUSED_MODEL_DIGEST, "opened for proposal"),
+        (
+            replace(PROPOSAL, body=PROPOSAL.body.replace("Multiply", "Add")),
+            BUDGET,
+            UNUSED_MODEL_DIGEST,
+            "opened for proposal",
+        ),
         (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, "opened under budget"),
         (PROPOSAL, BUDGET, "another-model", "opened with model digest"),
     ],
@@ -459,7 +530,7 @@ class CutAuthor:
         self.cuts = cuts
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
             raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
@@ -504,7 +575,7 @@ async def test_author_replies_cut_past_the_budget_reject_the_workpiece_on_its_bu
     ]
 
 
-async def unavailable_author(proposal: object, revision: Revision | None) -> AuthoredProgram:
+async def unavailable_author(proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
     raise ModelUnavailable("the hold ran out", ())
 
 
@@ -520,8 +591,12 @@ async def test_an_unavailable_model_fails_the_workpiece_at_the_author_with_its_r
 
 @pytest.mark.parametrize(
     "error",
-    [HOST_FAILURE, FileNotFoundError("blobs/ab/abcdef is missing")],
-    ids=["build host", "missing file"],
+    [
+        HOST_FAILURE,
+        FileNotFoundError("blobs/ab/abcdef is missing"),
+        BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP, "numbers"),
+    ],
+    ids=["build host", "missing file", "expired clock"],
 )
 async def test_a_failure_outside_the_program_fails_the_workpiece_at_build_and_a_relaunch_resumes_there(tmp_path, error):
     stages = replace(STAGES, author=SourceAuthor(), build=FailsOnce(error))
@@ -536,8 +611,8 @@ async def test_a_failure_outside_the_program_fails_the_workpiece_at_build_and_a_
     assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "failed"), *ACCEPTED_EXITS[3:]]
 
 
-async def builds_then_the_host_fails(*args: Any) -> TaskDraft:
-    await run_build(*args)
+async def builds_then_the_host_fails(*args: Any, **kwargs: Any) -> TaskDraft:
+    await run_build(*args, **kwargs)
     raise HOST_FAILURE
 
 
@@ -556,7 +631,7 @@ async def test_a_corrupt_memo_fails_the_workpiece_at_build_with_its_revisions_un
     assert not (tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / FAILURES_DIR).exists()
 
 
-async def fails_in_the_program(*args: Any) -> TaskDraft:
+async def fails_in_the_program(*args: Any, **kwargs: Any) -> TaskDraft:
     raise BuildFailure("the numbers do not multiply to the answer", "task")
 
 
