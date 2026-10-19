@@ -284,6 +284,20 @@ class SharedExpertPlacement(StrEnum):
     (``MoeOverlapWork``), forward and backward."""
 
 
+class MoeDispatch(StrEnum):
+    """How the MoE block lays out its projections and the routed experts' EP transport (same math)."""
+
+    FAST_TRACK = "fast_track"
+    """fast_track's block: ``moe_shared_placement`` places the shared experts, and the router, latent down and
+    (fused) shared gate/up projections run on replicated weights."""
+    HERO_LEVANTER = "hero_levanter"
+    """``moe_hero_ep``'s block: the router alone in high precision, the latent down and the shared experts as their
+    own ``_proj`` GEMMs on the FSDP-sharded weights (under a real MXFP8 recipe ``mx_linear`` gathers each shard's
+    MXFP8 bytes and reduce-scatters the gradient with the rest of the layer), the routed experts on levanter's
+    plain ragged EP path with no pinned overlap work, and the shared experts after it, where the scheduler places
+    them. Needs ``moe_shared_placement=fused`` (the placement it replaces)."""
+
+
 class Fp8Recipe(StrEnum):
     """Low-precision recipe for the projection and expert GEMMs (embeddings, router, lm head, norms, attention
     core and the optimizer stay in their usual precision)."""
@@ -796,6 +810,7 @@ class GrugModelConfig:
     kda_state_block_v: int = 32
     """d_v tile of the fused KDA state pass: 64 with ``kda_state_grads=xla`` is 8% faster on GB200 (same math)."""
     moe_shared_placement: SharedExpertPlacement = SharedExpertPlacement.FUSED
+    moe_dispatch: MoeDispatch = MoeDispatch.FAST_TRACK
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a learned per-sublayer
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
     attn_res: bool = False
@@ -1049,6 +1064,10 @@ class GrugModelConfig:
             raise ValueError("layer_carry_offload offloads the plain layer scan's carry (attn_res=false)")
         if self.scan_save_routed_output and not self.scan_layers:
             raise ValueError("scan_save_routed_output saves the routed output across the scan_layers backward")
+        if self.moe_dispatch == MoeDispatch.HERO_LEVANTER and self.moe_shared_placement != SharedExpertPlacement.FUSED:
+            raise ValueError(
+                "moe_dispatch=hero_levanter places the shared experts itself: keep moe_shared_placement=fused"
+            )
         if self.moe_shared_placement != SharedExpertPlacement.FUSED and self.fp8_recipe in _DENSE_FP8_SIM:
             raise ValueError("fp8_recipe covers only moe_shared_placement=fused shared experts")
         if unknown := set(()) - set(LATENT_MIX_SITES):
@@ -2966,6 +2985,27 @@ def moe_and_shared_fused(
     ]
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
     gate = None if shared_gate is None else unshard(shared_gate)
+    if mlp.cfg.moe_dispatch == MoeDispatch.HERO_LEVANTER:
+        if part_inputs or shadow is not None:
+            raise ValueError("moe_dispatch=hero_levanter reads one MLP input and has no moe_shadow_width")
+        return _moe_and_shared_hero(
+            mlp,
+            shared,
+            x,
+            x_flat,
+            gate,
+            dict(
+                hash_token_ids=hash_token_ids,
+                noise_key=noise_key,
+                router_tok_rows=router_tok_rows,
+                router_seed_bias=router_seed_bias,
+                router_embed=router_embed,
+                null_routing=null_routing,
+                saved_routed=saved_routed,
+                moe_k_keep=moe_k_keep,
+                moe_dynamic_layer=moe_dynamic_layer,
+            ),
+        )
     placement = mlp.cfg.moe_shared_placement
     overlap = None
     if placement == SharedExpertPlacement.OVERLAP:
@@ -3049,6 +3089,34 @@ def moe_and_shared_fused(
         )
         shared_detached = _batch_reshard(rearrange(shared_detached, "(b s) d -> b s d", b=b, s=s))
         stats = {**stats, **_compress_terms(mlp.cfg, shared_out, shared_detached, routed, shadow, shared_in)}
+    return routed + shared_out, stats
+
+
+def _moe_and_shared_hero(
+    mlp: MoEMLP,
+    shared: tuple[DenseMLP, ...],
+    x: Float[Array, "B S D"],
+    x_flat: Float[Array, "T D"],
+    shared_gate: Float[Array, " D"] | None,
+    routed_kwargs: dict[str, Any],
+) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    """``moe_and_shared_fused`` under ``MoeDispatch.HERO_LEVANTER``, as ``moe_hero_ep``'s ``MoEMLP`` plus
+    ``_shared_experts_fused``: separate projections on the FSDP-sharded weights and no pinned overlap work."""
+    cfg = mlp.cfg
+    b, s, _ = x.shape
+    router_weights = mlp.input_projection_weights(x_flat.dtype)[0]
+    projected = [jnp.einsum("td,de->te", x_flat, router_weights, out_sharding=_batch_spec())]
+    if mlp.w_latent_down is not None:
+        projected.append(_proj(cfg, x_flat, mlp.w_latent_down.astype(x_flat.dtype), out_sharding=_batch_spec()))
+    routed, stats = mlp(x, projected=projected, **routed_kwargs)
+    gated = shared[0].w_gate is not None
+    up_weights = tuple([e.w_gate for e in shared if gated] + [e.w_up for e in shared])
+    parts = _proj_parts(cfg, x_flat, up_weights)
+    if not gated:
+        stats = {**stats, _SHARED_PRE: jnp.concatenate(parts, axis=-1)}
+    w_down = jnp.concatenate([e.w_down for e in shared], axis=0)
+    shared_out = _shared_experts_tail(cfg, parts, len(shared), gated, w_down, x_flat, shared_gate, _batch_spec())
+    shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
     return routed + shared_out, stats
 
 
