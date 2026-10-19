@@ -6,12 +6,13 @@ from dataclasses import dataclass
 import pytest
 
 from taskforge.content_hash import digest
-from taskforge.stage40_build.run import _memoized
-from taskforge.stage40_build.step_store import (
+from taskforge.stage40_build_with_program.run import _memoized
+from taskforge.stage40_build_with_program.step_store import (
     SDK_VERSION,
     CacheStatus,
     RLEnvBuildStepKey,
     RLEnvBuildStepStore,
+    StoreCorruption,
 )
 
 
@@ -26,14 +27,14 @@ OUTPUT = Fixture(path="workspace/numbers.txt", lines=("6", "7"))
 
 
 @pytest.mark.parametrize("scheme", ["", "file://"], ids=["local path", "file url"])
-def test_a_stored_output_loads_back_and_items_share_its_blob(tmp_path, scheme):
+def test_a_stored_output_loads_back_and_workpieces_share_its_blob(tmp_path, scheme):
     root = f"{scheme}{tmp_path}/store"
-    first = RLEnvBuildStepStore(root, "item-a")
+    first = RLEnvBuildStepStore(root, "workpiece-a")
     assert first.load(KEY, "fixtures", Fixture) is None
 
     stored = first.store(KEY, "fixtures", OUTPUT)
-    RLEnvBuildStepStore(root, "item-b").store(KEY, "fixtures", OUTPUT)
-    loaded = RLEnvBuildStepStore(root, "item-a").load(KEY, "fixtures", Fixture)
+    RLEnvBuildStepStore(root, "workpiece-b").store(KEY, "fixtures", OUTPUT)
+    loaded = RLEnvBuildStepStore(root, "workpiece-a").load(KEY, "fixtures", Fixture)
 
     assert stored.inputs == KEY.inputs
     assert loaded is not None
@@ -42,11 +43,11 @@ def test_a_stored_output_loads_back_and_items_share_its_blob(tmp_path, scheme):
     assert record == stored
     assert stored.output_digest == digest(OUTPUT)
     assert [path.name for path in (tmp_path / "store" / "blobs").iterdir()] == [stored.output_digest]
-    assert (tmp_path / "store" / "items" / "item-b" / "steps" / "fixtures" / f"{KEY.digest}.json").exists()
+    assert (tmp_path / "store" / "workpieces" / "workpiece-b" / "steps" / "fixtures" / f"{KEY.digest}.json").exists()
 
 
 async def test_a_memoized_helper_computes_once_and_hits_on_the_second_call(tmp_path):
-    store = RLEnvBuildStepStore(str(tmp_path), "item-a")
+    store = RLEnvBuildStepStore(str(tmp_path), "workpiece-a")
     key = RLEnvBuildStepKey(SDK_VERSION, "helper source", {"path": digest(OUTPUT.path)}, "model")
     calls = []
 
@@ -70,7 +71,7 @@ class Readings:
 
 async def test_a_miss_returns_the_stored_form_of_the_output(tmp_path):
     """A consumer sees the same value on a miss as on a hit, whatever the step returned."""
-    store = RLEnvBuildStepStore(str(tmp_path), "item-a")
+    store = RLEnvBuildStepStore(str(tmp_path), "workpiece-a")
     key = RLEnvBuildStepKey(SDK_VERSION, "readings source", {}, "model")
 
     async def compute() -> Readings:
@@ -84,15 +85,15 @@ async def test_a_miss_returns_the_stored_form_of_the_output(tmp_path):
 
 
 def test_a_blob_altered_on_disk_is_refused(tmp_path):
-    store = RLEnvBuildStepStore(str(tmp_path), "item-a")
+    store = RLEnvBuildStepStore(str(tmp_path), "workpiece-a")
     record = store.store(KEY, "fixtures", OUTPUT)
     (tmp_path / "blobs" / record.output_digest).write_text("{}")
 
-    with pytest.raises(ValueError, match="does not match its digest"):
+    with pytest.raises(StoreCorruption, match="does not match its digest"):
         store.load(KEY, "fixtures", Fixture)
 
 
-@pytest.mark.parametrize("item_id", ["../escape", "a/b"])
-def test_an_item_id_unsafe_as_a_directory_name_is_refused(tmp_path, item_id):
+@pytest.mark.parametrize("workpiece_id", ["../escape", "a/b"])
+def test_a_workpiece_id_unsafe_as_a_directory_name_is_refused(tmp_path, workpiece_id):
     with pytest.raises(ValueError, match="must match"):
-        RLEnvBuildStepStore(str(tmp_path), item_id)
+        RLEnvBuildStepStore(str(tmp_path), workpiece_id)

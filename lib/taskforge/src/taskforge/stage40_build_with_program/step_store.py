@@ -13,15 +13,15 @@ library, such as ``TaskSpec``, falls under it.
 ``RLEnvBuildStepStore`` reads and writes through rigging's ``StoragePath``, so ``root`` may be a
 local path or an object-store URL. Under it the store keeps:
 
-* ``blobs/<sha256>``: each output as canonical JSON, written once and shared by all items;
-* ``items/<item_id>/steps/<name>/<key digest>.json``: the memo of each key an item stored.
+* ``blobs/<sha256>``: each output as canonical JSON, written once and shared by all workpieces;
+* ``workpieces/<workpiece_id>/steps/<name>/<key digest>.json``: the memo of each key a workpiece stored.
 
 A memo holds a step's stored output under one key; the ledger calls its own rows entries.
 
 The store writes the blob before the memo, so every memo points at a complete blob, and it
 writes each file to a temporary sibling before renaming it into place. On an object store the
 rename is a copy and a delete, so a memo costs three requests and appears whole or not at all;
-CI exercises a ``file://`` root, and ``tests/stage40_build/test_step_store_live.py`` (marker
+CI exercises a ``file://`` root, and ``tests/stage40_build_with_program/test_step_store_live.py`` (marker
 ``manual``) runs the same round trip against a bucket. A step's output has to come
 back intact from ``canonical_json`` followed by a pydantic ``TypeAdapter`` of its output type.
 Dataclasses, pydantic output types, tuples, strings and numbers come back intact. Raw ``bytes`` come back
@@ -32,7 +32,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath
 
@@ -46,10 +46,10 @@ SDK_VERSION = "taskforge.builder/8"
 FILE_SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
-def check_item_id(item_id: str) -> None:
-    """Raise ``ValueError`` unless ``item_id`` is safe to use as a directory name."""
-    if not FILE_SAFE.fullmatch(item_id):
-        raise ValueError(f"Item id {item_id!r} must match {FILE_SAFE.pattern}")
+def check_workpiece_id(workpiece_id: str) -> None:
+    """Raise ``ValueError`` unless ``workpiece_id`` is safe to use as a directory name."""
+    if not FILE_SAFE.fullmatch(workpiece_id):
+        raise ValueError(f"Workpiece id {workpiece_id!r} must match {FILE_SAFE.pattern}")
 
 
 def model_digest(model: ModelClient, sampling: LLMPolicy) -> str:
@@ -61,6 +61,13 @@ def model_digest(model: ModelClient, sampling: LLMPolicy) -> str:
     one and passes it to ``run_build`` in place of this one.
     """
     return digest({"model": model.model, "sampling": sampling})
+
+
+class StoreCorruption(OSError):
+    """A memo or blob in the store is unreadable or does not match its digest.
+
+    The store is a host fault, not the program's.
+    """
 
 
 class CacheStatus(StrEnum):
@@ -99,7 +106,7 @@ class RLEnvBuildStepMemo:
 
     ``RLEnvBuildStepStore.load`` reads it back. The memo repeats the key's fields except
     ``model_digest``. That digest, defined by ``model_digest``, enters every key, and
-    ``ItemBuildProvenance.model_digest`` keeps a copy for the build. A build pairs each memo with
+    ``WorkpieceBuildProvenance.model_digest`` keeps a copy for the build. A build pairs each memo with
     the ``CacheStatus`` it observed in an ``RLEnvBuildStepOutcome``, defined in ``run.py``.
 
     Attributes:
@@ -122,20 +129,20 @@ class RLEnvBuildStepMemo:
 
 
 class RLEnvBuildStepStore:
-    """Step outputs for the item ``item_id``, under ``root``.
+    """Step outputs for the workpiece ``workpiece_id``, under ``root``.
 
-    Memos are per item: ``load`` looks only under this item, so two items that compute the same
+    Memos are per workpiece: ``load`` looks only under this workpiece, so two workpieces that compute the same
     key each run the step once, while the blob they write is shared. A hit therefore says that this
-    item stored that key in an earlier build.
+    workpiece stored that key in an earlier build.
 
     A step receives no store, so a program written by the language model cannot memoize anything
     of its own; ``run_program`` is the store's one caller.
     """
 
-    def __init__(self, root: str, item_id: str):
-        check_item_id(item_id)
+    def __init__(self, root: str, workpiece_id: str):
+        check_workpiece_id(workpiece_id)
         self.root = StoragePath(root)
-        self.item_id = item_id
+        self.workpiece_id = workpiece_id
 
     def load[T](self, key: RLEnvBuildStepKey, name: str, output_type: type[T]) -> tuple[RLEnvBuildStepMemo, T] | None:
         """Read the memo stored for ``name`` under ``key`` and decode its blob as ``output_type``.
@@ -144,16 +151,25 @@ class RLEnvBuildStepStore:
             The memo and the decoded output, or ``None`` when no memo exists.
 
         Raises:
-            ValueError: the blob's content does not match the digest in the memo.
+            StoreCorruption: the memo does not validate, the blob's content does not match the digest
+                in the memo, or the blob does not decode as ``output_type``.
         """
         path = self._memo_path(key, name)
         if not path.exists():
             return None
-        memo = _MEMO.validate_json(path.read_bytes())
+        try:
+            memo = _MEMO.validate_json(path.read_bytes())
+        except ValidationError as error:
+            raise StoreCorruption(f"Memo {path} of step {name} does not validate") from error
         content = (self.root / "blobs" / memo.output_digest).read_bytes()
         if sha256_hex(content) != memo.output_digest:
-            raise ValueError(f"Blob {memo.output_digest} of step {name} does not match its digest")
-        return memo, TypeAdapter(output_type).validate_json(content)
+            raise StoreCorruption(f"Blob {memo.output_digest} of step {name} does not match its digest")
+        try:
+            return memo, TypeAdapter(output_type).validate_json(content)
+        except ValidationError as error:
+            raise StoreCorruption(
+                f"Blob {memo.output_digest} of step {name} does not decode as {output_type}"
+            ) from error
 
     def store(self, key: RLEnvBuildStepKey, name: str, output: object) -> RLEnvBuildStepMemo:
         """Write ``output``'s blob unless it exists, then the memo for ``name`` under ``key``."""
@@ -177,7 +193,7 @@ class RLEnvBuildStepStore:
     def _memo_path(self, key: RLEnvBuildStepKey, name: str) -> StoragePath:
         if not FILE_SAFE.fullmatch(name):
             raise ValueError(f"Step name {name!r} must match {FILE_SAFE.pattern}")
-        return self.root / "items" / self.item_id / "steps" / name / f"{key.digest}.json"
+        return self.root / "workpieces" / self.workpiece_id / "steps" / name / f"{key.digest}.json"
 
 
 def _write(path: StoragePath, content: bytes) -> None:
