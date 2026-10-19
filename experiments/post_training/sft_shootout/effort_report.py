@@ -109,6 +109,7 @@ def main() -> None:
     parser.add_argument("--family", choices=["tmax", "swesmith"], required=True)
     parser.add_argument("--task-list", required=True)
     parser.add_argument("--runs", nargs="+", required=True)
+    parser.add_argument("--trials-out", help="Also write one JSON line per trial here.")
     args = parser.parse_args()
 
     tasks = set(json.loads(StoragePath(args.task_list).read_text())["tasks"])
@@ -142,6 +143,13 @@ def main() -> None:
             and trial["n_conversations"] == 1
         )
     values = list(trials.values())
+    if args.trials_out:
+        keys = ("task_id", "passed", "clean_pass", "cut", "completion", "seconds")
+        lines = [
+            json.dumps({"trial_id": k, **{key: t[key] for key in keys}, "context": context.get(k)})
+            for k, t in trials.items()
+        ]
+        StoragePath(args.trials_out).write_text("\n".join(lines) + "\n")
     passing = [t for t in values if t["passed"]]
     clean = [t for t in values if t["clean_pass"]]
     print(
@@ -160,6 +168,9 @@ def main() -> None:
                 "cut_by_window": round(sum(t["cut"] for t in values) / len(values), 4),
                 "exceptions": sum(bool(t["exception"]) for t in values),
                 "reasoning_per_turn": summary(reasoning),
+                "zero_reasoning_turn_share": (
+                    round(sum(r == 0 for r in reasoning) / len(reasoning), 4) if reasoning else None
+                ),
                 "completion_per_passing_trial": summary([t["completion"] for t in passing]),
                 "completion_per_clean_pass": summary([t["completion"] for t in clean]),
                 "context_per_trial": summary([context[k] for k in trials if k in context]),
