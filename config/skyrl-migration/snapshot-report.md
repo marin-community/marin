@@ -2,7 +2,7 @@
 
 Source: `120302af30ebce0c16dcace3a03b0abf278ee48f`. Retained 494 files; discarded 831.
 
-This is a source candidate. Runtime bootstrap and wheel-based CI acceptance remain required.
+This is a source candidate. Runtime bootstrap and nightly acceptance remain required.
 
 | PR | parent | outcome | excluded paths |
 | --- | --- | --- | --- |

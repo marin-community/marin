@@ -22,8 +22,9 @@ import tempfile
 import tomllib
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from importlib.util import resolve_name
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -40,6 +41,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "config/skyrl-migration.toml"
 MATH500_REVISION = "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
 MATH500_CONTENT_SHA256 = "0a7389c2f2827aa8a29e82dd296afb85ce0ac0c3a02541ac975f00c3c57f0f5b"
+AGENT_LABEL = "agent-generated"
+PR_BRANCH_PREFIX = "skyrl-migration/pr-"
+DESTINATION_MARKER = "skyrl-destination"
+DESTINATION_PATTERN = re.compile(r"<!-- " + DESTINATION_MARKER + r": ([0-9a-f]{40}) -->")
 
 
 def run(
@@ -66,7 +71,7 @@ def gh(endpoint: str, *, method: str = "GET", payload: dict | None = None) -> An
     return result
 
 
-def pages(endpoint: str) -> list[dict]:
+def github_items(endpoint: str) -> list[dict]:
     return [item for page in json.loads(run("gh", "api", "--paginate", "--slurp", endpoint).stdout) for item in page]
 
 
@@ -140,10 +145,10 @@ def snapshot(output: Path, ref: str, days: int, now: datetime) -> None:
     cutoff = cutoff_time.isoformat().replace("+00:00", "Z")
     repository = gh(f"repos/{SOURCE}")
     source_sha = gh(f"repos/{SOURCE}/commits/{quote(ref, safe='')}")["sha"]
-    pulls = pages(f"repos/{SOURCE}/pulls?state=open&per_page=100")
+    pulls = github_items(f"repos/{SOURCE}/pulls?state=open&per_page=100")
     issues = [
         issue
-        for issue in pages(f"repos/{SOURCE}/issues?state=open&since={quote(cutoff)}&per_page=100")
+        for issue in github_items(f"repos/{SOURCE}/issues?state=open&since={quote(cutoff)}&per_page=100")
         if "pull_request" not in issue and datetime.fromisoformat(issue["updated_at"]) >= cutoff_time
     ]
 
@@ -153,15 +158,17 @@ def snapshot(output: Path, ref: str, days: int, now: datetime) -> None:
         comparison = gh(f"repos/{SOURCE}/compare/{base}...{head}")
         return pull | {
             "merge_base": comparison["merge_base_commit"]["sha"],
-            "comments": pages(f"repos/{SOURCE}/issues/{number}/comments?per_page=100"),
-            "reviews": pages(f"repos/{SOURCE}/pulls/{number}/reviews?per_page=100"),
-            "review_comments": pages(f"repos/{SOURCE}/pulls/{number}/comments?per_page=100"),
+            "comments": github_items(f"repos/{SOURCE}/issues/{number}/comments?per_page=100"),
+            "reviews": github_items(f"repos/{SOURCE}/pulls/{number}/reviews?per_page=100"),
+            "review_comments": github_items(f"repos/{SOURCE}/pulls/{number}/comments?per_page=100"),
         }
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         pulls = list(pool.map(capture_pull, pulls))
         comments = list(
-            pool.map(lambda issue: pages(f"repos/{SOURCE}/issues/{issue['number']}/comments?per_page=100"), issues)
+            pool.map(
+                lambda issue: github_items(f"repos/{SOURCE}/issues/{issue['number']}/comments?per_page=100"), issues
+            )
         )
     issues = [issue | {"comments": comment} for issue, comment in zip(issues, comments, strict=True)]
     objects = output / "source.git"
@@ -207,7 +214,14 @@ class Selection:
     missing_imports: list[str]
 
 
-def module_imports(path: Path, module: str) -> tuple[set[str], list[str], set[str]]:
+@dataclass
+class ModuleImports:
+    names: set[str]
+    dynamic: list[str]
+    required: set[str]
+
+
+def module_imports(path: Path, module: str) -> ModuleImports:
     """Include nested optional imports and literal dynamic imports in the closure."""
     names: set[str] = set()
     required: set[str] = set()
@@ -240,7 +254,7 @@ def module_imports(path: Path, module: str) -> tuple[set[str], list[str], set[st
                 required.add(name)
             else:
                 dynamic.append(f"{module}:{node.lineno}")
-    return names, dynamic, required
+    return ModuleImports(names, dynamic, required)
 
 
 def matches(path: str, patterns: list[str]) -> bool:
@@ -305,8 +319,8 @@ def selection(source: Path, manifest: dict, marin: Path | None) -> Selection:
         if found.returncode not in (0, 1):
             found.check_returncode()
         for filename in found.stdout.decode().splitlines():
-            names, _, _ = module_imports(marin / filename, path_to_module(marin / filename, marin) or "")
-            for name in resolve(names, known):
+            imports = module_imports(marin / filename, path_to_module(marin / filename, marin) or "")
+            for name in resolve(imports.names, known):
                 mark(modules[name].relative_to(source).as_posix(), f"Marin caller: {filename}")
     dynamic: set[str] = set()
     missing: set[str] = set()
@@ -323,14 +337,14 @@ def selection(source: Path, manifest: dict, marin: Path | None) -> Selection:
                     mark(helper.as_posix(), f"package/test setup for {path}")
         if path not in by_path or files[path].is_symlink():
             continue
-        names, unresolved, required = module_imports(files[path], by_path[path])
-        dynamic.update(unresolved)
+        imports = module_imports(files[path], by_path[path])
+        dynamic.update(imports.dynamic)
         missing.update(
             f"{path}: {name}"
-            for name in required
+            for name in imports.required
             if name.split(".")[0] in local_packages and name not in known and name not in namespaces
         )
-        for name in resolve(names, known):
+        for name in resolve(imports.names, known):
             mark(modules[name].relative_to(source).as_posix(), f"imported by {path}")
     return Selection(
         dict(sorted(retained.items())), sorted(set(files) - retained.keys()), sorted(dynamic), sorted(missing)
@@ -383,12 +397,36 @@ def commit(root: Path, message: str) -> str:
     return git(root, "rev-parse", "HEAD")
 
 
+class PullStatus(StrEnum):
+    PENDING = "pending"
+    READY = "ready"
+    BLOCKED_PARENT = "blocked-parent"
+    UNMAPPED_BASE = "unmapped-base"
+    EXCLUDED = "excluded"
+    CONFLICT = "conflict"
+    ALREADY_APPLIED = "already-applied"
+    NEEDS_DECISION = "needs-decision"
+
+
+@dataclass
+class PullOutcome:
+    number: int
+    url: str
+    parent: int | None
+    branch: str
+    status: PullStatus = PullStatus.PENDING
+    selected: list[str] = field(default_factory=list)
+    excluded: list[str] = field(default_factory=list)
+    commit: str = ""
+    base: str = ""
+    diagnostic: str = ""
+
+
 def stage(snapshot_dir: Path, output: Path) -> None:
     """Copy the candidate and test each complete Git delta on its staged parent."""
     snapshot_dir = snapshot_dir.resolve()
     record = read_json(snapshot_dir / "snapshot.json")
     chosen = read_json(snapshot_dir / "selection.json")
-    manifest = tomllib.loads((snapshot_dir / "retention.toml").read_text())
     output.mkdir(parents=True, exist_ok=False)
     tree = output / "tree"
     destination = tree / VENDOR
@@ -425,19 +463,43 @@ def stage(snapshot_dir: Path, output: Path) -> None:
         )
         git(tree, "add", ".")
         baseline = commit(tree, "Apply migration runtime fixes")
+    pulls = transplant_pulls(snapshot_dir, output, baseline)
+    report = {
+        "snapshot": str(snapshot_dir),
+        "source_sha": record["source_sha"],
+        "patches": chosen["patches"],
+        "retained": len(chosen["retained"]),
+        "discarded": len(chosen["discarded"]),
+        "pulls": pulls,
+        "issues": [{"number": issue["number"], "url": issue["html_url"]} for issue in record["issues"]],
+        "dynamic_imports": chosen["dynamic_imports"],
+        "missing_imports": chosen["missing_imports"],
+        "production_ready": False,
+    }
+    write_report(output, report)
+
+
+def transplant_pulls(snapshot_dir: Path, output: Path, baseline: str) -> list[dict]:
+    """Apply each source PR on its staged parent and return publication outcomes."""
+    record = read_json(snapshot_dir / "snapshot.json")
+    chosen = read_json(snapshot_dir / "selection.json")
+    manifest = tomllib.loads((snapshot_dir / "retention.toml").read_text())
+    tree = output / "tree"
+    objects = snapshot_dir / "source.git"
     git(tree, "fetch", "--quiet", "--no-tags", str(snapshot_dir / "source.git"), "+refs/snapshot/*:refs/source/*")
     parents = parent_pulls(record["pulls"], record["default_branch"])
-    outcomes: dict[int, dict] = {}
+    outcomes: dict[int, PullOutcome] = {}
     for pull in ordered_pulls(record["pulls"], parents):
         number, parent = pull["number"], parents[pull["number"]]
-        branch = f"skyrl-migration/pr-{number}"
-        outcome = {"number": number, "url": pull["html_url"], "parent": parent, "branch": branch}
+        branch = f"{PR_BRANCH_PREFIX}{number}"
+        outcome = PullOutcome(number, pull["html_url"], parent, branch)
         outcomes[number] = outcome
-        if parent is not None and outcomes[parent]["status"] != "ready":
-            outcome.update(status="blocked-parent")
+        if parent is not None and outcomes[parent].status is not PullStatus.READY:
+            outcome.status = PullStatus.BLOCKED_PARENT
             continue
         if parent is None and pull["base"]["ref"] != record["default_branch"]:
-            outcome.update(status="unmapped-base", base=pull["base"]["ref"])
+            outcome.status = PullStatus.UNMAPPED_BASE
+            outcome.base = pull["base"]["ref"]
             continue
         selected, excluded = [], []
         before = tree_paths(objects, pull["merge_base"])
@@ -449,11 +511,12 @@ def stage(snapshot_dir: Path, output: Path) -> None:
             )
             accepted = path in chosen["retained"] or (new and in_package and not matches(path, manifest["discard"]))
             (selected if accepted else excluded).append(path)
-        outcome.update(selected=selected, excluded=excluded)
+        outcome.selected = selected
+        outcome.excluded = excluded
         if not selected:
-            outcome.update(status="excluded")
+            outcome.status = PullStatus.EXCLUDED
             continue
-        base = outcomes[parent]["commit"] if parent is not None else baseline
+        base = outcomes[parent].commit if parent is not None else baseline
         git(tree, "checkout", "--quiet", "-b", branch, base)
         patch = run(
             "git",
@@ -483,37 +546,29 @@ def stage(snapshot_dir: Path, output: Path) -> None:
             check=False,
         )
         if applied.returncode:
-            outcome.update(status="conflict", diagnostic=applied.stderr.decode(errors="replace"))
+            outcome.status = PullStatus.CONFLICT
+            outcome.diagnostic = applied.stderr.decode(errors="replace")
             git(tree, "reset", "--hard", "--quiet", base)
             git(tree, "clean", "-fd", "--quiet")
             continue
         if not git(tree, "diff", "--cached", "--name-only"):
-            outcome.update(status="already-applied")
+            outcome.status = PullStatus.ALREADY_APPLIED
             continue
-        outcome.update(
-            status="needs-decision" if excluded else "ready",
-            commit=commit(tree, f"Transplant {SOURCE}#{number}\n\nSource-head: {pull['head']['sha']}"),
-        )
+        outcome.status = PullStatus.NEEDS_DECISION if excluded else PullStatus.READY
+        outcome.commit = commit(tree, f"Transplant {SOURCE}#{number}\n\nSource-head: {pull['head']['sha']}")
     git(tree, "checkout", "--quiet", "main")
-    report = {
-        "snapshot": str(snapshot_dir),
-        "source_sha": record["source_sha"],
-        "patches": chosen["patches"],
-        "retained": len(chosen["retained"]),
-        "discarded": len(chosen["discarded"]),
-        "pulls": list(outcomes.values()),
-        "issues": [{"number": issue["number"], "url": issue["html_url"]} for issue in record["issues"]],
-        "dynamic_imports": chosen["dynamic_imports"],
-        "missing_imports": chosen["missing_imports"],
-        "production_ready": False,
-    }
+    return [asdict(outcome) for outcome in outcomes.values()]
+
+
+def write_report(output: Path, report: dict) -> None:
+    """Write the machine-readable outcomes and their review summary."""
     write_json(output / "report.json", report)
     rows = [
         "# SkyRL migration dry run",
         "",
-        f"Source: `{record['source_sha']}`. Retained {report['retained']} files; discarded {report['discarded']}.",
+        f"Source: `{report['source_sha']}`. Retained {report['retained']} files; discarded {report['discarded']}.",
         "",
-        "This is a source candidate. Runtime bootstrap and wheel-based CI acceptance remain required.",
+        "This is a source candidate. Runtime bootstrap and nightly acceptance remain required.",
         "",
         "| PR | parent | outcome | excluded paths |",
         "| --- | --- | --- | --- |",
@@ -521,11 +576,11 @@ def stage(snapshot_dir: Path, output: Path) -> None:
     rows += [
         f"| [#{item['number']}]({item['url']}) | {item['parent'] or ''} | "
         f"{item['status']} | {len(item.get('excluded', []))} |"
-        for item in outcomes.values()
+        for item in report["pulls"]
     ]
     rows += [
         "",
-        f"Selected issues: {len(record['issues'])}. Complete source patches and review history remain in the snapshot.",
+        f"Selected issues: {len(report['issues'])}. Complete source patches and review history remain in the snapshot.",
         "",
         "See docs/dev-guide/skyrl-migration.md for cutover and archive requirements.",
     ]
@@ -700,7 +755,7 @@ def validate_cutover(number: int, source_sha: str, patches: list[dict]) -> dict:
 
 def validate_fresh(record: dict) -> None:
     head = gh(f"repos/{SOURCE}/commits/{quote(record['default_branch'], safe='')}")["sha"]
-    pulls = pages(f"repos/{SOURCE}/pulls?state=open&per_page=100")
+    pulls = github_items(f"repos/{SOURCE}/pulls?state=open&per_page=100")
     actual = {pull["number"]: (pull["head"]["sha"], pull["base"]["sha"], pull["base"]["ref"]) for pull in pulls}
     expected = {
         pull["number"]: (pull["head"]["sha"], pull["base"]["sha"], pull["base"]["ref"]) for pull in record["pulls"]
@@ -761,7 +816,7 @@ def publish_prs(candidate: Path, cutover: int) -> None:
     record = read_json(snapshot_dir / "snapshot.json")
     cutover_pull = validate_cutover(cutover, record["source_sha"], report["patches"])
     validate_fresh(record)
-    incomplete = [item["number"] for item in report["pulls"] if item["status"] != "ready"]
+    incomplete = [item["number"] for item in report["pulls"] if item["status"] != PullStatus.READY]
     target = gh(f"repos/{TARGET}")
     default = target["default_branch"]
     workspace = candidate / "publication"
@@ -779,24 +834,26 @@ def publish_prs(candidate: Path, cutover: int) -> None:
     git(workspace, "fetch", "--quiet", "origin", cutover_pull["merge_commit_sha"])
     target_base = git(workspace, "rev-parse", "FETCH_HEAD")
     git(workspace, "fetch", "--quiet", "--no-tags", str(snapshot_dir / "source.git"), "+refs/snapshot/*:refs/source/*")
-    labels = pages(f"repos/{TARGET}/labels?per_page=100")
-    if not any(label["name"] == "agent-generated" for label in labels):
-        gh(f"repos/{TARGET}/labels", method="POST", payload={"name": "agent-generated", "color": "ededed"})
+    labels = github_items(f"repos/{TARGET}/labels?per_page=100")
+    if not any(label["name"] == AGENT_LABEL for label in labels):
+        gh(f"repos/{TARGET}/labels", method="POST", payload={"name": AGENT_LABEL, "color": "ededed"})
     state_path = candidate / "published-prs.json"
     state = read_json(state_path) if state_path.exists() else {}
     pulls = {pull["number"]: pull for pull in record["pulls"]}
     for outcome in report["pulls"]:
-        if outcome["status"] != "ready":
+        if outcome["status"] != PullStatus.READY:
             continue
         number, parent, branch = outcome["number"], outcome["parent"], outcome["branch"]
         pull = pulls[number]
         marker = f"<!-- skyrl-migration: source={SOURCE}#{number} head={pull['head']['sha']} -->"
-        existing = pages(f"repos/{TARGET}/pulls?state=all&head=marin-community:{quote(branch, safe='')}&per_page=100")
-        base_branch = f"skyrl-migration/pr-{parent}" if parent else default
+        existing = github_items(
+            f"repos/{TARGET}/pulls?state=all&head=marin-community:{quote(branch, safe='')}&per_page=100"
+        )
+        base_branch = f"{PR_BRANCH_PREFIX}{parent}" if parent else default
         if existing:
             if len(existing) != 1 or marker not in existing[0]["body"] or existing[0]["base"]["ref"] != base_branch:
                 raise ValueError(f"Destination PR identity mismatch: {branch}")
-            destination = re.search(r"<!-- skyrl-destination: ([0-9a-f]{40}) -->", existing[0]["body"])
+            destination = DESTINATION_PATTERN.search(existing[0]["body"])
             if destination is None or existing[0]["head"]["sha"] != destination[1]:
                 raise ValueError(f"Destination PR head changed: {branch}")
             git(workspace, "fetch", "--quiet", "origin", existing[0]["head"]["sha"])
@@ -804,12 +861,12 @@ def publish_prs(candidate: Path, cutover: int) -> None:
             gh(
                 f"repos/{TARGET}/issues/{existing[0]['number']}/labels",
                 method="POST",
-                payload={"labels": ["agent-generated"]},
+                payload={"labels": [AGENT_LABEL]},
             )
             state[str(number)] = existing[0]["html_url"]
             write_json(state_path, state)
             continue
-        base = f"skyrl-migration/pr-{parent}" if parent else target_base
+        base = f"{PR_BRANCH_PREFIX}{parent}" if parent else target_base
         git(workspace, "checkout", "--quiet", "--detach", base)
         patch = candidate / f"pr-{number}-retained.patch"
         run("git", "-C", str(workspace), "apply", "--3way", "--index", f"--directory={VENDOR}", str(patch.resolve()))
@@ -830,14 +887,14 @@ def publish_prs(candidate: Path, cutover: int) -> None:
             + f"\n\nTransplanted from {pull['html_url']} by @{pull['user']['login']}. "
             "Original discussion and reviews remain at that URL.\n\n"
             f"Source base: `{pull['merge_base']}`; source head: `{pull['head']['sha']}`.\n\n"
-            f"{marker}\n<!-- skyrl-destination: {intended} -->\n"
+            f"{marker}\n<!-- {DESTINATION_MARKER}: {intended} -->\n"
         )
         created = gh(
             f"repos/{TARGET}/pulls",
             method="POST",
             payload={"title": pull["title"], "body": body, "head": branch, "base": base_branch, "draft": True},
         )
-        gh(f"repos/{TARGET}/issues/{created['number']}/labels", method="POST", payload={"labels": ["agent-generated"]})
+        gh(f"repos/{TARGET}/issues/{created['number']}/labels", method="POST", payload={"labels": [AGENT_LABEL]})
         state[str(number)] = created["html_url"]
         write_json(state_path, state)
     write_json(candidate / "publication-blockers.json", {"pending_prs": incomplete})

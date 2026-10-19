@@ -70,11 +70,11 @@ index 9c15e35fbd9454e9386abfcdd70cc4d3740093e6..6848937295f251e2d7e1888a8680e825
      final_answer = re.sub(r"(sqrt)([^{])", "sqrt{\\2}", final_answer)
      final_answer = final_answer.replace("$", "")
 
-diff --git a/skyrl-gym/tests/test_math500_migration.py b/skyrl-gym/tests/test_math500_migration.py
+diff --git a/skyrl-gym/tests/test_aime_answer_normalization.py b/skyrl-gym/tests/test_aime_answer_normalization.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..3da544653db86ad9fc799e376e96d355f68cbdfe
 --- /dev/null
-+++ b/skyrl-gym/tests/test_math500_migration.py
++++ b/skyrl-gym/tests/test_aime_answer_normalization.py
 @@ -0,0 +1,31 @@
 +# Copyright The Marin Authors
 +# SPDX-License-Identifier: Apache-2.0

@@ -199,8 +199,9 @@ The frozen-lock check honors that policy and verifies registry versions and
 direct wheel or Git origins. The independent `uv pip check` report is preserved
 in `dependency-check.json`; its five Bridge metadata discrepancies are not
 reported as clean. Runtime acceptance requires the real Megatron tests and
-Math500 generation/scoring to pass in that full profile. See the Loom
-`skyrl-math500-smoke` artifact for job outcomes and exact wheel revisions.
+Math500 generation/scoring to pass in that full profile. Preserve the output
+bundle: `receipt.json` identifies the wheel, source, lock, model, and dataset;
+`megatron.xml` and `metrics.json` record the GPU gate outcomes.
 
 ## Cutover changes before publication
 

@@ -15,10 +15,14 @@ import pytest
 from scripts import skyrl_migration as migration
 
 
-def write(root: Path, path: str, data: str | bytes) -> None:
+def write_bytes(root: Path, path: str, data: bytes) -> None:
     target = root / path
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data.encode() if isinstance(data, str) else data)
+    target.write_bytes(data)
+
+
+def write(root: Path, path: str, data: str) -> None:
+    write_bytes(root, path, data.encode())
 
 
 def save(root: Path, message: str) -> str:
@@ -48,7 +52,7 @@ def snapshot_dir(tmp_path: Path) -> Path:
     write(source, "skyrl-train/skyrl_train/dynamic.py", "def apply(a, b):\n    return a + b\n")
     write(source, "skyrl-train/skyrl_train/unused.py", "unused = True\n")
     write(source, "skyrl-train/skyrl_train/assets/old.txt", "data\n")
-    write(source, "skyrl-train/skyrl_train/assets/blob.bin", b"\0old\xff")
+    write_bytes(source, "skyrl-train/skyrl_train/assets/blob.bin", b"\0old\xff")
     write(source, "skyrl-gym/skyrl_gym/__init__.py", "")
     (source / "skyrl-train/skyrl-gym").symlink_to("../skyrl-gym/")
     write(source, "scripts/run.sh", "#!/bin/sh\nexit 0\n")
@@ -155,7 +159,7 @@ def test_snapshot_keeps_exact_git_links_and_recently_active_old_issues(
 
     monkeypatch.setattr(migration, "run", process)
     monkeypatch.setattr(migration, "gh", api)
-    monkeypatch.setattr(migration, "pages", paginate)
+    monkeypatch.setattr(migration, "github_items", paginate)
     output = tmp_path / "capture"
     migration.snapshot(output, "main", 10, datetime(2026, 10, 19, tzinfo=UTC))
     captured = migration.read_json(output / "snapshot.json")
@@ -189,7 +193,7 @@ def stacked_pulls(directory: Path) -> list[dict]:
     base = migration.git(source, "rev-parse", "HEAD")
     migration.git(source, "checkout", "--quiet", "-b", "pr-1")
     write(source, "skyrl-train/skyrl_train/relative.py", "value = 10\n")
-    write(source, "skyrl-train/skyrl_train/assets/blob.bin", b"\0new\x80\xff")
+    write_bytes(source, "skyrl-train/skyrl_train/assets/blob.bin", b"\0new\x80\xff")
     migration.git(source, "mv", "skyrl-train/skyrl_train/assets/old.txt", "skyrl-train/skyrl_train/assets/new.txt")
     first = save(source, "First")
     migration.git(source, "checkout", "--quiet", "-b", "pr-2")
@@ -334,7 +338,7 @@ def test_vendor_audit_rejects_changed_runtime_assets(snapshot_dir: Path, tmp_pat
     migration.stage(snapshot_dir, candidate)
     source = candidate / "tree" / migration.VENDOR
     migration.verify_vendor(source)
-    write(source, "skyrl-train/skyrl_train/assets/blob.bin", b"changed runtime data")
+    write_bytes(source, "skyrl-train/skyrl_train/assets/blob.bin", b"changed runtime data")
     with pytest.raises(ValueError, match="Vendored source changed"):
         migration.verify_vendor(source)
 
@@ -436,7 +440,7 @@ def github_fake(
         return {"repository": {"id": "target-id"}}
 
     monkeypatch.setattr(migration, "gh", api)
-    monkeypatch.setattr(migration, "pages", paginate)
+    monkeypatch.setattr(migration, "github_items", paginate)
     monkeypatch.setattr(migration, "graphql", graph)
     return remote
 

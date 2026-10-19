@@ -186,7 +186,7 @@
     "skyrl-gym/skyrl_gym/tools/__init__.py": "4a823ced7589da54126aa18c31dc434c3004c9a2c242341f11ddd7e62fa2ce11",
     "skyrl-gym/skyrl_gym/tools/search.py": "b989d39948fa247620ba25a35fd6dfd9589ec4d636473150fd0f35ca1bb0984a",
     "skyrl-gym/skyrl_gym/verification.py": "f494fbbe370e1f35a67ce2bf56ef6c686b09831dea245319d2925010e404bc53",
-    "skyrl-gym/tests/test_math500_migration.py": "86e74197df69e76722c7844121c301f47bf2a7e08c205fc8354e64a3d1e5093c",
+    "skyrl-gym/tests/test_aime_answer_normalization.py": "86e74197df69e76722c7844121c301f47bf2a7e08c205fc8354e64a3d1e5093c",
     "skyrl-train/ci/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "skyrl-train/ci/marin_nightly/README.md": "7323a5e6ea8d416a830efc76d37a78ae86a15e4171ca891bfcf1a6fa2471e49d",
     "skyrl-train/ci/marin_nightly/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -499,7 +499,7 @@
   "patches": [
     {
       "path": "skyrl-migration/runtime-fixes.patch",
-      "sha256": "523fe9aaed29cb45fb8ebac3d9ac3c7fa5e5f087540f87177196f71d832c5372"
+      "sha256": "7d15aa13ff0cf6427fcf5f48ed69c1f96591d3e8e5b0c7e8925e3ad21ed1fec7"
     }
   ],
   "source": "marin-community/MarinSkyRL",
