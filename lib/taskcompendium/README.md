@@ -43,7 +43,7 @@ flowchart LR
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
-| `schema_version` | Version of the serialized spec: `0.27`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.28`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
@@ -197,12 +197,13 @@ The runtime presents the source turns and function definitions and retains the f
 
 ## What is a grader?
 
-`TaskSpec.grader` declares how an attempt is graded. Its `kind` field selects one of four classes in `taskcompendium.models`:
+`TaskSpec.grader` declares how an attempt is graded. Its `kind` field selects one of five classes, defined in `taskcompendium.models` and, for `DecisionGrader`, `taskcompendium.decision`:
 
 | `kind` | Class | Grading |
 | --- | --- | --- |
 | `verifyit` | `VerifyitGrader` | A stock verifyit `mode` and its `parameters`: the keys of verifyit's `verifier.toml` table other than `mode`. |
 | `script` | `ScriptGrader` | A command run after the episode in a fresh machine built from a pinned image. |
+| `decision_model` | `DecisionGrader` | On the host, a decision model compares the final answer with a gold reference under a rubric. |
 | `session` | `SessionGrader` | A registered custom RolloutEngine `TaskSession` grades the task. |
 | `none` | `NoGrader` | The task cannot be graded here. `reason` says why; `contract` optionally keeps the source's grading terms. |
 
@@ -221,12 +222,15 @@ A `ScriptGrader` declares:
 | `reward` | `StdoutReward` (default), `ExitCodeReward`, or `FileReward`. |
 | `timeout` | Deadline in seconds for each grading command (default 600). |
 
+A `DecisionGrader` declares a `rubric` (a deliverable statement and scored, gate, cap or disqualifier items), a gold `reference`, the `state` the decision model reads, an `acceptance_level` and the `calibration` reads that set it. It has no environment and no verifier resources, and it names no model: the host supplies a `taskcompendium.decision.DecisionClient`. A decision model is a separate grader type from verifyit's `judge` mode. It reads one state and answers one comparative question, the whole candidate answer against the reference, on five levels: missing, contradicts, partially matches, equivalent, and matches exactly, with credits 0, 0, 0.5, 1 and 1. The default `state` (`SOLVER_TURN_STATE`) holds the deliverable, the rubric items, the reference, and the visible text of the solver's final assistant message. The grade uses the expected level over the returned probabilities. The reward is 1.0 at or above the acceptance level; below it the reward is `0.5 * min(1, credit(level) / credit(acceptance_level))`, so a rejected answer earns less than 0.5. The acceptance level lies in [0, 3]; `None` means level 2, "partially matches".
+
 `StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
 
 TaskSpec validation ties the grader to the answer:
 
 - An in-process `VerifyitGrader` cannot grade `file` or `workspace_state` answers.
 - A `VerifyitGrader` with an environment cannot grade `native_action` answers. Its workspace modes (`stdio`, `pytest`, `junit`, and `gotest`) cannot grade `text`, `number`, or `json` answers.
+- A `DecisionGrader` grades only `text`, `number`, `json`, and `native_action` answers.
 - `ScriptGrader.answer_path` must be `None` for `file`, `state`, and `workspace_state` answers. `conversation_path` must not replace a verifier resource.
 - Answer paths, output paths, and output directories must lie outside `/tests` and `/logs/verifier`.
 
@@ -308,11 +312,12 @@ def score_final_response(content: str):
     return grade_answer(spec, GradingAttempt(conversation))
 ```
 
-Three functions grade an attempt:
+Four functions grade an attempt:
 
 - `taskcompendium.grading.grade_answer(task, attempt)` grades with an in-process `VerifyitGrader`. The answer format extracts the submission, or `attempt.state` supplies it for a `state` answer, and `verifyit.candidate.grade_candidate` scores it. It raises `TypeError` for other graders.
 - `taskcompendium.runtime.grading.grade_in_sandbox(task, attempt, factory, machine_spec, *, task_machine=None, timeout=None)` is asynchronous. It grades with a `VerifyitGrader` that has an environment, or with a `ScriptGrader`, in a fresh machine from `factory`. `task_machine` is the agent's machine, required for `collect` and `artifacts`. Machine exceptions propagate.
-- `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. An in-process grader uses `grade_answer`; a sandbox grader uses shared environment preparation and `grade_in_sandbox`. Unsupported requirements raise before machine creation. A missing factory or machine specification, and machine `RuntimeError` or `OSError`, become `infra_error`. A `SessionGrader` raises `TypeError`.
+- `taskcompendium.grading.grade_decision_answer(task, attempt, client)` is asynchronous. It grades with a `DecisionGrader` on the host: one `client.decide` call with the state and the comparative question. A final message without assistant text is `submission_failure` with reward `0.0`, decided without a call. A missing client, a client `RuntimeError` or `OSError`, and a malformed read are `infra_error`. `GradeResult.detail` holds `level`, `bar` and `accepted`, and `passed` is `accepted`.
+- `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None, judge_connection=None, decision_client=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. A `DecisionGrader` uses `grade_decision_answer` with `decision_client`. A verifyit `judge` uses `grade_remote_judge_answer` with `judge_connection`. An in-process grader uses `grade_answer`; a sandbox grader uses shared environment preparation and `grade_in_sandbox`. Unsupported requirements raise before machine creation. A missing factory or machine specification, and machine `RuntimeError` or `OSError`, become `infra_error`. A `SessionGrader` raises `TypeError`.
 
 RolloutEngine's Shellbox session calls `grade_answer` or `grade_in_sandbox` after the turn loop; see [task rollouts](../../docs/references/task-rollouts.md).
 
@@ -347,5 +352,5 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.27` adds explicit task-owned shell tool bindings. Reconvert
+Schema `0.28` adds the `decision_model` grader. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.

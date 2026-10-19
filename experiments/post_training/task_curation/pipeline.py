@@ -89,8 +89,8 @@ from experiments.post_training.task_curation.images.build import (
 from experiments.post_training.task_curation.source import RlDataSource
 
 PIPELINE_VERSION = "2026.10.07.1"
-CURATION_VERSION = "2026.10.12.1"
-QUICK_VERSION = "2026.10.14.1"
+CURATION_VERSION = "2026.10.19.1"
+QUICK_VERSION = "2026.10.19.1"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4

@@ -9,7 +9,8 @@ from shellbox.machine import MachineFactory, MachineSpec
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import JudgeSpec
 
-from taskcompendium.grading import grade_answer, grade_remote_judge_answer
+from taskcompendium.decision import DecisionClient, DecisionGrader
+from taskcompendium.grading import grade_answer, grade_decision_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     GradingAttempt,
@@ -31,17 +32,21 @@ def grade_task(
     machine_factory: MachineFactory | None = None,
     machine_spec: MachineSpec | None = None,
     judge_connection: JudgeConnection | None = None,
+    decision_client: DecisionClient | None = None,
 ) -> GradeResult:
-    """Grade with an explicit judge connection, in process, or in a fresh grading machine.
+    """Grade with an explicit judge connection or decision client, in process, or in a fresh grading machine.
 
-    A ``NoGrader`` task is unavailable. A session grader runs only inside its rollout session.
-    Judge and machine failures become infrastructure errors.
+    A ``NoGrader`` task is unavailable. A session grader runs only inside its rollout session. A
+    decision-model grader grades on the host with ``decision_client``. Judge, decision-model and
+    machine failures, and a missing decision client, become infrastructure errors.
     """
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     if isinstance(grader, SessionGrader):
         raise TypeError("A session grader runs inside its rollout session")
+    if isinstance(grader, DecisionGrader):
+        return asyncio.run(grade_decision_answer(task, attempt, decision_client))
     if isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec):
         return grade_remote_judge_answer(task, attempt, judge_connection)
     if grader.environment is None:

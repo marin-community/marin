@@ -14,6 +14,7 @@ from verifyit.grade import positive_candidate
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import ExactSpec, JudgeSpec, MathSpec, McqSpec, NumericSpec
 
+from taskcompendium.decision import DecisionGrader
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
@@ -150,7 +151,7 @@ async def _control_checks(
 ) -> VerificationReport:
     require_resolved_environment(task.environment_requirements)
     grader = task.grader
-    if isinstance(grader, NoGrader | SessionGrader):
+    if isinstance(grader, NoGrader | SessionGrader | DecisionGrader):
         return VerificationReport(
             [
                 CheckResult(

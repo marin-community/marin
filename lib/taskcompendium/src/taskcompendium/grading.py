@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade an attempt in process with the task's verifyit mode.
+"""Grade an attempt on the host: in process with the task's verifyit mode, or with a judge or decision model.
 
 The task's answer format extracts one typed submission; this module adapts it to a verifyit
 candidate and maps the verifyit reward to a ``GradeResult``. verifyit owns specification
-validation and scoring.
+validation and scoring. A decision-model grader reads the solver's final visible turn instead
+(``grade_decision_answer``); ``taskcompendium.decision`` owns its scale and reward.
 """
 
 import json
@@ -26,12 +27,22 @@ from verifyit.spec import (
 )
 from verifyit.spec import FunctionCall as CandidateCall
 
+from taskcompendium.decision import (
+    QUESTION_ID,
+    DecisionClient,
+    DecisionGrader,
+    comparative_question,
+    decision_grade,
+    decision_state,
+    expected_level,
+)
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     ActionSubmission,
     AnswerType,
     AssistantToolCalls,
+    ConversationTrace,
     GradingAttempt,
     JsonSubmission,
     PlainText,
@@ -182,3 +193,47 @@ def grade_remote_judge_answer(
     except (APIError, GradingInfraError, RuntimeError, OSError) as error:
         return GradeResult(Outcome.INFRA_ERROR, None, str(error))
     return grade_result(verifier, verdict)
+
+
+def solver_turn_output(conversation: ConversationTrace) -> str:
+    """The visible text of the solver's final turn: the final assistant message's content.
+
+    Raises:
+        SubmissionFailure: the conversation does not end with a nonempty assistant text message.
+    """
+    return PlainText().extract(GradingAttempt(conversation)).value
+
+
+async def _decision_level(grader: DecisionGrader, solver_output: str, client: DecisionClient | None) -> float:
+    if client is None:
+        raise RuntimeError("Decision-model grading requires a decision client")
+    reads = await client.decide(decision_state(grader, solver_output), {QUESTION_ID: comparative_question()})
+    if QUESTION_ID not in reads:
+        raise RuntimeError(f"The decision model did not answer question {QUESTION_ID!r}")
+    try:
+        return expected_level(reads[QUESTION_ID])
+    except ValueError as error:
+        raise RuntimeError(f"The decision model returned a malformed read: {error}") from error
+
+
+async def grade_decision_answer(task: TaskSpec, attempt: GradingAttempt, client: DecisionClient | None) -> GradeResult:
+    """Grade one decision-model task: one comparative read of the solver's final turn against the bar.
+
+    A final turn without visible text is a submission failure, decided without a read. A missing
+    client, a client error and a malformed read are infrastructure errors. ``detail`` carries the
+    expected ``level``, the ``bar`` and whether the answer was ``accepted``.
+    """
+    grader = task.grader
+    if not isinstance(grader, DecisionGrader):
+        raise TypeError(f"Decision-model grading requires a decision-model grader, not {grader.kind}")
+    try:
+        output = solver_turn_output(attempt.conversation)
+    except SubmissionFailure as error:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+    try:
+        level = await _decision_level(grader, output, client)
+    except (RuntimeError, OSError) as error:
+        return GradeResult(Outcome.INFRA_ERROR, None, str(error))
+    grade = decision_grade(level, grader.bar)
+    detail = {"level": grade.level, "bar": grade.bar, "accepted": grade.accepted}
+    return GradeResult(Outcome.GRADED, grade.reward, detail=detail, passed=grade.accepted)

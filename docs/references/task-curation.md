@@ -298,7 +298,7 @@ identity; lock-backed worker environments retain their existing identities.
 
 ## Graders and controls
 
-A task's grader is one of four kinds:
+A task's grader is one of five kinds:
 
 - `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
   in process; with `environment=required_grader_environment(context)` it grades
@@ -306,6 +306,9 @@ A task's grader is one of four kinds:
 - `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
   TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
   to a file (`FileReward`).
+- `DecisionGrader` holds a rubric, a gold reference and a calibrated acceptance
+  level. A decision model supplied by the host grades the final answer against the
+  reference on the host, with no environment. Curation controls do not run it.
 - `SessionGrader` marks a task graded by its registered interactive session.
 - `NoGrader` records a source evaluator this repository cannot run, with the
   source contract. Its rows never reach `final/`.
