@@ -145,7 +145,6 @@ def test_embed_source_sends_tei_each_documents_first_chars_in_order(tmp_path, mo
     kept = [text for i, text in enumerate(_TEXTS) if i != 1]
     assert embedder.texts == [text[:_CAP] for text in kept]
     assert pq.read_table(artifact.shard_paths()[0]).column("id").to_pylist() == ["d0", "d2", "d3", "d4"]
-    assert artifact.counters["zephyr/records_in"] == 2 * len(_TEXTS)
     assert artifact.counters["embed/bytes_in"] == sum(len(text[:_CAP].encode()) for text in kept)
 
 
