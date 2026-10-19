@@ -10,10 +10,11 @@ from typing import Any
 
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
-from taskcompendium.grading import grade_answer
+from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import GradingAttempt, NoGrader, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.grading import grade_in_sandbox
+from verifyit.modes.grade_judge import JudgeConnection
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.machines import _AttemptMachineFactory, _machine_spec
@@ -30,6 +31,7 @@ async def _grade_rollout(
     resources: AsyncExitStack,
     *,
     stop_reason: str,
+    judge_connection: JudgeConnection | None,
 ) -> GradeResult:
     """Grade in process, or in a fresh verifier machine that the attempt owns.
 
@@ -40,6 +42,14 @@ async def _grade_rollout(
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     conversation = chat_conversation(list(messages))
+    if isinstance(grader, VerifyitGrader) and grader.mode == "judge" and judge_connection is not None:
+        async with asyncio.timeout(lowered.session.verifier_timeout):
+            return await asyncio.to_thread(
+                grade_remote_judge_answer,
+                task,
+                GradingAttempt(conversation, stop_reason=stop_reason),
+                judge_connection,
+            )
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
         return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
     attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)

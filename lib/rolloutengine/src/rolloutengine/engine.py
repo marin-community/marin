@@ -16,6 +16,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import SessionGrader
 from taskcompendium.runtime.output_capture import captured_output_files
 from taskcompendium.submission import conversation_messages
+from verifyit.modes.grade_judge import JudgeConnection
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.contracts import (
@@ -84,6 +85,7 @@ class RolloutEngine:
 
     An optional observer receives progress events while each attempt runs.
     ``providers`` serve the built-in session's host tools, keyed by ``ProviderRequirement.action_interface``.
+    ``judge_connection`` grades judge tasks through TaskCompendium's host service.
     """
 
     def __init__(
@@ -92,12 +94,14 @@ class RolloutEngine:
         factories: Mapping[str, MachineFactory],
         *,
         sessions: Mapping[str, TaskSessionFactory] | None = None,
+        judge_connection: JudgeConnection | None = None,
         observer: RolloutObserver | None = None,
         providers: Mapping[str, ToolProvider] | None = None,
     ):
         self.model = model
         self.factories = factories
         self.sessions = {} if sessions is None else sessions
+        self.judge_connection = judge_connection
         self.observer = observer
         self.providers = {} if providers is None else providers
 
@@ -192,7 +196,15 @@ class RolloutEngine:
             messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
         ) -> GradeResult:
             return await _grade_rollout(
-                lowered, messages, outputs, machine, self.factories, cleanup, resources, stop_reason=stop_reason
+                lowered,
+                messages,
+                outputs,
+                machine,
+                self.factories,
+                cleanup,
+                resources,
+                stop_reason=stop_reason,
+                judge_connection=self.judge_connection,
             )
 
         session_factories: Mapping[str, TaskSessionFactory] = {
