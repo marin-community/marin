@@ -62,6 +62,7 @@ from taskforge.stage40_build_with_program.step_store import (
     memoized,
     recomputed,
 )
+from taskforge.stage40_build_with_program.verification import unbuildable_problem, verification_problem
 
 DRAFT_DIR = "draft"
 TASK_FILE = "task.json"
@@ -329,6 +330,10 @@ def _machine_text(machine: SolverMachine | None) -> str:
     return f"solver_machine {machine}"
 
 
+VERIFICATION_CHECK = "verification"
+"""The ``BuildFailure.step`` of a proposal or draft whose verifier kind cannot match the proposal's."""
+
+
 async def run_build(
     program: RLEnvBuildProgram,
     proposal: TaskProposal,
@@ -363,8 +368,10 @@ async def run_build(
         model_digest: Replaces ``build_model_digest(model, sampling, services)`` in every key.
 
     Raises:
-        BuildFailure: the research requirement fails, a step failed, or the task's machine is not the
-            solver machine the proposal declares.
+        BuildFailure: the research requirement fails, a step failed, the task's machine is not the solver
+            machine the proposal declares, the proposal declares a verification kind no build implements yet
+            (``verification.unbuildable_problem``, before any step runs), or the built verifier is not the
+            declared kind (``verification.verification_problem``).
         BuildExpired: a step ran past ``STEP_TIMEOUT``, or raised one (the standard grader step does for a grader
             that timed out twice).
         BuildInfrastructureFailure: this host cannot provide the declared solver machine
@@ -372,6 +379,10 @@ async def run_build(
         ValueError: ``check_workpiece_id`` refused ``workpiece_id``.
     """
     machine_available(services, proposal)
+    declared = proposal.header.verification
+    unbuildable = unbuildable_problem(declared)
+    if unbuildable is not None:
+        raise BuildFailure(unbuildable, VERIFICATION_CHECK)
     researches = research is ResearchRequirement.ENFORCED and bool(proposal.header.research)
     if researches and (SOURCES_STEP not in program.steps or program.steps[SOURCES_STEP].output_type is not Sources):
         raise BuildFailure(f"a build that researches its proposal needs a {SOURCES_STEP!r} step returning Sources")
@@ -385,6 +396,9 @@ async def run_build(
         task, outcomes = await run_program(program, context, proposal, store, keyed_model, invalidate)
         fields.attrs["hits"] = str(sum(outcome.status is CacheStatus.HIT for outcome in outcomes))
         fields.attrs["steps"] = str(len(outcomes))
+    mismatch = verification_problem(declared, task)
+    if mismatch is not None:
+        raise BuildFailure(mismatch, VERIFICATION_CHECK)
     draft = TaskDraft(
         task=task,
         provenance=WorkpieceBuildProvenance(

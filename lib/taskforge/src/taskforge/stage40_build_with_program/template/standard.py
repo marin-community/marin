@@ -19,8 +19,10 @@ The steps, in run order:
    (``draft.requirements(packages=...)``), which needs no image. A container proposal gets a
    ``DockerBuild``, which ``publish_image`` pushes; the step's output memoizes the pinned reference.
    ``run_build`` refuses a task whose machine is not the declared one.
-4. ``grader`` writes the grader: an in-process verifyit grader (exact, numeric, math, mcq) when the
-   answer is one value, otherwise a Python grader program in a verifier machine. Before it returns,
+4. ``grader`` writes the grader of the kind the proposal declares: an LLM judge (``draft.judge_grader``)
+   for a reply whose prose is the product, an in-process verifyit grader (exact, numeric, math, mcq) for
+   one value in an unambiguous format, otherwise a Python grader program in a verifier machine. A judge
+   calls a model, which no build has, so it is not prototyped. For the other kinds, before it returns,
    the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
    ``FULL_CREDIT``, a reward outside the grader's score range, or an empty answer above the grader's
    declared ``rejection_ceiling`` goes back to the model, and after ``ATTEMPTS`` requests the build
@@ -147,15 +149,25 @@ async def grader(
         f"# Solver-visible files\n\n{files_text(fixtures.agent_files, '/')}\n\n"
         f"# Private data files already shipped with a grader script\n\n{files_text(fixtures.private_files, '')}\n\n"
         f"{SUBMISSION}\n\n{NUMERIC_LITERALS}\n\n"
-        "Write the grader from the proposal's 'Grader design and controls' section. Prefer an in-process kind "
-        "(exact, numeric, math or mcq) whenever the answer is one value; use kind=script only when the checks "
-        "need code. Rewards lie in [0, 1]. Give partial credit only where the proposal does, and declare "
+        "Write the grader from the proposal's 'Grader design and controls' section, of the kind its verification "
+        f"names: {proposal.header.verification}. llm_as_judge is kind=llm_as_judge: the proposal's rubric, each "
+        "item stated as its meaning with the reference values, tolerances, units and accepted equivalences, and a "
+        "reference reply, for a reply whose prose is the product. answer_in_box is an in-process kind (exact, "
+        "numeric, math or mcq) for one value in an unambiguous format. code is kind=script, only for what only "
+        "code can probe. Rewards lie in [0, 1]. Give partial credit only where the proposal does, and declare "
         "rejection_ceiling as the most a submission wrong in substance can collect under that scheme (0 without "
         "partial credit). The reference reply and files must earn full credit."
     )
     prototyped: list[GradedCandidate] = []
 
     async def problem(submitted: GraderDraft) -> str | None:
+        if submitted.kind == "llm_as_judge":
+            # A judge calls a model and a build has none: validation's controls are its first grades.
+            try:
+                grader_package(submitted, fixtures, requirements)
+            except ValueError as error:
+                return str(error)
+            return None
         if submitted.kind == "script" and not submitted.script.strip():
             return "kind=script needs the script source"
         reference_files = tuple(task_file(f) for f in submitted.reference_files)

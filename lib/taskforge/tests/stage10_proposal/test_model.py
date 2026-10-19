@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+from dataclasses import replace
 
 import pytest
 
 from taskforge.stage10_proposal.model import (
     BuildItem,
+    CompositePart,
     Environment,
     Grounding,
     ProposalFormatError,
@@ -55,6 +57,10 @@ AUTHORED = (
     "environment: container\n"
     "solver_machine: null\n"
     "verification: composite\n"
+    "composite:\n"
+    "  - kind: decision_model\n"
+    "    weight: 0.75\n"
+    "  - {kind: code, weight: 0.25}\n"
     "grounding: unverified\n"
     "research_need: needed\n"
     "research_reason: the deliverable should follow real handouts\n"
@@ -69,6 +75,7 @@ AUTHORED = (
     "---\n\n" + BODY.replace("\n", "\r\n") + "\n\n"
 )
 
+PARTS = (CompositePart(Verification.DECISION_MODEL, 0.75), CompositePart(Verification.CODE, 0.25))
 PROPOSAL_ID = "d01.algebra.linear-transformations/3"
 SOURCE = SourceRef(SourceKind.CAPABILITY, "d01.algebra.linear-transformations", "9f3a12")
 
@@ -88,6 +95,7 @@ def _proposal(
         environment=Environment.CONTAINER,
         solver_machine=None,
         verification=Verification.COMPOSITE,
+        composite=PARTS,
         research_need=research_need,
         research_reason="the deliverable should follow real handouts",
         research=research,
@@ -106,6 +114,7 @@ def test_authored_document_parses_to_typed_header_and_canonical_form_is_stable()
     header = proposal.header
     assert header.environment is Environment.CONTAINER
     assert header.verification is Verification.COMPOSITE
+    assert header.composite == PARTS
     assert header.research_need is ResearchNeed.NEEDED
     assert header.research[0].kind is ResearchKind.WEB
     assert header.build == (
@@ -244,6 +253,40 @@ def test_document_regex_matches_canonical_render(variant):
     assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), render(_proposal(**variant)))
 
 
+@pytest.mark.parametrize("verification", list(Verification), ids=str)
+def test_every_verification_kind_parses_and_the_regex_admits_it(verification):
+    proposal = _proposal()
+    parts = PARTS if verification is Verification.COMPOSITE else ()
+    proposal = TaskProposal(replace(proposal.header, verification=verification, composite=parts), proposal.body)
+    text = render(proposal)
+    assert parse(text).header.verification is verification
+    assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), text)
+
+
+def test_a_composite_may_repeat_a_kind():
+    repeated = (CompositePart(Verification.DECISION_MODEL, 0.5), CompositePart(Verification.DECISION_MODEL, 0.5))
+    proposal = _proposal()
+    text = render(TaskProposal(replace(proposal.header, composite=repeated), proposal.body))
+    assert parse(text).header.composite == repeated
+    assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), text)
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (("    weight: 0.75\n", "    weight: 0.5\n"), "weights sum to 0.75, not 1"),
+        (("  - {kind: code, weight: 0.25}\n", ""), "at least 2 parts"),
+        (("kind: code, weight", "kind: composite, weight"), "composite[1].kind: a composite part is one of"),
+        (("kind: code, weight: 0.25", "kind: code, weight: 0"), "composite[1].weight"),
+        (("verification: composite", "verification: decision_model"), "so composite must be []"),
+    ],
+    ids=["weights-not-one", "one-part", "nested-composite", "zero-weight", "parts-on-another-kind"],
+)
+def test_a_composite_is_a_weighted_list_of_other_kinds(edit, message):
+    with pytest.raises(ProposalFormatError, match=re.escape(message)):
+        parse(AUTHORED.replace(*edit))
+
+
 @pytest.mark.parametrize(
     "edit",
     [
@@ -255,6 +298,7 @@ def test_document_regex_matches_canonical_render(variant):
         ('"grader/*.py"]\n---\n', '"grader/*.py"]\n'),
         ('research:\n  - {kind: web, purpose: "two real lab handouts"}\n', "research: []\n"),
         ("## Build plan\n", ""),
+        ("  - {kind: code, weight: 0.25}\n", "  - {kind: composite, weight: 0.25}\n"),
     ],
     ids=[
         "quoted-enum",
@@ -265,6 +309,7 @@ def test_document_regex_matches_canonical_render(variant):
         "missing-closing-delimiter",
         "needed-with-empty-research",
         "missing-heading",
+        "nested-composite",
     ],
 )
 def test_document_regex_rejects_drift(edit: tuple[str, str]):

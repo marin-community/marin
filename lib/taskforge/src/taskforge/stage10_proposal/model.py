@@ -13,6 +13,9 @@ A proposal is written as::
     environment: container
     solver_machine: null
     verification: composite
+    composite:
+      - {kind: decision_model, weight: 0.7}
+      - {kind: code, weight: 0.3}
     research_need: needed
     research_reason: "the deliverable should follow real lab handouts"
     research:
@@ -29,6 +32,8 @@ in that order, unless ``null_reason`` is set, in which case the body may be abbr
 ``solver_machine`` pins the machine the solver works on: ``null`` for a container proposal, which runs
 in the image its build publishes, and one of ``SolverMachine`` for any other, so no later stage chooses
 it. ``none``, no machine at all, is legal only for a reasoning proposal.
+``composite`` lists the parts of a ``composite`` verification, each another kind with its share of the
+reward, and is empty for every other kind (``check_composite``).
 ``research_need`` must agree with ``research``: ``needed`` lists at least one item and ``not_needed``
 none, and the body of a non-null proposal cites every item, and only listed items, as ``research[i]``.
 ``render`` produces the canonical bytes: string scalars are JSON-quoted (valid YAML), keys appear
@@ -42,7 +47,7 @@ or newline.
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -71,6 +76,7 @@ HEADER_KEYS = (
     "environment",
     "solver_machine",
     "verification",
+    "composite",
     "research_need",
     "research_reason",
     "research",
@@ -123,12 +129,27 @@ few seconds of Python, or a real clock; `{SolverMachine.PACKAGES}` when solving 
 
 
 class Verification(StrEnum):
-    """How the private evaluator grades: exact match, executable checks, a judge rubric, or both."""
+    """How the private evaluator grades.
 
-    SIMPLE = "simple"
+    ``answer_in_box``: a generic match of a final answer whose format is unambiguous (exact, numeric, math,
+    choice). ``decision_model``: a decision model compares the answer with the reference answer against a
+    rubric; the default, since it needs no format restriction. ``code``: what only code can probe
+    (behavioural tests, running systems). ``llm_as_judge``: a model judge for deliverables whose prose is the
+    product. ``composite``: a weighted list of the other kinds (``CompositePart``).
+    """
+
+    ANSWER_IN_BOX = "answer_in_box"
+    DECISION_MODEL = "decision_model"
     CODE = "code"
-    JUDGE = "judge"
+    LLM_AS_JUDGE = "llm_as_judge"
     COMPOSITE = "composite"
+
+
+COMPOSITE_PART_KINDS = tuple(kind for kind in Verification if kind is not Verification.COMPOSITE)
+"""The kinds a composite part may be: every kind but composite, each as often as the proposal needs."""
+COMPOSITE_MIN_PARTS = 2
+COMPOSITE_WEIGHT_TOLERANCE = 1e-6
+"""How far the parts' weights may sum from 1."""
 
 
 class Grounding(StrEnum):
@@ -178,12 +199,25 @@ class BuildItem:
 
 
 @dataclass(frozen=True)
+class CompositePart:
+    """One part of a composite verification: a grader of ``kind`` and its share of the reward.
+
+    For now a composite is deliberately strict: a weighted list of the other kinds, repeats allowed, whose
+    weights sum to 1. It is meant to become an arbitrary program over graders.
+    """
+
+    kind: Verification
+    weight: float
+
+
+@dataclass(frozen=True)
 class ProposalHeader:
     id: str
     source: SourceRef
     environment: Environment
     solver_machine: SolverMachine | None
     verification: Verification
+    composite: tuple[CompositePart, ...]
     grounding: Grounding
     research_need: ResearchNeed
     research_reason: str
@@ -224,6 +258,8 @@ def render(p: TaskProposal) -> str:
         f"environment: {h.environment}",
         f"solver_machine: {'null' if h.solver_machine is None else h.solver_machine}",
         f"verification: {h.verification}",
+        "composite:" if h.composite else "composite: []",
+        *(f"  - {{kind: {part.kind}, weight: {json.dumps(part.weight)}}}" for part in h.composite),
         f"research_need: {h.research_need}",
         f"research_reason: {_quoted(h.research_reason)}",
         "research:" if h.research else "research: []",
@@ -254,6 +290,7 @@ def parse(text: str) -> TaskProposal:
     except yaml.YAMLError as error:
         raise ProposalFormatError(f"front matter is not valid YAML: {error}") from error
     header = _header(raw)
+    check_composite(header)
     body = "\n".join(lines[closing + 1 :])
     if header.null_reason is None:
         _check_headings(body)
@@ -308,6 +345,28 @@ def _check_headings(body: str) -> None:
         )
 
 
+def check_composite(header: ProposalHeader) -> None:
+    """A composite lists at least ``COMPOSITE_MIN_PARTS`` parts whose weights sum to 1; other kinds list none.
+
+    A null proposal may leave a composite's parts empty: it is never built.
+
+    Raises:
+        ProposalFormatError: the parts contradict the verification.
+    """
+    parts = header.composite
+    if header.verification is not Verification.COMPOSITE:
+        if parts:
+            raise ProposalFormatError(f"composite: verification is {header.verification}, so composite must be []")
+        return
+    if not parts and header.null_reason is not None:
+        return
+    if len(parts) < COMPOSITE_MIN_PARTS:
+        raise ProposalFormatError(f"composite: a composite verification lists at least {COMPOSITE_MIN_PARTS} parts")
+    total = sum(part.weight for part in parts)
+    if abs(total - 1) > COMPOSITE_WEIGHT_TOLERANCE:
+        raise ProposalFormatError(f"composite: the parts' weights sum to {total}, not 1")
+
+
 def _check_research(header: ProposalHeader, body: str) -> None:
     """The research decision agrees with the list, and a non-null body cites exactly the listed items."""
     count = len(header.research)
@@ -343,6 +402,9 @@ def _header(raw: object) -> ProposalHeader:
         environment=environment,
         solver_machine=_solver_machine(raw["solver_machine"], environment),
         verification=_enum(Verification, raw["verification"], "verification"),
+        composite=tuple(
+            _composite_part(item, f"composite[{i}]") for i, item in enumerate(_list(raw["composite"], "composite"))
+        ),
         grounding=_enum(Grounding, raw["grounding"], "grounding"),
         research_need=_enum(ResearchNeed, raw["research_need"], "research_need"),
         research_reason=_text(raw["research_reason"], "research_reason"),
@@ -414,6 +476,17 @@ def _research(value: object, field: str) -> ResearchItem:
     )
 
 
+def _composite_part(value: object, field: str) -> CompositePart:
+    raw = _mapping(value, field, ("kind", "weight"))
+    kind = _enum(Verification, raw["kind"], f"{field}.kind")
+    if kind not in COMPOSITE_PART_KINDS:
+        raise ProposalFormatError(f"{field}.kind: a composite part is one of {[str(k) for k in COMPOSITE_PART_KINDS]}")
+    weight = raw["weight"]
+    if isinstance(weight, bool) or not isinstance(weight, int | float) or not 0 < weight <= 1:
+        raise ProposalFormatError(f"{field}.weight: expected a number in (0, 1], got {weight!r}")
+    return CompositePart(kind=kind, weight=float(weight))
+
+
 def _build(value: object, field: str) -> BuildItem:
     if not isinstance(value, Mapping) or len(value) != 1:
         raise ProposalFormatError(f"{field}: expected a one-entry mapping 'name: description', got {value!r}")
@@ -425,6 +498,7 @@ def _build(value: object, field: str) -> BuildItem:
 # literals escape only REGEX_META rather than going through ``re.escape``.
 REGEX_META = frozenset("\\.+*?()|[]{}^$")
 QUOTED = r'"[^"\\\n]+"'
+NUMBER = r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:e-?[0-9]+)?"
 # One body line that is not a level-two heading.
 TEXT = r"(?:[^#\n][^\n]*|#[^#\n][^\n]*|##[^ \n][^\n]*|##?)"
 LINE = rf"{TEXT}?\n"
@@ -436,19 +510,21 @@ def _literal(text: str) -> str:
     return "".join(r"\n" if ch == "\n" else "\\" + ch if ch in REGEX_META else ch for ch in text)
 
 
-def _alternation(enum: type[StrEnum]) -> str:
-    return "(?:" + "|".join(_literal(str(member)) for member in enum) + ")"
+def _alternation(members: Iterable[StrEnum]) -> str:
+    return "(?:" + "|".join(_literal(str(member)) for member in members) + ")"
 
 
 def _header_rest() -> str:
     """The front matter after ``null_reason``, through the closing delimiter."""
     item = rf"  - \{{kind: {_alternation(ResearchKind)}, purpose: {QUOTED}\}}\n"
     with_machine = "(?:" + "|".join(_literal(str(m)) for m in SolverMachine if m is not SolverMachine.NONE) + ")"
+    part = rf"  - \{{kind: {_alternation(COMPOSITE_PART_KINDS)}, weight: {NUMBER}\}}\n"
     return (
         rf"(?:environment: {_literal(Environment.CONTAINER)}\nsolver_machine: null\n"
         rf"|environment: {_literal(Environment.REASONING)}\nsolver_machine: {_alternation(SolverMachine)}\n"
         rf"|environment: {_literal(Environment.SHELLSIM)}\nsolver_machine: {with_machine}\n)"
-        rf"verification: {_alternation(Verification)}\n"
+        rf"(?:verification: {_alternation(COMPOSITE_PART_KINDS)}\ncomposite: \[\]\n"
+        rf"|verification: {Verification.COMPOSITE}\ncomposite:(?: \[\]\n|\n(?:{part})+))"
         rf"(?:research_need: {ResearchNeed.NEEDED}\nresearch_reason: {QUOTED}\nresearch:\n(?:{item})+"
         rf"|research_need: {ResearchNeed.NOT_NEEDED}\nresearch_reason: {QUOTED}\nresearch: \[\]\n)"
         rf"build:(?: \[\]\n|\n(?:  - {QUOTED}: {QUOTED}\n)+)"

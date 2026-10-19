@@ -36,7 +36,7 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.stage10_proposal.model import ResearchNeed, SolverMachine, TaskProposal
+from taskforge.stage10_proposal.model import CompositePart, ResearchNeed, SolverMachine, TaskProposal, Verification
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program import run as run_module
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
@@ -557,3 +557,21 @@ async def test_a_proposal_without_research_needs_no_sources_step_under_the_requi
     draft = await build(tmp_path, unresearched, services, research=ResearchRequirement.ENFORCED)
 
     assert draft.task.id
+
+
+async def test_a_composite_proposal_is_refused_before_any_step_runs(tmp_path, proposal, services):
+    parts = (CompositePart(Verification.DECISION_MODEL, 0.5), CompositePart(Verification.CODE, 0.5))
+    composite = replace(proposal, header=replace(proposal.header, verification=Verification.COMPOSITE, composite=parts))
+    model = FakeModel()
+
+    with pytest.raises(BuildFailure, match=r"verification: .*no composite grader type exists"):
+        await build(tmp_path, composite, services, model=model)
+
+    assert model.calls == 0 and not (tmp_path / "store").exists()
+
+
+async def test_a_draft_whose_grader_is_not_the_declared_kind_is_refused(tmp_path, proposal, services):
+    declared_code = replace(proposal, header=replace(proposal.header, verification=Verification.CODE))
+
+    with pytest.raises(BuildFailure, match="declares code verification but the built grader is answer_in_box"):
+        await build(tmp_path, declared_code, services)

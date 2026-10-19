@@ -33,7 +33,8 @@ grounding: unverified
 null_reason: null
 environment: reasoning
 solver_machine: shellsim
-verification: simple
+verification: answer_in_box
+composite: []
 research_need: needed
 research_reason: "the task depends on an external fact the build must confirm"
 research:

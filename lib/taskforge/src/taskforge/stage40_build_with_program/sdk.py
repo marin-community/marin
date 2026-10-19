@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
@@ -45,6 +45,7 @@ from taskforge.llm.structured import CutReplyError, StructuredOutputError
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT, GRADER_VERDICT_PATH, VERDICT_REWARD
+from taskforge.spec.rubric import Rubric
 from taskforge.stage10_proposal.model import ProposalHeader, SolverMachine, TaskProposal, render
 from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext, call_ledger
 from taskforge.stage40_build_with_program.outputs import Fixtures, GradedCandidate, Grader, ResearchFinding, WebCall
@@ -58,6 +59,8 @@ GRADER_TIMEOUT = 300.0
 """Seconds a grader program may run on one candidate."""
 FULL_CREDIT = 0.99
 """The least reward a reference answer must receive."""
+RUBRIC_KINDS = frozenset({"llm_as_judge"})
+"""``GraderDraft`` kinds a model applies through a rubric."""
 ATTEMPTS = 3
 """Requests ``structured_until`` sends before it fails the build."""
 CUT_REPLY_CHARS = 2000
@@ -257,9 +260,15 @@ class DockerfileDraft(BaseModel):
 class GraderDraft(BaseModel):
     """Submit the private grader, the answer contract it enforces, and a reference answer."""
 
-    kind: Literal["exact", "numeric", "math", "mcq", "script"] = Field(
-        description="exact, numeric, math or mcq: a generic check of the final reply, graded in process (prefer "
-        "these whenever the answer is one value); script: a Python grader program, only when the checks need code."
+    kind: Literal["llm_as_judge", "exact", "numeric", "math", "mcq", "script"] = Field(
+        description="llm_as_judge: a model judge applies rubric to a reply whose prose is the product; exact, "
+        "numeric, math or mcq: a generic check of a final reply that is one value in an unambiguous format, "
+        "graded in process; script: a Python grader program, only for what only code can probe (running "
+        "solver-written code, executing files)."
+    )
+    rubric: Rubric | None = Field(
+        description="For llm_as_judge, the rubric: what a correct reply delivers, one item per property, each "
+        "stated as its meaning with reference values, tolerances, units and accepted equivalences; otherwise null."
     )
     script: str = Field(description="For kind=script, the grader program source; otherwise empty.")
     private_files: list[FileDraft] = Field(
@@ -287,6 +296,12 @@ class GraderDraft(BaseModel):
         "partial-credit scheme (for example 0.4 when format and a correct intermediate earn 0.4 together). The "
         "empty answer must score at most this, and validation's negative controls will demand at most this."
     )
+
+    @model_validator(mode="after")
+    def rubric_kind(self) -> "GraderDraft":
+        if (self.kind in RUBRIC_KINDS) != (self.rubric is not None):
+            raise ValueError(f"give a rubric exactly when kind is one of {sorted(RUBRIC_KINDS)}")
+        return self
 
     @field_validator("reference_files")
     @classmethod
@@ -563,10 +578,14 @@ async def research(context: RLEnvBuildContext, proposal: TaskProposal, index: in
 def grader_package(grader: GraderDraft, fixtures: Fixtures, requirements: EnvironmentRequirements) -> GraderPackage:
     """The grader ``grader`` describes.
 
+    An llm_as_judge grader is ``draft.judge_grader`` over the rubric and the reference reply.
     The generic kinds become an in-process verifyit grader. A script runs in a verifier machine: on
     the grader base image as a ``python_grader`` for a task without an image, or in a copy of the
     task image as a ``script_grader`` that receives the solver's workdir.
     """
+    if grader.kind == "llm_as_judge":
+        assert grader.rubric is not None  # GraderDraft.rubric_kind
+        return draft.judge_grader(grader.rubric, grader.reference_reply)
     if grader.kind == "exact":
         return draft.answer_grader(ExactSpec(expected=(grader.expected,), ignore_case=True, ignore_whitespace=True))
     if grader.kind == "numeric":

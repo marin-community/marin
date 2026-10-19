@@ -20,8 +20,13 @@ SECTIONS = {
 }
 
 
+COMPOSITE_PARTS = "\n  - {kind: decision_model, weight: 0.5}\n  - {kind: code, weight: 0.5}"
+"""The composite header value a composite document gets: a decision part and a code part."""
+
+
 def document(verification: str = "code", resources: str = '["grader/check.py", "fixtures/*.json"]') -> str:
     body = "\n".join(f"## {h}\n{SECTIONS.get(h, FILLER)}\n" for h in REQUIRED_HEADINGS)
+    composite = COMPOSITE_PARTS if verification == "composite" else " []"
     return f"""---
 id: "d01.cap/1"
 source: {{kind: capability, ref: "d01.cap", hash: "abc"}}
@@ -30,6 +35,7 @@ null_reason: null
 environment: reasoning
 solver_machine: shellsim
 verification: {verification}
+composite:{composite}
 research_need: needed
 research_reason: "the deliverable is modeled on real lab handouts"
 research:

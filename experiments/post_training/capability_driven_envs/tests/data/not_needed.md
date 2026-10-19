@@ -6,6 +6,7 @@ null_reason: null
 environment: reasoning
 solver_machine: shellsim
 verification: code
+composite: []
 research_need: not_needed
 research_reason: "Synthetic generator fixtures and derivable exact arithmetic; no external artifacts required."
 research: []

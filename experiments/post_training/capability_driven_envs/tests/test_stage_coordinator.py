@@ -77,7 +77,8 @@ grounding: unverified
 null_reason: null
 environment: shellsim
 solver_machine: shellsim
-verification: simple
+verification: answer_in_box
+composite: []
 research_need: not_needed
 research_reason: "the example program draws its own recipe"
 research: []
