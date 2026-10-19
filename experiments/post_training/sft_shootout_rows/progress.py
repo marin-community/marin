@@ -3,10 +3,10 @@
 
 """Dry-build plain, RS-multi and relay over every finished generation shard and print one progress summary.
 
-A shard is finished when its rebuilt.jsonl sits at a shard or round path (SHARD_PATH) with a _SUCCESS marker beside
-it. All finished shards of both families (plain and relay runs) go to validate_pilot.py, which builds and re-checks
-each arm under --output (a dry-run prefix with DRY_RUN_NOT_FOR_TRAINING markers; never an arm's input). The summary
-line holds, per arm, the manifest fields the progress table needs.
+A shard is finished when its rebuilt.jsonl sits at a shard or round path (build.SHARD_PATH) with a _SUCCESS marker
+beside it. All finished shards of both families (plain and relay runs) go to validate_pilot.py, which builds and
+re-checks each arm under --output (a dry-run prefix with DRY_RUN_NOT_FOR_TRAINING markers; never an arm's input).
+The summary line holds, per arm, the manifest fields the progress table needs.
 
 Usage:
     python -m experiments.post_training.sft_shootout_rows.progress --traces-root <s3 .../traces/> --pool <tasks.jsonl> \\
@@ -15,26 +15,14 @@ Usage:
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.sft_shootout_rows.build import finished_shards
+
 ARMS = ("plain", "rs-multi", "relay")
-
-
-# <family>/shard-NN/rebuilt.jsonl or <family>-relay/shard-NN/round-N/rebuilt.jsonl. Anything else, such as a failed round
-# moved aside to round-N.failed-<id>/, is not a finished shard.
-SHARD_PATH = re.compile(r"/[a-z]+(?:-relay)?/shard-[0-9a-z]+/(?:round-[0-9]+/)?rebuilt\.jsonl$")
-
-
-def finished_shards(root: str) -> list[str]:
-    found = []
-    for rebuilt in sorted(StoragePath(f"{root.rstrip('/')}/**/rebuilt.jsonl").glob(), key=str):
-        if SHARD_PATH.search(str(rebuilt)) and (rebuilt.parent / "_SUCCESS").exists():
-            found.append(str(rebuilt))
-    return found
 
 
 def main() -> None:
@@ -45,10 +33,11 @@ def main() -> None:
     parser.add_argument("--replay", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    shards = finished_shards(args.traces_root)
+    shards = finished_shards(args.traces_root, relay=False) + finished_shards(args.traces_root, relay=True)
     if not shards:
         raise SystemExit("No finished shards")
-    print("PROGRESS_SHARDS " + json.dumps([s.split("/traces/", 1)[-1] for s in shards]), flush=True)
+    names = [s.removeprefix(args.traces_root.rstrip("/") + "/") for s in shards]
+    print("PROGRESS_SHARDS " + json.dumps(names), flush=True)
     command = [
         sys.executable,
         "-m",
@@ -67,7 +56,7 @@ def main() -> None:
         args.output,
     ]
     subprocess.run(command, check=True)
-    summary = {"shards": [s.split("/traces/", 1)[-1] for s in shards], "arms": {}}
+    summary = {"shards": names, "arms": {}}
     for arm in ARMS:
         manifest = json.loads((StoragePath(args.output) / arm / "manifest.json").read_text())
         summary["arms"][arm] = {

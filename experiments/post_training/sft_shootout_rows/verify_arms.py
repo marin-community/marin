@@ -17,19 +17,22 @@ component (COMPONENT_NOT_AN_ARM, some families, no replay) gets the same family 
 (components listed first), the arm's rows for the component's families must be byte-identical to the component's. Any
 other arm is refused.
 
-    python -m experiments.post_training.sft_shootout_rows.verify_arms <plain prefix> [<other arm prefix> ...]
+--dry-run checks dry builds (build.py --dry-run) instead: each prefix must carry the DRY_RUN_NOT_FOR_TRAINING marker
+and no _SUCCESS; every other check is the same.
+
+    python -m experiments.post_training.sft_shootout_rows.verify_arms [--dry-run] <plain prefix> [<other arm prefix> ...]
 """
 
+import argparse
 import collections
 import gzip
 import hashlib
 import json
-import sys
 from typing import NamedTuple
 
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.sft_shootout_rows.build import COMPONENT_MARKER, EPOCHS, plain_family_b
+from experiments.post_training.sft_shootout_rows.build import COMPONENT_MARKER, DRY_RUN_MARKER, EPOCHS, plain_family_b
 from experiments.post_training.sweep_data.prepare_agentic import BATCH, PAD_TOKEN, read_component
 from experiments.post_training.sweep_data.select import CONTEXT
 
@@ -43,12 +46,15 @@ class ArmCheck(NamedTuple):
     selection: list[dict]
 
 
-def check_prefix(uri: str) -> ArmCheck:
-    """Check one production prefix against its own manifest; raise on any mismatch."""
+def check_prefix(uri: str, dry_run: bool = False) -> ArmCheck:
+    """Check one production (or, with dry_run, one dry-build) prefix against its own manifest; raise on any mismatch."""
     root = StoragePath(uri)
-    if not (root / "_SUCCESS").exists():
+    if dry_run:
+        if (root / "_SUCCESS").exists() or not (root / DRY_RUN_MARKER).exists():
+            raise ValueError(f"{uri}: a dry build has a {DRY_RUN_MARKER} marker and no _SUCCESS")
+    elif not (root / "_SUCCESS").exists():
         raise ValueError(f"{uri}: no _SUCCESS marker")
-    if (root / "DRY_RUN_NOT_FOR_TRAINING").exists():
+    elif (root / DRY_RUN_MARKER).exists():
         raise ValueError(f"{uri}: carries a dry-run marker")
     manifest, _, files = read_component(root)
     if (COMPONENT_MARKER in files) != bool(manifest.get("relay_component")):
@@ -200,7 +206,12 @@ def check_relay(uri: str, arm: ArmCheck, plain_manifest: dict) -> dict:
 
 
 def main() -> None:
-    plain_manifest, plain_index, plain, plain_report, _ = check_prefix(sys.argv[1])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("plain")
+    parser.add_argument("others", nargs="*")
+    args = parser.parse_args()
+    plain_manifest, plain_index, plain, plain_report, _ = check_prefix(args.plain, args.dry_run)
     if plain_manifest["arm"] != "plain":
         raise ValueError("The first prefix must be plain")
     if not (plain[0]["agentic"] == plain[1]["agentic"] == plain[2]["agentic"]):
@@ -214,8 +225,8 @@ def main() -> None:
     reports = [plain_report | {"epochs_same_rows_different_order": True}]
     b = plain_manifest["B_supervised_tokens"]
     components = []
-    for uri in sys.argv[2:]:
-        check = check_prefix(uri)
+    for uri in args.others:
+        check = check_prefix(uri, args.dry_run)
         manifest, index, arm, report = check.manifest, check.index, check.epochs, check.report
         if manifest.get("relay_component"):
             if any(arm[epoch]["replay"] for epoch in range(EPOCHS)):

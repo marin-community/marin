@@ -30,8 +30,15 @@ same inputs holds the same rows for that family. Fallback (off unless triggered)
 plain's B for it, the relay arm takes every episode of that family, and --arm plain --match-relay <relay prefix> builds
 a plain control whose rows of that family are cut, in a seeded task order, to relay's total.
 
+Trace inputs: by default every finished shard under --trace-prefix (TRACE_PREFIX, the v7 generation): the arm's own
+run type, <family>/shard-NN/rebuilt.jsonl for plain runs or <family>-relay/shard-NN/round-N/rebuilt.jsonl for relay,
+each with a _SUCCESS marker beside it. --traces gives the files explicitly instead.
+
+--dry-run checks the same pins as a production build but writes a DRY_RUN_NOT_FOR_TRAINING marker and no _SUCCESS, so
+the prefix can never feed an arm (verify_arms --dry-run checks it).
+
 Usage:
-    python -m experiments.post_training.sft_shootout_rows.build --arm plain --traces <rebuilt.jsonl> ... \\
+    python -m experiments.post_training.sft_shootout_rows.build --arm plain [--trace-prefix <s3 .../traces-v7/>] \\
         --pool <tasks.jsonl> --replay <replay slice prefix> --output <prefix>
 """
 
@@ -78,6 +85,13 @@ from experiments.post_training.sweep_data.prepare_replay import REPLAY_FRACTION_
 from experiments.post_training.sweep_data.render import training_row
 from experiments.post_training.sweep_data.select import CONTEXT
 
+# The v7 generation (lower GLM reasoning effort, decided 2026-10-19); earlier generations sit under traces/.
+TRACE_PREFIX = "s3://marin-us-east-02a/marin/experiments/sft-shootout/traces-v7/"
+TRACE_FAMILIES = ("swesmith", "tmax")
+# <family>/shard-NN/rebuilt.jsonl or <family>-relay/shard-NN/round-N/rebuilt.jsonl. Anything else, such as a failed round
+# moved aside to round-N.failed-<id>/, is not a finished shard.
+SHARD_PATH = re.compile(r"/(?:swesmith|tmax)(?:-relay)?/shard-[0-9a-z]+/(?:round-[0-9]+/)?rebuilt\.jsonl$")
+DRY_RUN_MARKER = "DRY_RUN_NOT_FOR_TRAINING"
 # Pool v5, the frozen pool.
 POOL_MANIFEST_SHA256 = "7f3d6f7dbef1ed80d302f251540c72a5c548edb871fd0afed729653d7b6def68"
 EPOCHS = 3
@@ -144,6 +158,8 @@ CHANGELOG = (
     "--plain-selection fewest-reasoning picks each task's pass with the fewest trained reasoning tokens",
     "RECOVERYVARIANTS recovery TMax failures: seeded variants within each style (v0 TBLite-100 parser errors) and "
     "v0's measured repeats within a point (same style 125/221, identical text 0/221)",
+    "TRACEPREFIX inputs default to every finished shard of the arm's run type under --trace-prefix (traces-v7/); "
+    "--dry-run builds with production pins, a DRY_RUN marker and no _SUCCESS",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
@@ -202,6 +218,17 @@ DENIED_RUNS = {
         "ran before the relay fix: v0 answered mini-swe 'Tool call error' turns that GLM should repair"
     ),
 }
+
+
+def finished_shards(prefix: str, relay: bool) -> list[str]:
+    """Every finished shard of one run type under a trace prefix: a rebuilt.jsonl with a _SUCCESS marker beside it."""
+    pattern = "{}/{}-relay/shard-*/round-*/rebuilt.jsonl" if relay else "{}/{}/shard-*/rebuilt.jsonl"
+    found = []
+    for family in TRACE_FAMILIES:
+        for rebuilt in StoragePath(pattern.format(prefix.rstrip("/"), family)).glob():
+            if SHARD_PATH.search(str(rebuilt)) and (rebuilt.parent / "_SUCCESS").exists():
+                found.append(str(rebuilt))
+    return sorted(found)
 
 
 def load_traces(uris: list[str], files: list[dict] | None = None) -> list[dict]:
@@ -488,7 +515,13 @@ def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", choices=get_args(Arm), required=True)
-    parser.add_argument("--traces", nargs="+", required=True)
+    inputs = parser.add_mutually_exclusive_group()
+    inputs.add_argument(
+        "--trace-prefix",
+        default=TRACE_PREFIX,
+        help="read every finished shard of the arm's run type under this prefix (default: the v7 traces)",
+    )
+    inputs.add_argument("--traces", nargs="+", help="explicit rebuilt.jsonl files instead of --trace-prefix")
     parser.add_argument("--pool", required=True, help="pool tasks.jsonl")
     parser.add_argument(
         "--pool-manifest", required=True, help="pool manifest.json (hash-checked against POOL_MANIFEST_SHA256)"
@@ -535,10 +568,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--test-inputs", action="store_true", help="skip the pool and replay pins (local validation only)"
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=f"production pins and checks, but a {DRY_RUN_MARKER} marker and no _SUCCESS (never an arm input)",
+    )
     parser.add_argument("--builder-commit", help="git commit of this builder (required for a production build)")
     args = parser.parse_args()
     if not args.test_inputs and not args.builder_commit:
         raise ValueError("--builder-commit is required unless --test-inputs")
+    if args.traces is None:
+        args.traces = finished_shards(args.trace_prefix, relay=args.arm == "relay")
+        if not args.traces:
+            raise ValueError(
+                f"No finished {'relay' if args.arm == 'relay' else 'plain'} shards under {args.trace_prefix}"
+            )
+    else:
+        args.trace_prefix = None
     if (args.relay_families and args.arm != "relay") or (args.match_relay and args.arm != "plain"):
         raise ValueError("--relay-families is for the relay arm and --match-relay for plain")
     return args
@@ -933,6 +979,8 @@ def build_manifest(
         "seed": SEED,
         "pool_manifest_sha256": None if args.test_inputs else POOL_MANIFEST_SHA256,
         "test_inputs": args.test_inputs,
+        "dry_run": args.dry_run,
+        "trace_prefix": args.trace_prefix,
         "traces": args.traces,
         "builder_commit": args.builder_commit,
         "builder_sources_sha256": {
@@ -1068,6 +1116,8 @@ def main() -> None:
         (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in rows.index))
         (out / "selection.jsonl").write_text("".join(json.dumps(item) + "\n" for item in rows.selection))
         (out / "dropped.jsonl").write_text("".join(json.dumps(item) + "\n" for item in dropped))
+        if args.dry_run:
+            (out / DRY_RUN_MARKER).write_text("dry build (--dry-run); never feed an arm\n")
         if rows.extra.get("relay_component"):
             (out / COMPONENT_MARKER).write_text("relay component: some families only, no replay; not a trainable arm\n")
         eligible = eligibility(args.arm, traces, pool, attempts)
@@ -1075,7 +1125,7 @@ def main() -> None:
         if recovery_stats is not None:
             manifest["recovery"] = recovery_stats
         manifest["require_clean_completion"] = args.require_clean_completion
-        upload(out, output, manifest, production=not args.test_inputs)
+        upload(out, output, manifest, production=not (args.test_inputs or args.dry_run))
         print(
             "ARM_BUILT " + json.dumps({k: v for k, v in manifest.items() if k not in ("task_slots", "traces")}),
             flush=True,
