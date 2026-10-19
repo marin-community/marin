@@ -189,19 +189,6 @@ def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_pa
     )
 
 
-def checkpoint_resume_paths(
-    output_path: str,
-    ttl_days: int = TEMPORARY_CHECKPOINT_TTL_DAYS,
-    *,
-    temp_prefix: str | None = None,
-) -> list[str]:
-    """Return permanent and configured scratch roots for checkpoint discovery."""
-    return [
-        prefix_join(output_path, DEFAULT_CHECKPOINTS_PATH),
-        temporary_checkpoint_base_path(output_path, ttl_days, temp_prefix=temp_prefix),
-    ]
-
-
 def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
     """Set every run-scoped path on ``train_config`` from ``output_path``.
 
@@ -209,15 +196,11 @@ def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConf
     Adapter LM/DPO exports PEFT rather than a merged HF model, so for those the merged ``hf_save_path``
     is cleared and ``peft_save_path`` takes the HF location.
     """
-    load_checkpoint_path = train_config.trainer.load_checkpoint_path
-    if load_checkpoint_path is None:
-        load_checkpoint_path = checkpoint_resume_paths(output_path)
     config = replace(  # type: ignore[bad-specialization]
         train_config,
         trainer=replace(
             train_config.trainer,
             checkpointer=resolve_checkpointer_output_path(train_config.trainer.checkpointer, output_path),
-            load_checkpoint_path=load_checkpoint_path,
         ),
         hf_save_path=prefix_join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )

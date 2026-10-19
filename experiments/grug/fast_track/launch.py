@@ -33,7 +33,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import checkpoint_resume_paths, temporary_checkpoint_base_path
+from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
@@ -382,7 +382,6 @@ def build_h100_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            load_checkpoint_path=checkpoint_resume_paths(ctx.output_path),
             checkpointer=CheckpointerConfig(
                 base_path=permanent_checkpoint_path,
                 temporary_base_path=temporary_checkpoint_path,
