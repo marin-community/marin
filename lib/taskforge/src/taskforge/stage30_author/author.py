@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
+from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.program import RLEnvBuildProgram
 
 PROGRAM_MANIFEST_FILE = "program.json"
@@ -54,7 +55,7 @@ class AuthoredProgram:
 
 
 class Author(Protocol):
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram: ...
+    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram: ...
 
 
 def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
@@ -78,7 +79,7 @@ def static_author(program: RLEnvBuildProgram) -> Author:
     """Return an author that hands back ``program``, with no source, for every proposal and revision."""
     authored = AuthoredProgram(program, None)
 
-    async def author(proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def author(proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
         return authored
 
     return author

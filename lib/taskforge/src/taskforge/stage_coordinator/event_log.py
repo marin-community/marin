@@ -21,7 +21,7 @@ from typing import Protocol, TypedDict
 from pydantic import TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
 
-from taskforge.stage40_build_with_program.step_store import check_workpiece_id
+from taskforge.ledger.records import check_workpiece_id
 from taskforge.stage_coordinator.workpiece_machine import WorkpieceEvent
 
 EVENT_SCHEMA = "1"

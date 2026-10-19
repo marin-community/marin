@@ -28,9 +28,18 @@ src/taskforge/
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
-  stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
+  stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure,
+                               BuildExpired;
+                               services.py: RLEnvBuildServices, AgentLimits;
+                               outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
+                               sandbox_effects.py: `build_machine`, `grade_candidate`, `publish_image`;
+                               sdk.py: the functions, schemas and constants steps call;
+                               infrastructure.py: host failures told apart from program failures;
+                               template/standard.py: the standard six-step program;
+                               glm_author.py: GlmAuthor and its prompts;
                                step_store.py: step keys, memos, the memo store and `memoized`;
-                               run.py: `run_program`, `run_build`, the draft and `WorkpieceBuildProvenance`
+                               run.py: `run_program`, `run_build`, `build_model_digest`, the draft and
+                               `WorkpieceBuildProvenance`
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
 
@@ -172,10 +181,11 @@ returning a value of its annotated type. The final step returns a `TaskSpec` and
 `@rl_env_build_sink` in place of `@rl_env_build_step`. The author passes the steps, and the sink as
 the keyword `sink`, to `rl_env_build_program`. That call orders the steps so each runs after its
 inputs, puts the sink last, and refuses a step whose output reaches neither another step nor the
-sink. A step receives an `RLEnvBuildContext` (workpiece id, model, sampling policy) as its first
-parameter. The decorator reads the step's inputs from the parameters after it, and the runner
-passes each one by name: another step's output, or the caller's proposal for a parameter called
-`proposal`. `tests/stage40_build_with_program/test_run.py` builds this toy program, abridged here:
+sink. A step receives an `RLEnvBuildContext` (workpiece id, round, model, sampling policy, services,
+and the running step's name) as its first parameter. The decorator reads the step's inputs from
+the parameters after it, and the runner passes each one by name: another step's output, or the
+caller's proposal for a parameter called `proposal`. `tests/stage40_build_with_program/test_run.py`
+builds this toy program, abridged here:
 
 ```python
 @rl_env_build_step
@@ -189,8 +199,8 @@ async def grader(context: RLEnvBuildContext) -> GraderPackage:
 
 
 @rl_env_build_sink
-async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage, proposal: dict) -> TaskSpec:
-    return TaskSpec(...)  # the prompt from proposal["task"], numbers as a worker resource, grader.grader
+async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage, proposal: TaskProposal) -> TaskSpec:
+    return TaskSpec(...)  # the proposal's prompt, numbers as a worker resource, grader.grader
 
 
 PROGRAM = rl_env_build_program(numbers, grader, sink=task)
@@ -198,17 +208,88 @@ PROGRAM = rl_env_build_program(numbers, grader, sink=task)
 
 `run_build` runs the program and writes `draft/task.json` and `draft/provenance.json`. The second
 file lists every step, the sink last, with the stored memo of its output and whether this build hit
-or missed the cache for it. The memo files in the store carry no status, because the store writes
-a memo only on a miss.
+or missed the cache for it, or reran it because the caller named it in `invalidate`. The memo files
+in the store carry no status, because the store writes a memo only on a miss or a rerun.
+`step_output(draft, store_root, name, output_type)` reads a step's output back.
 
 Each step's output is memoized under a key built from `SDK_VERSION`, a source digest, the content
-digest of each input, and a digest of the model and its sampling policy. The decorator computes the
-source digest over the step's own source text and everything the step reaches in its own module:
-the helpers it calls, the constants it reads, the classes in its return annotation at any depth,
-and what those classes reach in turn. Names bound by imports stay out; a library type such as
-`TaskSpec` falls under `SDK_VERSION`, so a library change comes with an `SDK_VERSION` bump.
+digest of each input, and `build_model_digest(model, sampling, services)`. The decorator computes
+the source digest over the step's own source text and everything the step reaches in its own
+module: the helpers it calls, the constants it reads, the classes in its return annotation at any
+depth, and what those classes reach in turn. Names bound by imports stay out; a library type such
+as `TaskSpec` falls under `SDK_VERSION`, so a library change comes with an `SDK_VERSION` bump.
+The model digest covers the model id, the sampling policy, the agent loops' reasoning replay and
+their limits (`AgentLimits`), so a build that drops reasoning, or bounds its agents differently,
+reruns every step; `run_build(model_digest=...)` overrides it. The machines, images, web tools and
+ledger in `RLEnvBuildServices` stay out of every key and out of every output.
 Because inputs enter the key by content, a step that reruns and returns the same output leaves its
-consumers cached.
+consumers cached. The runner memoizes each step through `step_store.memoized`, and a driver
+memoizing a helper calls it the same way with a key of its own. Every step records a `STEP` span
+with its key digest and cache status, and its model and tool calls carry its name as `step`; a
+build without a ledger records nothing.
+
+A step uses the host through `sandbox_effects`: `build_machine` prepares a machine as a task attempt
+would, `grade_candidate` grades a candidate reply and workspace through `RolloutEngine.run`, and
+`publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
+first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
+cause chain, even one the program wrapped, so the caller retries or abandons the workpiece instead of
+asking the author for a revision. A host fault is a machine the host could not create or lost
+(classified by the message table in `sandbox.host_failures`, which validation's classifier reads too),
+an unreachable controller, or a startup or verifier deadline that expired while a sandbox started,
+received files or ran a command (`SANDBOX_DEADLINE`): the grader's own command has its own timeout,
+so the deadline is the sandbox's latency. `grade_candidate` grades once more on fresh machines when
+the grader command timed out, and returns the second grade. A step-store memo or blob that reads back
+unreadable or altered raises `step_store.StoreCorruption`, an `OSError`, which the build child
+reports as a storage fault.
+
+A build that runs past a clock raises `BuildExpired`, a third outcome beside `BuildFailure` (the
+program's) and `BuildInfrastructureFailure` (the host's), carrying the `ExpiredClock` it ran past and
+the step: `WALL` when `build_process.run_build_in_process` kills the build at its wall clock, `STEP`
+when a step runs past `run.STEP_TIMEOUT`, and `GRADER` when the standard grader step's reference
+timed out on both of `grade_candidate`'s gradings. Until someone reads the record nobody knows whether
+Taskforge or the program was slow, so the library does not presume: the driver holds the workpiece as
+abandoned, spends no revision, does not rebuild it on its own and asks the author for no rewrite.
+
+`stage40_build_with_program/template/standard.py` is the standard program: five steps and the sink `assemble`.
+
+```
+sources(proposal) -> fixtures(proposal, sources) -> requirements(proposal, fixtures)
+    -> grader(proposal, fixtures, requirements) -> instructions(proposal, fixtures, requirements, grader)
+    -> assemble(proposal, fixtures, requirements, grader, instructions) -> TaskSpec
+```
+
+`sources` researches each research item of the proposal on the web, and
+`run_build(research=ResearchRequirement.ENFORCED)` fails a build whose `Sources` lacks a finding for one of them.
+`fixtures` writes the files for the solver machine the proposal declares, listing PyPI packages only for
+a package machine and no files for `none`, and `requirements` builds that machine (`draft.NO_MACHINE`
+for `none`). `run_build` refuses a task whose machine is not the declared one (`check_solver_machine`)
+as a `BuildFailure`, the program's, so no revision can move the solver between no machine, ShellSim,
+CPython and a container. Nor can the host: before anything runs,
+`run_build` and the agentic author's `author_round` call `infrastructure.machine_available`, which
+raises `NO_IMAGE_BUILDER` for a container proposal on a host without an image builder and `NO_FACTORY`
+for a package machine on a host without the local backend, so the workpiece ends as the host's, with no
+revision spent and no author adapting the task to the host.
+`grader` grades its own reference answer and the empty answer with `grade_candidate` before it returns,
+sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
+grader that rejects its own reference, returns a reward outside its score range, or credits the
+empty answer above its declared `rejection_ceiling` is a build failure. A reference whose grader
+timed out on both of `grade_candidate`'s gradings raises `BuildExpired` (`GRADER`) at once instead of
+going back to the model, and the driver holds the workpiece as abandoned. The `Grader` it returns
+holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
+its partial-credit scheme) and every candidate it graded. The agentic author's `run_build` tool
+grades the empty answer in the library after every build, whatever the program did, and fails the
+build in the grader step when it is graded above the ceiling; its digest reports that grade. `sdk.checked_structured` treats a reply
+the output limit cut off as one failed submission and asks for a shorter one.
+
+`stage40_build_with_program.glm_author.GlmAuthor` asks GLM for a program with the template as its example, and
+returns an `AuthoredProgram` holding the program and its source, which
+`stage30_author.loader.load_program_source` loads. The loader refuses a module whose top level
+holds anything but imports, classes, steps, the sink and a final
+`PROGRAM = rl_env_build_program(..., sink=...)`, because a step's key covers its own source and its
+output type alone, so an edit to a helper beside the steps would leave every key unchanged. It also
+refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `Grader`, and a
+program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
+the author receives.
 
 ## The stage machine
 
@@ -237,11 +318,11 @@ From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or ab
 raising an exception closes it as failed. `WorkpieceBudget` bounds the build and author failures a
 workpiece may revise after and the review retries it may follow. The coordinator spends the budget
 when it records the event, choosing revise or reject, retry or abandon. A build error costs a
-revision, except `BuildInfrastructureFailure`, `ModelUnavailable` and `OSError`, which fail the
-workpiece at the build stage. An author call raising `StructuredOutputError` costs a revision from
-the same budget. Its structured reply stayed invalid through the repair turns, as when the output
-limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE, ...)`. Any other
-author error fails the workpiece at the author stage.
+revision, except `BuildInfrastructureFailure`, `BuildExpired`, `ModelUnavailable` and `OSError`,
+which fail the workpiece at the build stage. An author call raising `StructuredOutputError` costs a
+revision from the same budget. Its structured reply stayed invalid through the repair turns, as when
+the output limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE,
+...)`. Any other author error fails the workpiece at the author stage.
 
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
@@ -250,6 +331,9 @@ with `StageFunctions.load_program`, so the author runs once per revision. Each a
 new `authored/<k>/`, so a relaunch resuming at build finds the program its `AUTHORED` event records
 even when a killed process re-authored the workpiece after the last save. A program defined in
 Python, as `static_author` returns, has no source, and the build stage asks the author for it again.
+
+`StageCoordinator` holds the build host's `RLEnvBuildServices` and the `ResearchRequirement`, and
+passes them to every build with its model, sampling policy and model digest.
 
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
 digest. A relaunch of the workpiece with another proposal, budget or model digest raises
@@ -282,6 +366,8 @@ so does an author call whose structured reply stays invalid after its repairs
 
 - the build host fails (`BuildInfrastructureFailure`), and the relaunch builds the same program
   again;
+- the build, a step or the grader runs past its clock (`BuildExpired`), which holds the workpiece
+  until someone reads the record;
 - the model is unavailable (`ModelUnavailable`), at the author or the build stage;
 - storage fails, or a blob or memo is missing or corrupt (`OSError`, with `StoreCorruption` for a
   corrupt one).
