@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 from verifyit.spec import ExactSpec
 
+from taskcompendium.decision import SOLVER_TURN_STATE, DecisionGrader
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading import grade_answer
 from taskcompendium.models import (
@@ -271,6 +272,45 @@ SCRIPT = {
     "environment": {"docker_image": IMAGE, "command_semantics": "linux_process"},
 }
 VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "environment": {"docker_image": IMAGE, "command_semantics": "linux_process"}}
+DECISION = {
+    "kind": "decision_model",
+    "rubric": {
+        "deliverable": "The repaired project's failing test, named.",
+        "items": [
+            {
+                "id": "test_name",
+                "intent": "The answer names the failing test.",
+                "pass_criterion": "The answer names test_parse_dates as the failing test.",
+                "equivalences": ["tests/test_dates.py::test_parse_dates"],
+                "negation_handling": "A test named only as passing does not count.",
+                "weight": 1.0,
+                "role": "scored",
+                "cap_value": None,
+            }
+        ],
+    },
+    "reference": "test_parse_dates fails.",
+    "acceptance_level": 2.75,
+    "calibration": {"reference": 3.5, "paraphrase": 2.75},
+}
+
+
+def test_decision_grader_survives_the_task_json_round_trip(specification):
+    task = TaskSpec.model_validate({**specification.model_dump(mode="json"), "grader": DECISION})
+
+    restored = TaskSpec.model_validate_json(task.model_dump_json())
+
+    assert restored == task
+    assert isinstance(restored.grader, DecisionGrader)
+    assert list(restored.grader.state) == list(SOLVER_TURN_STATE)
+    assert restored.grader.bar == 2.75
+
+
+@pytest.mark.parametrize("answer_type", ["file", "state", "workspace_state"])
+def test_decision_grader_refuses_answers_outside_the_conversation(specification, answer_type):
+    wire = {**specification.model_dump(mode="json"), "answer_type": answer_type, "grader": DECISION}
+    with pytest.raises(ValidationError, match="decision-model grader cannot grade"):
+        TaskSpec.model_validate(wire)
 
 
 @pytest.mark.parametrize(
@@ -322,6 +362,6 @@ def test_task_validation_rejects_invalid_grading_contracts(specification, update
 
 def test_task_json_rejects_prior_schema_version(specification):
     payload = json.loads(specification.model_dump_json())
-    payload["schema_version"] = "0.26"
+    payload["schema_version"] = "0.27"
     with pytest.raises(ValidationError):
         TaskSpec.model_validate_json(json.dumps(payload))

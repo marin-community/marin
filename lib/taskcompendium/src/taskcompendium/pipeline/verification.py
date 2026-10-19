@@ -9,6 +9,7 @@ from verifyit.grade import negative_candidate, positive_candidate
 from verifyit.modes.extract import extract_boxed
 from verifyit.spec import ExactSpec, JsonSchemaSpec, McqSpec, NumericSpec, PredictedActionSpec
 
+from taskcompendium.decision import DecisionGrader
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     ANSWER_CALL_NAME,
@@ -93,6 +94,12 @@ def verify_task(task: TaskSpec) -> list[CheckResult]:
         return [
             CheckResult(
                 check="runtime", status=CheckStatus.UNSUPPORTED, detail="A session grader runs in its rollout session"
+            )
+        ]
+    if isinstance(grader, DecisionGrader):
+        return [
+            CheckResult(
+                check="runtime", status=CheckStatus.UNSUPPORTED, detail="A decision-model grader needs a decision client"
             )
         ]
     if not isinstance(grader, VerifyitGrader) or grader.environment is not None:

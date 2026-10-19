@@ -403,6 +403,7 @@ The built-in Shellbox session grades by grader kind:
 | `VerifyitGrader` without an environment | `taskcompendium.grading.grade_answer` on the host, in a worker thread |
 | `VerifyitGrader` with an environment | `taskcompendium.runtime.grading.grade_in_sandbox` runs the verifyit command on the verifier machine |
 | `ScriptGrader` | `grade_in_sandbox` runs the grader command on the verifier machine |
+| `DecisionGrader` | Not routed yet; `taskcompendium.grading.grade_decision_answer` grades the final conversation on the host |
 | `SessionGrader` | Rejected at lowering; a registered custom session grades the task |
 | `NoGrader` | `GradeResult(Outcome.UNAVAILABLE, None, reason)` |
 

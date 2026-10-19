@@ -3,12 +3,13 @@
 
 """One deterministic task: its conversation, environment, grader, and answer format.
 
-A grader is one of four kinds. ``VerifyitGrader`` names a verifyit mode, graded in process
+A grader is one of five kinds. ``VerifyitGrader`` names a verifyit mode, graded in process
 against the extracted answer or, with an environment, by the verifyit command in a fresh
 machine. ``ScriptGrader`` runs a command in a fresh machine and reads its reward. A
-``SessionGrader`` task is graded by the rollout session that runs it. ``NoGrader`` records why a
-task cannot be graded. The answer format says how the final answer is requested from the model
-and extracted from its conversation.
+``DecisionGrader`` (``taskcompendium.decision``) is graded on the host by a decision model that
+compares the final answer with a reference under a rubric. A ``SessionGrader`` task is graded by
+the rollout session that runs it. ``NoGrader`` records why a task cannot be graded. The answer
+format says how the final answer is requested from the model and extracted from its conversation.
 """
 
 import base64
@@ -41,7 +42,9 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.27"
+from taskcompendium.decision import DecisionGrader
+
+SCHEMA_VERSION = "0.28"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
@@ -637,7 +640,9 @@ class NoGrader(BaseModel):
         return self
 
 
-Grader = Annotated[VerifyitGrader | ScriptGrader | SessionGrader | NoGrader, Field(discriminator="kind")]
+Grader = Annotated[
+    VerifyitGrader | ScriptGrader | DecisionGrader | SessionGrader | NoGrader, Field(discriminator="kind")
+]
 
 
 def grades_in_process(grader: Grader) -> bool:
@@ -884,6 +889,8 @@ class TaskSpec(BaseModel):
         if self.answer_type in CONVERSATION_ANSWERS and not self.answer_format.supports(self.answer_type):
             raise ValueError(f"Answer format {self.answer_format.kind} cannot carry a {self.answer_type} answer")
         validate_output_paths(self.output_paths)
+        if isinstance(self.grader, DecisionGrader) and self.answer_type not in CONVERSATION_ANSWERS:
+            raise ValueError(f"A decision-model grader cannot grade a {self.answer_type} answer")
         if grades_in_process(self.grader) and self.answer_type in (AnswerType.FILE, AnswerType.WORKSPACE_STATE):
             raise ValueError(f"A {self.answer_type} answer requires a grading environment")
         if isinstance(self.grader, VerifyitGrader) and self.grader.environment is not None:
