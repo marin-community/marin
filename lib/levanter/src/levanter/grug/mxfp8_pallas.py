@@ -319,6 +319,6 @@ def requantize_row_blocks(values, exponents, block_starts, block_rows) -> tuple[
 
 def quantize_rows_and_row_blocks(x: jax.Array, block_starts: jax.Array, block_rows: jax.Array):
     """``(quantize_rows(x), quantize_row_blocks(x, ...))``, in one pass over ``x`` when the fused kernel fits."""
-    if not _row_blocks_fit(x) or x.shape[0] % ROW_TILE:
+    if not _row_blocks_fit(x):
         return quantize_rows(x), mx_quantize_row_blocks(x, block_starts, block_rows)
     return mx_quantize_rows_and_row_blocks_pallas(x, block_starts, block_rows)

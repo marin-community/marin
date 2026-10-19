@@ -470,7 +470,8 @@ def _build_wgrad_launcher(*, tile_mn, cluster_mnk, max_active_clusters, max_swiz
 _TOKEN_MAJOR = _TS(mode=(1, 0), divisibility=(1, 16), static=False)
 _WGRAD_OUT_SPEC = _TS(divisibility=(1, 1, 8), static=False)
 MXFP8_WGRAD_TILE_MN = (256, 256)
-MXFP8_WGRAD_CLUSTER = (2, 1, 1)
+# bench_mxfp8_expert_wgrad.py at the hero chunk: (2, 2, 1) beats (2, 1, 1) by 1-5%; 256 x 128 tiles lose 12-25%.
+MXFP8_WGRAD_CLUSTER = (2, 2, 1)
 
 
 def mxfp8_token_grouped_gemm(
