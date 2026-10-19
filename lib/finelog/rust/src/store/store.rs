@@ -1341,7 +1341,7 @@ impl Store {
     /// READ side across the full DataFusion scan; structural mutations that
     /// unlink segments (`drop_table`, compaction/eviction) take the WRITE side.
     /// See the field doc on [`Store`].
-    pub fn query_visibility(&self) -> &Arc<tokio::sync::RwLock<()>> {
+    pub fn query_visibility(&self) -> &tokio::sync::RwLock<()> {
         self.tables.query_visibility()
     }
 
@@ -1759,10 +1759,8 @@ fn validate_v1_upgrade_preflight(
 mod tests {
     use std::collections::HashSet;
 
-    use arrow::array::{AsArray, Int64Array, StringArray};
+    use arrow::array::{Int64Array, StringArray};
     use buffa::{Message, MessageField, MessageView};
-
-    use crate::store::forwarding::{read_forwarding, ReadBudget};
 
     use super::*;
     use crate::levanter_metrics_policy::levanter_metrics_schema;
@@ -4437,15 +4435,13 @@ mod tests {
     async fn object_backed_l0_applies_declared_sort_order() {
         let data_dir = crate::test_support::unique_dir("sorted_object_data");
         let remote_dir = crate::test_support::unique_dir("sorted_object_remote");
-        let store = Arc::new(
-            Store::new(
-                Some(data_dir.clone()),
-                remote_dir.to_string_lossy().into_owned(),
-                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
-                ServeMode::Shadow,
-            )
-            .unwrap(),
-        );
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
         store.bootstrap_maintenance();
         store
             .register_versioned_table("iris.worker", sorted_object_backed_spec(1))
@@ -4487,113 +4483,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(mem_bytes, vec![10, 20, 30]);
-        let read = read_forwarding(
-            Arc::clone(&store),
-            "iris.worker",
-            0,
-            last_seq,
-            ReadBudget {
-                rows: 100,
-                bytes: 1 << 20,
-                segments: 8,
-                timeout: Duration::from_secs(10),
-            },
-        )
-        .await
-        .unwrap();
-        let workers: Vec<_> = read
-            .batches
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .column_by_name("worker_id")
-                    .unwrap()
-                    .as_string::<i32>()
-                    .iter()
-                    .map(|worker| worker.unwrap().to_owned())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        assert_eq!(workers, ["w3", "w1", "w2"]);
-        assert_eq!(read.scanned_through, last_seq);
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn forwarding_recovers_an_uncached_object_after_its_remote_bytes_return() {
-        let data_dir = crate::test_support::unique_dir("native_forward_cold_data");
-        let remote_dir = crate::test_support::unique_dir("native_forward_cold_remote");
-        let cold_dir = crate::test_support::unique_dir("native_forward_cold_recovery");
-        let store = Store::new(
-            Some(data_dir.clone()),
-            remote_dir.to_string_lossy().into_owned(),
-            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
-            ServeMode::Shadow,
-        )
-        .unwrap();
-        store.bootstrap_maintenance();
-        store
-            .register_versioned_table("iris.worker", object_backed_spec(1))
-            .unwrap();
-        store.publish_object_catalog("iris.worker").await.unwrap();
-        let (_, tip) = write_worker_rows(&store, &[("w1", 128, 1), ("w2", 256, 2)]).await;
-        store.publish_object_catalog("iris.worker").await.unwrap();
-        store.shutdown(Duration::from_secs(1)).await;
-
-        let cold = Arc::new(
-            Store::new(
-                Some(cold_dir.clone()),
-                remote_dir.to_string_lossy().into_owned(),
-                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
-                ServeMode::Shadow,
-            )
-            .unwrap(),
-        );
-        cold.recover_tables().await.unwrap();
-        let snapshot = cold.query_snapshot("iris.worker").unwrap();
-        assert_eq!(snapshot.paths.len(), 1);
-        assert!(!Path::new(&snapshot.paths[0]).exists());
-        let reference = &snapshot.sources.as_ref().unwrap().1[&snapshot.paths[0]].source;
-        let remote_path = remote_dir.join(reference.id.as_str());
-        let bytes = std::fs::read(&remote_path).unwrap();
-        std::fs::remove_file(&remote_path).unwrap();
-        let budget = ReadBudget {
-            rows: 100,
-            bytes: 1 << 20,
-            segments: 8,
-            timeout: Duration::from_secs(10),
-        };
-        assert!(
-            read_forwarding(Arc::clone(&cold), "iris.worker", 0, tip, budget)
-                .await
-                .is_err()
-        );
-
-        std::fs::write(remote_path, bytes).unwrap();
-        let read = read_forwarding(Arc::clone(&cold), "iris.worker", 0, tip, budget)
-            .await
-            .unwrap();
-        let workers: Vec<_> = read
-            .batches
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .column_by_name("worker_id")
-                    .unwrap()
-                    .as_string::<i32>()
-                    .iter()
-                    .map(|worker| worker.unwrap().to_owned())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        assert_eq!(workers, ["w1", "w2"]);
-        assert_eq!(read.scanned_through, tip);
-        cold.shutdown(Duration::from_secs(1)).await;
-        for directory in [data_dir, remote_dir, cold_dir] {
-            std::fs::remove_dir_all(directory).unwrap();
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

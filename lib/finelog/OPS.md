@@ -562,23 +562,8 @@ Interpret the pair as follows:
 
 The forwarder gives every live namespace one batch-sized turn per round, runs
 up to four namespace turns concurrently, and starts another round immediately
-while work remains. Each turn reads Parquet directly through Arrow, without
-SQL planning. A log turn spans up to one million source sequence positions;
-other tables span up to 200,000. The retained decoded Arrow budget is 256 MiB,
-with extra working space for one decoder batch, ordering, and IPC encoding.
-A wide read shortens its examined source prefix and resumes on the next turn;
-one oversized row can exceed the retained budget to preserve progress. Missing
-objects fail the turn and preserve its cursor.
-
-Cold cache misses download whole encoded objects before Parquet row-group pruning
-and the decoded-byte target take effect. Localization is serial within one
-namespace turn; up to four namespace turns can localize concurrently. Include an
-encoded-object download buffer per active localization, cache writes, and their
-latency in the resource budget. The 256 MiB target covers retained Arrow only;
-object downloads and cache I/O consume the same 60-second read deadline. The
-local benchmark did not measure cold recovery throughput.
-
-Requests retain their byte limit, and log chunks ship serially
+while work remains. A log turn reads up to one million rows; other tables read
+up to 200,000. Requests retain their byte limit, and log chunks ship serially
 to preserve order. Independent tables can overlap their durable hub writes.
 Hub or network failures get three attempts, then leave the affected cursor in place and yield to
 the next namespace. The same batch is retried on the next sweep; exhaustion does
@@ -630,12 +615,9 @@ rejection for such a destination means the hub predates that behavior or its man
 registration failed. The cumulative, process-lifetime `skipped_seqs` log field includes
 permanent rejections and local-retention gaps and resets after restart.
 
-`slow source read completed` reports live and selected segment counts, returned
-rows, retained Arrow bytes, the examined source boundary, and snapshot,
-localization, native scan/filter/order, and total milliseconds. A read can
-examine trailing foreign-origin positions without returning rows for them.
-The scan's examined boundary is shortened when the decoded byte budget binds.
-A settlement line also reports removed
+Slow forwarding lines include the live and selected segment counts, rows,
+visibility-lock wait, snapshot, planning, scan, encoding, hub acknowledgement,
+settlement, and total milliseconds. A settlement line also reports removed
 segment, row, and byte counts. Maintenance lines report resource class, queue
 wait, run time, and the requested follow-up class. Object-backed relays use the
 `RelayIo` class; `SpecMigration` and `QueryServing` have independent limits.

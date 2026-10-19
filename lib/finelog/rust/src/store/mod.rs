@@ -8,7 +8,6 @@
 pub mod adopt;
 pub mod catalog;
 pub mod compaction;
-pub(crate) mod forwarding;
 pub mod ipc;
 pub mod legacy;
 pub mod log_read;

@@ -6,8 +6,8 @@
 
 use std::net::SocketAddr;
 
-use arrow::array::{RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use arrow::array::{ListArray, RecordBatch, StringArray};
+use arrow::datatypes::{DataType, Field, Int64Type, Schema as ArrowSchema};
 
 use crate::proto::finelog::logging::{FetchLogsRequest, LogEntry, MatchScope, PushLogsRequest};
 use crate::proto::finelog::stats::{ColumnType, ListRelayStatusRequest};
@@ -25,9 +25,6 @@ use crate::store::Store;
 use crate::telemetry_policy::TELEMETRY_NAMESPACE;
 
 use super::*;
-
-use crate::query::{make_ctx, run_query_over};
-use crate::store::forwarding::{bounded_forward_read_through, resume_after_eviction};
 
 use crate::proto::finelog::logging::LogServiceClient;
 
@@ -771,6 +768,46 @@ fn one_telemetry_sized_read_turn_fits_one_request() {
         .iter()
         .all(|(ipc, _)| ipc.len() <= FORWARD_BATCH_BYTES));
     assert_eq!(chunks.last().unwrap().1, FORWARD_BATCH_ROWS);
+}
+
+#[test]
+fn chunk_by_bytes_preserves_nullable_and_nested_slices() {
+    let text = "x".repeat(64);
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(StringArray::from(
+            (0..4_000)
+                .map(|row| (row % 3 != 0).then_some(text.as_str()))
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+            (0..4_000).map(|row| Some(vec![Some(row); 16])),
+        )),
+    ];
+    for column in columns {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            column.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![column])
+            .unwrap()
+            .slice(117, 2_000);
+        let seqs = Int64Array::from_iter_values(118..2_118);
+        let chunks = chunk_by_bytes(&batch, &seqs, 16 << 10).unwrap();
+        // Nested slices retain the original child buffers. Counting those buffers
+        // for each slice would turn this into one serial request per row.
+        assert!(chunks.len() <= 32);
+        let mut decoded = Vec::new();
+        let mut count = 0;
+        for (ipc, last_seq) in chunks {
+            assert!(ipc.len() <= 16 << 10);
+            let part = decode_one_record_batch(&ipc).unwrap();
+            count += part.num_rows();
+            assert_eq!(last_seq, seqs.value(count - 1));
+            decoded.push(part);
+        }
+        assert_eq!(concat_batches(&batch.schema(), &decoded).unwrap(), batch);
+    }
 }
 
 // -------------------------------------------------------------------------------------
@@ -1519,36 +1556,6 @@ async fn a_hub_outage_holds_the_cursor_and_recovery_delivers_every_row_once() {
             ("/user/job/t", "before-outage"),
             ("/user/job/t", "during-outage"),
         ],
-    )
-    .await;
-    assert_eq!(
-        fx.cursor(LOG_NAMESPACE_NAME),
-        Some(fx.tip(LOG_NAMESPACE_NAME))
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_missing_source_file_preserves_progress_until_its_bytes_are_restored() {
-    let fx = Fixture::new("missing-source").await;
-    push(&fx.source_client, "/user/job/0:0", &["first", "second"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
-    let path = fx.source.list_segments(LOG_NAMESPACE_NAME).unwrap()[0]
-        .path
-        .clone();
-    let bytes = std::fs::read(&path).unwrap();
-    std::fs::remove_file(&path).unwrap();
-    let forwarder = fx.forwarder(PRIV_A);
-    let mut progress = Progress::new();
-    let (_stop_tx, mut stop) = watch::channel(false);
-    forwarder.forward_round(&mut progress, &mut stop).await;
-    assert_eq!(fx.cursor(LOG_NAMESPACE_NAME), Some(0));
-    assert!(fx.hub_log_rows().await.is_empty());
-
-    std::fs::write(path, bytes).unwrap();
-    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
-    wait_for_hub_log_rows(
-        &fx,
-        &[("/user/job/0:0", "first"), ("/user/job/0:0", "second")],
     )
     .await;
     assert_eq!(
