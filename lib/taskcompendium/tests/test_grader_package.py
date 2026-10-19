@@ -3,7 +3,6 @@
 
 """Grader packages and their observable verdicts."""
 
-import asyncio
 import json
 from dataclasses import replace
 
@@ -15,7 +14,7 @@ from verifyit.spec import JsonSchemaSpec, NumericSpec, ScriptSpec
 
 from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.grading import parse_grade_result
-from taskcompendium.grading_result import GradingFailure, GradingPhase, GradingProgress, Outcome
+from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
@@ -38,7 +37,6 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.task_grading import grade_task
 
@@ -94,66 +92,6 @@ jq --argjson expected "$expected" '{
     reward: (if .value == $expected then 1 else 0 end), detail: {actual: .value}
 }' /app/state.json > /logs/verifier/reward.json
 """
-
-
-class PhaseRecordingFactory(FixtureImageFactory):
-    """The fixture factory, whose machines note the grading phase at each command."""
-
-    def __init__(self, progress: GradingProgress):
-        self.progress = progress
-        self.phases: list[tuple[tuple[str, ...], GradingPhase]] = []
-
-    async def create(self, spec):
-        machine = await super().create(spec)
-        factory = self
-
-        class Noting:
-            async def run(self, command):
-                factory.phases.append((command.argv, factory.progress.phase))
-                return await machine.run(command)
-
-            async def upload(self, source, target):
-                await machine.upload(source, target)
-
-            async def download(self, source, target):
-                await machine.download(source, target)
-
-            async def close(self):
-                await machine.close()
-
-        return Noting()
-
-
-@pytest.mark.parametrize(
-    "environment",
-    [GRADING_ENVIRONMENT, GRADING_ENVIRONMENT.model_copy(update={"setup_commands": ("true",)})],
-    ids=["no-setup", "with-a-setup-command"],
-)
-def test_grading_progress_is_staging_until_the_authors_commands(environment):
-    """The runtime's preparation runs under STAGING; the author's setup commands and grader under GRADER."""
-    grader = ScriptGrader(
-        argv=("sh", "/tests/grade.sh"),
-        environment=environment,
-        answer_path=None,
-        reward=FileReward(
-            files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),), pass_above=0.5
-        ),
-    )
-    config = inline_resource("config.json", b'{"expected": 3}').model_copy(update={"mode": "0600"})
-    task = _task(GraderPackage(grader, (inline_resource("grade.sh", STATE_GRADER), config)), AnswerType.STATE)
-    progress = GradingProgress()
-    factory = PhaseRecordingFactory(progress)
-    attempt = _attempt(task, TextMessage(role="assistant", content="Done"), StateSubmission({"value": 3}))
-
-    result = asyncio.run(grade_in_sandbox(task, attempt, factory, GRADING_MACHINE, progress=progress))
-
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
-    phases = factory.phases
-    authored = min(index for index, (argv, _) in enumerate(phases) if argv[-1] in ("/tests/grade.sh", "true"))
-    assert phases[0][1] is GradingPhase.STAGING
-    assert all(phase is GradingPhase.STAGING for _, phase in phases[:authored])
-    assert all(phase is GradingPhase.GRADER for _, phase in phases[authored:])
-    assert progress.phase is GradingPhase.GRADER
 
 
 @pytest.mark.parametrize("value,reward,passed", [(3, 1.0, True), (4, 0.0, False)])

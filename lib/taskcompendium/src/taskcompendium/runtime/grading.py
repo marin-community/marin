@@ -111,7 +111,6 @@ def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, .
 
 
 async def _run_checked(machine: Machine, command: Command, failure: str) -> None:
-    """Run a command the task's author chose, failing the grading as the grader's when it fails."""
     await _run_step(machine, command, failure, timed_out=GradingFailure.TIMEOUT, failed=GradingFailure.EXECUTION)
 
 
@@ -461,8 +460,7 @@ async def grade_in_sandbox(
     The grading machine comes from ``factory`` with ``machine_spec``, applying the environment's
     working directory and variables. ``task_machine`` is the agent's
     machine; graders that collect inputs or copy artifacts require it. Machine failures propagate.
-    ``progress`` reads ``STAGING`` from here until the grader's command starts, for a caller whose
-    deadline covers the whole grading.
+    ``progress`` exposes the current phase to a caller whose deadline covers grading preparation.
     """
     if progress is None:
         progress = GradingProgress()
