@@ -108,7 +108,7 @@ def test_tei_client_splits_large_requests_without_reordering(monkeypatch):
 
 
 _CAP = HARRIER_MAX_RAW_TEXT_CHARS
-_TEXTS = ["short", "é" * (_CAP + 7), "a" * _CAP, "b" * (_CAP + 1), "🙂x" * _CAP]
+_TEXTS = ["short", "é" + "x" * (_CAP + 6), "a" * _CAP, "b" * _CAP + "TAIL", "🙂" + "y" * (2 * _CAP)]
 
 
 class _RecordingEmbedder:
@@ -174,13 +174,15 @@ class _CountingBatch:
         return rows
 
 
-def test_reader_materializes_an_oversized_row_group_in_bounded_pieces():
+def test_reader_yields_truncated_records_from_an_oversized_row_group_in_bounded_pieces():
     ids = [f"d{i}" for i in range(40)]
+    texts = [f"{i}:" + "x" * _CAP for i in range(40)]
     sizes = []
-    batch = _CountingBatch(pa.record_batch({"id": ids, "text": ["x"] * 40}), sizes, nbytes=40 * 64 * 1024 * 1024)
+    batch = _CountingBatch(pa.record_batch({"id": ids, "text": texts}), sizes, nbytes=40 * 64 * 1024 * 1024)
 
     records = list(_truncated_records(batch))
 
     assert max(sizes) < 40
     assert sum(sizes) == 40
     assert [record["id"] for record in records] == ids
+    assert [record["text"] for record in records] == [text[:_CAP] for text in texts]

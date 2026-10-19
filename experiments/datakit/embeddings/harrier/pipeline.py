@@ -149,9 +149,10 @@ def _truncated_records(batch: pa.RecordBatch) -> Iterator[dict]:
 def _load_truncated_documents(spec: InputFileSpec) -> Reader[dict]:
     """Read ``id``/``text`` records, keeping the first HARRIER_MAX_RAW_TEXT_CHARS of each text.
 
-    Truncating here, before ``window``, bounds the reader, the window and the TEI call by
-    the cap rather than by raw document size. Slicing each row group into ``rows_per_chunk``
-    pieces keeps ``to_pylist`` from materializing a whole row group of untruncated text.
+    Truncating here, before ``window``, bounds the Python records, the window and the TEI
+    call by the cap rather than by raw document size. Slicing each row group into
+    ``rows_per_chunk`` pieces keeps ``to_pylist`` from materializing a whole row group of
+    untruncated text. The Arrow read itself still loads one whole row group at a time.
     """
     return flat_map_reader(load_parquet_batch(spec), _truncated_records)
 
