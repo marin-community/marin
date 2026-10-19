@@ -7,6 +7,7 @@ import difflib
 from pathlib import Path
 from typing import Sequence
 
+from lm_eval.tasks import TaskManager
 from pydantic import ValidationError
 
 from evalchemy_config import EvaluationConfig, load_evaluation_config
@@ -20,15 +21,7 @@ def _available_tasks() -> set[str]:
     chat_tasks = {
         path.name for path in _CHAT_BENCHMARKS_DIR.iterdir() if (path / "eval_instruct.py").is_file()
     }
-    try:
-        from lm_eval.tasks import TaskManager
-    except ModuleNotFoundError:
-        lm_eval_tasks = {
-            path.parent.name if path.name == "default.yaml" else path.stem
-            for path in _LM_EVAL_TASKS_DIR.rglob("*.yaml")
-        }
-    else:
-        lm_eval_tasks = set(TaskManager("ERROR", include_path=[str(_LM_EVAL_TASKS_DIR)]).all_tasks)
+    lm_eval_tasks = set(TaskManager("ERROR", include_path=[str(_LM_EVAL_TASKS_DIR)]).all_tasks)
     return chat_tasks | lm_eval_tasks
 
 

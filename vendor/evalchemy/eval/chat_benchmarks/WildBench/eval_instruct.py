@@ -11,9 +11,6 @@ from datasets import load_dataset
 from eval.constants import AUTO_ANNOTATOR_MODEL
 from eval.task import BaseBenchmark
 
-# Import WildBench utilities
-
-
 @dataclass
 class WildBenchConfig:
     """Configuration for WildBench evaluation."""

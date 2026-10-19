@@ -257,8 +257,7 @@ class EvaluationLimits:
 
         ``model_args.max_length`` reaches every lm-eval model adapter.  Native
         lm-eval tasks consume ``gen_kwargs.max_gen_toks``; custom benchmarks
-        consume ``args.max_tokens`` and are additionally protected by
-        :class:`eval.task.BaseBenchmark` at request construction time.
+        consume ``args.max_tokens``.
         """
         model_args = parse_key_value_args(getattr(args, "model_args", None))
         gen_kwargs = parse_key_value_args(getattr(args, "gen_kwargs", None))

@@ -244,7 +244,8 @@ class RunFingerprint:
           - ``grader_source_path`` -> ``grader_source_digest`` (sha256 of the grader source; accepts
             a single path or a sequence for a multi-file grader). A precomputed digest may be passed.
           - ``chat_template`` (the rendered template STRING) -> ``template_digest``; or pass
-            ``chat_template_digest`` directly. When ``apply_chat_template`` is false this is absent.
+            ``chat_template_digest`` directly. Supplied templates and digests are included
+            regardless of ``apply_chat_template``.
 
         Decoding ALIASES are normalized (``normalize_decoding``) before they enter the set, so
         ``max_gen_toks`` / ``max_new_tokens`` / ``max_tokens`` collapse to one key.

@@ -65,7 +65,7 @@ def find_custom_benchmark_classes(
     module: ModuleType,
     base_class: type,
 ) -> list[type]:
-    """Return concrete benchmark subclasses defined by the supplied module."""
+    """Return benchmark subclasses defined by the supplied module, including abstract ones."""
     return [
         candidate
         for _, candidate in inspect.getmembers(module, inspect.isclass)

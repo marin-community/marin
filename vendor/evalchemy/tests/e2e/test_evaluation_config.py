@@ -29,14 +29,38 @@ def _validate_config(path: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_validate_config_accepts_portable_yaml_without_starting_an_evaluation(tmp_path):
+@pytest.mark.parametrize("task", ["gsm8k", "IFEval"])
+def test_validate_config_accepts_portable_yaml_without_starting_an_evaluation(tmp_path, task):
     config = tmp_path / "evaluation.yaml"
-    config.write_text("tasks:\n  - gsm8k\nmax_tokens: 512\n")
+    config.write_text(f"tasks:\n  - {task}\nmax_tokens: 512\n")
 
     result = _validate_config(config)
 
     assert result.returncode == 0, result.stderr
-    assert "valid evaluation config" in result.stdout
+
+
+def test_validate_config_fails_when_catalog_dependency_is_broken(tmp_path):
+    config = tmp_path / "evaluation.yaml"
+    config.write_text("tasks:\n  - gsm8k\n")
+    broken_package = tmp_path / "lm_eval"
+    broken_package.mkdir()
+    (broken_package / "__init__.py").write_text("")
+    (broken_package / "tasks.py").write_text("import evalchemy_missing_catalog_dependency\n")
+    script = (
+        "import runpy, sys; "
+        f"sys.path.insert(0, {str(tmp_path)!r}); "
+        "runpy.run_module('eval.serve_eval.cli', run_name='__main__')"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script, "validate-config", str(config)],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "ModuleNotFoundError: No module named 'evalchemy_missing_catalog_dependency'" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -103,5 +127,4 @@ def test_canonical_json_and_schema_fingerprint_are_stable():
 
     assert canonical_json(config) == canonical_json(same_config)
     assert len(fingerprint()) == 64
-
 

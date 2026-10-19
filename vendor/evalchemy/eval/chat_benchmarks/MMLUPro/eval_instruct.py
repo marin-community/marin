@@ -41,7 +41,6 @@ PROMPT_RESOURCE = "initial_prompt.txt"
 
 
 def generate_cot_prompt(val_df: List[Dict[str, Any]], curr: Dict[str, Any], k: int) -> str:
-    # Load base template
     base = files(PROMPT_PACKAGE).joinpath(PROMPT_RESOURCE).read_text()
     subject = curr["category"]
     support = select_by_category(val_df, subject)[:k]

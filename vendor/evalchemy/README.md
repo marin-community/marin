@@ -16,6 +16,8 @@ leaderboard outputs have been removed.
 
 The evaluator's import packages, `eval` and `evalchemy_config`, belong to this
 environment. Marin calls the `evalchemy` CLI in a child process.
+Configuration validation requires the installed lm-eval task catalog; missing
+catalog dependencies fail validation instead of using an incomplete task list.
 
 ```bash
 uv run --project vendor/evalchemy --frozen --no-dev evalchemy --help

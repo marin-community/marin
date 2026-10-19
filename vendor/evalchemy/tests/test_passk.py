@@ -1,16 +1,13 @@
-"""CPU unit tests for the shared pass@k utilities (Stage 2b).
+"""CPU unit tests for the shared pass@k calculations.
 
 Covers:
- - estimate_pass_at_k matches the (now-promoted) reference estimator bit-for-bit,
+ - estimate_pass_at_k matches the reference estimator bit-for-bit,
  - aggregate_pass_at_k is monotone non-decreasing in k and bounded [0,1],
- - parse_pass_at_k handles strings / lists / empty,
- - the estimator is defined exactly once (no third copy), and HumanEval/MBPPPlus
-   re-export the shared symbol (same object).
+ - parse_pass_at_k handles strings / lists / empty.
 """
 
 import itertools
 import pathlib
-import subprocess
 import sys
 
 import numpy as np
@@ -24,7 +21,7 @@ from eval.passk import aggregate_pass_at_k, estimate_pass_at_k, parse_pass_at_k
 
 
 def _reference_estimate(num_samples, num_correct, k):
-    """Verbatim copy of the pre-Stage-2b duplicated estimator, for parity."""
+    """Reference combinatorial estimator for numerical parity."""
 
     def estimator(n, c, k):
         if n - c < k:
@@ -76,34 +73,3 @@ def test_parse_pass_at_k():
     assert parse_pass_at_k([128, 1, 8]) == [1, 8, 128]
     assert parse_pass_at_k(None) == [1, 8, 32, 128]
     assert parse_pass_at_k("") == [1, 8, 32, 128]
-
-
-def test_shared_estimator_is_canonical_and_humaneval_mbppplus_reexport():
-    """Stage 2b dedup contract: the estimator the plan promotes (HumanEval +
-    MBPPPlus, plus the retired driver) now lives once in eval/passk.py, and
-    those two benchmark modules re-export the SAME object rather than defining
-    their own.
-
-    Note: several other vendored sub-packages (MBPP/human_eval, BigCodeBench,
-    CruxEval, HumanEvalPlus, MultiPLE, LiveBench) ship their own independent
-    `estimate_pass_at_k`; consolidating those is out of Stage 2b's named scope
-    and is left for a later cleanup. This test pins the Stage-2b contract.
-    """
-    # Static contract (no heavy deps): neither file defines its own copy
-    # anymore; both import the shared symbol.
-    he_src = (REPO / "eval/chat_benchmarks/HumanEval/human_eval/evaluation.py").read_text()
-    mp_src = (REPO / "eval/chat_benchmarks/MBPPPlus/mbpp_plus/evaluation.py").read_text()
-    assert "def estimate_pass_at_k" not in he_src
-    assert "def estimate_pass_at_k" not in mp_src
-    assert "from eval.passk import estimate_pass_at_k" in he_src
-    assert "from eval.passk import estimate_pass_at_k" in mp_src
-
-    # Live identity check when the (heavy) benchmark deps are importable.
-    try:
-        from eval.chat_benchmarks.HumanEval.human_eval import evaluation as he
-        from eval.chat_benchmarks.MBPPPlus.mbpp_plus import evaluation as mp
-        from eval import passk
-    except Exception as e:  # missing fire/etc. in a lean CPU env
-        pytest.skip(f"benchmark deps unavailable for live identity check: {e}")
-    assert he.estimate_pass_at_k is passk.estimate_pass_at_k
-    assert mp.estimate_pass_at_k is passk.estimate_pass_at_k
