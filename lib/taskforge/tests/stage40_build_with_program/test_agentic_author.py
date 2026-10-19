@@ -92,7 +92,7 @@ async def assemble(context: RLEnvBuildContext, grader: Grader) -> TaskSpec:
         ANSWER_FORMAT,
         grader.package,
         Source(dataset="test", revision="r", row="0", importer_revision="test"),
-        environment=None,
+        environment=draft.requirements(image=None),
     )
 
 

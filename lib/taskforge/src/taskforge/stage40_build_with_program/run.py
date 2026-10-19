@@ -17,8 +17,9 @@ whether the step or Taskforge was slow is unknown, so the caller holds the item 
 a revision.
 
 ``run_build`` computes the model part of every key (``build_model_digest``), runs the program for
-one proposal, applies the research requirement, and writes the sink's ``TaskSpec`` with the
-build's ``WorkpieceBuildProvenance`` to ``<round_dir>/draft/``. Validation lowers the task for its own
+one proposal, applies the research requirement, refuses a task whose machine is not the solver
+machine the proposal declares (``check_solver_machine``), and writes the sink's ``TaskSpec`` with
+the build's ``WorkpieceBuildProvenance`` to ``<round_dir>/draft/``. Validation lowers the task for its own
 host and reads any step's stored output, such as the grader's reference answer, through
 ``step_output``.
 """
@@ -39,7 +40,8 @@ from taskforge.content_hash import digest
 from taskforge.ledger.records import EntryKind, span
 from taskforge.llm.client import Completion, ModelClient, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.spec.draft import SHELL_CAPABILITY
+from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
@@ -50,6 +52,7 @@ from taskforge.stage40_build_with_program.context import (
 )
 from taskforge.stage40_build_with_program.infrastructure import infrastructure_failure
 from taskforge.stage40_build_with_program.outputs import SOURCES_STEP, Sources
+from taskforge.stage40_build_with_program.sdk import solver_machine
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import (
     SDK_VERSION,
@@ -301,6 +304,29 @@ def check_research(proposal: TaskProposal, sources: Sources) -> None:
         )
 
 
+def check_solver_machine(proposal: TaskProposal, task: TaskSpec, sink: str) -> None:
+    """Raise ``BuildFailure`` for the step ``sink`` unless ``task`` runs on the machine ``proposal`` declares.
+
+    The proposal pins the solver's machine (``ProposalHeader.solver_machine``, ``None`` for a container
+    proposal's own image), so a program that builds another one, or none, is wrong whatever the host.
+    """
+    declared = _machine_text(proposal.header.solver_machine)
+    requirements = task.environment_requirements
+    if SHELL_CAPABILITY not in requirements.capabilities:
+        raise BuildFailure(f"the task has no machine, but the proposal declares {declared}", sink)
+    built = solver_machine(requirements)
+    if built != proposal.header.solver_machine:
+        raise BuildFailure(
+            f"the task machine is {_machine_text(built)}, but the proposal declares {declared}; build the machine "
+            "the proposal declares",
+            sink,
+        )
+
+
+def _machine_text(machine: SolverMachine | None) -> str:
+    return "the task's own image" if machine is None else f"solver_machine {machine}"
+
+
 async def run_build(
     program: RLEnvBuildProgram,
     proposal: TaskProposal,
@@ -335,7 +361,8 @@ async def run_build(
         model_digest: Replaces ``build_model_digest(model, sampling, services)`` in every key.
 
     Raises:
-        BuildFailure: the research requirement fails, or a step failed.
+        BuildFailure: the research requirement fails, a step failed, or the task's machine is not the
+            solver machine the proposal declares.
         BuildExpired: a step ran past ``STEP_TIMEOUT``, or raised one (the standard grader step does for a grader
             that timed out twice).
         BuildInfrastructureFailure: a step failed because of the host.
@@ -369,6 +396,7 @@ async def run_build(
     )
     if researches:
         check_research(proposal, step_output(draft, store_root, SOURCES_STEP, Sources))
+    check_solver_machine(proposal, task, program.sink.name)
     _write_draft(round_dir / DRAFT_DIR, draft)
     return draft
 

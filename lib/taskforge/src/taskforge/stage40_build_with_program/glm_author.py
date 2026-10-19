@@ -245,6 +245,7 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "files_text",
             "machine_facts",
             "environment_facts",
+            "packages_declared",
             "grader_contract",
             "grader_package",
             "output_paths",

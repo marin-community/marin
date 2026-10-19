@@ -33,7 +33,7 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.stage10_proposal.model import ResearchNeed, TaskProposal
+from taskforge.stage10_proposal.model import Environment, ResearchNeed, SolverMachine, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program import run as run_module
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
@@ -288,6 +288,41 @@ async def test_a_failing_sink_raises_a_build_failure_carrying_its_step_name(tmp_
     assert failure.value.step == "task"
     assert str(failure.value) == "task: the numbers do not multiply to the answer"
     assert not (tmp_path / "round" / DRAFT_DIR).exists()
+
+
+@pytest.mark.parametrize(
+    ("environment", "machine", "declared"),
+    [
+        (Environment.REASONING, SolverMachine.CPYTHON, "solver_machine cpython"),
+        (Environment.SHELLSIM, SolverMachine.PACKAGES, "solver_machine packages"),
+        (Environment.CONTAINER, None, "the task's own image"),
+    ],
+)
+async def test_a_task_off_the_declared_solver_machine_fails_the_build_as_the_programs(
+    tmp_path, proposal, services, environment, machine, declared
+):
+    """The toy program builds a ShellSim task whatever the proposal declares."""
+    header = replace(proposal.header, environment=environment, solver_machine=machine)
+
+    with pytest.raises(BuildFailure) as failure:
+        await build(tmp_path, replace(proposal, header=header), services)
+
+    assert failure.value.step == "task"
+    assert failure.value.message == (
+        f"the task machine is solver_machine shellsim, but the proposal declares {declared}; build the machine the "
+        "proposal declares"
+    )
+    assert not (tmp_path / "round" / DRAFT_DIR).exists()
+
+
+async def test_a_task_without_a_machine_fails_the_build_when_the_proposal_declares_one(tmp_path, proposal, services):
+    @rl_env_build_sink
+    async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage) -> TaskSpec:
+        shell = toy_task(context.workpiece_id, numbers, grader, "Multiply 6 by 7.")
+        return shell.model_copy(update={"environment_requirements": EnvironmentRequirements()})
+
+    with pytest.raises(BuildFailure, match="the task has no machine, but the proposal declares solver_machine shellsim"):
+        await build(tmp_path, proposal, services, rl_env_build_program(numbers, grader, sink=task))
 
 
 async def test_a_step_past_its_call_budget_fails_the_build_as_the_programs(

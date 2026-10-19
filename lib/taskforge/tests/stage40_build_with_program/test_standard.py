@@ -11,7 +11,6 @@ from dataclasses import replace
 import pytest
 from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import RolloutEngine
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, PackageSpec
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
@@ -22,10 +21,10 @@ from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
 from taskforge.spec.draft import VERDICT_REWARD, answer_grader
-from taskforge.stage10_proposal.model import Environment
+from taskforge.stage10_proposal.model import Environment, SolverMachine, TaskProposal
 from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock
-from taskforge.stage40_build_with_program.outputs import Fixtures, Grader
+from taskforge.stage40_build_with_program.outputs import Fixtures, Grader, Sources
 from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build, step_output
 from taskforge.stage40_build_with_program.sdk import (
     ATTEMPTS,
@@ -34,8 +33,9 @@ from taskforge.stage40_build_with_program.sdk import (
     FixturesDraft,
     GraderDraft,
     grader_package,
-    machine_available,
     machine_facts,
+    packages_declared,
+    solver_machine,
     task_file,
 )
 from taskforge.stage40_build_with_program.step_store import CacheStatus
@@ -86,6 +86,12 @@ def grader_call(script: str) -> dict:
     }
 
 
+def declaring(proposal: TaskProposal, machine: SolverMachine | None) -> TaskProposal:
+    """``proposal`` declaring ``machine``, as a container proposal when ``machine`` is ``None``."""
+    environment = Environment.CONTAINER if machine is None else proposal.header.environment
+    return replace(proposal, header=replace(proposal.header, environment=environment, solver_machine=machine))
+
+
 def serve_until_the_grader(fake_glm) -> None:
     """The research run and the fixtures submission, the model calls before the grader step."""
     fake_glm.stream(tool_calls=(("web_search", '{"query": "6 times 7"}'),), finish="tool_calls")
@@ -96,7 +102,6 @@ def serve_until_the_grader(fake_glm) -> None:
                 "agent_files": [file("workspace/question.txt", "What is 6 * 7?")],
                 "private_files": [file("key.txt", "42")],
                 "facts": "6 * 7 = 42",
-                "solver_machine": "shellsim",
                 "packages": [],
             }
         )
@@ -188,7 +193,6 @@ FIXTURES = Fixtures(
     agent_files=(task_file(FileDraft.model_validate(file("workspace/question.txt", "What is 6 * 7?"))),),
     private_files=(task_file(FileDraft.model_validate(file("key.txt", "42"))),),
     facts="6 * 7 = 42",
-    solver_machine="shellsim",
     packages=(),
 )
 
@@ -280,7 +284,7 @@ class RecordingImageBuilder:
 
 
 async def test_a_container_task_publishes_its_image_and_grades_in_a_copy_of_it(context, proposal, fake_glm):
-    container = replace(proposal, header=replace(proposal.header, environment=Environment.CONTAINER))
+    container = declaring(proposal, None)
     dockerfile = "FROM python:3.12-slim\nWORKDIR /workspace\n"
     fake_glm.stream(content=json.dumps({"dockerfile": dockerfile, "context_files": []}))
     images = RecordingImageBuilder()
@@ -305,8 +309,29 @@ async def test_a_container_task_publishes_its_image_and_grades_in_a_copy_of_it(c
     assert sorted(f.path for f in package.resources) == ["grade.py", "key.txt"]
 
 
+@pytest.mark.parametrize(
+    ("machine", "packages", "facts"),
+    [
+        (SolverMachine.SHELLSIM, [], "The task machine is ShellSim"),
+        (SolverMachine.CPYTHON, [], "The task machine is a container with CPython 3.12"),
+        (SolverMachine.PACKAGES, ["numpy"], "the PyPI packages you list"),
+    ],
+)
+async def test_the_fixtures_and_requirements_steps_build_the_declared_solver_machine(
+    context, proposal, fake_glm, machine, packages, facts
+):
+    declared = declaring(proposal, machine)
+    fake_glm.stream(content=json.dumps({"agent_files": [], "private_files": [], "facts": "f", "packages": packages}))
+
+    fixtures = await standard.fixtures.fn(context(), declared, Sources(notes="", findings=()))
+    requirements = await standard.requirements.fn(context(), declared, fixtures)
+
+    assert facts in fake_glm.requests[0]["messages"][-2]["content"]
+    assert solver_machine(requirements) is machine
+
+
 async def test_cpython_fixtures_choose_the_grader_base_image(context, proposal):
-    requirements = await standard.requirements.fn(context(), proposal, replace(FIXTURES, solver_machine="cpython"))
+    requirements = await standard.requirements.fn(context(), declaring(proposal, SolverMachine.CPYTHON), FIXTURES)
     package = grader_package(GraderDraft.model_validate(grader_call(GOOD_GRADER)), FIXTURES, requirements)
 
     assert requirements.docker_image == GRADER_BASE_IMAGE
@@ -335,7 +360,7 @@ async def test_the_instructions_step_sends_back_an_instruction_with_a_problem(
     fake_glm.stream(content=json.dumps({"system": "", "instruction": instruction}))
     fake_glm.stream(content=json.dumps({"system": "", "instruction": good}))
     ledger = task_file(FileDraft.model_validate(file("workspace/ledger.csv", LEDGER_LINE)))
-    fixtures = replace(FIXTURES, agent_files=(ledger,), private_files=(), solver_machine="cpython")
+    fixtures = replace(FIXTURES, agent_files=(ledger,), private_files=())
     grader = Grader(
         package=answer_grader(ExactSpec(expected=("1234.56",))),
         answer_contract=contract,
@@ -354,8 +379,8 @@ async def test_the_instructions_step_sends_back_an_instruction_with_a_problem(
 
 
 async def test_package_fixtures_choose_a_package_machine_without_an_image(context, proposal):
-    fixtures = replace(FIXTURES, solver_machine="packages", packages=("numpy", "pandas==2.2.3"))
-    requirements = await standard.requirements.fn(context(), proposal, fixtures)
+    fixtures = replace(FIXTURES, packages=("numpy", "pandas==2.2.3"))
+    requirements = await standard.requirements.fn(context(), declaring(proposal, SolverMachine.PACKAGES), fixtures)
     package = grader_package(GraderDraft.model_validate(grader_call(GOOD_GRADER)), fixtures, requirements)
 
     assert (requirements.docker_image, requirements.package_spec) == (
@@ -366,25 +391,27 @@ async def test_package_fixtures_choose_a_package_machine_without_an_image(contex
     assert isinstance(package.grader, ScriptGrader) and package.grader.environment.docker_image == GRADER_BASE_IMAGE
 
 
+def test_fixtures_refuse_a_package_with_pip_options():
+    with pytest.raises(ValueError, match="without pip options"):
+        FixturesDraft.model_validate(
+            {"agent_files": [], "private_files": [], "facts": "", "packages": ["--index-url=https://example.org"]}
+        )
+
+
 @pytest.mark.parametrize(
-    ("machine", "packages"),
-    [("packages", []), ("shellsim", ["numpy"]), ("packages", ["--index-url=https://example.org"])],
+    ("machine", "packages", "problem"),
+    [
+        (SolverMachine.PACKAGES, [], "declares solver_machine: packages; list the PyPI packages"),
+        (SolverMachine.SHELLSIM, ["numpy"], "declares solver_machine: shellsim, which installs no packages"),
+        (None, ["numpy"], "declares a container, which installs no packages"),
+    ],
+    ids=["packages-without-any", "shellsim-with-some", "container-with-some"],
 )
-def test_fixtures_list_packages_exactly_for_a_package_machine(machine, packages):
-    submission = {"agent_files": [], "private_files": [], "facts": "", "solver_machine": machine}
+async def test_fixtures_list_packages_exactly_for_a_declared_package_machine(proposal, machine, packages, problem):
+    submitted = FixturesDraft.model_validate({"agent_files": [], "private_files": [], "facts": "", "packages": packages})
 
-    with pytest.raises(ValueError):
-        FixturesDraft.model_validate({**submission, "packages": packages})
+    check = packages_declared(declaring(proposal, machine))
 
-
-async def test_a_packages_machine_goes_back_to_the_model_on_a_host_without_the_local_backend(context):
-    draft = FixturesDraft.model_validate(
-        {"agent_files": [], "private_files": [], "facts": "", "solver_machine": "packages", "packages": ["numpy"]}
-    )
-    without_local = context(factories={Backend.SHELLSIM.value: ShellSimMachineFactory()})
-    with_local = context(
-        factories={Backend.SHELLSIM.value: ShellSimMachineFactory(), Backend.LOCAL.value: ShellSimMachineFactory()}
-    )
-
-    assert "needs the local backend" in (await machine_available(without_local)(draft) or "")
-    assert await machine_available(with_local)(draft) is None
+    assert problem in (await check(submitted) or "")
+    matching = ["numpy"] if machine is SolverMachine.PACKAGES else []
+    assert await check(submitted.model_copy(update={"packages": matching})) is None

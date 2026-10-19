@@ -270,6 +270,10 @@ sources(proposal) -> fixtures(proposal, sources) -> requirements(proposal, fixtu
 
 `sources` researches each research item of the proposal on the web, and
 `run_build(research=ResearchRequirement.ENFORCED)` fails a build whose `Sources` lacks a finding for one of them.
+`fixtures` writes the files for the solver machine the proposal declares, listing PyPI packages only for
+a package machine, and `requirements` builds that machine. `run_build` refuses a task whose machine is
+not the declared one (`check_solver_machine`) as a `BuildFailure`, the program's, so no revision can
+move the solver between ShellSim, CPython and a container.
 `grader` grades its own reference answer and the empty answer with `grade_candidate` before it returns,
 sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
 grader that rejects its own reference, returns a reward outside its score range, or credits the

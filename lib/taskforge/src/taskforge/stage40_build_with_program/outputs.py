@@ -15,7 +15,6 @@ a meaning outside the program:
 """
 
 from dataclasses import dataclass
-from typing import Literal
 
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
@@ -24,8 +23,6 @@ from taskcompendium.models import TaskResource
 from taskforge.stage10_proposal.model import ResearchKind
 
 SOURCES_STEP = "sources"
-
-type SolverMachine = Literal["shellsim", "cpython", "packages"]
 
 
 @dataclass(frozen=True)
@@ -68,18 +65,16 @@ class Sources:
 
 @dataclass(frozen=True)
 class Fixtures:
-    """Solver-visible files, private reference data, the facts they encode, and the solver machine.
+    """Solver-visible files, private reference data, the facts they encode, and the packages of a package machine.
 
     ``agent_files`` paths are relative to the machine root, under ``workspace/``. ``private_files``
-    paths are relative to the grader's private directory. ``solver_machine`` applies to a task
-    without its own image: ShellSim, CPython on the grader base image, or CPython with the PyPI
-    ``packages``, which are empty for the other machines.
+    paths are relative to the grader's private directory. ``packages`` are the PyPI requirements of
+    a proposal that declares ``solver_machine: packages``, and empty for any other.
     """
 
     agent_files: tuple[TaskResource, ...]
     private_files: tuple[TaskResource, ...]
     facts: str
-    solver_machine: SolverMachine
     packages: tuple[str, ...]
 
 

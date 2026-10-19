@@ -11,14 +11,13 @@ The steps, in run order:
 
 1. ``sources`` calls ``research`` for each research item of the proposal, concurrently. The notes
    feed the later steps.
-2. ``fixtures`` writes the solver-visible files and the private reference data, and picks the
-   solver machine a non-container task runs on: ShellSim, the grader-base image's CPython when
-   solving takes more computation than ShellSim's budget or a real clock, or CPython with the PyPI
-   packages the fixtures list when solving needs them.
-3. ``requirements`` returns the task machine. A reasoning or shellsim proposal runs in ShellSim, on
-   Taskforge's grader-base image when the fixtures chose CPython, or on a package machine
-   (``draft.requirements(packages=...)``), which needs no image. A container proposal gets a
-   ``DockerBuild``, which ``publish_image`` pushes; the step's output memoizes the pinned reference.
+2. ``fixtures`` writes the solver-visible files and the private reference data for the solver
+   machine the proposal declares (``solver_machine``), and lists the PyPI packages of a package
+   machine.
+3. ``requirements`` returns the declared task machine: ShellSim, Taskforge's grader-base image for
+   CPython, or a package machine (``draft.requirements(packages=...)``), which needs no image. A
+   container proposal gets a ``DockerBuild``, which ``publish_image`` pushes; the step's output
+   memoizes the pinned reference. ``run_build`` refuses a task whose machine is not the declared one.
 4. ``grader`` writes the grader: an in-process verifyit grader (exact, numeric, math, mcq) when the
    answer is one value, otherwise a Python grader program in a verifier machine. Before it returns,
    the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
@@ -45,7 +44,7 @@ from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, T
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
 from taskforge.spec.verdict import grader_checks, reward_in_range
-from taskforge.stage10_proposal.model import Environment, TaskProposal
+from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
 from taskforge.stage40_build_with_program.outputs import Fixtures, GradedCandidate, Grader, Instructions, Sources
@@ -72,9 +71,9 @@ from taskforge.stage40_build_with_program.sdk import (
     grader_contract,
     grader_package,
     instruction_problem,
-    machine_available,
     machine_facts,
     output_paths,
+    packages_declared,
     research,
     structured_until,
     task_file,
@@ -93,7 +92,7 @@ async def sources(context: RLEnvBuildContext, proposal: TaskProposal) -> Sources
 @rl_env_build_step
 async def fixtures(context: RLEnvBuildContext, proposal: TaskProposal, sources: Sources) -> Fixtures:
     request = (
-        f"{environment_facts(proposal.header.environment)}\n\n"
+        f"{environment_facts(proposal.header)}\n\n"
         f"# Research notes\n\n{sources.notes or '(none)'}\n\n"
         "Write the task fixtures from the proposal's Build plan. The task's data lives in solver-visible "
         f"files under {WORKSPACE}/, never in the instruction: tables, datasets, logs and documents are files "
@@ -102,13 +101,12 @@ async def fixtures(context: RLEnvBuildContext, proposal: TaskProposal, sources: 
         "will check."
     )
     submitted = await structured_until(
-        context, task_messages(proposal, request), FixturesDraft, machine_available(context)
+        context, task_messages(proposal, request), FixturesDraft, packages_declared(proposal)
     )
     return Fixtures(
         agent_files=tuple(task_file(f) for f in submitted.agent_files),
         private_files=tuple(task_file(f) for f in submitted.private_files),
         facts=submitted.facts,
-        solver_machine=submitted.solver_machine,
         packages=tuple(submitted.packages),
     )
 
@@ -117,8 +115,9 @@ async def fixtures(context: RLEnvBuildContext, proposal: TaskProposal, sources: 
 async def requirements(
     context: RLEnvBuildContext, proposal: TaskProposal, fixtures: Fixtures
 ) -> EnvironmentRequirements:
-    if proposal.header.environment is not Environment.CONTAINER:
-        image = GRADER_BASE_IMAGE if fixtures.solver_machine == "cpython" else None
+    machine = proposal.header.solver_machine
+    if machine is not None:
+        image = GRADER_BASE_IMAGE if machine is SolverMachine.CPYTHON else None
         return draft.requirements(image=image, packages=fixtures.packages, workdir=WORKDIR)
     request = (
         f"Write the task image: a Dockerfile (WORKDIR {WORKDIR}, no network at run time) and any build-context "

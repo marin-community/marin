@@ -21,8 +21,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
-from shellbox.machine import Backend
+from pydantic import BaseModel, Field, field_validator
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import (
@@ -46,7 +45,7 @@ from taskforge.llm.structured import CutReplyError, StructuredOutputError
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT, GRADER_VERDICT_PATH, VERDICT_REWARD
-from taskforge.stage10_proposal.model import Environment, TaskProposal, render
+from taskforge.stage10_proposal.model import ProposalHeader, SolverMachine, TaskProposal, render
 from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext, call_ledger
 from taskforge.stage40_build_with_program.outputs import Fixtures, GradedCandidate, Grader, ResearchFinding, WebCall
 
@@ -149,11 +148,6 @@ through a `shell(command)` tool, may write and run Python scripts there, and end
 reply. Private grader files are never installed in the solver's machine.\
 """
 
-SOLVER_MACHINE_CHOICE = """\
-Choose solver_machine for this non-container task. shellsim: {shellsim} cpython: {cpython} \
-packages: {packages}\
-"""
-
 CONTAINER_FACTS = """\
 The task machine is a container started from the task image, without network. The solver works in \
 {workdir} through a `shell(command)` tool and ends with a final text reply. Private grader files are \
@@ -217,7 +211,8 @@ def under_workspace(files: list[FileDraft]) -> list[FileDraft]:
 
 
 class FixturesDraft(BaseModel):
-    """Submit the task fixtures: solver-visible files, private reference data, and the facts they encode."""
+    """Submit the task fixtures: solver-visible files, private reference data, the facts they encode, and the
+    packages of a package machine."""
 
     agent_files: list[FileDraft] = Field(
         description=f"Solver-visible files, paths relative to the machine root under {WORKSPACE}/ "
@@ -227,16 +222,9 @@ class FixturesDraft(BaseModel):
         description="Grader-only data files, paths relative to the grader's private directory. May be empty."
     )
     facts: str = Field(description="The ground truth these fixtures encode, with every value the grader checks.")
-    solver_machine: Literal["shellsim", "cpython", "packages"] = Field(
-        description="shellsim when reading, shell tools or a short Python script are enough; cpython when "
-        "solving needs more computation than ShellSim's few seconds of Python, or a real clock; packages when "
-        "solving also needs PyPI packages (numpy, pandas, ...) and no system packages; packages runs only on a host "
-        "with the local backend, and the fixtures check sends the draft back otherwise. Ignored for a container "
-        "task, which runs in its own image."
-    )
     packages: list[str] = Field(
-        description="For solver_machine=packages, the PyPI requirements the solver's machine installs, one per "
-        "entry, such as numpy or pandas==2.2.3, each available as a wheel; otherwise empty."
+        description="When the proposal declares solver_machine: packages, the PyPI requirements the solver's "
+        "machine installs, one per entry, such as numpy or pandas==2.2.3, each available as a wheel; otherwise empty."
     )
 
     @field_validator("agent_files")
@@ -244,12 +232,11 @@ class FixturesDraft(BaseModel):
     def visible(cls, files: list[FileDraft]) -> list[FileDraft]:
         return under_workspace(files)
 
-    @model_validator(mode="after")
-    def machine_packages(self) -> "FixturesDraft":
-        if (self.solver_machine == "packages") != bool(self.packages):
-            raise ValueError("list packages exactly when solver_machine is packages")
-        draft.check_packages(self.packages)
-        return self
+    @field_validator("packages")
+    @classmethod
+    def requirements(cls, packages: list[str]) -> list[str]:
+        draft.check_packages(packages)
+        return packages
 
 
 class DockerfileDraft(BaseModel):
@@ -326,31 +313,39 @@ def files_text(files: Sequence[TaskResource], root: str) -> str:
     return "\n\n".join(sections) or "(none)"
 
 
-def machine_facts(requirements: EnvironmentRequirements) -> str:
-    """The solver's machine for a prompt: CPython with the packages of a package machine, ShellSim
-    without an image, CPython on the grader base image, otherwise the task's own container."""
-    packages = requirements.package_spec
-    if packages is not None and requirements.command_semantics == CommandSemantics.LINUX_PROCESS:
-        listed = ", ".join(f"`{package}`" for package in packages.pypi_packages or ())
-        return PACKAGES_FACTS.format(workdir=WORKDIR, packages=f"these PyPI packages: {listed}")
-    if requirements.docker_image is None:
-        return SHELLSIM_FACTS.format(workdir=WORKDIR)
+def solver_machine(requirements: EnvironmentRequirements) -> SolverMachine | None:
+    """The solver machine ``requirements`` (a ``draft.requirements`` result) describe, or ``None`` for the
+    task's own image."""
     if requirements.docker_image == GRADER_BASE_IMAGE:
-        return CPYTHON_FACTS.format(workdir=WORKDIR)
-    return CONTAINER_FACTS.format(workdir=WORKDIR)
+        return SolverMachine.CPYTHON
+    if requirements.docker_image is not None:
+        return None
+    if requirements.command_semantics == CommandSemantics.LINUX_PROCESS:
+        return SolverMachine.PACKAGES
+    return SolverMachine.SHELLSIM
 
 
-def environment_facts(environment: Environment) -> str:
-    """The machines a proposal environment allows the solver, for a prompt written before the fixtures choose."""
-    if environment is Environment.CONTAINER:
+def _facts(machine: SolverMachine | None, packages: str) -> str:
+    if machine is None:
         return CONTAINER_FACTS.format(workdir=WORKDIR)
-    return SOLVER_MACHINE_CHOICE.format(
-        shellsim=SHELLSIM_FACTS.format(workdir=WORKDIR),
-        cpython=CPYTHON_FACTS.format(workdir=WORKDIR),
-        packages=PACKAGES_FACTS.format(
-            workdir=WORKDIR, packages="the PyPI packages you list, installed from wheels with no image to build"
-        ),
-    )
+    if machine is SolverMachine.PACKAGES:
+        return PACKAGES_FACTS.format(workdir=WORKDIR, packages=packages)
+    if machine is SolverMachine.CPYTHON:
+        return CPYTHON_FACTS.format(workdir=WORKDIR)
+    return SHELLSIM_FACTS.format(workdir=WORKDIR)
+
+
+def machine_facts(requirements: EnvironmentRequirements) -> str:
+    """The solver's machine ``requirements`` describe, for a prompt: ShellSim, CPython on the grader base
+    image, CPython with the packages of a package machine, or the task's own container."""
+    spec = requirements.package_spec
+    listed = "" if spec is None else ", ".join(f"`{package}`" for package in spec.pypi_packages or ())
+    return _facts(solver_machine(requirements), f"these PyPI packages: {listed}")
+
+
+def environment_facts(header: ProposalHeader) -> str:
+    """The solver's machine the proposal declares, for a prompt written before the requirements step builds it."""
+    return _facts(header.solver_machine, "the PyPI packages you list, installed from wheels with no image to build")
 
 
 def grader_contract(requirements: EnvironmentRequirements) -> str:
@@ -389,20 +384,20 @@ async def structured[T: BaseModel](context: RLEnvBuildContext, messages: Sequenc
     return result.value
 
 
-def machine_available(context: RLEnvBuildContext) -> Callable[[FixturesDraft], Awaitable[str | None]]:
-    """The fixtures check that sends back a machine choice this host cannot run.
+def packages_declared(proposal: TaskProposal) -> Callable[[FixturesDraft], Awaitable[str | None]]:
+    """The fixtures check that sends back packages the proposal's declared machine does not install.
 
-    A package machine runs on the local backend only. On a host whose factories lack it, the draft
-    goes back to the model with the alternative named, before any file is written or built.
+    A proposal that declares ``solver_machine: packages`` needs at least one package; any other
+    proposal lists none, since its machine has no packages to install.
     """
+    machine = proposal.header.solver_machine
 
     async def problem(submitted: FixturesDraft) -> str | None:
-        if submitted.solver_machine == "packages" and Backend.LOCAL.value not in context.services.factories:
-            return (
-                "solver_machine=packages needs the local backend, which this host does not have; choose "
-                "cpython (the grader base image, CPython 3.12 with the standard library) and keep the task "
-                "within it, or shellsim"
-            )
+        if machine is SolverMachine.PACKAGES and not submitted.packages:
+            return "the proposal declares solver_machine: packages; list the PyPI packages the solver's machine installs"
+        if machine is not SolverMachine.PACKAGES and submitted.packages:
+            declared = "a container" if machine is None else f"solver_machine: {machine}"
+            return f"the proposal declares {declared}, which installs no packages; list none"
         return None
 
     return problem
