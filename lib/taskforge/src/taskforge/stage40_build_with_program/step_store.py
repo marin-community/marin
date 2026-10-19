@@ -40,7 +40,7 @@ from taskforge.content_hash import canonical_json, digest, sha256_hex
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 
-SDK_VERSION = "taskforge.builder/8"
+SDK_VERSION = "taskforge.builder/9"
 """Bump when a library change alters what an unchanged step would produce."""
 
 FILE_SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
