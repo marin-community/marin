@@ -1341,7 +1341,7 @@ impl Store {
     /// READ side across the full DataFusion scan; structural mutations that
     /// unlink segments (`drop_table`, compaction/eviction) take the WRITE side.
     /// See the field doc on [`Store`].
-    pub fn query_visibility(&self) -> &tokio::sync::RwLock<()> {
+    pub fn query_visibility(&self) -> &Arc<tokio::sync::RwLock<()>> {
         self.tables.query_visibility()
     }
 
@@ -1759,7 +1759,7 @@ fn validate_v1_upgrade_preflight(
 mod tests {
     use std::collections::HashSet;
 
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::{AsArray, Int64Array, StringArray};
     use buffa::{Message, MessageField, MessageView};
 
     use super::*;
@@ -4435,13 +4435,15 @@ mod tests {
     async fn object_backed_l0_applies_declared_sort_order() {
         let data_dir = crate::test_support::unique_dir("sorted_object_data");
         let remote_dir = crate::test_support::unique_dir("sorted_object_remote");
-        let store = Store::new(
-            Some(data_dir.clone()),
-            remote_dir.to_string_lossy().into_owned(),
-            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
-            ServeMode::Shadow,
-        )
-        .unwrap();
+        let store = Arc::new(
+            Store::new(
+                Some(data_dir.clone()),
+                remote_dir.to_string_lossy().into_owned(),
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+                ServeMode::Shadow,
+            )
+            .unwrap(),
+        );
         store.bootstrap_maintenance();
         store
             .register_versioned_table("iris.worker", sorted_object_backed_spec(1))
@@ -4483,6 +4485,35 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(mem_bytes, vec![10, 20, 30]);
+        let read = crate::store::forwarding::read_forwarding(
+            Arc::clone(&store),
+            "iris.worker",
+            0,
+            last_seq,
+            crate::store::forwarding::ReadBudget {
+                rows: 100,
+                bytes: 1 << 20,
+                segments: 8,
+                timeout: Duration::from_secs(10),
+            },
+        )
+        .await
+        .unwrap();
+        let workers: Vec<_> = read
+            .batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column_by_name("worker_id")
+                    .unwrap()
+                    .as_string::<i32>()
+                    .iter()
+                    .map(|worker| worker.unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(workers, ["w3", "w1", "w2"]);
+        assert_eq!(read.scanned_through, last_seq);
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();

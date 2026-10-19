@@ -8,6 +8,7 @@
 pub mod adopt;
 pub mod catalog;
 pub mod compaction;
+pub mod forwarding;
 pub mod ipc;
 pub mod legacy;
 pub mod log_read;

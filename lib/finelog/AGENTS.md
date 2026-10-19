@@ -53,8 +53,13 @@ distinct from the iris controller's signing key; the hub stores its public key.
 The forwarder (`rust/src/server/forwarding.rs`) forwards **every table**, not just
 logs. Each round it lists the live namespaces and gives each one a batch-sized turn,
 with up to four namespace turns in flight, then immediately starts another round
-while any namespace remains backlogged. Log reads hold up to one million rows;
-other table reads hold up to 200,000. Per namespace, it reads the rows past a
+while any namespace remains backlogged. The spool reader
+(`rust/src/store/forwarding.rs`) reads Parquet directly through Arrow, without
+SQL planning or public-query result conversion. Log reads span up to one million
+source sequence positions; other tables span up to 200,000. A 256 MiB retained
+Arrow budget can shorten the examined prefix; decoder, ordering, and encoding
+working space are additional. Overlapping and physically reordered segments
+are ordered by source sequence before delivery. Per namespace, it reads past a
 durable per-`(target, namespace)` cursor
 (`forward_state` in the catalog) and ships them through the generic `RegisterTable` +
 `WriteRows` (Arrow IPC) path — a namespace the hub lacks is created there first. Rows
@@ -177,6 +182,13 @@ alongside the queries moves every number by 2-4x.
 
 `EXPLAIN ANALYZE` counters are decimal, `bytes_scanned` included: `1.16 B` is
 1.16 billion.
+
+`cargo run --release --manifest-path lib/finelog/rust/Cargo.toml --example
+forwarding_bench -- /absolute/new/local/directory` compares the SQL reference
+and native spool reader on identical synthetic log segments. It also replays
+both through a real local hub with zstd and local-disk durability. The directory
+must be new; retain its JSONL output and remove its generated stores afterward.
+This measures warm local files, not remote-object recovery or a loaded hub.
 
 ### Dashboard
 

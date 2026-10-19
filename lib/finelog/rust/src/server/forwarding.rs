@@ -76,12 +76,10 @@ use crate::proto::finelog::stats::{
     RegisterTableRequest, ReportRelayNamespaceStatus, ReportRelayStatusRequest, StatsServiceClient,
     WriteRowsRequest,
 };
-use crate::query::{
-    make_ctx, run_query_over, run_within_query_timeout, QueryResult, RegisteredProvider,
-};
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::telemetry::{counter_batch, telemetry_schema, CounterSample};
 use crate::server::MAX_MESSAGE_BYTES;
+use crate::store::forwarding::{read_forwarding, ReadBudget};
 use crate::store::ipc::encode_ipc;
 use crate::store::schema::{
     schema_to_proto_owned, Schema, IMPLICIT_CLUSTER_COLUMN, IMPLICIT_SEQ_COLUMN,
@@ -104,6 +102,9 @@ const RELAY_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 /// A relay's bounded internal scan may need to open a cold set of remote L0s.
 /// Keep its recovery budget independent of the public Query RPC deadline.
 const FORWARD_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Retained source rows per read, excluding decoder, ordering, and IPC working space.
+const FORWARD_READ_BYTES: usize = 256 << 20;
 
 /// Rows read from one namespace per batch. The hub durably acknowledges each outbound
 /// request, so a small row cap turns its one-second flush-coalescing interval into a
@@ -304,7 +305,8 @@ fn build_client(target: &str) -> Result<StatsServiceClient<HttpsTransport>, Stri
     Ok(StatsServiceClient::new(transport, config))
 }
 
-pub(super) fn forward_client_config(uri: http::Uri) -> ClientConfig {
+/// Configure the forwarding wire codec, compression, and message limits.
+pub fn forward_client_config(uri: http::Uri) -> ClientConfig {
     let compression = CompressionRegistry::new()
         .register(GzipProvider::default())
         .register(ZstdProvider::with_level(FINELOG_ZSTD_LEVEL));
@@ -564,19 +566,11 @@ where
         };
         let turn_started = Instant::now();
         self.observe_lag(name, cursor, persisted);
-        // The forwarder stamps this column with its own cluster on the way out and
-        // forwards only rows that do not already carry a foreign origin, so a hub's
-        // own relayed rows never loop back. A registered table always has it (added
-        // implicitly at registration); a legacy namespace adopted from disk before
-        // the column existed does not, and forwards unstamped until it is
-        // re-registered.
-        let has_origin = schema.column(IMPLICIT_CLUSTER_COLUMN).is_some();
-
         if cursor >= persisted || *stop.borrow() {
             return ForwardTurn::Wait;
         }
         let read_started = Instant::now();
-        let batch = match self.read_batch(name, cursor, persisted, has_origin).await {
+        let batch = match self.read_batch(name, cursor, persisted).await {
             Ok(batch) => batch,
             Err(e) => {
                 tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: read failed; retrying next tick");
@@ -617,6 +611,9 @@ where
             }
         }
         let Some((ship, seqs)) = batch.rows else {
+            if batch.scanned_through <= cursor {
+                return ForwardTurn::Wait;
+            }
             // Every row up to `scanned_through` was filtered out by the scan (rows already
             // carrying a foreign origin cluster). Advance the cursor to `scanned_through`,
             // or the loop rereads them forever. Safe against a concurrent writer:
@@ -738,10 +735,9 @@ where
                 "finelog forwarder: slow batch stage breakdown"
             );
         }
-        // Fewer than LIMIT matching rows means the scan examined the complete bounded
-        // sequence window. Advance over any trailing foreign-origin rows after every
-        // outbound chunk is settled; doing this earlier could skip a failed chunk.
-        if batch.complete_window && cursor < batch.scanned_through {
+        // The reader proves coverage through this boundary, including filtered rows.
+        // Settle that trailing prefix only after every outbound chunk has completed.
+        if cursor < batch.scanned_through {
             cursor = batch.scanned_through;
         }
         if !self
@@ -942,195 +938,36 @@ where
         }
     }
 
-    /// One bounded batch of locally-written rows of `name` in `(cursor, persisted]`
-    /// as a batch ready to ship (its `seq` column dropped, its origin column stamped),
-    /// alongside the seqs those rows carry. When eviction has already archived the rows
-    /// just above `cursor`, `resume_at` names the seq to resume from instead.
+    /// Read one proven source prefix without invoking the public query engine.
     async fn read_batch(
         &self,
         name: &str,
         cursor: i64,
         persisted: i64,
-        has_origin: bool,
     ) -> Result<Batch, StatsError> {
-        let read_started = Instant::now();
-        // One guard across both the snapshot and the scan: eviction takes the write side
-        // before unlinking, so no segment can vanish between the two.
-        let visibility_started = Instant::now();
-        let _read_guard = self.store.query_visibility().read().await;
-        let visibility_wait = visibility_started.elapsed();
-
-        let snapshot_started = Instant::now();
-        let store = Arc::clone(&self.store);
-        let owned = name.to_string();
-        let snapshot = tokio::task::spawn_blocking(move || store.query_snapshot(&owned))
-            .await
-            .map_err(|e| StatsError::Internal(format!("snapshot task panicked: {e}")))??;
-        let snapshot_elapsed = snapshot_started.elapsed();
-
-        let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
-        let read_from = resume_at.unwrap_or(cursor);
-
-        let scanned_through = bounded_forward_read_through(
-            &snapshot.paths,
-            &snapshot.seq_bounds,
-            read_from,
-            persisted,
-            FORWARD_BATCH_SEGMENTS,
-        );
-        let candidate_segments = snapshot
-            .seq_bounds
-            .values()
-            .filter(|(minimum, maximum)| *maximum > read_from && *minimum <= scanned_through)
-            .count();
-        let live_segments = snapshot.paths.len();
-        let planning_started = Instant::now();
-        let provider = self.store.namespace_provider(name, snapshot)?;
-
-        let table = quote_ident(name);
-        let mut sql =
-            format!("SELECT * FROM {table} WHERE seq > {read_from} AND seq <= {scanned_through}");
-        if has_origin {
-            // Only rows this store's own writers produced. A row that already carries an
-            // origin cluster arrived here by forwarding, and re-forwarding it would loop.
-            // Segments predating the column store NULL, which is a local row.
-            sql.push_str(" AND (cluster IS NULL OR cluster = '')");
-        }
-        let batch_rows = if name == LOG_NAMESPACE_NAME {
-            FORWARD_LOG_BATCH_ROWS
+        let rows = if name == LOG_NAMESPACE_NAME {
+            FORWARD_LOG_BATCH_ROWS as usize
         } else {
-            FORWARD_BATCH_ROWS
+            FORWARD_BATCH_ROWS as usize
         };
-        sql.push_str(&format!(" ORDER BY seq LIMIT {batch_rows}"));
-
-        let providers = vec![RegisteredProvider {
-            name: name.to_string(),
-            provider,
-        }];
-        let planning_elapsed = planning_started.elapsed();
-        // Honor the table's query lifetime and the tighter forwarder deadline.
-        let query_ctx = make_ctx();
-        let read = run_query_over(&query_ctx, providers, &sql);
-        let timeout = self
-            .store
-            .object_query_bound()
-            .map_or(FORWARD_READ_TIMEOUT, |bound| {
-                bound.min(FORWARD_READ_TIMEOUT)
-            });
-        let scan_started = Instant::now();
-        let result = run_within_query_timeout(
-            Some(timeout),
-            read,
-            |timeout| {
-                StatsError::DeadlineExceeded(format!(
-                    "forward read of {name:?} exceeded deadline of {} ms",
-                    timeout.as_millis()
-                ))
+        let read = read_forwarding(
+            Arc::clone(&self.store),
+            name,
+            cursor,
+            persisted,
+            ReadBudget {
+                rows,
+                bytes: FORWARD_READ_BYTES,
+                segments: FORWARD_BATCH_SEGMENTS,
+                timeout: FORWARD_READ_TIMEOUT,
             },
-            |e| StatsError::Internal(format!("read {name:?} failed: {e}")),
         )
         .await?;
-        let scan_elapsed = scan_started.elapsed();
-
-        let encode_started = Instant::now();
-        let rows = self.ship_batch(result)?;
-        let encode_elapsed = encode_started.elapsed();
-        let row_count = rows.as_ref().map_or(0, |(batch, _)| batch.num_rows());
-        let complete_window = rows
-            .as_ref()
-            .is_none_or(|(batch, _)| batch.num_rows() < batch_rows as usize);
-        let total = read_started.elapsed();
-        let log_read = || {
-            tracing::info!(
-                namespace = name,
-                cursor,
-                persisted,
-                scanned_through,
-                live_segments,
-                candidate_segments,
-                rows = row_count,
-                visibility_wait_ms = visibility_wait.as_millis() as u64,
-                snapshot_ms = snapshot_elapsed.as_millis() as u64,
-                planning_ms = planning_elapsed.as_millis() as u64,
-                scan_ms = scan_elapsed.as_millis() as u64,
-                encode_ms = encode_elapsed.as_millis() as u64,
-                total_ms = total.as_millis() as u64,
-                "finelog forwarder: slow read completed"
-            );
-        };
-        if total >= SLOW_FORWARD_TURN {
-            log_read();
-        } else {
-            tracing::debug!(
-                namespace = name,
-                cursor,
-                persisted,
-                scanned_through,
-                live_segments,
-                candidate_segments,
-                rows = row_count,
-                visibility_wait_ms = visibility_wait.as_millis() as u64,
-                snapshot_ms = snapshot_elapsed.as_millis() as u64,
-                planning_ms = planning_elapsed.as_millis() as u64,
-                scan_ms = scan_elapsed.as_millis() as u64,
-                encode_ms = encode_elapsed.as_millis() as u64,
-                total_ms = total.as_millis() as u64,
-                "finelog forwarder: read completed"
-            );
-        }
         Ok(Batch {
-            rows,
-            resume_at,
-            scanned_through,
-            complete_window,
+            rows: ship_batch(read.schema, read.batches, &self.config.cluster)?,
+            resume_at: read.resume_at,
+            scanned_through: read.scanned_through,
         })
-    }
-
-    /// Turn a scan result into a batch ready for [`WriteRows`]: concatenate the collected
-    /// batches, drop the server-assigned `seq` column (the hub assigns its own), and
-    /// stamp the origin column with this store's cluster. `None` when the scan matched no
-    /// rows. Returns the dropped seqs alongside, so the caller can advance its cursor.
-    fn ship_batch(
-        &self,
-        result: QueryResult,
-    ) -> Result<Option<(RecordBatch, Int64Array)>, StatsError> {
-        if result.batches.is_empty() {
-            return Ok(None);
-        }
-        let batch = concat_batches(&result.schema, &result.batches)
-            .map_err(|e| StatsError::Internal(format!("concat batches: {e}")))?;
-        let num_rows = batch.num_rows();
-        if num_rows == 0 {
-            return Ok(None);
-        }
-
-        let seq_idx = result
-            .schema
-            .index_of(IMPLICIT_SEQ_COLUMN)
-            .map_err(|e| StatsError::Internal(format!("scan result has no seq column: {e}")))?;
-        let seqs: Int64Array = batch.column(seq_idx).as_primitive::<Int64Type>().clone();
-
-        let origin: ArrayRef = Arc::new(StringArray::from(vec![
-            self.config.cluster.as_str();
-            num_rows
-        ]));
-        let mut fields: Vec<Field> = Vec::with_capacity(batch.num_columns() - 1);
-        let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns() - 1);
-        for (i, field) in result.schema.fields().iter().enumerate() {
-            if i == seq_idx {
-                continue;
-            }
-            fields.push(field.as_ref().clone());
-            if field.name() == IMPLICIT_CLUSTER_COLUMN {
-                columns.push(Arc::clone(&origin));
-            } else {
-                columns.push(Arc::clone(batch.column(i)));
-            }
-        }
-        let ship_schema = Arc::new(ArrowSchema::new(fields));
-        let ship = RecordBatch::try_new(ship_schema, columns)
-            .map_err(|e| StatsError::Internal(format!("build ship batch: {e}")))?;
-        Ok(Some((ship, seqs)))
     }
 
     /// Create or evolve `name` on the hub when this process has not registered its
@@ -1315,63 +1152,60 @@ struct Batch {
     resume_at: Option<i64>,
     /// Highest sequence position included in this physical scan window.
     scanned_through: i64,
-    /// Whether LIMIT left no matching rows unread inside the window.
-    complete_window: bool,
 }
 
-/// Bound a forwarding scan by physical segment fanout as well as row count. Segment
-/// paths are ordered by minimum sequence, so the maximum sequence of the first
-/// `max_segments` live ranges gives the provider a tight predicate before localization.
-/// Any later range overlapping that bound is still selected by the provider, preserving
-/// correctness for historical overlapping geometry.
-fn bounded_forward_read_through(
-    paths: &[String],
-    seq_bounds: &BTreeMap<String, (i64, i64)>,
-    read_from: i64,
-    persisted: i64,
-    max_segments: usize,
-) -> i64 {
-    assert!(max_segments > 0);
-    paths
-        .iter()
-        .filter_map(|path| seq_bounds.get(path))
-        .filter(|(min_seq, max_seq)| *max_seq > read_from && *min_seq <= persisted)
-        .take(max_segments)
-        .map(|(_, max_seq)| *max_seq)
-        .max()
-        // `persisted` and the segment snapshot are separate observations. A
-        // concurrent local-disk-acknowledged flush may raise the former before
-        // its segment appears in the latter. No visible range means this scan
-        // can prove no progress, not that every sequence through `persisted`
-        // was inspected.
-        .unwrap_or(read_from)
-        .min(persisted)
-}
+/// Turn a scan result into a batch ready for [`WriteRows`]: concatenate the collected
+/// batches, drop the server-assigned `seq` column (the hub assigns its own), and
+/// stamp the origin column with this store's cluster. `None` when the scan matched no
+/// rows. Returns the dropped seqs alongside, so the caller can advance its cursor.
+pub fn ship_batch(
+    schema: Arc<ArrowSchema>,
+    mut batches: Vec<RecordBatch>,
+    cluster: &str,
+) -> Result<Option<(RecordBatch, Int64Array)>, StatsError> {
+    if batches.is_empty() {
+        return Ok(None);
+    }
+    let batch = if batches.len() == 1 {
+        batches.pop().expect("one source batch")
+    } else {
+        concat_batches(&schema, &batches)
+            .map_err(|e| StatsError::Internal(format!("concat batches: {e}")))?
+    };
+    let num_rows = batch.num_rows();
+    if num_rows == 0 {
+        return Ok(None);
+    }
 
-/// The seq to resume from when the next row after `cursor` is already gone: `min_seq` is
-/// the oldest row the local segments still hold, and anything below it lives only in the
-/// remote archive, which no scan here reads. A forwarder that waits for those rows waits
-/// forever.
-///
-/// `None` means nothing was lost — `cursor + 1` is still present, so the cursor may sit
-/// one below `min_seq` — or there are no local segments at all (an empty namespace, whose
-/// watermark cannot be behind anything).
-fn resume_after_eviction(cursor: i64, min_seq: Option<i64>) -> Option<i64> {
-    min_seq
-        .filter(|min_seq| cursor + 1 < *min_seq)
-        .map(|min_seq| min_seq - 1)
-}
+    let seq_idx = schema
+        .index_of(IMPLICIT_SEQ_COLUMN)
+        .map_err(|e| StatsError::Internal(format!("scan result has no seq column: {e}")))?;
+    let seqs: Int64Array = batch.column(seq_idx).as_primitive::<Int64Type>().clone();
 
-/// A double-quoted SQL identifier for `name`, so a dotted namespace (`iris.worker`)
-/// resolves as one table and an embedded quote cannot break out of the identifier.
-fn quote_ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
+    let origin: ArrayRef = Arc::new(StringArray::from(vec![cluster; num_rows]));
+    let mut fields: Vec<Field> = Vec::with_capacity(batch.num_columns() - 1);
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns() - 1);
+    for (i, field) in schema.fields().iter().enumerate() {
+        if i == seq_idx {
+            continue;
+        }
+        fields.push(field.as_ref().clone());
+        if field.name() == IMPLICIT_CLUSTER_COLUMN {
+            columns.push(Arc::clone(&origin));
+        } else {
+            columns.push(Arc::clone(batch.column(i)));
+        }
+    }
+    let ship_schema = Arc::new(ArrowSchema::new(fields));
+    let ship = RecordBatch::try_new(ship_schema, columns)
+        .map_err(|e| StatsError::Internal(format!("build ship batch: {e}")))?;
+    Ok(Some((ship, seqs)))
 }
 
 /// Encode `ship` into IPC chunks bounded by `max_bytes`, pairing each with the largest
 /// `seq` it carries. A single row that exceeds the budget is emitted alone so it cannot
 /// stall every later row behind the forwarding cursor.
-fn chunk_by_bytes(
+pub fn chunk_by_bytes(
     ship: &RecordBatch,
     seqs: &Int64Array,
     max_bytes: usize,

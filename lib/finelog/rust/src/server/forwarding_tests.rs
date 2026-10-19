@@ -26,6 +26,9 @@ use crate::telemetry_policy::TELEMETRY_NAMESPACE;
 
 use super::*;
 
+use crate::query::{make_ctx, run_query_over};
+use crate::store::forwarding::{bounded_forward_read_through, resume_after_eviction};
+
 use crate::proto::finelog::logging::LogServiceClient;
 
 const SOURCE_CLUSTER: &str = "cw-test";
@@ -1516,6 +1519,36 @@ async fn a_hub_outage_holds_the_cursor_and_recovery_delivers_every_row_once() {
             ("/user/job/t", "before-outage"),
             ("/user/job/t", "during-outage"),
         ],
+    )
+    .await;
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(fx.tip(LOG_NAMESPACE_NAME))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_missing_source_file_preserves_progress_until_its_bytes_are_restored() {
+    let fx = Fixture::new("missing-source").await;
+    push(&fx.source_client, "/user/job/0:0", &["first", "second"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    let path = fx.source.list_segments(LOG_NAMESPACE_NAME).unwrap()[0]
+        .path
+        .clone();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+    assert_eq!(fx.cursor(LOG_NAMESPACE_NAME), Some(0));
+    assert!(fx.hub_log_rows().await.is_empty());
+
+    std::fs::write(path, bytes).unwrap();
+    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+    wait_for_hub_log_rows(
+        &fx,
+        &[("/user/job/0:0", "first"), ("/user/job/0:0", "second")],
     )
     .await;
     assert_eq!(
