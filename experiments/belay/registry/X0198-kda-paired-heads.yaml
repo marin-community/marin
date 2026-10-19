@@ -14,7 +14,7 @@ tags:
 knobs:
 - kda_head_pairing
 trials:
-- id: t01
+- id: t001
   variant: half log-decay per sub-step
   rung: d512
   protocol: equal_steps
@@ -34,7 +34,7 @@ trials:
   step_time_change: 173.3 vs 171.6 ms
   tuned: half vs full decay
   note: pair shares one state, halving memory
-- id: t02
+- id: t002
   variant: full log-decay per sub-step
   rung: d512
   protocol: equal_steps

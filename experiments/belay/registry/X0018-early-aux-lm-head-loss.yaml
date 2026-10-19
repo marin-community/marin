@@ -14,7 +14,7 @@ details:
 - tap after layer 0
 - weight 1->0 over 500 steps or 0.3 over 200
 trials:
-- id: t01
+- id: t001
   variant: weight 1->0 over 500 steps, after layer 0
   rung: d512
   protocol: equal_steps
@@ -33,7 +33,7 @@ trials:
     aux weight: 1 -> 0 over 500 steps
     tap: after layer 0
   tuned: weight 1/500 steps vs 0.3/200 steps
-- id: t02
+- id: t002
   variant: weight 0.3 over 200 steps
   rung: d512
   protocol: equal_steps

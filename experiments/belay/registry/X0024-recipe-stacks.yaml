@@ -18,7 +18,7 @@ knobs:
 - embed_gated_norm=false
 - final_gated_norm=false
 trials:
-- id: t01
+- id: t001
   variant: emb2 + learnable qk_mult (init 1) + min LR 0
   rung: d512
   protocol: equal_steps
@@ -44,7 +44,7 @@ trials:
     learnable_qk_mult: init 1
     min LR ratio: '0'
   note: seed 2 at 2719 steps; superseded by qk_mult 2.5
-- id: t02
+- id: t002
   variant: qk_mult 2.5 + emb2 + min LR 0
   rung: d512
   protocol: equal_steps
@@ -67,7 +67,7 @@ trials:
     second_embed: 'true'
     min LR ratio: '0'
   note: adds nothing over qk_mult 2.5 alone
-- id: t03
+- id: t003
   variant: 'bundle: fp32 + qk 2.5 + beta1 0.8 + z-loss 0 + no GatedNorms'
   rung: d512
   protocol: equal_steps
@@ -92,7 +92,7 @@ trials:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
   note: does not stack at d512
-- id: t04
+- id: t004
   variant: bundle at d768
   rung: d768
   protocol: equal_steps
@@ -114,7 +114,7 @@ trials:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
   note: passes gate 1; z-loss later restored
-- id: t05
+- id: t005
   variant: qk 2.5 + beta1 0.8 + z-loss 0, GatedNorms kept, d768
   rung: d768
   protocol: equal_steps
@@ -133,7 +133,7 @@ trials:
     qk_mult: '2.5'
     beta1: '0.8'
     z_loss_weight: '0'
-- id: t06
+- id: t006
   variant: bundle with z-loss kept, fixed qk 2.5
   rung: d512
   protocol: equal_steps
@@ -158,7 +158,7 @@ trials:
     final_gated_norm: 'false'
     z_loss_weight: 1e-4 (kept)
   note: flat vs qk_mult 2.5 alone at d512
-- id: t07
+- id: t007
   variant: bundle with z-loss kept, fixed qk 2.5, d768
   rung: d768
   protocol: equal_steps
@@ -180,7 +180,7 @@ trials:
     final_gated_norm: 'false'
     z_loss_weight: 1e-4 (kept)
   note: passes gate 1; z-loss costs 0.0023 vs z-loss-0 bundle
-- id: t08
+- id: t008
   variant: gate-2 recipe (learnable qk init 2.5), d768
   rung: d768
   protocol: equal_steps
@@ -203,7 +203,7 @@ trials:
     z_loss_weight: 1e-4 (kept)
     learnable_qk_mult: 'true'
   note: -0.0030 vs fixed qk; learned qk_mult ends 4.72 / 4.81
-- id: t09
+- id: t009
   variant: gate-2 recipe (learnable qk), d512
   rung: d512
   protocol: equal_steps
@@ -226,7 +226,7 @@ trials:
     z_loss_weight: 1e-4 (kept)
     learnable_qk_mult: 'true'
   note: -0.039 vs original baseline
-- id: t10
+- id: t010
   variant: gate-2 recipe, d1024 baseline steps
   rung: d1024
   protocol: data_matched
@@ -249,7 +249,7 @@ trials:
     z_loss_weight: 1e-4 (kept)
     learnable_qk_mult: 'true'
   note: gate 2 d1024 passes
-- id: t11
+- id: t011
   variant: gate-2 recipe, d1280 baseline steps
   rung: d1280
   protocol: data_matched
@@ -271,7 +271,7 @@ trials:
     final_gated_norm: 'false'
     z_loss_weight: 1e-4 (kept)
     learnable_qk_mult: 'true'
-- id: t12
+- id: t012
   variant: gate-2 recipe at d768
   rung: d768
   protocol: data_matched
@@ -287,7 +287,7 @@ trials:
   wandb:
   - lc1-b28-d768-base-r
   note: ML changes alone at baseline step count
-- id: t13
+- id: t013
   variant: bg + ema
   rung: d512
   protocol: equal_steps
@@ -306,7 +306,7 @@ trials:
     embed2_rows: '524288'
     ema: b0.995 last 1000
   tuned: stacks of bg (524k bigram source), relu2, ema, skm90
-- id: t14
+- id: t014
   variant: bg + relu2 + ema
   rung: d512
   protocol: equal_steps
@@ -323,7 +323,7 @@ trials:
   - lc1-b43-bg-relu2-ema
   step_time_change: 619 ex/s (tied-gate relu2)
   tuned: stacks of bg (524k bigram source), relu2, ema, skm90
-- id: t15
+- id: t015
   variant: relu2 + ema
   rung: d512
   protocol: equal_steps
@@ -340,7 +340,7 @@ trials:
   - lc1-b43-relu2-ema
   step_time_change: 651 ex/s
   tuned: stacks of bg (524k bigram source), relu2, ema, skm90
-- id: t16
+- id: t016
   variant: bg + Sinkhorn m0.9 embed
   rung: d512
   protocol: equal_steps
@@ -356,7 +356,7 @@ trials:
   wandb:
   - lc1-b43-bg-skm90
   tuned: stacks of bg (524k bigram source), relu2, ema, skm90
-- id: t17
+- id: t017
   variant: bg + relu2 + ema, d768
   rung: d768
   protocol: data_matched
@@ -373,7 +373,7 @@ trials:
   - lc1-b43-d768-bg-relu2-ema
   step_time_change: 255 ex/s
   tuned: stacks of bg (524k bigram source), relu2, ema, skm90
-- id: t18
+- id: t018
   variant: relu2 + ema, ungated kernel
   rung: d512
   protocol: equal_steps
@@ -390,7 +390,7 @@ trials:
   - lc1-b48-relu2k-ema
   step_time_change: 676 ex/s
   tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
-- id: t19
+- id: t019
   variant: bg + relu2 + ema, ungated kernel
   rung: d512
   protocol: equal_steps
@@ -407,7 +407,7 @@ trials:
   - lc1-b48-bg-relu2k-ema
   step_time_change: 641 ex/s
   tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
-- id: t20
+- id: t020
   variant: bg + relu2 + ema + key offset, ungated kernel
   rung: d512
   protocol: equal_steps
@@ -424,7 +424,7 @@ trials:
   - lc1-b48-bg-relu2k-ema-keyoff
   step_time_change: 638 ex/s
   tuned: ungated kernel (moe_ungated_kernel=true) vs tied gate
-- id: t21
+- id: t021
   variant: 'stack: bg 1M x10 + relu2 (ungated) + ema + key offset'
   rung: d512
   protocol: equal_steps
@@ -440,7 +440,7 @@ trials:
   wandb:
   - lc1-b50-stack
   step_time_change: 620 ex/s (-21%)
-- id: t22
+- id: t022
   variant: full stack (bg 524k x10 + relu2 + ema + key offset + MuonEq), fixed time
   rung: d512
   protocol: fixed_time
@@ -457,7 +457,7 @@ trials:
   - lc1-b51-ft-full
   step_time_change: 635 ex/s
   note: best blend 3.0604 (+0.0013); relu2 576/12 does not pay at fixed time
-- id: t23
+- id: t023
   variant: candidate 1 stack (no relu2), fixed time
   rung: d512
   protocol: fixed_time
@@ -474,7 +474,7 @@ trials:
   - lc1-b51-ft-norelu
   step_time_change: 731 ex/s
   note: 'blend 0.75: 3.0395 (-0.0196); k ~1.13x over soft-cap-10 base'
-- id: t24
+- id: t024
   variant: candidate 1 stack (no relu2), equal steps
   rung: d512
   protocol: equal_steps
@@ -490,7 +490,7 @@ trials:
   wandb:
   - lc1-b51-eq-norelu
   step_time_change: 744 ex/s
-- id: t25
+- id: t025
   variant: candidate 1 at d768
   rung: d768
   protocol: data_matched
@@ -508,7 +508,7 @@ trials:
   settings:
     recipe: candidate 1
   note: ex/s 309 vs 318 (-3%, bigram table); best EMA blend 2.7741
-- id: t26
+- id: t026
   variant: candidate 1 at d1024
   rung: d1024
   protocol: data_matched
@@ -526,7 +526,7 @@ trials:
   settings:
     recipe: candidate 1
   note: best blend 2.5602; k 1.31x vs clean KMA
-- id: t27
+- id: t027
   variant: candidate 1 at d1280
   rung: d1280
   protocol: data_matched
@@ -543,7 +543,7 @@ trials:
     recipe: candidate 1
     embed2_fsdp: 'true'
   note: rerun after OOM; needed embed2_fsdp row-sharding
-- id: t28
+- id: t028
   variant: candidate 2 (ReLU2 1.5x + Bi-Maxwell + decay power 0.7)
   rung: d512
   protocol: equal_steps
@@ -567,7 +567,7 @@ trials:
     muonh_decay_power: '0.7'
   step_time_change: +2.2% (728 vs 744 ex/s)
   note: best EMA blend 3.0178 / 3.0252; about -0.009 at fixed time
-- id: t29
+- id: t029
   variant: gate-2 recipe at d1024
   rung: d1024
   protocol: data_matched
@@ -583,7 +583,7 @@ trials:
   wandb:
   - lc1-g2-d1024-bs
   note: passes; ~1.10x effective compute; -6.9% step from MFU work
-- id: t30
+- id: t030
   variant: gate-2 recipe
   rung: d512
   protocol: equal_steps
@@ -603,7 +603,7 @@ trials:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
   note: ML-only, baseline step counts; projected k ~1.09x at 1e24
-- id: t31
+- id: t031
   variant: gate-2 recipe
   rung: d768
   protocol: data_matched
@@ -623,7 +623,7 @@ trials:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
   note: ML-only, baseline step counts; projected k ~1.09x at 1e24
-- id: t32
+- id: t032
   variant: gate-2 recipe
   rung: d1024
   protocol: data_matched
@@ -643,7 +643,7 @@ trials:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
   note: ML-only, baseline step counts; projected k ~1.09x at 1e24
-- id: t33
+- id: t033
   variant: gate-2 recipe
   rung: d1280
   protocol: data_matched
@@ -665,7 +665,7 @@ trials:
     embed_gated_norm: 'false'
     final_gated_norm: 'false'
   note: ML-only, baseline step counts; projected k ~1.09x at 1e24
-- id: t34
+- id: t034
   variant: gate-2 recipe at d512, equal steps
   rung: d512
   protocol: equal_steps
@@ -682,7 +682,7 @@ trials:
   wandb:
   - lc1-eq-d512-s0
   note: Δ on seed mean; ~1.07x effective compute
-- id: t35
+- id: t035
   variant: stack4 on candidate 8
   rung: d512
   protocol: equal_steps
@@ -702,7 +702,7 @@ trials:
     router_combine: sqrt_softplus_renorm
     moe_drop_renorm: 'true'
   step_time_change: +1.0% median step
-- id: t36
+- id: t036
   variant: candidate 9 at d768 (widths scaled)
   rung: d768
   protocol: equal_steps
@@ -721,7 +721,7 @@ trials:
   settings:
     widths: scaled to hidden
   note: mean delta; 107% log-k retention
-- id: t37
+- id: t037
   variant: candidate 7 (512 experts + gated value embeddings)
   rung: d512
   protocol: equal_steps
@@ -744,7 +744,7 @@ trials:
     value_embeds: gated
   step_time_change: +4%
   note: pieces stack additively; k 2.35x vs clean KMA
-- id: t38
+- id: t038
   variant: d768 candidate 7
   rung: d768
   protocol: equal_steps
@@ -760,7 +760,7 @@ trials:
   wandb:
   - lc1-b89-d768-cand7
   note: k 1.66x vs clean KMA; ~90% log-k retention
-- id: t39
+- id: t039
   variant: d768 candidate 7 + scaled EMA + bigram 2M
   rung: d768
   protocol: equal_steps
@@ -781,7 +781,7 @@ trials:
     embed2_rows: 2M
   tuned: plain vs scaled settings
   note: k 1.82x; -0.0122 vs plain d768 candidate 7
-- id: t40
+- id: t040
   variant: candidate 8 (beta2 0.98, GDN-2 gates, cosine Adam, 1x768 shared)
   rung: d512
   protocol: equal_steps

@@ -21,7 +21,7 @@ knobs:
 - latent_select_layers
 - latent_select_plus_proj
 trials:
-- id: t01
+- id: t001
   variant: first-half read selection at d768
   rung: d768
   protocol: equal_steps
@@ -38,7 +38,7 @@ trials:
   settings:
     read: first half channels
   note: mean delta; neutral at d768
-- id: t02
+- id: t002
   variant: first 256 hidden channels, routed width 1x (384)
   rung: d512
   protocol: equal_steps
@@ -57,7 +57,7 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- id: t03
+- id: t003
   variant: first 256 hidden channels, routed width 2x (768)
   rung: d512
   protocol: equal_steps
@@ -76,7 +76,7 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- id: t04
+- id: t004
   variant: first 256 hidden channels, routed width 4x (1536)
   rung: d512
   protocol: equal_steps
@@ -95,7 +95,7 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- id: t05
+- id: t005
   variant: first 256 hidden channels, routed width 8x (3072)
   rung: d512
   protocol: equal_steps
@@ -114,7 +114,7 @@ trials:
     attn_res_layer_backward: recompute
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
-- id: t06
+- id: t006
   variant: first 256 hidden channels, routed width 16x (6144)
   rung: d512
   protocol: equal_steps
@@ -134,7 +134,7 @@ trials:
     attn_res_remat_attention: 'true'
   tuned: routed width 1x-32x
   note: 'vs projection: within 0.002 to 8x, +0.0038 at 16x'
-- id: t07
+- id: t007
   variant: select first half, all layers
   rung: d512
   protocol: equal_steps
@@ -157,7 +157,7 @@ trials:
     latent_select_pattern: first
   tuned: first/random/rotating, layers, +proj
   note: removes w_latent_down (~2% FLOPs)
-- id: t08
+- id: t008
   variant: random half per layer
   rung: d512
   protocol: equal_steps
@@ -181,7 +181,7 @@ trials:
   step_time_change: 1-4% slower
   tuned: first/random/rotating, layers, +proj
   note: same half every layer is better
-- id: t09
+- id: t009
   variant: rotating window per layer
   rung: d512
   protocol: equal_steps
@@ -204,7 +204,7 @@ trials:
     latent_select_pattern: rotating
   step_time_change: 1-4% slower
   tuned: first/random/rotating, layers, +proj
-- id: t10
+- id: t010
   variant: select in KDA layers only
   rung: d512
   protocol: equal_steps
@@ -226,7 +226,7 @@ trials:
     latent_select: 'true'
     latent_select_layers: kda
   tuned: first/random/rotating, layers, +proj
-- id: t11
+- id: t011
   variant: select in global layers only
   rung: d512
   protocol: equal_steps
@@ -248,7 +248,7 @@ trials:
     latent_select: 'true'
     latent_select_layers: global
   tuned: first/random/rotating, layers, +proj
-- id: t12
+- id: t012
   variant: select first half + learned projection
   rung: d512
   protocol: equal_steps
@@ -271,7 +271,7 @@ trials:
     latent_select_plus_proj: 'true'
   tuned: first/random/rotating, layers, +proj
   note: most consistent but same FLOPs as candidate 8
-- id: t13
+- id: t013
   variant: d768 select first half (widths scaled to hidden)
   rung: d768
   protocol: equal_steps
@@ -297,7 +297,7 @@ trials:
     --ema-last-steps: '2600'
   tuned: selection vs projection at d768
   note: no delta column given; reference arm is the projection run
-- id: t14
+- id: t014
   variant: write selection (first 256 channels, no w_latent_up)
   rung: d512
   protocol: equal_steps
@@ -319,7 +319,7 @@ trials:
     latent_write_select: 'true'
     routed output scale: '0.32'
   tuned: write vs read+write selection
-- id: t15
+- id: t015
   variant: read + write selection
   rung: d512
   protocol: equal_steps

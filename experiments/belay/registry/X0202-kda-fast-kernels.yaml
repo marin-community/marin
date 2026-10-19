@@ -24,7 +24,7 @@ knobs:
 - kda_state_grads=pallas
 - kda_state_block_v=64
 trials:
-- id: t01
+- id: t001
   variant: chunk 32 + on-chip gates + pallas state grads
   rung: d512
   protocol: equal_steps
@@ -48,7 +48,7 @@ trials:
     kda_onchip_erase_gate: 'true'
     kda_state_grads: pallas
   step_time_change: -3.5% (184.4 -> 177.9 ms)
-- id: t02
+- id: t002
   variant: candidate 11 at own 480 s budget
   rung: d512
   protocol: fixed_time
@@ -69,7 +69,7 @@ trials:
     kda_onchip_erase_gate: 'true'
     kda_state_grads: pallas
   note: adopted as candidate 11
-- id: t03
+- id: t003
   variant: kda_state_block_v=64
   rung: d512
   protocol: unknown

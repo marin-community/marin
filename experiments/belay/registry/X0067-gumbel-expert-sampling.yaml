@@ -13,7 +13,7 @@ tags:
 knobs:
 - moe_gumbel_tau
 trials:
-- id: t01
+- id: t001
   variant: tau 0.1
   rung: d512
   protocol: equal_steps
@@ -31,7 +31,7 @@ trials:
   settings:
     moe_gumbel_tau: '0.1'
   tuned: tau 0.1/0.3/1.0
-- id: t02
+- id: t002
   variant: tau 0.3
   rung: d512
   protocol: equal_steps
@@ -49,7 +49,7 @@ trials:
   settings:
     moe_gumbel_tau: '0.3'
   tuned: tau 0.1/0.3/1.0
-- id: t03
+- id: t003
   variant: tau 1.0
   rung: d512
   protocol: equal_steps

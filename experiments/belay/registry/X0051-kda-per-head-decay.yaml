@@ -13,7 +13,7 @@ tags:
 knobs:
 - kda_decay_per_head=true
 trials:
-- id: t01
+- id: t001
   variant: GDN-style per-head decay in KDA
   rung: d512
   protocol: equal_steps

@@ -16,7 +16,7 @@ papers:
 knobs:
 - muon_top_shrink
 trials:
-- id: t01
+- id: t001
   variant: gamma 2 (shrink 0.5)
   rung: d512
   protocol: equal_steps
@@ -35,7 +35,7 @@ trials:
     muon_top_shrink: '0.5'
   step_time_change: -4.5% ex/s
   tuned: gamma 2/3.54/7.07
-- id: t02
+- id: t002
   variant: gamma 3.54 (shrink 0.72)
   rung: d512
   protocol: equal_steps
@@ -53,7 +53,7 @@ trials:
   settings:
     muon_top_shrink: '0.72'
   tuned: gamma 2/3.54/7.07
-- id: t03
+- id: t003
   variant: gamma 7.07 (shrink 0.86)
   rung: d512
   protocol: equal_steps

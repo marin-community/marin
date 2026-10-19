@@ -17,7 +17,7 @@ details:
 knobs:
 - ngram_stat_mode=bigram
 trials:
-- id: t01
+- id: t001
   variant: n-gram stat memory 2/3/4 as own AttnRes source, same data
   rung: d512
   protocol: equal_steps
@@ -41,7 +41,7 @@ trials:
     code dim: '64'
     wiring: own AttnRes source
   note: 'wiring cost: reader took gate share from init'
-- id: t02
+- id: t002
   variant: bigram-only stat memory, own source, same data
   rung: d512
   protocol: equal_steps
@@ -62,7 +62,7 @@ trials:
   settings:
     orders: '2'
     wiring: own AttnRes source
-- id: t03
+- id: t003
   variant: 2/3/4 into bigram source (zero-init), same data
   rung: d512
   protocol: equal_steps
@@ -86,7 +86,7 @@ trials:
     rows per order: 2M
   tuned: same data / 2x / 8x prefill
   note: neutral
-- id: t04
+- id: t004
   variant: 2/3/4 into bigram source, pre-filled from 2x run tokens
   rung: d512
   protocol: equal_steps
@@ -110,7 +110,7 @@ trials:
     prefill: 2x run tokens
   tuned: same data / 2x / 8x prefill
   note: prediction falsified
-- id: t05
+- id: t005
   variant: 2/3/4 into bigram source, pre-filled from 8x
   rung: d512
   protocol: equal_steps

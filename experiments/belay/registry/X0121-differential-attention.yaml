@@ -30,7 +30,7 @@ knobs:
 - mla_gdla_noise_heads
 - mla_diff_lambda_init=0.1
 trials:
-- id: t01
+- id: t001
   variant: MLA layers, softmax(q1k1) - lambda softmax(q2k2)
   rung: d512
   protocol: equal_steps
@@ -50,7 +50,7 @@ trials:
   - lc1-b77-diffattnk-s1
   step_time_change: +6% (186 vs 175 ms)
   note: mean -0.0016; learned lambda mostly negative (sums maps); ~+0.011 at fixed time
-- id: t02
+- id: t002
   variant: g=4 + elementwise gate
   rung: d512
   protocol: equal_steps
@@ -71,7 +71,7 @@ trials:
   step_time_change: +6.6% (183.0 ms)
   tuned: g 2/4, elementwise vs per-head gate
   note: loses at fixed time
-- id: t03
+- id: t003
   variant: g=2 + elementwise gate
   rung: d512
   protocol: equal_steps
@@ -91,7 +91,7 @@ trials:
     attn_gate_elementwise: 'true'
   step_time_change: 183.1 / 185.9 ms vs 171.6
   tuned: g 2/4, elementwise vs per-head gate
-- id: t04
+- id: t004
   variant: g=4, per-head gate
   rung: d512
   protocol: equal_steps
@@ -109,7 +109,7 @@ trials:
   step_time_change: 181.3 vs 171.6 ms
   tuned: g 2/4, elementwise vs per-head gate
   note: isolates the gate
-- id: t05
+- id: t005
   variant: GDLA 5+1, 1 value head
   rung: d512
   protocol: equal_steps
@@ -127,7 +127,7 @@ trials:
     output gate: elementwise
   step_time_change: 190.6 ms
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t06
+- id: t006
   variant: GDLA 2x(2+1)
   rung: d512
   protocol: equal_steps
@@ -145,7 +145,7 @@ trials:
     output gate: elementwise
   step_time_change: 189.1 ms
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t07
+- id: t007
   variant: GDLA 2x(3+1)
   rung: d512
   protocol: equal_steps
@@ -163,7 +163,7 @@ trials:
     output gate: elementwise
   step_time_change: 196.9 ms
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t08
+- id: t008
   variant: GDLA 2x(3+1), per-head gate
   rung: d512
   protocol: equal_steps
@@ -181,7 +181,7 @@ trials:
     output gate: per head
   step_time_change: 193.0 ms
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t09
+- id: t009
   variant: GDLA 3x(2+1)
   rung: d512
   protocol: equal_steps
@@ -199,7 +199,7 @@ trials:
     output gate: elementwise
   step_time_change: 199.3 ms
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t10
+- id: t010
   variant: GDLA 6x(1+1) DIFF pairs
   rung: d512
   protocol: equal_steps
@@ -217,7 +217,7 @@ trials:
     output gate: elementwise
   step_time_change: 207.1 (+7%) ms
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t11
+- id: t011
   variant: 'mean noise: uniform prefix mean'
   rung: d512
   protocol: equal_steps
@@ -234,7 +234,7 @@ trials:
     noise map: uniform prefix mean
   step_time_change: 194.3 ms vs 189.8
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t12
+- id: t012
   variant: 'mean noise: decayed, half-life 16'
   rung: d512
   protocol: equal_steps
@@ -251,7 +251,7 @@ trials:
     noise map: decayed, half-life 16
   step_time_change: 195.3 ms vs 189.8
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t13
+- id: t013
   variant: 'mean noise: half-life 64'
   rung: d512
   protocol: equal_steps
@@ -268,7 +268,7 @@ trials:
     noise map: half-life 64
   step_time_change: 194.7 ms vs 189.8
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t14
+- id: t014
   variant: 'mean noise: half-life 256'
   rung: d512
   protocol: equal_steps
@@ -285,7 +285,7 @@ trials:
     noise map: half-life 256
   step_time_change: 195.0 ms vs 189.8
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t15
+- id: t015
   variant: GDLA 6x(1+1), lambda init 0.1
   rung: d512
   protocol: equal_steps
@@ -303,7 +303,7 @@ trials:
     mla_diff_lambda_init: '0.1'
   step_time_change: 207.1 ms
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t16
+- id: t016
   variant: GDLA 3x(2+1), lambda init 0.1
   rung: d512
   protocol: equal_steps
@@ -321,7 +321,7 @@ trials:
     mla_diff_lambda_init: '0.1'
   step_time_change: 199.1 ms
   tuned: GDLA group shapes; lambda init 0.5/0.1; mean-noise half-life 16/64/256
-- id: t17
+- id: t017
   variant: GDLA 2x(3+1), lambda init 0.1
   rung: d512
   protocol: equal_steps

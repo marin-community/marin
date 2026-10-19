@@ -15,7 +15,7 @@ papers:
 knobs:
 - ple_lr_mult
 trials:
-- id: t01
+- id: t001
   variant: PLE 64-dim, table at 10x Adam LR
   rung: d512
   protocol: equal_steps
@@ -39,7 +39,7 @@ trials:
   tuned: table LR 1x / 3x / 10x
   note: bimodal runs; delta computed vs base
   derived: true
-- id: t02
+- id: t002
   variant: PLE 64, table at 1x Adam LR
   rung: d512
   protocol: equal_steps
@@ -61,7 +61,7 @@ trials:
     ple_lr_mult: '1'
   tuned: table LR 1x / 3x / 10x
   note: 'bimodal: base mode ~3.010 or bad mode ~3.073'
-- id: t03
+- id: t003
   variant: PLE 64, table at 3x Adam LR
   rung: d512
   protocol: equal_steps

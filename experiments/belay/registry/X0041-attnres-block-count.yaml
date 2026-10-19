@@ -12,7 +12,7 @@ tags:
 details:
 - 'base: 8 blocks'
 trials:
-- id: t01
+- id: t001
   variant: AttnRes block cap 4 (vs 8)
   rung: d512
   protocol: equal_steps
@@ -30,7 +30,7 @@ trials:
   settings:
     AttnRes max blocks: '4'
   note: no measurable speedup; dropped
-- id: t02
+- id: t002
   variant: 4 blocks
   rung: d512
   protocol: equal_steps
@@ -48,7 +48,7 @@ trials:
   settings:
     attnres blocks: '4'
   tuned: 4/8/12
-- id: t03
+- id: t003
   variant: 12 blocks
   rung: d512
   protocol: equal_steps

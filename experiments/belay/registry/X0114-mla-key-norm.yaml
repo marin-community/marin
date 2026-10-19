@@ -23,7 +23,7 @@ knobs:
 - mla_k_norm_split (split variant)
 - mla_k_norm_shared
 trials:
-- id: t01
+- id: t001
   variant: per-head key-only RMSNorm
   rung: d512
   protocol: equal_steps
@@ -48,7 +48,7 @@ trials:
     mla_k_norm: 'true'
   tuned: whole-key vs split norm
   note: mean -0.0056, k 1.036x, no ex/s cost
-- id: t02
+- id: t002
   variant: split norm over offset halves
   rung: d512
   protocol: equal_steps
@@ -67,7 +67,7 @@ trials:
     mla_k_norm_split: 'true'
   tuned: whole-key vs split norm
   note: no better than one norm
-- id: t03
+- id: t003
   variant: shared key norm (1 RMS per token)
   rung: d512
   protocol: equal_steps
@@ -89,7 +89,7 @@ trials:
     mla_k_norm_shared: 'true'
   tuned: per-head vs shared key norm
   note: keeps ~1/3 of per-head gain; cache-cheap variant
-- id: t04
+- id: t004
   variant: d768 remove key and query norm (qk_mult 2.5)
   rung: d768
   protocol: equal_steps

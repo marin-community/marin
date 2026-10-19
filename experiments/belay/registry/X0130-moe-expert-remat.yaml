@@ -13,7 +13,7 @@ tags:
 knobs:
 - moe_expert_remat=false
 trials:
-- id: t01
+- id: t001
   variant: no expert recompute
   rung: d512
   protocol: equal_steps

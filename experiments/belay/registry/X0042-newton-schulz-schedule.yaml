@@ -14,7 +14,7 @@ tags:
 knobs:
 - coefficient_type
 trials:
-- id: t01
+- id: t001
   variant: Newton-Schulz 4 steps (vs 5)
   rung: d512
   protocol: equal_steps
@@ -32,7 +32,7 @@ trials:
   settings:
     NS steps: '4'
   note: no measurable speedup; dropped
-- id: t02
+- id: t002
   variant: 10 Newton-Schulz iterations (vs 5)
   rung: d512
   protocol: equal_steps
@@ -53,7 +53,7 @@ trials:
     NS iterations: '10'
   step_time_change: +1.5% (per Studies table)
   note: flattens every family's NS output; loss neutral
-- id: t03
+- id: t003
   variant: 3 quintic steps
   rung: d512
   protocol: equal_steps
@@ -72,7 +72,7 @@ trials:
     NS steps: '3'
   step_time_change: 170.3 vs 171.6 ms
   tuned: NS steps 3/4/5, coefficient schedules
-- id: t04
+- id: t004
   variant: 4 quintic steps
   rung: d512
   protocol: equal_steps
@@ -91,7 +91,7 @@ trials:
     NS steps: '4'
   step_time_change: 170.4 vs 171.6 ms
   tuned: NS steps 3/4/5, coefficient schedules
-- id: t05
+- id: t005
   variant: tight_top (3 quintic + 2 cubic)
   rung: d512
   protocol: equal_steps
@@ -110,7 +110,7 @@ trials:
     coefficient_type: tight_top
   step_time_change: 171.8 vs 171.6 ms
   tuned: NS steps 3/4/5, coefficient schedules
-- id: t06
+- id: t006
   variant: boost_low
   rung: d512
   protocol: equal_steps

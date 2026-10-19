@@ -11,7 +11,7 @@ tags:
 - lr
 - routed-experts
 trials:
-- id: t01
+- id: t001
   variant: routed-expert MuonH LR x0.7 (rlr07)
   rung: d512
   protocol: equal_steps
@@ -29,7 +29,7 @@ trials:
   settings:
     routed MuonH LR mult: '0.7'
   tuned: x0.7 / x0.5
-- id: t02
+- id: t002
   variant: routed-expert MuonH LR x0.5 (rlr05)
   rung: d512
   protocol: equal_steps

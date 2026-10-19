@@ -15,7 +15,7 @@ papers:
 knobs:
 - memory_layers
 trials:
-- id: t01
+- id: t001
   variant: memory layer at L3, 2 heads x top-16
   rung: d512
   protocol: equal_steps
@@ -41,7 +41,7 @@ trials:
   step_time_change: +13% (167-170 ms)
   tuned: 2x16 vs 4x32
   note: about +0.02 at fixed time
-- id: t02
+- id: t002
   variant: memory layer at L3, 4 heads x top-32 (paper)
   rung: d512
   protocol: equal_steps

@@ -15,7 +15,7 @@ details:
 knobs:
 - mla_q_norm=true
 trials:
-- id: t01
+- id: t001
   variant: q norm + per-head k norm, qk_mult init 2.5
   rung: d512
   protocol: equal_steps
@@ -39,7 +39,7 @@ trials:
     qk_mult: '2.5'
   tuned: qk_mult init 2.5 / 4 / 6
   note: learned qk_mult drifts down to ~2
-- id: t02
+- id: t002
   variant: q norm + shared k norm
   rung: d512
   protocol: equal_steps
@@ -60,7 +60,7 @@ trials:
   settings:
     mla_q_norm: 'true'
     mla_k_norm_shared: 'true'
-- id: t03
+- id: t003
   variant: q norm + qk_mult init 4.0
   rung: d512
   protocol: equal_steps
@@ -83,7 +83,7 @@ trials:
     qk_mult: '4.0'
   tuned: qk_mult init 2.5 / 4 / 6
   note: qk_mult settles near 3; becomes candidate 5
-- id: t04
+- id: t004
   variant: d768 remove query norm (qk_mult 2.5)
   rung: d768
   protocol: equal_steps

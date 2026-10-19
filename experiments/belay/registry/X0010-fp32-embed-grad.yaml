@@ -18,7 +18,7 @@ knobs:
 - always on
 - embed_grad_fp32
 trials:
-- id: t01
+- id: t001
   variant: fp32 scatter-add embedding backward
   rung: d512
   protocol: fixed_time
@@ -39,7 +39,7 @@ trials:
   settings:
     embedding backward: fp32 scatter-add per shard + psum
   step_time_change: +9.9% ex/s
-- id: t02
+- id: t002
   variant: new base at 2817 fixed-time steps
   rung: d512
   protocol: fixed_time
@@ -60,7 +60,7 @@ trials:
   settings:
     steps: 2817 (751 ex/s x 480 s / 128)
   note: -0.023 vs original baseline mean from speed alone
-- id: t03
+- id: t003
   variant: d768 validation
   rung: d768
   protocol: equal_steps
@@ -79,7 +79,7 @@ trials:
     steps: 7325 = 6929 x 305.4 / 288.9
   step_time_change: +5.7% ex/s
   note: passes gate 1
-- id: t04
+- id: t004
   variant: fp32 on vs off, clean KMA config
   rung: d512
   protocol: equal_steps

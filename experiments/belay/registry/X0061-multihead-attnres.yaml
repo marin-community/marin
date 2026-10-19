@@ -17,7 +17,7 @@ knobs:
 - attn_res_heads
 - attn_res_head_sub
 trials:
-- id: t01
+- id: t001
   variant: 4 heads
   rung: d512
   protocol: equal_steps
@@ -35,7 +35,7 @@ trials:
   settings:
     attn_res_heads: '4'
   tuned: heads 4/8
-- id: t02
+- id: t002
   variant: 8 heads
   rung: d512
   protocol: equal_steps
@@ -53,7 +53,7 @@ trials:
   settings:
     attn_res_heads: '8'
   tuned: heads 4/8
-- id: t03
+- id: t003
   variant: 4 heads + V gate
   rung: d512
   protocol: equal_steps
@@ -71,7 +71,7 @@ trials:
   settings:
     attn_res_heads: '4'
     attn_res_v_gate: 'true'
-- id: t04
+- id: t004
   variant: d768 4 heads
   rung: d768
   protocol: data_matched
@@ -89,7 +89,7 @@ trials:
   settings:
     attn_res_heads: '4'
   tuned: query LR x3/x1/3, temperature, per-head norm
-- id: t05
+- id: t005
   variant: d768 4 heads, query LR x3
   rung: d768
   protocol: data_matched
@@ -108,7 +108,7 @@ trials:
     attn_res_heads: '4'
     attn_res_query_lr_scale: '0.3'
   tuned: query LR x3/x1/3, temperature, per-head norm
-- id: t06
+- id: t006
   variant: d768 4 heads, query LR x1/3
   rung: d768
   protocol: data_matched
@@ -127,7 +127,7 @@ trials:
     attn_res_heads: '4'
     attn_res_query_lr_scale: '0.03'
   tuned: query LR x3/x1/3, temperature, per-head norm
-- id: t07
+- id: t007
   variant: d768 4 heads + learnable temperature
   rung: d768
   protocol: data_matched
@@ -146,7 +146,7 @@ trials:
     attn_res_heads: '4'
     temperature: learnable, init 1
   tuned: query LR x3/x1/3, temperature, per-head norm
-- id: t08
+- id: t008
   variant: d768 4 heads + per-head RMSNorm
   rung: d768
   protocol: data_matched
@@ -165,7 +165,7 @@ trials:
     attn_res_heads: '4'
     key norm: per-head RMSNorm
   tuned: query LR x3/x1/3, temperature, per-head norm
-- id: t09
+- id: t009
   variant: hierarchical 4-head, slice sub-queries (128 wide)
   rung: d512
   protocol: equal_steps
@@ -184,7 +184,7 @@ trials:
     attn_res_head_sub: slice
     heads: '4'
   tuned: slice vs full sub-queries
-- id: t10
+- id: t010
   variant: hierarchical 4-head, full-width sub-queries
   rung: d512
   protocol: equal_steps
@@ -203,7 +203,7 @@ trials:
     attn_res_head_sub: full
     heads: '4'
   tuned: slice vs full sub-queries
-- id: t11
+- id: t011
   variant: 4 heads + V gate
   rung: d512
   protocol: equal_steps

@@ -21,7 +21,7 @@ details:
 knobs:
 - transfer_normed
 trials:
-- id: t01
+- id: t001
   variant: transfer lambda 0.01
   rung: d512
   protocol: equal_steps
@@ -37,7 +37,7 @@ trials:
   settings:
     lambda: '0.01'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
-- id: t02
+- id: t002
   variant: transfer lambda 0.04
   rung: d512
   protocol: equal_steps
@@ -53,7 +53,7 @@ trials:
   settings:
     lambda: '0.04'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
-- id: t03
+- id: t003
   variant: transfer lambda 0.16
   rung: d512
   protocol: equal_steps
@@ -69,7 +69,7 @@ trials:
   settings:
     lambda: '0.16'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
-- id: t04
+- id: t004
   variant: gap loss lambda 0.04
   rung: d512
   protocol: equal_steps
@@ -86,7 +86,7 @@ trials:
     lambda: '0.04'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: duplicates paths
-- id: t05
+- id: t005
   variant: gap loss lambda 0.16
   rung: d512
   protocol: equal_steps
@@ -103,7 +103,7 @@ trials:
     lambda: '0.16'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: duplicates paths
-- id: t06
+- id: t006
   variant: routed penalty lambda 0.01
   rung: d512
   protocol: equal_steps
@@ -120,7 +120,7 @@ trials:
     lambda: '0.01'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: destructive
-- id: t07
+- id: t007
   variant: routed penalty lambda 0.04
   rung: d512
   protocol: equal_steps
@@ -137,7 +137,7 @@ trials:
     lambda: '0.04'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: destructive
-- id: t08
+- id: t008
   variant: shadow probe only
   rung: d512
   protocol: equal_steps
@@ -151,7 +151,7 @@ trials:
   - 2.9631
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: detached probe; no effect on training
-- id: t09
+- id: t009
   variant: transfer lambda 0.04 at 100x overtraining
   rung: d512
   protocol: equal_steps
@@ -169,7 +169,7 @@ trials:
     steps: '281700'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: routed share 0.00 in 5 of 6 layers
-- id: t10
+- id: t010
   variant: gap lambda 0.16 at 100x overtraining
   rung: d512
   protocol: equal_steps
@@ -187,7 +187,7 @@ trials:
     steps: '281700'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: cost grows with overtraining
-- id: t11
+- id: t011
   variant: normalized transfer lambda 0.01
   rung: d512
   protocol: equal_steps
@@ -204,7 +204,7 @@ trials:
     lambda: '0.01'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: intake fix for norm stretching
-- id: t12
+- id: t012
   variant: normalized transfer lambda 0.04
   rung: d512
   protocol: equal_steps
@@ -221,7 +221,7 @@ trials:
     lambda: '0.04'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: intake fix for norm stretching
-- id: t13
+- id: t013
   variant: transfer 0.04 + counter force n=2
   rung: d512
   protocol: equal_steps
@@ -240,7 +240,7 @@ trials:
     n: '2'
   tuned: lambda 0.01/0.04/0.16; transfer, gap, routed penalty, normed, counter force
   note: intake fix for norm stretching
-- id: t14
+- id: t014
   variant: transfer 0.04 + counter force n=4
   rung: d512
   protocol: equal_steps

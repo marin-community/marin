@@ -15,7 +15,7 @@ details:
 knobs:
 - init_std_mult_gates=2
 trials:
-- id: t01
+- id: t001
   variant: gate init x0.5
   rung: d512
   protocol: equal_steps
@@ -30,7 +30,7 @@ trials:
     init_std_mult_gates: '0.5'
   tuned: x0.5/1/2/4
   note: 2-seed mean
-- id: t02
+- id: t002
   variant: gate init x2
   rung: d512
   protocol: equal_steps
@@ -45,7 +45,7 @@ trials:
     init_std_mult_gates: '2'
   tuned: x0.5/1/2/4
   note: 2-seed mean
-- id: t03
+- id: t003
   variant: gate init x4
   rung: d512
   protocol: equal_steps

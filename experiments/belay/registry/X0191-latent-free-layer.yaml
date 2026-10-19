@@ -16,7 +16,7 @@ details:
 knobs:
 - latent_free_layers
 trials:
-- id: t01
+- id: t001
   variant: layer 0
   rung: d512
   protocol: equal_steps
@@ -34,7 +34,7 @@ trials:
   step_time_change: 194 ms vs 184.3 ms
   tuned: layer 0..5
   note: step cost from tail stack, not FLOPs
-- id: t02
+- id: t002
   variant: layer 1
   rung: d512
   protocol: equal_steps
@@ -52,7 +52,7 @@ trials:
   step_time_change: 193 ms vs 184.3 ms
   tuned: layer 0..5
   note: step cost from tail stack, not FLOPs
-- id: t03
+- id: t003
   variant: layer 2
   rung: d512
   protocol: equal_steps
@@ -70,7 +70,7 @@ trials:
   step_time_change: 192 ms vs 184.3 ms
   tuned: layer 0..5
   note: step cost from tail stack, not FLOPs
-- id: t04
+- id: t004
   variant: layer 3
   rung: d512
   protocol: equal_steps
@@ -88,7 +88,7 @@ trials:
   step_time_change: 192 ms vs 184.3 ms
   tuned: layer 0..5
   note: step cost from tail stack, not FLOPs
-- id: t05
+- id: t005
   variant: layer 4
   rung: d512
   protocol: equal_steps
@@ -106,7 +106,7 @@ trials:
   step_time_change: 194 ms vs 184.3 ms
   tuned: layer 0..5
   note: step cost from tail stack, not FLOPs
-- id: t06
+- id: t006
   variant: layer 5
   rung: d512
   protocol: equal_steps

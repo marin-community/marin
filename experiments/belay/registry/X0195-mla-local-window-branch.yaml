@@ -18,7 +18,7 @@ details:
 knobs:
 - global_local_window
 trials:
-- id: t01
+- id: t001
   variant: window 64, 4x64 heads
   rung: d512
   protocol: equal_steps
@@ -37,7 +37,7 @@ trials:
   step_time_change: 174.1 vs 171.6 ms
   tuned: window 64/128/256, heads 4/8
   note: one seed (other failed)
-- id: t02
+- id: t002
   variant: window 128, 4x64 heads
   rung: d512
   protocol: equal_steps
@@ -57,7 +57,7 @@ trials:
     heads: 4 x 64
   step_time_change: 173.2 vs 171.6 ms
   tuned: window 64/128/256, heads 4/8
-- id: t03
+- id: t003
   variant: window 256, 4x64 heads
   rung: d512
   protocol: equal_steps
@@ -77,7 +77,7 @@ trials:
     heads: 4 x 64
   step_time_change: 174.0 vs 171.6 ms
   tuned: window 64/128/256, heads 4/8
-- id: t04
+- id: t004
   variant: window 128, 8x64 heads
   rung: d512
   protocol: equal_steps

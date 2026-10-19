@@ -18,7 +18,7 @@ papers:
 knobs:
 - init_std_mult_gates
 trials:
-- id: t01
+- id: t001
   variant: expert init x0.5
   rung: d512
   protocol: equal_steps
@@ -32,7 +32,7 @@ trials:
   settings:
     expert init: x0.5
   tuned: x0.5 / x2
-- id: t02
+- id: t002
   variant: expert init x2
   rung: d512
   protocol: equal_steps

@@ -16,7 +16,7 @@ details:
 knobs:
 - moe_out_gate
 trials:
-- id: t01
+- id: t001
   variant: per-token sigmoid gate on whole MoE output
   rung: d512
   protocol: equal_steps

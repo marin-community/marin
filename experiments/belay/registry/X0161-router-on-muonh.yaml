@@ -14,7 +14,7 @@ papers:
 - title: DeepSeek-V4
 - title: Kimi K3
 trials:
-- id: t01
+- id: t001
   variant: router on MuonH + learnable temperature
   rung: d512
   protocol: equal_steps
@@ -30,7 +30,7 @@ trials:
     router optimizer: MuonH
     router temperature: learnable per layer
   tuned: router LR x1 / x0.5
-- id: t02
+- id: t002
   variant: router on MuonH + temperature, router LR x0.5
   rung: d512
   protocol: equal_steps

@@ -17,7 +17,7 @@ papers:
 knobs:
 - moe_dense_router_grad
 trials:
-- id: t01
+- id: t001
   variant: Default-MoE dense router gradient (stateless)
   rung: d512
   protocol: equal_steps
@@ -38,7 +38,7 @@ trials:
   settings:
     moe_dense_router_grad: 'true'
   note: within seed noise; not added
-- id: t02
+- id: t002
   variant: Default-MoE dense router gradient (stateless)
   rung: d512
   protocol: equal_steps

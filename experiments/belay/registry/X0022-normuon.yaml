@@ -13,7 +13,7 @@ tags:
 details:
 - beta2 0.95
 trials:
-- id: t01
+- id: t001
   variant: NorMuon beta2 0.95
   rung: d512
   protocol: equal_steps

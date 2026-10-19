@@ -15,7 +15,7 @@ details:
 knobs:
 - expert_visit_bias
 trials:
-- id: t01
+- id: t001
   variant: unweighted sum
   rung: d512
   protocol: equal_steps
@@ -34,7 +34,7 @@ trials:
     c_e: '1'
   step_time_change: 170.4 vs 171.6 ms
   tuned: unweighted vs combine-weighted
-- id: t02
+- id: t002
   variant: combine-weighted
   rung: d512
   protocol: equal_steps

@@ -26,7 +26,7 @@ knobs:
 - kda_value_embeds=gated
 - value_embeds=gated_lambda
 trials:
-- id: t01
+- id: t001
   variant: lambda form (ve)
   rung: d512
   protocol: equal_steps
@@ -48,7 +48,7 @@ trials:
     optimizer: Adam at Adam LR
   step_time_change: -11% ex/s
   tuned: lambda vs gated
-- id: t02
+- id: t002
   variant: gated (veg)
   rung: d512
   protocol: equal_steps
@@ -68,7 +68,7 @@ trials:
     gate: sigmoid(x W) per head, W zero-init
   step_time_change: -13% ex/s
   tuned: lambda vs gated
-- id: t03
+- id: t003
   variant: lambda form (ve), on fp32 base
   rung: d512
   protocol: equal_steps
@@ -84,7 +84,7 @@ trials:
   wandb:
   - lc1-b02-ve
   note: -0.001 vs new base mean
-- id: t04
+- id: t004
   variant: gated (veg), on fp32 base
   rung: d512
   protocol: equal_steps
@@ -100,7 +100,7 @@ trials:
   wandb:
   - lc1-b02-veg
   note: -0.0025 vs new base mean
-- id: t05
+- id: t005
   variant: gated, 1x LR (retry)
   rung: d512
   protocol: equal_steps
@@ -124,7 +124,7 @@ trials:
   step_time_change: +0.5%
   tuned: LR 1x vs 10x
   note: clearest missed chance; nearly free
-- id: t06
+- id: t006
   variant: gated, table LR x10
   rung: d512
   protocol: equal_steps
@@ -147,7 +147,7 @@ trials:
     value_embed_lr_mult: '10'
   tuned: LR 1x vs 10x
   note: value tables want plain Adam LR
-- id: t07
+- id: t007
   variant: gated, table LR 0.3x
   rung: d512
   protocol: equal_steps
@@ -170,7 +170,7 @@ trials:
     value_embed_lr_mult: '0.3'
   tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
   note: peak at 0.3x; goes into next candidate
-- id: t08
+- id: t008
   variant: gated, table LR 2x
   rung: d512
   protocol: equal_steps
@@ -192,7 +192,7 @@ trials:
     value_embeds: gated
     value_embed_lr_mult: '2'
   tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
-- id: t09
+- id: t009
   variant: gated, table LR 3x
   rung: d512
   protocol: equal_steps
@@ -214,7 +214,7 @@ trials:
     value_embeds: gated
     value_embed_lr_mult: '3'
   tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
-- id: t10
+- id: t010
   variant: gated, table LR 5x
   rung: d512
   protocol: equal_steps
@@ -236,7 +236,7 @@ trials:
     value_embeds: gated
     value_embed_lr_mult: '5'
   tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
-- id: t11
+- id: t011
   variant: gated, table LR 0.1x
   rung: d512
   protocol: equal_steps
@@ -258,7 +258,7 @@ trials:
     value_embeds: gated
     value_embed_lr_mult: '0.1'
   tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
-- id: t12
+- id: t012
   variant: gated, table LR 0.03x
   rung: d512
   protocol: equal_steps
@@ -280,7 +280,7 @@ trials:
     value_embeds: gated
     value_embed_lr_mult: '0.03'
   tuned: 0.03x/0.1x/0.3x/1x/2x/3x/5x/10x
-- id: t13
+- id: t013
   variant: value-embedding LR 0.3x on candidate 9
   rung: d512
   protocol: equal_steps
@@ -298,7 +298,7 @@ trials:
   settings:
     value_embed_lr_mult: '0.3'
   note: b92's -0.0158 on candidate 6 gone on candidate 9; closed
-- id: t14
+- id: t014
   variant: gated, on the 4 KDA layers
   rung: d512
   protocol: equal_steps
@@ -314,7 +314,7 @@ trials:
     kda_value_embeds: gated
   step_time_change: +1%
   note: closed; value embeddings stay on MLA only
-- id: t15
+- id: t015
   variant: gate x learned scalar (gated_lambda)
   rung: d512
   protocol: equal_steps

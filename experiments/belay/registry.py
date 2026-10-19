@@ -28,8 +28,8 @@ import yaml
 REGISTRY_DIR = Path(__file__).parent / "registry"
 ID_RE = re.compile(r"^X\d{4}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-# A trial id is local to its experiment; elsewhere a trial is cited as "<experiment id>.<trial id>", e.g. X0014.t05.
-TRIAL_ID_RE = re.compile(r"^t(0[1-9]|[1-9]\d+)$")
+# A trial id is local to its experiment; elsewhere a trial is cited as "<experiment id>.<trial id>", e.g. X0014.t005.
+TRIAL_ID_RE = re.compile(r"^t\d{3}$")
 # One list shared with the intake bot (scripts/ci/belay_intake.py), which reads it from this branch.
 CATEGORIES: tuple[str, ...] = tuple(json.loads((REGISTRY_DIR / "categories.json").read_text()))
 
@@ -235,7 +235,7 @@ def validate(experiments: list[Experiment]) -> None:
             raise ValueError(f"{e.id}: intake experiments must record their intake comment")
         trial_ids = [t.id for t in e.trials]
         if bad := [i for i in trial_ids if not TRIAL_ID_RE.match(i)]:
-            raise ValueError(f"{e.id}: trial ids {bad} must look like t01")
+            raise ValueError(f"{e.id}: trial ids {bad} must look like t001")
         numbers = [int(i[1:]) for i in trial_ids]
         if numbers != sorted(set(numbers)):
             raise ValueError(f"{e.id}: trial ids must increase down the file, with no repeats")

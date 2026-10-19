@@ -20,7 +20,7 @@ knobs:
 - kda_beta_group=adam
 - kda_beta_scale
 trials:
-- id: t01
+- id: t001
   variant: init x1
   rung: d512
   protocol: equal_steps
@@ -36,7 +36,7 @@ trials:
   settings:
     init_std_mult_beta: '1'
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
-- id: t02
+- id: t002
   variant: init x4
   rung: d512
   protocol: equal_steps
@@ -52,7 +52,7 @@ trials:
   settings:
     init_std_mult_beta: '4'
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
-- id: t03
+- id: t003
   variant: init x8
   rung: d512
   protocol: equal_steps
@@ -68,7 +68,7 @@ trials:
   settings:
     init_std_mult_beta: '8'
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
-- id: t04
+- id: t004
   variant: MuonH LR mult 1
   rung: d512
   protocol: equal_steps
@@ -84,7 +84,7 @@ trials:
   settings:
     w_beta MuonH LR mult: '1'
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
-- id: t05
+- id: t005
   variant: MuonH LR mult 4
   rung: d512
   protocol: equal_steps
@@ -100,7 +100,7 @@ trials:
   settings:
     w_beta MuonH LR mult: '4'
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
-- id: t06
+- id: t006
   variant: learned per-head beta scale
   rung: d512
   protocol: equal_steps
@@ -116,7 +116,7 @@ trials:
   settings:
     kda_beta_scale: learned per head
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
-- id: t07
+- id: t007
   variant: AdamH
   rung: d512
   protocol: equal_steps
@@ -132,7 +132,7 @@ trials:
   settings:
     kda_beta_group: adamh
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
-- id: t08
+- id: t008
   variant: Adam (norm free)
   rung: d512
   protocol: equal_steps
@@ -148,7 +148,7 @@ trials:
   settings:
     kda_beta_group: adam
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
-- id: t09
+- id: t009
   variant: w_beta on Adam at 1x Adam LR (base15)
   rung: d512
   protocol: equal_steps
@@ -164,7 +164,7 @@ trials:
     Adam LR mult: (base15)
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
   note: adopted into base15
-- id: t10
+- id: t010
   variant: w_beta Adam LR 0.1x
   rung: d512
   protocol: equal_steps
@@ -180,7 +180,7 @@ trials:
     Adam LR mult: 0.1x
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
   note: insensitive to LR
-- id: t11
+- id: t011
   variant: w_beta Adam LR 0.3x
   rung: d512
   protocol: equal_steps
@@ -196,7 +196,7 @@ trials:
     Adam LR mult: 0.3x
   tuned: init x1/x2/x4/x8; LR mult 1/2/4; AdamH/Adam; Adam LR 0.1x-3x
   note: insensitive to LR
-- id: t12
+- id: t012
   variant: w_beta Adam LR 3x
   rung: d512
   protocol: equal_steps

@@ -17,7 +17,7 @@ papers:
 details:
 - 'H-gate: SiLU(H_i W_d) W_u rank 32 added to output gate logits'
 trials:
-- id: t01
+- id: t001
   variant: MLA H-gate (df12)
   rung: d512
   protocol: equal_steps
@@ -34,7 +34,7 @@ trials:
     gate: H-gate rank 32
   step_time_change: 191.8 ms
   tuned: H-gate / C-gate / both; MLA vs KDA
-- id: t02
+- id: t002
   variant: MLA C-gate
   rung: d512
   protocol: equal_steps
@@ -51,7 +51,7 @@ trials:
     gate: MLA C-gate
   step_time_change: 192.5 ms
   tuned: H-gate / C-gate / both; MLA vs KDA
-- id: t03
+- id: t003
   variant: H-gate + C-gate
   rung: d512
   protocol: equal_steps
@@ -68,7 +68,7 @@ trials:
     gate: H-gate + C-gate
   step_time_change: 191.6 ms
   tuned: H-gate / C-gate / both; MLA vs KDA
-- id: t04
+- id: t004
   variant: MLA H-gate rank 32 (2 seeds)
   rung: d512
   protocol: equal_steps
@@ -87,7 +87,7 @@ trials:
   step_time_change: +0.9% (191.5 ms)
   tuned: H-gate / C-gate / both; MLA vs KDA
   note: mean; nets ~-0.001 fixed time
-- id: t05
+- id: t005
   variant: KDA output content gate
   rung: d512
   protocol: equal_steps

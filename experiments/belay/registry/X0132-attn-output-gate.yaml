@@ -26,7 +26,7 @@ knobs:
 - attn_gate_elementwise
 - attn_gate_rank=16
 trials:
-- id: t01
+- id: t001
   variant: elementwise (per-channel) MLA output gate
   rung: d512
   protocol: fixed_time
@@ -47,7 +47,7 @@ trials:
   settings:
     attn_gate_elementwise: 'true'
   note: mean +0.0011; neutral
-- id: t02
+- id: t002
   variant: elementwise gate alone
   rung: d512
   protocol: equal_steps
@@ -64,7 +64,7 @@ trials:
     attn_gate_elementwise: 'true'
   step_time_change: 174.7 ms (no PGLE)
   note: neutral
-- id: t03
+- id: t003
   variant: per-channel full rank (gel)
   rung: d512
   protocol: equal_steps
@@ -83,7 +83,7 @@ trials:
     attn_gate_elementwise: 'true'
   step_time_change: +0.8%
   note: mean +0.0008; closed
-- id: t04
+- id: t004
   variant: per-channel rank-16 GatedNorm form (glr)
   rung: d512
   protocol: equal_steps
@@ -102,7 +102,7 @@ trials:
     attn_gate_rank: '16'
   step_time_change: +0.5%
   note: mean +0.0017; closed
-- id: t05
+- id: t005
   variant: elementwise gate, no differential (eg)
   rung: d512
   protocol: equal_steps

@@ -12,7 +12,7 @@ tags:
 - consistency-gate
 - cautious
 trials:
-- id: t01
+- id: t001
   variant: cautious mask, per-layer sphere
   rung: d512
   protocol: equal_steps
@@ -31,7 +31,7 @@ trials:
     mask: zero uphill coords, rescale by kept fraction
   tuned: per-layer vs per-expert sphere
   note: closed
-- id: t02
+- id: t002
   variant: cautious mask + per-expert sphere + reproject
   rung: d512
   protocol: equal_steps
@@ -50,7 +50,7 @@ trials:
     hyperball_per_expert: 'true'
   tuned: per-layer vs per-expert sphere
   note: 'closed: no gain over per-expert-sphere control'
-- id: t03
+- id: t003
   variant: per-expert consistency gate
   rung: d512
   protocol: equal_steps

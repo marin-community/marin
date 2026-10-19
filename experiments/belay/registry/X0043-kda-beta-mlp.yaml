@@ -13,7 +13,7 @@ tags:
 knobs:
 - kda_beta_rank
 trials:
-- id: t01
+- id: t001
   variant: rank-16 MLP, MuonH 2x, random init
   rung: d512
   protocol: equal_steps
@@ -33,7 +33,7 @@ trials:
     optimizer: MuonH 2x
     init: random
   tuned: MuonH vs Adam, random vs zero init
-- id: t02
+- id: t002
   variant: rank-16 MLP, Adam, random init
   rung: d512
   protocol: equal_steps
@@ -53,7 +53,7 @@ trials:
     optimizer: Adam
     init: random
   tuned: MuonH vs Adam, random vs zero init
-- id: t03
+- id: t003
   variant: rank-16 MLP, Adam, W_beta_up zero-init
   rung: d512
   protocol: equal_steps
@@ -73,7 +73,7 @@ trials:
     optimizer: Adam
     W_beta_up init: zero
   tuned: MuonH vs Adam, random vs zero init
-- id: t04
+- id: t004
   variant: rank 64, MuonH 2x
   rung: d512
   protocol: equal_steps
@@ -92,7 +92,7 @@ trials:
     kda_beta_rank: '64'
     optimizer: MuonH 2x
   tuned: rank 16 / 64; MuonH 2x / 4x
-- id: t05
+- id: t005
   variant: rank 16, MuonH 4x
   rung: d512
   protocol: equal_steps

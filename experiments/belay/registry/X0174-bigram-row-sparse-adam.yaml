@@ -17,7 +17,7 @@ details:
 knobs:
 - embed2_row_sparse_adam
 trials:
-- id: t01
+- id: t001
   variant: beta1 0, per-row v, no AdEMAMix, table LR x10
   rung: d512
   protocol: equal_steps
@@ -35,7 +35,7 @@ trials:
     AdEMAMix: 'off'
     table LR mult: '10'
   tuned: table LR x10 / x20 / x70
-- id: t02
+- id: t002
   variant: table LR x20
   rung: d512
   protocol: equal_steps
@@ -53,7 +53,7 @@ trials:
     AdEMAMix: 'off'
     table LR mult: '20'
   tuned: table LR x10 / x20 / x70
-- id: t03
+- id: t003
   variant: table LR x70 (record's value)
   rung: d512
   protocol: equal_steps

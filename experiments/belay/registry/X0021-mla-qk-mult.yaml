@@ -24,7 +24,7 @@ knobs:
 - learnable_qk_mult=true
 - qk_mult=4.0
 trials:
-- id: t01
+- id: t001
   variant: learnable, init 1
   rung: d512
   protocol: equal_steps
@@ -45,7 +45,7 @@ trials:
     optimizer: Adam at Adam LR
   tuned: init 1 vs 2.5
   note: scalars climb to 2.64 / 2.36
-- id: t02
+- id: t002
   variant: learnable, init 2.5
   rung: d512
   protocol: equal_steps
@@ -67,7 +67,7 @@ trials:
     learnable_qk_mult: 'true'
     init: '2.5'
   tuned: learnable init 1 / 2.5, fixed 2.5
-- id: t03
+- id: t003
   variant: fixed 2.5
   rung: d512
   protocol: equal_steps
@@ -86,7 +86,7 @@ trials:
     qk_mult: '2.5'
     learnable: 'false'
   tuned: learnable vs fixed
-- id: t04
+- id: t004
   variant: fixed 2.5, seed 1
   rung: d512
   protocol: equal_steps
@@ -105,7 +105,7 @@ trials:
     qk_mult: '2.5'
   tuned: qk_mult 2.0 / 2.5 / 3.0 / 3.5
   note: 2-seed mean 3.0877, -0.0113
-- id: t05
+- id: t005
   variant: fixed 2.0
   rung: d512
   protocol: equal_steps
@@ -123,7 +123,7 @@ trials:
   settings:
     qk_mult: '2.0'
   tuned: qk_mult 2.0 / 2.5 / 3.0 / 3.5
-- id: t06
+- id: t006
   variant: fixed 3.0
   rung: d512
   protocol: equal_steps
@@ -141,7 +141,7 @@ trials:
   settings:
     qk_mult: '3.0'
   tuned: qk_mult 2.0 / 2.5 / 3.0 / 3.5
-- id: t07
+- id: t007
   variant: fixed 3.5
   rung: d512
   protocol: equal_steps
@@ -159,7 +159,7 @@ trials:
   settings:
     qk_mult: '3.5'
   tuned: qk_mult 2.0 / 2.5 / 3.0 / 3.5
-- id: t08
+- id: t008
   variant: fixed 2.5, d768 check
   rung: d768
   protocol: equal_steps
@@ -176,7 +176,7 @@ trials:
   - lc1-b06-d768-qk25
   settings:
     qk_mult: '2.5'
-- id: t09
+- id: t009
   variant: fixed 2.5, 4-seed paired
   rung: d512
   protocol: equal_steps
@@ -203,7 +203,7 @@ trials:
   settings:
     qk_mult: '2.5'
   note: mean -0.0088 +- 0.0022 SE
-- id: t10
+- id: t010
   variant: fixed 2.5 at d768 vs d768 baseline
   rung: d768
   protocol: equal_steps
@@ -221,7 +221,7 @@ trials:
   settings:
     qk_mult: '2.5'
   note: only -0.0014 vs d768 fp32 run; gain mostly does not carry
-- id: t11
+- id: t011
   variant: learnable, init 2.5, d768
   rung: d768
   protocol: equal_steps
@@ -240,7 +240,7 @@ trials:
     learnable_qk_mult: 'true'
     init: '2.5'
   note: -0.0118 vs d768 baseline
-- id: t12
+- id: t012
   variant: d768 learnable off (fixed 2.5)
   rung: d768
   protocol: data_matched
@@ -259,7 +259,7 @@ trials:
     qk_mult: '2.5'
     learnable_qk_mult: 'false'
   note: most of the benefit is the fixed 2.5 multiplier
-- id: t13
+- id: t013
   variant: learnable qk_mult init 2.0, cap 10
   rung: d512
   protocol: equal_steps
@@ -278,7 +278,7 @@ trials:
     qk_mult: '2.0'
     learnable_qk_mult: 'true'
   tuned: init 2.0/2.5/3.0
-- id: t14
+- id: t014
   variant: learnable qk_mult init 3.0, cap 10
   rung: d512
   protocol: equal_steps
@@ -297,7 +297,7 @@ trials:
     qk_mult: '3.0'
     learnable_qk_mult: 'true'
   tuned: init 2.0/2.5/3.0
-- id: t15
+- id: t015
   variant: init 4.0 (with per-head k norm)
   rung: d512
   protocol: equal_steps
@@ -320,7 +320,7 @@ trials:
     learnable_qk_mult: 'true'
   tuned: qk_mult init 2.5 / 4 / 6
   note: seeds split; learned value 4.8 / 4.6, still rising
-- id: t16
+- id: t016
   variant: init 6 with q norm
   rung: d512
   protocol: equal_steps
@@ -343,7 +343,7 @@ trials:
     qk_mult: '6.0'
   tuned: qk_mult init 4 vs 6
   note: settles ~4.8; init 4 stays
-- id: t17
+- id: t017
   variant: init 6, key norm only
   rung: d512
   protocol: equal_steps
@@ -365,7 +365,7 @@ trials:
     qk_mult: '6.0'
   tuned: qk_mult init 4 vs 6
   note: climbs past 6.4; level with init 4
-- id: t18
+- id: t018
   variant: per-head learnable qk_mult init 4
   rung: d512
   protocol: equal_steps

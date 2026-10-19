@@ -27,7 +27,7 @@ knobs:
 - router_bias_seed=L:E:V:b
 - --routing-dump-steps
 trials:
-- id: t01
+- id: t001
   variant: 'analysis model: top-1 of 8 x 3072 wide, sigmoid_raw'
   rung: d512
   protocol: equal_steps
@@ -47,7 +47,7 @@ trials:
     expert width: '3072'
     router_combine: sigmoid_raw
   note: I(tok;e)/H(e) 0.51-0.73, ~2.5x prev-token; specialization set by ~10% of training
-- id: t02
+- id: t002
   variant: tie expert 3 to token "1" in every layer
   rung: d512
   protocol: equal_steps
@@ -63,7 +63,7 @@ trials:
     router_embed_tie: '*:3:1 (id 24)'
   tuned: tied token digit / newline / LaTeX / control; tie vs bias
   note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
-- id: t03
+- id: t003
   variant: tie expert 3 to newline in every layer
   rung: d512
   protocol: equal_steps
@@ -79,7 +79,7 @@ trials:
     router_embed_tie: '*:3:\n (id 206)'
   tuned: tied token digit / newline / LaTeX / control; tie vs bias
   note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
-- id: t04
+- id: t004
   variant: tie expert 3 to "mathbf" in every layer
   rung: d512
   protocol: equal_steps
@@ -95,7 +95,7 @@ trials:
     router_embed_tie: '*:3:mathbf (id 3169)'
   tuned: tied token digit / newline / LaTeX / control; tie vs bias
   note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
-- id: t05
+- id: t005
   variant: tie expert 3 to " table" in every layer (control)
   rung: d512
   protocol: equal_steps
@@ -111,7 +111,7 @@ trials:
     router_embed_tie: '*:3: table (id 3708)'
   tuned: tied token digit / newline / LaTeX / control; tie vs bias
   note: tie seeds token at L0 (P=1.00) and spreads to embedding neighbors
-- id: t06
+- id: t006
   variant: fixed +4 logit bias on expert 3 for token "1"
   rung: d512
   protocol: equal_steps
@@ -127,7 +127,7 @@ trials:
     router_bias_seed: expert 3, token 1, +4
   tuned: tie vs bias
   note: weak seed; QB and router override it
-- id: t07
+- id: t007
   variant: digit '1' tie, layer 0 only
   rung: d512
   protocol: equal_steps
@@ -140,7 +140,7 @@ trials:
   - -0.0003
   - 0.0003
   note: P(e3|class) L0 0.97/0.80; deeper layers free
-- id: t08
+- id: t008
   variant: newline tie, layer 0 only
   rung: d512
   protocol: equal_steps
@@ -153,7 +153,7 @@ trials:
   - -0.0014
   - -0.0016
   note: P(e3|class) L0 1.00/1.00
-- id: t09
+- id: t009
   variant: two ties (digit, newline), every layer
   rung: d512
   protocol: equal_steps
@@ -166,7 +166,7 @@ trials:
   - 0.032
   - 0.042
   note: fixing a quarter of experts in every layer costs loss
-- id: t10
+- id: t010
   variant: top-1 of 8 study model
   rung: d512
   protocol: equal_steps
@@ -179,7 +179,7 @@ trials:
   - 0.107
   - 0.11
   note: I(token;expert)/H(expert) 0.51-0.73 by layer
-- id: t11
+- id: t011
   variant: top-1 of 32 study model
   rung: d512
   protocol: equal_steps
@@ -192,7 +192,7 @@ trials:
   - 0.067
   - 0.068
   note: I/H 0.54-0.73
-- id: t12
+- id: t012
   variant: top-2 of 64 study model
   rung: d512
   protocol: equal_steps
@@ -205,7 +205,7 @@ trials:
   - 0.047
   - 0.048
   note: I/H 0.43-0.55
-- id: t13
+- id: t013
   variant: LaTeX class-centroid tie, every layer
   rung: d512
   protocol: equal_steps
@@ -219,7 +219,7 @@ trials:
   - 0.0007
   tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
   note: P(e3|class) L0 0.80/0.96
-- id: t14
+- id: t014
   variant: LaTeX class-centroid tie, layer 0 only
   rung: d512
   protocol: equal_steps
@@ -233,7 +233,7 @@ trials:
   - -0.0029
   tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
   note: P(e3|class) L0 0.98/0.97; seed 1 from follow-up comment
-- id: t15
+- id: t015
   variant: digit class-centroid tie, every layer
   rung: d512
   protocol: equal_steps
@@ -247,7 +247,7 @@ trials:
   - -0.0024
   tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
   note: holds digit class in every layer, no loss cost
-- id: t16
+- id: t016
   variant: digit '1' tie every layer, released at step 250
   rung: d512
   protocol: equal_steps
@@ -261,7 +261,7 @@ trials:
   - 0.0
   tuned: token vs class-centroid tie, every layer vs layer 0, release step 250 / 1000
   note: seeded partition persists after release
-- id: t17
+- id: t017
   variant: digit '1' tie every layer, released at step 1000
   rung: d512
   protocol: equal_steps

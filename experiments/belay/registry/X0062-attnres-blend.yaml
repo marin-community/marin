@@ -13,7 +13,7 @@ tags:
 knobs:
 - attn_res_blend
 trials:
-- id: t01
+- id: t001
   variant: static lambda blend with mean
   rung: d512
   protocol: equal_steps
@@ -31,7 +31,7 @@ trials:
   settings:
     attn_res_blend: static
     lambda init: '1'
-- id: t02
+- id: t002
   variant: dynamic lambda blend
   rung: d512
   protocol: equal_steps

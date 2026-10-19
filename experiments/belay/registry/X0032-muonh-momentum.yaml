@@ -10,7 +10,7 @@ tags:
 - muon
 - momentum
 trials:
-- id: t01
+- id: t001
   variant: MuonH momentum 0.9
   rung: d512
   protocol: equal_steps
@@ -28,7 +28,7 @@ trials:
   settings:
     MuonH momentum: 0.9 (vs 0.95)
   tuned: 0.9 / 0.95 / 0.98
-- id: t02
+- id: t002
   variant: MuonH momentum 0.98
   rung: d512
   protocol: equal_steps

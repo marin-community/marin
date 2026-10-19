@@ -13,7 +13,7 @@ tags:
 papers:
 - arxiv: '2506.14038'
 trials:
-- id: t01
+- id: t001
   variant: SimBal weight 0.1 and 0.01
   rung: d512
   protocol: equal_steps

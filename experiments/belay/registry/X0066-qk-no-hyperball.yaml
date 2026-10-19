@@ -14,7 +14,7 @@ tags:
 knobs:
 - muon_free group
 trials:
-- id: t01
+- id: t001
   variant: all q,k free, wd 0
   rung: d512
   protocol: equal_steps
@@ -33,7 +33,7 @@ trials:
     group: muon_free on attn_q, attn_k (KDA+MLA)
     wd: '0'
   tuned: wd 0/0.001/0.003/0.01
-- id: t02
+- id: t002
   variant: all q,k free, wd 0.001
   rung: d512
   protocol: equal_steps
@@ -52,7 +52,7 @@ trials:
     group: muon_free on attn_q, attn_k (KDA+MLA)
     wd: '0.001'
   tuned: wd 0/0.001/0.003/0.01
-- id: t03
+- id: t003
   variant: all q,k free, wd 0.003
   rung: d512
   protocol: equal_steps
@@ -71,7 +71,7 @@ trials:
     group: muon_free on attn_q, attn_k (KDA+MLA)
     wd: '0.003'
   tuned: wd 0/0.001/0.003/0.01
-- id: t04
+- id: t004
   variant: all q,k free, wd 0.01
   rung: d512
   protocol: equal_steps
@@ -90,7 +90,7 @@ trials:
     group: muon_free on attn_q, attn_k (KDA+MLA)
     wd: '0.01'
   tuned: wd 0/0.001/0.003/0.01
-- id: t05
+- id: t005
   variant: MLA q,k only, wd 0
   rung: d512
   protocol: equal_steps
@@ -109,7 +109,7 @@ trials:
     group: muon_free on MLA w_q, w_uk
     wd: '0'
   note: qk_mult stays ~2.4; equivalent sharpening
-- id: t06
+- id: t006
   variant: MLA q,k only, wd 0.01
   rung: d512
   protocol: equal_steps

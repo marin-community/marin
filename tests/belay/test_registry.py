@@ -20,7 +20,7 @@ def _experiment(**overrides) -> R.Experiment:
         status=R.Status.DONE,
         trials=(
             R.Trial(
-                id="t01",
+                id="t001",
                 variant="raw",
                 rung="d512",
                 protocol="equal_steps",
@@ -68,7 +68,9 @@ def test_validate_rejects_malformed_entries(overrides):
         R.validate([_experiment(**overrides)])
 
 
-@pytest.mark.parametrize("trial_ids", [("t1",), ("T01",), ("01",), ("t00",), ("t001",), ("t01", "t01"), ("t02", "t01")])
+@pytest.mark.parametrize(
+    "trial_ids", [("t1",), ("t01",), ("T001",), ("001",), ("t1000",), ("t001", "t001"), ("t002", "t001")]
+)
 def test_validate_rejects_malformed_repeated_or_out_of_order_trial_ids(trial_ids):
     (trial,) = _experiment().trials
     trials = tuple(dataclasses.replace(trial, id=i) for i in trial_ids)
@@ -78,16 +80,11 @@ def test_validate_rejects_malformed_repeated_or_out_of_order_trial_ids(trial_ids
 
 def test_validate_accepts_gaps_in_trial_ids():
     (trial,) = _experiment().trials
-    R.validate([_experiment(trials=(trial, dataclasses.replace(trial, id="t03")))])
-
-
-def test_validate_accepts_three_digit_trial_ids():
-    (trial,) = _experiment().trials
-    R.validate([_experiment(trials=(trial, dataclasses.replace(trial, id="t100")))])
+    R.validate([_experiment(trials=(trial, dataclasses.replace(trial, id="t003")))])
 
 
 def test_load_names_the_file_and_the_missing_key(tmp_path):
-    text = R.write_experiment(_experiment(), tmp_path).read_text().replace("- id: t01\n  variant", "- variant")
+    text = R.write_experiment(_experiment(), tmp_path).read_text().replace("- id: t001\n  variant", "- variant")
     (tmp_path / "X0001-sqrt-softplus-router.yaml").write_text(text)
     with pytest.raises(ValueError, match=r"X0001-sqrt-softplus-router.yaml: Trial: missing keys \['id'\]"):
         R.load_registry(tmp_path)
@@ -125,7 +122,7 @@ def test_intake_bot_entries_are_valid_registry_files(tmp_path):
 
 def test_placeholder_bpb_scales_losses_and_signed_deltas_only():
     trial = R.Trial(
-        id="t01",
+        id="t001",
         variant="beta (0.95, 0.999), sigma 0.005",
         rung="d512",
         protocol="equal_steps",

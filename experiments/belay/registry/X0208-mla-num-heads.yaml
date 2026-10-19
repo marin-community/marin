@@ -17,7 +17,7 @@ knobs:
 - mla_num_heads=6
 - mla_head_dim
 trials:
-- id: t01
+- id: t001
   variant: 6 MLA heads on ragged
   rung: d512
   protocol: equal_steps
@@ -36,7 +36,7 @@ trials:
   step_time_change: +4.2% (190.6 ms)
   tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
   note: mean delta, both seeds
-- id: t02
+- id: t002
   variant: 6 MLA heads on ragged, 2705 steps
   rung: d512
   protocol: fixed_time
@@ -55,7 +55,7 @@ trials:
     steps: '2705'
   tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
   note: break-even at equal time
-- id: t03
+- id: t003
   variant: candidate 12 (ragged + 6 heads) at candidate 11 budget
   rung: d512
   protocol: fixed_time
@@ -71,7 +71,7 @@ trials:
     mla_num_heads: '6'
   tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
   note: wash at fixed time; different clusters
-- id: t04
+- id: t004
   variant: MLA 12 heads x 64
   rung: d512
   protocol: equal_steps
@@ -90,7 +90,7 @@ trials:
   step_time_change: 302.1 ms
   tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
   note: equal attention FLOPs; closed
-- id: t05
+- id: t005
   variant: MLA 12 x 64, qk_mult x sqrt2
   rung: d512
   protocol: equal_steps
@@ -110,7 +110,7 @@ trials:
   step_time_change: 302.8 ms
   tuned: 4 vs 6 heads; 12x64 / 8x96 at equal FLOPs
   note: equal attention FLOPs; closed
-- id: t06
+- id: t006
   variant: MLA 8 x 96
   rung: d512
   protocol: equal_steps

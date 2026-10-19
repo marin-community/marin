@@ -15,7 +15,7 @@ papers:
 knobs:
 - moe_hash_layers=0
 trials:
-- id: t01
+- id: t001
   variant: hash routing on layer 0
   rung: d512
   protocol: equal_steps

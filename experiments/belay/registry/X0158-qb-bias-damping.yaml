@@ -13,7 +13,7 @@ tags:
 papers:
 - title: StableMoE
 trials:
-- id: t01
+- id: t001
   variant: damped QB bias gamma 0.5
   rung: d512
   protocol: equal_steps
@@ -28,7 +28,7 @@ trials:
     gamma: '0.5'
   tuned: gamma 0.5 / 0.3
   note: seed mean
-- id: t02
+- id: t002
   variant: damped QB bias gamma 0.3
   rung: d512
   protocol: equal_steps

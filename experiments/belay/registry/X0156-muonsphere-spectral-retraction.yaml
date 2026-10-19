@@ -14,7 +14,7 @@ tags:
 papers:
 - arxiv: '2601.08393'
 trials:
-- id: t01
+- id: t001
   variant: MuonH LR x1
   rung: d512
   protocol: equal_steps
@@ -29,7 +29,7 @@ trials:
     muonh LR: x1
   tuned: LR x1/0.5/0.25
   note: 2-seed mean
-- id: t02
+- id: t002
   variant: MuonH LR x0.5
   rung: d512
   protocol: equal_steps
@@ -44,7 +44,7 @@ trials:
     muonh LR: x0.5
   tuned: LR x1/0.5/0.25
   note: 2-seed mean
-- id: t03
+- id: t003
   variant: MuonH LR x0.25
   rung: d512
   protocol: equal_steps
@@ -59,7 +59,7 @@ trials:
     muonh LR: x0.25
   tuned: LR x1/0.5/0.25
   note: 2-seed mean
-- id: t04
+- id: t004
   variant: radius = init sigma1
   rung: d512
   protocol: equal_steps
@@ -74,7 +74,7 @@ trials:
   settings:
     radius: init sigma1
   tuned: radius init sigma1 / c 2
-- id: t05
+- id: t005
   variant: c = 2
   rung: d512
   protocol: equal_steps

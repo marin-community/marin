@@ -11,7 +11,7 @@ tags:
 - relative-position
 - rel_extent
 trials:
-- id: t01
+- id: t001
   variant: rel_extent 512
   rung: d512
   protocol: equal_steps
@@ -26,7 +26,7 @@ trials:
     rel_extent: '512'
   tuned: extent 512 / 2048, rel_dim 32
   note: seed mean
-- id: t02
+- id: t002
   variant: rel_extent 2048
   rung: d512
   protocol: equal_steps
@@ -41,7 +41,7 @@ trials:
     rel_extent: '2048'
   tuned: extent 512 / 2048, rel_dim 32
   note: seed mean
-- id: t03
+- id: t003
   variant: rel_dim 32
   rung: d512
   protocol: equal_steps

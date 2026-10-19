@@ -14,7 +14,7 @@ papers:
 - arxiv: '2610.13630'
   title: Multi-Stream Attention Residuals
 trials:
-- id: t01
+- id: t001
   variant: m=4, kernels 4/8/12, no mixer (plain sum)
   rung: d512
   protocol: equal_steps
@@ -38,7 +38,7 @@ trials:
   commit: 0e9cdc7460
   step_time_change: +18% (0.205 vs 0.174 s/step, 40-step probe)
   note: mixer arms first diverged from an XLA bf16 bitcast miscompile of alpha/b grads; rerun as m4b/m2b at 912bd13876
-- id: t02
+- id: t002
   variant: m=4, kernels 4/8/12, sigmoid mixer
   rung: d512
   protocol: equal_steps
@@ -59,7 +59,7 @@ trials:
   settings:
     attn_res_streams: '4'
   commit: 912bd13876
-- id: t03
+- id: t003
   variant: m=2, kernel 4, sigmoid mixer
   rung: d512
   protocol: equal_steps
@@ -81,7 +81,7 @@ trials:
     attn_res_streams: '2'
     attn_res_stream_kernels: '4'
   commit: 912bd13876
-- id: t04
+- id: t004
   variant: m=2, kernel 4, no mixer, all sources
   rung: d512
   protocol: equal_steps
@@ -104,7 +104,7 @@ trials:
     attn_res_stream_kernels: '4'
     attn_res_stream_mixer: 'false'
   commit: 23bd387bcc
-- id: t05
+- id: t005
   variant: m=2 no mixer, stream reads only the conv'd embedding
   rung: d512
   protocol: equal_steps
@@ -128,7 +128,7 @@ trials:
     attn_res_stream_mixer: 'false'
     attn_res_stream_sources: embed
   commit: 23bd387bcc
-- id: t06
+- id: t006
   variant: m=2 no mixer, stream reads all sources except the embedding
   rung: d512
   protocol: equal_steps
@@ -152,7 +152,7 @@ trials:
     attn_res_stream_mixer: 'false'
     attn_res_stream_sources: no_embed
   commit: 23bd387bcc
-- id: t07
+- id: t007
   variant: m=2 no mixer, scalar taps shared across channels
   rung: d512
   protocol: equal_steps
@@ -176,7 +176,7 @@ trials:
     attn_res_stream_mixer: 'false'
     attn_res_stream_scalar_taps: 'true'
   commit: 23bd387bcc
-- id: t08
+- id: t008
   variant: no MSAR, write-side conv on the embedding source (e + conv(e))
   rung: d512
   protocol: equal_steps
@@ -197,7 +197,7 @@ trials:
   settings:
     embed_sconv: 'true'
   commit: 23bd387bcc
-- id: t09
+- id: t009
   variant: no MSAR, write-side SConv kernel 8 (also KDA q/k/v)
   rung: d512
   protocol: equal_steps
@@ -218,7 +218,7 @@ trials:
   settings:
     sconv_kernel: '8'
   commit: 23bd387bcc
-- id: t10
+- id: t010
   variant: m2embed + learned per-gate scale on conv(e)
   rung: d512
   protocol: equal_steps
@@ -243,7 +243,7 @@ trials:
     attn_res_stream_sources: embed
     attn_res_embed_scale: 'true'
   commit: 00b0b9d102
-- id: t11
+- id: t011
   variant: embedding out of layer-gate softmax, added at weight 1
   rung: d512
   protocol: equal_steps
@@ -264,7 +264,7 @@ trials:
   settings:
     attn_res_embed_out: 'true'
   commit: 00b0b9d102
-- id: t12
+- id: t012
   variant: embedding out of softmax + learned per-gate scale
   rung: d512
   protocol: equal_steps
@@ -286,7 +286,7 @@ trials:
     attn_res_embed_out: 'true'
     attn_res_embed_scale: 'true'
   commit: 00b0b9d102
-- id: t13
+- id: t013
   variant: MLP-output SConv dropped
   rung: d512
   protocol: equal_steps
@@ -307,7 +307,7 @@ trials:
   settings:
     sconv_sites: attn
   commit: 00b0b9d102
-- id: t14
+- id: t014
   variant: MLP-output SConv moved to MLP input
   rung: d512
   protocol: equal_steps
@@ -328,7 +328,7 @@ trials:
   settings:
     sconv_sites: attn,mlp_in
   commit: 00b0b9d102
-- id: t15
+- id: t015
   variant: MLP-output SConv + routed latent-output conv
   rung: d512
   protocol: equal_steps
@@ -349,7 +349,7 @@ trials:
   settings:
     sconv_sites: attn,mlp,latent_out
   commit: 33aa1753a8
-- id: t16
+- id: t016
   variant: routed latent-output conv instead of MLP-output conv
   rung: d512
   protocol: equal_steps
@@ -370,7 +370,7 @@ trials:
   settings:
     sconv_sites: attn,latent_out
   commit: 33aa1753a8
-- id: t17
+- id: t017
   variant: routed latent-output + shared-output convs
   rung: d512
   protocol: equal_steps
@@ -391,7 +391,7 @@ trials:
   settings:
     sconv_sites: attn,latent_out,shared_out
   commit: 33aa1753a8
-- id: t18
+- id: t018
   variant: routed latent-input conv instead
   rung: d512
   protocol: equal_steps
@@ -412,7 +412,7 @@ trials:
   settings:
     sconv_sites: attn,latent_in
   commit: 33aa1753a8
-- id: t19
+- id: t019
   variant: shared-input conv instead
   rung: d512
   protocol: equal_steps
@@ -431,7 +431,7 @@ trials:
     sconv_sites: attn,shared_in
   commit: 33aa1753a8
   note: seed 1 stopped at step 2758 without a final eval
-- id: t20
+- id: t020
   variant: conv(e) at layer 0 gates only
   rung: d512
   protocol: equal_steps
@@ -456,7 +456,7 @@ trials:
     attn_res_stream_sources: embed
     attn_res_stream_gates: 0a,0m
   commit: fb1caabf39
-- id: t21
+- id: t021
   variant: conv(e) at layer 0 gates + layer 3 MLP gate
   rung: d512
   protocol: equal_steps

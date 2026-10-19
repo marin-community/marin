@@ -17,7 +17,7 @@ details:
 knobs:
 - --z-loss-weight
 trials:
-- id: t01
+- id: t001
   variant: z-loss weight 0 (vs 1e-4)
   rung: d512
   protocol: equal_steps
@@ -35,7 +35,7 @@ trials:
   settings:
     z_loss_weight: '0'
   tuned: 0 / 1e-4 / 1e-3
-- id: t02
+- id: t002
   variant: z-loss weight 1e-3
   rung: d512
   protocol: equal_steps
@@ -53,7 +53,7 @@ trials:
   settings:
     z_loss_weight: 1e-3
   tuned: 0 / 1e-4 / 1e-3
-- id: t03
+- id: t003
   variant: z-loss 0 on qk 2.5 base
   rung: d512
   protocol: equal_steps
@@ -70,7 +70,7 @@ trials:
   - lc1-b07-z0
   settings:
     z_loss_weight: '0'
-- id: t04
+- id: t004
   variant: z-loss 3e-4 with cap 10
   rung: d512
   protocol: equal_steps
@@ -88,7 +88,7 @@ trials:
   settings:
     z-loss: 3e-4
   tuned: z-loss 3e-5/1e-4/3e-4
-- id: t05
+- id: t005
   variant: z-loss 3e-5 with cap 10
   rung: d512
   protocol: equal_steps
@@ -106,7 +106,7 @@ trials:
   settings:
     z-loss: 3e-5
   tuned: z-loss 3e-5/1e-4/3e-4
-- id: t06
+- id: t006
   variant: z-loss 0 with soft-cap (zl0)
   rung: d512
   protocol: equal_steps
@@ -124,7 +124,7 @@ trials:
   settings:
     z-loss: '0'
   tuned: z-loss 1e-4 vs 0, at 1x and 4x steps
-- id: t07
+- id: t007
   variant: z-loss 0 at 4x overtrain (ot4-zl0)
   rung: d512
   protocol: unknown

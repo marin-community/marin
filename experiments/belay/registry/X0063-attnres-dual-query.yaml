@@ -12,7 +12,7 @@ tags:
 knobs:
 - attn_res_dual_query
 trials:
-- id: t01
+- id: t001
   variant: two queries, sigma 0.005
   rung: d512
   protocol: equal_steps
@@ -31,7 +31,7 @@ trials:
     attn_res_dual_query: 'true'
     q_b init sigma: '0.005'
   tuned: sigma 0.005/0.02
-- id: t02
+- id: t002
   variant: two queries, sigma 0.02
   rung: d512
   protocol: equal_steps

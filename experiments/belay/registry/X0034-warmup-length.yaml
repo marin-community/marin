@@ -10,7 +10,7 @@ tags:
 - warmup
 - schedule
 trials:
-- id: t01
+- id: t001
   variant: warmup 5% (vs 1%)
   rung: d512
   protocol: equal_steps

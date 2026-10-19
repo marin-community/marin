@@ -22,7 +22,7 @@ knobs:
 - latent_out_dim
 - latent_dim
 trials:
-- id: t01
+- id: t001
   variant: read 128 / write 256
   rung: d512
   protocol: equal_steps
@@ -44,7 +44,7 @@ trials:
     latent_dim: '128'
     write: '256'
   tuned: read 32/64/128/256/512
-- id: t02
+- id: t002
   variant: read 64 / write 256
   rung: d512
   protocol: equal_steps
@@ -66,7 +66,7 @@ trials:
     latent_dim: '64'
     write: '256'
   tuned: read 32/64/128/256/512
-- id: t03
+- id: t003
   variant: read 32 / write 256
   rung: d512
   protocol: equal_steps
@@ -88,7 +88,7 @@ trials:
     latent_dim: '32'
     write: '256'
   tuned: read 32/64/128/256/512
-- id: t04
+- id: t004
   variant: no shared, read 256 / write 512
   rung: d512
   protocol: equal_steps
@@ -110,7 +110,7 @@ trials:
     latent_in: '256'
     latent_out: '512'
     shared_expert_intermediate_dim: '0'
-- id: t05
+- id: t005
   variant: no shared, read 512 / write 256
   rung: d512
   protocol: equal_steps
@@ -132,7 +132,7 @@ trials:
     latent_in: '512'
     latent_out: '256'
     shared_expert_intermediate_dim: '0'
-- id: t06
+- id: t006
   variant: no shared, read 128 / write 256
   rung: d512
   protocol: equal_steps
@@ -153,7 +153,7 @@ trials:
     latent_dim: '128'
     shared_expert_intermediate_dim: '0'
   tuned: read 64/128
-- id: t07
+- id: t007
   variant: no shared, read 64 / write 256
   rung: d512
   protocol: equal_steps
@@ -176,7 +176,7 @@ trials:
     shared_expert_intermediate_dim: '0'
   tuned: read 64/128
   derived: true
-- id: t08
+- id: t008
   variant: read 192 / write 320 (fixed total 512)
   rung: d512
   protocol: equal_steps
@@ -198,7 +198,7 @@ trials:
     latent_in: '192'
     latent_out: '320'
   tuned: read/write split at total 512
-- id: t09
+- id: t009
   variant: read 128 / write 384 (fixed total 512)
   rung: d512
   protocol: equal_steps
@@ -220,7 +220,7 @@ trials:
     latent_in: '128'
     latent_out: '384'
   tuned: read/write split at total 512
-- id: t10
+- id: t010
   variant: read 320 / write 192 (fixed total 512)
   rung: d512
   protocol: equal_steps
@@ -242,7 +242,7 @@ trials:
     latent_in: '320'
     latent_out: '192'
   tuned: read/write split at total 512
-- id: t11
+- id: t011
   variant: read 256 / write 512 (no w_latent_up)
   rung: d512
   protocol: equal_steps
@@ -260,7 +260,7 @@ trials:
   step_time_change: -11% ex/s
   tuned: 256/512 vs 512/256 at equal expert FLOPs
   note: break-even at fixed time; doubles combine bytes
-- id: t12
+- id: t012
   variant: read 512 / write 256 (no w_latent_down)
   rung: d512
   protocol: equal_steps
@@ -277,7 +277,7 @@ trials:
     latent_out: '256'
   step_time_change: -9% ex/s
   tuned: 256/512 vs 512/256 at equal expert FLOPs
-- id: t13
+- id: t013
   variant: read 320 / write 448 at d768
   rung: d768
   protocol: equal_steps
@@ -298,7 +298,7 @@ trials:
     bigram table: rule A
   step_time_change: same ex/s
   note: same-sign small gain at d768; flat at d512 (b107)
-- id: t14
+- id: t014
   variant: read 320 / write 448 at d768, data-matched
   rung: d768
   protocol: data_matched
@@ -318,7 +318,7 @@ trials:
     write latent: '448'
   tuned: 320/448, 256/512 vs 384/384
   note: batch 124's -0.0026 at 7325 steps did not replicate
-- id: t15
+- id: t015
   variant: read 256 / write 512 at d768, data-matched
   rung: d768
   protocol: data_matched

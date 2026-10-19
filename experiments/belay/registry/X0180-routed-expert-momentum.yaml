@@ -11,7 +11,7 @@ tags:
 - momentum
 - routed-experts
 trials:
-- id: t01
+- id: t001
   variant: routed-expert MuonH momentum 0.98 (rmom98)
   rung: d512
   protocol: equal_steps
@@ -28,7 +28,7 @@ trials:
     dense momentum: '0.95'
   step_time_change: 186 ms
   tuned: routed momentum 0.90 / 0.95 (base) / 0.98
-- id: t02
+- id: t002
   variant: routed-expert MuonH momentum 0.90
   rung: d512
   protocol: equal_steps

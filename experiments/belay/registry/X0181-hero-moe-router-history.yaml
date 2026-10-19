@@ -14,7 +14,7 @@ papers:
 - arxiv: '2609.32581'
   title: HERO-MoE
 trials:
-- id: t01
+- id: t001
   variant: residual router logits from earlier layers' detached routing
   rung: d512
   protocol: equal_steps

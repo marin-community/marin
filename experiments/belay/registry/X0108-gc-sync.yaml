@@ -13,7 +13,7 @@ tags:
 details:
 - GC_EVERY_STEPS = 50
 trials:
-- id: t01
+- id: t001
   variant: gc.freeze + disable + synchronized collect every 50 steps
   rung: d512
   protocol: unknown
@@ -28,7 +28,7 @@ trials:
     GC_EVERY_STEPS: '50'
   step_time_change: -24% mean step
   note: same math; mean step 213.8 -> 161.7 ms; median unchanged
-- id: t02
+- id: t002
   variant: gc.freeze only
   rung: d512
   protocol: unknown

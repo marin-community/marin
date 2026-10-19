@@ -14,7 +14,7 @@ details:
 knobs:
 - router_lr_mult=0.5
 trials:
-- id: t01
+- id: t001
   variant: router Adam LR x0.1
   rung: d512
   protocol: equal_steps
@@ -29,7 +29,7 @@ trials:
     router_lr_mult: '0.1'
   tuned: x0.1/0.25/0.5/1/2
   note: 2-seed mean
-- id: t02
+- id: t002
   variant: router Adam LR x0.25
   rung: d512
   protocol: equal_steps
@@ -44,7 +44,7 @@ trials:
     router_lr_mult: '0.25'
   tuned: x0.1/0.25/0.5/1/2
   note: 2-seed mean
-- id: t03
+- id: t003
   variant: router Adam LR x0.5
   rung: d512
   protocol: equal_steps
@@ -60,7 +60,7 @@ trials:
     router_lr_mult: '0.5'
   tuned: x0.5 / x2
   note: lead; bracketing x0.25 / x0.1
-- id: t04
+- id: t004
   variant: router Adam LR x2
   rung: d512
   protocol: equal_steps

@@ -22,7 +22,7 @@ knobs:
 - adam_ademamix_alpha=5.0
 - adam_ademamix_beta3=0.98
 trials:
-- id: t01
+- id: t001
   variant: alpha 5, beta3 0.999, paper warmup
   rung: d512
   protocol: equal_steps
@@ -46,7 +46,7 @@ trials:
     warmup: paper schedule
   tuned: beta3 0.95-0.999, alpha 5/8, warmup
   note: wins early (-0.036 at step 500), fades by end
-- id: t02
+- id: t002
   variant: alpha 5 by 10%, cooldown over last 30%
   rung: d512
   protocol: equal_steps
@@ -70,7 +70,7 @@ trials:
     cooldown: last 30% to 0
   tuned: beta3 0.95-0.999, alpha 5/8, warmup
   note: fast warmup diverges; paper's slow warmup is load-bearing
-- id: t03
+- id: t003
   variant: alpha 5, beta3 0.99
   rung: d512
   protocol: equal_steps
@@ -93,7 +93,7 @@ trials:
     adam_ademamix_beta3: '0.99'
     warmup: paper schedule
   tuned: beta3 0.95 / 0.98 / 0.99 / 0.995 / 0.999
-- id: t04
+- id: t004
   variant: alpha 5, beta3 0.98
   rung: d512
   protocol: equal_steps
@@ -117,7 +117,7 @@ trials:
     warmup: paper schedule
   tuned: beta3 0.95 / 0.98 / 0.99 / 0.995 / 0.999
   note: plateau 0.95-0.99; step time unchanged
-- id: t05
+- id: t005
   variant: alpha 5, beta3 0.995
   rung: d512
   protocol: equal_steps
@@ -140,7 +140,7 @@ trials:
     adam_ademamix_beta3: '0.995'
     warmup: paper schedule
   tuned: beta3 0.95 / 0.98 / 0.99 / 0.995 / 0.999
-- id: t06
+- id: t006
   variant: alpha 5, beta3 0.95
   rung: d512
   protocol: equal_steps
@@ -163,7 +163,7 @@ trials:
     adam_ademamix_beta3: '0.95'
     warmup: paper schedule
   tuned: beta3 0.95 / 0.98 / 0.99 / 0.995 / 0.999
-- id: t07
+- id: t007
   variant: alpha 8, beta3 0.98
   rung: d512
   protocol: equal_steps
@@ -186,7 +186,7 @@ trials:
     adam_ademamix_beta3: '0.98'
   tuned: alpha 5 vs 8
   note: alpha 5 stays
-- id: t08
+- id: t008
   variant: d768 remove AdEMAMix
   rung: d768
   protocol: equal_steps
@@ -205,7 +205,7 @@ trials:
     AdEMAMix: 'off'
   tuned: leave-one-out over candidate 6 pieces
   note: leave-one-out over candidate 6, sign flipped to 'adding the piece' (negative = piece helps)
-- id: t09
+- id: t009
   variant: d768 beta3 scaled to steps (0.992)
   rung: d768
   protocol: equal_steps
@@ -224,7 +224,7 @@ trials:
     adam_ademamix_beta3: '0.992'
   tuned: beta3 0.98 vs 0.992 at d768
   note: horizon scaled to step count
-- id: t10
+- id: t010
   variant: AdEMAMix beta3 0.98 -> 0.992 at d768
   rung: d768
   protocol: data_matched
@@ -239,7 +239,7 @@ trials:
   settings:
     adam_ademamix_beta3: '0.992'
   note: slightly worse, keep 0.98
-- id: t11
+- id: t011
   variant: AdEMAMix off at d768 (alpha 5 -> 0)
   rung: d768
   protocol: data_matched

@@ -16,7 +16,7 @@ papers:
 knobs:
 - sublayer_out_norm
 trials:
-- id: t01
+- id: t001
   variant: sublayer output RMSNorm with gain
   rung: d512
   protocol: equal_steps

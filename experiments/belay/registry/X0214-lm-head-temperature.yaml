@@ -12,7 +12,7 @@ tags:
 details:
 - per-token 2*sigmoid(h w) on lm_head input
 trials:
-- id: t01
+- id: t001
   variant: per-token 2*sigmoid temperature
   rung: d512
   protocol: equal_steps

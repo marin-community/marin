@@ -22,7 +22,7 @@ details:
 knobs:
 - moe_ragged_chunks
 trials:
-- id: t01
+- id: t001
   variant: ragged all-to-all transport, one MoE layer microbenchmark
   rung: d512
   protocol: unknown
@@ -37,7 +37,7 @@ trials:
   step_time_change: +34% (MoE layer)
   tuned: routed width 1x-32x
   note: device kernel 11.64 ms (+34%); backward uses generic Triton ragged_dot
-- id: t02
+- id: t002
   variant: ragged one-shot + fused ReLU2 kernel on candidate 8
   rung: d512
   protocol: equal_steps
@@ -62,7 +62,7 @@ trials:
     shared width: 512 (confound)
   step_time_change: -6.5% ex/s
   note: '0 drops vs 1.75-2.44%; confound: shared at 512 not 768'
-- id: t03
+- id: t003
   variant: fused ragged ReLU2 kernel, swept tiles (microbenchmark)
   rung: d512
   protocol: unknown
@@ -71,7 +71,7 @@ trials:
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-5864990387
   baseline: haliax ragged_dot + ReLU2 2.690 ms
   note: 1.592 ms fwd+bwd (-41%); full layer 8.81 vs 8.61 ms pooled-wave
-- id: t04
+- id: t004
   variant: ragged one-shot + fused ReLU2, capacity 1.15 (true candidate 8)
   rung: d512
   protocol: equal_steps
@@ -96,7 +96,7 @@ trials:
   step_time_change: -10.3% throughput
   tuned: capacity 1.15 vs 1.05
   note: dropless worth ~-0.0035/step; net loss at fixed time
-- id: t05
+- id: t005
   variant: ragged one-shot + fused ReLU2, capacity 1.05
   rung: d512
   protocol: equal_steps
@@ -121,7 +121,7 @@ trials:
   step_time_change: -5.6% throughput
   tuned: capacity 1.15 vs 1.05
   note: drops 0.04-0.05%; net ~+0.006 at fixed time, no win yet
-- id: t06
+- id: t006
   variant: ragged one-shot cap 1.05, single process (profile)
   rung: d512
   protocol: unknown
@@ -134,7 +134,7 @@ trials:
     driver: single-process
   step_time_change: +4.2% median (194.3 vs 186.4 ms)
   note: +5.6 ms/step ragged GPU time; most slowdown from single-process host bursts
-- id: t07
+- id: t007
   variant: ragged capacity 1.05 (pre-port)
   rung: d512
   protocol: equal_steps
@@ -153,7 +153,7 @@ trials:
     drop renorm: 'off'
   step_time_change: +9.7% (193.6 vs 176.5 ms)
   tuned: capacity 1.05/1.15; transport; chunks 1/2/4
-- id: t08
+- id: t008
   variant: ragged capacity 1.15 (pre-port)
   rung: d512
   protocol: equal_steps
@@ -172,7 +172,7 @@ trials:
     drop renorm: 'off'
   step_time_change: +15% (203.1 ms)
   tuned: capacity 1.05/1.15; transport; chunks 1/2/4
-- id: t09
+- id: t009
   variant: 'ragged with #9708 port (ragp105)'
   rung: d512
   protocol: equal_steps
@@ -192,7 +192,7 @@ trials:
   step_time_change: +2.6% (182.7 vs 178.1 ms)
   tuned: capacity 1.05/1.15; transport; chunks 1/2/4
   note: mean 2.9628; gains 0.003 per step
-- id: t10
+- id: t010
   variant: 'speed probe: collective overlap limit 4'
   rung: d512
   protocol: unknown
@@ -206,7 +206,7 @@ trials:
   step_time_change: 184.1 vs 184.9 ms
   tuned: capacity 1.05/1.15; transport; chunks 1/2/4
   note: none of the cheap ragged settings help
-- id: t11
+- id: t011
   variant: 'speed probe: device transport'
   rung: d512
   protocol: unknown
@@ -220,7 +220,7 @@ trials:
   step_time_change: 200.7 vs 189.1 ms
   tuned: capacity 1.05/1.15; transport; chunks 1/2/4
   note: none of the cheap ragged settings help
-- id: t12
+- id: t012
   variant: 'speed probe: 1 expert chunk'
   rung: d512
   protocol: unknown
@@ -234,7 +234,7 @@ trials:
   step_time_change: 194.6 vs 189.1 ms
   tuned: capacity 1.05/1.15; transport; chunks 1/2/4
   note: none of the cheap ragged settings help
-- id: t13
+- id: t013
   variant: 'speed probe: 4 expert chunks'
   rung: d512
   protocol: unknown

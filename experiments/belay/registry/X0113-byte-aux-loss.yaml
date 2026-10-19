@@ -15,7 +15,7 @@ knobs:
 - byte_aux_weight
 - byte_aux_mid_layer
 trials:
-- id: t01
+- id: t001
   variant: 8 bytes, final hidden, weight 0.1 to 0 at 50%
   rung: d512
   protocol: equal_steps
@@ -35,7 +35,7 @@ trials:
     byte_aux_weight: '0.1'
     off at: 50%
   tuned: weight 0.1 vs 0.3; final vs mid; off at 50% vs 20%
-- id: t02
+- id: t002
   variant: 8 bytes, final hidden, weight 0.3 to 0 at 50%
   rung: d512
   protocol: equal_steps
@@ -55,7 +55,7 @@ trials:
     byte_aux_weight: '0.3'
     off at: 50%
   tuned: weight 0.1 vs 0.3; final vs mid; off at 50% vs 20%
-- id: t03
+- id: t003
   variant: mid-network stream, weight 0.1
   rung: d512
   protocol: equal_steps
@@ -74,7 +74,7 @@ trials:
     byte_aux_mid_layer: 'true'
     byte_aux_weight: '0.1'
   tuned: weight 0.1 vs 0.3; final vs mid; off at 50% vs 20%
-- id: t04
+- id: t004
   variant: mid-network stream, weight 0.3
   rung: d512
   protocol: equal_steps
@@ -93,7 +93,7 @@ trials:
     byte_aux_mid_layer: 'true'
     byte_aux_weight: '0.3'
   tuned: weight 0.1 vs 0.3; final vs mid; off at 50% vs 20%
-- id: t05
+- id: t005
   variant: final hidden, weight 0.1 to 0 by 20%
   rung: d512
   protocol: equal_steps

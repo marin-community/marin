@@ -18,7 +18,7 @@ knobs:
 - num_shared_experts
 - shared_expert_intermediate_dim
 trials:
-- id: t01
+- id: t001
   variant: 1 shared + top-10 routed (FLOP-neutral)
   rung: d512
   protocol: fixed_time
@@ -38,7 +38,7 @@ trials:
     top-k: '10'
   step_time_change: -8% ex/s
   note: more EP assignments make it slower
-- id: t02
+- id: t002
   variant: remove shared expert
   rung: d512
   protocol: equal_steps
@@ -59,7 +59,7 @@ trials:
   settings:
     shared_expert_intermediate_dim: '0'
   note: mean +0.011 (deltas from reported losses)
-- id: t03
+- id: t003
   variant: top-4, shared expert 768 wide
   rung: d512
   protocol: fixed_time
@@ -81,7 +81,7 @@ trials:
     shared_expert_intermediate_dim: '768'
   step_time_change: +4% (155 ms)
   note: mean -0.0060; ~0 at fixed time
-- id: t04
+- id: t004
   variant: routed 448 x 8, shared 0
   rung: d512
   protocol: equal_steps
@@ -105,7 +105,7 @@ trials:
   step_time_change: 174 vs 177 ms
   tuned: routed 384-768 x shared 0/384
   note: delta computed per seed; shared expert worth more than its FLOPs at d512
-- id: t05
+- id: t005
   variant: routed 512 x 8, shared 0
   rung: d512
   protocol: equal_steps
@@ -128,7 +128,7 @@ trials:
     shared_expert_intermediate_dim: '0'
   step_time_change: 175 ms
   tuned: routed 384-768 x shared 0/384
-- id: t06
+- id: t006
   variant: routed 640 x 8, shared 0
   rung: d512
   protocol: equal_steps
@@ -151,7 +151,7 @@ trials:
     shared_expert_intermediate_dim: '0'
   step_time_change: 180 ms
   tuned: routed 384-768 x shared 0/384
-- id: t07
+- id: t007
   variant: routed 768 x 8, shared 0
   rung: d512
   protocol: equal_steps
@@ -174,7 +174,7 @@ trials:
     shared_expert_intermediate_dim: '0'
   step_time_change: 184 ms
   tuned: routed 384-768 x shared 0/384
-- id: t08
+- id: t008
   variant: routed 1024, shared 96
   rung: d512
   protocol: equal_steps
@@ -195,7 +195,7 @@ trials:
   step_time_change: 198 vs 177 ms
   tuned: shared 192/96/0 at routed 1024
   note: mean -0.0308; +0.002 vs shared 192
-- id: t09
+- id: t009
   variant: routed 1024, no shared
   rung: d512
   protocol: equal_steps
@@ -216,7 +216,7 @@ trials:
   step_time_change: 193 vs 177 ms
   tuned: shared 192/96/0 at routed 1024
   note: mean -0.0275; removing shared costs +0.0055
-- id: t10
+- id: t010
   variant: 1 shared x 768 (same total width), 512 experts
   rung: d512
   protocol: equal_steps
@@ -239,7 +239,7 @@ trials:
     shared_expert_intermediate_dim: '768'
   tuned: 2x384 vs 1x768 vs 1x384
   note: matches 2 x 384 exactly
-- id: t11
+- id: t011
   variant: 1 shared x 384 (half shared compute), 512 experts
   rung: d512
   protocol: equal_steps

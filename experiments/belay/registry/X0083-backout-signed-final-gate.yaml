@@ -13,7 +13,7 @@ tags:
 knobs:
 - attn_res_final_signed
 trials:
-- id: t01
+- id: t001
   variant: signed zero-init coefficients on final gate
   rung: d512
   protocol: equal_steps
@@ -33,7 +33,7 @@ trials:
   - lc1-b44-backout-s1
   settings:
     attn_res_final_signed: 'true'
-- id: t02
+- id: t002
   variant: key offset + backout
   rung: d512
   protocol: equal_steps

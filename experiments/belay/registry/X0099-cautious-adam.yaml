@@ -16,7 +16,7 @@ papers:
 knobs:
 - adam_cautious
 trials:
-- id: t01
+- id: t001
   variant: all plain-Adam groups
   rung: d512
   protocol: equal_steps

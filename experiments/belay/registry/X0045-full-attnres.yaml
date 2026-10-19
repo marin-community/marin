@@ -12,7 +12,7 @@ tags:
 knobs:
 - attn_res_full=true
 trials:
-- id: t01
+- id: t001
   variant: full AttnRes, every sublayer a source
   rung: d512
   protocol: equal_steps
@@ -31,7 +31,7 @@ trials:
     attn_res_full: 'true'
   step_time_change: -3% ex/s
   note: block AttnRes stays
-- id: t02
+- id: t002
   variant: full AttnRes on z-loss-kept bundle, equal steps
   rung: d512
   protocol: equal_steps
@@ -50,7 +50,7 @@ trials:
     attn_res_full: 'true'
   step_time_change: -3% ex/s
   note: luck; fair-step reruns show no win
-- id: t03
+- id: t003
   variant: full AttnRes at fair fixed-time steps
   rung: d512
   protocol: fixed_time

@@ -11,7 +11,7 @@ tags:
 - per-head
 - kimi-k3
 trials:
-- id: t01
+- id: t001
   variant: per-head Muon on attention projections (K3)
   rung: d512
   protocol: equal_steps

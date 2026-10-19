@@ -12,7 +12,7 @@ tags:
 - attnres
 - tanh
 trials:
-- id: t01
+- id: t001
   variant: router soft-cap 5
   rung: d512
   protocol: equal_steps
@@ -26,7 +26,7 @@ trials:
   settings:
     router cap: '5'
   tuned: router cap 5/10, AttnRes cap 5/10
-- id: t02
+- id: t002
   variant: router soft-cap 10
   rung: d512
   protocol: equal_steps
@@ -40,7 +40,7 @@ trials:
   settings:
     router cap: '10'
   tuned: router cap 5/10, AttnRes cap 5/10
-- id: t03
+- id: t003
   variant: AttnRes logit soft-cap 5
   rung: d512
   protocol: equal_steps
@@ -54,7 +54,7 @@ trials:
   settings:
     attnres cap: '5'
   tuned: router cap 5/10, AttnRes cap 5/10
-- id: t04
+- id: t004
   variant: AttnRes logit soft-cap 10
   rung: d512
   protocol: equal_steps

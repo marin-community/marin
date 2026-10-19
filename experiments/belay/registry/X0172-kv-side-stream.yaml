@@ -13,7 +13,7 @@ tags:
 - identity
 - residual-stream
 trials:
-- id: t01
+- id: t001
   variant: w=128 (1 head)
   rung: d512
   protocol: equal_steps
@@ -36,7 +36,7 @@ trials:
     side MLP: ReLU2 4w
   step_time_change: +8% median step
   tuned: w 128 / 256
-- id: t02
+- id: t002
   variant: w=256 (2 heads)
   rung: d512
   protocol: equal_steps

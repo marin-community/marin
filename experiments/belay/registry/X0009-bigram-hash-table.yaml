@@ -41,7 +41,7 @@ knobs:
 - --embed2-rows-frac 0.408
 - --embed2-rows-frac
 trials:
-- id: t01
+- id: t001
   variant: bigram-hashed 2nd table, 16k rows
   rung: d512
   protocol: equal_steps
@@ -60,7 +60,7 @@ trials:
     hash: (prev, cur) bigram
     rows: 16k
   note: hashing loses unigram identity
-- id: t02
+- id: t002
   variant: 131k rows, per-layer input, lambda 0.1
   rung: d512
   protocol: equal_steps
@@ -81,7 +81,7 @@ trials:
     lambda init: '0.1'
   step_time_change: 760 ex/s
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t03
+- id: t003
   variant: 524k rows, per-layer input, lambda 0.1
   rung: d512
   protocol: equal_steps
@@ -102,7 +102,7 @@ trials:
     lambda init: '0.1'
   step_time_change: 726 ex/s
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t04
+- id: t004
   variant: 131k, per-layer input, lambda init 0
   rung: d512
   protocol: equal_steps
@@ -122,7 +122,7 @@ trials:
     second_embed_mode: input
     lambda init: '0'
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t05
+- id: t005
   variant: 131k, per-layer input, lambda init 0.3
   rung: d512
   protocol: equal_steps
@@ -142,7 +142,7 @@ trials:
     second_embed_mode: input
     lambda init: '0.3'
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t06
+- id: t006
   variant: 16k rows, per-layer input
   rung: d512
   protocol: equal_steps
@@ -161,7 +161,7 @@ trials:
     embed2_rows: '16384'
     second_embed_mode: input
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t07
+- id: t007
   variant: 524k rows as AttnRes source
   rung: d512
   protocol: equal_steps
@@ -182,7 +182,7 @@ trials:
   step_time_change: 743 ex/s
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
   note: mid-run -0.025; costs ~6% ex/s (743)
-- id: t08
+- id: t008
   variant: 524k as source, seed 1
   rung: d512
   protocol: equal_steps
@@ -202,7 +202,7 @@ trials:
     integration: AttnRes source
     seed: '1'
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t09
+- id: t009
   variant: 1M rows as source
   rung: d512
   protocol: equal_steps
@@ -222,7 +222,7 @@ trials:
     integration: AttnRes source
   step_time_change: 727 vs 747 ex/s (~-3%)
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t10
+- id: t010
   variant: 524k as source, table LR x3
   rung: d512
   protocol: equal_steps
@@ -241,7 +241,7 @@ trials:
     embed2_rows: '524288'
     embed2_lr_mult: '3'
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t11
+- id: t011
   variant: 524k as source, table LR x10
   rung: d512
   protocol: equal_steps
@@ -260,7 +260,7 @@ trials:
     embed2_rows: '524288'
     embed2_lr_mult: '10'
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t12
+- id: t012
   variant: 524k as source, d768
   rung: d768
   protocol: data_matched
@@ -280,7 +280,7 @@ trials:
     integration: AttnRes source
   step_time_change: 309 vs 318 ex/s (-3%)
   tuned: rows 16k/131k/524k/1M; integration input vs AttnRes source; lambda init 0/0.1/0.3; table LR x1/x3/x10
-- id: t13
+- id: t013
   variant: 1M rows, table LR x10
   rung: d512
   protocol: equal_steps
@@ -301,7 +301,7 @@ trials:
   step_time_change: 713 vs 785 ex/s (-9.2%)
   tuned: rows 524k/1M x table LR x1/x3/x10/x30
   note: est. ~-0.007 at fixed time
-- id: t14
+- id: t014
   variant: 524k, table LR x30
   rung: d512
   protocol: equal_steps
@@ -321,7 +321,7 @@ trials:
     embed2_lr_mult: '30'
   step_time_change: 736 ex/s
   tuned: rows 524k/1M x table LR x1/x3/x10/x30
-- id: t15
+- id: t015
   variant: 524k, table LR x10, seed 1
   rung: d512
   protocol: equal_steps
@@ -342,7 +342,7 @@ trials:
     seed: '1'
   tuned: rows 524k/1M x table LR x1/x3/x10/x30
   note: 2-seed mean -0.015 with batch-40 seed 0
-- id: t16
+- id: t016
   variant: low-rank 524k x 128
   rung: d512
   protocol: equal_steps
@@ -363,7 +363,7 @@ trials:
   step_time_change: 774 vs 744 ex/s (+4.0%)
   tuned: embed2_dim 128/256; rows 524k/2M
   note: net +0.003 at fixed time; full width stays
-- id: t17
+- id: t017
   variant: low-rank 524k x 256
   rung: d512
   protocol: equal_steps
@@ -384,7 +384,7 @@ trials:
   step_time_change: 762 ex/s (+2.4%)
   tuned: embed2_dim 128/256; rows 524k/2M
   note: net +0.001 at fixed time
-- id: t18
+- id: t018
   variant: low-rank 2M x 128
   rung: d512
   protocol: equal_steps
@@ -405,7 +405,7 @@ trials:
   step_time_change: 751 ex/s (+0.9%)
   tuned: embed2_dim 128/256; rows 524k/2M
   note: net +0.002; collisions not the bottleneck
-- id: t19
+- id: t019
   variant: trigram keys instead of bigram, 524k
   rung: d512
   protocol: equal_steps
@@ -424,7 +424,7 @@ trials:
     embed2_ngram: '3'
     embed2_rows: '524288'
   note: trigram rows too sparse
-- id: t20
+- id: t020
   variant: 524k, bf16 table backward
   rung: d512
   protocol: equal_steps
@@ -445,7 +445,7 @@ trials:
   step_time_change: -4% ex/s
   tuned: 524k vs 1M rows
   note: 716 vs 744 ex/s; fp32 path stays
-- id: t21
+- id: t021
   variant: 1M rows, bf16 table backward
   rung: d512
   protocol: equal_steps
@@ -465,7 +465,7 @@ trials:
     embed2_rows: 1M
   tuned: 524k vs 1M rows
   note: 704 ex/s vs 744
-- id: t22
+- id: t022
   variant: 524k, table LR x10, d768
   rung: d768
   protocol: data_matched
@@ -484,7 +484,7 @@ trials:
     embed2_rows: '524288'
     embed2_lr_mult: '10'
   note: 109% log-k retention vs d512
-- id: t23
+- id: t023
   variant: 4-head hashing
   rung: d512
   protocol: equal_steps
@@ -505,7 +505,7 @@ trials:
   settings:
     embed2_hash_heads: '4'
   note: neutral; collisions don't limit the table
-- id: t24
+- id: t024
   variant: 1M rows
   rung: d768
   protocol: equal_steps
@@ -524,7 +524,7 @@ trials:
     embed2_rows: 1M
   step_time_change: +2.3%
   tuned: rows 524k/1M/2M at d768
-- id: t25
+- id: t025
   variant: 2M rows
   rung: d768
   protocol: equal_steps
@@ -544,7 +544,7 @@ trials:
   step_time_change: +5.4%
   tuned: rows 524k/1M/2M at d768
   note: 2M still not saturated
-- id: t26
+- id: t026
   variant: EMA scaled + bigram 1M rows
   rung: d768
   protocol: equal_steps
@@ -564,7 +564,7 @@ trials:
     --ema-last-steps: '2600'
     --ema-beta: '0.998'
   note: the two roughly add
-- id: t27
+- id: t027
   variant: 1M rows
   rung: d512
   protocol: equal_steps
@@ -581,7 +581,7 @@ trials:
   - 3.0068
   step_time_change: +2.5%
   note: roughly break-even at fixed time
-- id: t28
+- id: t028
   variant: 2M rows
   rung: d512
   protocol: equal_steps
@@ -604,7 +604,7 @@ trials:
     embed2_lr_mult: '10'
   step_time_change: +7%
   tuned: LR x10 vs x20
-- id: t29
+- id: t029
   variant: 2M rows, LR x20
   rung: d512
   protocol: equal_steps
@@ -627,7 +627,7 @@ trials:
     embed2_lr_mult: '20'
   tuned: LR x10 vs x20
   note: x20 worse than x10
-- id: t30
+- id: t030
   variant: 2M rows on candidate 7
   rung: d512
   protocol: equal_steps
@@ -649,7 +649,7 @@ trials:
     embed2_rows: 2M
   step_time_change: +9% vs cand 6
   note: -0.0046 more than candidate 7 alone
-- id: t31
+- id: t031
   variant: 2M rows on candidate 8
   rung: d512
   protocol: equal_steps
@@ -671,7 +671,7 @@ trials:
     embed2_rows: 2M
   step_time_change: ~195 vs 183 ms
   note: k 2.57x vs clean KMA
-- id: t32
+- id: t032
   variant: rule A table size (1,015,808 rows)
   rung: d768
   protocol: data_matched

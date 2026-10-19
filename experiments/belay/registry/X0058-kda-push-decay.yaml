@@ -17,7 +17,7 @@ details:
 knobs:
 - push_decay
 trials:
-- id: t01
+- id: t001
   variant: 2 buckets pure
   rung: d512
   protocol: equal_steps
@@ -36,7 +36,7 @@ trials:
     push buckets: '2'
   step_time_change: 602 ex/s vs 740
   tuned: buckets 2/4, hybrid, sigmoid split, wider init
-- id: t02
+- id: t002
   variant: 2 buckets hybrid (reader g + bucket)
   rung: d512
   protocol: equal_steps
@@ -55,7 +55,7 @@ trials:
     push buckets: '2'
   step_time_change: 589 ex/s
   tuned: buckets 2/4, hybrid, sigmoid split, wider init
-- id: t03
+- id: t003
   variant: 4 buckets pure
   rung: d512
   protocol: equal_steps
@@ -74,7 +74,7 @@ trials:
     push buckets: '4'
   step_time_change: 459 ex/s
   tuned: buckets 2/4, hybrid, sigmoid split, wider init
-- id: t04
+- id: t004
   variant: 2 buckets sigmoid split
   rung: d512
   protocol: equal_steps
@@ -93,7 +93,7 @@ trials:
     push buckets: '2'
   step_time_change: 602 ex/s
   tuned: buckets 2/4, hybrid, sigmoid split, wider init
-- id: t05
+- id: t005
   variant: 2 buckets wider init
   rung: d512
   protocol: equal_steps

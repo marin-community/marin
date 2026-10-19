@@ -16,7 +16,7 @@ details:
 knobs:
 - num_experts=512
 trials:
-- id: t01
+- id: t001
   variant: 'control: SwiGLU 576/top-12 (1.5x params and FLOPs)'
   rung: d512
   protocol: equal_steps
@@ -37,7 +37,7 @@ trials:
   step_time_change: 652 ex/s (-17%)
   tuned: 576/top-12 vs 384/top-8 vs 1.5x wider; expert LR x1.25; shared ReLU2; SwiGLU 576 control
   note: more experts and compute; would lose at fixed time
-- id: t02
+- id: t002
   variant: 512 experts (sparsity 64), candidate 6 widths
   rung: d512
   protocol: equal_steps
@@ -61,7 +61,7 @@ trials:
   step_time_change: +1.5%
   tuned: 384 vs 512 experts
   note: 35.8 GiB peak, same as 384 experts
-- id: t03
+- id: t003
   variant: 512 experts at routed 2d / shared 0.375d
   rung: d512
   protocol: equal_steps
@@ -85,7 +85,7 @@ trials:
     shared width: 192 (0.375d)
   tuned: 384 vs 512 experts
   note: -0.040 vs candidate 6; does not fit at d1024
-- id: t04
+- id: t004
   variant: 512 experts at 0.75d, d1024 memory probe
   rung: d1024
   protocol: unknown

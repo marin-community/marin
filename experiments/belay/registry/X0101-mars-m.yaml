@@ -18,7 +18,7 @@ details:
 knobs:
 - muon_mars_gamma=0.025
 trials:
-- id: t01
+- id: t001
   variant: gamma 0.025
   rung: d512
   protocol: equal_steps

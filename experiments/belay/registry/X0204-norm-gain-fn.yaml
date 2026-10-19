@@ -23,7 +23,7 @@ knobs:
 - norm_gain_overrides=final:exp
 - sigmoid_gain_norms=embed,embed2
 trials:
-- id: t01
+- id: t001
   variant: e^w gains
   rung: d512
   protocol: equal_steps
@@ -40,7 +40,7 @@ trials:
     norm_gain_fn: exp
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
   note: final_norm climbs to 15
-- id: t02
+- id: t002
   variant: softplus gains, LR x1.6
   rung: d512
   protocol: equal_steps
@@ -57,7 +57,7 @@ trials:
     norm_gain_fn: softplus
     norm_gain_lr_mult: '1.6'
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
-- id: t03
+- id: t003
   variant: 2*sigmoid gains, LR x2
   rung: d512
   protocol: equal_steps
@@ -75,7 +75,7 @@ trials:
     norm_gain_lr_mult: '2'
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
   note: pins final_norm at cap 2
-- id: t04
+- id: t004
   variant: sigmoid gains on embed and embed2 norms
   rung: d512
   protocol: equal_steps
@@ -92,7 +92,7 @@ trials:
     sigmoid_gain_norms: embed,embed2
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
   note: neutral
-- id: t05
+- id: t005
   variant: e^w gains, 2 seeds
   rung: d512
   protocol: equal_steps
@@ -111,7 +111,7 @@ trials:
     norm_gain_fn: exp
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
   note: does not replicate
-- id: t06
+- id: t006
   variant: e^w gains, gain LR x0.5
   rung: d512
   protocol: equal_steps
@@ -128,7 +128,7 @@ trials:
     norm_gain_fn: exp
     norm_gain_lr_mult: '0.5'
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
-- id: t07
+- id: t007
   variant: e^w gains, gain LR x2
   rung: d512
   protocol: equal_steps
@@ -145,7 +145,7 @@ trials:
     norm_gain_fn: exp
     norm_gain_lr_mult: '2'
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
-- id: t08
+- id: t008
   variant: e^w on final_norm only
   rung: d512
   protocol: equal_steps
@@ -161,7 +161,7 @@ trials:
   settings:
     norm_gain_overrides: final:exp
   tuned: linear / e^w / softplus / 2*sigmoid; gain LR x0.5 / x2
-- id: t09
+- id: t009
   variant: e^w gains + no combine renorm
   rung: d512
   protocol: equal_steps

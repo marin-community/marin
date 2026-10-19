@@ -10,7 +10,7 @@ tags:
 - attnres
 - z-loss
 trials:
-- id: t01
+- id: t001
   variant: bias + AttnRes z-loss 1e-3
   rung: d512
   protocol: equal_steps
@@ -30,7 +30,7 @@ trials:
     logit bias: 'on'
   tuned: z 1e-3 / 1e-1
   note: eval incl. z term; corrected delta about +0.004
-- id: t02
+- id: t002
   variant: bias + AttnRes z-loss 1e-1
   rung: d512
   protocol: equal_steps

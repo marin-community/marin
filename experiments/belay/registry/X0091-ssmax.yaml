@@ -17,7 +17,7 @@ papers:
 knobs:
 - mla_ssmax
 trials:
-- id: t01
+- id: t001
   variant: SSMax on MLA, zero-init per-head s
   rung: d512
   protocol: equal_steps

@@ -13,7 +13,7 @@ tags:
 knobs:
 - kda_decay_conv=true
 trials:
-- id: t01
+- id: t001
   variant: 4-tap causal ShortConv on KDA decay input
   rung: d512
   protocol: equal_steps

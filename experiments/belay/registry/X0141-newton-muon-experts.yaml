@@ -15,7 +15,7 @@ papers:
 - arxiv: '2604.01472'
   title: Newton-Muon
 trials:
-- id: t01
+- id: t001
   variant: expert up weights, beta 0.95, gamma 0.2, every 32
   rung: d512
   protocol: equal_steps

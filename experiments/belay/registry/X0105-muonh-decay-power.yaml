@@ -18,7 +18,7 @@ details:
 knobs:
 - muonh_decay_power=0.7
 trials:
-- id: t01
+- id: t001
   variant: power 0.4 (fast early)
   rung: d512
   protocol: equal_steps
@@ -37,7 +37,7 @@ trials:
     muonh_decay_power: '0.4'
   tuned: 0.4/0.6/0.7/0.85/1.0/2.0
   note: modded-nanogpt MuonH-track 0.4 overshoots here
-- id: t02
+- id: t002
   variant: power 0.7
   rung: d512
   protocol: equal_steps
@@ -58,7 +58,7 @@ trials:
     muonh_decay_power: '0.7'
   tuned: 0.4/0.6/0.7/0.85/1.0/2.0
   note: optimum just below linear; seed 1 -0.0030 reported in batch 63
-- id: t03
+- id: t003
   variant: power 2.0 (slow early)
   rung: d512
   protocol: equal_steps
@@ -76,7 +76,7 @@ trials:
   settings:
     muonh_decay_power: '2.0'
   tuned: 0.4/0.6/0.7/0.85/1.0/2.0
-- id: t04
+- id: t004
   variant: power 0.6
   rung: d512
   protocol: equal_steps
@@ -93,7 +93,7 @@ trials:
     muonh_decay_power: '0.6'
   tuned: 0.4/0.6/0.7/0.85/1.0/2.0
   note: reported in batch 63
-- id: t05
+- id: t005
   variant: power 0.85
   rung: d512
   protocol: equal_steps

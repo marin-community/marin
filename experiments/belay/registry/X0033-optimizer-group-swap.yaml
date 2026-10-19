@@ -15,7 +15,7 @@ knobs:
 - lm_head_group
 - embed_group
 trials:
-- id: t01
+- id: t001
   variant: lm_head on MuonH (vs AdamH)
   rung: d512
   protocol: equal_steps
@@ -32,7 +32,7 @@ trials:
   - lc1-b07-headmu
   settings:
     lm_head_group: muonh
-- id: t02
+- id: t002
   variant: token embedding on AdamH (vs Adam)
   rung: d512
   protocol: equal_steps

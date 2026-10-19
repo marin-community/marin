@@ -24,7 +24,7 @@ knobs:
 - kda_erase_gate=true
 - kda_write_gate=true
 trials:
-- id: t01
+- id: t001
   variant: write gate only
   rung: d512
   protocol: equal_steps
@@ -43,7 +43,7 @@ trials:
     kda_write_gate: 'true'
   step_time_change: -2.5% ex/s
   note: neutral at -2.5% ex/s; not adopted
-- id: t02
+- id: t002
   variant: erase gate only
   rung: d512
   protocol: equal_steps
@@ -65,7 +65,7 @@ trials:
     kda_erase_gate: 'true'
   tuned: erase vs erase+write
   note: erase entropy 0.69 -> 0.13-0.15
-- id: t03
+- id: t003
   variant: erase + write gates (full GDN-2)
   rung: d512
   protocol: equal_steps

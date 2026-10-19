@@ -14,7 +14,7 @@ papers:
 - arxiv: '2512.23447'
   title: ERC
 trials:
-- id: t01
+- id: t001
   variant: ERC weight 1, alpha 1
   rung: d512
   protocol: equal_steps
@@ -37,7 +37,7 @@ trials:
     alpha: '1'
   tuned: weight 1/0.1, alpha 1/0.5
   note: coupling ~1.27
-- id: t02
+- id: t002
   variant: ERC weight 1, alpha 0.5
   rung: d512
   protocol: equal_steps
@@ -60,7 +60,7 @@ trials:
     alpha: '0.5'
   tuned: weight 1/0.1, alpha 1/0.5
   note: coupling ~2.4
-- id: t03
+- id: t003
   variant: ERC weight 0.1, alpha 1
   rung: d512
   protocol: equal_steps
