@@ -43,11 +43,12 @@ class QualityScoringBatch:
 
     texts: Sequence[str]
     document_ids: Sequence[str]
+    sources: Sequence[str]
     embeddings: NDArray[np.float32] | None = None
 
     def __post_init__(self) -> None:
-        if len(self.texts) != len(self.document_ids):
-            raise ValueError("quality texts and document IDs must have equal length")
+        if not len(self.texts) == len(self.document_ids) == len(self.sources):
+            raise ValueError("quality texts, document IDs, and sources must have equal length")
         if self.embeddings is not None and len(self.embeddings) != len(self.texts):
             raise ValueError("quality embeddings must have one row per document")
 

@@ -35,6 +35,7 @@ def test_ridge_head_uses_fixed_training_groups_and_keeps_audit_labels_private():
             QualityScoringBatch(
                 texts=["10", "20"],
                 document_ids=["doc-10", "doc-20"],
+                sources=["source", "source"],
                 embeddings=np.asarray([[10.0], [20.0]], dtype=np.float32),
             )
         ),
