@@ -27,6 +27,34 @@ from starlette.testclient import TestClient
 DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-applet"
 
 
+@pytest.mark.parametrize("invalid_graph", ["duplicate_id", "missing_parent", "cycle", "cooldown_mismatch"])
+def test_snowball_release_rejects_invalid_lineage_and_preserves_local_output(tmp_path: Path, invalid_graph: str) -> None:
+    source = Path(__file__).parents[1] / "applets" / "snowball_family_tree"
+    applet = tmp_path / "snowball"
+    shutil.copytree(source, applet, ignore=shutil.ignore_patterns("dist", "__pycache__"))
+    valid_release = CliRunner().invoke(cli, ["release", str(applet), "--dry-run", "--json"])
+    assert valid_release.exit_code == 0, valid_release.output
+    graph = json.loads((applet / "graph-data.json").read_text())
+    nodes = graph["nodes"]
+    if invalid_graph == "duplicate_id":
+        nodes.append(nodes[-1].copy())
+    elif invalid_graph == "missing_parent":
+        nodes[-1]["parents"] = ["missing-checkpoint"]
+    elif invalid_graph == "cycle":
+        nodes[-1]["parents"] = [nodes[-1]["id"]]
+    else:
+        nodes[-1]["lane"] = "2.7T"
+    (applet / "graph-data.json").write_text(json.dumps(graph))
+    (applet / "dist").mkdir()
+    previous_output = applet / "dist" / "index.html"
+    previous_output.write_text("previous local output")
+
+    result = CliRunner().invoke(cli, ["release", str(applet), "--dry-run", "--json"])
+
+    assert result.exit_code != 0
+    assert previous_output.read_text() == "previous local output"
+
+
 @pytest.fixture(params=["static", "build"])
 def release_checkout(tmp_path: Path, request: pytest.FixtureRequest) -> Path:
     repo = tmp_path / "checkout"
