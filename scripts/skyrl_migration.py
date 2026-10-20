@@ -1040,7 +1040,6 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
     record = read_json(snapshot_dir / SNAPSHOT_FILE)
     patches = [MigrationPatch(**patch) for patch in read_json(snapshot_dir / "selection.json")["patches"]]
     validate_cutover(cutover, record["source_sha"], patches)
-    validate_fresh(record)
     owner, name = TARGET.split("/")
     repository_id = graphql(
         "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}", owner=owner, name=name

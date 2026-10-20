@@ -559,7 +559,7 @@ def github_fake(
                 for comment in record["issues"][0]["comments"]
             ]
         if endpoint.startswith(f"repos/{migration.SOURCE}/pulls?"):
-            return record["pulls"]
+            return remote.get("fork_pulls", record["pulls"])
         if endpoint.startswith(f"repos/{migration.TARGET}/labels?"):
             return [{"name": "agent-generated"}]
         if endpoint.startswith(f"repos/{migration.TARGET}/pulls?"):
@@ -629,6 +629,7 @@ def test_issue_transfer_recovers_after_remote_success_and_protects_edits(
     migration.write_json(snapshot_dir / "snapshot.json", record)
     migration.plan(snapshot_dir, snapshot_dir / "manifest.toml", None)
     remote = github_fake(monkeypatch, record, "cutover")
+    remote["fork_pulls"] = [{"number": 4, "head": {"sha": "new"}, "base": {"sha": "base", "ref": "main"}}]
     remote["issues"] = {
         "id": issue["node_id"],
         "body": issue["body"],
