@@ -62,6 +62,8 @@ def declared_sample_metric(metrics: Mapping[str, float], declared: str | None) -
     picked = declared_metric(metrics, declared)
     if picked is not None or declared is None:
         return picked
+    if declared.endswith(REPEAT_MEAN_SUFFIX):
+        return declared_metric(metrics, declared.removesuffix(REPEAT_MEAN_SUFFIX))
     if declared == MRCR_RUN_METRIC:
         return declared_metric(metrics, MRCR_SAMPLE_METRIC)
     return None

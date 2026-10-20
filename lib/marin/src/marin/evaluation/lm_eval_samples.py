@@ -44,13 +44,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.metric_selection import (
-    REPEAT_MEAN_SUFFIX,
-    base_metric,
-    declared_metric,
-    declared_sample_metric,
-    primary_filter,
-)
+from marin.evaluation.metric_selection import base_metric, declared_sample_metric, primary_filter
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, BenchmarkMetadataRef, EvalTaskRef, TaskCoverage
 
 
@@ -227,8 +221,6 @@ def _lm_eval_grading(
     ``,<filter>`` suffix. This accepts both encodings.
     """
     picked = declared_sample_metric(metrics, primary_metric_name)
-    if picked is None and primary_metric_name is not None and primary_metric_name.endswith(REPEAT_MEAN_SUFFIX):
-        picked = declared_metric(metrics, primary_metric_name.removesuffix(REPEAT_MEAN_SUFFIX))
     if picked is None:
         return None
     name, value = picked

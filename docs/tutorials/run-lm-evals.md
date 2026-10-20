@@ -368,6 +368,11 @@ Marin does not rebuild scores, uncertainty estimates, or breakdowns by averaging
 source of truth for model, evaluation identity, status, metrics, hardware, provenance, and Iris job
 paths.
 
+GPQA Diamond reports `accuracy_avg` across repeats while each response stores `accuracy`.
+EvalDash maps these names and recovers missing per-response grades
+from stored scores. Responses without a score remain ungraded. The sample browser counts each
+attempt, so 198 questions with three repeats produce 594 sample rows.
+
 ## Use the shared launcher in a pipeline
 
 `experiments.evaluation.pipeline.eval_step` wraps the same registered model and evaluation
