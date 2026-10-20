@@ -275,5 +275,5 @@ def test_a_merge_samples_again_after_a_cut_off_reply():
 
 
 def test_a_merged_capability_cannot_give_its_member_ids_as_behaviors():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not the IDs of its members"):
         Group(id="failed-runs.a", name="A", outcome="B.", includes=("k0", "k4"), members=("k0", "k4"))
