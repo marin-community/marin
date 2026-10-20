@@ -11,48 +11,6 @@ from scripts import generate_recipe_schema as generator
 
 ROOT = Path(__file__).resolve().parents[3]
 
-OUTPUT_PATH_RECIPES = frozenset(
-    {
-        "128GPU_80B_A3B_next_cp1",
-        "32GPU_qwen3_coder_30b_a3b_ep4",
-        "32GPU_qwen3_coder_30b_a3b_ep4_nooffload",
-        "56GPU_qwen3_8b",
-        "64GPU_qwen3_6_35b_a3b",
-        "opencode_smoke_literal",
-        "tasktrove_dq_sweep_30b",
-        "tasktrove_dq_sweep_30b_cp6",
-        "tasktrove_dq_sweep_30b_ncclnet",
-        "tasktrove_dq_sweep_30b_terminus2",
-    }
-)
-BUNDLED_NORMALIZATION = {
-    "trainer.ckpt_path": OUTPUT_PATH_RECIPES,
-    "trainer.export_path": OUTPUT_PATH_RECIPES,
-    "trainer.seed": frozenset(
-        {
-            "nemotron_ultra_rlvr_acceptance",
-            "snowball_ultra_rlvr1_colocated64",
-            "snowball_ultra_rlvr1_split64",
-            "snowball_ultra_rlvr2_colocated64",
-            "snowball_ultra_rlvr2_split64",
-        }
-    ),
-    "trainer.max_ckpts_to_keep": frozenset(
-        {
-            "snowball_mopd_ultra_32k",
-            "snowball_mopd_ultra_async_32k_smoke",
-            "snowball_ultra_rlvr1_colocated64",
-            "snowball_ultra_rlvr1_split64",
-            "snowball_ultra_rlvr2_colocated64",
-            "snowball_ultra_rlvr2_split64",
-        }
-    ),
-    "policy_chat_template": frozenset({"delphi_math_rl", "delphi_math_rl_ifeval"}),
-    "trainer.ref.model.path": OUTPUT_PATH_RECIPES - {"56GPU_qwen3_8b", "opencode_smoke_literal"},
-    "generator.engine_init_kwargs.served_model_name": frozenset(
-        {"nemotron_ultra_rlvr_acceptance", "opencode_smoke_literal"}
-    ),
-}
 BASE = """defaults:
   - _self_
 data:
@@ -157,12 +115,6 @@ def test_repository_generation_matches_hydra_author_defaults_and_all_group_optio
     paths = sorted((ROOT / "cloud/iris/configs").glob("*.yaml"))
     recipes = generator.recipe_documents(ROOT / "cloud/iris/configs", generator.CONFIG_DIR, sources.groups)
     for path, document in zip(paths, recipes, strict=True):
-        for key, names in BUNDLED_NORMALIZATION.items():
-            if path.stem in names:
-                parent = document
-                for part in key.split(".")[:-1]:
-                    parent = parent.get(part, {})
-                parent.pop(key.rsplit(".", 1)[-1], None)
         assert schema.SkyRLRecipe.from_document(document).to_skyrl() == document, path.name
 
 

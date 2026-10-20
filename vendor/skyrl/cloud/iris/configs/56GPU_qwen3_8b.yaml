@@ -1,0 +1,164 @@
+entrypoint: terminal_bench
+
+config_groups:
+  terminal_bench_config: terminal_bench
+
+context_budget:
+  request_window_tokens: 32768
+  max_new_tokens_per_turn: 4096
+  max_turns: 999999
+
+terminal_bench:
+
+  harbor:
+    override_timeout_sec: 900
+
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 2048
+
+    verifier_override_timeout_sec: 300
+
+    max_retries: 3
+    min_wait_sec: 60.0
+    max_wait_sec: 600.0
+    wait_multiplier: 2.0
+
+    exclude_exceptions:
+      - VerifierTimeoutError
+      - VerifierRuntimeError
+      - RewardFileNotFoundError
+      - RewardFileEmptyError
+      - VerifierOutputParseError
+
+    n_concurrent_trials: 288
+
+    enable_reward_shaping: false
+
+    enable_error_classification: true
+    mask_exceptions:
+      - DaytonaError
+      - EnvironmentStartTimeoutError
+      - NetworkError
+      - ConnectionError
+      - RewardFileNotFoundError
+      - RewardFileEmptyError
+      - ContextLengthExceededError
+    default_error_treatment: zero
+    passthrough_exceptions:
+      - AgentTimeoutError
+    zero_exceptions: []
+
+trainer:
+  strategy: megatron
+  flash_attn: false
+  algorithm:
+    advantage_estimator: rloo_n
+    group_advantage_min_size: 4
+    use_kl_loss: false
+    kl_loss_coef: 0.0
+    eps_clip_low: 0.2
+    eps_clip_high: 0.05
+    loss_reduction: sequence_mean
+    policy_loss_type: behavior_clip
+
+  epochs: 2
+  max_steps: 80
+  update_epochs_per_batch: 1
+
+  train_batch_size: 64
+  policy_mini_batch_size: 64
+  eval_batch_size: 64
+
+  micro_forward_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: 1
+
+
+  use_sample_packing: true
+
+  eval_interval: 999999
+  eval_before_train: false
+  resume_mode: latest
+  hf_hub_repo_id: null
+  hf_hub_private: false
+  hf_hub_revision: main
+
+  enable_db_registration: false
+
+  project_name: OpenThoughts-Agent
+  log_level: INFO
+  tracker_commit_each_step: true
+  logger: wandb
+
+  run_name: null
+
+  policy:
+    optimizer_config:
+      lr: 8e-6
+      weight_decay: 0.0
+      adam_betas: [0.9, 0.999]
+      max_grad_norm: 0.9
+    megatron_config:
+      tensor_model_parallel_size: 2
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
+  ref:
+    megatron_config:
+      tensor_model_parallel_size: 2
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
+  placement:
+    colocate_all: false
+    policy_num_nodes: 1
+    ref_num_nodes: 1
+    policy_num_gpus_per_node: 8
+    ref_num_gpus_per_node: 8
+
+  rollout_buffer:
+    max_staleness_steps: 16
+    max_in_flight: 128
+
+generator:
+  chat_template_kwargs:
+    enable_thinking: true
+  backend: vllm
+  timeout_multiplier: 1.0
+  model_dtype: bfloat16
+
+  inference_engine_tensor_parallel_size: 1
+  num_inference_engines: 48
+
+  n_samples_per_prompt: 8
+  eval_n_samples_per_prompt: 8
+
+  gpu_memory_utilization: 0.85
+
+  max_num_seqs: 24
+  max_num_batched_tokens: 16384
+
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  inference_stats_interval: 1
+
+  sampling_params:
+    temperature: 1.2
+    top_p: 1.0
+    top_k: -1
+
+  chat_template:
+    source: file
+    name_or_path: chat_templates/qwen3_thinking_acc.jinja2
+
+extra_env:
+  NCCL_DEBUG: WARN
+
+data:
+  train_data: []
+  val_data: []

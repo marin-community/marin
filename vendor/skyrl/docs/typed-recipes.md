@@ -49,6 +49,12 @@ open mappings. `terminal_bench` holds Harbor configuration as an open mapping. I
 other third-party option maps retain their documented pass-through surfaces; SkyRL's reserved engine
 keys are checked at the recipe root.
 
+The launcher validates expanded source recipes through `SkyRLRecipe.from_document` before Hydra
+composition. It fills omitted allocation node counts, runtime profiles and data kinds
+from the composed configuration and checks supplied values. Authored data lists survive when envelope
+inputs are empty; differing nonempty recipe and envelope lists are rejected. Role GPU counts must fit
+the available hardware. Schema-only fields keep their consumer defaults when absent from the recipe.
+
 Artifact draft sources require `source_identity` in the form `sha256:` followed by 64 lowercase hex
 digits. Agreement with the artifact manifest is a launch-time check. Hub revisions and local source
 identities use their source-specific launcher rules.

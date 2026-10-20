@@ -1,0 +1,167 @@
+
+entrypoint: terminal_bench
+
+config_groups:
+  terminal_bench_config: terminal_bench
+
+context_budget:
+  request_window_tokens: 32768
+  max_new_tokens_per_turn: 4096
+  max_turns: 30
+
+terminal_bench:
+
+  harbor:
+    override_timeout_sec: 600
+    verifier_override_timeout_sec: 120
+
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 2048
+
+    env_network_policy:
+      mode: domain_allow_list
+      value: iris.oa.dev
+
+    max_retries: 3
+    min_wait_sec: 60.0
+    max_wait_sec: 600.0
+    wait_multiplier: 2.0
+
+    exclude_exceptions:
+      - VerifierTimeoutError
+      - VerifierRuntimeError
+      - RewardFileNotFoundError
+      - RewardFileEmptyError
+      - VerifierOutputParseError
+
+    n_concurrent_trials: 8
+
+    enable_reward_shaping: false
+
+    enable_error_classification: true
+    mask_exceptions:
+      - DaytonaError
+      - EnvironmentStartTimeoutError
+      - NetworkError
+      - ConnectionError
+      - VerifierTimeoutError
+      - NonZeroAgentExitCodeError
+      - RewardFileNotFoundError
+      - RewardFileEmptyError
+      - ContextLengthExceededError
+    default_error_treatment: zero
+    passthrough_exceptions:
+      - AgentTimeoutError
+    zero_exceptions: []
+
+trainer:
+  strategy: megatron
+  algorithm:
+    # This is an infrastructure gate, not a quality run. One rollout for each of
+    # eight distinct tasks gives the eight-way policy mesh useful work without
+    # multiplying the Daytona load by a group-relative estimator's sample count.
+    advantage_estimator: reinforce++
+    use_kl_loss: false
+    kl_loss_coef: 0.0
+    eps_clip_low: 0.2
+    eps_clip_high: 0.05
+    loss_reduction: sequence_mean
+    off_policy_correction: tis
+
+  epochs: 1
+  max_steps: 3
+  update_epochs_per_batch: 1
+
+  train_batch_size: 8
+  policy_mini_batch_size: 8
+  eval_batch_size: 8
+
+  micro_forward_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: 1
+
+
+  # The smoke runtime does not install FlashAttention 2, which sample packing
+  # requires. These short trajectories do not benefit from packing.
+  use_sample_packing: false
+
+  eval_interval: 999999
+  eval_before_train: false
+  resume_mode: latest
+  hf_hub_repo_id: null
+  hf_hub_private: false
+  hf_hub_revision: main
+
+  enable_db_registration: false
+
+  project_name: OpenThoughts-Agent
+  log_level: INFO
+  tracker_commit_each_step: true
+  logger: wandb
+
+  run_name: null
+
+  policy:
+    optimizer_config:
+      lr: 8e-6
+      weight_decay: 0.0
+      adam_betas: [0.9, 0.999]
+      max_grad_norm: 0.9
+    megatron_config:
+      # The default format gathers the full optimizer state into one rank's host memory,
+      # which pushes the colocated node past Ray's memory-kill threshold at the final save.
+      optimizer_checkpoint_sharding_type: dp_reshardable
+  placement:
+    colocate_all: true
+    policy_num_nodes: null
+    ref_num_nodes: null
+    policy_num_gpus_per_node: null
+    ref_num_gpus_per_node: null
+
+generator:
+  backend: vllm
+  timeout_multiplier: 1.0
+  model_dtype: bfloat16
+
+  inference_engine_tensor_parallel_size: 1
+  num_inference_engines: null
+
+  n_samples_per_prompt: 1
+  eval_n_samples_per_prompt: 1
+
+  # Colocated Megatron keeps more than 25 GiB per H100 after an optimizer step even when
+  # offloaded, so vLLM must wake its KV cache into the remainder.
+  gpu_memory_utilization: 0.5
+
+  max_num_seqs: 24
+  max_num_batched_tokens: 16384
+
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  inference_stats_interval: 1
+
+  sampling_params:
+    temperature: 0.7
+    top_p: 1.0
+    top_k: -1
+
+  chat_template:
+    source: file
+    name_or_path: chat_templates/qwen3_thinking_acc.jinja2
+
+  engine_init_kwargs:
+    enable_auto_tool_choice: true
+    tool_call_parser: hermes
+
+extra_env:
+  NCCL_DEBUG: WARN
+  # Stress gates match outcomes by task ID. Ray's cross-worker log deduplication
+  # can otherwise replace those distinct lines with one arbitrary representative.
+  RAY_DEDUP_LOGS: "0"
+
+data:
+  train_data: []
+  val_data: []

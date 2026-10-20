@@ -9,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import asdict, dataclass, replace
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -20,19 +19,13 @@ from omegaconf import DictConfig, OmegaConf
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
 from cloud.iris.runtime_bundle import resolve_launcher_source, runtime_bundle_inputs
+from marinskyrl.recipe_schema import ExportedPolicy, LaunchResult, LaunchState
 from marinskyrl.checkpoint_paths import policy_export_path
 from marinskyrl.hf_model import validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
-
-
-class LaunchState(StrEnum):
-    PREPARED = "prepared"
-    SUBMITTED = "submitted"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -42,29 +35,6 @@ class LaunchOutcome:
     job_id: str
     job_state: str
     exit_code: int
-
-
-@dataclass(frozen=True)
-class ExportedPolicy:
-    policy_export_uri: str
-    global_step: int
-    tokenizer_uri: str
-    tokenizer_revision: str
-    checkpoint_root: str
-    terminal_manifest_uri: str
-
-
-@dataclass(frozen=True)
-class LaunchResult:
-    run_id: str
-    attempt_id: str
-    state: LaunchState
-    iris_job_id: str | None
-    iris_job_state: str | None
-    source_digest: str
-    runtime_profile: str
-    model: ExportedPolicy | None
-    failure: str | None
 
 
 class LaunchBackend(Protocol):

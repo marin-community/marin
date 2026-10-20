@@ -1,0 +1,215 @@
+entrypoint: terminal_bench
+
+config_groups:
+  terminal_bench_config: terminal_bench
+
+context_budget:
+  request_window_tokens: 98304
+  max_new_tokens_per_turn: 16384
+  max_turns: 999999
+
+terminal_bench:
+
+  harbor:
+    override_timeout_sec: 1800
+
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 2048
+
+    verifier_override_timeout_sec: 300
+
+    max_retries: 3
+    min_wait_sec: 60.0
+    max_wait_sec: 600.0
+    wait_multiplier: 2.0
+
+    exclude_exceptions:
+      - VerifierTimeoutError
+      - RewardFileNotFoundError
+      - RewardFileEmptyError
+      - VerifierOutputParseError
+      - VerifierRuntimeError
+
+    n_concurrent_trials: 288
+
+    enable_reward_shaping: false
+
+    enable_error_classification: true
+    mask_exceptions:
+      - VerifierTimeoutError
+      - DaytonaError
+      - EnvironmentStartTimeoutError
+      - NetworkError
+      - ConnectionError
+      - RewardFileNotFoundError
+      - RewardFileEmptyError
+    default_error_treatment: zero
+    passthrough_exceptions:
+      - AgentTimeoutError
+      - ContextLengthExceededError
+
+trainer:
+  distributed:
+    worker_collective_timeout_seconds: 3600
+  strategy: megatron
+  flash_attn: false
+  use_sample_packing: true
+  gradient_checkpointing: true
+  gradient_checkpointing_use_reentrant: true
+  algorithm:
+    advantage_estimator: rloo_n
+    group_advantage_min_size: 4
+    use_kl_loss: false
+    kl_loss_coef: 0.0
+    eps_clip_low: 0.2
+    eps_clip_high: 0.05
+    loss_reduction: seq_mean_token_sum_norm_global
+    policy_loss_type: behavior_clip
+
+  epochs: 2
+  max_steps: 80
+  update_epochs_per_batch: 1
+
+  train_batch_size: 64
+  policy_mini_batch_size: 64
+  eval_batch_size: 64
+
+  micro_forward_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: 1
+
+
+  eval_interval: 999999
+  eval_before_train: false
+  resume_mode: latest
+  hf_hub_repo_id: null
+  hf_hub_private: false
+  hf_hub_revision: main
+
+  enable_db_registration: false
+
+  project_name: OpenThoughts-Agent
+  log_level: INFO
+  tracker_commit_each_step: true
+  logger: wandb
+
+  run_name: null
+
+  policy:
+    optimizer_config:
+      lr: 8e-6
+      weight_decay: 0.0
+      adam_betas: [0.9, 0.999]
+      max_grad_norm: 0.9
+      optimizer_kwargs:
+        foreach: false
+    megatron_config:
+      moe_router_replay: true
+      tensor_model_parallel_size: 8
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      logprob_chunk_size: 1024
+  ref:
+    model: {}
+    megatron_config:
+      moe_router_replay: true
+      tensor_model_parallel_size: 8
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      logprob_chunk_size: 1024
+  placement:
+    colocate_all: false
+    policy_num_nodes: 8
+    ref_num_nodes: 8
+    policy_num_gpus_per_node: 8
+    ref_num_gpus_per_node: 8
+    policy_strict_spread_pg: true
+    policy_per_gpu_bundles: true
+    policy_force_cvd_mask: true
+
+  rollout_buffer:
+    max_staleness_steps: 16
+    max_in_flight: 128
+
+generator:
+  chat_template_kwargs:
+    enable_thinking: true
+  gdn_backend: flashqla
+  vllm_attention_backend: FLASH_ATTN
+  backend: vllm
+  timeout_multiplier: 1.0
+  model_dtype: bfloat16
+
+  enforce_eager: false
+
+  inference_engine_tensor_parallel_size: 4
+  num_inference_engines: 16
+
+  inference_engine_expert_parallel_size: 1
+
+  inference_engine_decode_context_parallel_size: 1
+
+  inference_engine_mp_backend: true
+
+  n_samples_per_prompt: 8
+  eval_n_samples_per_prompt: 8
+
+  gpu_memory_utilization: 0.85
+
+  max_num_seqs: 12
+  max_num_batched_tokens: 16384
+
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  inference_stats_interval: 1
+
+  sampling_params:
+    temperature: 0.7
+    top_p: 1.0
+    top_k: -1
+
+  chat_template:
+    source: file
+    name_or_path: chat_templates/qwen3_thinking_acc.jinja2
+
+  engine_init_kwargs:
+    disable_custom_all_reduce: true
+    enable_return_routed_experts: true
+    async_scheduling: false
+
+data:
+  train_data: []
+  val_data: []
+
+trajectory_runner:
+  rollout_workers:
+    num_workers: 4
+    cpus_per_worker: 8
+
+extra_env:
+  FSSPEC_S3: '{"config_kwargs": {"s3": {"addressing_style": "virtual"}}}'
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HUB_DOWNLOAD_TIMEOUT: "60"
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+  NCCL_DEBUG: WARN
+  NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+  NCCL_SOCKET_FAMILY: AF_INET
+  TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: "3600"
+  TORCH_NCCL_ENABLE_MONITORING: "1"
+  TORCH_NCCL_DUMP_ON_TIMEOUT: "1"
+  TORCH_FR_BUFFER_SIZE: "20000"
+  TORCH_NCCL_TRACE_CPP_STACK: "1"
+  TORCH_NCCL_DEBUG_INFO_TEMP_FILE: /tmp/fr_dumps/80b-next-cp1/nccl_fr_rank
+  TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
+  TORCH_NCCL_DESYNC_DEBUG: "1"
+  VLLM_MQ_MAX_CHUNK_BYTES_MB: "160"
+  VLLM_ROUTED_EXPERTS_SIDE_TIMEOUT_SECONDS: "1200"
+  VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "900"

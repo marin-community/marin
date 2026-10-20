@@ -18,15 +18,15 @@ from skyrl_train.config.objective_spec import validate_objective
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from cloud.iris.rl_config_translation import (
-    RL_ENTRYPOINTS,
-    RLEntrypoint,
     compose_skyrl_config,
     parse_rl_config,
     registered_rl_entrypoint_module,
     training_type_for_entrypoint,
-    validate_tp_divides_heads,
 )
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
+from marinskyrl.entrypoints import RL_ENTRYPOINTS
+from marinskyrl.recipe_schema import RLEntrypoint
+from marinskyrl.recipe_schema.rules import validate_tp_divides_heads
 from marinskyrl.distillation import validate_generation_logprobs
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.task_sources import data_source
@@ -150,7 +150,7 @@ class InputsConfig:
     """Immutable model and data locators resolved by Marin."""
 
     model: LaunchModelLocator = field(default_factory=LaunchModelLocator)
-    data_kind: str = "tasks"
+    data_kind: str = MISSING
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
 
@@ -173,7 +173,6 @@ def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     """Compose a raw mapping into the strict structured launch schema."""
     schema = OmegaConf.structured(SkyRLLaunchConfig)
     composed = OmegaConf.merge(schema, raw)
-    OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
     return composed
 
 
@@ -181,36 +180,51 @@ def _is_source_recipe(skyrl: DictConfig) -> bool:
     return "context_budget" in skyrl or "config_groups" in skyrl or "defaults" in skyrl
 
 
-def _compose_source_recipe(config: DictConfig) -> DictConfig:
+def _compose_source_recipe(config: DictConfig) -> tuple[DictConfig, str]:
     raw_skyrl = OmegaConf.to_container(config.skyrl, resolve=False)
     if not isinstance(raw_skyrl, dict):
         raise TypeError("skyrl must be a mapping")
+    nodes_unset = OmegaConf.is_missing(config.iris.allocation, "num_nodes")
     model_uri = str(config.inputs.model.uri)
     model_identity = str(config.inputs.model.identity)
     model_is_cloud = is_cloud_uri(model_uri)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as source_file:
         OmegaConf.save(OmegaConf.create(raw_skyrl), source_file.name, resolve=False)
         parsed = parse_rl_config(source_file.name)
+        if nodes_unset:
+            required_counts = (
+                "trainer.placement.policy_num_nodes",
+                "trainer.placement.ref_num_nodes",
+                "generator.num_inference_engines",
+            )
+            expanded = OmegaConf.create(parsed.raw)
+            missing = [path for path in required_counts if OmegaConf.select(expanded, path) is None]
+            if missing:
+                raise ValueError(
+                    "iris.allocation.num_nodes is unset; the expanded recipe must set " + ", ".join(missing)
+                )
+        parameters = {
+            "job_name": str(config.iris.job_name),
+            "experiments_dir": str(config.runtime.experiments_dir),
+            "gpus_per_node": int(config.iris.allocation.gpus_per_node),
+            "model_path": str(config.inputs.model.local_path),
+            "model_source_uri": model_uri if model_is_cloud else None,
+            "model_source_identity": model_identity if model_is_cloud else None,
+            "model_revision": model_identity,
+            "train_data": list(config.inputs.train_data),
+            "val_data": list(config.inputs.validation_data),
+            "checkpoint_root": str(config.artifacts.checkpoint_root),
+            "export_root": str(config.artifacts.export_root),
+            "resume_checkpoint_count": int(config.artifacts.resume_checkpoint_count),
+            "trajectory_root": join_resource_path(str(config.artifacts.attempts_root), "trajectories"),
+            "export_hf_artifact": bool(config.run.export_hf),
+            "seed": int(config.run.seed),
+        }
+        if not nodes_unset:
+            parameters["num_nodes"] = int(config.iris.allocation.num_nodes)
         compiled = compose_skyrl_config(
             parsed,
-            {
-                "job_name": str(config.iris.job_name),
-                "experiments_dir": str(config.runtime.experiments_dir),
-                "num_nodes": int(config.iris.allocation.num_nodes),
-                "gpus_per_node": int(config.iris.allocation.gpus_per_node),
-                "model_path": str(config.inputs.model.local_path),
-                "model_source_uri": model_uri if model_is_cloud else None,
-                "model_source_identity": model_identity if model_is_cloud else None,
-                "model_revision": model_identity,
-                "train_data": list(config.inputs.train_data),
-                "val_data": list(config.inputs.validation_data),
-                "checkpoint_root": str(config.artifacts.checkpoint_root),
-                "export_root": str(config.artifacts.export_root),
-                "resume_checkpoint_count": int(config.artifacts.resume_checkpoint_count),
-                "trajectory_root": join_resource_path(str(config.artifacts.attempts_root), "trajectories"),
-                "export_hf_artifact": bool(config.run.export_hf),
-                "seed": int(config.run.seed),
-            },
+            parameters,
             config.iris.allocation,
         )
         OmegaConf.resolve(compiled.config)
@@ -221,18 +235,42 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
         compiled.entrypoint, max_staleness_steps=compiled.config.trainer.rollout_buffer.max_staleness_steps
     )
     resolved.runtime.training_type = None if training_type is None else training_type.value
-    resolved.inputs.data_kind = parsed.data_kind
     resolved.skyrl = compiled.config
-    return compose_launch_config(resolved)
+    return compose_launch_config(resolved), parsed.data_kind
+
+
+def _fill_launch_fields(config: DictConfig, *, data_kind: str | None = None) -> None:
+    """Fill omitted envelope fields and validate the supplied derived values."""
+    skyrl = OmegaConf.to_container(config.skyrl, resolve=True)
+    if not isinstance(skyrl, dict):
+        raise TypeError("skyrl must be a mapping")
+    checkpoint_export = config.run.mode == RunMode.CHECKPOINT_EXPORT
+    plan = derive_policy_export_role_plan(skyrl) if checkpoint_export else derive_role_plan(skyrl)
+    if OmegaConf.is_missing(config.iris.allocation, "num_nodes"):
+        config.iris.allocation.num_nodes = derive_num_nodes(plan)
+    if OmegaConf.is_missing(config.runtime, "profile"):
+        config.runtime.profile = runtime_profile_for_strategy(
+            skyrl.get("trainer", {}).get("strategy"),
+            mode=RuntimeMode.CHECKPOINT_EXPORT if checkpoint_export else RuntimeMode.TRAINING,
+        ).value
+    if data_kind is not None:
+        if OmegaConf.is_missing(config.inputs, "data_kind"):
+            config.inputs.data_kind = data_kind
+        elif config.inputs.data_kind != data_kind:
+            raise ValueError(
+                f"inputs.data_kind={config.inputs.data_kind!r} does not match the composed SkyRL value {data_kind!r}"
+            )
 
 
 def load_launch_config(path: Path) -> DictConfig:
     """Load and validate one complete SkyRL launch document."""
     config = compose_launch_config(OmegaConf.load(path))
+    data_kind = None
     if _is_source_recipe(config.skyrl):
         if config.run.mode != RunMode.TRAIN:
             raise ValueError("checkpoint_export launch configs must already contain a composed SkyRL subtree")
-        config = _compose_source_recipe(config)
+        config, data_kind = _compose_source_recipe(config)
+    _fill_launch_fields(config, data_kind=data_kind)
     probe = config.skyrl.get("trainer", {}).get("mismatch_probe", {})
     if probe.get("enabled") and not probe.get("archive_uri"):
         artifact_root = posixpath.dirname(str(config.artifacts.resolved_config_uri))

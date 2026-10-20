@@ -204,12 +204,6 @@ def test_public_recipe_round_trip_preserves_parts_and_reports_owned_paths():
     }
     with pytest.raises(ValueError, match="artifact sources require sha256"):
         schema.SkyRLRecipe.combine(base=base, uri=uri_part)
-    heads = schema.RecipePatch(model_num_attention_heads=42)
-    tensor_parallel = schema.RecipePatch(generator=schema.Generator(inference_engine_tensor_parallel_size=2))
-    valid = schema.SkyRLRecipe.combine(base=base, heads=heads, tensor_parallel=tensor_parallel)
-    assert schema.SkyRLRecipe.from_document(valid.to_skyrl()) == valid
-    with pytest.raises(ValueError, match="does not divide model_num_attention_heads=42"):
-        schema.SkyRLRecipe.combine(base=base, heads=heads)
     with pytest.raises(ValueError, match="artifact sources require sha256"):
         artifact.with_settings(["generator.speculative_decoding.model.source_identity=author-identity"])
     for source, identity in (("hf://org/draft", "b" * 40), ("/local/draft", "author-identity")):

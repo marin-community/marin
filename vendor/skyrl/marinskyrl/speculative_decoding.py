@@ -11,11 +11,13 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit
 
 from marinskyrl.resource_locator import is_cloud_uri, is_hugging_face_repo_id
+from marinskyrl.entrypoints import RL_ENTRYPOINTS
+from marinskyrl.recipe_schema.rules import RLEntrypoint
 
 
 _HF_SOURCE_SCHEME = "hf"
 _HF_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
-STANDARD_TRAINING_ENTRYPOINT = "skyrl_train.entrypoints.main_base"
+STANDARD_TRAINING_ENTRYPOINT = RL_ENTRYPOINTS[RLEntrypoint.STANDARD]
 
 
 def is_hugging_face_commit(value: str) -> bool:

@@ -29,6 +29,10 @@ from .declared import InferenceStatsCallback as InferenceStatsCallback
 from .declared import LoggingBackend as LoggingBackend
 from .declared import CorrectionRule as CorrectionRule
 from .declared import Callback as Callback
+
+from .launch_result import ExportedPolicy as ExportedPolicy
+from .launch_result import LaunchResult as LaunchResult
+from .launch_result import LaunchState as LaunchState
 from .sections import Algorithm as Algorithm
 from .sections import ChatTemplate as ChatTemplate
 from .sections import CheckpointExport as CheckpointExport
