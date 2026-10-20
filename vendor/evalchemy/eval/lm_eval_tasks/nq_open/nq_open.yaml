@@ -1,0 +1,43 @@
+# NQ-Open override.
+#
+# Upstream stops at bare newline, period, or comma. Those tokens are legitimate
+# formatting and answer content for chat endpoints, so they can end generation
+# before the model exposes an answer. The explicit answer contract keeps
+# reasoning in artifacts while the scorer receives only the marked final answer.
+task: nq_open
+dataset_path: google-research-datasets/nq_open
+output_type: generate_until
+training_split: train
+validation_split: validation
+description: "Answer these questions:\n\n"
+doc_to_text: "Q: {{question}}?\nRespond with exactly \"Answer: <short answer>\"."
+doc_to_target: "{{answer}}"
+fewshot_delimiter: "\n"
+fewshot_config:
+  doc_to_target: "Answer: {{answer}}"
+generation_kwargs:
+  until: !function eval.generation_stops.SHORT_ANSWER_STOP_SEQUENCES
+  do_sample: false
+  temperature: 0.0
+filter_list:
+  - name: strict_answer
+    filter:
+      - function: custom
+        filter_fn: !function eval.lm_eval_tasks.short_answer_extraction.marked_short_answer_filter
+      - function: take_first
+  - name: extract_answer
+    filter:
+      - function: custom
+        filter_fn: !function eval.lm_eval_tasks.short_answer_extraction.short_answer_filter
+      - function: take_first
+target_delimiter: " "
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+    regexes_to_ignore:
+    - "\\b(?:The |the |An |A |The |a |an )"
+metadata:
+  version: 4.3

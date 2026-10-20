@@ -126,12 +126,10 @@ class InferenceWorker:
         self, client: httpx.Client, leased_request: LeasedInferenceRequest
     ) -> LeasedInferenceResponse | None:
         request = leased_request.request
-        if request.path in {"/tokenize", "/metrics"}:
-            # These endpoints live outside the OpenAI API root.
-            url = self._upstream.endpoint.base_url.rstrip("/").removesuffix("/v1") + request.path
+        if request.path.startswith("/v1/"):
+            url = self._upstream.endpoint.url(request.path.removeprefix("/v1/"))
         else:
-            upstream_path = request.path.removeprefix("/v1/")
-            url = self._upstream.endpoint.url(upstream_path)
+            url = self._upstream.endpoint.server_url(request.path)
         if request.streaming:
             self._stream(client, leased_request, url)
             return None

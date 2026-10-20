@@ -11,6 +11,8 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import cast
 
 import requests
@@ -23,6 +25,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.resources.state import TaskState, is_job_finished
 from rigging.connect import capability_path, proxy_path
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline, Duration
 
@@ -34,6 +37,7 @@ from marin.inference.config import (
     EffectiveServing,
     IrisConfig,
     LevanterEngineConfig,
+    ObjectStoreLoadMode,
     RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
@@ -223,7 +227,7 @@ def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig 
 
 
 def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedModelConfig, int]:
-    # Keep model-cache and Transformers imports inside accelerator workers.
+    # Resolve serving geometry inside accelerator workers.
     from marin.inference.model_preparation import (  # noqa: PLC0415
         read_attention_heads,
         resolve_model_path,
@@ -286,8 +290,28 @@ def _prepared_local_inference(
 ) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
     resolved_engine = _resolved_engine(engine, iris)
-    with local_inference(resolved_model, resolved_engine, num_chips=num_chips) as session:
-        yield session
+    with _staged_model(resolved_model) as prepared_model:
+        with local_inference(prepared_model, resolved_engine, num_chips=num_chips) as session:
+            yield session
+
+
+@contextlib.contextmanager
+def _staged_model(model: ServedModelConfig) -> Iterator[ServedModelConfig]:
+    """Stage remote weights on worker-local disk when the serving config requires it."""
+    source = StoragePath(model.weights)
+    if model.object_store_load_mode is ObjectStoreLoadMode.STREAM or not source.is_remote:
+        yield model
+        return
+
+    with TemporaryDirectory(prefix="marin-model-") as temporary_directory:
+        local_weights = Path(temporary_directory) / "model"
+        started = time.monotonic()
+        logger.info("Staging model weights from %s to worker-local disk", source)
+        source.download_to(str(local_weights), recursive=True, batch_size=16)
+        if not local_weights.is_dir():
+            raise FileNotFoundError(f"staged model directory was not created: {local_weights}")
+        logger.info("Staged model weights from %s in %.1f seconds", source, time.monotonic() - started)
+        yield replace(model, weights=str(local_weights))
 
 
 def _server_root(model: RunningModel) -> str:
@@ -331,6 +355,7 @@ def _effective_serving(
     engine: VllmEngineConfig | LevanterEngineConfig,
     iris: IrisConfig,
     tensor_parallel_size: int,
+    instances: int = 1,
 ) -> EffectiveServing:
     geometry = iris.serving_geometry
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
@@ -343,7 +368,7 @@ def _effective_serving(
         tensor_parallel_size=options.tensor_parallel_size,
         data_parallel_size=options.data_parallel_size,
         pipeline_parallel_size=geometry.pipeline_parallel_size if geometry else 1,
-        task_count=iris.worker_resources.replicas,
+        task_count=iris.worker_resources.replicas * instances,
         max_model_len=int(context) if context is not None and str(context).isdigit() else None,
     )
 
@@ -802,6 +827,13 @@ def _expose_brokered_inference(
         response = requests.get(running_model.endpoint.url("models"), timeout=proxy.readiness_timeout_seconds)
         response.raise_for_status()
         worker_metadata = _registered_worker_metadata(request_provider)
+        effective_serving = _effective_serving(
+            model,
+            config.engine,
+            iris,
+            worker_metadata.tensor_parallel_size,
+            instances=config.instances,
+        )
         with iris_ctx().registry.registered(
             endpoint_name,
             _server_root(running_model),
@@ -811,6 +843,7 @@ def _expose_brokered_inference(
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 streaming=True,
                 proxy_timeout_seconds=proxy.request_timeout_seconds,
+                effective_serving=effective_serving,
             ),
             access=EndpointAccess.ENDPOINT_ACCESS_LINK,
         ):
@@ -828,7 +861,7 @@ def _expose_brokered_inference(
                 streaming=True,
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 backend_name=worker_metadata.backend_name,
-                effective_serving=_effective_serving(model, config.engine, iris, worker_metadata.tensor_parallel_size),
+                effective_serving=effective_serving,
                 broker=response_provider,
                 metrics_url=(
                     f"{_server_root(internal_model)}/metrics"

@@ -15,19 +15,24 @@ from enum import StrEnum
 
 from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from rigging.filesystem.cluster_config import marin_temp_bucket
 
 from marin.evaluation.eval_measurements import task_item_count
 from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
-from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, ChatTokenizerBackend, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runtime import (
-    EVALCHEMY_EXTRA_PACKAGES,
     EVALCHEMY_PYTHON_VERSION,
-    EVALCHEMY_REQUIREMENT,
+    EVALCHEMY_REQUIRED_EXTRAS,
+    EVALCHEMY_RUNTIME_PROJECT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
+from marin.evaluation.lm_eval_samples import (
+    preserved_sample_sources,
+    rebuild_lm_eval_samples,
+    summarize_native_eval_samples,
+)
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalTaskRef,
@@ -98,12 +103,11 @@ def _child_env(env_vars: Mapping[str, str], **extra: str) -> dict[str, str]:
 class EvalchemyRuntimeConfig:
     """Execution policy for the Evalchemy HTTP-client child."""
 
-    requirement: str = EVALCHEMY_REQUIREMENT
-    python_version: str = EVALCHEMY_PYTHON_VERSION
-    extra_packages: tuple[str, ...] = EVALCHEMY_EXTRA_PACKAGES
+    extras: tuple[str, ...] = EVALCHEMY_REQUIRED_EXTRAS
     cpu: float = 8.0
     memory: str = "32g"
     disk: str = "50g"
+    dataset_cache: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,7 @@ class EvalchemyRunConfig:
     name: str
     tasks: tuple[EvalTaskConfig, ...]
     apply_chat_template: bool = False
+    chat_tokenizer_backend: ChatTokenizerBackend = ChatTokenizerBackend.SERVER
     debug: bool = False
     # None passes no generation cap to Evalchemy, which then sizes each benchmark's responses from the
     # served context window minus its stored longest prompt (evalchemy#132).
@@ -122,8 +127,8 @@ class EvalchemyRunConfig:
     batch_size: str | None = None
     seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
-    chat_template_kwargs: dict[str, bool | None] = field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | str] = field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeConfig | None = None
     runtime: EvalchemyRuntimeConfig = field(default_factory=EvalchemyRuntimeConfig)
@@ -198,6 +203,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             ],
             "out_path": output_dir,
             "apply_chat_template": config.apply_chat_template,
+            "chat_tokenizer_backend": config.chat_tokenizer_backend,
             "debug": config.debug,
             "max_gen_toks": config.max_gen_toks,
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
@@ -208,21 +214,28 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             "seed": config.seed,
             "extra_model_args": dict(config.extra_model_args),
             "max_length": config.max_length,
+            "dataset_cache": (
+                config.runtime.dataset_cache
+                if config.runtime.dataset_cache is not None
+                else marin_temp_bucket(30, "evalchemy-datasets", source_prefix=output_dir)
+            ),
         }
     )
 
 
 def _evalchemy_client_command(runtime: EvalchemyRuntimeConfig) -> tuple[str, ...]:
     command = [
-        "uvx",
-        "--no-config",
+        "uv",
+        "run",
+        "--project",
+        EVALCHEMY_RUNTIME_PROJECT,
+        "--frozen",
+        "--no-default-groups",
         "--python",
-        runtime.python_version,
-        "--from",
-        runtime.requirement,
+        EVALCHEMY_PYTHON_VERSION,
     ]
-    for package in runtime.extra_packages:
-        command.extend(("--with", package))
+    for extra in runtime.extras:
+        command.extend(("--extra", extra))
     command.append("python")
     return tuple(command)
 
@@ -240,7 +253,7 @@ def _run_evalchemy_child(
         try:
             judge_api_key = env_vars["JUDGE_API_KEY"]
         except KeyError as exc:
-            raise ValueError("FinanceBench judge configuration requires JUDGE_API_KEY") from exc
+            raise ValueError("External judge configuration requires JUDGE_API_KEY") from exc
         judge_env = {
             "JUDGE_API_KEY": judge_api_key,
             "JUDGE_BASE_URL": config.judge.base_url,
@@ -248,8 +261,12 @@ def _run_evalchemy_child(
         }
     client = iris_ctx().client
     child_id = uuid.uuid4().hex[:8]
-    uvx_command = shlex.join(_evalchemy_client_command(config.runtime))
-    command = f'exec {uvx_command} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
+    runtime_command = shlex.join(_evalchemy_client_command(config.runtime))
+    command = (
+        'cd "$IRIS_WORKDIR"\n'
+        f'export UV_PROJECT_ENVIRONMENT="$IRIS_WORKDIR/{EVALCHEMY_RUNTIME_PROJECT}/.venv"\n'
+        f'exec {runtime_command} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
+    )
     eval_job = client.submit(
         entrypoint=Entrypoint.from_command("bash", "-c", command),
         name=f"eval-{config.name.replace('.', '-')}-{child_id}",
@@ -259,6 +276,7 @@ def _run_evalchemy_child(
             disk=config.runtime.disk,
         ),
         environment=EnvironmentSpec(
+            setup_scripts=[],
             env_vars=_child_env(
                 env_vars,
                 JAX_PLATFORMS="cpu",
@@ -267,7 +285,7 @@ def _run_evalchemy_child(
                 TQDM_MININTERVAL="30",
                 **judge_env,
                 **{CONFIG_ENV_KEY: _run_config_json(model, config, output_dir)},
-            )
+            ),
         ),
         max_retries_failure=0,
     )
@@ -329,6 +347,12 @@ def read_evalchemy_outcome(config: EvalchemyRunConfig, output_dir: str, eval_job
             output_dir,
             tasks=config.tasks,
         )
+        if preserved_sample_sources(output_dir):
+            rebuild_lm_eval_samples(
+                output_dir,
+                tasks=summary.tasks,
+                writer_id=f"marin-evalchemy-samples-{uuid.uuid4().hex}",
+            )
         normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
     except Exception as exc:
         raise EvalPipelineError(

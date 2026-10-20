@@ -307,6 +307,21 @@ to add required files excluded by default, such as a validation job's tests and
 patterns (CLI `--exclude`) and build/cache exclusions, including Rust `target/`
 directories and native `.so` files, still apply to these includes.
 
+Workspace `pyproject.toml` can include runtime assets excluded by default and
+exclude tracked files from every submitted bundle:
+
+```toml
+[tool.iris.bundle]
+include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*"]
+exclude = ["^vendor/harbor/tests(/|$)"]
+```
+
+Include patterns are globs; exclude patterns are regular expressions matched
+against paths relative to the workspace. Repository exclusions apply after
+repository includes. For a validation job that needs excluded tests, pass globs
+through `IrisClient.remote(..., extra_bundle_includes=["vendor/harbor/tests/**/*.py"])`.
+Caller `bundle_exclude` patterns and build/cache exclusions still apply.
+
 **Configuration** (required):
 
 ```yaml
