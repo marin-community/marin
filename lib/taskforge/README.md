@@ -28,7 +28,9 @@ src/taskforge/
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
-  stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure,
+  stage40_build_with_program/  agentic_author.py: `author_round`, the agent session that writes, loads,
+                               builds and grades a build program;
+                               context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure,
                                BuildExpired;
                                services.py: RLEnvBuildServices, AgentLimits;
                                outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
@@ -47,13 +49,18 @@ Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pip
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
 modules (`child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and the shared
-modules import no stage. The coordinator package, `stage_coordinator`, runs the stages in order and
-is unnumbered. It may import any stage and shared module, and `tests/test_imports.py` refuses an
-import of it from any other package, along with the other wrong-way imports.
-`scripts/ledger_summary.py` totals wall time and tokens per kind and step over JSONL ledgers.
-`scripts/build_image_job.py` runs on Iris and documents its submit command in its docstring: it
-builds a directory's `DockerBuild` context with `taskforge.sandbox.image_builder` and prints the
-pinned registry digest.
+modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
+builds a task today goes through a build program, so the SDK, the standard template, the build
+services, the program runner and the agentic author (an agent session that writes and iterates
+that program) all live there. The name leaves room for a `stage40_build_with_agent` package in
+which an agent produces the task draft directly, with no build program at all; that is a future
+surface, not a home for anything that writes a program, however the writer runs. The coordinator
+package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import any stage
+and shared module, and `tests/test_imports.py` refuses an import of it from any other package, along
+with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
+and step over JSONL ledgers. `scripts/build_image_job.py` runs on Iris and documents its submit
+command in its docstring: it builds a directory's `DockerBuild` context with
+`taskforge.sandbox.image_builder` and prints the pinned registry digest.
 
 ## Proposals
 
@@ -290,6 +297,58 @@ output type alone, so an edit to a helper beside the steps would leave every key
 refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `Grader`, and a
 program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
 the author receives.
+
+`stage40_build_with_program.agentic_author.author_round` is the agentic author: one agent session (`run_agent`,
+reasoning replay KEEP) per program round, working in a workspace that starts with the template as
+`program.py`, the proposal, the SDK reference and the template under the read-only `reference/`, and
+an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`, `read_reference`,
+`write_file`, `edit_file`, `list_files`), run the loader (`run_loader`), build the program with the
+caller's `ProgramBuilder` (`run_build`, which must build as the caller's build stage does, on the same
+step store, so a program that built in the session rebuilds there from memo hits alone), grade a
+candidate against the last draft the session built (`run_grade_candidate`), and search and fetch the
+web when the proposal lists research. Every load of a program (`run_loader`, `run_build`, `submit`)
+goes through the session's `ProgramLoader`, by default `stage30_author.load_process` in a child process
+bounded by `LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the
+caller's event loop. Every tool result is cut to 6,000 characters, head and tail. A host failure never
+reaches the model: `run_build` and `run_grade_candidate` retry a `BuildInfrastructureFailure` up to
+`HOST_RETRIES` times with a doubling backoff (at once re-raising a cause in `HOST_REJECTIONS`), then
+re-raise it like `ModelUnavailable`, so the round ends without a record and spends no revision; a
+loader child the host killed raises it with cause `BUILD_PROCESS`. A `BuildExpired` from `run_build`
+never reaches the model either: the tool writes `run.json` with `status: "expired"`, the `clock`, the
+`step` and the message as `text`, and re-raises it at once, so the round ends the same way and the
+driver holds the workpiece as abandoned.
+`submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
+program that never built in the session is refused once and handed in untested when submitted again;
+an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
+when a turn's prompt and output plus `turn_max_tokens` exceed `session_token_cap`, at the turn budget,
+or after a third reply without a tool call (a reply cut at the output limit is nudged to take a
+smaller step instead). It writes, under the workpiece's directory:
+
+```
+rounds/<n>/authored/<k>/
+  author.json        author_kind, status (accepted, handed_off, author_failed), revision, session_dir,
+                     mode, stop_reason, wall; accepted adds program_digest and tested
+  session.json       turns, tool calls by tool, tokens, cached share, prompts, stop reason, nudges,
+                     submissions, in-session builds
+  transcript.json    the opening and user turns, then each assistant turn with its tool calls and results
+  submit.json        accepted and every submit call with its outcome
+  program.py         accepted only: the submitted file's bytes
+  program.json       accepted only: program_manifest
+  record.json        accepted only: GlmAuthor's record fields, with author_kind and turns
+rounds/<n>/agentic/<k>/
+  conversation.json  the messages as sent, read by a same-session revision
+  workspace/         program.py, proposal.md, notes.md, reference/
+  runs/<j>/          one per in-session build: draft/ and run.json (status built, build_failure,
+                     crash, infrastructure, or expired with its clock)
+```
+
+Round 0 starts a fresh session. After a build failure, the session that submitted the program
+continues with the failure as its next user turn when it ended by `submit` within
+`revision_same_session` (its last prompt and its turns used); any other revision starts a fresh session
+from a copy of its workspace. A session that ends without a submission hands its workspace to a fresh
+session in the same round once (`handed_off`), and the next unsubmitted one ends the round
+`author_failed`; a session stopped by the context guard hands off up to four sessions per round. A
+relaunch never resumes a session mid-way: a session directory without an `author.json` starts a handoff.
 
 ## The stage machine
 
