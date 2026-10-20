@@ -4,8 +4,10 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace as Record
+from uuid import uuid4
 
 import duckdb
+import httpx
 import pyarrow as pa
 import pytest
 from config import ClusterTarget
@@ -13,10 +15,16 @@ from conftest import bridge_config
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from dashboard_stitch import stitch_all
+from finelog.client import LogClient
+from finelog.embedded import require_embedded_server
 from finelog.errors import StatsError
+from rigging.timing import Duration, ExponentialBackoff
 from server import create_app
 from starlette.testclient import TestClient
-from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, VLLM_OVERVIEW_SECTIONS
+from vllm_observability import (
+    VLLM_DETAIL_MAX_WINDOW_MS,
+    VLLM_OVERVIEW_SECTIONS,
+)
 
 
 @pytest.mark.parametrize("filename", ["inference.json", "inference_overview.json"])
@@ -59,19 +67,378 @@ def test_inference_identity_selector_reads_request_state_rows(filename: str) -> 
 def _vllm_projection_database():
     database = duckdb.connect()
     columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
-        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
+        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT,
+        body_json VARCHAR"""
     for table in ("telemetry_v1.marinskyrl", "telemetry_v1.vllm"):
         database.execute(f'CREATE TABLE "{table}"({columns})')
     database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
     # Finelog and DuckDB name the same struct constructor differently.
     database.execute(
-        """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
-                     AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
+        """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3, k4, v4, k5, v5,
+                                     k6 := NULL, v6 := NULL, k7 := NULL, v7 := NULL,
+                                     k8 := NULL, v8 := NULL, k9 := NULL, v9 := NULL,
+                                     k10 := NULL, v10 := NULL, k11 := NULL, v11 := NULL)
+                     AS struct_pack(timestamp_ms := v1, seq := v2, value := v3,
+                                    body_json := v4, publication_id := v5,
+                                    histogram_count := v6, histogram_sum := v7,
+                                    histogram_bounds := v8, producer_epoch := v9,
+                                    source_sequence := v10, histogram_bins := v11)"""
     )
     return database
 
 
-def _embedded_overview_app(invalid_histogram):
+_HISTOGRAM_ATTRIBUTES = {
+    "engine": "engine-a",
+    "engine_index": "0",
+    "metric_source": "vllm",
+    "source_kind": "histogram",
+    "source_temporality": "cumulative_snapshot",
+}
+
+
+def _histogram_rows(family, bounds, point, attributes=_HISTOGRAM_ATTRIBUTES):
+    timestamp, sequence, bins, total = point
+    common = {key: value for key, value in attributes.items() if key != "histogram_publication_id"}
+    labels = json.dumps(common, sort_keys=True, separators=(",", ":"))
+
+    def scalar_labels(extra):
+        return json.dumps({**attributes, **extra}, sort_keys=True, separators=(",", ":"))
+
+    count = sum(bins)
+    body = {
+        "encoding": "explicit_bucket_v1",
+        "aggregation_temporality": "cumulative",
+        "explicit_bounds": bounds,
+        "bucket_counts": bins,
+        "count": count,
+        "sum": total,
+        "producer_epoch": attributes["engine"],
+        "sequence": sequence,
+    }
+    scalar = []
+    cumulative = 0
+    for bound, amount in zip((*bounds, float("inf")), bins, strict=True):
+        cumulative += amount
+        label = "+Inf" if bound == float("inf") else str(int(bound)) if float(bound).is_integer() else str(bound)
+        scalar.append((family + "_bucket", "gauge", float(cumulative), None, scalar_labels({"le": label}), timestamp))
+    scalar.extend(
+        (family + "_" + component, "gauge", float(value), None, scalar_labels({}), timestamp)
+        for component, value in (("count", count), ("sum", total))
+    )
+    return scalar, (family, "histogram", None, json.dumps(body), labels, timestamp)
+
+
+def _insert_histograms(database, rows):
+    database.executemany(
+        """INSERT INTO "telemetry_v1.marinskyrl"
+           (cluster, service, job_id, name, kind, value, body_json,
+            resource_attributes_json, attributes_json, timestamp_ms, seq)
+           VALUES ('cw-a', 'marinskyrl', '/train', ?, ?, ?, ?, '{}', ?, ?, ?)""",
+        [(*row, seq) for seq, row in enumerate(rows)],
+    )
+
+
+def _histogram_results(database, start_ms=0):
+    source = Record(
+        target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"),
+        query=lambda sql, *, max_rows: database.execute(sql).fetch_arrow_table(),
+    )
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    params = {"identity_kind": "job_id", "identity": "/train", "from": start_ms, "to": 90_000, "bucket_ms": 15_000}
+    with TestClient(app) as client:
+        detail = client.get("/finelog/marin/v1/vllm/overview", params=params)
+        summary = client.get(
+            "/finelog/marin/v1/vllm/overview",
+            params={**params, "to": VLLM_DETAIL_MAX_WINDOW_MS + 90_000, "view": "run_summary"},
+        )
+    assert detail.status_code == summary.status_code == 200
+    return detail.json(), summary.json()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "scalar_conflicting",
+        "scalar_staggered",
+        "scalar_bucket_reset",
+        "scalar_middle_bin_reset",
+        "structured_middle_bin_reset",
+        "structured_unidentified_fast",
+        "dual_conflicting",
+        "dual_missing",
+        "dual_missing_middle_bucket",
+        "dual_partial",
+    ],
+)
+def test_vllm_histogram_publication_faults(scenario):
+    database = _vllm_projection_database()
+    points = [(0, 0, (0, 0, 0), 0.0), (15_000, 1, (1, 2, 0), 0.3), (30_000, 2, (3, 2, 0), 0.8)]
+    if scenario == "scalar_conflicting":
+        points.insert(2, (15_000, 1, (2, 3, 0), 0.5))
+    elif scenario == "scalar_bucket_reset":
+        points[-1] = (30_000, 2, (0, 5, 0), 0.8)
+    elif scenario.endswith("middle_bin_reset"):
+        points[-1] = (30_000, 2, (3, 1, 1), 0.8)
+    rows = []
+    for timestamp, sequence, bins, total in points:
+        attributes = dict(_HISTOGRAM_ATTRIBUTES)
+        if scenario.startswith("dual") or scenario in ("scalar_conflicting", "scalar_staggered"):
+            attributes = {"histogram_publication_id": f"engine-a:{sequence}", **attributes}
+        scalar, structured = _histogram_rows(
+            "time_to_first_token_seconds", (0.1, 1.0), (timestamp, sequence, bins, total), attributes
+        )
+        if scenario.startswith(("scalar", "dual")):
+            for name, kind, value, body, labels, sample_time in scalar:
+                if scenario == "scalar_staggered":
+                    fields = json.loads(labels)
+                    labels = json.dumps(
+                        {"histogram_publication_id": fields.pop("histogram_publication_id"), **fields},
+                        separators=(",", ":"),
+                    )
+                if sequence == 1:
+                    if scenario == "dual_partial" and name != "time_to_first_token_seconds_bucket":
+                        continue
+                    if scenario == "dual_partial" and json.loads(labels)["le"] != "0.1":
+                        continue
+                    if scenario == "dual_missing_middle_bucket" and json.loads(labels).get("le") == "1":
+                        continue
+                    if scenario == "scalar_staggered":
+                        sample_time = 16_000 if name.endswith("_sum") else 17_000
+                rows.append((name, kind, value, body, labels, sample_time))
+        if not scenario.startswith("scalar") and not (
+            scenario in ("dual_missing", "dual_missing_middle_bucket", "dual_partial") and sequence == 1
+        ):
+            name, kind, value, body_json, labels, sample_time = structured
+            body = json.loads(body_json)
+            if scenario == "structured_unidentified_fast":
+                del body["producer_epoch"], body["sequence"]
+                sample_time //= 3
+            rows.append((name, kind, value, json.dumps(body), labels, sample_time))
+            if scenario == "dual_conflicting" and sequence == 1:
+                rows.append(
+                    (
+                        name,
+                        kind,
+                        value,
+                        json.dumps({**body, "bucket_counts": [0, sum(bins), 0]}),
+                        rows[-1][4],
+                        sample_time,
+                    )
+                )
+    _insert_histograms(database, rows)
+    start = 30_000 if scenario == "scalar_conflicting" else 16_500 if scenario == "scalar_staggered" else 0
+    result, summary = _histogram_results(database, start)
+    stats = {
+        row["stat"]: (row["value"], row["samples"])
+        for row in result
+        if row["section"] == "latency" and row["metric"] == "ttft" and row["t"] is None
+    }
+    reset = scenario == "scalar_bucket_reset" or scenario.endswith("middle_bin_reset")
+    count = 3 if reset else 5
+    assert stats["mean"] == pytest.approx((0.1 if reset else 0.16, count))
+    assert stats["p50"] == pytest.approx((1.0 if reset else 0.1, count))
+    assert stats["p90"] == stats["p99"] == pytest.approx((1.0, count))
+    samples = (
+        1
+        if reset or scenario in ("dual_conflicting", "dual_missing_middle_bucket", "dual_partial", "scalar_conflicting")
+        else 2
+    )
+    assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "ttft_observations"] == [
+        (count, samples)
+    ]
+
+
+def test_vllm_target_histograms_weight_producers_without_dual_or_reset_counts():
+    database = _vllm_projection_database()
+    rows = []
+    for family, bounds, small_total, big_total in (
+        ("request_generation_tokens", (10.0, 100.0), 20.0, 800.0),
+        ("request_time_per_output_token_seconds", (0.02, 0.1), 0.04, 0.8),
+    ):
+        for timestamp, count, total in ((0, 0, 0.0), (15_000, 2, small_total), (30_000, 1, small_total / 2)):
+            labels = {"histogram_publication_id": f"engine-a:{timestamp // 15_000}", **_HISTOGRAM_ATTRIBUTES}
+            scalar, structured = _histogram_rows(
+                family, bounds, (timestamp, timestamp // 15_000, (count, 0, 0), total), labels
+            )
+            rows.extend(scalar if timestamp < 30_000 else [])
+            rows.append(structured)
+        for timestamp, count, total in ((0, 0, 0.0), (15_000, 8, big_total), (30_000, 10, big_total * 1.25)):
+            scalar, _ = _histogram_rows(
+                family,
+                bounds,
+                (timestamp, timestamp // 15_000, (0, count, 0), total),
+                {**_HISTOGRAM_ATTRIBUTES, "engine": "engine-b", "engine_index": "1"},
+            )
+            rows.extend(scalar)
+    _insert_histograms(database, rows)
+    result, _ = _histogram_results(database)
+    means = {
+        row["metric"]: (row["value"], row["samples"])
+        for row in result
+        if row["stat"] == "mean" and row["metric"] in ("output_tokens", "tpot")
+    }
+    assert means == {"output_tokens": pytest.approx((85.0, 12)), "tpot": pytest.approx((1.04 / 12, 12))}
+    assert [
+        (row["value"], row["samples"])
+        for row in result
+        if row["metric"] == "tpot" and row["stat"] == "mean_over_time" and row["t"] == 30_000
+    ] == [pytest.approx((0.1, 2))]
+    assert {row["series"]: row["value"] for row in result if row["section"] == "output_length_distribution"} == {
+        "10": 2,
+        "100": 10,
+        "+Inf": 0,
+    }
+
+
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_structured_histogram_exact_large_counts_duplicate_loss_and_reset(conflicting):
+    database = _vllm_projection_database()
+    first = (1 << 53) + 1
+    rows = []
+    for timestamp, sequence, count, total, arrival in (
+        (0, 0, first, 0.0, 5),
+        (15_000, 1, first + 2, 0.2, 2),
+        (15_000, 1, first + (4 if conflicting else 2), 0.4 if conflicting else 0.2, 8),
+        (45_000, 3, first + 5, 0.5, 1),
+        (60_000, 4, 1, 0.1, 7),
+        (75_000, 5, 3, 0.3, 3),
+    ):
+        _, row = _histogram_rows("time_to_first_token_seconds", (0.1,), (timestamp, sequence, (count, 0), total))
+        rows.append((*row, arrival))
+    database.executemany(
+        """INSERT INTO "telemetry_v1.marinskyrl"
+           (cluster, service, job_id, name, kind, value, body_json,
+            resource_attributes_json, attributes_json, timestamp_ms, seq)
+           VALUES ('cw-a', 'marinskyrl', '/train', ?, ?, ?, ?, '{}', ?, ?, ?)""",
+        rows,
+    )
+    scalar, _ = _histogram_rows(
+        "time_to_first_token_seconds",
+        (0.1,),
+        (30_000, 2, (first + 3, 0), 0.3),
+        {"histogram_publication_id": "engine-a:2", **_HISTOGRAM_ATTRIBUTES},
+    )
+    _insert_histograms(database, scalar)
+    for start in (0, 30_000):
+        result, summary = _histogram_results(database, start)
+        count = 7 if conflicting or start == 0 else 5
+        assert [
+            (row["value"], row["samples"])
+            for row in result
+            if row["section"] == "latency" and row["metric"] == "ttft" and row["stat"] == "mean"
+        ] == [(pytest.approx(0.1), count)]
+        times = {
+            row["t"]: row["samples"]
+            for row in result
+            if row["section"] == "latency" and row["metric"] == "ttft" and row["stat"] == "mean_over_time"
+        }
+        expected = {45_000: 5, 75_000: 2} if conflicting else {15_000: 2, 45_000: 3, 75_000: 2}
+        assert times == {t: value for t, value in expected.items() if t >= start}
+        assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [count]
+
+
+@pytest.mark.parametrize(
+    ("legacy_prefix", "bounds", "duplicate_last", "count", "mean", "p50"),
+    [
+        pytest.param(False, (0.1, 0.1, 0.2, 0.2), False, 4, 0.15, None, id="structured_schema_change"),
+        pytest.param(True, (0.1, 0.1, 0.2, 0.2), False, 4, 0.15, None, id="scalar_prefix_schema_change"),
+        pytest.param(False, (1, 1.0, 1.0, 1.0), False, 5, 0.14, 1.0, id="equivalent_numeric_bounds"),
+        pytest.param(False, (1, 1.0, 1.0, 1.0), True, 3, 0.1, 1.0, id="conflicting_numeric_copy"),
+    ],
+)
+def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schema_tails(
+    legacy_prefix, bounds, duplicate_last, count, mean, p50
+):
+    database = _vllm_projection_database()
+    rows = []
+    for sequence, (bound, amount, total) in enumerate(zip(bounds, (0, 2, 3, 5), (0.0, 0.2, 0.3, 0.7), strict=True)):
+        scalar, structured = _histogram_rows(
+            "time_to_first_token_seconds", (bound,), (sequence * 15_000, sequence, (amount, 0), total)
+        )
+        rows.extend(scalar if legacy_prefix and sequence < 2 else [structured])
+        if duplicate_last and sequence == 3:
+            body = json.loads(structured[3])
+            body["explicit_bounds"] = [int(bound)]
+            rows.append((*structured[:3], json.dumps(body), *structured[4:]))
+    _insert_histograms(database, rows)
+    result, summary = _histogram_results(database)
+    stats = {
+        row["stat"]: (row["value"], row["samples"])
+        for row in result
+        if row["section"] == "latency" and row["metric"] == "ttft" and row["t"] is None
+    }
+    assert stats["mean"] == pytest.approx((mean, count))
+    assert stats["p50"] == ((None, count) if p50 is None else pytest.approx((p50, count)))
+    assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [count]
+
+
+@pytest.mark.integration
+def test_vllm_histograms_roundtrip_native_finelog(tmp_path):
+    server = require_embedded_server()(log_dir=str(tmp_path / "finelog"))
+    client = LogClient.connect(server.address)
+    try:
+        rows = []
+        for point in ((0, 0, (0, 0, 0), 0.0), (15_000, 1, (1, 2, 0), 0.3), (30_000, 2, (3, 2, 0), 0.8)):
+            scalar, structured = _histogram_rows(
+                "time_to_first_token_seconds",
+                (0.1, 1.0),
+                point,
+                {"histogram_publication_id": f"engine-a:{point[1]}", **_HISTOGRAM_ATTRIBUTES},
+            )
+            rows.extend([*scalar, structured])
+        records = [
+            {
+                "name": name,
+                "kind": kind,
+                "value": value,
+                "body": json.loads(body) if body is not None else None,
+                "timestamp_ms": timestamp,
+                "attributes": json.loads(labels),
+            }
+            for name, kind, value, body, labels, timestamp in rows
+        ]
+        with httpx.Client(base_url=server.address, timeout=5) as ingest:
+            for service in ("vllm", "marinskyrl"):
+                batch_id = str(uuid4())
+                response = ingest.post(
+                    "/v1/telemetry",
+                    headers={"Idempotency-Key": batch_id},
+                    json={
+                        "version": 1,
+                        "batch_id": batch_id,
+                        "resource": {"service": service, "job_id": "/train" if service == "marinskyrl" else "/other"},
+                        "records": records,
+                    },
+                )
+                assert response.status_code == 200, response.text
+        ExponentialBackoff().wait_until_or_raise(
+            lambda: client.query("SELECT COUNT(*) FROM \"telemetry_v1.marinskyrl\" WHERE job_id = '/train'")
+            .column(0)[0]
+            .as_py()
+            == len(records),
+            timeout=Duration.from_seconds(10),
+            error_message="Histogram records were accepted but did not become query-visible",
+        )
+        source = Record(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=client.query)
+        app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+        params = {"identity_kind": "job_id", "identity": "/train", "from": 0, "to": 45_000, "bucket_ms": 15_000}
+        with TestClient(app) as bridge:
+            detail = bridge.get("/finelog/marin/v1/vllm/overview", params=params)
+            summary = bridge.get(
+                "/finelog/marin/v1/vllm/overview",
+                params={**params, "to": VLLM_DETAIL_MAX_WINDOW_MS + 45_000, "view": "run_summary"},
+            )
+        assert detail.status_code == summary.status_code == 200
+        assert [
+            (row["value"], row["samples"]) for row in detail.json() if row["metric"] == "ttft" and row["stat"] == "mean"
+        ] == [(pytest.approx(0.16), 5)]
+        assert [row["value"] for row in summary.json() if row["metric"] == "ttft_observations"] == [5]
+    finally:
+        client.close()
+        server.stop()
+
+
+def _embedded_overview_app(invalid_histogram, histogram_format="scalar"):
     database = _vllm_projection_database()
 
     def sample(name, value, timestamp, **labels):
@@ -97,7 +464,8 @@ def _embedded_overview_app(invalid_histogram):
         for name, reason, final in (("request_success_total", "length", 1), ("request_failure_total", "error", 100))
         for timestamp, value in ((0, 0), (15_000, final))
     ]
-    for family, mean in (
+    histograms = []
+    for family, scale in (
         ("request_time_per_output_token_seconds", 0.1),
         ("time_to_first_token_seconds", 2),
         ("inter_token_latency_seconds", 0.02),
@@ -107,17 +475,19 @@ def _embedded_overview_app(invalid_histogram):
     ):
         if invalid_histogram == "missing_component" and family == "inter_token_latency_seconds":
             continue  # Older MSRL runs did not export native ITL.
-        for component, final in (("sum", mean), ("count", 1), ("bucket", 1)):
-            labels = {**cumulative, **({"le": str(mean)} if component == "bucket" else {})}
-            samples += [
-                sample(f"{family}_{component}", value, timestamp, **labels)
-                for timestamp, value in ((0, 0), (15_000, final))
-            ]
-    samples += [
-        sample("request_generation_tokens_bucket", value, timestamp, le=bound, **cumulative)
-        for bound, final in (("10", 0), ("+Inf", 1))
-        for timestamp, value in ((0, 0), (15_000, final))
-    ]
+        bounds = (0.1 * scale, float(scale))
+        for sequence, bins, total in ((0, (0, 0, 0), 0), (1, (1, 2, 0), 0.3), (2, (3, 2, 0), 0.8)):
+            attributes = {**_HISTOGRAM_ATTRIBUTES, "engine": "physical-a"}
+            if histogram_format == "dual":
+                attributes["histogram_publication_id"] = f"physical-a:{sequence}"
+            scalar, structured = _histogram_rows(
+                family, bounds, (sequence * 15_000, sequence, bins, total * scale), attributes
+            )
+            if histogram_format in ("scalar", "dual") or (histogram_format == "mixed" and sequence < 2):
+                histograms.extend(scalar)
+            if histogram_format in ("structured", "dual") or (histogram_format == "mixed" and sequence > 0):
+                histograms.append(structured)
+    _insert_histograms(database, histograms)
     # A second engine must not skew the fleet mean/tails with a reset or partial scrape.
     for component in ("sum", "count", "bucket"):
         labels = {**cumulative, "engine": "physical-b", "engine_index": "1"}
@@ -144,6 +514,8 @@ def _embedded_overview_app(invalid_histogram):
     ]
     database.executemany(
         """INSERT INTO "telemetry_v1.marinskyrl"
+           (cluster, service, job_id, name, kind, value, resource_attributes_json,
+            attributes_json, timestamp_ms, seq)
            VALUES ('cw-a', 'marinskyrl', '/train', ?, 'gauge', ?, '{"worker":"driver"}', ?, ?, ?)""",
         [(*row, seq) for seq, row in enumerate(samples)],
     )
@@ -183,28 +555,43 @@ def _assert_dashboard_panels(client, dashboards, params):
 
 def _assert_overview_rows(rows, invalid_histogram):
     assert {row["section"] for row in rows} == VLLM_OVERVIEW_SECTIONS - {"run_timeline"}
-    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["detail", "no_conclusion"]
+    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["detail", "check_count_gap"]
     values = {(row["section"], row["metric"], row["stat"], row["series"], row["t"]): row["value"] for row in rows}
+    for metric, mean, p50, tail in (
+        ("ttft", 0.32, 0.2, 2),
+        ("inter_token_latency", 0.0032, 0.002, 0.02),
+        ("tpot", 0.016, 0.01, 0.1),
+        ("output_tokens", 16, 10, 100),
+    ):
+        if metric == "inter_token_latency" and invalid_histogram == "missing_component":
+            continue
+        for stat, expected in (("mean", mean), ("p50", p50), ("p90", tail), ("p99", tail)):
+            assert [
+                (row["value"], row["samples"])
+                for row in rows
+                if row["metric"] == metric and row["stat"] == stat and row["t"] is None
+            ] == [pytest.approx((expected, 5))]
     assert values[("request_outcome", "requests", "total", "stop", None)] == 1
     assert (
         values[("length_finish_fraction", "length_finish_fraction", "fraction", "length / all engine finishes", None)]
         == 0.5
     )
-    assert values[("output_length_distribution", "output_tokens", "interval_count", "100", None)] == 1
     assert [(row["series"], row["value"]) for row in rows if row["section"] == "output_length_distribution"] == [
-        ("10", 0),
-        ("100", 1),
+        ("10", 3),
+        ("100", 2),
         ("+Inf", 0),
     ]
     assert values[("request_rate", "requests", "rate", "stop", 15_000)] == pytest.approx(1 / 15)
-    assert values[("latency", "tpot", "mean_over_time", "time per output token", 15_000)] == 0.1
-    assert values[("latency", "ttft", "mean_over_time", "ttft", 15_000)] == 2
-    assert values[("latency", "prefill", "mean", "prefill", None)] == 1
+    assert values[("latency", "tpot", "mean_over_time", "time per output token", 15_000)] == pytest.approx(0.01)
+    assert values[("latency", "tpot", "mean_over_time", "time per output token", 30_000)] == pytest.approx(0.025)
+    assert values[("latency", "ttft", "mean_over_time", "ttft", 15_000)] == pytest.approx(0.2)
+    assert values[("latency", "ttft", "mean_over_time", "ttft", 30_000)] == pytest.approx(0.5)
+    assert values[("latency", "prefill", "mean", "prefill", None)] == pytest.approx(0.16)
     assert values[("latency", "prefill", "p90", "prefill", None)] == 1
-    assert values[("latency", "decode", "mean", "decode", None)] == 10
-    assert values[("workload", "output_tokens", "mean", "output_tokens", None)] == 100
+    assert values[("latency", "decode", "mean", "decode", None)] == pytest.approx(1.6)
+    assert values[("workload", "output_tokens", "mean", "output_tokens", None)] == 16
     histogram_rows = [row for row in rows if row["section"] in ("latency", "workload")]
-    assert all(row["samples"] == 1 for row in histogram_rows)
+    assert all(row["samples"] == {None: 5, 15_000: 3, 30_000: 2}[row["t"]] for row in histogram_rows)
     assert all(row["unit"] == "tokens" for row in histogram_rows if row["metric"] == "output_tokens")
     assert values[("saturation", "num_requests_running", "value", "num_requests_running", 15_000)] == 3
     assert values[("saturation", "num_requests_in_flight", "value", "num_requests_in_flight", 15_000)] == 4
@@ -223,15 +610,24 @@ def _assert_overview_rows(rows, invalid_histogram):
     if invalid_histogram == "missing_component":
         assert ("physical-a", "inter_token_latency_mean") not in engines
     else:
-        assert engines[("physical-a", "inter_token_latency_mean")] == 0.02
+        assert engines[("physical-a", "inter_token_latency_mean")] == pytest.approx(0.0032)
     assert ("physical-b", "generated_tokens_per_second") not in engines  # Missing is not idle.
     freshness = {row["series"].rsplit(":", 1)[-1]: row["status"] for row in rows if row["section"] == "freshness_detail"}
     assert freshness == {"physical-a": "stale_or_stopped", "physical-b": "fresh"}
 
 
-@pytest.mark.parametrize("invalid_histogram", ["reset", "missing_component"])
-def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
-    app, dashboards, params, queries = _embedded_overview_app(invalid_histogram)
+@pytest.mark.parametrize(
+    ("histogram_format", "invalid_histogram"),
+    [
+        ("scalar", "reset"),
+        ("scalar", "missing_component"),
+        ("structured", "reset"),
+        ("mixed", "reset"),
+        ("dual", "reset"),
+    ],
+)
+def test_dashboard_vllm_overview_end_to_end(histogram_format, invalid_histogram):
+    app, dashboards, params, queries = _embedded_overview_app(invalid_histogram, histogram_format)
     path = "/v1/vllm/overview"
 
     with TestClient(app) as client:
@@ -263,7 +659,10 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
     if invalid_histogram == "missing_component":
         assert not any(row["metric"] == "inter_token_latency" for row in summary_rows)
     else:
-        assert [row["value"] for row in summary_rows if row["metric"] == "inter_token_latency"] == [0.02]
+        assert [row["value"] for row in summary_rows if row["metric"] == "inter_token_latency"] == [
+            pytest.approx(0.0032)
+        ]
+    assert [row["value"] for row in summary_rows if row["metric"] == "ttft_observations"] == [5]
 
 
 def _standalone_overview_app():
@@ -271,7 +670,9 @@ def _standalone_overview_app():
     for cluster, values in (("cw-a", (100, 250, 10)), ("cw-b", (100, 160, 220))):
         for timestamp, value in zip((0, 60_000, 120_000), values, strict=True):
             database.execute(
-                """INSERT INTO "telemetry_v1.vllm" VALUES
+                """INSERT INTO "telemetry_v1.vllm"
+                (cluster, service, job_id, name, kind, value, resource_attributes_json,
+                 attributes_json, timestamp_ms, seq) VALUES
                 (?, 'vllm', '/serve', 'generation_tokens_total', 'gauge', ?, '{}',
                  '{"source_temporality":"cumulative_snapshot"}', ?, 0),
                 (?, 'vllm', '/serve', 'num_requests_waiting', 'gauge', 0, '{}',
@@ -363,7 +764,9 @@ def test_run_triage_count_gap_can_be_a_partial_window_without_a_failed_request()
         for timestamp, value in zip((0, 60_000, 5 * 3_600_000, 9 * 3_600_000), values, strict=True)
     ]
     database.executemany(
-        """INSERT INTO "telemetry_v1.vllm" VALUES
+        """INSERT INTO "telemetry_v1.vllm"
+           (cluster, service, job_id, name, kind, value, resource_attributes_json,
+            attributes_json, timestamp_ms, seq) VALUES
            ('cw-a', 'vllm', '/other-serve', ?, 'gauge', ?, '{}', ?, ?, 0)""",
         [
             (

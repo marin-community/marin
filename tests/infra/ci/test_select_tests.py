@@ -564,8 +564,19 @@ def test_deploy_change_selects_deploy_test(tmp_path: Path) -> None:
     assert leg_paths(matrix, "deploy") == ["infra/deploy/tests/test_cli.py"]
 
 
-def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
-    """A uv.lock bump reruns the full matrix but keeps every leg on the prebuilt wheel."""
-    matrix = select_matrix(["uv.lock"], tmp_path)
-    assert matrix, "broad trigger emits the full matrix"
-    assert all(leg.setup == "" for leg in matrix)
+@pytest.mark.parametrize(
+    ("changed", "source_build"),
+    [
+        (["uv.lock"], False),
+        (["infra/grafana/src/vllm_observability.py"], True),
+        (["infra/grafana/tests/test_vllm_observability.py"], True),
+        (["uv.lock", "infra/grafana/src/vllm_observability.py"], True),
+    ],
+)
+def test_dependency_and_dashboard_changes_select_the_required_finelog_build(tmp_path, changed, source_build):
+    matrix = select_matrix(changed, tmp_path)
+    finelog = next(leg for leg in matrix if leg.package == "marin-finelog")
+    assert finelog.setup == ("rust" if source_build else "")
+    assert finelog.test_paths == "lib/finelog/tests"
+    if not source_build:
+        assert all(leg.setup != "rust" for leg in matrix)

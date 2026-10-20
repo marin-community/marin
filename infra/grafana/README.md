@@ -759,6 +759,10 @@ docker run --rm -p 3000:8080 -e PORT=8080 marin-grafana
 # → http://localhost:3000 (without an IAP identity header, anonymous Viewer; panels need VPC access to finelog)
 ```
 
+The Finelog source-build CI lane runs the native histogram query contract. To run it locally
+from the repository root, use `uv run --project infra/grafana --python 3.12 --frozen --group dev --with ./lib/finelog/rust timeout 120s python -m pytest -m integration infra/grafana/tests/test_vllm_observability.py::test_vllm_histograms_roundtrip_native_finelog`.
+The server compiles before the test deadline; the regular bridge suite excludes this integration test.
+
 No alerting credentials are needed to start: both contact points are loopback
 webhooks, so Grafana boots without them and the bridge answers 503 on the alert
 routes until `LOOM_ALERT_URL` and the Slack settings are present.

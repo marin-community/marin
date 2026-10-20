@@ -118,6 +118,13 @@ jobs:
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
 
+      - name: Test vLLM dashboard against native Finelog
+        if: matrix.package == 'marin-finelog' && matrix.setup == 'rust'
+        run: |
+          uv run --project infra/grafana --python 3.12 --frozen --group dev \
+            --with ./lib/finelog/rust timeout 120s python -m pytest -m integration \
+            infra/grafana/tests/test_vllm_observability.py::test_vllm_histograms_roundtrip_native_finelog
+
   slow:
     if: ${{ github.event_name == 'schedule' }}
     name: slow
