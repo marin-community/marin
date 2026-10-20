@@ -3,15 +3,15 @@
 
 from collections import Counter
 
-from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, RolloutData
+from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON, Rollout
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.stage50_validate.evidence import Complete, Evidence, Incomplete, RewardStats
 from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind, Ungraded
 
 
-def rollout(grade: GradeResult, stop_reason: str = "stop") -> RolloutData:
-    return RolloutData("task", (), (), (), (), None, grade, stop_reason)
+def rollout(stop_reason: str = "stop") -> Rollout:
+    return Rollout("run", (), stop_reason)
 
 
 def graded(
@@ -21,11 +21,11 @@ def graded(
     stop_reason: str = "stop",
     code_error: bool = False,
 ) -> Graded:
-    return Graded(rollout(GradeResult(status, reward, passed=passed), stop_reason), code_error)
+    return Graded(rollout(stop_reason), GradeResult(status, reward, passed=passed), code_error)
 
 
 def ungraded(cause: Cause) -> Ungraded:
-    return Ungraded(cause, "detail", None)
+    return Ungraded(cause, "detail", None, None)
 
 
 def test_statistics_use_graded_outcomes_only_and_ungraded_ones_make_evidence_incomplete():

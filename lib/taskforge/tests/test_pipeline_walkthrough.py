@@ -32,7 +32,7 @@ from taskforge.spec.draft import assemble, requirements
 from taskforge.stage10_proposal.model import TaskProposal, parse
 from taskforge.stage20_triage.verdict import accept
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
-from taskforge.stage30_author.loader import load_program_source
+from taskforge.stage30_author.loader import SdkExports, load_program_source
 from taskforge.stage30_author.program import (
     RLEnvBuildProgram,
     rl_env_build_program,
@@ -215,6 +215,14 @@ async def review(summary: object) -> Decision:
     return Accept(band=BandOutcome.IN_BAND)
 
 
+NO_SDK_NAMES = SdkExports(defining_modules={})
+"""The walkthrough's programs read no name they leave unbound, so the loader has no SDK name to suggest."""
+
+
+def load_toy_program(source: str) -> RLEnvBuildProgram:
+    return load_program_source(source, NO_SDK_NAMES)
+
+
 def no_call(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("this stage does not run")
 
@@ -222,7 +230,7 @@ def no_call(*args: object, **kwargs: object) -> NoReturn:
 STAGES = StageFunctions(
     triage=accept,
     author=static_author(PROGRAM),
-    load_program=load_program_source,
+    load_program=load_toy_program,
     build=run_build,
     validate=validate,
     review=review,
@@ -251,7 +259,7 @@ class SourceAuthor:
 
     async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
-        return AuthoredProgram(load_program_source(self.source), self.source)
+        return AuthoredProgram(load_toy_program(self.source), self.source)
 
 
 HOST_FAILURE = BuildInfrastructureFailure("image_pull", "the sandbox image did not pull")
@@ -286,10 +294,14 @@ class SaveFailsOnce(JsonEventStore):
 
 
 def coordinator(
-    root: Path, stages: StageFunctions = STAGES, budget: WorkpieceBudget = BUDGET, digest: str = UNUSED_MODEL_DIGEST
+    root: Path,
+    stages: StageFunctions = STAGES,
+    budget: WorkpieceBudget = BUDGET,
+    digest: str = UNUSED_MODEL_DIGEST,
+    research: ResearchRequirement = ResearchRequirement.OFF,
 ) -> StageCoordinator:
     return StageCoordinator(
-        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, ResearchRequirement.OFF, digest
+        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, research, digest
     )
 
 
@@ -351,7 +363,7 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 
     def load_program(source: str) -> RLEnvBuildProgram:
         loaded.append(source)
-        return load_program_source(source)
+        return load_toy_program(source)
 
     log = InMemoryEventLog()
     stages = replace(STAGES, author=author, load_program=load_program)
@@ -365,28 +377,34 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
     assert log.events()[2].digest == PROGRAM.digest
 
 
+OFF = ResearchRequirement.OFF
+
+
 @pytest.mark.parametrize(
-    ("proposal", "budget", "digest", "refusal"),
+    ("proposal", "budget", "digest", "research", "refusal"),
     [
         (
             replace(PROPOSAL, body=PROPOSAL.body.replace("Multiply", "Add")),
             BUDGET,
             UNUSED_MODEL_DIGEST,
+            OFF,
             "opened for proposal",
         ),
-        (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, "opened under budget"),
-        (PROPOSAL, BUDGET, "another-model", "opened with model digest"),
+        (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, OFF, "opened under budget"),
+        (PROPOSAL, BUDGET, "another-model", OFF, "opened with model digest"),
+        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, ResearchRequirement.ENFORCED, "opened with research off"),
     ],
-    ids=["proposal", "budget", "model digest"],
+    ids=["proposal", "budget", "model digest", "research"],
 )
-async def test_a_relaunch_with_another_proposal_budget_or_model_digest_is_refused(
-    tmp_path, proposal, budget, digest, refusal
+async def test_a_relaunch_with_another_proposal_budget_model_digest_or_research_is_refused(
+    tmp_path, proposal, budget, digest, research, refusal
 ):
     await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL, InMemoryEventLog())
     before = tree_bytes(tmp_path)
 
+    relaunch = coordinator(tmp_path, budget=budget, digest=digest, research=research)
     with pytest.raises(ValueError, match=f"{WORKPIECE} was {refusal}"):
-        await run_workpiece(coordinator(tmp_path, budget=budget, digest=digest), WORKPIECE, proposal, InMemoryEventLog())
+        await run_workpiece(relaunch, WORKPIECE, proposal, InMemoryEventLog())
     assert tree_bytes(tmp_path) == before
 
 
@@ -536,7 +554,7 @@ class CutAuthor:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
             raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
-        return AuthoredProgram(load_program_source(SOURCE), SOURCE)
+        return AuthoredProgram(load_toy_program(SOURCE), SOURCE)
 
 
 async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_author_samples_again(tmp_path):

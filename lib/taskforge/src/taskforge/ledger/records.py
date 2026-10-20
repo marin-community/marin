@@ -4,7 +4,8 @@
 """Ledger entries: provenance and timing for LLM calls, steps, trials, stages and events.
 
 Callers time work with :func:`span`, which records an entry when the block exits, including when
-it raises (the exception propagates unchanged).
+it raises. The block's exception propagates; if recording its entry also fails, the exception
+carries a note saying so.
 
 ``cause`` is free-form text, by default the raised exception's class name. A classifying caller
 (the ``validate`` package) sets ``fields.cause = classify(exc).value`` before re-raising so the

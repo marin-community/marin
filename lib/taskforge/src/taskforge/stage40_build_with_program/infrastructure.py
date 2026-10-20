@@ -12,11 +12,15 @@ handing the program's author a traceback, because no revision of the program can
 Only errors the program cannot have caused are infrastructure:
 
 * ``NO_FACTORY``: the build needs a machine backend this host has no factory for (a laptop without
-  Docker). Lowering raises it, since RolloutEngine checks each machine's environment with its
+  Docker). Lowering raises it, since ``RolloutEngine.check`` checks each machine's environment with its
   factory before it acquires one. It is deterministic on the host (``HOST_REJECTIONS``): no retry here changes it, so the
   loop abandons the workpiece at once without retrying the build.
 * ``NO_IMAGE_BUILDER``: the build publishes a task image and this host has no ``ImageBuilder``.
   Also deterministic on the host.
+* ``IMAGE_JOB_FAILED``: a job publishing the task image failed for a host reason
+  (``sandbox.image_builder.ImageJobFailed``): it did not schedule, its worker was lost, it was
+  killed, the push failed, or the registry did not serve back the pushed image. An image whose build
+  job ran and failed (``BuildFailed``) is the program's.
 * ``SCHEDULING_TIMEOUT``: the factory itself gave up waiting for a machine (Iris could not
   schedule the sandbox). The engine's verifier deadline also covers the verifier machine's start,
   so every such deadline exceeds ``SANDBOX_SCHEDULING_TIMEOUT``; a shorter one would cancel the
@@ -42,6 +46,12 @@ controller refuses for the request itself (a code outside ``HOST_RPC_CODES``), a
 commands that fail. Shellbox raises a bare ``RuntimeError`` for both a failed Docker build and an
 unreachable Docker daemon, so those stay the program's too.
 
+An ``OSError`` raised outside the program's own frames (``storage_fault``) is the step store's: a
+storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``). It is not a
+``BuildInfrastructureFailure``, but neither the coordinator's build stage nor the agentic author
+hands it to the author, since no program change repairs the store. One raised by the program's own
+code is the program's.
+
 The proposal pins the solver's machine, so the host never chooses it: ``machine_available`` raises
 ``NO_FACTORY`` for a package machine on a host without the local backend and ``NO_IMAGE_BUILDER`` for
 a container proposal on a host without an image builder. ``run_build`` and the agentic author's
@@ -49,7 +59,8 @@ a container proposal on a host without an image builder. ``run_build`` and the a
 or its program spends a model call.
 """
 
-from collections.abc import Callable, Iterator, Mapping
+import traceback
+from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -57,7 +68,7 @@ from pathlib import Path
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rolloutengine.contracts import RolloutInterrupted, RolloutOperation
+from rolloutengine.models import RolloutInterrupted, RolloutOperation
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineFactory, MachineSpec, Result
 
 from taskforge.sandbox.factories import MachineHost, container_backend
@@ -86,6 +97,8 @@ class InfrastructureCause(StrEnum):
 
     NO_FACTORY = "no_factory"
     NO_IMAGE_BUILDER = "no_image_builder"
+    IMAGE_JOB_FAILED = "image_job_failed"
+    """A build or push job of ``publish_image`` failed for a host reason (``image_builder.ImageJobFailed``)."""
     NO_DECISION_MODEL = "no_decision_model"
     """The build grades a decision-model grader on a host whose services have no decision client."""
     DECISION_UNAVAILABLE = "decision_unavailable"
@@ -134,6 +147,35 @@ def _chain(error: BaseException) -> Iterator[BaseException]:
         yield current
         seen.add(id(current))
         current = current.__cause__ or current.__context__
+
+
+def exception_chain(error: BaseException) -> list[BaseException]:
+    """List ``error`` and the exceptions it was raised from or during, outermost first."""
+    chain: list[BaseException] = []
+    link: BaseException | None = error
+    while link is not None and link not in chain:
+        chain.append(link)
+        if link.__cause__ is not None:
+            link = link.__cause__
+        elif link.__suppress_context__:
+            link = None
+        else:
+            link = link.__context__
+    return chain
+
+
+def raised_in_program(error: BaseException, program_files: Collection[str]) -> bool:
+    """Whether a traceback in ``error``'s chain passes through ``program_files``, the program's step functions' files."""
+    return any(
+        frame.filename in program_files
+        for link in exception_chain(error)
+        for frame in traceback.extract_tb(link.__traceback__)
+    )
+
+
+def storage_fault(error: BaseException, program_files: Collection[str]) -> bool:
+    """Whether ``error`` is an ``OSError`` raised outside the program's frames, which only the step store raises."""
+    return isinstance(error, OSError) and not raised_in_program(error, program_files)
 
 
 def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure | None:

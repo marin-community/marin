@@ -71,6 +71,13 @@ def test_build_must_contain_its_dockerfile():
         DockerBuild(files=(resource("app/run.sh", b"echo\n"),))
 
 
+@pytest.mark.parametrize("paths", [("app", "app"), ("app", "app/run.sh"), ("app/run.sh", "app")])
+def test_build_context_paths_must_not_collide(paths):
+    files = tuple(resource(path, b"x") for path in paths)
+    with pytest.raises(ValueError, match="Path collision"):
+        DockerBuild(files=(resource("Dockerfile", b"FROM x\n"), *files))
+
+
 def test_context_over_the_total_limit_is_refused(tmp_path):
     write_context(tmp_path)
     (tmp_path / "blob.bin").write_bytes(b"x" * 1024)

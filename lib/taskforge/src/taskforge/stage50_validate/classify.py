@@ -3,11 +3,18 @@
 
 """The one classifier from trial failures to ``Cause``, and the trial outcome built on it.
 
-A failure is either an exception (a ``RolloutInterrupted`` from the engine with the original error
+A failure is either an exception (a ``GradedRolloutInterrupted`` from the engine with the original error
 as its ``__cause__``, a ``ModelClient`` error, a shellbox error such as ``MachineTerminated``) or a
-rollout the engine returned without a usable grade. A recognized original error wins over the
+``GradedRollout`` the engine returned without a usable grade. A recognized original error wins over the
 interrupted operation, so a ``ModelUnavailable`` during ``MODEL`` is ``MODEL_UNAVAILABLE``. Anything
 no rule matches is ``UNCLASSIFIED``, which ``Evidence`` counts like any other cause.
+
+Each interrupted operation has its causes. ``START`` is a machine that did not start, or the task's own
+setup; ``PREPARE``, the harness failing before its first model turn, is ``SESSION_PREPARE`` unless the task
+explains it; ``MODEL`` is the model's error, or ``MODEL_TIMEOUT``; ``ADVANCE``, a tool step that raised or
+outlived the tool-turn deadline, is ``TOOL_EXECUTION``; ``GRADE`` is output capture or the grader. ``ATTEMPT``
+is always ``ATTEMPT_TIMEOUT``: the engine reports it when the attempt deadline expired, also for a harness
+that ignored the deadline's cancellation and ended after it, and grades neither.
 
 A rollout with a grade can still have a cause. A task without a grader (``NoGrader``) grades
 ``UNAVAILABLE``, which is ``VERIFIER_SKIPPED``. A verifyit ``pytest`` grader scores a candidate whose
@@ -25,11 +32,12 @@ import traceback
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rolloutengine.contracts import (
+from rolloutengine.models import (
     LENGTH_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     GenerationLimitReached,
-    RolloutData,
+    GradedRollout,
+    GradedRolloutInterrupted,
     RolloutInterrupted,
     RolloutOperation,
 )
@@ -61,13 +69,13 @@ CANDIDATE_CODE_REASONS = frozenset({"startup_error", "collection_error"})
 """The ``reason`` values in a verifyit pytest verdict's detail when the candidate's code did not load."""
 
 
-def classify(failure: BaseException | RolloutData, task: TaskSpec) -> Cause:
+def classify(failure: BaseException | GradedRollout, task: TaskSpec) -> Cause:
     """Map an exception, or a rollout of ``task`` returned without a usable grade, to its ``Cause``.
 
     Raises:
         ValueError: ``failure`` is a rollout with a usable grade.
     """
-    if isinstance(failure, RolloutData):
+    if isinstance(failure, GradedRollout):
         return _grade_cause(failure, task)
     return _exception_cause(failure)
 
@@ -94,26 +102,27 @@ def candidate_code_error(grade: GradeResult, task: TaskSpec) -> bool:
     )
 
 
-def trial_outcome(result: RolloutData | Exception, task: TaskSpec) -> Outcome:
-    """The outcome of one engine run: what ``RolloutEngine.run`` returned or raised.
+def trial_outcome(result: GradedRollout | Exception, task: TaskSpec) -> Outcome:
+    """The outcome of one engine run: what ``RolloutEngine.run_task`` returned or raised.
 
     A total-turn deadline is a normal ending: RolloutEngine grades the state the agent left, and the
     trial is ``Graded`` with that grade and ``timed_out`` set, so timed-out trials stay in the
     denominator. A deadline that expired before the first response leaves nothing to grade
     (``UNAVAILABLE``), which is ``Ungraded(AGENT_TIMEOUT)``.
     """
-    if isinstance(result, RolloutData):
-        grade = result.grade
+    if isinstance(result, GradedRollout):
+        rollout, grade = result.rollout, result.grade
         if grade.status in GRADED_STATUSES and reward_in_range(grade):
-            return Graded(result, candidate_code_error(grade, task))
+            return Graded(rollout, grade, candidate_code_error(grade, task))
         if grade.status in GRADED_STATUSES:
             detail = f"reward {grade.reward} is outside the grader's score range [{grade.score_min}, {grade.score_max}]"
-            return Ungraded(classify(result, task), detail, result)
-        return Ungraded(classify(result, task), grade.error or str(grade.status), result)
+            return Ungraded(classify(result, task), detail, rollout, grade)
+        return Ungraded(classify(result, task), grade.error or str(grade.status), rollout, grade)
     cause = classify(result, task)
     detail = "".join(traceback.format_exception(result))
     rollout = result.rollout if isinstance(result, RolloutInterrupted) else None
-    return Ungraded(cause, detail, rollout)
+    grade = result.grade if isinstance(result, GradedRolloutInterrupted) else None
+    return Ungraded(cause, detail, rollout, grade)
 
 
 def _exception_cause(error: BaseException) -> Cause:
@@ -149,7 +158,7 @@ def _matches_rolloutengine_setup_message(error: BaseException | None) -> bool:
 
 def _is_setup_failure(error: BaseException | None, operation: RolloutOperation) -> bool:
     if operation is RolloutOperation.PREPARE and isinstance(error, ValueError):
-        return True  # the default task session's prepare: the environment lacks the task's required capabilities
+        return True  # the shell harness before its first turn: the environment lacks the task's required capabilities
     return _matches_rolloutengine_setup_message(error)
 
 
@@ -196,8 +205,8 @@ def _interruption_cause(error: RolloutInterrupted) -> Cause:
     return Cause.UNCLASSIFIED
 
 
-def _grade_cause(rollout: RolloutData, task: TaskSpec) -> Cause:
-    grade = rollout.grade
+def _grade_cause(result: GradedRollout, task: TaskSpec) -> Cause:
+    rollout, grade = result.rollout, result.grade
     if grade.status in GRADED_STATUSES:
         if not reward_in_range(grade):
             return Cause.GRADER_REWARD_RANGE
@@ -212,6 +221,8 @@ def _grade_cause(rollout: RolloutData, task: TaskSpec) -> Cause:
         return Cause.INVALID_TASK
     if rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON:
         return Cause.AGENT_TIMEOUT
-    if rollout.stop_reason == LENGTH_STOP_REASON and not rollout.steps:
+    if rollout.stop_reason == LENGTH_STOP_REASON and not any(
+        conversation.steps for conversation in rollout.conversations
+    ):
         return Cause.GENERATION_LIMIT
     return Cause.NO_GRADE

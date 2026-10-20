@@ -16,7 +16,6 @@ from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.glm_client import Pool
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
-from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.build_process import (
     LOG_FILE,
     REQUEST,
@@ -40,6 +39,7 @@ from taskforge.stage40_build_with_program.context import (
     ExpiredClock,
 )
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
+from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from tests.stage30_author.programs import PROGRAM as PLAIN_PROGRAM
@@ -127,7 +127,7 @@ async def test_a_build_in_a_child_process_writes_the_draft_and_ledger_of_the_bui
     for _ in range(2):
         fake_glm.stream(content=json.dumps({"text": "What is 6 * 7?"}))
     in_process = await run_build(
-        load_program_source(PROGRAM),
+        load_program(PROGRAM),
         proposal,
         WORKPIECE,
         tmp_path / "here" / "round",

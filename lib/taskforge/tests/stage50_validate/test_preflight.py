@@ -156,9 +156,9 @@ async def test_a_setup_command_writing_under_a_read_only_root_moves_the_task_mac
         cpython_task(("mkdir -p /workspace /opt/gen",)), MachineHost.LAPTOP, engine.factories, engine, DEADLINES
     )
 
-    assert result.lowered.runtime.task_machine is not None
-    assert result.lowered.runtime.task_machine.backend == Backend.DOCKER.value
-    assert result.lowered.task.environment_requirements.docker_image == GRADER_BASE_IMAGE
+    assert result.spec.task_machine is not None
+    assert result.spec.task_machine.backend == Backend.DOCKER.value
+    assert result.spec.task.environment_requirements.docker_image == GRADER_BASE_IMAGE
     assert result.fallback is not None
     assert (result.fallback.from_backend, result.fallback.to_backend) == (Backend.LOCAL.value, Backend.DOCKER.value)
     assert result.fallback.cause is Cause.TASK_SETUP
@@ -172,11 +172,11 @@ async def test_the_fallback_moves_the_task_machine_alone_and_keeps_the_verifier_
     result = await preflight(task, MachineHost.LAPTOP, engine.factories, engine, DEADLINES)
 
     assert result.fallback is not None and result.fallback.to_backend == Backend.DOCKER.value
-    runtime = result.lowered.runtime
-    assert runtime.task_machine is not None and runtime.task_machine.backend == Backend.DOCKER.value
-    assert runtime.verifier_machine is not None and runtime.verifier_machine.backend == Backend.LOCAL.value
-    assert result.lowered.task.environment_requirements.docker_image == GRADER_BASE_IMAGE
-    grading = grading_environment(result.lowered.task)
+    spec = result.spec
+    assert spec.task_machine is not None and spec.task_machine.backend == Backend.DOCKER.value
+    assert spec.verifier_machine is not None and spec.verifier_machine.backend == Backend.LOCAL.value
+    assert result.spec.task.environment_requirements.docker_image == GRADER_BASE_IMAGE
+    grading = grading_environment(result.spec.task)
     assert grading is not None and grading.docker_image is None and grading.package_spec == LOCAL_CPYTHON
 
 
@@ -203,8 +203,8 @@ async def test_a_local_machine_the_host_failed_once_keeps_the_local_backend():
     )
 
     assert result.fallback is None and local.creates == 2
-    assert result.lowered.runtime.task_machine is not None
-    assert result.lowered.runtime.task_machine.backend == Backend.LOCAL.value
+    assert result.spec.task_machine is not None
+    assert result.spec.task_machine.backend == Backend.LOCAL.value
 
 
 async def test_a_task_whose_setup_runs_locally_keeps_the_local_backend():
@@ -215,8 +215,8 @@ async def test_a_task_whose_setup_runs_locally_keeps_the_local_backend():
     )
 
     assert result.fallback is None
-    assert result.lowered.runtime.task_machine is not None
-    assert result.lowered.runtime.task_machine.backend == Backend.LOCAL.value
+    assert result.spec.task_machine is not None
+    assert result.spec.task_machine.backend == Backend.LOCAL.value
 
 
 async def test_a_host_without_the_local_backend_is_not_probed():
@@ -227,8 +227,8 @@ async def test_a_host_without_the_local_backend_is_not_probed():
     )
 
     assert result.fallback is None
-    assert result.lowered.runtime.task_machine is not None
-    assert result.lowered.runtime.task_machine.backend == Backend.DOCKER.value
+    assert result.spec.task_machine is not None
+    assert result.spec.task_machine.backend == Backend.DOCKER.value
 
 
 async def test_a_package_machine_is_neither_probed_nor_moved_off_the_local_backend():
@@ -241,5 +241,5 @@ async def test_a_package_machine_is_neither_probed_nor_moved_off_the_local_backe
     result = await preflight(task, MachineHost.LAPTOP, engine.factories, engine, DEADLINES)
 
     assert result.fallback is None and local.creates == 0
-    assert result.lowered.runtime.task_machine is not None
-    assert result.lowered.runtime.task_machine.backend == Backend.LOCAL.value
+    assert result.spec.task_machine is not None
+    assert result.spec.task_machine.backend == Backend.LOCAL.value

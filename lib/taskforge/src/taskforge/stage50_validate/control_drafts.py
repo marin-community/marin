@@ -8,7 +8,8 @@ section calls for, so their ids and expectations follow the proposal. It sends a
 when ``validate_controls`` refuses the set, when a control's reward bounds cross the grader's
 declared rejection ceiling (``check_expectations``: the most a submission wrong in substance can
 earn under the grader's partial-credit scheme), or when a control repeats a candidate the grader
-step graded while it prototyped the grader (``check_controls_not_graded``): controls are written,
+step graded while it prototyped the grader, the same final reply with the same files
+(``check_controls_not_graded``): controls are written,
 not fitted to the grader. The reference answer and the empty answer are exempt, since the grader step
 must grade both, and they are also the usual reference and malformed controls. The grader comes
 from the draft's ``grader`` step output (``stage40_build_with_program.run.step_output``), so the reference
@@ -31,7 +32,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import BaseModel, Field, field_validator
 from rigging.filesystem.atomic import atomic_rename
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import TaskResource, TaskSpec, TextMessage, format_conversation, normalized_absolute_path
+from taskcompendium.models import TaskResource, TaskSpec, format_conversation, normalized_absolute_path
 from taskcompendium.runtime.resources import resource_bytes
 
 from taskforge.llm.client import ModelClient
@@ -44,7 +45,6 @@ from taskforge.spec.controls import (
     ControlKind,
     Expectation,
     Transcript,
-    Workspace,
     check_expectations,
     controls_json,
     parse_controls,
@@ -54,7 +54,7 @@ from taskforge.spec.controls import (
 )
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage40_build_with_program.context import BuildFailure
-from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
+from taskforge.stage40_build_with_program.outputs import Grader
 from taskforge.stage40_build_with_program.sdk import SUBMISSION, checked_structured, files_text, task_messages
 
 CONTROLS_FILE = "controls.json"
@@ -152,22 +152,13 @@ def file_set(files: Sequence[TaskResource]) -> frozenset[tuple[str, bytes]]:
     return frozenset((resource.path, resource_bytes(resource)) for resource in files)
 
 
-def _is_graded(control: Control, graded: Sequence[GradedCandidate], exempt_replies: frozenset[str]) -> bool:
-    """Whether ``control`` is one of the ``graded`` candidates.
+def submission(draft: ControlDraft) -> tuple[str, frozenset[tuple[str, bytes]]]:
+    """The draft's final reply and its files as (path relative to the machine root, content) pairs.
 
-    A workspace control matches a candidate with the same files. A reply-only transcript matches a
-    candidate with the same reply and no files. A transcript with shell calls writes files no
-    candidate records, so it matches on its final reply alone, unless that reply is exempt.
+    A ``GradedCandidate`` reads the same way through ``file_set``, so the two compare by what they submit.
     """
-    if isinstance(control.payload, Workspace):
-        files = file_set(control.payload.files)
-        return bool(files) and any(file_set(c.files) == files for c in graded)
-    final = control.payload.turns[-1]
-    if not isinstance(final, TextMessage):
-        return False
-    if control.payload.calls():
-        return final.content not in exempt_replies and any(c.reply == final.content for c in graded)
-    return any(c.reply == final.content and not c.files for c in graded)
+    files = frozenset((str(PurePosixPath(f.path).relative_to("/")), f.content.encode()) for f in draft.files)
+    return draft.final_reply, files
 
 
 def check_control_files(drafts: Sequence[ControlDraft], output_paths: Sequence[str]) -> None:
@@ -194,16 +185,16 @@ def check_control_files(drafts: Sequence[ControlDraft], output_paths: Sequence[s
         )
 
 
-def check_controls_not_graded(controls: Sequence[Control], grader: Grader) -> None:
-    """Refuse a control that repeats a candidate in ``grader.prototyped``, other than the exempt two.
+def check_controls_not_graded(drafts: Sequence[ControlDraft], grader: Grader) -> None:
+    """Refuse a control whose final reply and files repeat a candidate in ``grader.prototyped``, other than the
+    exempt two.
 
     Raises:
         ValueError: naming the controls that repeat a prototyped candidate.
     """
     exempt = {("", file_set(())), (grader.reference_reply, file_set(grader.reference_files))}
-    candidates = [c for c in grader.prototyped if (c.reply, file_set(c.files)) not in exempt]
-    exempt_replies = frozenset({"", grader.reference_reply})
-    repeated = [control.id for control in controls if _is_graded(control, candidates, exempt_replies)]
+    graded = {(c.reply, file_set(c.files)) for c in grader.prototyped} - exempt
+    repeated = [draft.id for draft in drafts if submission(draft) in graded]
     if repeated:
         raise ValueError(
             f"controls {repeated} are candidates the grader step graded while it prototyped the grader. Controls "
@@ -302,7 +293,7 @@ async def write_controls(
             controls = [control_from_draft(c) for c in submitted.controls]
             validate_controls(task, controls)
             check_expectations(controls, grader.rejection_ceiling)
-            check_controls_not_graded(controls, grader)
+            check_controls_not_graded(submitted.controls, grader)
         except ValueError as error:
             return str(error)
         return None

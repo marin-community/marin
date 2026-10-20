@@ -6,8 +6,9 @@
 ``load_program_source`` runs the module body in the calling process. The build child bounds the
 steps it runs, but a caller that only loads a program (the agentic author's loader, build and submit
 tools) would block its event loop on a module body that spins. ``load_program_in_process`` runs the
-loader in a child process for at most ``wall_timeout`` seconds, with the source on its stdin, and
-reads back the program's manifest (``author.program_manifest``) or the loader's refusal.
+loader in a child process for at most ``wall_timeout`` seconds, with the source and the caller's
+``SdkExports`` on its stdin, and reads back the program's manifest (``author.program_manifest``) or the
+loader's refusal.
 
 A child that exits without a result, as when the kernel killed it for memory, raises
 ``LoaderProcessFailed``: the host's fault, not the program's. This stage cannot import the build's
@@ -24,7 +25,7 @@ from pydantic import BaseModel
 
 from taskforge.child_process import stop_process_group
 from taskforge.stage30_author.author import program_manifest
-from taskforge.stage30_author.loader import load_program_source
+from taskforge.stage30_author.loader import SdkExports, load_program_source
 
 MODULE = "taskforge.stage30_author.load_process"
 STDERR_TAIL = 2000
@@ -48,6 +49,13 @@ class ProgramManifest(BaseModel):
     steps: dict[str, StepManifest]
 
 
+class LoadRequest(BaseModel):
+    """What the child reads: the program's source and the names its refusals suggest from."""
+
+    source: str
+    sdk: SdkExports
+
+
 class LoadResult(BaseModel):
     """What the child writes: the manifest of a program that loads, or the loader's refusal."""
 
@@ -55,8 +63,8 @@ class LoadResult(BaseModel):
     error: str | None = None
 
 
-async def load_program_in_process(source: str, *, wall_timeout: float) -> ProgramManifest:
-    """The manifest of ``source``, loaded by ``load_program_source`` in a child process.
+async def load_program_in_process(source: str, sdk: SdkExports, *, wall_timeout: float) -> ProgramManifest:
+    """The manifest of ``source``, loaded by ``load_program_source`` with ``sdk`` in a child process.
 
     Raises:
         ValueError: the loader refuses ``source`` (its message), or the module body ran past
@@ -67,7 +75,8 @@ async def load_program_in_process(source: str, *, wall_timeout: float) -> Progra
         sys.executable, "-m", MODULE, stdin=PIPE, stdout=PIPE, stderr=PIPE, start_new_session=True
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(source.encode()), wall_timeout)
+        request = LoadRequest(source=source, sdk=sdk).model_dump_json().encode()
+        stdout, stderr = await asyncio.wait_for(process.communicate(request), wall_timeout)
     except TimeoutError:
         raise ValueError(
             f"the program's module body ran for more than {wall_timeout:.0f} seconds without returning; keep "
@@ -88,9 +97,10 @@ async def load_program_in_process(source: str, *, wall_timeout: float) -> Progra
 
 
 def main() -> None:
-    source = sys.stdin.read()
+    request = LoadRequest.model_validate_json(sys.stdin.read())
     try:
-        result = LoadResult(manifest=ProgramManifest.model_validate(program_manifest(load_program_source(source))))
+        program = load_program_source(request.source, request.sdk)
+        result = LoadResult(manifest=ProgramManifest.model_validate(program_manifest(program)))
     except ValueError as error:
         result = LoadResult(error=str(error))
     sys.stdout.write(json.dumps(result.model_dump()))

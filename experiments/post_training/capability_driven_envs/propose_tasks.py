@@ -16,12 +16,13 @@ capability, the driver:
 Repairing REPAIR verdicts, building accepted proposals with ``stage40_build_with_program`` and validating the
 drafts belong to a stage coordinator, which Taskforge does not include, so the driver stops after
 the verdicts. When a capability's plan stays invalid or its model calls run out of retries, the
-driver records the error as that capability's failure and still writes the run's outputs:
+driver records the error as that capability's failure and still writes the run's outputs, the
+proposals included when only their review failed:
 
 * ``OUTPUT_DIR/calls/``, the rubric's ``CallStore``, written as the calls finish.
 * ``OUTPUT_DIR/<capability id>/`` with ``plan.request.json`` and ``plan.completions.json``, and per
-  slot ``slot-NN.request.json``, ``slot-NN.completions.json``, then ``slot-NN.md`` and
-  ``slot-NN.verdict.json`` for a proposal or ``slot-NN.failure.txt`` for a slot failure.
+  slot ``slot-NN.request.json``, ``slot-NN.completions.json``, then ``slot-NN.md`` and, unless the
+  review failed, ``slot-NN.verdict.json`` for a proposal, or ``slot-NN.failure.txt`` for a slot failure.
 * ``OUTPUT_DIR/summary.json``, mapping each capability id to its failure or to the decision or
   failure of each slot.
 
@@ -74,11 +75,16 @@ from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_
 logger = logging.getLogger(__name__)
 
 CALLS_DIR = "calls"
+MODEL_ERRORS = (StructuredOutputError, ModelRequestRejected, ModelUnavailable)
+"""The errors that fail one capability's proposals or their review, rather than the run."""
 
 
 @dataclass(frozen=True)
 class ProposedCapability:
-    """A capability's proposal batch and the verdict of each proposal, by slot, or the error that stopped it."""
+    """A capability's proposal batch and the verdict of each proposal, by slot, or the error that stopped it.
+
+    ``batch`` is ``None`` when proposing failed, and ``verdicts`` is empty when the review failed after it.
+    """
 
     capability_id: str
     batch: ProposalBatch | None
@@ -100,15 +106,19 @@ async def propose_capability(
     """Propose ``slots`` slots for ``idea`` and evaluate every proposal.
 
     A model error or a plan still invalid after its repair becomes the capability's ``failure``. The
-    function returns it in place of raising it, so the other capabilities proceed.
+    function returns it in place of raising it, so the other capabilities proceed, and keeps the batch
+    when only the review failed.
     """
     context = CheckContext(allowed_combinations=ALL_COMBINATIONS)
     try:
         batch = await source.propose(idea, slots)
-        outcomes = [s for s in batch.slots if isinstance(s, SlotProposal)]
-        verdicts = await asyncio.gather(*(evaluate(s.proposal, CHECKS, rubric, context) for s in outcomes))
-    except (StructuredOutputError, ModelRequestRejected, ModelUnavailable) as error:
+    except MODEL_ERRORS as error:
         return ProposedCapability(idea.capability_id, None, {}, str(error))
+    outcomes = [s for s in batch.slots if isinstance(s, SlotProposal)]
+    try:
+        verdicts = await asyncio.gather(*(evaluate(s.proposal, CHECKS, rubric, context) for s in outcomes))
+    except MODEL_ERRORS as error:
+        return ProposedCapability(idea.capability_id, batch, {}, f"review: {error}")
     return ProposedCapability(
         idea.capability_id, batch, {s.slot: v for s, v in zip(outcomes, verdicts, strict=True)}, None
     )
@@ -137,9 +147,9 @@ async def propose_tasks(
 
 def capability_summary(proposed: ProposedCapability) -> str | dict[str, str]:
     """Summarize ``proposed`` as its failure, or as each slot's decision or slot failure."""
-    if proposed.batch is None:
-        assert proposed.failure is not None
+    if proposed.failure is not None:
         return proposed.failure
+    assert proposed.batch is not None
     return {
         str(outcome.slot): (
             str(proposed.verdicts[outcome.slot].decision) if isinstance(outcome, SlotProposal) else outcome.error
@@ -164,7 +174,8 @@ def write_outputs(output_dir: Path, proposed: Sequence[ProposedCapability]) -> N
             (directory / f"{name}.completions.json").write_text(pretty_json(outcome.completions))
             if isinstance(outcome, SlotProposal):
                 (directory / f"{name}.md").write_text(render(outcome.proposal))
-                (directory / f"{name}.verdict.json").write_text(capability.verdicts[outcome.slot].to_json())
+                if outcome.slot in capability.verdicts:
+                    (directory / f"{name}.verdict.json").write_text(capability.verdicts[outcome.slot].to_json())
             else:
                 (directory / f"{name}.failure.txt").write_text(outcome.error)
     summary = {capability.capability_id: capability_summary(capability) for capability in proposed}

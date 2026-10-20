@@ -5,8 +5,8 @@
 
 Every attempt of every trial is one ``TRIAL`` ledger span (``step`` is ``<kind>/<trial>/<attempt>``,
 ``cause`` is the ``Cause`` value of an ungraded attempt) and one JSON file under
-``<evidence_dir>/<kind>/<trial>/attempt-<n>.json`` holding the outcome and the full ``RolloutData``
-(or the traceback when the engine kept no rollout). Both carry ``cleanup_errors``, the number of
+``<evidence_dir>/<kind>/<trial>/attempt-<n>.json`` holding the outcome, its grade and the full
+``Rollout`` (or the traceback when the engine kept no rollout). Both carry ``cleanup_errors``, the number of
 cleanup actions that failed or overran (RolloutEngine's ``cleanup_error_count``), so a leaked
 machine shows in summaries; it is ``None`` when the engine kept no rollout.
 
@@ -18,27 +18,30 @@ its own model, ``model.for_step(<kind>/<trial>/<attempt>)``: a ``GlmRolloutModel
 ``LLM_CALL`` spans under the attempt's step and routes on it, so the k trials of a workpiece do not
 share one prefix-cache key.
 
-Every trial runs under the engine's messages trace (``TaskSessionSpec.trace = MESSAGES``, set by
+Every trial runs under the engine's messages trace (``TaskRolloutSpec.trace = MESSAGES``, set by
 ``EngineSettings.apply``): a trial is graded and never trained on, so the engine records the token
 ids a model reports without checking them, with an all-zero loss mask, and a model's next prompt
-need not extend the ids of its last turn. The attempt span's ``tokens_in`` and
-``tokens_out`` sum the prompt and response ids of the attempt's turns.
+need not extend the ids of its last turn. No trial has a token budget (``RolloutLimits.max_total_tokens``
+is ``None``). The attempt span's ``tokens_in`` and ``tokens_out`` sum the ``usage`` of the turns of
+every conversation of the attempt; a scripted turn reports none and counts nothing.
 
 A graded attempt's record says whether the candidate's own code did not load
 (``candidate_code_error``); the span carries ``candidate_code_error="true"`` when it did.
 
 Validation owns its trials' deadlines and engine limits: ``TrialPlan.deadlines`` replaces the
-total-turn and attempt deadlines of the builder's ``TaskSessionSpec`` (``Deadlines.apply``) and
-``EngineSettings.apply`` its trace and its turn, command, tool-turn, model-turn and cleanup limits,
-so every trial is bounded whatever the builder set, and the ledger's ``input_hash`` covers the
-effective ``LoweredTaskSpec`` (``task_digest``). The builder's verifier deadline and machine settings stand.
+total-turn and attempt deadlines of the builder's ``RolloutLimits`` (``Deadlines.apply``) and
+``EngineSettings.apply`` its trace and its turn, tool-turn, model-turn and cleanup limits, while the
+engine ``EngineSettings.engine`` builds registers the shell harness with its command timeout, so every
+trial is bounded whatever the builder set. The ledger's ``input_hash`` is ``task_digest``, over
+Taskforge's own record of what the trial ran (``trial_record``): the task, the machine selections, the
+effective limits and the command timeout. The builder's verifier deadline and machine settings stand.
 
-The attempt file holds the whole ``RolloutData``, steps included: a validation round is reviewed
-from its files alone, and the final reply, the tool calls and the per-turn usage are read from the
-steps.
+The attempt file holds the whole ``Rollout``, every conversation and its steps included: a validation
+round is reviewed from its files alone, and the final reply, the tool calls and the per-turn usage are
+read from the steps.
 
 The answer format is part of the task (``TaskSpec.answer_format``), so ``input_hash`` covers it
-with the rest of the lowered spec. A task whose format cannot carry its answer for its grader
+with the rest of the task. A task whose format cannot carry its answer for its grader
 (TaskCompendium ``submission_compatibility``) is not started: each of its trials is one
 ``SUBMISSION_UNSUPPORTED`` attempt naming the reasons.
 
@@ -57,16 +60,16 @@ import base64
 import copy
 import dataclasses
 import json
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from pydantic import JsonValue
 from rigging.timing import ExponentialBackoff
-from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutData
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.spec import LoweredTaskSpec, TraceMode
+from rolloutengine.models import GradedRollout, Model, Rollout, RolloutStep, TaskRolloutSpec, TraceMode
 from shellbox.machine import MachineFactory
 from taskcompendium.models import CONVERSATION_ANSWERS, TaskSpec
 from taskcompendium.submission import submission_compatibility
@@ -74,34 +77,33 @@ from taskcompendium.submission import submission_compatibility
 from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
 from taskforge.sandbox.factories import Refusal, task_refusals
+from taskforge.spec import draft
 from taskforge.spec.decision import DecisionClient, run_decision_trial, task_decision_grader
 from taskforge.stage50_validate.classify import trial_outcome
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
-
-type RolloutModel = Callable[[ModelRequest], Awaitable[ModelTurn]]
 
 
 class TrialModel(Protocol):
     """A RolloutEngine model that each attempt binds to its ledger step, as ``GlmRolloutModel`` is."""
 
-    def for_step(self, step: str) -> RolloutModel: ...
+    def for_step(self, step: str) -> Model: ...
 
 
 ATTEMPT_PREFIX = "attempt-"
 """Each attempt file is ``<evidence_dir>/<kind>/<trial>/attempt-<n>.json``."""
 CLEANUP_ERROR_COUNT = "cleanup_error_count"
-"""The ``RolloutData.metrics`` key where RolloutEngine counts failed cleanup actions."""
+"""The ``Rollout.metrics`` key where RolloutEngine counts failed cleanup actions."""
 
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """The machine factories ``RolloutEngine`` runs on, and the session trace and limits validation
-    imposes on every trial.
+    """The machine factories ``RolloutEngine`` runs on, the shell command timeout its shell harness has, and
+    the trace and limits validation imposes on every trial.
 
     ``factories`` is keyed by shellbox ``Backend`` value, as ``machine_factories`` returns it.
     ``command_timeout`` bounds one shell command and ``tool_turn_timeout`` one tool turn, so the first
     must be shorter. ``model_turn_timeout`` bounds one model call. ``cleanup_timeout`` bounds each
-    cleanup action (closing a session or machine); the engine records a cleanup that fails or overruns
+    cleanup action (closing a tool session or machine); the engine records a cleanup that fails or overruns
     in ``grade.diagnostics``. ``decision`` grades decision-model tasks on the host, ``None`` on a host
     without a decision model, where such a task is not started.
     """
@@ -122,28 +124,27 @@ class EngineSettings:
         if self.model_turn_timeout <= 0 or self.cleanup_timeout <= 0:
             raise ValueError("EngineSettings needs positive model_turn_timeout and cleanup_timeout")
 
-    def apply(self, lowered: LoweredTaskSpec) -> LoweredTaskSpec:
-        """``lowered`` under the messages trace, with these session limits in place of the builder's."""
-        session = lowered.session.model_copy(
+    def apply(self, spec: TaskRolloutSpec) -> TaskRolloutSpec:
+        """``spec`` under the messages trace, with these limits in place of the builder's."""
+        limits = spec.limits.model_copy(
             update={
-                "trace": TraceMode.MESSAGES,
                 "max_turns": self.max_turns,
-                "command_timeout": self.command_timeout,
                 "tool_turn_timeout": self.tool_turn_timeout,
                 "model_turn_timeout": self.model_turn_timeout,
                 "cleanup_timeout": self.cleanup_timeout,
             }
         )
-        return lowered.model_copy(update={"session": session})
+        return spec.model_copy(update={"limits": limits, "trace": TraceMode.MESSAGES})
 
-    def engine(self, model: RolloutModel) -> RolloutEngine:
-        return RolloutEngine(model, self.factories)
+    def engine(self) -> RolloutEngine:
+        """The engine every trial runs on: ``factories``, and the shell harness with ``command_timeout``."""
+        return draft.rollout_engine(self.factories, command_timeout=self.command_timeout)
 
 
 def submission_refusal(task: TaskSpec) -> str | None:
     """Why the task's answer format cannot carry its answer, or ``None`` when it can.
 
-    Only an answer read from the conversation has a format to check, as in RolloutEngine's session.
+    Only an answer read from the conversation has a format to check, as in RolloutEngine's shell harness.
     """
     if task.answer_type not in CONVERSATION_ANSWERS:
         return None
@@ -159,7 +160,7 @@ class Deadlines:
     state the agent left (stop reason ``total_turn_timeout``), or reports no grade when no turn had
     completed (``Cause.AGENT_TIMEOUT``). ``attempt_timeout`` bounds the whole attempt, machine start
     and grading included. They are a property of the validation run, not of the task, so they
-    replace the builder's ``TaskSessionSpec`` values rather than living in the ``TaskSpec``.
+    replace the builder's ``RolloutLimits`` values rather than living in the ``TaskSpec``.
     """
 
     total_turn_timeout: float
@@ -169,12 +170,12 @@ class Deadlines:
         if not 0 < self.total_turn_timeout < self.attempt_timeout:
             raise ValueError("Deadlines need 0 < total_turn_timeout < attempt_timeout")
 
-    def apply(self, lowered: LoweredTaskSpec) -> LoweredTaskSpec:
-        """``lowered`` with these deadlines in place of its session's own."""
-        session = lowered.session.model_copy(
+    def apply(self, spec: TaskRolloutSpec) -> TaskRolloutSpec:
+        """``spec`` with these deadlines in place of its own."""
+        limits = spec.limits.model_copy(
             update={"total_turn_timeout": self.total_turn_timeout, "attempt_timeout": self.attempt_timeout}
         )
-        return lowered.model_copy(update={"session": session})
+        return spec.model_copy(update={"limits": limits})
 
 
 @dataclass(frozen=True)
@@ -219,39 +220,41 @@ class TrialPlan:
 
 
 async def run_trials(
-    lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: TrialModel
+    spec: TaskRolloutSpec, plan: TrialPlan, settings: EngineSettings, model: TrialModel
 ) -> list[Outcome]:
-    """Run ``plan.k`` trials of ``lowered`` under ``plan.deadlines`` and ``settings`` concurrently;
+    """Run ``plan.k`` trials of ``spec`` under ``plan.deadlines`` and ``settings`` concurrently;
     return one final outcome per trial, in order."""
     async with asyncio.TaskGroup() as group:
-        trials = [group.create_task(run_trial(lowered, plan, settings, model, str(index))) for index in range(plan.k)]
+        trials = [group.create_task(run_trial(spec, plan, settings, model, str(index))) for index in range(plan.k)]
     return [trial.result() for trial in trials]
 
 
 async def run_trial(
-    lowered: LoweredTaskSpec, plan: TrialPlan, settings: EngineSettings, model: TrialModel, trial: str
+    spec: TaskRolloutSpec, plan: TrialPlan, settings: EngineSettings, model: TrialModel, trial: str
 ) -> Outcome:
-    """Run one trial of ``lowered`` under ``plan.deadlines`` and ``settings``, attempting it again
+    """Run one trial of ``spec`` under ``plan.deadlines`` and ``settings``, attempting it again
     after a backoff while it fails for a retryable cause, up to ``plan.max_retries`` times.
 
     Raises:
         ValueError: the task has a decision-model grader and ``settings.decision`` is ``None``.
     """
-    if task_decision_grader(lowered.task) is not None and settings.decision is None:
-        raise ValueError(f"task {lowered.task.id!r} has a decision-model grader but this host has no decision client")
-    lowered = settings.apply(plan.deadlines.apply(lowered))
-    unsupported = submission_refusal(lowered.task)
+    if task_decision_grader(spec.task) is not None and settings.decision is None:
+        raise ValueError(f"task {spec.task.id!r} has a decision-model grader but this host has no decision client")
+    spec = settings.apply(plan.deadlines.apply(spec))
+    digest = task_digest(spec, settings.command_timeout)
+    unsupported = submission_refusal(spec.task)
     if unsupported is not None:
-        return _refuse(lowered, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None))
-    refusals = task_refusals(lowered, settings.factories)
+        return _refuse(digest, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None, None))
+    refusals = task_refusals(spec, settings.factories)
     if refusals:
-        return _refuse(lowered, plan, trial, Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None))
+        return _refuse(digest, plan, trial, Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None, None))
+    engine = settings.engine()
     backoff = copy.copy(plan.retry_backoff)
     retries = 0
     attempt = plan.first_attempt
     while True:
-        engine = settings.engine(model.for_step(attempt_step(plan, trial, attempt)))
-        outcome = await _attempt(engine, lowered, plan, trial, attempt, settings.decision)
+        model_of_attempt = model.for_step(attempt_step(plan, trial, attempt))
+        outcome = await _attempt(engine, spec, model_of_attempt, digest, plan, trial, attempt, settings.decision)
         if isinstance(outcome, Graded):
             return outcome
         if not outcome.retryable or retries >= plan.max_retries:
@@ -265,15 +268,39 @@ def refusal_detail(refusals: Sequence[Refusal]) -> str:
     return "; ".join(f"{refusal.where}: {refusal.reason}: {refusal.detail}" for refusal in refusals)
 
 
-def task_digest(lowered: LoweredTaskSpec) -> str:
-    """The sha256 of the lowered task as it runs (after ``Deadlines.apply`` and ``EngineSettings.apply``),
-    its answer format included."""
-    return sha256_hex(lowered.model_dump_json().encode())
+def trial_record(spec: TaskRolloutSpec, command_timeout: float) -> dict[str, JsonValue]:
+    """What a trial of ``spec`` runs, as Taskforge records it: the input of ``task_digest``.
+
+    ``spec`` is the spec as it runs (after ``Deadlines.apply`` and ``EngineSettings.apply``), and
+    ``command_timeout`` the shell harness's. The record is a JSON object of exactly these keys:
+
+    - ``task``: the ``TaskSpec``, its answer format included;
+    - ``task_machine`` and ``verifier_machine``: each machine selection's ``MachineRuntimeSpec``, or ``null``;
+    - ``limits``: the effective ``RolloutLimits``;
+    - ``command_timeout``: the timeout of one shell command.
+
+    Each value is its model's JSON dump. The harness name, which is always ``draft.SHELL_HARNESS``, and the
+    trace, which is always ``MESSAGES``, are not in it, so the digest does not follow the shape of the
+    engine's ``TaskRolloutSpec``.
+    """
+    task_machine, verifier_machine = spec.task_machine, spec.verifier_machine
+    return {
+        "task": spec.task.model_dump(mode="json"),
+        "task_machine": None if task_machine is None else task_machine.model_dump(mode="json"),
+        "verifier_machine": None if verifier_machine is None else verifier_machine.model_dump(mode="json"),
+        "limits": spec.limits.model_dump(mode="json"),
+        "command_timeout": command_timeout,
+    }
 
 
-def _refuse(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, outcome: Ungraded) -> Ungraded:
+def task_digest(spec: TaskRolloutSpec, command_timeout: float) -> str:
+    """The sha256 of ``trial_record(spec, command_timeout)`` as JSON with sorted keys."""
+    return sha256_hex(json.dumps(trial_record(spec, command_timeout), sort_keys=True).encode())
+
+
+def _refuse(digest: str, plan: TrialPlan, trial: str, outcome: Ungraded) -> Ungraded:
     """Record ``outcome`` as the only attempt of a trial that is not started."""
-    with attempt_span(lowered, plan, trial, plan.first_attempt) as fields:
+    with attempt_span(digest, plan, trial, plan.first_attempt) as fields:
         record_attempt(fields, outcome, plan, trial, plan.first_attempt, outcome_json(outcome))
     return outcome
 
@@ -284,43 +311,48 @@ def attempt_step(plan: TrialPlan, trial: str, attempt: int) -> str:
 
 
 @contextmanager
-def attempt_span(lowered: LoweredTaskSpec, plan: TrialPlan, trial: str, attempt: int) -> Iterator[SpanFields]:
-    """The ``TRIAL`` ledger span of one attempt: step ``<kind>/<trial>/<attempt>``, ``input_hash`` the task digest."""
+def attempt_span(digest: str, plan: TrialPlan, trial: str, attempt: int) -> Iterator[SpanFields]:
+    """The ``TRIAL`` ledger span of one attempt: step ``<kind>/<trial>/<attempt>``, ``input_hash`` the
+    trial's ``task_digest``."""
     with span(
         plan.ledger,
         EntryKind.TRIAL,
         workpiece_id=plan.workpiece_id,
         round=plan.round,
         step=attempt_step(plan, trial, attempt),
-        input_hash=task_digest(lowered),
+        input_hash=digest,
     ) as fields:
         yield fields
 
 
 async def _attempt(
     engine: RolloutEngine,
-    lowered: LoweredTaskSpec,
+    spec: TaskRolloutSpec,
+    model: Model,
+    digest: str,
     plan: TrialPlan,
     trial: str,
     attempt: int,
     decision: DecisionClient | None,
 ) -> Outcome:
-    with attempt_span(lowered, plan, trial, attempt) as fields:
+    with attempt_span(digest, plan, trial, attempt) as fields:
         try:
-            result: RolloutData | Exception = await _rollout(engine, lowered, decision)
+            result: GradedRollout | Exception = await _rollout(engine, spec, model, decision)
         except Exception as error:
             result = error
-        outcome = trial_outcome(result, lowered.task)
+        outcome = trial_outcome(result, spec.task)
         record_attempt(fields, outcome, plan, trial, attempt, outcome_json(outcome))
     return outcome
 
 
-async def _rollout(engine: RolloutEngine, lowered: LoweredTaskSpec, decision: DecisionClient | None) -> RolloutData:
-    """One engine run of ``lowered``; a decision-model task runs without its grader and is graded on the host."""
-    if task_decision_grader(lowered.task) is None:
-        return await engine.run(lowered)
+async def _rollout(
+    engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, decision: DecisionClient | None
+) -> GradedRollout:
+    """One engine run of ``spec``; a decision-model task runs without its grader and is graded on the host."""
+    if task_decision_grader(spec.task) is None:
+        return await engine.run_task(spec, model)
     assert decision is not None  # run_trial refuses a decision task on a host without a client
-    return await run_decision_trial(engine, lowered, decision)
+    return await run_decision_trial(engine, spec, model, decision)
 
 
 def record_attempt(
@@ -332,14 +364,21 @@ def record_attempt(
     """
     fields.attrs = _attributes(outcome)
     rollout = outcome.rollout
-    if rollout is not None and rollout.steps:
-        fields.tokens_in = sum(len(step.turn.prompt_token_ids) for step in rollout.steps)
-        fields.tokens_out = sum(len(step.turn.response_token_ids) for step in rollout.steps)
+    steps = () if rollout is None else rollout_steps(rollout)
+    if rollout is not None and steps:
+        usages = [step.turn.usage for step in steps if step.turn.usage is not None]
+        fields.tokens_in = sum(usage.prompt_tokens for usage in usages)
+        fields.tokens_out = sum(usage.completion_tokens for usage in usages)
         fields.finish_reason = rollout.stop_reason
     if isinstance(outcome, Ungraded):
         fields.cause = str(outcome.cause)
     fields.output_hash = sha256_hex(payload)
     write_evidence(plan.evidence_dir / str(plan.kind) / trial / f"{ATTEMPT_PREFIX}{attempt}.json", payload)
+
+
+def rollout_steps(rollout: Rollout) -> tuple[RolloutStep, ...]:
+    """The steps of every conversation of ``rollout``, in order."""
+    return tuple(step for conversation in rollout.conversations for step in conversation.steps)
 
 
 def cleanup_errors(outcome: Outcome) -> int | None:
@@ -365,7 +404,7 @@ def _attributes(outcome: Outcome) -> dict[str, str]:
 
 
 def outcome_json(outcome: Outcome) -> bytes:
-    """The evidence record of one attempt: the outcome and its whole ``RolloutData``."""
+    """The evidence record of one attempt: the outcome, its grade and its whole ``Rollout``."""
     record: dict[str, Any] = (
         {
             "outcome": "graded",
@@ -382,11 +421,12 @@ def outcome_json(outcome: Outcome) -> bytes:
         }
     )
     record["cleanup_errors"] = cleanup_errors(outcome)
+    record["grade"] = None if outcome.grade is None else dataclasses.asdict(outcome.grade)
     record["rollout"] = None if outcome.rollout is None else _rollout_record(outcome.rollout)
     return json.dumps(record, indent=1).encode()
 
 
-def _rollout_record(rollout: RolloutData) -> dict[str, Any]:
+def _rollout_record(rollout: Rollout) -> dict[str, Any]:
     """``rollout`` as JSON: the captured output files, bytes keyed by path, are base64 strings."""
     record = dataclasses.asdict(rollout)
     record["outputs"] = {path: base64.b64encode(content).decode() for path, content in rollout.outputs.items()}

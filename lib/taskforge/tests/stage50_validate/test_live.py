@@ -13,10 +13,11 @@ import json
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from rigging.timing import ExponentialBackoff
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.models import TaskRolloutSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory, UnsupportedMachineSpec
 
@@ -30,7 +31,7 @@ from taskforge.spec.controls import Control
 from taskforge.stage50_validate.controls import ControlOutcome, ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.evidence import Complete, Evidence, Incomplete
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
+from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, rollout_steps, run_trials
 from tests.conftest import unique_run_name
 from tests.sandbox.fixture_images import FixtureImageFactory
 
@@ -90,26 +91,33 @@ def check_dir(evidence_dir: Path, check: str) -> Path:
     return evidence_dir / unique_run_name(check)
 
 
+def turns(outcome: Outcome) -> list[dict[str, Any]]:
+    """The model's messages across the rollout's conversations; none without a rollout."""
+    rollout = outcome.rollout
+    return [] if rollout is None else [step.turn.message for step in rollout_steps(rollout)]
+
+
 def shell_commands(outcome: Outcome) -> list[str]:
+    return [call["function"]["arguments"] for message in turns(outcome) for call in message.get("tool_calls") or []]
+
+
+def response_tokens(outcome: Outcome) -> int:
+    """The completion tokens the rollout's turns report in their usage; 0 without a rollout."""
     rollout = outcome.rollout
     if rollout is None:
-        return []
-    return [
-        call["function"]["arguments"]
-        for message in rollout.messages
-        if message["role"] == "assistant"
-        for call in message.get("tool_calls") or []
-    ]
+        return 0
+    return sum(step.turn.usage.completion_tokens for step in rollout_steps(rollout) if step.turn.usage is not None)
 
 
 def outcome_summary(outcome: Outcome) -> dict[str, object]:
     rollout = outcome.rollout
+    messages = turns(outcome)
     common = {
-        "turns": 0 if rollout is None else len(rollout.steps),
+        "turns": len(messages),
         "stop_reason": None if rollout is None else rollout.stop_reason,
-        "response_tokens": 0 if rollout is None else sum(len(step.turn.response_token_ids) for step in rollout.steps),
+        "response_tokens": response_tokens(outcome),
         "shell_calls": shell_commands(outcome),
-        "final_message": None if rollout is None or not rollout.messages else rollout.messages[-1].get("content"),
+        "final_message": messages[-1].get("content") if messages else None,
     }
     if isinstance(outcome, Graded):
         return {
@@ -178,7 +186,7 @@ async def client(glm_source, live_provider):
 async def solver_trials(
     client: GlmClient,
     evidence_dir: Path,
-    lowered: LoweredTaskSpec,
+    lowered: TaskRolloutSpec,
     check: str,
     purpose: str,
     factories: dict[str, MachineFactory],
@@ -232,7 +240,7 @@ async def test_shellsim_file_task_trials(client, evidence_dir, file_task):
 async def replay_controls(
     client: GlmClient,
     evidence_dir: Path,
-    lowered: LoweredTaskSpec,
+    lowered: TaskRolloutSpec,
     controls: tuple[Control, ...],
     check: str,
     factories: dict[str, MachineFactory],

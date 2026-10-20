@@ -54,8 +54,6 @@ class LLMPolicy:
 
     ``temperature`` and ``top_p`` default to GLM-5.3's published ``generation_config.json``
     (temperature 1.0, top_p 0.95, no top_k), so an unset policy samples as the model publishes.
-    Chat completions and the token-id route both send exactly ``sampling_params()``, so the two
-    transports sample the same distribution.
 
     Attributes:
         max_tokens: Output budget per request. Defaults to the model maximum.
@@ -76,7 +74,7 @@ class LLMPolicy:
         return {"reasoning_effort": str(self.reasoning_effort)}
 
     def sampling_params(self) -> dict[str, float]:
-        """The sampling fields every request sends, on either transport."""
+        """The sampling fields every request sends."""
         return {"temperature": self.temperature, "top_p": self.top_p}
 
 

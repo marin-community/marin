@@ -7,22 +7,25 @@ import sys
 
 import pytest
 
-from taskforge.stage30_author.loader import load_program_source, module_name
+from taskforge.stage30_author.loader import SdkExports, load_program_source, module_name
+from taskforge.stage40_build_with_program.program_sdk import sdk_exports
 from taskforge.stage40_build_with_program.template import standard
 from tests.stage30_author.programs import PROGRAM
 
+SDK = sdk_exports()
+
 
 def test_the_standard_template_loads_as_an_authored_program():
-    program = load_program_source(inspect.getsource(standard))
+    program = load_program_source(inspect.getsource(standard), SDK)
 
     assert program.order == ("sources", "fixtures", "requirements", "grader", "instructions", "assemble")
     assert program.digest == standard.PROGRAM.digest
 
 
 def test_a_program_loads_once_per_source_with_its_own_output_models():
-    program = load_program_source(PROGRAM)
+    program = load_program_source(PROGRAM, SDK)
 
-    assert load_program_source(PROGRAM) is program
+    assert load_program_source(PROGRAM, SDK) is program
     assert program.steps["question"].output_type.__module__ == module_name(PROGRAM)
 
 
@@ -36,7 +39,7 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
 
     for _ in range(2):
         with pytest.raises(KeyboardInterrupt):
-            load_program_source(source)
+            load_program_source(source, SDK)
         assert module_name(source) not in sys.modules
 
 
@@ -204,7 +207,7 @@ def test_a_program_outside_the_rules_is_refused_and_unregistered(edit, problem):
     assert source != PROGRAM
 
     with pytest.raises(ValueError, match=problem):
-        load_program_source(source)
+        load_program_source(source, SDK)
 
     assert module_name(source) not in sys.modules
 
@@ -247,6 +250,22 @@ IMPORT_EACH = re.escape("Import each SDK name the program uses from its module."
 )
 def test_a_refusal_ends_each_sentence_once_with_or_without_a_suggestion(edit, message):
     with pytest.raises(ValueError) as refusal:
-        load_program_source(edit(PROGRAM))
+        load_program_source(edit(PROGRAM), SDK)
 
     assert re.fullmatch(message, str(refusal.value)), str(refusal.value)
+
+
+def test_the_loader_suggests_only_the_sdk_names_its_caller_passes():
+    source = PROGRAM.replace(
+        '    return Question(text="What is 6 * 7?")',
+        '    await research(context, "Find the product.")\n    return Question(text="What is 6 * 7?")',
+    )
+    sdk = SdkExports(defining_modules={"research": ("example.sdk",)})
+
+    with pytest.raises(ValueError, match=r"did you mean 'research' from example\.sdk\?") as suggested:
+        load_program_source(source, sdk)
+    with pytest.raises(ValueError) as unsuggested:
+        load_program_source(source, SdkExports(defining_modules={}))
+
+    assert "did you mean" not in str(unsuggested.value)
+    assert module_name(source) not in sys.modules, str(suggested.value)

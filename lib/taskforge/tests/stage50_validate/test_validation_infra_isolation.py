@@ -4,19 +4,18 @@
 """Infrastructure failures during a validation trial are retried, never charged to the task.
 
 Each case is the exception RolloutEngine raises for one failure pattern of a 2,049-workpiece run's infrastructure
-revisions during a trial (the chain ``engine.py`` builds: ``RolloutInterrupted(operation) from <original>``),
+revisions during a trial (the chain ``engine.py`` builds: ``GradedRolloutInterrupted(operation) from <original>``),
 classified by ``classify``, validation's one classifier. A pattern passes when the trial is ``Ungraded`` with a
 retryable cause. Validation never revises a program (an ungraded validation ends the workpiece as retryable), so
 retryable-or-ungraded is the whole rule here. The preflight's host failures are pinned in ``test_preflight.py``.
 """
 
 import asyncio
-from dataclasses import replace
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rolloutengine.contracts import RolloutData, RolloutInterrupted, RolloutOperation
+from rolloutengine.models import GradedRollout, GradedRolloutInterrupted, Rollout, RolloutOperation
 from shellbox.machine import MachineTerminated
 from taskcompendium.grading_result import GradeResult, GradingFailure
 from taskcompendium.grading_result import Outcome as GradeStatus
@@ -41,18 +40,18 @@ def task() -> TaskSpec:
     )
 
 
-def empty_rollout(spec: TaskSpec) -> RolloutData:
-    """The rollout the engine keeps for an attempt that produced no turn."""
-    return RolloutData(spec.id, (), (), (), (), None, GradeResult(GradeStatus.UNAVAILABLE, None), "")
+EMPTY_ROLLOUT = Rollout("run", (), "error")
+"""The rollout the engine keeps for an attempt that produced no turn."""
+UNGRADED = GradeResult(GradeStatus.UNAVAILABLE, None, "Execution has no final grade")
 
 
-def interrupted(operation: RolloutOperation, original: BaseException) -> RolloutInterrupted:
+def interrupted(operation: RolloutOperation, original: BaseException) -> GradedRolloutInterrupted:
     try:
         try:
             raise original
         except BaseException as cause:
-            raise RolloutInterrupted(empty_rollout(task()), operation) from cause
-    except RolloutInterrupted as error:
+            raise GradedRolloutInterrupted(EMPTY_ROLLOUT, operation, UNGRADED) from cause
+    except GradedRolloutInterrupted as error:
         return error
 
 
@@ -70,7 +69,7 @@ def deadline() -> TimeoutError:
 PARENT_TERMINATED = "Iris sandbox task failed before running: Parent job terminated"
 CANNOT_SUBMIT = "Cannot submit job: parent job /muchanem/gen1000-s1p has terminated (state=JOB_STATE_KILLED)"
 
-CASES: dict[str, tuple[RolloutInterrupted | RolloutData, Cause]] = {
+CASES: dict[str, tuple[GradedRolloutInterrupted | GradedRollout, Cause]] = {
     "grade-deadline (slow exec or transfer)": (interrupted(RolloutOperation.GRADE, deadline()), Cause.GRADER_TIMEOUT),
     "start-deadline": (interrupted(RolloutOperation.START, deadline()), Cause.MACHINE_START_TIMEOUT),
     "parent-terminated-at-start": (
@@ -116,10 +115,10 @@ CASES: dict[str, tuple[RolloutInterrupted | RolloutData, Cause]] = {
 }
 
 
-def timed_out_grade() -> RolloutData:
+def timed_out_grade() -> GradedRollout:
     """A rollout the engine returned whose grader command hit its own timeout (``GradingFailure.TIMEOUT``)."""
     grade = GradeResult(GradeStatus.INFRA_ERROR, None, "Grader command timed out", failure=GradingFailure.TIMEOUT)
-    return replace(empty_rollout(task()), grade=grade)
+    return GradedRollout(EMPTY_ROLLOUT, grade)
 
 
 CASES["grader-command-timed-out"] = (timed_out_grade(), Cause.GRADER_TIMEOUT)
