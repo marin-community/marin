@@ -46,6 +46,15 @@ def _execution() -> IrisSkyRLExecution:
     )
 
 
+@pytest.mark.parametrize("profile", [None, "CONTAINER_PROFILE_PRIVILEGED"])
+def test_coordinator_uses_the_explicit_job_container_profile(profile: str | None) -> None:
+    execution = dataclasses.replace(_execution(), container_profile=profile)
+    _, request = _coordinator_request(
+        [_step(execution)], "experiments.test_rl", ("--run",), 1, Path("/workspace/marin"), {}
+    )
+    assert request.resources.container_profile == profile
+
+
 def test_coordinator_request_replays_the_experiment_main() -> None:
     cluster_config, request = _coordinator_request(
         [_step(_execution())],
