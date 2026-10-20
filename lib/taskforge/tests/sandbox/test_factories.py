@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -207,17 +208,33 @@ def test_verifier_machine_is_checked_against_its_own_backend():
 
 def test_laptop_without_docker_omits_its_factory_and_logs_why(monkeypatch, caplog):
     monkeypatch.setattr(factories.shutil, "which", lambda name: None)
-    factories.docker_unavailable.cache_clear()
+    factories.docker_unavailable_reason.cache_clear()
     try:
         with caplog.at_level(logging.WARNING, logger=factories.__name__):
             built = machine_factories(MachineHost.LAPTOP, controller_url=None)
     finally:
-        factories.docker_unavailable.cache_clear()
+        factories.docker_unavailable_reason.cache_clear()
     assert set(built) == {Backend.SHELLSIM.value}
     assert "docker CLI not found" in caplog.text
     assert reasons(lowered(selection(Backend.DOCKER), image=IMAGE), built) == {
         (RefusalReason.NO_FACTORY, MachineRole.TASK)
     }
+
+
+def test_laptop_whose_docker_daemon_hangs_omits_its_factory(monkeypatch, caplog):
+    def hang(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], factories.DOCKER_PROBE_TIMEOUT)
+
+    monkeypatch.setattr(factories.shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(factories.subprocess, "run", hang)
+    factories.docker_unavailable_reason.cache_clear()
+    try:
+        with caplog.at_level(logging.WARNING, logger=factories.__name__):
+            built = machine_factories(MachineHost.LAPTOP, controller_url=None)
+    finally:
+        factories.docker_unavailable_reason.cache_clear()
+    assert set(built) == {Backend.SHELLSIM.value}
+    assert "docker daemon did not answer" in caplog.text
 
 
 def test_a_lock_only_grader_needs_the_local_factory_of_an_iris_task(monkeypatch, caplog):
@@ -235,7 +252,7 @@ def test_a_lock_only_grader_needs_the_local_factory_of_an_iris_task(monkeypatch,
 @pytest.mark.parametrize("host", list(MachineHost))
 def test_factories_cover_the_hosts_backends(monkeypatch, host):
     local = FakeFactory(Backend.LOCAL)
-    monkeypatch.setattr(factories, "docker_unavailable", lambda: None)
+    monkeypatch.setattr(factories, "docker_unavailable_reason", lambda: None)
     monkeypatch.setattr(factories, "local_sandbox", lambda: LocalSandbox(factory=local, unavailable=None))
     is_iris = host is MachineHost.IRIS
     built = machine_factories(host, controller_url="http://controller.example:10000" if is_iris else None)

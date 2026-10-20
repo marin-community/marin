@@ -111,9 +111,7 @@ MANIFEST_TYPES = (
     "application/vnd.docker.distribution.manifest.v2+json",
 )
 # Iris copies the submitter's HF_TOKEN and WANDB_API_KEY into every job unless overridden.
-BLANKED_ENV = {"HF_TOKEN": "", "WANDB_API_KEY": ""}
-# rigging.redaction treats "auth" as a sensitive key word, so Iris redacts this variable's value.
-REGISTRY_AUTH_ENV = "REGISTRY_AUTH"
+BLANKED_ENV = ("HF_TOKEN", "WANDB_API_KEY")
 REGISTRY_CREDENTIAL_ENV = "TASKFORGE_REGISTRY_CREDENTIAL"
 """The variable a coordinator job carries the credential JSON in; "credential" makes Iris redact it."""
 CREDENTIAL_FIELDS = ("registry", "user", "password")
@@ -242,7 +240,7 @@ def submit_job(
     return client.submit(
         entrypoint=entrypoint,
         name=name,
-        environment=EnvironmentSpec(setup_scripts=[], env_vars={**inherited, **BLANKED_ENV, **env}),
+        environment=EnvironmentSpec(setup_scripts=[], env_vars={**inherited, **dict.fromkeys(BLANKED_ENV, ""), **env}),
         resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
         task_image=image,
         container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
@@ -331,12 +329,12 @@ class IrisImageBuilder:
                     ),
                     image=PUSH_IMAGE,
                     env={
-                        "CRANE_URL": CRANE_URL,
-                        "CRANE_SHA256": CRANE_SHA256,
-                        "ARCHIVE_URI": archive.uri,
-                        "ARCHIVE_SHA256": archive.sha256,
-                        "DESTINATION": destination,
-                        REGISTRY_AUTH_ENV: base64.b64encode(credential.docker_config()).decode(),
+                        image_push.CRANE_URL_ENV: CRANE_URL,
+                        image_push.CRANE_SHA256_ENV: CRANE_SHA256,
+                        image_push.ARCHIVE_URI_ENV: archive.uri,
+                        image_push.ARCHIVE_SHA256_ENV: archive.sha256,
+                        image_push.DESTINATION_ENV: destination,
+                        image_push.REGISTRY_AUTH_ENV: base64.b64encode(credential.docker_config()).decode(),
                     },
                     target_cluster=self.target_cluster,
                 )

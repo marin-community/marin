@@ -16,11 +16,11 @@ from iris.rpc import job_pb2
 
 from taskforge.sandbox.image_builder import (
     BLANKED_ENV,
-    REGISTRY_AUTH_ENV,
     REGISTRY_CREDENTIAL_ENV,
     RegistryCredential,
     submit_job,
 )
+from taskforge.sandbox.image_push import REGISTRY_AUTH_ENV
 
 PASSWORD = "registry-password"
 CREDENTIAL_JSON = json.dumps({"registry": "registry.example", "user": "publisher", "password": PASSWORD})
