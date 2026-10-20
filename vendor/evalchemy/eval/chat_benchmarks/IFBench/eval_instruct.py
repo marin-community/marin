@@ -22,8 +22,12 @@ from eval.task import BaseBenchmark
 
 
 
+DATASET_NAME = "allenai/IFBench_test"
+DATASET_REVISION = "2e8a48de45ff3bf41242f927254ca81b59ca3ae2"
+
+
 class IFBenchBenchmark(BaseBenchmark):
-    SOURCE = SourceRef("allenai/IFBench_test", "train")
+    SOURCE = SourceRef(DATASET_NAME, "train", revision=DATASET_REVISION)
     METRICS = ("strict_prompt_accuracy", "strict_instruction_accuracy", "loose_prompt_accuracy", "loose_instruction_accuracy")
     PRIMARY_METRIC = "strict_prompt_accuracy"
     """Instruction-following benchmark over ``allenai/IFBench_test``."""
@@ -58,8 +62,8 @@ class IFBenchBenchmark(BaseBenchmark):
         machine-checkable constraint metadata lives alongside it in
         ``instruction_id_list`` and ``kwargs`` and is consumed by the grader.
         """
-        dataset: Dataset = load_dataset("allenai/IFBench_test", split="train")
-        self.logger.info("Loaded %d examples from allenai/IFBench_test", len(dataset))
+        dataset: Dataset = load_dataset(DATASET_NAME, split="train", revision=DATASET_REVISION)
+        self.logger.info("Loaded %d examples from %s", len(dataset), DATASET_NAME)
 
         questions: List[Dict[str, Any]] = []
         for ex in dataset:
