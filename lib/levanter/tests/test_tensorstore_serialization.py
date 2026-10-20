@@ -102,6 +102,18 @@ def test_tensorstore_checkpoint_simple():
         assert all(np.isclose(rkey, initial_key))
 
 
+def test_tensorstore_checkpoint_keeps_chunks_tensorstore_judges_fill():
+    # TensorStore 0.1.84 drops some whole chunks written from referenced source data as if they held the fill
+    # value (this (3, 96, 128, 128) chunk among them); the leaf then restores as zeros.
+    weights = jnp.ones((3, 96, 128, 128), dtype=jnp.float32)
+
+    with TemporaryDirectory() as tmpdir:
+        tree_serialize_leaves_tensorstore(tmpdir, {"w": weights})
+        restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": jnp.zeros_like(weights)})
+
+    np.testing.assert_array_equal(np.asarray(restored["w"]), np.asarray(weights))
+
+
 def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
     with use_test_mesh():
         key0 = jax.random.PRNGKey(0)
