@@ -9,7 +9,7 @@ from skyrl_train.objective.correction import compute_correction
 from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.telemetry import ConsumedWork
 from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE
-from skyrl_train.utils.importance_ratio_diagnostics import LocalReduction, mismatch_ratio_metrics
+from skyrl_train.utils.importance_ratio_diagnostics import MetricReduction, mismatch_ratio_metrics
 from collections import defaultdict
 from collections.abc import Sequence
 from typing import Dict, List
@@ -292,7 +292,7 @@ def zero_std_group_fraction(uids: Sequence[str], rewards: Tensor) -> float:
 
 
 def install_correction(
-    batch: TrainingInputBatch, algorithm: DictConfig, *, reduction: LocalReduction
+    batch: TrainingInputBatch, algorithm: DictConfig, *, reduction: MetricReduction
 ) -> dict[str, float]:
     """Install configured policy correction weights and return their diagnostics."""
     correction = off_policy_correction(algorithm)
@@ -312,7 +312,7 @@ def training_metrics(
     batch: TrainingInputBatch,
     *,
     algorithm: DictConfig,
-    reduction: LocalReduction,
+    reduction: MetricReduction,
     phase: Literal["forward", "advantages"],
     step_wise: bool,
     training_metrics_enabled: bool = False,
@@ -376,7 +376,7 @@ def training_metrics(
 
 
 def token_staleness_metrics(
-    batch: TrainingInputBatch, facts: Sequence[RowFacts], *, reduction: LocalReduction
+    batch: TrainingInputBatch, facts: Sequence[RowFacts], *, reduction: MetricReduction
 ) -> dict[str, float]:
     """Report loss-bearing token staleness and compact policy-stamp coverage."""
     trained = batch["loss_mask"] > 0

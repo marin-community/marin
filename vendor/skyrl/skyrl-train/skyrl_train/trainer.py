@@ -30,7 +30,10 @@ from skyrl_train.batch_metrics import reward_metrics, training_metrics, token_st
 from skyrl_train.batch_source import (
     DriverBatchSource,
     BatchSummary,
+    BatchSource,
     batch_lifetime,
+    make_batch_source,
+    require_worker_batch_support,
 )
 from skyrl_train.batch_assembly import BatchPlan, assemble_slice, fields_from_facts, forward_input
 from skyrl_train.rollouts.buffer import RolloutGroup, RowFacts
@@ -67,7 +70,7 @@ from skyrl_train.utils.advantage_estimators import (
     apply_loop_advantages,
     drop_advantage_inputs,
 )
-from marinskyrl.runtime_options import PolicyLossType, reference_model_required
+from marinskyrl.runtime_options import BatchBuilder, parse_batch_builder, PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
     DistillationObjectiveKind,
     DistillationRewardMode,
@@ -228,6 +231,9 @@ class RayPPOTrainer:
         callbacks: Optional[List[TrainerCallback]] = None,
     ):
         self.cfg = cfg
+        self.batch_builder = parse_batch_builder(cfg.trainer.batch_builder)
+        if self.batch_builder is not BatchBuilder.DRIVER:
+            require_worker_batch_support(cfg, trainer_type=type(self))
         self.distillation_plan = compile_distillation_plan_from_config(cfg)
         self.context = context
         self._training_metrics_enabled: bool = cfg.trainer.training_metrics
@@ -1380,7 +1386,10 @@ class RayPPOTrainer:
 
     async def _train_step(self, epoch: int, step_wall: StepWallTime) -> BatchSummary:
         """Read this step's batch from the rollout buffer, train on it, sync the new weights, and return the batch."""
-        source = DriverBatchSource(self, self.context)
+        source = make_batch_source(
+            self.batch_builder,
+            driver=DriverBatchSource(self, self.context),
+        )
         async with batch_lifetime(source):
             step_wall.start("group_admission")
             logger.info(
@@ -1514,7 +1523,7 @@ class RayPPOTrainer:
         self._log_metrics_stdout(startup_eval, step=self.global_step, kind="startup")
         self.tracker.log(startup_eval, step=self.global_step, commit=False)
 
-    async def _run_training(self, source: DriverBatchSource, *, step_wall: StepWallTime | None = None):
+    async def _run_training(self, source: BatchSource, *, step_wall: StepWallTime | None = None):
         await source.forward(step_wall=step_wall)
         await source.finalize(step_wall=step_wall)
         return await source.train(step_wall=step_wall)

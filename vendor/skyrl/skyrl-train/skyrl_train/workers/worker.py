@@ -4,6 +4,10 @@ import contextlib
 import logging
 import os
 import socket
+import time
+from dataclasses import dataclass
+from types import SimpleNamespace
+import numpy as np
 from typing import Dict, Optional, Type, List, Any, Callable
 from skyrl_train.utils.progress import configure_progress, tqdm
 from marinskyrl.runtime_options import R3Transport
@@ -21,6 +25,25 @@ from ray.util.placement_group import (
     PlacementGroupSchedulingStrategy,
     placement_group,
     placement_group_table,
+)
+
+from skyrl_train.batch_assembly import BatchPlan, assemble_slice, forward_input
+from skyrl_train.batch_digest import BatchInputPhase, digest
+from skyrl_train.batch_metrics import install_correction, training_metrics, token_staleness_metrics
+from skyrl_train.group_admission import GroupAdvantageInvariant
+from skyrl_train.utils.advantage_estimators import (
+    apply_loop_advantages,
+    drop_advantage_inputs,
+    batch_advantages,
+)
+from skyrl_train.utils.importance_ratio_diagnostics import WorldReduction
+from skyrl_train.batch_sampling import RowOwnership, filter_trajectory_batch
+from skyrl_train.rollouts.buffer import PayloadReference
+from skyrl_train.rollouts.context import RolloutReader
+from skyrl_train.trajectory_runners.trajectory_processing import (
+    normalize_trajectory_batches,
+    token_reward_rows,
+    validate_trajectory_batch,
 )
 
 from skyrl_train.config.query_bias import (
@@ -727,6 +750,37 @@ class PPORayActorGroup:
         )
         return dispatch_class.dispatch(self.actor_infos, method_name, *args, settings=settings, **kwargs)
 
+    def read_batch_groups(self, plan: BatchPlan, reader: RolloutReader) -> list[ObjectRef]:
+        """Share each group through its first intersecting DP collection actor."""
+        dp_size = self.actor_infos[0].rank.dp_size
+        owners = {actor.rank.dp: actor for actor in self.actor_infos if actor.rank.is_collection_dp_rank()}
+        group_owners = {}
+        for dp in range(dp_size):
+            for index in plan.group_indices(dp, dp_size):
+                group_owners.setdefault(index, dp)
+        return [
+            owners[dp].handle.read_batch_groups.remote(
+                plan.batch_id, reader, tuple(index for index, owner in group_owners.items() if owner == dp)
+            )
+            for dp in range(dp_size)
+        ]
+
+    def load_batch(
+        self, plan: BatchPlan, reader: RolloutReader, shared: list[PayloadReference], pad_token_id: int
+    ) -> list[ObjectRef]:
+        """Load each rank's intersecting shared groups on all of its mesh replicas."""
+        references = {index: ref for result in shared for index, ref in result.value}
+        plan_ref = ray.put(plan)
+        tasks = []
+        for actor in self.actor_infos:
+            indices = plan.group_indices(actor.rank.dp, actor.rank.dp_size)
+            tasks.append(
+                actor.handle.load_batch.remote(
+                    plan_ref, reader, indices, tuple(references[index] for index in indices), pad_token_id
+                )
+            )
+        return tasks
+
     def async_init_model(
         self,
         *args,
@@ -851,6 +905,12 @@ class PPORayActorGroup:
                 pass  # Actor may already be dead
 
 
+@dataclass
+class LoadedBatch:
+    plan: BatchPlan
+    batch: TrainingInputBatch
+
+
 class PolicyWorkerBase(Worker):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -865,6 +925,135 @@ class PolicyWorkerBase(Worker):
         self._policy_train_spans: bool = self.cfg.trainer.policy_train_spans
         self._memory = LearnerCudaMetrics(enabled=self._policy_train_spans, rank=self._rank)
         self._model_version_step: int | None = None
+        self._loaded_batches: dict[int, LoadedBatch] = {}
+
+    async def read_batch_groups(
+        self, batch_id: int, reader: RolloutReader, indices: tuple[int, ...]
+    ) -> PayloadReference:
+        references = await reader.share(batch_id, indices)
+        return PayloadReference(tuple(zip(indices, references, strict=True)))
+
+    async def load_batch(
+        self,
+        plan: BatchPlan,
+        reader: RolloutReader,
+        indices: tuple[int, ...],
+        references: tuple[ObjectRef, ...],
+        pad_token_id: int,
+    ) -> float:
+        """Assemble and retain the rank's rows using the complete batch's normalization rules."""
+        if plan.batch_id in self._loaded_batches:
+            raise ValueError(f"worker batch {plan.batch_id} is already loaded")
+        started = time.perf_counter()
+        groups = await reader.read_shared(plan.batch_id, indices, references)
+        for index, group in zip(indices, groups, strict=True):
+            facts = plan.facts[index]
+            payload = group.trajectory_batch
+            if not np.array_equal(
+                facts.prompt_len, [len(row) for row in payload["prompt_token_ids"]]
+            ) or not np.array_equal(facts.response_len, [len(row) for row in payload["response_ids"]]):
+                raise ValueError(f"selected rollout row geometry does not match metadata for {group.uid}")
+        rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
+        selected = []
+        for index, group in zip(indices, groups, strict=True):
+            offset = sum(len(facts.response_len) for facts in plan.facts[:index])
+            local_rows = list(
+                range(max(rows.start - offset, 0), min(rows.stop - offset, len(plan.facts[index].response_len)))
+            )
+            selected.append(
+                filter_trajectory_batch(group.trajectory_batch, local_rows, row_ownership=RowOwnership.BORROWED)
+            )
+        batch = normalize_trajectory_batches(selected, fields=plan.fields)
+        validate_trajectory_batch(len(batch["response_ids"]), batch)
+        batch["rewards"] = token_reward_rows(batch["rewards"], batch["response_ids"])
+        data = await asyncio.to_thread(
+            assemble_slice,
+            plan,
+            rows,
+            batch,
+            tokenizer=SimpleNamespace(pad_token_id=pad_token_id),
+            algorithm=self.cfg.trainer.algorithm,
+        )
+        data.metadata.update(pad_size=0, global_step=plan.global_step)
+        self._loaded_batches[plan.batch_id] = LoadedBatch(plan, data)
+        return time.perf_counter() - started
+
+    def _forward_loaded_logprobs(self, data: TrainingInputBatch) -> torch.Tensor:
+        return self.forward(data)["output"]
+
+    def forward_loaded(self, batch_id: int) -> TrainingOutputBatch:
+        """Retain completed policy scores and return globally reduced diagnostics."""
+        loaded = self._loaded_batches[batch_id]
+        batch = loaded.batch
+        batch["action_log_probs"] = self._forward_loaded_logprobs(forward_input(batch))
+        batch["base_action_log_probs"], batch["values"] = None, None
+        reduction = WorldReduction(self.strategy.all_reduce, self.mesh_rank.is_collection_dp_rank())
+        metrics = (
+            token_staleness_metrics(batch, loaded.plan.facts, reduction=reduction)
+            if self.cfg.trainer.training_metrics
+            else {}
+        )
+        metrics.update(
+            training_metrics(
+                batch,
+                algorithm=self.cfg.trainer.algorithm,
+                reduction=reduction,
+                phase="forward",
+                step_wise=False,
+                training_metrics_enabled=self.cfg.trainer.training_metrics,
+                rollout_logprobs_enabled=self.cfg.generator.sampling_params.logprobs is not None,
+            )
+        )
+        output = TrainingOutputBatch({})
+        output.metadata = {"batch_metrics": metrics}
+        return output
+
+    def prepare_loaded(self, batch_id: int) -> TrainingOutputBatch:
+        """Install outcome or uniform credit and finalize the retained training input."""
+        loaded = self._loaded_batches[batch_id]
+        batch, plan, algorithm = loaded.batch, loaded.plan, self.cfg.trainer.algorithm
+        reduction = WorldReduction(self.strategy.all_reduce, self.mesh_rank.is_collection_dp_rank())
+        metrics = install_correction(batch, algorithm, reduction=reduction)
+        if plan.advantages is not None:
+            rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
+            batch["advantages"] = (
+                torch.from_numpy(plan.advantages[rows.start : rows.stop].copy())[:, None] * batch["response_mask"]
+            )
+            batch["returns"] = batch["advantages"]
+        else:
+            rows = plan.rank_rows(self.mesh_rank.dp, self.mesh_rank.dp_size)
+            batch["advantages"], batch["returns"] = batch_advantages(
+                batch,
+                algorithm,
+                invariant=GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage),
+            )
+        metrics.update(
+            training_metrics(
+                batch,
+                algorithm=algorithm,
+                reduction=reduction,
+                phase="advantages",
+                step_wise=False,
+                group_scores=(
+                    plan.uids,
+                    torch.from_numpy(np.concatenate([facts.score for facts in plan.facts]))[:, None],
+                ),
+            )
+        )
+        loaded.batch = drop_advantage_inputs(apply_loop_advantages(batch))
+        output = TrainingOutputBatch({})
+        output.metadata = {"batch_metrics": metrics}
+        return output
+
+    def train_loaded(self, batch_id: int) -> TrainingOutputBatch:
+        return self.ppo_train(self._loaded_batches[batch_id].batch)
+
+    def digest_loaded(self, batch_id: int, phase: BatchInputPhase):
+        data = self._loaded_batches[batch_id].batch
+        return digest(forward_input(data) if phase is BatchInputPhase.FORWARD else data)
+
+    def unload_batch(self, batch_id: int) -> None:
+        self._loaded_batches.pop(batch_id, None)
 
     async def _begin_vllm_layerwise_weight_reload(self, inference_engine_client, *, enabled: bool) -> None:
         """Open a rank-synchronized vLLM reload around a streamed weight update."""

@@ -5,6 +5,16 @@ from enum import StrEnum
 from typing import Any
 
 
+class BatchBuilder(StrEnum):
+    DRIVER = "driver"
+    WORKER = "worker"
+    VERIFY = "verify"
+
+
+def parse_batch_builder(value: str) -> BatchBuilder:
+    return BatchBuilder(value)
+
+
 class R3Transport(StrEnum):
     BY_VALUE = "by_value"
     RESIDENT = "resident"
