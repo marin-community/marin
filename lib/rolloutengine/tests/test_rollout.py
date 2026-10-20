@@ -57,7 +57,14 @@ from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.grade import grade as verifyit_grade
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
-from verifyit.spec import RUBRIC_LABELS, FunctionCall, JudgeSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
+from verifyit.spec import (
+    RUBRIC_LABELS,
+    FunctionCall,
+    JudgeSpec,
+    PredictedActionSpec,
+    StructuredExactSpec,
+    parse_spec,
+)
 
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
