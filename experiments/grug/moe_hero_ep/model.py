@@ -61,6 +61,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
+from levanter.kernels.triton.gated_norm import gated_rms_norm
 from levanter.kernels.triton.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
@@ -253,6 +254,18 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
     return default
 
 
+class GatedNormImplementation(StrEnum):
+    """How each ``GatedNorm(RMSNorm(x))`` pair runs; both compute the same function.
+
+    ``REFERENCE`` composes the two modules. ``FUSED`` calls ``levanter.kernels.triton.gated_norm``,
+    which never writes the normalized activation to HBM and, on GPU, runs the backward's two
+    elementwise steps on Triton kernels.
+    """
+
+    REFERENCE = "reference"
+    FUSED = "fused"
+
+
 class QbEstimator(StrEnum):
     """How the QB router estimates each expert's threshold beta (the (1-K/E) upper quantile of the
     logit margins ``score - alpha``).
@@ -317,6 +330,7 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    gated_norm_implementation: GatedNormImplementation = GatedNormImplementation.REFERENCE
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -781,6 +795,15 @@ class GatedNorm(eqx.Module):
         return x * gate.astype(x.dtype)
 
 
+def _gated_rms_norm(
+    rms: RMSNorm, gated: GatedNorm, x: Float[Array, "B S D"], implementation: GatedNormImplementation
+) -> Float[Array, "B S D"]:
+    """``gated(rms(x))`` on the configured implementation."""
+    if implementation == GatedNormImplementation.REFERENCE:
+        return gated(rms(x))
+    return gated_rms_norm(x, unshard(rms.weight), gated.w_down, gated.w_up, eps=rms.eps)
+
+
 class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
@@ -1189,6 +1212,7 @@ class Block(eqx.Module):
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"  # SConv on the attention branch output (cfg.sconv)
     sconv_mlp: "ShortConv | None"  # SConv on the MoE branch output (cfg.sconv)
+    gated_norm_implementation: GatedNormImplementation = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -1218,6 +1242,7 @@ class Block(eqx.Module):
             sconv_mlp=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
             ),
+            gated_norm_implementation=cfg.gated_norm_implementation,
         )
 
     @named_call
@@ -1235,12 +1260,12 @@ class Block(eqx.Module):
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_in = _gated_rms_norm(self.rms_attn, self.attn_gated_norm, x, self.gated_norm_implementation)
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_in = _gated_rms_norm(self.rms_mlp, self.mlp_gated_norm, x, self.gated_norm_implementation)
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
         mlp_out, router_stats = self.mlp(mlp_in, token_valid)
         if self.shared is not None:
@@ -1323,7 +1348,7 @@ class Transformer(eqx.Module):
 
         cfg = self.config
         hidden = _embedding_gather(self.token_embed, token_ids)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        hidden = _gated_rms_norm(self.embed_norm, self.embed_gated_norm, hidden, cfg.gated_norm_implementation)
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
         segment_ids = None
@@ -1413,7 +1438,7 @@ class Transformer(eqx.Module):
             "margin_min_per_layer": stacked_router_stats["margin_min"],
             "margin_max_per_layer": stacked_router_stats["margin_max"],
         }
-        hidden = self.final_gated_norm(self.final_norm(hidden))
+        hidden = _gated_rms_norm(self.final_norm, self.final_gated_norm, hidden, cfg.gated_norm_implementation)
         return hidden, router_metrics
 
     @named_call
