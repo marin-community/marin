@@ -516,15 +516,22 @@ class CapabilitySource:
         Raises:
             StructuredOutputError: the plan stayed invalid after its repair.
             ModelUnavailable: the model ran out of retries. The source cancels the slots still
-                running before the error propagates, as for any other error a slot raises.
+                running and raises the first slot's error itself, not in an ``ExceptionGroup``, as
+                for any other error a slot raises.
         """
         planned = await plan_slots(self.model, self.policy, idea, n, self.environments)
-        async with asyncio.TaskGroup() as group:
-            tasks = {
-                s.slot: group.create_task(author_proposal(self.model, self.policy, idea, planned.plan, s))
-                for s in planned.plan.slots
-                if s.status is SlotStatus.PROPOSE
-            }
+        try:
+            async with asyncio.TaskGroup() as group:
+                tasks = {
+                    s.slot: group.create_task(author_proposal(self.model, self.policy, idea, planned.plan, s))
+                    for s in planned.plan.slots
+                    if s.status is SlotStatus.PROPOSE
+                }
+        except ExceptionGroup as failures:
+            # The group cancelled the other slots. Raise the failure as one slot would, with its own
+            # cause chain and without the group as context, so callers catch it by type.
+            failure = failures.exceptions[0]
+            raise failure from failure.__cause__
         slots = tuple(
             tasks[s.slot].result() if s.slot in tasks else null_slot_proposal(idea, s) for s in planned.plan.slots
         )

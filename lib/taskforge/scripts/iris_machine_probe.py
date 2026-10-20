@@ -139,30 +139,32 @@ async def check_machine(factory: IrisMachineFactory, spec: MachineSpec, tmp: str
 async def check_ttl(factory: IrisMachineFactory, spec: MachineSpec, ttl: int) -> None:
     short = IrisMachineFactory(controller_url=factory.controller_url, job_ttl=ttl)
     machine, seconds = await create(short, spec)
-    started = time.monotonic()
-    first = await machine.run(Command(("echo", "alive")))
-    emit("ttl", phase="before", create=seconds, exit=first.exit_code, stdout=first.stdout.decode().strip())
-    await asyncio.sleep(max(0, ttl + 30 - (time.monotonic() - started)))
-    while True:
-        state = await asyncio.to_thread(machine.job.status)
-        elapsed = round(time.monotonic() - started, 1)
-        try:
-            second = await machine.run(Command(("echo", "alive")))
-            emit("ttl", phase="after", elapsed=elapsed, job_state=state.state, exit=second.exit_code)
-        except Exception as error:
-            emit(
-                "ttl",
-                phase="after",
-                elapsed=elapsed,
-                job_state=state.state,
-                terminated=isinstance(error, MachineTerminated),
-                error=repr(error)[:300],
-            )
-            break
-        if elapsed > ttl + 600:
-            break
-        await asyncio.sleep(30)
-    await machine.close()
+    try:
+        started = time.monotonic()
+        first = await machine.run(Command(("echo", "alive")))
+        emit("ttl", phase="before", create=seconds, exit=first.exit_code, stdout=first.stdout.decode().strip())
+        await asyncio.sleep(max(0, ttl + 30 - (time.monotonic() - started)))
+        while True:
+            state = await asyncio.to_thread(machine.job.status)
+            elapsed = round(time.monotonic() - started, 1)
+            try:
+                second = await machine.run(Command(("echo", "alive")))
+                emit("ttl", phase="after", elapsed=elapsed, job_state=state.state, exit=second.exit_code)
+            except Exception as error:
+                emit(
+                    "ttl",
+                    phase="after",
+                    elapsed=elapsed,
+                    job_state=state.state,
+                    terminated=isinstance(error, MachineTerminated),
+                    error=repr(error)[:300],
+                )
+                break
+            if elapsed > ttl + 600:
+                break
+            await asyncio.sleep(30)
+    finally:
+        await machine.close()
 
 
 async def check_private_image(factory: IrisMachineFactory) -> None:
@@ -174,18 +176,22 @@ async def check_private_image(factory: IrisMachineFactory) -> None:
     except Exception as error:
         emit("private_image", ok=False, seconds=round(time.monotonic() - start, 2), error=repr(error)[:800])
         return
-    result = await machine.run(Command(("/opt/task/run.sh",)))
-    emit("private_image", ok=True, seconds=round(time.monotonic() - start, 2), stdout=result.stdout.decode())
-    await machine.close()
+    try:
+        result = await machine.run(Command(("/opt/task/run.sh",)))
+        emit("private_image", ok=True, seconds=round(time.monotonic() - start, 2), stdout=result.stdout.decode())
+    finally:
+        await machine.close()
 
 
 async def check_grader_base(factory: IrisMachineFactory, image: str) -> None:
     spec = MachineSpec(source=RegistryImage(image), workdir="/app", network=NetworkPolicy.DENY)
     start = time.monotonic()
     machine = await factory.create(spec)
-    result = await machine.run(Command(("sh", "-c", GRADER_BASE_SCRIPT)))
-    emit("grader_base", seconds=round(time.monotonic() - start, 2), stdout=result.stdout.decode())
-    await machine.close()
+    try:
+        result = await machine.run(Command(("sh", "-c", GRADER_BASE_SCRIPT)))
+        emit("grader_base", seconds=round(time.monotonic() - start, 2), stdout=result.stdout.decode())
+    finally:
+        await machine.close()
 
 
 async def guarded(name: str, coro) -> None:

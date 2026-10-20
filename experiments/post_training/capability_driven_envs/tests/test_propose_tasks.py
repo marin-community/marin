@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
+from taskforge.llm.client import ModelUnavailable
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, Environment, parse
 from taskforge.stage20_triage.verdict import TriageDecision, Verdict
@@ -107,6 +108,40 @@ def test_a_plan_invalid_after_its_repair_fails_only_its_capability(tmp_path: Pat
     summary = json.loads((output / SUMMARY_FILE).read_text())
     assert "slot 1 is proposed in container" in summary[CAPABILITY_ID]
     assert list((output / CAPABILITY_ID).iterdir()) == []
+
+
+def test_a_slot_whose_model_runs_out_of_retries_fails_only_its_capability(tmp_path: Path):
+    ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
+    model = ScriptedModel()
+    model.reply(json.dumps(PLAN))
+    model.fail(ModelUnavailable("the router answered 503 on every retry", ()))
+    output = tmp_path / "run"
+    output.mkdir()
+
+    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, 1, output / CALLS_DIR, LLMPolicy()))
+    write_outputs(output, proposed)
+
+    assert "503 on every retry" in json.loads((output / SUMMARY_FILE).read_text())[CAPABILITY_ID]
+    assert list((output / CAPABILITY_ID).iterdir()) == []
+
+
+def test_a_review_whose_model_runs_out_of_retries_keeps_the_proposals(tmp_path: Path):
+    ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
+    model = ScriptedModel()
+    model.reply(json.dumps(PLAN))
+    model.reply(proposal_document(ideas[CAPABILITY_ID].capability_hash))
+    model.fail(ModelUnavailable("the router answered 503 on every retry", ()))
+    output = tmp_path / "run"
+    output.mkdir()
+
+    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, 1, output / CALLS_DIR, LLMPolicy()))
+    write_outputs(output, proposed)
+
+    assert json.loads((output / SUMMARY_FILE).read_text())[CAPABILITY_ID].startswith("review: ")
+    directory = output / CAPABILITY_ID
+    assert parse((directory / "slot-01.md").read_text()).header.id == f"{CAPABILITY_ID}/1"
+    assert (directory / "slot-01.completions.json").exists()
+    assert not (directory / "slot-01.verdict.json").exists()
 
 
 def test_an_unknown_capability_is_refused_before_the_run_starts():
