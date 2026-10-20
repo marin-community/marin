@@ -242,7 +242,7 @@ def request_kwargs(
 
 
 @dataclass
-class _Connection:
+class _LoopPool:
     """The connection pool of one event loop, and the SDK client on it for one endpoint."""
 
     http: httpx.AsyncClient
@@ -267,7 +267,7 @@ class GlmClient:
             initial=provider.backoff_initial, maximum=provider.backoff_maximum, factor=provider.backoff_factor
         )
         self._endpoint = source.current()
-        self._connections: dict[asyncio.AbstractEventLoop, _Connection] = {}
+        self._pools: dict[asyncio.AbstractEventLoop, _LoopPool] = {}
 
     def __reduce__(self) -> tuple[type[Self], tuple[EndpointSource, LLMProviderConfig]]:
         return type(self), (self._source, self._provider)
@@ -279,7 +279,7 @@ class GlmClient:
     @property
     def http(self) -> httpx.AsyncClient:
         """The running event loop's connection pool, for requests to the router's other endpoints such as ``/health``."""
-        return self._connection().http
+        return self._pool().http
 
     async def __aenter__(self) -> Self:
         return self
@@ -287,27 +287,25 @@ class GlmClient:
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
-        connection = self._connections.pop(asyncio.get_running_loop(), None)
-        if connection is not None:
-            await connection.http.aclose()
+        pool = self._pools.pop(asyncio.get_running_loop(), None)
+        if pool is not None:
+            await pool.http.aclose()
 
-    def _connection(self) -> _Connection:
+    def _pool(self) -> _LoopPool:
         """The running event loop's connection pool and SDK client, opened on first use there."""
-        for loop in [loop for loop in list(self._connections) if loop.is_closed()]:
-            self._connections.pop(loop, None)
+        for loop in [loop for loop in list(self._pools) if loop.is_closed()]:
+            self._pools.pop(loop, None)
         loop = asyncio.get_running_loop()
-        connection = self._connections.get(loop)
-        if connection is None:
-            connections = self._provider.max_connections
-            http = httpx.AsyncClient(
-                limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
-            )
-            connection = _Connection(http, self._sdk_client(self._endpoint, http), self._endpoint)
-            self._connections[loop] = connection
-        elif connection.endpoint != self._endpoint:
-            connection.sdk = self._sdk_client(self._endpoint, connection.http)
-            connection.endpoint = self._endpoint
-        return connection
+        pool = self._pools.get(loop)
+        if pool is None:
+            limit = self._provider.max_connections
+            http = httpx.AsyncClient(limits=httpx.Limits(max_connections=limit, max_keepalive_connections=limit))
+            pool = _LoopPool(http, self._sdk_client(self._endpoint, http), self._endpoint)
+            self._pools[loop] = pool
+        elif pool.endpoint != self._endpoint:
+            pool.sdk = self._sdk_client(self._endpoint, pool.http)
+            pool.endpoint = self._endpoint
+        return pool
 
     def _sdk_client(self, endpoint: GlmEndpoint, http: httpx.AsyncClient) -> openai.AsyncOpenAI:
         timeout = httpx.Timeout(
@@ -482,7 +480,7 @@ class GlmClient:
         started = time.monotonic()
         ttft: float | None = None
         try:
-            chunks = await self._connection().sdk.chat.completions.create(**kwargs)
+            chunks = await self._pool().sdk.chat.completions.create(**kwargs)
             assert isinstance(chunks, openai.AsyncStream)
             async with chunks:
                 last_token = time.monotonic()
@@ -548,7 +546,7 @@ class GlmClient:
         """
         endpoint = self._endpoint
         try:
-            response = await self._connection().http.get(
+            response = await self._pool().http.get(
                 f"{endpoint.base_url.removesuffix(API_ROOT)}/health",
                 headers={"Authorization": f"Bearer {endpoint.token}"},
                 timeout=HEALTH_TIMEOUT,
