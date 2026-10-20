@@ -13,10 +13,10 @@ src/taskforge/
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
   content_hash.py              canonical JSON and its sha256 digests
-  ledger/                      timed spans to per-workpiece JSONL and, under Iris, Finelog
-  llm/                         the ModelClient protocol, the GLM client and its token-id route, sampling
-                               policy, structured output, call cache, ledger recording, agent loop, web
-                               tools, the RolloutEngine model
+  ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
+  llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
+                               output, call cache, ledger recording, agent loop, web tools, the
+                               RolloutEngine model
   sandbox/                     MachineFactory selection per host, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
@@ -92,9 +92,9 @@ regex with continuations off and re-asks once if the rewrite fails `parse`.
 
 ## Task specs
 
-A built task is a TaskCompendium `TaskSpec` and the `LoweredTaskSpec` that says how it runs.
-`spec.draft.assemble` builds the semantic task and `spec.draft.lower` alone builds the lowered
-record, so a move of either is a single-site change.
+A built task is a TaskCompendium `TaskSpec` and the RolloutEngine `TaskRolloutSpec` that says how it
+runs. `spec.draft.assemble` builds the semantic task and `spec.draft.lower` alone builds the rollout
+spec, so a move of either is a single-site change.
 
 - `spec.draft.assemble(task_id, instruction, answer_type, answer_format, grader, source, *,
   environment, files, output_paths, system, final_tools, tags) -> TaskSpec`. `environment` is
@@ -105,15 +105,24 @@ record, so a move of either is a single-site change.
   `grader` is a `GraderPackage` from `answer_grader(spec)` (a verifyit mode graded in process, or
   in a verifier machine given `environment=`), `python_grader(script, config, environment=,
   answer_path=, timeout=)` (`python3 /tests/grade.py` in a verifier machine) or
-  `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`.
+  `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`. RolloutEngine grades an
+  LLM judge (a verifyit `JudgeSpec`) on the host through the judge service of `TaskRolloutSpec.judge_connection`
+  or `VERIFYIT_JUDGE_BASE_URL`, with no verifier machine, so its `RolloutEngine.check` fails on a host
+  that has neither.
   `grader_environment(task_image)` is the verifier machine's environment: the task image, or
   `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
-- `spec.draft.lower(task, *, host, task_machine, verifier_machine, session, factories)` runs
+- `spec.draft.lower(task, *, host, task_machine, verifier_machine, limits, factories)` runs
   each machine on `host_requirements` for `factories`: with the local backend, the grader base image
   and package machines run there; without it, a package machine runs on the grader base image. It
   picks the host's container backend for an image, the local backend for Linux processes without
-  one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment
-  takes a verifier machine; no other grader does.
+  one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment,
+  other than a judge, takes a verifier machine; no other grader does. `limits` is a `RolloutLimits`
+  from `rollout_limits(...)`, which sets no token budget. The spec names the harness `SHELL_HARNESS`,
+  and `lower` rejects what `RolloutEngine.check` rejects (`draft.check`).
+- `spec.draft.rollout_engine(factories, *, command_timeout)` is the `RolloutEngine` every Taskforge
+  rollout runs on: the factories and RolloutEngine's `ShellHarness(command_timeout=...)` registered as
+  `SHELL_HARNESS`. The shell command timeout belongs to the harness registration, not to the spec, and
+  each run passes its model: `engine.run_task(spec, model)` returns a `GradedRollout`.
 - `spec.controls.Control` is one labeled candidate submission (`kind`, `category`, `concern`,
   `author`, a `Transcript` or `Workspace` payload, an `Expectation`). `concern` is `reference`,
   `acceptance`, `extraction` or `shortcut`, and the concern a control may carry follows its
@@ -123,12 +132,12 @@ record, so a move of either is a single-site change.
 - `sandbox.factories.machine_factories(where, controller_url)` returns the factories for
   `RolloutEngine`, keyed by shellbox `Backend` value: ShellSim plus Docker on a laptop,
   ShellSim plus gVisor on Iris, plus the local backend for lock-only graders when bubblewrap works
-  in the Iris task. Before a trial starts, `task_refusals(lowered, factories)` passes each machine of
-  a lowered task to its factory's `check_environment` and lists a typed refusal, with the factory's
+  in the Iris task. Before a trial starts, `task_refusals(spec, factories)` passes each machine of
+  a `TaskRolloutSpec` to its factory's `check_environment` and lists a typed refusal, with the factory's
   message, for each machine without a factory or rejected by one. `warm_local_python(factories)`
-  builds the local backend's bare CPython environment in a background thread, so a coordinator that
-  calls it once at start spares its first wave of local machines the five-second build; the build
-  children share the cache.
+  builds the local backend's bare CPython environment in a background thread, so the run's driver
+  (the ladder that runs Taskforge on Iris), which calls it once at start, spares its first wave of
+  local machines the five-second build; the build children share the cache.
 
 Task-specific grading is the task's own code, private in `resources.verifier`, run by a
 `ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
@@ -153,13 +162,11 @@ run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
                     (record: CallLedger)
                       |              |
                       v              v
-          GlmClient.complete      span(LLM_CALL) -> Ledger.record(LedgerEntry)
-          or .generate,                              |-> JsonlLedger   <root>/<workpiece_id>.jsonl
-          retries and holds                          '-> FinelogLedger taskforge.ledger (under Iris)
-                      |
+          GlmClient.complete,     span(LLM_CALL) -> Ledger.record(LedgerEntry)
+          retries and holds                          |-> JsonlLedger   <root>/<workpiece_id>.jsonl
+                      |                              '-> FinelogLedger taskforge.ledger (under Iris)
                       v
           GLM-5.3 router: POST /v1/chat/completions (streamed)
-                          or POST /inference/v1/generate (token ids)
 ```
 
 `llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
@@ -171,10 +178,11 @@ own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each a
 `max_tokens`.
 
 `llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
-the messages trace. Each turn is one streamed chat-completions call with `return_token_ids`, and
-the turn reports the ids and logprobs the server sent in its chunks, and the call's usage; under
-`TraceMode.MESSAGES` the engine records them without checking them, and a stream without them gives
-a turn with empty ids. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
+the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
+and the call's usage with empty token ids; the rollout model requests neither token ids nor logprobs,
+and refuses a request that carries them (a `ModelRequest.continuation` or pinned prompt ids).
+Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage against the attempt's
+token budget, which Taskforge leaves unset. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
 

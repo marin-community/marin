@@ -17,7 +17,7 @@ import re
 import threading
 import time
 from collections.abc import Iterator, Sequence
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -451,7 +451,13 @@ def test_twenty_concurrent_agents_share_one_client(glm_source, live_provider, ev
             },
         ]
 
-    async def one(client: GlmClient, n: int) -> tuple[AgentRun, float, str]:
+    @dataclass(frozen=True)
+    class AgentResult:
+        run: AgentRun
+        wall_time: float
+        file: str
+
+    async def one(client: GlmClient, n: int) -> AgentResult:
         machine = await shellsim()
         tool = shell_tool(machine, timeout=SHELL_TIMEOUT, output_limit_bytes=SHELL_OUTPUT_LIMIT)
         run, wall = await timed_agent(
@@ -459,7 +465,7 @@ def test_twenty_concurrent_agents_share_one_client(glm_source, live_provider, ev
         )
         content = await machine.run(Command(argv=("cat", "/workspace/answer.txt"), timeout=SHELL_TIMEOUT))
         await machine.close()
-        return run, wall, content.stdout.decode().strip()
+        return AgentResult(run, wall, content.stdout.decode().strip())
 
     async def go() -> tuple[list, float]:
         started = time.monotonic()
@@ -474,18 +480,18 @@ def test_twenty_concurrent_agents_share_one_client(glm_source, live_provider, ev
             if isinstance(r, BaseException)
             else {
                 "agent": n,
-                "stop": r[0].stop,
-                "turns": len(r[0].turns),
-                "wall_time": r[1],
-                "completion_tokens": r[0].usage.completion_tokens,
-                "file": r[2],
-                "number": last_integer(r[2]),
+                "stop": r.run.stop,
+                "turns": len(r.run.turns),
+                "wall_time": r.wall_time,
+                "completion_tokens": r.run.usage.completion_tokens,
+                "file": r.file,
+                "number": last_integer(r.file),
                 "expected": n * n + 7,
             }
         )
         for n, r in enumerate(results)
     ]
-    runs = [r[0] for r in results if not isinstance(r, BaseException)]
+    runs = [r.run for r in results if not isinstance(r, BaseException)]
     record(
         evidence_dir,
         "concurrent_20",

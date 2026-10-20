@@ -4,7 +4,6 @@
 import asyncio
 import json
 import socket
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
@@ -17,11 +16,8 @@ from taskforge.llm.client import (
     FinishReason,
     ModelRequestRejected,
     ModelUnavailable,
-    TokenCompletion,
 )
 from taskforge.llm.glm_client import (
-    GENERATE_PATH,
-    ROUTING_KEY_HEADER,
     EndpointSource,
     FixedEndpoint,
     GlmClient,
@@ -35,7 +31,6 @@ from taskforge.llm.policy import (
     LLMProviderConfig,
     Message,
 )
-from tests.conftest import ScriptedStream
 
 MESSAGES: list[Message] = [{"role": "user", "content": "hi"}]
 CONTEXT_ERROR = json.dumps(
@@ -347,68 +342,8 @@ def test_continuations_stop_at_policy_limit(fake_glm, run):
     assert len(fake_glm.requests) == 3
 
 
-def generate(source: EndpointSource, provider: LLMProviderConfig, max_tokens: int = 64) -> TokenCompletion:
-    async def call() -> TokenCompletion:
-        async with GlmClient(source, provider) as client:
-            return await client.generate((1, 2, 3), LLMPolicy(), max_tokens=max_tokens, routing_key="workpiece:0:solver")
-
-    return asyncio.run(call())
-
-
-def test_generate_posts_token_ids_and_reads_ids_logprobs_bytes_and_usage(fake_glm, fast_provider):
-    fake_glm.generate((30, 31), (b"ok", b"<|user|>"), prompt_tokens=3, cached_tokens=2)
-
-    completion = generate(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)
-
-    assert (completion.token_ids, completion.token_bytes) == ((30, 31), (b"ok", b"<|user|>"))
-    assert completion.logprobs == (-0.25, -0.25)
-    assert (completion.usage.prompt_tokens, completion.usage.completion_tokens, completion.usage.cached_tokens) == (
-        3,
-        2,
-        2,
-    )
-    [body] = fake_glm.requests
-    assert fake_glm.request_paths == [GENERATE_PATH]
-    assert body == {
-        "model": "glm-5.3",
-        "token_ids": [1, 2, 3],
-        "sampling_params": {"max_tokens": 64, "temperature": 1.0, "top_p": 0.95, "logprobs": 0},
-        "return_token_bytes": True,
-        "stream": False,
-    }
-    headers = fake_glm.request_headers[0]
-    assert (headers["authorization"], headers[ROUTING_KEY_HEADER]) == ("Bearer test-token", "workpiece:0:solver")
-
-
-def test_generate_retries_a_retryable_status_and_records_each_attempt(fake_glm, fast_provider):
-    fake_glm.status(503, "busy")
-    fake_glm.generate((30,), (b"<|user|>",))
-
-    completion = generate(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)
-
-    assert outcomes(completion) == [AttemptOutcome.RETRYABLE_STATUS, AttemptOutcome.COMPLETED]
-    assert len(fake_glm.requests) == 2
-
-
-def test_generate_rejects_a_router_without_token_bytes_at_once(fake_glm, fast_provider):
-    fake_glm.status(503, json.dumps({"error": {"code": "token_bytes_unavailable", "message": "tokenizer mismatch"}}))
-
-    with pytest.raises(ModelRequestRejected) as error:
-        generate(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)
-
-    assert (error.value.status, len(fake_glm.requests)) == (503, 1)
-    assert outcomes(error.value) == [AttemptOutcome.REJECTED]
-
-
-def test_generate_context_overflow_raises(fake_glm, fast_provider):
-    fake_glm.status(400, CONTEXT_ERROR)
-
-    with pytest.raises(ContextExhausted):
-        generate(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)
-
-
 def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_provider):
-    """Ladder harness patch: a silently dead keep-alive socket reads nothing until the stall timeout, and so would
+    """A silently dead keep-alive socket reads nothing until the stall timeout, and so would
     every other idle connection the pool holds on that path, so the retry goes through a new pool. (The fake server
     speaks HTTP/1.0 and never keeps a connection alive, so the test checks the pool, not the socket.)"""
     fake_glm.stream(content="never finishes", stall_after_first=True)
@@ -419,34 +354,34 @@ def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_p
         async with GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), provider) as client:
             before = client.http
             completion = await client.complete(MESSAGES, LLMPolicy())
-            return completion, client.http is not before and not before.is_closed
+            return completion, client.http is not before and before.is_closed
 
-    completion, replaced_and_retired = asyncio.run(call())
+    completion, replaced_and_closed = asyncio.run(call())
     assert completion.content == "second try"
     assert outcomes(completion) == [AttemptOutcome.STALLED, AttemptOutcome.COMPLETED]
-    assert replaced_and_retired
+    assert replaced_and_closed
 
 
-def test_a_long_reply_with_per_token_logprobs_streams_in_linear_time(fake_glm, run):
-    """The SDK's stream accumulator rebuilds the snapshot's whole logprobs list on every chunk, so a 4,000-token
-    reply took about 11 s of event-loop CPU; the client keeps logprobs in the raw events only."""
-    tokens = 4000
+def test_a_replaced_pool_closes_once_the_calls_still_streaming_on_it_finish(fake_glm, fast_provider):
+    """A pool replaced after a stall must not hold its sockets until the client exits, nor cut a call streaming on it."""
+    fake_glm.stream(reasoning="slow but steady", content="first", interval=0.2)
+    fake_glm.stream(content="never finishes", stall_after_first=True)
+    fake_glm.stream(content="second try")
 
-    def token_chunk(finish_reason: str | None) -> dict:
-        logprobs = {"content": [{"token": "w", "logprob": -0.1, "bytes": [119], "top_logprobs": []}]}
-        return {
-            "choices": [{"index": 0, "delta": {"content": "w "}, "logprobs": logprobs, "finish_reason": finish_reason}]
-        }
+    async def call() -> tuple[str, bool, bool, Completion]:
+        provider = replace(fast_provider, stall_timeout=0.4)
+        async with GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), provider) as client:
+            before = client.http
+            streaming = asyncio.create_task(client.complete(MESSAGES, LLMPolicy()))
+            while not fake_glm.requests:
+                await asyncio.sleep(0.01)
+            retried = await client.complete(MESSAGES, LLMPolicy())
+            open_while_streaming = not streaming.done() and not before.is_closed
+            slow = await streaming
+            return retried.content, open_while_streaming, before.is_closed, slow
 
-    events: list[dict | str] = [
-        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]},
-        *(token_chunk(None) for _ in range(tokens - 1)),
-        token_chunk("stop"),
-        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": tokens}},
-    ]
-    fake_glm.responses.append(ScriptedStream(events, True, None))
-    started = time.monotonic()
-    completion = run()
-    assert time.monotonic() - started < 4.0
-    assert completion.content == "w " * tokens
-    assert sum('"logprob"' in event for event in completion.attempts[-1].events) == tokens
+    retried, open_while_streaming, closed_after, slow = asyncio.run(call())
+    assert retried == "second try"
+    assert open_while_streaming
+    assert (slow.content, outcomes(slow)) == ("first", [AttemptOutcome.COMPLETED])
+    assert closed_after

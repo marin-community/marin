@@ -18,7 +18,7 @@ the GLM author also sends it back within its structured call.
    definition, an assignment or a parameter, unless ``SAFE_BUILTINS`` holds it. A missing import
    or a misspelt name would otherwise fail in the middle of a build, after the steps before it
    spent their model calls. The refusal names the closest name, if one is close, out of the
-   program's bound names and the names ``sdk_exports`` finds defined in the allowed modules; for
+   program's bound names and the caller's ``SdkExports``, the names the allowed modules define; for
    an SDK name it also gives the modules to import it from. The check ignores scope, so it misses
    a name bound in one function and read in another. An attribute the program reads from a module
    it imports, such as ``draft.GRADER_TIMEOUT``, is checked against that module the same way,
@@ -27,9 +27,11 @@ the GLM author also sends it back within its structured call.
    ``SAFE_BUILTINS``, which keeps a program to the SDK's functions; programs are trusted model
    output in the builder's process, so this is no security boundary. The build SDK belongs to a
    later stage than this module, so the program imports it by name at run time rather than this
-   module importing it. Before running the module, the pass registers the source in ``linecache``
-   under the module's file name, so the step decorator's ``inspect.getsource`` reads each step's
-   text. An import of a name the module lacks gets a suggestion from ``sdk_exports`` as well. The
+   module importing it, and the build lists the SDK's names for the loader
+   (``stage40_build_with_program.program_sdk.sdk_exports``). Before running the module, the pass
+   registers the source in ``linecache`` under the module's file name, so the step decorator's
+   ``inspect.getsource`` reads each step's text. An import of a name the module lacks gets a
+   suggestion from the ``SdkExports`` as well. The
    loader looks first among the names the imported module defines, then in the other modules, so
    a misspelt name comes back with its spelling in that module, and a name imported from the
    wrong module comes back with the module defining it. The DAG checks
@@ -49,13 +51,13 @@ import builtins
 import difflib
 import functools
 import importlib
-import inspect
 import linecache
 import sys
 import types
 from collections.abc import Iterable, Mapping, Sequence
 from types import ModuleType
 
+from pydantic import BaseModel
 from taskcompendium.models import TaskSpec
 
 from taskforge.content_hash import sha256_hex
@@ -132,7 +134,20 @@ MODULE_RULE = (
 )
 
 
+class SdkExports(BaseModel, frozen=True):
+    """Each public name the ``ALLOWED_IMPORTS`` modules define, with the modules defining it.
+
+    The loader suggests from these names when a program reads a name it never binds or imports a
+    name its module lacks. The build SDK belongs to a later stage, so this module never imports it:
+    the build lists its names (``stage40_build_with_program.program_sdk.sdk_exports``) and passes
+    them to ``load_program_source``.
+    """
+
+    defining_modules: dict[str, tuple[str, ...]]
+
+
 def _restricted_import(
+    sdk: SdkExports,
     name: str,
     globals: Mapping[str, object] | None = None,  # noqa: A002 - __import__ signature
     locals: Mapping[str, object] | None = None,  # noqa: A002 - __import__ signature
@@ -152,7 +167,7 @@ def _restricted_import(
     module = importlib.import_module(name)
     for item in fromlist or ():
         if item != "*" and not hasattr(module, item):
-            raise ImportError(f"{name!r} has no name {item!r}{_import_suggestion(item, name)}")
+            raise ImportError(f"{name!r} has no name {item!r}{_import_suggestion(item, name, sdk)}")
     return module
 
 
@@ -167,50 +182,14 @@ def _suggestion(name: str, candidates: Iterable[str]) -> str:
     return f"; did you mean {matches[0]!r}?" if matches else ""
 
 
-def _defined_names(module: ModuleType) -> set[str]:
-    """The public names ``module`` defines: its ``__all__``, or else its public names minus its top-level imports."""
-    declared = getattr(module, "__all__", None)
-    if declared is not None:
-        return set(declared)
-    public = {n for n, value in vars(module).items() if not n.startswith("_") and not isinstance(value, ModuleType)}
-    try:
-        tree = ast.parse(inspect.getsource(module))
-    except (OSError, TypeError):
-        # A module without Python source, such as math, has no import statements to subtract.
-        return public
-    imported = {
-        (alias.asname or alias.name).split(".")[0]
-        for node in tree.body
-        if isinstance(node, ast.Import | ast.ImportFrom)
-        for alias in node.names
-    }
-    return public - imported
-
-
-@functools.cache
-def sdk_exports() -> dict[str, tuple[str, ...]]:
-    """Each public name the ``ALLOWED_IMPORTS`` modules define, with the modules defining it.
-
-    The loader imports those modules here, when it first builds a suggestion, since the build SDK
-    belongs to a later stage. A module re-exporting an imported name does not count, so
-    ``DOCKER_IMAGE_REQUIREMENTS`` maps to ``taskforge.stage40_build_with_program.sdk`` alone, although the
-    standard template imports it as well.
-    """
-    modules: dict[str, list[str]] = {}
-    for module in sorted(ALLOWED_IMPORTS):
-        for name in _defined_names(importlib.import_module(module)):
-            modules.setdefault(name, []).append(module)
-    return {name: tuple(defining) for name, defining in modules.items()}
-
-
-def _name_suggestion(name: str, bound: Iterable[str]) -> str:
+def _name_suggestion(name: str, bound: Iterable[str], sdk: SdkExports) -> str:
     """``"; did you mean 'x'?"`` for the closest of ``bound`` and the SDK exports to ``name``.
 
     A former SDK name in ``RENAMED_SDK_NAMES`` gets the name replacing it. An SDK export the
     program has not bound comes with its modules, as in ``"; did you mean 'research' from
     taskforge.stage40_build_with_program.sdk?"``. The result is ``""`` when no name is close.
     """
-    exports = sdk_exports()
+    exports = sdk.defining_modules
     renamed = RENAMED_SDK_NAMES.get(name)
     if renamed is not None:
         return f"; did you mean {renamed!r} from {' or '.join(exports[renamed])}?"
@@ -224,7 +203,7 @@ def _name_suggestion(name: str, bound: Iterable[str]) -> str:
     return f"; did you mean {match!r} from {' or '.join(exports[match])}?"
 
 
-def _import_suggestion(name: str, module: str) -> str:
+def _import_suggestion(name: str, module: str, sdk: SdkExports) -> str:
     """The suggestion for ``from module import name``, looking first among the names ``module`` defines.
 
     A close name from ``module`` comes first, and an exact name another module defines follows it:
@@ -233,7 +212,7 @@ def _import_suggestion(name: str, module: str) -> str:
     a former SDK name, the suggestion is ``_name_suggestion``'s.
     """
     if name not in RENAMED_SDK_NAMES:
-        exports = sdk_exports()
+        exports = sdk.defining_modules
         own = sorted(export for export, defining in exports.items() if module in defining)
         matches = difflib.get_close_matches(name, own, n=1)
         elsewhere = [defining for defining in exports.get(name, ()) if defining != module]
@@ -241,13 +220,18 @@ def _import_suggestion(name: str, module: str) -> str:
             return f"; did you mean {matches[0]!r} from {module}, or {name!r} from {' or '.join(elsewhere)}?"
         if matches:
             return f"; did you mean {matches[0]!r} from {module}?"
-    return _name_suggestion(name, ())
+    return _name_suggestion(name, (), sdk)
 
 
-SAFE_BUILTINS: dict[str, object] = {
-    **{name: value for name, value in vars(builtins).items() if name not in UNSAFE_BUILTINS},
-    "__import__": _restricted_import,
-}
+SAFE_BUILTINS = frozenset(name for name in vars(builtins) if name not in UNSAFE_BUILTINS)
+"""The builtins a build program may use; its ``__import__`` is ``_restricted_import``."""
+
+
+def _program_builtins(sdk: SdkExports) -> dict[str, object]:
+    return {
+        **{name: getattr(builtins, name) for name in SAFE_BUILTINS},
+        "__import__": functools.partial(_restricted_import, sdk),
+    }
 
 
 def module_name(source: str) -> str:
@@ -260,8 +244,10 @@ def program_file(source: str) -> str:
     return f"<{module_name(source)}>"
 
 
-def load_program_source(source: str) -> RLEnvBuildProgram:
+def load_program_source(source: str, sdk: SdkExports) -> RLEnvBuildProgram:
     """Check and run ``source`` as a build program module and return its ``PROGRAM``.
+
+    ``sdk`` holds the names the refusals suggest from; it does not change what loads.
 
     Raises:
         ValueError: the source does not parse, breaks the module-level rule, uses an unsafe
@@ -277,12 +263,12 @@ def load_program_source(source: str) -> RLEnvBuildProgram:
     except SyntaxError as error:
         raise ValueError(f"the program does not parse: {error}") from error
     _check_module_level(tree)
-    _check_names(tree)
-    _check_module_attributes(tree)
+    _check_names(tree, sdk)
+    _check_module_attributes(tree, sdk)
     filename = program_file(source)
     linecache.cache[filename] = (len(source), None, source.splitlines(keepends=True), filename)
     module = types.ModuleType(name)
-    module.__dict__.update({"__builtins__": SAFE_BUILTINS, "__file__": filename})
+    module.__dict__.update({"__builtins__": _program_builtins(sdk), "__file__": filename})
     sys.modules[name] = module
     try:
         try:
@@ -382,7 +368,7 @@ def _bound_names(tree: ast.Module) -> set[str]:
     return bound
 
 
-def _check_names(tree: ast.Module) -> None:
+def _check_names(tree: ast.Module, sdk: SdkExports) -> None:
     bound = _bound_names(tree)
     unsafe: set[str] = set()
     unbound: dict[str, int] = {}
@@ -397,7 +383,7 @@ def _check_names(tree: ast.Module) -> None:
         raise ValueError(f"the program uses builtins that do not exist for build programs: {sorted(unsafe)}")
     if unbound:
         problems = [
-            f"`{name}` (line {line}){_name_suggestion(name, bound | SAFE_BUILTINS.keys())}"
+            f"`{name}` (line {line}){_name_suggestion(name, bound | SAFE_BUILTINS, sdk)}"
             for name, line in sorted(unbound.items(), key=lambda item: item[1])
         ]
         listed = "\n".join(f"- {problem}" for problem in problems)
@@ -420,7 +406,7 @@ def _imported_modules(tree: ast.Module) -> dict[str, str]:
     return {name: path for name, path in modules.items() if path in ALLOWED_IMPORTS}
 
 
-def _check_module_attributes(tree: ast.Module) -> None:
+def _check_module_attributes(tree: ast.Module, sdk: SdkExports) -> None:
     """Refuse an attribute the program reads from an imported module that does not define it."""
     modules = _imported_modules(tree)
     missing: dict[tuple[str, str], int] = {}
@@ -439,7 +425,8 @@ def _check_module_attributes(tree: ast.Module) -> None:
     if not missing:
         return
     problems = [
-        f"`{name}.{attr}` (line {line}): {modules[name]!r} has no name {attr!r}{_import_suggestion(attr, modules[name])}"
+        f"`{name}.{attr}` (line {line}): {modules[name]!r} has no name {attr!r}"
+        f"{_import_suggestion(attr, modules[name], sdk)}"
         for (name, attr), line in sorted(missing.items(), key=lambda item: item[1])
     ]
     listed = "\n".join(f"- {_sentence(problem)}" for problem in problems)

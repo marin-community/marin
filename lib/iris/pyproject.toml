@@ -53,7 +53,7 @@ controller = [
     # wheel. The floor must stay at or above 0.2.46.dev33324331711, which added the
     # catalog parser for list-valued histogram schemas. Older servers cannot
     # reopen catalogs containing COLUMN_TYPE_FLOAT64_LIST or COLUMN_TYPE_INT64_LIST.
-    "marin-finelog-server>=0.2.54.dev35409391246",
+    "marin-finelog-server>=0.2.67.dev39325146809",
 ]
 worker = []
 # Interactive `iris login` against an IAP-fronted cluster (desktop OAuth flow).
