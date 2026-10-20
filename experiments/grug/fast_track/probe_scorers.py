@@ -8,8 +8,12 @@ Each scorer moves the selected data far from a random selection in a known direc
 
 import hashlib
 import json
+import os
+import tempfile
 from dataclasses import dataclass
+from functools import cache
 
+import fasttext
 import numpy as np
 from marin.execution.artifact import read_artifact
 from numpy.typing import NDArray
@@ -176,3 +180,63 @@ def format_heavy() -> DocumentQualityScorer:
 def shortest_source_quota() -> DocumentQualityScorer:
     """Within each source, prefer the shortest documents, and keep the source mix of the raw prefix."""
     return _SourceQuotaScorer(_TextLengthScorer(-1.0), _quota_tables(SHORTEST_SOURCE_QUOTA_TABLE_PATH))
+
+
+# The public DCLM fastText classifier (OpenHermes 2.5 and ELI5 against RefinedWeb), copied from
+# mlfoundations/fasttext-oh-eli5 at revision cd8b714a90f2.
+DCLM_FASTTEXT_MODEL_PATH = (
+    "s3://marin-us-east-02a/marin/fast-track/models/dclm-fasttext-oh-eli5/cd8b714a90f2/"
+    "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin"
+)
+DCLM_HIGH_QUALITY_LABEL = "__label__hq"
+
+
+@dataclass(frozen=True)
+class _WebOnlyScorer:
+    """Score the raw web documents with ``inner`` and every other document 0."""
+
+    inner: DocumentQualityScorer
+
+    def scores(self, batch: QualityScoringBatch) -> NDArray[np.float64]:
+        web = np.flatnonzero([source in RAW_WEB_SOURCES for source in batch.sources])
+        out = np.zeros(len(batch.sources), dtype=np.float64)
+        if len(web):
+            web_batch = QualityScoringBatch(
+                [batch.texts[i] for i in web], [batch.document_ids[i] for i in web], [batch.sources[i] for i in web]
+            )
+            out[web] = self.inner.scores(web_batch)
+        return out
+
+
+@dataclass(frozen=True)
+class _FastTextScorer:
+    """DCLM's high-quality probability: the document joined to one line, scored by the classifier."""
+
+    model: fasttext.FastText._FastText
+
+    def scores(self, batch: QualityScoringBatch) -> NDArray[np.float64]:
+        out = np.empty(len(batch.texts), dtype=np.float64)
+        for index, text in enumerate(batch.texts):
+            # Score one line at a time: the list form of `predict` returns wrong probabilities under NumPy 2.
+            predictions = self.model.f.predict(" ".join(text.strip().splitlines()) + "\n", 2, 0.0, "replace")
+            out[index] = {label: probability for probability, label in predictions}[DCLM_HIGH_QUALITY_LABEL]
+        return out
+
+
+@cache
+def _dclm_fasttext_model() -> fasttext.FastText._FastText:
+    local_path = os.path.join(tempfile.gettempdir(), os.path.basename(DCLM_FASTTEXT_MODEL_PATH))
+    if not os.path.exists(local_path):
+        # Worker processes can share a disk, so each one renames its own completed copy into place.
+        partial_path = f"{local_path}.{os.getpid()}.partial"
+        StoragePath(DCLM_FASTTEXT_MODEL_PATH).download_to(partial_path)
+        os.replace(partial_path, local_path)
+    return fasttext.load_model(local_path)
+
+
+def dclm_fasttext_web() -> DocumentQualityScorer:
+    """Rank the web documents by the DCLM fastText classifier, below them every other document.
+
+    The classifier's probability is above 0, so a selection that web tokens can fill takes only web.
+    """
+    return _WebOnlyScorer(_FastTextScorer(_dclm_fasttext_model()))

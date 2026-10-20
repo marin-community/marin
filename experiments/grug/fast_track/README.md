@@ -418,3 +418,11 @@ It accepts a candidate when the mean of English, code, and math is above zero at
 (1% for each English group, 2% for the others).
 A rung that passes goes to the next rung with the same gate.
 Confirm a quality head on a second raw pool (`corpus_sample_cli --seed`), because repeated selection on one pool can overfit it.
+
+The judge accepts a known good classifier. `probe_scorers:dclm_fasttext_web` ranks the raw web documents by the public
+[DCLM fastText classifier](https://huggingface.co/mlfoundations/fasttext-oh-eli5) and takes 60% of the web tokens.
+Against a random 60% of the web tokens (`probe_scorers:web_only`, three seeds each), the judge gave `better` at d768:
+G +3.5% [+2.9%, +4.0%], and each group went up. On the same pair, Paloma macro loss became 0.2% worse and c4_en loss 1.2% worse,
+so a Paloma gate rejects this classifier. G is gold-answer BPB. The English accuracy macro went up by only 0.2 points.
+In the full pool, web is 17% of the tokens. There, the same classifier on the web sources gave G +0.4%, which the judge cannot resolve at d768.
+To improve a scorer for some sources, compare it against random on those sources only. Then confirm it on the full pool at a larger rung.
