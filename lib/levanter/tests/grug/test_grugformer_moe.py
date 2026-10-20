@@ -1962,6 +1962,11 @@ def test_ring_dedup_down_project_combine_matches_autodiff(dtype, monkeypatch):
     weights_grad = np.asarray(grads[2])
     assert np.all(weights_grad[inv == dispatch_rows] == 0)
     assert np.all(np.asarray(grads[0])[kept:] == 0)
+    # ragged_dot leaves rows past the last group unspecified, and its transpose on TPU writes them, so compare the
+    # activation gradient on the grouped rows only.
+    grads = (grads[0][:kept], *grads[1:])
+    expected_grads = (expected_grads[0][:kept], *expected_grads[1:])
+    f32_grads = (f32_grads[0][:kept], *f32_grads[1:])
     if dtype == jnp.float32:
         np.testing.assert_allclose(np.asarray(out), np.asarray(expected_out), rtol=1e-5, atol=1e-5)
         for actual, expected in zip(grads, expected_grads, strict=True):
