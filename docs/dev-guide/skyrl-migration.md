@@ -70,8 +70,8 @@ The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
 The migration tool rebuilds source candidates and prepares active work. It
-does not edit Marin's integration, publish a wheel, enable migrated nightlies,
-or archive the fork. Those are reviewed changes or final cutover operations.
+does not publish a wheel or archive the fork. Marin owns the integration and
+the scheduled gates described below.
 
 The checked-in `vendor/skyrl` tree is the script's patched baseline output, including
 its license and upstream provenance. The generated
@@ -375,32 +375,25 @@ loads step two and advances to step four, a complete final export, and a
 successful evaluation artifact. This is a plumbing smoke, not a learning
 quality gate. A coordinator's running state or first loss does not satisfy it.
 
-## Remaining gates before archival
+## Nightly gates
 
-Staging records source selection and PR application outcomes. Runtime acceptance
-and active-work reconciliation remain separate gates. The port
-includes the nested launcher, hash-verified source bundle, and removal of the
-old external updater pin. Complete these gates before archiving the fork:
+`marin-skyrl-nightly.yaml` runs the retained OPD sync, Grug/Megatron including
+CP2/parity, and asynchronous GPU CatCount gates from the checked-out Marin
+revision. The Grug CUTLASS case remains weekly or explicitly requested. The
+workflow preserves native metric thresholds, logs, failure reporting and job
+cleanup. The CatCount runner at `infra/ci/run_skyrl_cat_count.sh` uses this
+checkout directly; it does not clone Marin or rewrite a fork dependency pin.
+The nightly dashboard points at Marin's workflow.
 
-1. Adapt `run_cat_count_h100.sh`: it currently clones Marin and rewrites its
-   fork branch pin. Run the exact candidate Marin revision and nested runtime.
-   Move the CPU launcher tests, CPU CatCount, OPD sync, Grug/Megatron including
-   CP2/parity, and GPU CatCount lanes into Marin CI. Preserve metric gates,
-   failure artifacts, resource cleanup, and manual/weekly boundaries. Add a
-   representative task rollout plus checkpoint export/resume gate for the
-   retained surface. Compare with the existing green pin before pruning is
-   accepted; candidate dependencies may differ from that pin.
-2. Remove dead entrypoint registry entries such as `mini_swe`, update the
-   stale `fully_async` validation in Marin, and validate supported task curation
-   callers through the pruned runtime. Update `infra/grafana/src/nightly_config.py`,
-   workflow links, [RL launching](../references/rl-launching.md), the external
-   dependency documentation, and fork policy. Retire the old repository's WIF
-   bindings deliberately after its jobs are disabled; read `infra/pulumi.md`
-   before modifying IAM or Pulumi configuration.
+`marin-skyrl-cpu-nightly.yaml` runs the CPU CatCount learning, reversed-reward,
+and checkpoint/resume cases in the independently locked nested CPU environment.
+The `skyrl-wheel` unit lane covers the launcher, bundle, wheel and verifier
+boundary. The artifact smoke above covers the production train/export/resume
+and downstream evaluation handoffs.
 
 Run CPU and GPU acceptance with the exact nested runtime, each independently
-resolved lock, and the same Marin revision. The dry run does not launch GPU
-jobs or contact object storage. Preserve native wheel release assets hosted by
+resolved lock, and the same Marin revision. The migration `stage` command does
+not launch GPU jobs or contact object storage. Preserve native wheel release assets hosted by
 the old repository; archiving and deleting a repository are different actions.
 
 ## Publish active work
@@ -439,6 +432,32 @@ Destination markers recover a lost create response. Existing branches are
 never force-pushed; mismatching trees, markers, or edited destination heads
 stop publication. Publication state is saved after each successful item, so
 previous successes survive a later failure.
+
+For selected PRs that need adaptation, prepare full Marin-relative binary
+patches with supporting tests, docs and data. Supply a JSON array with
+`number`, `source_head`, `parent` (a selected source PR number or `null`),
+`patch`, `title`, `body`, and `notes` (an array of scope and qualification notes).
+Patch paths are relative to the JSON file or absolute. Titles and bodies must
+describe the resulting behavior; keep validation receipts in comments.
+
+```bash
+uv run --no-project python -m scripts.skyrl_migration prepare-ports \
+  --candidate /path/to/migration/candidate --ports /path/to/adaptations.json \
+  --base HEAD --output /path/to/reviewed-ports
+uv run --no-project python -m scripts.skyrl_migration publish-prs \
+  --candidate /path/to/migration/candidate \
+  --ports /path/to/reviewed-ports/ports.json
+```
+
+Preparation captures patch bytes and hashes, verifies source heads, and replays
+every selected parent stack against the full Marin checkout. Inspect the
+resulting tree and `replay.json`. Publishing with `--ports` publishes exactly
+that selection; other staged PRs stay unpublished. Add
+`--execute --cutover-pr <merged-Marin-PR-number>` after review. Publication
+rechecks hashes and freshness and replays the complete selection against the
+merged cutover before pushing any branches. A changed source head, missing
+parent, edited patch or conflict stops publication. A clean replay is not a
+runtime qualification of the selected features.
 
 ## Archive after reconciliation
 

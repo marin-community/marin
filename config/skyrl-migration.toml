@@ -83,6 +83,9 @@ reason = "Nemotron policy graders load verifier prompts and reward combinations"
 glob = "skyrl-train/skyrl_train/models/**"
 reason = "Grug and Qwen model registration for supported Megatron/vLLM runs"
 [[keep]]
+glob = "skyrl-train/examples/gsm8k/gsm8k_dataset.py"
+reason = "GSM8K input preparation for the OPD nightly"
+[[keep]]
 glob = "skyrl-train/ci/marin_nightly/**"
 reason = "current OPD, Grug/Megatron, CatCount runners and metric gates"
 [[keep]]

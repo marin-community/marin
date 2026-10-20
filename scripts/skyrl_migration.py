@@ -1058,14 +1058,124 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
         write_json(state_path, state)
 
 
-def publish_prs(candidate: Path, cutover: int) -> None:
+@dataclass(frozen=True)
+class ReviewedPort:
+    number: int
+    source_head: str
+    parent: int | None
+    patch: str
+    sha256: str
+    title: str
+    body: str
+    notes: list[str]
+
+
+def publication_body(pull: dict, port: ReviewedPort | None, head: str) -> str:
+    patch_marker = f"<!-- skyrl-port-patch: {port.sha256} -->" if port is not None else ""
+    return (
+        source_references(port.body if port is not None else pull["body"] or "")
+        + f"\n\nTransplanted from {pull['html_url']} by @{pull['user']['login']}. "
+        "Original discussion and reviews remain at that URL.\n\n"
+        f"Source base: `{pull['merge_base']}`; source head: `{pull['head']['sha']}`.\n\n"
+        f"<!-- skyrl-migration: source={SOURCE}#{pull['number']} head={pull['head']['sha']} -->\n"
+        f"{patch_marker}\n<!-- {DESTINATION_MARKER}: {head} -->\n"
+    )
+
+
+def reviewed_ports(path: Path, record: dict) -> list[ReviewedPort]:
+    """Validate captured port bytes and source identities, then order the stack."""
+    captured = read_json(path)
+    if captured["source_sha"] != record["source_sha"]:
+        raise ValueError("Reviewed ports belong to a different source snapshot")
+    pulls = {pull["number"]: pull for pull in record["pulls"]}
+    ports = [ReviewedPort(**item) for item in captured["ports"]]
+    pending = {port.number: port for port in ports}
+    if len(pending) != len(ports):
+        raise ValueError("Duplicate reviewed PR")
+    for port in ports:
+        if port.source_head != pulls[port.number]["head"]["sha"]:
+            raise ValueError(f"Reviewed source head changed: {port.number}")
+        if port.parent is not None and port.parent not in pending:
+            raise ValueError(f"Missing reviewed parent: {port.number} -> {port.parent}")
+        patch = path.parent / relative_path(port.patch)
+        if file_digest(patch) != port.sha256:
+            raise ValueError(f"Reviewed patch changed: {port.number}")
+    ordered = []
+    while pending:
+        ready = sorted(number for number, port in pending.items() if port.parent not in pending)
+        if not ready:
+            raise ValueError("Reviewed PR parents form a cycle")
+        ordered.extend(pending.pop(number) for number in ready)
+    return ordered
+
+
+def prepare_ports(candidate: Path, ports_path: Path, marin: Path, base: str, output: Path) -> None:
+    """Capture manually adapted full Marin patches and replay every selected stack offline."""
+    report = read_stage_report(candidate / "report.json")
+    snapshot_dir = Path(report.snapshot)
+    record = read_json(snapshot_dir / "snapshot.json")
+    output.mkdir(parents=True, exist_ok=False)
+    captured = []
+    for item in read_json(ports_path):
+        patch = output / f"pr-{item['number']}.patch"
+        shutil.copyfile(ports_path.parent / item["patch"], patch)
+        captured.append(
+            asdict(
+                ReviewedPort(
+                    item["number"],
+                    item["source_head"],
+                    item["parent"],
+                    patch.name,
+                    file_digest(patch),
+                    item["title"],
+                    item["body"],
+                    item["notes"],
+                )
+            )
+        )
+    manifest = output / "ports.json"
+    write_json(manifest, {"source_sha": record["source_sha"], "ports": captured})
+    ports = reviewed_ports(manifest, record)
+    tree = output / "tree"
+    run("git", "clone", "--quiet", "--shared", "--no-checkout", str(marin.resolve()), str(tree))
+    git(tree, "fetch", "--quiet", str(snapshot_dir / "source.git"), "+refs/snapshot/*:refs/source/*")
+    commits = replay_ports(tree, ports, manifest.parent, git(marin, "rev-parse", base))
+    write_json(output / "replay.json", {"base": git(marin, "rev-parse", base), "commits": commits})
+
+
+def replay_ports(tree: Path, ports: list[ReviewedPort], directory: Path, base: str) -> dict[int, str]:
+    commits = {}
+    for port in ports:
+        git(tree, "checkout", "--quiet", "--detach", commits[port.parent] if port.parent is not None else base)
+        run("git", "-C", str(tree), "apply", "--3way", "--index", str((directory / port.patch).resolve()))
+        commits[port.number] = commit(
+            tree, f"{port.title}\n\nSource: {SOURCE}#{port.number}\nSource-head: {port.source_head}"
+        )
+    return commits
+
+
+def publish_prs(candidate: Path, cutover: int, ports_path: Path | None = None) -> None:
     """Create draft PRs with preserved stack bases, without replacing existing branches."""
     report = read_stage_report(candidate / "report.json")
     snapshot_dir = Path(report.snapshot)
     record = read_json(snapshot_dir / "snapshot.json")
     cutover_pull = validate_cutover(cutover, record["source_sha"], report.patches)
     validate_fresh(record)
-    incomplete = [item.number for item in report.pulls if item.status != PullStatus.READY]
+    ports = reviewed_ports(ports_path, record) if ports_path is not None else []
+    selected = {port.number: port for port in ports}
+    outcomes = (
+        [
+            PullOutcome(port.number, "", port.parent, f"{PR_BRANCH_PREFIX}{port.number}", PullStatus.READY)
+            for port in ports
+        ]
+        if ports_path is not None
+        else report.pulls
+    )
+    incomplete = [
+        item.number
+        for item in report.pulls
+        if (item.number not in selected if ports_path is not None else item.status != PullStatus.READY)
+    ]
     target = gh(f"repos/{TARGET}")
     default = target["default_branch"]
     workspace = candidate / "publication"
@@ -1083,28 +1193,42 @@ def publish_prs(candidate: Path, cutover: int) -> None:
     git(workspace, "fetch", "--quiet", "origin", cutover_pull["merge_commit_sha"])
     target_base = git(workspace, "rev-parse", "FETCH_HEAD")
     git(workspace, "fetch", "--quiet", "--no-tags", str(snapshot_dir / "source.git"), "+refs/snapshot/*:refs/source/*")
+    if ports_path is not None:
+        replay_ports(workspace, ports, ports_path.parent, target_base)
     labels = github_items(f"repos/{TARGET}/labels?per_page=100")
     if not any(label["name"] == AGENT_LABEL for label in labels):
         gh(f"repos/{TARGET}/labels", method="POST", payload={"name": AGENT_LABEL, "color": "ededed"})
     state_path = candidate / "published-prs.json"
     state = read_json(state_path) if state_path.exists() else {}
     pulls = {pull["number"]: pull for pull in record["pulls"]}
-    for outcome in report.pulls:
+    for outcome in outcomes:
         if outcome.status != PullStatus.READY:
             continue
         number, parent, branch = outcome.number, outcome.parent, outcome.branch
         pull = pulls[number]
         marker = f"<!-- skyrl-migration: source={SOURCE}#{number} head={pull['head']['sha']} -->"
+        port = selected.get(number)
+        patch_marker = f"<!-- skyrl-port-patch: {port.sha256} -->" if port is not None else ""
         existing = github_items(
             f"repos/{TARGET}/pulls?state=all&head=marin-community:{quote(branch, safe='')}&per_page=100"
         )
         base_branch = f"{PR_BRANCH_PREFIX}{parent}" if parent else default
         if existing:
-            if len(existing) != 1 or marker not in existing[0]["body"] or existing[0]["base"]["ref"] != base_branch:
+            if (
+                len(existing) != 1
+                or marker not in existing[0]["body"]
+                or patch_marker not in existing[0]["body"]
+                or existing[0]["base"]["ref"] != base_branch
+            ):
                 raise ValueError(f"Destination PR identity mismatch: {branch}")
             destination = DESTINATION_PATTERN.search(existing[0]["body"])
             if destination is None or existing[0]["head"]["sha"] != destination[1]:
                 raise ValueError(f"Destination PR head changed: {branch}")
+            expected_title = port.title if port is not None else pull["title"]
+            if existing[0]["title"] != expected_title or existing[0]["body"] != publication_body(
+                pull, port, destination[1]
+            ):
+                raise ValueError(f"Destination PR text changed: {branch}")
             git(workspace, "fetch", "--quiet", "origin", existing[0]["head"]["sha"])
             git(workspace, "branch", "-f", branch, existing[0]["head"]["sha"])
             gh(
@@ -1117,9 +1241,21 @@ def publish_prs(candidate: Path, cutover: int) -> None:
             continue
         base = f"{PR_BRANCH_PREFIX}{parent}" if parent else target_base
         git(workspace, "checkout", "--quiet", "--detach", base)
-        patch = candidate / f"pr-{number}-retained.patch"
-        run("git", "-C", str(workspace), "apply", "--3way", "--index", f"--directory={VENDOR}", str(patch.resolve()))
-        commit(workspace, f"Transplant {SOURCE}#{number}\n\nSource-head: {pull['head']['sha']}")
+        if port is not None:
+            run(
+                "git",
+                "-C",
+                str(workspace),
+                "apply",
+                "--3way",
+                "--index",
+                str((ports_path.parent / port.patch).resolve()),
+            )
+            commit(workspace, f"{port.title}\n\nSource: {pull['html_url']}\nSource-head: {pull['head']['sha']}")
+        else:
+            patch = candidate / f"pr-{number}-retained.patch"
+            run("git", "-C", str(workspace), "apply", "--3way", "--index", f"--directory={VENDOR}", str(patch.resolve()))
+            commit(workspace, f"Transplant {SOURCE}#{number}\n\nSource-head: {pull['head']['sha']}")
         intended = git(workspace, "rev-parse", "HEAD")
         remote = git(workspace, "ls-remote", "origin", f"refs/heads/{branch}")
         if remote:
@@ -1131,22 +1267,24 @@ def publish_prs(candidate: Path, cutover: int) -> None:
         else:
             git(workspace, "push", "origin", f"HEAD:refs/heads/{branch}")
         git(workspace, "branch", "-f", branch, intended)
-        body = (
-            source_references(pull["body"] or "")
-            + f"\n\nTransplanted from {pull['html_url']} by @{pull['user']['login']}. "
-            "Original discussion and reviews remain at that URL.\n\n"
-            f"Source base: `{pull['merge_base']}`; source head: `{pull['head']['sha']}`.\n\n"
-            f"{marker}\n<!-- {DESTINATION_MARKER}: {intended} -->\n"
-        )
+        body = publication_body(pull, port, intended)
         created = gh(
             f"repos/{TARGET}/pulls",
             method="POST",
-            payload={"title": pull["title"], "body": body, "head": branch, "base": base_branch, "draft": True},
+            payload={
+                "title": port.title if port is not None else pull["title"],
+                "body": body,
+                "head": branch,
+                "base": base_branch,
+                "draft": True,
+            },
         )
+        if created["title"] != (port.title if port is not None else pull["title"]) or created["body"] != body:
+            raise ValueError(f"Published PR text differs from the reviewed payload: {created['html_url']}")
         gh(f"repos/{TARGET}/issues/{created['number']}/labels", method="POST", payload={"labels": [AGENT_LABEL]})
         state[str(number)] = created["html_url"]
         write_json(state_path, state)
-    write_json(candidate / "publication-blockers.json", {"pending_prs": incomplete})
+    write_json(candidate / "publication-blockers.json", {"pending_prs": incomplete, "selected_prs": list(selected)})
 
 
 def main() -> None:
@@ -1182,6 +1320,12 @@ def main() -> None:
     apply.add_argument("--manifest", type=Path, default=MANIFEST)
     finish = commands.add_parser("finish-refresh", help="Finish a manually resolved candidate and rebuild its PR report")
     finish.add_argument("--report", type=Path, required=True)
+    ports = commands.add_parser("prepare-ports", help="Capture and replay reviewed full Marin PR adaptations offline")
+    ports.add_argument("--candidate", type=Path, required=True)
+    ports.add_argument("--ports", type=Path, required=True)
+    ports.add_argument("--marin", type=Path, default=ROOT)
+    ports.add_argument("--base", default="HEAD")
+    ports.add_argument("--output", type=Path, required=True)
     wheel = commands.add_parser("build-wheel", help="Build a binary candidate without installing dependencies")
     wheel.add_argument("--candidate", type=Path, required=True)
     smoke = commands.add_parser("prepare-math500", help="Bundle a wheel-only Math500 smoke for an isolated Iris task")
@@ -1193,6 +1337,8 @@ def main() -> None:
         command.add_argument("--candidate", type=Path, required=True)
         command.add_argument("--cutover-pr", type=int)
         command.add_argument("--execute", action="store_true")
+        if name == "publish-prs":
+            command.add_argument("--ports", type=Path, help="Prepared, hashed full Marin port manifest")
     args = parser.parse_args()
     if args.command == "check-vendor":
         check_vendor(args.source)
@@ -1230,11 +1376,17 @@ def main() -> None:
         finish_refresh(read_refresh_report(args.report))
     elif args.command == "build-wheel":
         build_wheel(args.candidate)
+    elif args.command == "prepare-ports":
+        prepare_ports(args.candidate, args.ports, args.marin, args.base, args.output)
     elif args.command == "prepare-math500":
         prepare_math500(args.candidate, args.dataset, args.output)
     elif not args.execute:
         report = read_json(args.candidate / "report.json")
-        print(json.dumps(report["issues"] if args.command == "transfer-issues" else report["pulls"], indent=2))
+        if args.command == "publish-prs" and args.ports is not None:
+            record = read_json(Path(report["snapshot"]) / "snapshot.json")
+            print(json.dumps([asdict(port) for port in reviewed_ports(args.ports, record)], indent=2))
+        else:
+            print(json.dumps(report["issues"] if args.command == "transfer-issues" else report["pulls"], indent=2))
     else:
         if args.cutover_pr is None:
             parser.error("--execute requires --cutover-pr")
@@ -1242,7 +1394,7 @@ def main() -> None:
             report = read_json(args.candidate / "report.json")
             transfer_issues(Path(report["snapshot"]), args.candidate / "transferred-issues.json", args.cutover_pr)
         else:
-            publish_prs(args.candidate, args.cutover_pr)
+            publish_prs(args.candidate, args.cutover_pr, args.ports)
 
 
 if __name__ == "__main__":

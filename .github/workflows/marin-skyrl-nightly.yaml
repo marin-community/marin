@@ -1,0 +1,182 @@
+name: Marin - SkyRL Nightly
+
+
+on:
+  schedule:
+    - cron: "0 9 * * 1-6"
+    - cron: "0 9 * * 0"
+  workflow_dispatch:
+    inputs:
+      grug_cutlass:
+        description: Include the weekly Grug CUTLASS case alongside nightly Triton
+        type: boolean
+        default: false
+      target_cluster:
+        description: "Iris cluster to federate the job to"
+        default: cw-rno2a
+
+concurrency:
+  group: marin-nightly
+  cancel-in-progress: false
+
+jobs:
+  gpu-gate:
+    name: ${{ matrix.lane }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: opd-sync-h100
+            gpu: H100x4
+            cpu: 32
+            memory: 192GB
+            iris_timeout: 3600
+            workflow_timeout_minutes: 100
+            task_script: vendor/skyrl/skyrl-train/ci/marin_nightly/run_opd_h100.sh
+            log: opd-nightly.log
+          - lane: grug-megatron-h100
+            gpu: H100x4
+            cpu: 32
+            memory: 256GB
+            iris_timeout: 7200
+            workflow_timeout_minutes: ${{ (github.event.schedule == '0 9 * * 0' || inputs.grug_cutlass) && 140 || 100 }}
+            task_script: vendor/skyrl/skyrl-train/ci/marin_nightly/run_grug_megatron.sh
+            log: grug-megatron.log
+          - lane: cat-count-h100
+            workflow_timeout_minutes: 55
+            submit: runner
+            task_script: infra/ci/run_skyrl_cat_count.sh
+            log: cat-count-nightly.log
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.workflow_timeout_minutes }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      JOB_NAME: skyrl-nightly-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+      TARGET_CLUSTER: ${{ github.event.inputs.target_cluster || 'cw-rno2a' }}
+      GRUG_CUTLASS_WEEKLY: ${{ (github.event.schedule == '0 9 * * 0' || inputs.grug_cutlass) && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: hai-gcp-models
+      - name: Install Marin CPU launcher
+        run: uv sync --frozen --package marin-core --extra cpu --no-default-groups
+
+      - name: Run ${{ matrix.lane }}
+        run: |
+          set -o pipefail
+          if [[ "${{ matrix.submit }}" == "runner" ]]; then
+            bash "${{ matrix.task_script }}" 2>&1 | tee "${{ matrix.log }}"
+            exit
+          fi
+          iris_args=()
+          if [[ "${{ matrix.lane }}" == "grug-megatron-h100" ]]; then
+            # Iris excludes tests from workspace bundles unless requested.
+            iris_args+=(--include 'vendor/skyrl/skyrl-train/tests/**/*')
+          fi
+          uv run --frozen --package marin-core --extra cpu --no-default-groups iris --cluster marin job run \
+            --target-cluster "$TARGET_CLUSTER" \
+            --job-name "$JOB_NAME" \
+            --gpu "${{ matrix.gpu }}" --enable-extra-resources \
+            --cpu "${{ matrix.cpu }}" --memory "${{ matrix.memory }}" --disk 200GB \
+            --no-sync \
+            --timeout "${{ matrix.iris_timeout }}" \
+            -e GRUG_CUTLASS_WEEKLY "$GRUG_CUTLASS_WEEKLY" \
+            "${iris_args[@]}" \
+            -- env -u PYTHONPATH -u UV_PROJECT_ENVIRONMENT -u UV_WORKING_DIRECTORY -u VIRTUAL_ENV \
+            bash "${{ matrix.task_script }}" 2>&1 | tee "${{ matrix.log }}"
+
+      - name: Cancel any Iris job the run left behind
+        if: always()
+        run: |
+          uv run --frozen --package marin-core --extra cpu --no-default-groups iris --cluster marin job cancel --prefix "/runner/$JOB_NAME" || true
+
+      # The report reaches the runner only through the streamed log, so a missing report means the
+      # lane never got that far.
+      - name: Summarize the run's dashboard
+        if: always() && matrix.lane == 'cat-count-h100'
+        run: |
+          python3 - "${{ matrix.log }}" "$TARGET_CLUSTER" <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          # `::warning::` is read from stdout; the summary is a file. One stream loses the other.
+          summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          log, cluster = sys.argv[1], sys.argv[2]
+
+          marker = "NIGHTLY_TELEMETRY_READINESS"
+          if not pathlib.Path(log).exists():
+              print("The lane produced no log, so it failed before training.", file=summary)
+              raise SystemExit(0)
+
+          lines = [line for line in pathlib.Path(log).read_text(errors="replace").splitlines() if marker in line]
+          if not lines:
+              print("The readiness report did not run, so the run may not be readable on the dashboard.", file=summary)
+              raise SystemExit(0)
+
+          report = json.loads(lines[-1].split(marker, 1)[1])
+          run_id = report["run_id"]
+          url = (
+              f"https://grafana.oa.dev/d/marin-rl-runs?var-cluster={cluster}"
+              f"&var-run={run_id}&from=now-24h&to=now"
+          )
+          print(f"### RL run view\n\n[{run_id}]({url})\n", file=summary)
+          if "error" in report:
+              print(f"Readiness could not be checked: `{report['error']}`", file=summary)
+              raise SystemExit(0)
+
+          print("| signal | records | panel |", file=summary)
+          print("| --- | --- | --- |", file=summary)
+          for signal in report["signals"]:
+              mark = "" if signal["records"] else " :warning:"
+              print(f"| {signal['key']}{mark} | {signal['records']} | {signal['panel']} |", file=summary)
+          summary.close()
+          for key in report["missing"]:
+              print(f"::warning::no telemetry for {key}; its panel will be empty")
+          PY
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ${{ matrix.lane }}-run-log
+          path: ${{ matrix.log }}
+          if-no-files-found: ignore
+
+  report-failure:
+    needs: [gpu-gate]
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: read
+      contents: read
+    steps:
+      - uses: marin-community/marin-style/actions/report-failure@d855d6304ad0532c131ef2e208db84ed7acf4721
+        with:
+          lane: skyrl-nightly
+          trigger-token: ${{ secrets.LOOM_TRIGGER_GH_TOKEN }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          triage-notes: >-
+            The nightly runs OPD, Grug Megatron and the asynchronous
+            CatCount learning gate through WIF-authenticated Iris jobs. CatCount reports
+            INFRASTRUCTURE_FAILURE and retries once when no native training row reached
+            the log. Failures after training starts and metric violations are GATE_FAILURE.
+            Inspect the native log to distinguish placement, connection, lock,
+            native-extension and training failures. A repository-local PR
+            that fixes the tracked failure must end its body with a Fixes link to this
+            issue. Use Part of only when the PR does not restore the lane.

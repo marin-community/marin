@@ -614,8 +614,9 @@ def test_issue_transfer_recovers_after_remote_success_and_lost_response(
     assert f"https://github.com/{migration.SOURCE}/issues/13" in remote["issues"]["body"]
 
 
+@pytest.mark.parametrize("adapted", [False, True])
 def test_pr_publication_recovers_lost_response_and_preserves_stack(
-    snapshot_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    snapshot_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapted: bool
 ) -> None:
     prepare(snapshot_dir, stacked_pulls(snapshot_dir))
     candidate = tmp_path / "candidate"
@@ -623,7 +624,39 @@ def test_pr_publication_recovers_lost_response_and_preserves_stack(
     destination = tmp_path / "destination.git"
     migration.run("git", "clone", "--quiet", "--bare", str(candidate / "tree"), str(destination))
     cutover = migration.git(destination, "rev-parse", "main")
+    for outcome in migration.read_stage_report(candidate / "report.json").pulls:
+        migration.git(destination, "update-ref", "-d", f"refs/heads/{outcome.branch}")
     record = migration.read_json(snapshot_dir / "snapshot.json")
+    ports_path = None
+    if adapted:
+        report = migration.read_stage_report(candidate / "report.json")
+        original = tmp_path / "adaptations.json"
+        ports = []
+        for outcome in report.pulls:
+            if outcome.status is not migration.PullStatus.READY:
+                continue
+            tree = candidate / "tree"
+            before = migration.git(tree, "rev-parse", outcome.commit + "^")
+            migration.git(tree, "checkout", "--quiet", "--detach", outcome.commit)
+            write(tree, f"docs/port-{outcome.number}.md", f"Adapted port {outcome.number}\n")
+            revised = save(tree, "Add port documentation")
+            patch = tmp_path / f"adapted-{outcome.number}.patch"
+            patch.write_bytes(migration.run("git", "-C", str(tree), "diff", "--binary", before, revised).stdout)
+            ports.append(
+                {
+                    "number": outcome.number,
+                    "source_head": next(p["head"]["sha"] for p in record["pulls"] if p["number"] == outcome.number),
+                    "parent": outcome.parent,
+                    "patch": str(patch),
+                    "title": f"Adapt change {outcome.number}",
+                    "body": "Preserve the runtime change and its supporting documentation.",
+                    "notes": [],
+                }
+            )
+        migration.write_json(original, ports)
+        prepared = tmp_path / "prepared"
+        migration.prepare_ports(candidate, original, tree, cutover, prepared)
+        ports_path = prepared / "ports.json"
     remote = github_fake(monkeypatch, record, cutover, destination)
     actual_run = migration.run
 
@@ -634,9 +667,9 @@ def test_pr_publication_recovers_lost_response_and_preserves_stack(
     monkeypatch.setattr(migration, "run", process)
     remote["interrupt"] = True
     with pytest.raises(RuntimeError, match="Lost response"):
-        migration.publish_prs(candidate, 99)
-    migration.publish_prs(candidate, 99)
-    migration.publish_prs(candidate, 99)
+        migration.publish_prs(candidate, 99, ports_path)
+    migration.publish_prs(candidate, 99, ports_path)
+    migration.publish_prs(candidate, 99, ports_path)
     assert len(remote["pulls"]) == 2
     assert [item["base"]["ref"] for item in remote["pulls"]] == ["main", "skyrl-migration/pr-1"]
     assert (
@@ -645,3 +678,23 @@ def test_pr_publication_recovers_lost_response_and_preserves_stack(
         )
         == "value = 20"
     )
+    if adapted:
+        assert migration.git(destination, "show", "skyrl-migration/pr-2:docs/port-2.md") == "Adapted port 2"
+        for field in ("title", "body"):
+            original_text = remote["pulls"][0][field]
+            remote["pulls"][0][field] += "Changed text"
+            with pytest.raises(ValueError, match="text changed"):
+                migration.publish_prs(candidate, 99, ports_path)
+            remote["pulls"][0][field] = original_text
+        for field in ("source_head", "sha256"):
+            captured = migration.read_json(ports_path)
+            captured["ports"][0][field] = "changed"
+            migration.write_json(ports_path, captured)
+            with pytest.raises(ValueError, match="changed"):
+                migration.publish_prs(candidate, 99, ports_path)
+            captured["ports"][0][field] = (
+                ports[0]["source_head"]
+                if field == "source_head"
+                else migration.file_digest(prepared / captured["ports"][0]["patch"])
+            )
+            migration.write_json(ports_path, captured)

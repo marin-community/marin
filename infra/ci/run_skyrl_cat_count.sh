@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-REPOSITORY_ROOT="$(git rev-parse --show-toplevel)"
-RUNTIME_COMMIT="$(git rev-parse HEAD)"
-MARIN_ROOT="${RUNNER_TEMP:-$(mktemp -d)}/cat-count-marin"
+MARIN_ROOT="$(git rev-parse --show-toplevel)"
+REPOSITORY_ROOT="$MARIN_ROOT/vendor/skyrl"
 TARGET_CLUSTER="${TARGET_CLUSTER:-cw-rno2a}"
+IRIS_JOB_PREFIX="${IRIS_JOB_PREFIX:-/runner}"
 DEADLINE=1200
-git clone --filter=blob:none --branch main --single-branch https://github.com/marin-community/marin.git "$MARIN_ROOT"
-sed -i "s/branch = \"main\"/rev = \"$RUNTIME_COMMIT\"/" "$MARIN_ROOT/config/external/MarinSkyRL/pyproject.toml"
-uv run "$MARIN_ROOT/config/update-external.py" MarinSkyRL
-python3 -c 'import runpy, sys; pin = runpy.run_path(sys.argv[1])["MARIN_SKYRL"]; assert pin.commit == sys.argv[2], pin.commit' \
-  "$MARIN_ROOT/lib/marin/src/marin/external_dependencies.py" "$RUNTIME_COMMIT"
-echo "CAT_COUNT_NIGHTLY marin=$(git -C "$MARIN_ROOT" rev-parse HEAD) runtime=$RUNTIME_COMMIT"
+echo "CAT_COUNT_NIGHTLY marin=$(git rev-parse HEAD)"
 
 for attempt in 1 2; do
   log="${RUNNER_TEMP:-/tmp}/cat-count-nightly-a$attempt.log"
@@ -30,7 +27,7 @@ for attempt in 1 2; do
   fi
   if ((status == 0)); then
     uv run --project "$MARIN_ROOT" --frozen --package marin-core --extra cpu --no-default-groups \
-      iris --cluster marin job logs "/runner/$JOB_NAME-a$attempt" --no-tail --max-lines 60000 \
+      iris --cluster marin job logs "$IRIS_JOB_PREFIX/$JOB_NAME-a$attempt" --no-tail --max-lines 60000 \
       2>&1 | tee "$log" || { echo "INFRASTRUCTURE_FAILURE: complete native log unavailable"; exit 2; }
   fi
   wall_clock=$(($(date +%s) - start))
@@ -38,7 +35,7 @@ for attempt in 1 2; do
   if ! grep -q 'WANDB_MIRROR kind=train ' "$log"; then
     echo "INFRASTRUCTURE_FAILURE: no training step ran"
     uv run --project "$MARIN_ROOT" --frozen --package marin-core --extra cpu --no-default-groups \
-      iris --cluster marin job cancel --prefix "/runner/$JOB_NAME-a$attempt"
+      iris --cluster marin job cancel --prefix "$IRIS_JOB_PREFIX/$JOB_NAME-a$attempt"
     continue
   fi
   if ((status != 0)); then
