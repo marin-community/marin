@@ -18,7 +18,7 @@ def run(p, **kwargs) -> Verdict:
 
 def test_a_well_formed_proposal_is_accepted_with_every_check_recorded(proposal):
     verdict = run(proposal)
-    assert (verdict.decision, verdict.reasons) == (TriageDecision.ACCEPT, ())
+    assert (verdict.decision, verdict.reasons, verdict.author_state) == (TriageDecision.ACCEPT, (), {})
     assert (verdict.proposal_id, verdict.proposal_digest) == (proposal.header.id, proposal.digest)
     assert {r.status for r in verdict.structural} == {CheckStatus.PASS, CheckStatus.SKIP}
 
@@ -68,4 +68,9 @@ def test_a_narrower_context_rejects_a_pairing_it_leaves_out(proposal):
 
 def test_verdict_round_trips_through_json(proposal):
     verdict = run(replace(proposal, header=replace(proposal.header, resources=("../secrets.txt",))))
+    assert Verdict.from_json(verdict.to_json()) == verdict
+
+
+def test_a_verdict_carrying_author_state_round_trips_through_json(proposal):
+    verdict = replace(run(proposal), author_state={"obligations": ["derive 42 in the grader"], "strict": True})
     assert Verdict.from_json(verdict.to_json()) == verdict
