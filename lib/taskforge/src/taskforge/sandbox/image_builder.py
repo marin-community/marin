@@ -28,6 +28,12 @@ never shares a container with the model-authored Dockerfile. The build process
    digest resolves to the same bytes and the config says linux/amd64, and returns the
    digest-pinned reference (``registry/repository@sha256:...``).
 
+A publish fails in one of two ways. ``BuildFailed`` is the build's own: the build job ran and failed,
+kaniko on the Dockerfile and its context or the job's execution timeout, which a Dockerfile change can
+fix. ``ImageJobFailed`` is the host's: a job did not schedule, its worker was lost, it was killed, the
+push job failed (it runs no code from the build), Iris kept no output archive, or the registry does not
+serve back what was pushed. No Dockerfile change fixes those.
+
 The builder takes the credential at construction and reads no secret store itself, so it runs on
 a host without ``gcloud`` or Google credentials, such as a coordinator in an Iris task. The
 credential is the Secret Manager secret ``SECRET_NAME``, a JSON object with ``registry``, ``user``
@@ -182,7 +188,11 @@ def registry_credential_json() -> str:
 
 
 class BuildFailed(RuntimeError):
-    """A build or push job ended without a pushed image."""
+    """The build job ran and failed: kaniko refused the Dockerfile or its context, or the build outran the job."""
+
+
+class ImageJobFailed(RuntimeError):
+    """A publish failed for a host reason, so no change to the Dockerfile helps (see the module docstring)."""
 
 
 @dataclass(frozen=True)
@@ -207,13 +217,13 @@ def manifest_readback(credential: RegistryCredential, repository: str, tag: str)
         by_digest = client.get(f"{base}/manifests/{digest}")
         by_digest.raise_for_status()
         if by_digest.content != by_tag.content:
-            raise BuildFailed(f"{digest} does not resolve to the manifest bytes of tag {tag}")
+            raise ImageJobFailed(f"{digest} does not resolve to the manifest bytes of tag {tag}")
         config_digest = by_tag.json()["config"]["digest"]
         config = client.get(f"{base}/blobs/{config_digest}", follow_redirects=True)
         config.raise_for_status()
         platform = (config.json()["os"], config.json()["architecture"])
         if platform != ("linux", "amd64"):
-            raise BuildFailed(f"image platform is {platform}, not linux/amd64")
+            raise ImageJobFailed(f"image platform is {platform}, not linux/amd64")
     return digest
 
 
@@ -223,7 +233,7 @@ def output_archive(job: Job) -> TaskOutputArchive:
     archive = attempt.output_archive
     if archive is None or archive.state != TaskOutputArchiveState.UPLOADED:
         detail = "none" if archive is None else f"{archive.state}: {archive.error_message}"
-        raise BuildFailed(f"build job {job.job_id} left no uploaded output archive ({detail})")
+        raise ImageJobFailed(f"build job {job.job_id} left no uploaded output archive ({detail})")
     return archive
 
 
@@ -316,7 +326,7 @@ class IrisImageBuilder:
                 )
                 jobs.append(build_job)
                 logger.info("submitted build job %s for %s", build_job.job_id, destination)
-                wait_succeeded(build_job)
+                wait_succeeded(build_job, BuildFailed)
                 built = time.monotonic() - start
                 archive = output_archive(build_job)
                 logger.info("build archive %s (%d bytes)", archive.uri, archive.size_bytes)
@@ -340,7 +350,7 @@ class IrisImageBuilder:
                 )
                 jobs.append(push_job)
                 logger.info("submitted push job %s", push_job.job_id)
-                wait_succeeded(push_job)
+                wait_succeeded(push_job, ImageJobFailed)
             finally:
                 for job in jobs:
                     if job.state not in TERMINAL_JOB_STATES:
@@ -354,10 +364,25 @@ class IrisImageBuilder:
 TERMINAL_JOB_STATES = frozenset(
     {JobState.SUCCEEDED, JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
 )
+HOST_JOB_STATES = frozenset({JobState.UNSCHEDULABLE, JobState.WORKER_FAILED, JobState.KILLED})
+"""How a job ends when the host stopped it: never scheduled, its worker lost, or cancelled from outside.
+
+A job that ran and exited nonzero, or outran its execution timeout, ends ``FAILED``.
+"""
 
 
-def wait_succeeded(job: Job) -> None:
-    """Wait for ``job`` to end; raise ``BuildFailed`` with Iris's error (which carries the log tail) otherwise."""
-    status = job.wait(timeout=SCHEDULING_TIMEOUT + JOB_TIMEOUT, poll_interval=POLL_INTERVAL, raise_on_failure=False)
-    if status.state != JobState.SUCCEEDED:
-        raise BuildFailed(f"job {job.job_id} ended {status.state}: {status.error_message}")
+def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed]) -> None:
+    """Wait for ``job`` to succeed, raising with Iris's error, which carries the log tail, when it does not.
+
+    Raises:
+        ImageJobFailed: the job ended in ``HOST_JOB_STATES``, or did not end within its deadlines.
+        BuildFailed | ImageJobFailed: ``failed``, when the job ran and ended ``FAILED``.
+    """
+    try:
+        status = job.wait(timeout=SCHEDULING_TIMEOUT + JOB_TIMEOUT, poll_interval=POLL_INTERVAL, raise_on_failure=False)
+    except TimeoutError as error:
+        raise ImageJobFailed(f"job {job.job_id} did not end within its scheduling and execution timeouts") from error
+    if status.state == JobState.SUCCEEDED:
+        return
+    error = ImageJobFailed if status.state in HOST_JOB_STATES else failed
+    raise error(f"job {job.job_id} ended {status.state}: {status.error_message}")
