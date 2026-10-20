@@ -19,10 +19,17 @@ from taskcompendium.models import TaskSpec
 from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, MachineHost, grading_environment
 from taskforge.spec import draft
 from taskforge.spec.draft import SHELL_CAPABILITY
+from taskforge.stage40_build_with_program.sandbox_effects import GRADE_CANDIDATE_PREPARATION_TIMEOUT
 from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
 
-STARTUP_TIMEOUT = 600.0
-"""Seconds the task machine and the verifier machine may take to start."""
+STARTUP_TIMEOUT = SANDBOX_SCHEDULING_TIMEOUT + GRADE_CANDIDATE_PREPARATION_TIMEOUT
+"""Seconds the task machine and the verifier machine may take to start: the factory's scheduling budget, then
+the preparation margin build-time grading allows.
+
+The machine's start covers the factory's wait for a sandbox as well as its files and setup commands, so a
+sandbox scheduled late in that wait still has the margin to prepare, and one that never starts is the
+factory's typed timeout rather than an untyped startup deadline.
+"""
 VERIFIER_TIMEOUT = SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
 """The trial's grading deadline: a verifier machine's scheduling budget, then a template grader's own timeout.
 

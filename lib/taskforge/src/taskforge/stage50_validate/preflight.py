@@ -35,7 +35,6 @@ The probe is not evidence: it records no attempt file and no ledger span. Like e
 under the engine's messages trace (``EngineSettings.apply``), so its empty reply carries no token ids.
 """
 
-import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -148,11 +147,14 @@ def _task_machine_fallback(
 
 
 async def _probe(spec: TaskRolloutSpec, settings: EngineSettings, deadlines: Deadlines):
-    """One engine run of ``spec`` with the probe model, classified as a trial outcome would be."""
+    """One engine run of ``spec`` with the probe model, classified as a trial outcome would be.
+
+    The engine holds the run to ``deadlines.attempt_timeout`` itself, so an expired probe is an
+    ``ATTEMPT_TIMEOUT`` as in a trial.
+    """
     prepared = settings.apply(deadlines.apply(spec))
     try:
-        async with asyncio.timeout(deadlines.attempt_timeout):
-            result: GradedRollout | Exception = await settings.engine().run_task(prepared, _ProbeModel())
+        result: GradedRollout | Exception = await settings.engine().run_task(prepared, _ProbeModel())
     except Exception as error:
         result = error
     return trial_outcome(result, prepared.task)
