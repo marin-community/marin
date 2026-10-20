@@ -34,7 +34,7 @@ def ground_truth(extras: dict[str, Any]) -> Any:
 
 
 def grade_gsm8k(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
-    method = config.get("reward_method", "strict")
+    method = config.get("reward_method", "final_line")
     score = (
         0.0
         if method == "final_line" and turn.stop_reason not in COMPLETED_STOP_REASONS

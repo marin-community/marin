@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from sympy import exp, simplify
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, final_verdict, last_boxed_answer
-from skyrl_gym.envs.nemotron_ultra.judge import DEFAULT_JUDGE_MAX_TOKENS, IncompleteJudgeResponse
+from skyrl_gym.envs.nemotron_ultra.judge import DEFAULT_JUDGE_MAX_TOKENS
 
 from math_verify import grader, parse
 from math_verify.errors import TimeoutException
@@ -125,23 +125,13 @@ def symbolic_math_reward(
         receiving.close()
 
 
-_JUDGE_TOKEN_BUDGETS = (DEFAULT_JUDGE_MAX_TOKENS, 2 * DEFAULT_JUDGE_MAX_TOKENS)
-
-
 def _judge_equal(judge: Judge, question: str, first: str, second: str) -> tuple[bool, str]:
     messages = [
         {"role": "system", "content": _JUDGE_SYSTEM},
         {"role": "user", "content": _JUDGE_PROMPT.format(question=question, first=first, second=second)},
     ]
-    incomplete: IncompleteJudgeResponse | None = None
-    for max_tokens in _JUDGE_TOKEN_BUDGETS:
-        try:
-            output = judge.generate(messages, max_tokens=max_tokens)
-        except IncompleteJudgeResponse as error:
-            incomplete = error
-            continue
-        return final_verdict(output, {"[[A=B]]", "[[A!=B]]"}) == "[[A=B]]", output
-    raise incomplete
+    output = judge.generate(messages)
+    return final_verdict(output, {"[[A=B]]", "[[A!=B]]"}) == "[[A=B]]", output
 
 
 def grade_math(

@@ -5,6 +5,8 @@ from enum import StrEnum
 
 from omegaconf import DictConfig
 
+from skyrl_train.inference_engines.vllm.utils import pop_vllm_wrapper_kwargs
+
 
 class WeightSyncPauseMode(StrEnum):
     """How vLLM handles in-flight requests during a weight sync."""
@@ -53,4 +55,13 @@ def resolve_weight_sync_pause_policy(generator: DictConfig) -> WeightSyncPausePo
         raise ValueError("generator.weight_sync_pause.clear_cache=false requires mode=keep")
     if policy.mode is WeightSyncPauseMode.WAIT and generator.vllm_v1_disable_multiproc:
         raise ValueError("generator.weight_sync_pause.mode=wait requires vllm_v1_disable_multiproc=false")
+    if policy.mode is WeightSyncPauseMode.ABORT:
+        engine_kwargs = dict(generator.engine_init_kwargs)
+        wrapper_kwargs = pop_vllm_wrapper_kwargs(engine_kwargs)
+        if (
+            wrapper_kwargs.get("enable_auto_tools")
+            or wrapper_kwargs.get("tool_parser")
+            or engine_kwargs.get("reasoning_parser")
+        ):
+            raise ValueError("generator.weight_sync_pause.mode=abort is incompatible with tool or reasoning parsers")
     return policy

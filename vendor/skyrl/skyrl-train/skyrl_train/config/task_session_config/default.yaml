@@ -38,8 +38,8 @@ text_to_sql:
   machine: *python_machine
 
 gsm8k:
-  # Select final_line when only a completed response's last #### line should earn reward.
-  reward_method: strict
+  # final_line grades the completed final #### line; strict extracts the first marked number.
+  reward_method: final_line
 
 text2sql:
   db_path: "/home/ray/default/sql_data"

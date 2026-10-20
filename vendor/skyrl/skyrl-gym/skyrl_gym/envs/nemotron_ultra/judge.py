@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -23,6 +24,18 @@ DEFAULT_JUDGE_MAX_TOKENS = 8192
 
 class IncompleteJudgeResponse(ValueError):
     """Judge generation stopped before producing any content."""
+
+
+class TruncatedJudgeResponse(IncompleteJudgeResponse):
+    """Judge generation reached its output-token budget."""
+
+
+def _generate_with_truncation_retry(generate: Callable[[int], str], max_tokens: int) -> str:
+    try:
+        return generate(max_tokens)
+    except TruncatedJudgeResponse:
+        logger.warning("Judge reached its %d-token output budget; retrying with %d", max_tokens, 2 * max_tokens)
+        return generate(2 * max_tokens)
 
 
 class GenRMResponseTransport(StrEnum):
@@ -137,7 +150,9 @@ class OpenAIJudge:
         )
         body: dict[str, Any] = response.json()
         choice = body["choices"][0]
-        if choice.get("finish_reason") in {"length", "content_filter"}:
+        if choice.get("finish_reason") == "length":
+            raise TruncatedJudgeResponse(f"Truncated judge response: {body}")
+        if choice.get("finish_reason") == "content_filter":
             raise IncompleteJudgeResponse(f"Incomplete judge response: {body}")
         if self.strict_completion and (
             len(body["choices"]) != 1
@@ -152,7 +167,9 @@ class OpenAIJudge:
         return content
 
     def generate(self, messages: list[dict[str, str]], *, max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS) -> str:
-        return self._post_chat_completion(messages, max_tokens=max_tokens)
+        return _generate_with_truncation_retry(
+            lambda budget: self._post_chat_completion(messages, max_tokens=budget), max_tokens
+        )
 
     def generate_response(
         self,
@@ -171,16 +188,32 @@ class OpenAIJudge:
                 "response_1": metadata["response_1"],
                 "response_2": metadata["response_2"],
             }
-            return self._post_chat_completion(
-                [
-                    {"role": "system", "content": _GENRM_COMPARISON_INSTRUCTIONS},
-                    {"role": "user", "content": json.dumps(comparison, ensure_ascii=False, sort_keys=True)},
-                ],
-                max_tokens=max_output_tokens,
-                temperature=temperature,
-                top_p=top_p,
+            messages = [
+                {"role": "system", "content": _GENRM_COMPARISON_INSTRUCTIONS},
+                {"role": "user", "content": json.dumps(comparison, ensure_ascii=False, sort_keys=True)},
+            ]
+            return _generate_with_truncation_retry(
+                lambda budget: self._post_chat_completion(
+                    messages, max_tokens=budget, temperature=temperature, top_p=top_p
+                ),
+                max_output_tokens,
             )
+        return _generate_with_truncation_retry(
+            lambda budget: self._post_response(
+                input_messages, metadata=metadata, max_output_tokens=budget, temperature=temperature, top_p=top_p
+            ),
+            max_output_tokens,
+        )
 
+    def _post_response(
+        self,
+        input_messages: list[dict[str, str]],
+        *,
+        metadata: dict[str, Any],
+        max_output_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> str:
         response = _post_json_with_retry(
             url=f"{self.base_url.rstrip('/')}/responses",
             headers={"Authorization": f"Bearer {self._resolved_api_key()}", "Content-Type": "application/json"},
@@ -197,6 +230,8 @@ class OpenAIJudge:
         )
         body: dict[str, Any] = response.json()
         if body.get("status") == "incomplete":
+            if (body.get("incomplete_details") or {}).get("reason") == "max_output_tokens":
+                raise TruncatedJudgeResponse(f"Truncated judge response: {body}")
             raise IncompleteJudgeResponse(f"Incomplete judge response: {body}")
         if self.strict_completion and body.get("status") != "completed":
             raise IncompleteJudgeResponse("GenRM response did not complete")
