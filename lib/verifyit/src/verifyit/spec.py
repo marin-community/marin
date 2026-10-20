@@ -19,6 +19,7 @@ from typing import Any
 
 import tomli_w
 
+from verifyit.closure_scoring import ClosureFormat
 from verifyit.json_comparison import JsonValue, NumericTypePolicy
 from verifyit.json_objects import unique_object
 
@@ -34,6 +35,7 @@ class Mode(StrEnum):
     MATH = "math"
     NUMERIC = "numeric"
     EXACT = "exact"
+    STRUCTURE_CLOSURE = "structure_closure"
     JSON_SCHEMA = "json-schema"
     XML_ELEMENTS = "xml-elements"
     CSV_COLUMNS = "csv-columns"
@@ -148,6 +150,17 @@ class ExactSpec:
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     strip_outer_whitespace: bool = True
     substring: bool = False
+
+
+@dataclass(frozen=True)
+class StructureClosureSpec:
+    """Complete a pinned assistant prefix while preserving its reference content."""
+
+    prefix: str
+    expected: str
+    format: ClosureFormat
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.GRADE, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -334,6 +347,7 @@ Spec = (
     | MathSpec
     | NumericSpec
     | ExactSpec
+    | StructureClosureSpec
     | JsonSchemaSpec
     | XmlElementsSpec
     | CsvColumnsSpec
@@ -383,6 +397,11 @@ MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
     ),
     Mode.EXACT: ModeDescriptor(
         ExactSpec, "grade_exact", CandidateEntrypoints("validate_exact", "grade_exact_candidate")
+    ),
+    Mode.STRUCTURE_CLOSURE: ModeDescriptor(
+        StructureClosureSpec,
+        "grade_structure_closure",
+        CandidateEntrypoints("validate_structure_closure", "grade_structure_closure_candidate"),
     ),
     Mode.JSON_SCHEMA: ModeDescriptor(
         JsonSchemaSpec,
