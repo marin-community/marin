@@ -4,10 +4,9 @@
 """Shared fixtures for Taskforge tests.
 
 ``fake_glm`` is a scripted fake of the GLM router, run as a real local HTTP server.
-``POST /v1/chat/completions`` streams queued responses, ``POST /inference/v1/generate`` (the
-token-id route) answers with queued JSON, and ``GET /health`` reports queued worker counts. Every
-POST body is kept in ``requests``, with its path and headers at the same index of
-``request_paths`` and ``request_headers``. ``other_fake_glm`` is a second, independent server, for
+``POST /v1/chat/completions`` streams queued responses and ``GET /health`` reports queued worker
+counts. Every POST body is kept in ``requests``, with its headers at the same index of
+``request_headers``. ``other_fake_glm`` is a second, independent server, for
 an endpoint that moves. ``fast_provider`` is a provider config whose backoff is a millisecond, so
 retries and holds are quick, and ``glm_client`` is a ``GlmClient`` on ``fake_glm`` with that
 config; ``fake_source`` builds the endpoint source for any fake. ``ledger`` is an in-memory
@@ -27,7 +26,7 @@ import tempfile
 import threading
 import uuid
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -37,7 +36,7 @@ from pathlib import Path
 import pytest
 
 from taskforge.ledger.records import LedgerEntry
-from taskforge.llm.glm_client import GENERATE_PATH, FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMProviderConfig
 
 GLM_MODEL = "glm-5.3"
@@ -159,16 +158,10 @@ class ScriptedStatus:
 
 
 @dataclass
-class ScriptedJson:
-    body: dict
-
-
-@dataclass
 class FakeGlm:
     base_url: str = ""
     responses: deque = field(default_factory=deque)
     requests: list[dict] = field(default_factory=list)
-    request_paths: list[str] = field(default_factory=list)
     request_headers: list[dict[str, str]] = field(default_factory=list)
     health_workers: deque = field(default_factory=lambda: deque([{"high": 1, "bulk": 1}]))
     health_polls: int = 0
@@ -186,14 +179,10 @@ class FakeGlm:
         send_done: bool = True,
         stall_after_first: bool = False,
         raw_payload: str | None = None,
-        prompt_token_ids: tuple[int, ...] = (),
-        token_ids: tuple[int, ...] = (),
     ) -> None:
         """Queue one streamed reply; ``tool_calls`` holds ``(name, arguments)`` pairs.
 
         ``raw_payload`` is sent verbatim as the second ``data:`` line, for malformed-stream tests.
-        ``prompt_token_ids`` and ``token_ids`` emulate vLLM's ``return_token_ids``: the first is sent on
-        the first chunk, the second with one logprob per token on the chunk that carries the finish reason.
         """
         deltas: list[dict] = [{"role": "assistant", "content": ""}]
         deltas += [{"reasoning": part} for part in _halves(reasoning)]
@@ -207,11 +196,6 @@ class FakeGlm:
             ]
         events: list[dict] = [{"choices": [{"index": 0, "delta": d, "finish_reason": None}]} for d in deltas]
         events[-1]["choices"][0]["finish_reason"] = finish
-        if prompt_token_ids:
-            events[0]["prompt_token_ids"] = list(prompt_token_ids)
-        if token_ids:
-            events[-1]["choices"][0]["token_ids"] = list(token_ids)
-            events[-1]["choices"][0]["logprobs"] = {"content": [{"token": str(t), "logprob": -0.5} for t in token_ids]}
         events.append(
             {
                 "choices": [],
@@ -228,44 +212,6 @@ class FakeGlm:
             payloads.insert(1, raw_payload)
         stall = self.released if stall_after_first else None
         self.responses.append(ScriptedStream(payloads, send_done, stall))
-
-    def generate(
-        self,
-        token_ids: Sequence[int],
-        token_bytes: Sequence[bytes | None],
-        finish: str = "stop",
-        prompt_tokens: int = 10,
-        cached_tokens: int = 0,
-        logprob_count: int | None = None,
-    ) -> None:
-        """Queue one token-route reply: ``token_ids`` with one logprob entry each and their ``token_bytes``.
-
-        As the router does, the reply carries ``token_bytes`` only when the request set
-        ``return_token_bytes``. A ``None`` in ``token_bytes`` is the null the router sends for an id
-        without bytes. ``logprob_count`` sends that many logprob entries instead, for misalignment tests.
-        """
-        entries = [{"token": f"token_id:{t}", "logprob": -0.25} for t in token_ids]
-        count = len(entries) if logprob_count is None else logprob_count
-        self.responses.append(
-            ScriptedJson(
-                {
-                    "choices": [
-                        {
-                            "index": 0,
-                            "token_ids": list(token_ids),
-                            "token_bytes": [None if data is None else list(data) for data in token_bytes],
-                            "logprobs": {"content": entries[:count]},
-                            "finish_reason": finish,
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": len(token_ids),
-                        "prompt_tokens_details": {"cached_tokens": cached_tokens},
-                    },
-                }
-            )
-        )
 
     def status(self, code: int, body: str, headers: dict[str, str] | None = None) -> None:
         self.responses.append(ScriptedStatus(code, body, headers or {}))
@@ -297,24 +243,14 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
             self._send(fake.health_status, json.dumps({"status": "ok", "workers": fake.next_health()}), {})
 
         def do_POST(self) -> None:
-            assert self.path in ("/v1/chat/completions", GENERATE_PATH), self.path
+            assert self.path == "/v1/chat/completions", self.path
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             fake.requests.append(body)
-            fake.request_paths.append(self.path)
             fake.request_headers.append({key.lower(): value for key, value in self.headers.items()})
             response = fake.responses.popleft()
             if isinstance(response, ScriptedStatus):
                 self._send(response.code, response.body, response.headers)
                 return
-            if isinstance(response, ScriptedJson):
-                assert self.path == GENERATE_PATH, self.path
-                reply = json.loads(json.dumps(response.body))
-                if body.get("return_token_bytes") is not True:
-                    for choice in reply["choices"]:
-                        del choice["token_bytes"]
-                self._send(200, json.dumps(reply), {"Content-Type": "application/json"})
-                return
-            assert self.path == "/v1/chat/completions", self.path
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()

@@ -30,8 +30,6 @@ from taskforge.llm.client import (
     ModelClient,
     ModelUnavailable,
     StructuredResult,
-    TokenCompletion,
-    TokenGenerator,
     Usage,
 )
 from taskforge.llm.policy import LLMPolicy, Message
@@ -109,25 +107,6 @@ async def complete_into(
         fields.attrs.update(attempt_attrs(error.attempts, time.monotonic() - started))
         raise
     record_completions(fields, (completion,))
-    return completion
-
-
-async def generate_into(
-    fields: SpanFields,
-    client: TokenGenerator,
-    token_ids: Sequence[int],
-    policy: LLMPolicy,
-    max_tokens: int,
-    routing_key: str,
-) -> TokenCompletion:
-    """``client.generate`` with its attempt record written to ``fields``; the caller records tokens once parsed."""
-    started = time.monotonic()
-    try:
-        completion = await client.generate(token_ids, policy, max_tokens=max_tokens, routing_key=routing_key)
-    except ModelUnavailable as error:
-        fields.attrs.update(attempt_attrs(error.attempts, time.monotonic() - started))
-        raise
-    fields.attrs.update(attempt_attrs(completion.attempts, completion.wall_time))
     return completion
 
 

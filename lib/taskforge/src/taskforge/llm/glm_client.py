@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.3 chat completions through the ``openai`` SDK and token-id sampling, retried by one loop.
+"""GLM-5.3 chat completions through the ``openai`` SDK, retried by one loop.
 
 ``GlmClient`` implements ``taskforge.llm.client.ModelClient``, with ``LLMProviderConfig`` supplying
 the model, the retry budget and backoff, the hold and stall timeouts and the connection pool. The
@@ -45,15 +45,6 @@ sent them.
 continuations off, then validates the reply and asks for repairs through ``taskforge.llm.structured``.
 That module also appends a user turn describing each field, since the chat template renders nothing
 from ``response_format``.
-
-``generate`` samples from prompt token ids without a chat template, through the router's token-id
-route (``GENERATE_PATH``), for rollouts that must keep their exact tokens. It sends one
-non-streamed POST over the same connection pool and the same retry and hold loop as ``complete``,
-so the statuses, holds and context overflow behave as above. No stall timeout applies; the caller's
-turn timeout bounds the request. The body asks for ``return_token_bytes``, and the route answers
-with each sampled id's bytes. A 503 reporting ``token_bytes_unavailable`` means the router's
-tokenizer does not match the model, which no retry fixes, so the call raises
-``ModelRequestRejected``.
 """
 
 import asyncio
@@ -84,8 +75,6 @@ from taskforge.llm.client import (
     ModelRequestRejected,
     ModelUnavailable,
     StructuredResult,
-    TokenCompletion,
-    TokenEvidenceError,
     ToolCall,
     Usage,
 )
@@ -116,11 +105,6 @@ reused blindly; a stalled read also retires the whole pool (``_reset_pool``)."""
 POOL_RESET_INTERVAL = 30.0
 """Least seconds between two pool resets, so a burst of stalls on one bad path replaces the pool once."""
 HEALTH_TIMEOUT = 20.0
-GENERATE_PATH = "/inference/v1/generate"
-"""The router's token-id route, beside the OpenAI-compatible ``/v1`` root."""
-ROUTING_KEY_HEADER = "x-routing-key"
-TOKEN_BYTES_UNAVAILABLE = "token_bytes_unavailable"
-"""The 503 error code the token-id route returns when its tokenizer cannot supply token bytes."""
 
 
 class Pool(StrEnum):
@@ -190,21 +174,6 @@ class _Segment:
     finished: float
 
 
-def _without_logprobs(chunk: ChatCompletionChunk) -> ChatCompletionChunk:
-    """``chunk`` with its choices' logprobs dropped, for the SDK's stream accumulator only.
-
-    ``ChatCompletionStreamState.handle_chunk`` rebuilds the whole accumulated snapshot, logprobs list included, on
-    every chunk, so a reply with per-token logprobs costs quadratic CPU on the event loop (8,000 tokens: 43 s in one
-    call), which starves every other request in the process. The raw events keep the logprobs; ``rollout_model``
-    reads tokens and logprobs from them, never from the snapshot.
-    """
-    if not any(choice.logprobs is not None for choice in chunk.choices):
-        return chunk
-    return chunk.model_copy(
-        update={"choices": [choice.model_copy(update={"logprobs": None}) for choice in chunk.choices]}
-    )
-
-
 def _carries_token(chunk: ChatCompletionChunk) -> bool:
     """Check a chunk for generated text in its content, reasoning or tool-call deltas.
 
@@ -237,8 +206,6 @@ def _retry_after(response: httpx.Response) -> float:
 def _status_failure(response: httpx.Response) -> _AttemptFailed:
     status = response.status_code
     body = response.text[:ERROR_BODY_LIMIT]
-    if status == 503 and TOKEN_BYTES_UNAVAILABLE in body:
-        return _AttemptFailed(AttemptOutcome.REJECTED, body, status)
     if status == 404 and "route" in body.lower():
         return _AttemptFailed(AttemptOutcome.ROUTE_MISSING, body, status)
     if status == 400 and CONTEXT_LIMIT_PATTERN.search(body):
@@ -272,61 +239,6 @@ def request_kwargs(
         **sdk_fields,
         "extra_body": {"chat_template_kwargs": policy.template_kwargs(), **extra_fields},
     }
-
-
-def generate_body(model: str, token_ids: Sequence[int], max_tokens: int, policy: LLMPolicy) -> dict[str, object]:
-    """Build the exact token-id route body the client sends.
-
-    ``sampling_params`` carries the policy's ``sampling_params()``, the same fields chat completions
-    send; the route rejects ``min_p`` and ``logit_bias``. ``logprobs: 0`` returns the sampled
-    token's own raw logprob, and ``return_token_bytes`` returns each sampled id's bytes.
-    """
-    return {
-        "model": model,
-        "token_ids": list(token_ids),
-        "sampling_params": {"max_tokens": max_tokens, **policy.sampling_params(), "logprobs": 0},
-        "return_token_bytes": True,
-        "stream": False,
-    }
-
-
-def token_completion(payload: Mapping[str, Any], wall_time: float, attempts: tuple[Attempt, ...]) -> TokenCompletion:
-    """Read a token-id route response.
-
-    Raises:
-        TokenEvidenceError: ``token_bytes`` is absent, does not align with ``token_ids``, or has no
-            bytes for a sampled id; or the logprob entries do not align with ``token_ids``.
-    """
-    choice = payload["choices"][0]
-    token_ids = tuple(choice["token_ids"])
-    token_bytes = choice.get("token_bytes")
-    if token_bytes is None:
-        raise TokenEvidenceError("the response has no token_bytes; the route must honor return_token_bytes")
-    if len(token_bytes) != len(token_ids):
-        raise TokenEvidenceError(f"{len(token_ids)} token ids but {len(token_bytes)} token_bytes entries")
-    missing = [index for index, data in enumerate(token_bytes) if data is None]
-    if missing:
-        ids = [token_ids[index] for index in missing[:8]]
-        raise TokenEvidenceError(f"sampled ids {ids} at indices {missing[:8]} came back without bytes")
-    entries = (choice.get("logprobs") or {}).get("content") or []
-    if len(entries) != len(token_ids):
-        raise TokenEvidenceError(f"{len(token_ids)} token ids but {len(entries)} logprob entries")
-    usage = payload["usage"]
-    prompt_details = usage.get("prompt_tokens_details") or {}
-    return TokenCompletion(
-        token_ids=token_ids,
-        logprobs=tuple(float(entry["logprob"]) for entry in entries),
-        token_bytes=tuple(bytes(data) for data in token_bytes),
-        finish_reason=FinishReason(choice["finish_reason"]),
-        usage=Usage(
-            prompt_tokens=usage["prompt_tokens"],
-            completion_tokens=usage["completion_tokens"],
-            reasoning_tokens=0,
-            cached_tokens=prompt_details.get("cached_tokens") or 0,
-        ),
-        wall_time=wall_time,
-        attempts=attempts,
-    )
 
 
 class GlmClient:
@@ -497,53 +409,6 @@ class GlmClient:
         """
         return await complete_structured(self, messages, output_type, policy, self._provider.structured_repairs)
 
-    async def generate(
-        self, token_ids: Sequence[int], policy: LLMPolicy, *, max_tokens: int, routing_key: str
-    ) -> TokenCompletion:
-        """Sample from ``token_ids`` through the token-id route (``GENERATE_PATH``), without a chat template.
-
-        The request retries and holds as ``complete`` does, and a context overflow raises
-        ``ContextExhausted``. ``routing_key`` goes out as ``ROUTING_KEY_HEADER``, so a rollout's
-        requests share a node's prefix cache. The route reports no reasoning split, so
-        ``usage.reasoning_tokens`` is 0.
-
-        Raises:
-            TokenEvidenceError: The response's ids, logprobs and token bytes do not align.
-        """
-        started = time.monotonic()
-        attempts: list[Attempt] = []
-        body = generate_body(self._provider.model, token_ids, max_tokens, policy)
-
-        async def send(events: list[str]) -> dict[str, Any]:
-            return await self._generate_once(body, routing_key, events)
-
-        payload = await self._retrying(send, 0, max_tokens, attempts)
-        return token_completion(payload, time.monotonic() - started, tuple(attempts))
-
-    async def _generate_once(self, body: Mapping[str, object], routing_key: str, events: list[str]) -> dict[str, Any]:
-        """Send one token-id route request, appending the raw response body to ``events``."""
-        endpoint = self._endpoint
-        headers = {"Authorization": f"Bearer {endpoint.token}", ROUTING_KEY_HEADER: routing_key}
-        timeout = httpx.Timeout(connect=CONNECT_TIMEOUT, read=None, write=WRITE_TIMEOUT, pool=None)
-        try:
-            response = await self._http.post(
-                f"{endpoint.base_url.removesuffix(API_ROOT)}{GENERATE_PATH}", json=body, headers=headers, timeout=timeout
-            )
-        except httpx.TransportError as error:
-            raise _AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"{type(error).__name__}: {error}") from error
-        if response.status_code != 200:
-            raise _status_failure(response)
-        events.append(response.text)
-        try:
-            payload = response.json()
-        except json.JSONDecodeError as error:
-            raise _AttemptFailed(AttemptOutcome.STREAM_ERROR, f"malformed response body: {error}") from error
-        if "error" in payload:
-            raise _AttemptFailed(AttemptOutcome.STREAM_ERROR, json.dumps(payload["error"])[:ERROR_BODY_LIMIT])
-        if payload["choices"][0]["finish_reason"] == FinishReason.ABORT:
-            raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
-        return payload
-
     async def _segment(
         self,
         messages: Sequence[Message],
@@ -649,7 +514,7 @@ class GlmClient:
                     except StopAsyncIteration:
                         break
                     events.append(chunk.model_dump_json())
-                    state.handle_chunk(_without_logprobs(chunk))
+                    state.handle_chunk(chunk)
                     if _carries_token(chunk):
                         last_token = time.monotonic()
                         if ttft is None:
