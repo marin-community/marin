@@ -63,8 +63,10 @@ def test_cooldown_coefficients_match_integrated_constant_direction_updates():
         cooldown_coefficients(steps, optimizer, 100, shifted)
 
 
-@pytest.mark.parametrize("donors", [False, True])
-def test_streamed_native_hero_average_roundtrip_preserves_master_and_latest_router(tmp_path, monkeypatch, donors):
+@pytest.mark.parametrize(("donors", "config_format"), [(False, "json"), (True, "yaml")])
+def test_streamed_native_hero_average_roundtrip_preserves_master_and_latest_router(
+    tmp_path, monkeypatch, donors, config_format
+):
     model_config = GrugModelConfig(
         vocab_size=128010 if donors else 16,
         hidden_dim=8,
@@ -97,8 +99,9 @@ def test_streamed_native_hero_average_roundtrip_preserves_master_and_latest_rout
         "data": {"tokenizer": "test-tokenizer"},
     }
     run_config = json.loads(json.dumps(run_config))
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump(run_config))
+    config_path = tmp_path / f"config.{config_format}"
+    # JSON scientific numbers such as layer_norm_eps=1e-5 must remain numeric.
+    config_path.write_text(json.dumps(run_config) if config_format == "json" else yaml.safe_dump(run_config))
     schedule = optimizer.lr_scheduler(100)
     adam = optimizer.lr_scheduler(100, override_lr=optimizer.adam_lr)
     pins, masters = [], []

@@ -330,7 +330,7 @@ def _write_json(path: str, value: object) -> None:
 def _load_config(pin: CheckpointPin) -> dict:
     fs, plain = filesystem_for(pin.config_path)
     with fs.open(plain, "r") as source:
-        config = yaml.safe_load(source)
+        config = json.load(source) if pin.config_path.endswith(".json") else yaml.safe_load(source)
     if digest(config) != pin.config_digest:
         raise ValueError(f"Saved run configuration changed: {pin.config_path}")
     return config
