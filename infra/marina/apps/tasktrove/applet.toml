@@ -1,0 +1,9 @@
+applet_id = "fb17d8f5-7b28-49bc-b4be-6eec90711902"
+source_paths = ["infra/marina/web"]
+
+name = "tasktrove"
+python_entrypoint = "app:create_api"
+title = "TaskTrove"
+description = "Explore the TaskTrove task collection and its cleanup report. Filter tasks by source, environment, or tags and download their archives."
+build_command = "cd web && npm ci && npm run build"
+data_url = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9"

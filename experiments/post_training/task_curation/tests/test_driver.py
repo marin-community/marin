@@ -105,11 +105,32 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     assert "Unknown source: unknown" in unknown.output
 
 
+def test_local_canary_cannot_write_an_explicit_production_catalog(tmp_path, catalog):
+    production = tmp_path / "production"
+    result = CliRunner().invoke(
+        main,
+        [
+            *arguments(tmp_path),
+            "--mode",
+            "full",
+            "--cache-dir",
+            str(tmp_path / "canary"),
+            "--publish-catalog",
+            str(production),
+            "--run",
+        ],
+    )
+    assert result.exit_code == 2
+    assert not production.exists()
+
+
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
     # The factory probes for a working bubblewrap; CI hosts cannot build sandboxes.
-    monkeypatch.setattr("shellbox.backends.local.machine._working_bwrap", lambda candidates: Path("/usr/bin/bwrap"))
+    monkeypatch.setattr(
+        "shellbox.backends.local.machine._working_bwrap", lambda candidates, system_directories: Path("/usr/bin/bwrap")
+    )
     environment = Environment(
         requirements=REQUIREMENTS,
         files={DATA_PATH: install_fake_archive(monkeypatch)},
@@ -130,10 +151,18 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     assert spec.env == {"NLTK_DATA": "/srv/nltk_data"}
 
 
-def test_local_only_planning_does_not_require_a_controller(tmp_path, catalog, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2/rl-grading")
-    result = CliRunner().invoke(main, arguments(tmp_path))
+@pytest.mark.parametrize("root", [None, "s3://marin-us-east-02a/marin/curation-trial"])
+def test_remote_planning_uses_cw_instead_of_ambient_gcs(tmp_path, catalog, monkeypatch, root):
+    previous = "gs://marin-us-central2/rl-grading"
+    monkeypatch.setenv("MARIN_PREFIX", previous)
+    options = arguments(tmp_path)
+    if root is not None:
+        options += ["--artifact-root", root]
+    result = CliRunner().invoke(main, options)
     assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["chunk_storage_prefix"] == f"{root or 's3://marin-us-east-02a/marin'}/.zephyr/rl-data-campaign"
+    assert os.environ["MARIN_PREFIX"] == previous
     assert not (tmp_path / "report.json").exists()
 
 
@@ -212,7 +241,17 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     input_file.write_text("1\n2\n3\n")
     source = number_source(input_file)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
-    options = ["--mode", mode, "--skip-assessment", "--source", source.name, "--max-workers", "1"]
+    options = [
+        "--mode",
+        mode,
+        "--skip-assessment",
+        "--source",
+        source.name,
+        "--max-workers",
+        "1",
+        "--artifact-root",
+        str(tmp_path / "artifacts"),
+    ]
     if mode == "quick":
         output_root = tmp_path / "output"
         report = output_root / "campaign.json"
@@ -293,6 +332,8 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
         "1",
         "--report-path",
         str(report),
+        "--artifact-root",
+        str(tmp_path / "artifacts"),
     ]
     runner = CliRunner()
     planned = runner.invoke(main, options)

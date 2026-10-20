@@ -25,7 +25,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.models import SourceStatus
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, append_curation_catalog
+from experiments.post_training.task_curation.curation_catalog import append_curation_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +171,7 @@ def write_campaign_report(
     started_at: str,
     source_ids: Mapping[str, str],
     execution: Mapping[str, object],
+    catalog_root: str,
 ) -> None:
     """Persist source outcomes and catalog terminal reports for local or reviewed runs."""
     report = campaign_report(status, mode=mode, outcomes=outcomes, run_id=run_id, started_at=started_at)
@@ -179,7 +180,7 @@ def write_campaign_report(
     path.write_bytes(report_bytes)
     if status != CampaignStatus.RUNNING:
         append_curation_catalog(
-            str(path.parent / CATALOG_DIRECTORY),
+            catalog_root,
             report_bytes,
             run_id=run_id,
             report_path=report_path,
@@ -196,6 +197,7 @@ def run_campaign(
     runtime: CampaignRuntime,
     report_path: str,
     source_ids: Mapping[str, str],
+    catalog_root: str,
     mode: str = "sample",
     assessments: Mapping[str, AssessmentPaths] | None = None,
 ) -> tuple[SourceOutcome, ...]:
@@ -232,6 +234,7 @@ def run_campaign(
             started_at=started_at,
             source_ids=source_ids,
             execution=asdict(pool),
+            catalog_root=catalog_root,
         )
 
     def started(step: ArtifactStep[CampaignArtifact]) -> None:

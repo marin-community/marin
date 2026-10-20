@@ -195,13 +195,6 @@ def runner_lock(spec: DatabaseSpec, runner: str) -> Iterator[bool]:
 
 
 @contextmanager
-def deployment_runner_lock(spec: DatabaseSpec, runner: str) -> Iterator[bool]:
-    """Wait to lease the runner used for deployment migrations."""
-    with _advisory_lock(spec, f"{RUNNER_LOCK_PREFIX}{runner}", LockAcquisition.BLOCKING) as acquired:
-        yield acquired
-
-
-@contextmanager
 def migration_lock(spec: DatabaseSpec) -> Iterator[None]:
     """Serialize schema migrations across every runner and deployment."""
     with _advisory_lock(spec, MIGRATION_LOCK_NAME, LockAcquisition.BLOCKING) as acquired:

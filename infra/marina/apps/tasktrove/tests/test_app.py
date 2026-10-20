@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from marina.apps import Services
+from marina.testing import SourceServices
 from tasktrove import app as tasktrove
 
 
@@ -68,7 +68,7 @@ def client(tmp_path) -> TestClient:
             }
         )
     )
-    services = Services(name="tasktrove", data_url=str(tmp_path), database=None)
+    services = SourceServices(name="tasktrove", data_url=str(tmp_path), database=None)
     api = cast(FastAPI, tasktrove.create_api(services).app)
     return TestClient(api)
 

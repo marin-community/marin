@@ -369,4 +369,5 @@ def test_conversion_retains_duplicate_tasks_and_rejections_without_review_or_con
     manifest = json.loads(Path(result.manifest_path).read_text())
     assert manifest["reviewed"] is False
     assert manifest["verified"] is False
+    assert manifest["intended_use"] == "train"
     assert not (tmp_path / "output" / "final").exists()

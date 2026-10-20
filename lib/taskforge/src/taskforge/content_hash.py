@@ -4,7 +4,7 @@
 """Canonical JSON encoding and sha256 content hashes over it.
 
 ``canonical_json`` is the encoding Taskforge hashes. It sorts keys, uses compact separators and
-writes UTF-8 text, with bytes as base64 and dataclasses or pydantic models field by field.
+writes UTF-8 text, with bytes as base64 and dataclass or pydantic values field by field.
 ``digest`` returns the sha256 of that encoding. ``pretty_json`` produces the indented form for
 prompts and for files people read.
 """

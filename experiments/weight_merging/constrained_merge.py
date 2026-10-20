@@ -35,12 +35,17 @@ def main() -> None:
     base = CheckpointReader(CheckpointSource(**recipe["base"]))
     donors = [CheckpointReader(CheckpointSource(**item)) for item in recipe["donors"]]
     support = tuple(TensorSupport(x["name"], None if x["rows"] is None else tuple(x["rows"])) for x in recipe["support"])
-    params = recipe["parameters"]
+    params = recipe["parameters"].copy()
     iso = params["method"] == "iso"
+    row_scaled = params["method"] == "row_scaled"
     if iso:
         parameters = None
         if not torch.cuda.is_available():
             raise ValueError("Campaign ISO conversion requires its reserved CUDA device")
+    elif row_scaled:
+        if len(donors) != 1:
+            raise ValueError("Row-scaled transfer requires exactly one donor")
+        parameters = None
     else:
         parameters = merge_parameters(params)
     diagnostics = []
@@ -55,10 +60,16 @@ def main() -> None:
         values = [reader.tensor(name) for reader in donors]
         if row is not None:
             values = [tensor[row] for tensor in values]
-        if "expert_assignment" in recipe:
-            donor_index = recipe["expert_assignment"][name][str(row)]
+        if "expert_assignment" in recipe or row_scaled:
+            if row is None:
+                raise ValueError("Assigned transfers require row support")
+            if row_scaled:
+                donor_index = 0
+                fraction = recipe["row_fractions"][name][str(row)]
+            else:
+                donor_index = recipe["expert_assignment"][name][str(row)]
+                fraction = recipe["transfer_fraction"]
             donor = values[donor_index]
-            fraction = recipe["transfer_fraction"]
             if fraction == 1:
                 return donor
             return (value.float() + fraction * (donor.float() - value.float())).to(value.dtype)
@@ -80,13 +91,20 @@ def main() -> None:
         assert parameters is not None
         return merge_tensor(value, values, parameters, tensor_name=f"{name}:{row}")
 
-    audit = export_constrained(base, recipe["output"], support, recipe["support_cap"], transform)
+    audit = export_constrained(
+        base,
+        recipe["output"],
+        support,
+        recipe["support_cap"],
+        recipe["change_cap"],
+        transform,
+    )
     audit["recipe"] = recipe
-    audit["parameters"] = params if iso else asdict(parameters)
+    audit["parameters"] = params if iso or row_scaled else asdict(parameters)
     audit["elapsed_seconds"] = time.monotonic() - start
     if iso:
         audit["iso_diagnostics"] = diagnostics
-    finalize_constrained_export(audit, recipe["audit"], recipe["change_cap"])
+    finalize_constrained_export(audit, recipe["audit"])
     logging.info("Completed policy audit: %s; changed %.6f%%", recipe["audit"], audit["changed_percent"])
 
 

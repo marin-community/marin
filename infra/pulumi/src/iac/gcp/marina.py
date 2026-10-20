@@ -109,6 +109,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                             principals["human-006"],
                             principals["human-064"],
                             principals["human-076"],
+                            principals["human-054"],
                         ),
                     ),
                 ),
