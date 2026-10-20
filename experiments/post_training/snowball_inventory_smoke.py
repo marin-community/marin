@@ -22,6 +22,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLRetentionPolicy,
+    SkyRLRolePlan,
     SkyRLRun,
     SkyRLRunConfig,
     SkyRLRuntime,
@@ -45,55 +46,67 @@ ROLE_PLAN = replace(SNOWBALL_RECIPE.role_plan, train_batch_size=32, policy_mini_
 
 
 @dataclass(frozen=True)
-class InventorySmokeConfig:
+class InventoryRunConfig:
     training: SkyRLRunConfig
     pool_sha256: str
+    validation_sha256: str | None = None
 
 
-def verify_pool_runtime(launch_config_yaml: str, expected_sha256: str, output_uri: str) -> None:
+def verify_pool_runtime(
+    launch_config_yaml: str, expected_sha256: str, output_uri: str, validation_sha256: str | None
+) -> None:
     with TemporaryDirectory(prefix="snowball-launch-preflight-") as directory:
         path = Path(directory) / "launch.yaml"
         path.write_text(launch_config_yaml)
+        command = [
+            "uv",
+            "run",
+            "--project",
+            "config/external/MarinSkyRL",
+            "--frozen",
+            "--no-dev",
+            "python",
+            "experiments/post_training/snowball_inventory_probe.py",
+            "--launch-config",
+            str(path),
+            "--expected-sha256",
+            expected_sha256,
+            "--output-uri",
+            output_uri,
+        ]
+        if validation_sha256 is not None:
+            command.extend(["--expected-validation-sha256", validation_sha256])
         subprocess.run(
-            [
-                "uv",
-                "run",
-                "--project",
-                "config/external/MarinSkyRL",
-                "--frozen",
-                "--no-dev",
-                "python",
-                "experiments/post_training/snowball_inventory_probe.py",
-                "--launch-config",
-                str(path),
-                "--expected-sha256",
-                expected_sha256,
-                "--output-uri",
-                output_uri,
-            ],
+            command,
             cwd=Path(__file__).resolve().parents[2],
             check=True,
             timeout=30 * 60,
         )
 
 
-def run_inventory_smoke(config: InventorySmokeConfig) -> SkyRLRun:
+def run_inventory(config: InventoryRunConfig) -> SkyRLRun:
     report_uri = prefix_join(config.training.output.terminal_manifest_uri.rsplit("/", 1)[0], "probe/report.json")
     remote(
         verify_pool_runtime,
         resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
-    )(config.training.launch_config_yaml, config.pool_sha256, report_uri)
+    )(config.training.launch_config_yaml, config.pool_sha256, report_uri, config.validation_sha256)
     return run_skyrl(config.training)
 
 
-def smoke_recipe(request_window_tokens: int, max_new_tokens: int) -> dict:
+def smoke_recipe(
+    request_window_tokens: int,
+    max_new_tokens: int,
+    *,
+    role_plan: SkyRLRolePlan = ROLE_PLAN,
+    max_steps: int = 10,
+) -> dict:
     preset = replace(
         DEFAULT,
         label="inventory-smoke",
-        max_steps=10,
+        max_steps=max_steps,
         eval_interval=-1,
         max_staleness_steps=0,
-        generation_workers=ROLE_PLAN.train_batch_size,
+        generation_workers=role_plan.train_batch_size,
         request_window_tokens=request_window_tokens,
         max_new_tokens=max_new_tokens,
         batch_policy="full_batch",
@@ -116,8 +129,9 @@ def smoke_recipe(request_window_tokens: int, max_new_tokens: int) -> dict:
     }
     config["trainer"]["max_ckpts_to_keep"] = 1
     config["trainer"]["seed"] = SEED
-    config["trainer"]["train_batch_size"] = ROLE_PLAN.train_batch_size
-    config["trainer"]["policy_mini_batch_size"] = ROLE_PLAN.policy_mini_batch_size
+    config["trainer"]["train_batch_size"] = role_plan.train_batch_size
+    config["trainer"]["policy_mini_batch_size"] = role_plan.policy_mini_batch_size
+    config["generator"]["n_samples_per_prompt"] = role_plan.n_samples_per_prompt
     config["trainer"]["project_name"] = "marin-snowball-curriculum-smoke"
     config["extra_env"]["VERIFYIT_JUDGE_MODEL"] = "openai/gpt-oss-120b"
     config["extra_env"].update({"NCCL_NET": "Socket", "NCCL_IB_DISABLE": "1", "NCCL_SOCKET_FAMILY": "AF_INET"})
@@ -189,10 +203,10 @@ def main(
         export_hf=True,
     )
 
-    def build_config(ctx: StepContext) -> InventorySmokeConfig:
-        return InventorySmokeConfig(rl.build_config(ctx), pool_sha256)
+    def build_config(ctx: StepContext) -> InventoryRunConfig:
+        return InventoryRunConfig(rl.build_config(ctx), pool_sha256)
 
-    return replace(rl, run=run_inventory_smoke, build_config=build_config)
+    return replace(rl, run=run_inventory, build_config=build_config)
 
 
 if __name__ == "__main__":

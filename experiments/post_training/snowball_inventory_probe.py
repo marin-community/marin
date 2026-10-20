@@ -42,6 +42,7 @@ from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from verifyit.modes.grade_judge import JudgeConnection
 
 EXPECTED_ROWS = 100_000
+EXPECTED_VALIDATION_ROWS = 243
 CORE_REVISION = "6e2fe1839ea067be147f1ce06aced63a96670f7a"
 FEATURE_DISTRIBUTIONS = ("marin-taskcompendium", "marin-rolloutengine", "marin-verifyit")
 INVALID_ANSWER = "snowball_inventory_probe_invalid_answer"
@@ -62,6 +63,9 @@ class ProbeReport:
     sha256: str | None = None
     row_count: int = 0
     engine_checks: int = 0
+    validation_sha256: str | None = None
+    validation_rows: int = 0
+    validation_engine_checks: int = 0
     contract_source_id: str | None = None
     contract_task_id: str | None = None
     source_counts: dict[str, int] = field(default_factory=dict)
@@ -139,6 +143,7 @@ async def probe(
     launch_config: Path,
     expected_sha256: str,
     report: ProbeReport,
+    expected_validation_sha256: str | None,
 ) -> None:
     report.package_revisions = package_revisions()
     report.phase = "launch_configuration"
@@ -171,6 +176,30 @@ async def probe(
         judge_connection = JudgeConnection(remote_judge["base_url"], os.environ[remote_judge["api_key_env"]])
         os.environ["VERIFYIT_JUDGE_MODEL"] = config.runtime.task_env["VERIFYIT_JUDGE_MODEL"]
         scripts, native = inventory_representatives(path, report, factories, token_prefix, judge_connection)
+        if config.inputs.validation_data:
+            report.phase = "validation_contracts"
+            if len(config.inputs.validation_data) != 1 or expected_validation_sha256 is None:
+                raise ValueError("The validation panel requires one pinned source and its expected hash")
+            validation = config.inputs.validation_data[0]
+            validation_uri = prefix_join(validation.uri, validation.relative_path)
+            validation_path = Path(directory) / "validation.parquet"
+            with StoragePath(validation_uri).open("rb") as source, validation_path.open("wb") as target:
+                shutil.copyfileobj(source, target)
+            with validation_path.open("rb") as source:
+                report.validation_sha256 = hashlib.file_digest(source, "sha256").hexdigest()
+            if report.validation_sha256 != expected_validation_sha256:
+                raise ValueError("The validation panel differs from its expected SHA-256")
+            engine = RolloutEngine(factories, {"token_prefix": token_prefix})
+            for batch in pq.ParquetFile(validation_path).iter_batches(columns=["task_rollout_spec"], batch_size=256):
+                for row in batch.to_pylist():
+                    spec = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+                    engine.check(spec.model_copy(update={"judge_connection": judge_connection}))
+                    report.validation_rows += 1
+                    report.validation_engine_checks += 1
+            if report.validation_rows != EXPECTED_VALIDATION_ROWS:
+                raise ValueError("The complete 243-contract validation panel did not pass engine checks")
+        elif expected_validation_sha256 is not None:
+            raise ValueError("A validation hash was supplied without a configured validation panel")
     report.phase = "script_grading"
     for source, spec in sorted(scripts.items()):
         assert isinstance(spec.task.grader, ScriptGrader) and spec.verifier_machine is not None
@@ -203,11 +232,12 @@ def write_report(output_uri: str, report: ProbeReport) -> None:
 @click.command(help=__doc__)
 @click.option("--launch-config", type=click.Path(exists=True, path_type=Path), required=True)
 @click.option("--expected-sha256", required=True)
+@click.option("--expected-validation-sha256")
 @click.option("--output-uri", required=True, help="Destination JSON report URI.")
-def main(launch_config: Path, expected_sha256: str, output_uri: str) -> None:
+def main(launch_config: Path, expected_sha256: str, expected_validation_sha256: str | None, output_uri: str) -> None:
     report = ProbeReport()
     try:
-        asyncio.run(probe(launch_config, expected_sha256, report))
+        asyncio.run(probe(launch_config, expected_sha256, report, expected_validation_sha256))
     except Exception as error:
         report.status = "failed"
         report.error_type = type(error).__name__
