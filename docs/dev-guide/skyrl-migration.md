@@ -478,3 +478,10 @@ Then archive the repository, preserving its source history and releases:
 ```bash
 gh repo archive marin-community/MarinSkyRL --yes
 ```
+
+## Performance planning
+
+Use the [Snowball/Hero performance chooser](skyrl-performance.md) for workload
+shape, learner/serving layout and full-loop bottleneck diagnosis. The guides
+retain dated source measurements and qualification limits; validate the current
+resolved artifact recipe before using a historical layout.
