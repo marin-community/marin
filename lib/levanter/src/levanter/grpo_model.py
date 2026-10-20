@@ -57,6 +57,9 @@ def response_logprobs(
         raise ValueError("Every response needs at least one preceding prompt token")
     if block_size < 1:
         raise ValueError("block_size must be positive")
+    # TODO: Support packed trajectories with explicit segment IDs; this mask
+    # only separates padding from one trajectory per row.
+    # TODO: Replay rollout router decisions when scoring and training MoE models.
     model = inference_mode(model, True)
     mask = AttentionMask.causal().with_segment_ids(batch.attention_mask.astype(jnp.int32))
     activations, _ = split_activations(model.activations(batch.tokens, mask, pos_ids=batch.position_ids, key=key))
