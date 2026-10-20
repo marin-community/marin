@@ -37,7 +37,7 @@ from pathlib import Path
 import numpy as np
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.sft_shootout_rows.build import EPOCHS, v0_tokenizer
+from experiments.post_training.sft_shootout_rows.build import END_THINK, EPOCHS, START_THINK, v0_tokenizer
 from experiments.post_training.sweep_data.prepare_agentic import (
     CONTEXT,
     PAD_TOKEN,
@@ -47,7 +47,6 @@ from experiments.post_training.sweep_data.prepare_agentic import (
 )
 from experiments.post_training.sweep_data.render import training_row
 
-START_THINK, END_THINK = 128002, 128003
 MODES = ("mask", "drop")
 CAPS = (1_000, 2_000, 4_000)
 

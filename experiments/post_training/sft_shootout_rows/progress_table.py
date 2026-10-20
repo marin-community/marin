@@ -25,6 +25,7 @@ POOL_NOT_HELD_OUT = {"tmax": 1914, "swesmith": 1995}
 REPLAY_CEILING_B = 4 * 10_355_114  # supervised tokens of continuation v2 (build.REPLAY_URI)
 KNOWN_DROPS = {
     "not_passed",
+    "no_clean_completion",
     "heldout_task",
     "over_context",
     "summarized_trial",

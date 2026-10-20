@@ -36,7 +36,8 @@ def main() -> None:
     shards = finished_shards(args.traces_root, relay=False) + finished_shards(args.traces_root, relay=True)
     if not shards:
         raise SystemExit("No finished shards")
-    names = [s.removeprefix(args.traces_root.rstrip("/") + "/") for s in shards]
+    root = str(StoragePath(args.traces_root)).rstrip("/") + "/"
+    names = [s.removeprefix(root) for s in shards]
     print("PROGRESS_SHARDS " + json.dumps(names), flush=True)
     command = [
         sys.executable,

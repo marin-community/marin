@@ -17,7 +17,7 @@ Eligible tasks: pool tasks that are not held out and have at least one passing G
 import random
 from dataclasses import dataclass, field
 
-SEED = 20261016
+from experiments.post_training.sweep_data.select import SEED
 
 
 @dataclass

@@ -243,10 +243,10 @@ DENIED_RUNS = {
 
 def finished_shards(prefix: str, relay: bool) -> list[str]:
     """Every finished shard of one run type under a trace prefix: a rebuilt.jsonl with a _SUCCESS marker beside it."""
-    pattern = "{}/{}-relay/shard-*/round-*/rebuilt.jsonl" if relay else "{}/{}/shard-*/rebuilt.jsonl"
+    pattern = "{}-relay/shard-*/round-*/rebuilt.jsonl" if relay else "{}/shard-*/rebuilt.jsonl"
     found = []
     for family in TRACE_FAMILIES:
-        for rebuilt in StoragePath(pattern.format(prefix.rstrip("/"), family)).glob():
+        for rebuilt in (StoragePath(prefix) / pattern.format(family)).glob():
             if SHARD_PATH.search(str(rebuilt)) and (rebuilt.parent / "_SUCCESS").exists():
                 found.append(str(rebuilt))
     return sorted(found)
@@ -1008,7 +1008,6 @@ def candidate_counts(kept: dict[str, Candidate], dropped: list[dict]) -> dict:
             family: dict(collections.Counter(d["reason"].split(":")[0] for d in dropped if d["family"] == family))
             for family in sorted({d["family"] for d in dropped if d["family"]})
         },
-        # One count per summarized trial (each contributes one dropped row per conversation).
         "kept_with_scrubbed_proxy_url": sum(
             1 for candidate in kept.values() if SCRUBBED_PROXY_URL.search(json.dumps(candidate.trace["messages"]))
         ),
@@ -1018,6 +1017,7 @@ def candidate_counts(kept: dict[str, Candidate], dropped: list[dict]) -> dict:
         "agent_tool_env_drops_by_task": dict(
             collections.Counter(d["task_id"] for d in dropped if d["reason"] == "touches_agent_tool_env")
         ),
+        # One count per summarized trial (each contributes one dropped row per conversation).
         "summarized_trials_by_family": dict(
             collections.Counter(
                 d["family"] for d in dropped if d["reason"] == "summarized_trial" and d["conversation"] == 0
