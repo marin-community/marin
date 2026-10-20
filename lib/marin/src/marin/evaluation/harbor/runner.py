@@ -508,7 +508,7 @@ class HarborExecutor:
         return HarborResumeIdentity(
             dataset=self.config.record_dataset,
             policy_digest=self.config.digest,
-            runtime=harbor_runtime_descriptor(self.config.error_taxonomy.commit, self.config.runtime_project),
+            runtime=harbor_runtime_descriptor(),
             task_limit=self.task_limit,
             model=self.model_config,
             judge=self.judge_config,

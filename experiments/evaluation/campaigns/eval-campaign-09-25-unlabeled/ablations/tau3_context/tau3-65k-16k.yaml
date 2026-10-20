@@ -53,7 +53,7 @@ agents:
       max_input_tokens: 65536
       max_output_tokens: 16384
 user_agent:
-  import_path: tau3_bench.acp_relay.harbor_agent:Tau3HarborACPRelay
+  import_path: harbor.agents.tau3_acp_relay.harbor_agent:Tau3HarborACPRelay
   mcp_servers:
   - name: tau3-runtime
     transport: streamable-http

@@ -16,6 +16,10 @@ uv run pytest <test path>
 uv run --no-project infra/ci/run_tests.py
 ```
 
+The affected-test runner checks Harbor's standalone lock and runs its offline
+runtime suite when vendored Harbor or its local Rigging or FineStore dependencies
+change. Run those checks directly with `uv run --no-project infra/ci/run_harbor_tests.py`.
+
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
 partial marker expression such as `-m "not slow"`; pytest replaces the default
@@ -54,6 +58,18 @@ transitive dependencies. If the selector cannot compare the base and head
 lockfiles, it runs the TPU lane. Levanter or Haliax source changes also select
 the lane. The Levanter Torch lane retains its root manifest trigger. Scheduled
 or manual runs without a base ref run every suite.
+
+The Levanter TPU lane selects affected files containing `pytest.mark.tpu`,
+then runs only marked cases, including scheduled and full-suite runs. Mark
+tests when they exercise real accelerator kernels, TPU numerical behavior, or
+device transfers and collectives that CPU coverage cannot validate. Use
+`@pytest.mark.tpu` on individual tests, `pytest.param(..., marks=pytest.mark.tpu)`
+for selected parameters, or `pytestmark = pytest.mark.tpu` for an entire module.
+Keep markers literal so [select_tests.py](infra/ci/select_tests.py) can find them
+without importing test dependencies. The marker also works on test classes.
+CPU CI continues to run these tests when supported; `tpu` opts into hardware
+coverage and does not imply a CPU skip. The TPU lane retains all default safety
+exclusions and excludes Torch tests.
 
 ## Core Rule
 

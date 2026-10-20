@@ -35,8 +35,6 @@ jobs:
             forks: tpu-inference and vllm together
           - unit: vllm-gpu
             forks: the vllm GPU pin
-          - unit: harbor
-            forks: harbor
     permissions:
       contents: read
       id-token: write

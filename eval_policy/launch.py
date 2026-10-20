@@ -78,6 +78,12 @@ def launch_policy(
             f"{version} requires historical Evalchemy commit {commit}; "
             "run it from a Marin checkout that predates Evalchemy vendoring"
         )
+    if any(policy.mechanism == "harbor" for _, policy in evaluations):
+        commit = RUNTIME_COMMITS[version]["harbor"]
+        raise ValueError(
+            f"{version} requires historical Harbor commit {commit}; "
+            "run it from a Marin checkout that predates Harbor vendoring"
+        )
     needs_artifact = version == SEPTEMBER_24_VERSION
     if needs_artifact and artifact_dir is None:
         raise ValueError("selected September 24 evaluations require the pinned artifact directory from issue #9409")

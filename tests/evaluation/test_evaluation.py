@@ -26,7 +26,7 @@ from finestore.reader import ReadView
 from finestore.store import DataStore
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
-from marin.evaluation.eval_policy import HARBOR_COMMIT, SEPTEMBER_16_VERSION, source_config_digest
+from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION, source_config_digest
 from marin.evaluation.evalchemy.runner import (
     EvalchemyExecutor,
     EvalchemyRunConfig,
@@ -36,14 +36,12 @@ from marin.evaluation.evalchemy.runner import (
 from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor, evalchemy_runtime_source_hash
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
-    HARBOR_RUNTIME,
-    HARBOR_RUNTIME_PROJECT,
+    HARBOR_SOURCE,
     HarborDatasetKind,
     HarborErrorTaxonomy,
     ValidatedHarborConfig,
     harbor_runtime_descriptor,
 )
-from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.lm_eval_samples import samples_from_lm_eval
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
@@ -70,7 +68,6 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
-from marin.external_dependencies import HARBOR
 from marin.inference.config import (
     EffectiveServing,
     ResolvedModelLocator,
@@ -111,11 +108,10 @@ def _install_fake_harbor_preflight(
     monkeypatch: pytest.MonkeyPatch,
     *,
     verifier_env_keys: tuple[str, ...] = (),
-    commit: str = HARBOR.commit,
 ) -> list[Mapping[str, object]]:
     received: list[Mapping[str, object]] = []
 
-    def preflight(requests, *, runtime_project):
+    def preflight(requests):
         configs = []
         for path, model_agent_kwargs in requests:
             received.append(model_agent_kwargs)
@@ -136,7 +132,7 @@ def _install_fake_harbor_preflight(
                         agent=frozenset({"AgentError"}),
                         passthrough=frozenset({"PassthroughError"}),
                         undecided=frozenset({"VerifierTimeoutError"}),
-                        commit=commit,
+                        commit=HARBOR_SOURCE.commit,
                     ),
                     max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
                     max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
@@ -157,7 +153,6 @@ def _install_fake_harbor_preflight(
                         n_attempted=1,
                     ),
                     trials_per_task=1,
-                    runtime_project=runtime_project,
                 )
             )
         return tuple(configs)
@@ -166,8 +161,9 @@ def _install_fake_harbor_preflight(
     return received
 
 
-def test_verified_harbor_launch_uses_locked_policy_runtime(monkeypatch):
-    _install_fake_harbor_preflight(monkeypatch, commit=HARBOR_COMMIT)
+@pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])
+def test_verified_harbor_launch_rejects_vendored_runtime(monkeypatch, version):
+    _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
         model=ModelConfig(name="test-model", location="org/test-model"),
@@ -186,17 +182,11 @@ def test_verified_harbor_launch_uses_locked_policy_runtime(monkeypatch):
         submission_cluster="marin",
         federated_cluster=None,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        version=SEPTEMBER_16_VERSION,
+        version=version,
     )
 
-    evaluation = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test").evaluations[0]
-
-    assert isinstance(evaluation.executor, HarborExecutor)
-    assert evaluation.executor.config.runtime_project == f"{HARBOR_RUNTIME_PROJECT}/pins/{HARBOR_COMMIT}"
-    assert evaluation.identity.eval_runtime == harbor_runtime_descriptor(
-        HARBOR_COMMIT, evaluation.executor.config.runtime_project
-    )
-    assert evaluation.identity.eval_ref.harbor.harbor_config_commit == HARBOR_COMMIT
+    with pytest.raises(ValueError, match="evaluator runtime must use commit"):
+        build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
 
 
 def _write_harbor_config(path: Path) -> Path:
@@ -1556,7 +1546,8 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
     }
-    assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
+    assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {harbor_runtime_descriptor()}
+    assert all(evaluation.endpoint_route is EndpointRoute.CAPABILITY for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
 
@@ -2058,7 +2049,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "env": "daytona",
             "task_limit": 2,
             "config_digest": evaluation.identity.eval_ref.harbor.config_digest,
-            "harbor_config_commit": HARBOR.commit,
+            "harbor_config_commit": HARBOR_SOURCE.commit,
             "max_input_tokens": _PREFLIGHT_MAX_INPUT_TOKENS,
             "max_output_tokens": _PREFLIGHT_MAX_OUTPUT_TOKENS,
         },
@@ -2300,7 +2291,7 @@ def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, m
     iris_opened = False
     error = "Harbor config must declare exactly one agent"
 
-    def reject_preflight(_requests, *, runtime_project):
+    def reject_preflight(_requests):
         raise ValueError(error)
 
     def open_iris_client(**_kwargs):

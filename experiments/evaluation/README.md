@@ -272,10 +272,10 @@ Historical `eval-policy-...-verified` Evalchemy launches require their original
 external commits and must run from a Marin checkout that predates vendoring.
 Both the shared launcher and `eval_policy.launch` reject selections containing
 those benchmarks before creating configs or starting jobs.
-Historical records remain readable. Harbor preflight and workers continue to use
-the `RUNTIME_COMMITS` selection from `lib/marin/src/marin/evaluation/eval_policy.py`
-and `config/external/harbor/pins/<Harbor commit>/uv.lock` with `uv run --frozen`.
-Unversioned Harbor launches use the current pin in `config/external/`.
+Harbor preflight and workers always use `vendor/harbor` and its lock. The published
+September cohort labels require their original Harbor runtime, so current Harbor
+launches also fail admission under those labels. Historical records remain
+readable; reproduce those runs from their recorded Marin checkout.
 
 `tasks` selects one or more evaluator task names. Use `task_options.<task>` for `num_fewshot`,
 `task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include
@@ -347,13 +347,13 @@ The checked-in `swebench-recovery`, `ot-tblite-recovery`, `tb2-recovery`,
 `simpleqa-recovery`, and `ds-1000-local` files preserve retry and resume policies for longer agentic runs.
 They are file-backed policies rather than registry entries. A `recovery` name denotes an exact-identity
 resume policy; each benchmark retains its own retry count and exception taxonomy. `ds-1000-local`
-expects the generated Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; create that
-tree with Harbor's DS-1000 adapter before launching it.
+expects a prebuilt Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; supply that
+dataset before launching it.
 
-Harbor evaluation preflight and execution use the independently locked project
-under `config/external/harbor`; its evaluator dependency graph is absent from the
-root workspace lock. They install the exact `marin.external_dependencies.HARBOR`
-revision in an isolated uv environment. Every Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
+Harbor is an independent project under `vendor/harbor`, excluded from Marin's workspace. Its own
+lockfile resolves local Rigging and FineStore sources; Marin invokes preflight and execution through
+an isolated subprocess CLI. The runtime descriptor identifies the upstream revision, dependency lock,
+and vendored/local library source digests. Every Harbor record stores the deterministic source-policy digest in `eval.harbor.config_digest` and any
 Marin runtime task cap in `eval.harbor.task_limit`. A policy's own `n_tasks` remains represented by
 the digest.
 

@@ -33,7 +33,6 @@ from marin.evaluation.evalchemy.runtime import (
 )
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
-    HARBOR_RUNTIME_PROJECT,
     ValidatedHarborConfig,
     harbor_runtime_descriptor,
     preflight_harbor_configs,
@@ -246,11 +245,7 @@ def _resolve_definitions(
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
     model_agent_kwargs = harbor_model_agent_kwargs(model)
     requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
-    harbor_commit = runtime_commits.get("harbor")
-    harbor_project = (
-        f"{HARBOR_RUNTIME_PROJECT}/pins/{harbor_commit}" if harbor_commit is not None else HARBOR_RUNTIME_PROJECT
-    )
-    validated_configs = iter(preflight_harbor_configs(requests, runtime_project=harbor_project))
+    validated_configs = iter(preflight_harbor_configs(requests))
 
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
@@ -285,10 +280,8 @@ def _resolve_definitions(
                 name,
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
-                    runtime_descriptor=harbor_runtime_descriptor(config.error_taxonomy.commit, config.runtime_project),
-                    cache_runtime_descriptor=harbor_runtime_descriptor(
-                        config.error_taxonomy.commit, config.runtime_project
-                    ),
+                    runtime_descriptor=harbor_runtime_descriptor(),
+                    cache_runtime_descriptor=harbor_runtime_descriptor(),
                     executor=definition.executor_for(
                         config,
                         model,

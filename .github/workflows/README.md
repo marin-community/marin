@@ -108,8 +108,16 @@ delta is only `Deslop` commits, which closes the review-then-deslop loop.
 
 ## External dependency updates
 
-`ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
-MarinSkyRL projects at 00:17, 06:17, 12:17, and 18:17 UTC. It runs
+Harbor is maintained under `vendor/harbor`. The `harbor-unit` lane and local
+affected-test runner use `infra/ci/run_harbor_tests.py` to check its standalone
+lock before running offline runtime tests. Changes to its local Rigging and
+FineStore dependencies also select this lane.
+
+Evalchemy is maintained under `vendor/evalchemy` with its own lock and dedicated
+`evalchemy-unit` lane. Both vendored evaluators use local Rigging and FineStore.
+
+`ops-external-dependencies.yaml` advances the isolated MarinSkyRL project
+at 00:17, 06:17, 12:17, and 18:17 UTC. It runs
 `uv run config/update-external.py` without a project selector, records each
 resolved version and commit in the job summary, and includes every upstream
 commit subject between the old and new revisions. It opens or refreshes one

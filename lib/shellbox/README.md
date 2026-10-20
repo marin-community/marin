@@ -16,7 +16,7 @@ uv pip install --prerelease allow 'marin-shellbox[iris]'
 uv pip install 'marin-shellbox[gvisor]'
 ```
 
-The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [Marin Harbor fork](../../config/external/harbor/pyproject.toml), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra requires ShellSim 0.1.38 or newer. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
+The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [vendored Harbor project](../../vendor/harbor/README.md), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra requires ShellSim 0.1.38 or newer. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
 
 ## Machine API
 
@@ -229,7 +229,7 @@ The default ShellSim limits per trial are 10 billion CPU units, 2 GiB modeled me
 Run the local Harbor smoke without QEMU:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[shellsim]' \
   lib/shellbox/tests/harbor_smoke.py shellsim /tmp/shellsim-smoke-jobs
 ```
 
@@ -313,14 +313,14 @@ Acceleration defaults to `auto`. This selects KVM when `/dev/kvm` is readable an
 The local smoke test uses a deterministic OpenAI-compatible server and a Harbor task. Supply a PTY-enabled OCI bundle with `/bin/bash`:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
   lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/bash-image /tmp/qemu-smoke-jobs
 ```
 
 For a task with `docker_image` or `environment/Dockerfile`, use `task-image` and supply the QEMU asset paths in a JSON file with the same keys as `qemu_assets` above:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
   lib/shellbox/tests/harbor_smoke.py task-image /tmp/qemu-image-smoke-jobs \
   --task-path /path/to/task \
   --image-cache /var/cache/marin-shellbox \
@@ -330,7 +330,7 @@ uv run --no-project --python config/external/harbor/.venv/bin/python \
 The TaskTrove `nl2bash` fixture can be built on a Docker-capable build machine, copied to an OCI layout, and staged with `--task-dockerfile` pointing to its extracted `environment/Dockerfile`. Its unchanged Harbor task passes with:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
   lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/nl2bash /tmp/nl2bash-jobs \
   --task-path /path/to/extracted/nl2bash \
   --command-file lib/shellbox/tests/manual/tasktrove_nl2bash_command.sh \
@@ -350,7 +350,7 @@ uv run --no-project python lib/shellbox/benchmarks/tasktrove/sample.py /tmp/mari
 Build one Docker image per `dockerfile_id` in `sample.json`, copy each image to an OCI layout, and stage it with its `environment/Dockerfile`. Name the images `tasktrove-clean-qemu:<dockerfile_id>` and the bundles `/tmp/marin-shellbox-benchmark/bundles/<dockerfile_id>`. Then run:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
   lib/shellbox/benchmarks/tasktrove/compare.py /tmp/marin-shellbox-benchmark --concurrency 2
 ```
 

@@ -82,17 +82,6 @@ nuances = [
     "A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration. The wheel verifier and the fork release gate both name the extension (vllm._C_stable_libtorch on CUDA 13); audit them when the base moves across such a boundary.",
 ]
 
-[harbor]
-upstream = "https://github.com/harbor-framework/harbor.git"
-pin = "isolated_project"
-branch = "main"
-base_select = "upstream_main"
-e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
-blocker_assignee = "yonromai"
-nuances = [
-    "Fork main is hundreds of commits behind upstream with a non-linear overlay and an upstream package refactor; auto-rebase is intractable until a one-time manual catch-up brings it close, so a refresh files a blocker until then.",
-]
-
 [MarinSkyRL]
 upstream = "https://github.com/NovaSky-AI/SkyRL.git"
 pin = "isolated_project"

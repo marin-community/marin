@@ -3,25 +3,19 @@
 
 """Published launch recipes materialize the benchmark settings they claim."""
 
-import json
-from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
-from subprocess import CompletedProcess
-from types import SimpleNamespace
 
 import pytest
 import yaml
-from click.testing import CliRunner
 from iris.rpc import job_pb2
-from marin.evaluation.eval_policy import HARBOR_COMMIT, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
+from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import LaunchProvenance
 
 from eval_policy.launch import _harbor_config, launch_policy
-from experiments.evaluation.cli import cli
 from experiments.evaluation.evals import EvalchemyDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
@@ -74,9 +68,17 @@ def test_verified_launch_requires_its_historical_evaluator_checkout(monkeypatch,
 
 
 @pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])
-@pytest.mark.parametrize("selection", [None, ("math500",), ("swebench-recovery", "math500")])
-def test_policy_launcher_rejects_historical_evalchemy_before_writing_or_launching(
-    tmp_path, monkeypatch, version, selection
+@pytest.mark.parametrize(
+    ("selection", "evaluator"),
+    [
+        (None, "Evalchemy"),
+        (("math500",), "Evalchemy"),
+        (("swebench-recovery", "math500"), "Evalchemy"),
+        (("swebench-recovery", "ot-tblite-recovery"), "Harbor"),
+    ],
+)
+def test_policy_launcher_rejects_historical_evaluators_before_writing_or_launching(
+    tmp_path, monkeypatch, version, selection, evaluator
 ):
     output_dir = tmp_path / "eval_policy"
     output_dir.mkdir()
@@ -86,90 +88,8 @@ def test_policy_launcher_rejects_historical_evalchemy_before_writing_or_launchin
     monkeypatch.setattr("eval_policy.launch.ROOT", tmp_path)
     monkeypatch.setattr("eval_policy.launch.run", lambda command, **_kwargs: launched.append(command))
 
-    with pytest.raises(ValueError, match=r"requires historical Evalchemy commit.*checkout"):
+    with pytest.raises(ValueError, match=rf"requires historical {evaluator} commit.*checkout"):
         launch_policy(version, model_path, None, None, "cw-rno2a", selection)
 
     assert not launched
     assert not list(output_dir.iterdir())
-
-
-@pytest.mark.parametrize("h100_count", [2, 4, 8])
-@pytest.mark.parametrize("dry_run", [False, True])
-def test_harbor_subset_requests_separate_nonblocking_h100_launches(tmp_path, monkeypatch, h100_count, dry_run):
-    model_path = tmp_path / "model.yaml"
-    model_path.write_text(
-        f"name: model\nlocation: org/model\nresource_hint:\n  gpu:\n    H100: {h100_count}\n"
-        f"serve:\n  tensor_parallel_size: {h100_count}\n  data_parallel_size: 1\n  auto_overrides: false\n"
-    )
-    submissions = []
-    launched = []
-    monkeypatch.setenv("DAYTONA_API_KEY", "test-daytona-key")
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-
-    def preflight(command):
-        requests = json.loads(Path(command[-1]).read_text())
-        payloads = []
-        for request in requests:
-            payloads.append(
-                {
-                    "stable_policy_json": "{}",
-                    "digest": f"sha256:{'a' * 64}",
-                    "dataset_kind": "harbor_registry",
-                    "dataset_selector": "test-dataset",
-                    "dataset_revision": "1.0",
-                    "agent": "terminus-2",
-                    "environment": "daytona",
-                    "verifier_env_keys": [],
-                    "error_taxonomy": {
-                        "commit": HARBOR_COMMIT,
-                        "infrastructure": [],
-                        "agent": [],
-                        "passthrough": [],
-                        "undecided": [],
-                    },
-                    "max_input_tokens": 32768,
-                    "max_output_tokens": 4096,
-                    "benchmark_metadata": {
-                        "schema_version": 1,
-                        "task": Path(request["path"]).stem,
-                        "primary_metric": "reward",
-                        "metric_kind": "continuous",
-                        "metrics": [
-                            {"name": "reward", "source_name": "reward", "kind": "continuous", "higher_is_better": True}
-                        ],
-                        "n_benchmark": 1,
-                        "n_attempted": 1,
-                    },
-                    "trials_per_task": 1,
-                }
-            )
-        return CompletedProcess(command, 0, stdout=json.dumps(payloads))
-
-    monkeypatch.setattr("marin.evaluation.harbor.driver_config._capture_driver", preflight)
-
-    def submit(*, entrypoint, **_kwargs):
-        _, args, _ = entrypoint.resolve()
-        launched.append(args[0])
-        return SimpleNamespace(job_id="/test/eval")
-
-    client = SimpleNamespace(submit=submit)
-    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
-
-    def capture(command, **_kwargs):
-        context = cli.commands["launch"].make_context("launch", command[6:])
-        submissions.append(context.params)
-        result = CliRunner().invoke(cli.commands["launch"], command[6:])
-        assert result.exit_code == 0, result.output
-
-    monkeypatch.setattr("eval_policy.launch.run", capture)
-    benchmarks = ("swebench-recovery", "ot-tblite-recovery")
-    launch_policy(SEPTEMBER_16_VERSION, model_path, None, None, "cw-rno2a", benchmarks, dry_run)
-
-    assert len(submissions) == 2
-    assert {submission["harbor_config"][0].stem for submission in submissions} == set(benchmarks)
-    assert all(submission["no_wait"] is not dry_run for submission in submissions)
-    assert all(submission["dry_run"] is dry_run for submission in submissions)
-    assert all(submission["accelerator"] == f"H100x{h100_count}" for submission in submissions)
-    assert len(launched) == (0 if dry_run else 2)
-    assert {batch.evaluations[0].identity.eval_ref.name for batch in launched} == (set() if dry_run else set(benchmarks))
-    assert all(batch.accelerator.label == f"H100x{h100_count}" for batch in launched)

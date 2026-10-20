@@ -29,13 +29,14 @@ eval "$(cd "$MARIN_DIR" && uv run python - <<'PY'
 import shlex
 
 from marin.evaluation.evalchemy.runtime import evalchemy_runtime_source_hash
-from marin.external_dependencies import HARBOR
+from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, harbor_runtime_descriptor
 
 print(f"CAMPAIGN_EVALCHEMY_SOURCE_HASH={shlex.quote(evalchemy_runtime_source_hash())}")
-print(f"CAMPAIGN_SHA_HARBOR={shlex.quote(HARBOR.commit)}")
+print(f"CAMPAIGN_SHA_HARBOR={shlex.quote(HARBOR_SOURCE.commit)}")
+print(f"CAMPAIGN_HARBOR_RUNTIME={shlex.quote(harbor_runtime_descriptor())}")
 PY
 )"
-export CAMPAIGN_SHA_MARIN CAMPAIGN_SHA_HARBOR CAMPAIGN_EVALCHEMY_SOURCE_HASH
+export CAMPAIGN_SHA_MARIN CAMPAIGN_SHA_HARBOR CAMPAIGN_EVALCHEMY_SOURCE_HASH CAMPAIGN_HARBOR_RUNTIME
 
 die() {
   echo "error: $*" >&2
@@ -52,32 +53,7 @@ validate_marin_checkout() {
   git -C "$MARIN_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || die "MARIN_DIR is not a git worktree: $MARIN_DIR"
 
-  local pins
-  pins=$(python3 - \
-    "$MARIN_DIR/config/external/harbor/uv.lock" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-lock = Path(sys.argv[1]).read_text()
-variables = {
-    "harbor": "HARBOR_LOCK",
-    "harbor-tau3-bench-adapter": "HARBOR_TAU3_ADAPTER_LOCK",
-}
-for name, variable in variables.items():
-    block = re.search(rf'\[\[package\]\]\nname = "{re.escape(name)}"\n(.*?)(?=\n\[\[package\]\]|\Z)', lock, re.DOTALL)
-    if block is None:
-        raise SystemExit(f"missing Harbor runtime package in lock: {name}")
-    match = re.search(r'source = \{ git = "[^"]*#([0-9a-f]{40})" \}', block.group(1))
-    if match is None:
-        raise SystemExit(f"missing immutable Harbor runtime commit for {name}")
-    print(f"{variable}={match.group(1)}")
-PY
-  )
-  [ "$(grep -cx "HARBOR_LOCK=$CAMPAIGN_SHA_HARBOR" <<<"$pins")" = 1 ] \
-    || die "locked Harbor runtime differs from $CAMPAIGN_SHA_HARBOR"
-  [ "$(grep -cx "HARBOR_TAU3_ADAPTER_LOCK=$CAMPAIGN_SHA_HARBOR" <<<"$pins")" = 1 ] \
-    || die "locked Harbor tau3 adapter differs from $CAMPAIGN_SHA_HARBOR"
+  (cd "$MARIN_DIR" && uv lock --project vendor/harbor --check)
 
   local unexpected
   unexpected=$(git -C "$MARIN_DIR" status --porcelain \
@@ -494,6 +470,7 @@ snapshot_launch_configs() {
   mkdir -p "$CONFIG_SNAPSHOT_DIR"
   CAMPAIGN_SHA_MARIN="$CAMPAIGN_SHA_MARIN" \
   CAMPAIGN_SHA_HARBOR="$CAMPAIGN_SHA_HARBOR" \
+  CAMPAIGN_HARBOR_RUNTIME="$CAMPAIGN_HARBOR_RUNTIME" \
   CAMPAIGN_EVALCHEMY_SOURCE_HASH="$CAMPAIGN_EVALCHEMY_SOURCE_HASH" \
   SNAPSHOT_DIR="$CONFIG_SNAPSHOT_DIR" \
   python3 - "$@" <<'PY'
@@ -516,6 +493,7 @@ payload = {
     "pins": {
         "marin": os.environ["CAMPAIGN_SHA_MARIN"],
         "harbor": os.environ["CAMPAIGN_SHA_HARBOR"],
+        "harbor_runtime": os.environ["CAMPAIGN_HARBOR_RUNTIME"],
         "evalchemy_source_hash": os.environ["CAMPAIGN_EVALCHEMY_SOURCE_HASH"],
     },
     "files": [

@@ -99,15 +99,7 @@ class VllmGpuRelease:
     wheels: tuple[VllmGpuWheel, ...]
 
 
-EXTERNAL_PROJECTS = (
-    ExternalProject(
-        "harbor",
-        "harbor",
-        "HARBOR",
-        runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
-    ),
-    ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),
-)
+EXTERNAL_PROJECTS = (ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),)
 
 
 def locked_package(lock_path: Path, distribution: str) -> dict:
