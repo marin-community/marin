@@ -18,6 +18,8 @@ recovery input. The EvalDash Marina runner scans object storage and commits cata
 instances do no background reconciliation work.
 The runner writes through the database engine without loading a serving snapshot. Catalog
 materialization reads and writes at most 128 run IDs per batch within the prefix transaction.
+Source verification updates and upserts also use batches of at most 128 rows; PostgreSQL applies
+each verification batch in one statement rather than sending an update for each record.
 Object checks finish before that transaction begins; parsed records from those checks remain in
 memory until commit.
 Historical records may omit `model.config.tokenizer_revision`; the record reader treats an omitted
@@ -47,8 +49,11 @@ Each source change and its selected `eval_catalog_runs`/`eval_catalog_metrics` p
 transaction. The lowest configured prefix priority wins duplicate run IDs, so a removed canonical
 record promotes its legacy copy without rereading it. The transaction advances
 `eval_catalog_state.generation`. Each serving instance checks that generation at most once every 10
-seconds and swaps its in-memory aggregate views only after a newer generation commits. A failed check
-serves the last good snapshot and retries after the same interval. `marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION` applies the
+seconds and swaps its in-memory record snapshot only after a newer generation commits. A failed check
+serves the last good snapshot and retries after the same interval. Snapshot loads read the generation
+and records in one read-only `REPEATABLE READ` transaction, so a writer can commit during a load
+without blocking it or mixing records from different generations.
+`marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION` applies the
 pending numbered migrations from `migrations/` under a
 PostgreSQL advisory lock and rejects a database whose migration ledger is newer than the running
 binary; mounting the app only verifies the schema, and never writes. The initial migration adopts the
@@ -63,6 +68,17 @@ selector, an opt-in qualified aggregate, and archive controls), runs (a "by laun
 expanding each serve group to its evals, plus a flat filterable table), run detail (grade with its
 interval and ungraded-item breakdown, metrics, version + description, live iris job/attempt status,
 live finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest probes).
+
+Run filters search the full catalog before applying the result limit. Model and eval pickers
+search the catalog's names by case-insensitive word fragments and support arrow keys, Enter,
+and Escape. Filters, result limit, and launch/flat view are carried in the run-log URL.
+Runs span all cohorts; the cohort carried by the shell navigation applies to scored views.
+Filtering launches by eval retains all their sibling runs and the full launch's status.
+`/meta` returns `run_facets` over all records, including smoke runs, separately from panel facets.
+Its model, benchmark, cohort, and filter lists are computed when a catalog snapshot loads or refreshes.
+Requests reuse those lists and read current archive flags independently; archiving does not require a
+new catalog generation. Synchronous metadata work runs in a worker thread so database waits leave the
+async event loop available to other requests.
 
 Model detail links record the selected cohort in `?cohort=`, including `all` and `unversioned`,
 so reopening a link restores the same runs and scores. Links without a cohort resolve to the
@@ -98,8 +114,8 @@ The kernel is the only access gate; there is no application auth. Handlers read 
 The kernel mounts these under `/evaldash/api/`.
 
 ```
-GET  /runs?model=&eval=&user=&status=&group=&limit=   filtered run rows
-GET  /groups?model=&user=&limit=   runs collapsed into launches (one row per group_id) with per-eval members
+GET  /runs?model=&eval=&user=&status=&version=&accelerator=&group=&limit=   filtered run rows
+GET  /groups?model=&eval=&user=&status=&version=&accelerator=&limit=   runs collapsed into launches (one row per group_id) with per-eval members
 GET  /runs/{run_id}     the full record.json for one run (404 if absent)
 GET  /runs/{run_id}/jobs           live iris job + per-task attempt status for each role
 GET  /runs/{run_id}/logs?role=&tail=&substring=   live finelog log lines for one role
@@ -167,7 +183,9 @@ The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-2
 The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
 and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
-in the selected cohort and benchmarks.
+in the selected cohort and benchmarks. Compare's searchable Add model dropdown supports up to four
+selections, with controls to remove one model or clear the set. Model names wrap in the picker,
+comparison results, and model cards; config digests remain visible on a separate line.
 
 Historical cohort labels remain selectable. `cohort=all` selects the newest admissible run per
 benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
