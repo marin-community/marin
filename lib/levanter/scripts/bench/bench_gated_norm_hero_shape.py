@@ -131,24 +131,24 @@ def main() -> int:
     args = p.parse_args()
 
     x, dy, weights = _make_inputs(args)
-    copy_s, _ = _time(jax.jit(lambda a: a * jnp.asarray(2, a.dtype)), (x,), args.steps, args.warmup)
-    pass_s = copy_s / 2
-    print(f"one [T, D] pass: {pass_s * 1e3:.3f} ms ({x.size * x.dtype.itemsize / pass_s / 1e12:.2f} TB/s)")
+    copy_time, _ = _time(jax.jit(lambda a: a * jnp.asarray(2, a.dtype)), (x,), args.steps, args.warmup)
+    pass_time = copy_time / 2
+    print(f"one [T, D] pass: {pass_time * 1e3:.3f} ms ({x.size * x.dtype.itemsize / pass_time / 1e12:.2f} TB/s)")
     reference = _fp32_reference(x, dy, weights)
 
     results = []
     for name in args.variants.split(","):
         fn = VARIANTS[name]
-        fwd_s, _ = _time(jax.jit(fn), (x, weights), args.steps, args.warmup)
-        fwd_bwd_s, (y, grads) = _time(_out_and_grads(fn), (x, weights, dy), args.steps, args.warmup)
+        fwd_time, _ = _time(jax.jit(fn), (x, weights), args.steps, args.warmup)
+        fwd_bwd_time, (y, grads) = _time(_out_and_grads(fn), (x, weights, dy), args.steps, args.warmup)
         res = Result(
             variant=name,
             device_kind=jax.local_devices()[0].device_kind,
-            fwd_ms=fwd_s * 1e3,
-            fwd_bwd_ms=fwd_bwd_s * 1e3,
-            per_step_ms=HERO_CALLS_PER_STEP * (fwd_bwd_s + fwd_s) * 1e3,
-            fwd_passes=fwd_s / pass_s,
-            fwd_bwd_passes=fwd_bwd_s / pass_s,
+            fwd_ms=fwd_time * 1e3,
+            fwd_bwd_ms=fwd_bwd_time * 1e3,
+            per_step_ms=HERO_CALLS_PER_STEP * (fwd_bwd_time + fwd_time) * 1e3,
+            fwd_passes=fwd_time / pass_time,
+            fwd_bwd_passes=fwd_bwd_time / pass_time,
             rel_rms_vs_fp32={k: _rel_rms(v, reference[k]) for k, v in _flatten(y, grads).items()},
         )
         print(RESULT_PREFIX + json.dumps(asdict(res)), flush=True)

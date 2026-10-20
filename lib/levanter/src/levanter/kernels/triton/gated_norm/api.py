@@ -22,7 +22,6 @@ the Triton kernels on GPU and on XLA elsewhere.
 
 import functools
 import warnings
-from collections.abc import Sequence
 from typing import Literal, TypeAlias
 
 import jax
@@ -40,12 +39,6 @@ from .xla import dg_xla, dx_xla
 Implementation: TypeAlias = Literal["xla", "triton_gpu"]
 
 _ELEMENTWISE = {"xla": (dg_xla, dx_xla), "triton_gpu": (dg_triton, dx_triton)}
-
-
-def _default_implementations() -> tuple[Implementation, ...]:
-    if triton_gated_norm_available():
-        return ("triton_gpu", "xla")
-    return ("xla",)
 
 
 def _matmul_f32(a: jax.Array, b: jax.Array, contract: tuple[int, int]) -> jax.Array:
@@ -111,31 +104,27 @@ def _gated_rms_norm_2d_bwd(eps, implementation, residuals, dy):
 _gated_rms_norm_2d.defvjp(_gated_rms_norm_2d_fwd, _gated_rms_norm_2d_bwd)
 
 
-def _resolve(requested: tuple[Implementation, ...], explicit_single: bool, tokens: int, hidden: int) -> Implementation:
-    errors: list[str] = []
-    for name in requested:
-        if name == "xla":
-            return name
-        if name != "triton_gpu":
-            raise ValueError(f"Unknown gated_rms_norm implementation {name!r}")
-        if not triton_gated_norm_available():
-            reason = "Triton backend unavailable or not running on a GPU"
-        else:
-            reason = triton_gated_norm_shapes_supported(tokens, hidden)
-        if reason is None:
-            return name
-        if explicit_single:
-            raise RuntimeError(f"gated_rms_norm implementation 'triton_gpu' is unusable: {reason}")
-        errors.append(f"triton_gpu: {reason}")
-        warnings.warn(f"gated_rms_norm falling back from 'triton_gpu' ({reason})", stacklevel=3)
-    raise RuntimeError("No usable gated_rms_norm implementation: " + "; ".join(errors))
+def _resolve(implementation: Implementation | None, tokens: int, hidden: int) -> Implementation:
+    if implementation == "xla":
+        return "xla"
+    if implementation not in (None, "triton_gpu"):
+        raise ValueError(f"Unknown gated_rms_norm implementation {implementation!r}")
+    available = triton_gated_norm_available()
+    reason = triton_gated_norm_shapes_supported(tokens, hidden) if available else "Triton unavailable or not on a GPU"
+    if reason is None:
+        return "triton_gpu"
+    if implementation == "triton_gpu":
+        raise RuntimeError(f"gated_rms_norm implementation 'triton_gpu' is unusable: {reason}")
+    if available:
+        warnings.warn(f"gated_rms_norm falling back from 'triton_gpu' to 'xla' ({reason})", stacklevel=3)
+    return "xla"
 
 
-def _local(x, rms_weight, w_down, w_up, *, eps, requested, explicit_single):
+def _local(x, rms_weight, w_down, w_up, *, eps, implementation):
     hidden = x.shape[-1]
     x_2d = x.reshape(-1, hidden)
-    implementation = _resolve(requested, explicit_single, x_2d.shape[0], hidden)
-    return _gated_rms_norm_2d(x_2d, rms_weight, w_down, w_up, eps, implementation).reshape(x.shape)
+    resolved = _resolve(implementation, x_2d.shape[0], hidden)
+    return _gated_rms_norm_2d(x_2d, rms_weight, w_down, w_up, eps, resolved).reshape(x.shape)
 
 
 def gated_rms_norm(
@@ -145,7 +134,7 @@ def gated_rms_norm(
     w_up: Float[Array, "R D"],
     *,
     eps: float,
-    implementation: Implementation | Sequence[Implementation] | None = None,
+    implementation: Implementation | None = None,
 ) -> Float[Array, "... D"]:
     """``GatedNorm(RMSNorm(x))``: ``n * sigmoid(silu(n @ w_down) @ w_up)`` with ``n = RMSNorm(x)``.
 
@@ -162,20 +151,13 @@ def gated_rms_norm(
       w_down: the bottleneck down projection.
       w_up: the bottleneck up projection.
       eps: the RMSNorm epsilon.
-      implementation: a single name (fail fast if unusable) or an ordered sequence to try in turn.
-        Defaults to the Triton backward kernels on GPU and XLA elsewhere, or when the local token
+      implementation: "triton_gpu" (raises where it cannot run) or "xla". ``None`` takes the Triton
+        backward kernels on GPU and XLA elsewhere; on GPU it warns and takes XLA when the local token
         count is not a multiple of 64 or the hidden size not a multiple of 128.
     """
-    if implementation is None:
-        requested = _default_implementations()
-    elif isinstance(implementation, str):
-        requested = (implementation,)
-    else:
-        requested = tuple(implementation)
-    explicit_single = isinstance(implementation, str)
     # fp32 weights inside the shard_map make the cross-shard gradient sums fp32.
     weights = tuple(w.astype(jnp.float32) for w in (rms_weight, w_down, w_up))
-    local = functools.partial(_local, eps=eps, requested=requested, explicit_single=explicit_single)
+    local = functools.partial(_local, eps=eps, implementation=implementation)
 
     mesh = get_abstract_mesh()
     if mesh is None or mesh.empty:

@@ -123,8 +123,13 @@ def test_triton_implementation_fails_fast_where_it_cannot_run():
     x, _, rms_weight, w_down, w_up = _inputs(64, hidden, 32, jnp.float32, seed=5)
     with pytest.raises(RuntimeError, match="triton_gpu"):
         gated_rms_norm(x, rms_weight, w_down, w_up, eps=EPS, implementation="triton_gpu")
+
+
+def test_default_implementation_on_gpu_warns_and_uses_xla_for_unsupported_shapes():
+    _requires_gpu()
+    x, _, rms_weight, w_down, w_up = _inputs(64, 96, 32, jnp.float32, seed=5)
     with pytest.warns(UserWarning, match="triton_gpu"):
-        got = gated_rms_norm(x, rms_weight, w_down, w_up, eps=EPS, implementation=("triton_gpu", "xla"))
+        got = gated_rms_norm(x, rms_weight, w_down, w_up, eps=EPS)
     want = gated_rms_norm(x, rms_weight, w_down, w_up, eps=EPS, implementation="xla")
     np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
 
