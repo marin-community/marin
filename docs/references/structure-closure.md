@@ -34,8 +34,9 @@ must convert before either split is published. Each task has a user instruction,
 an assistant text prefill and a private `StructureClosureSpec`. No historical
 token IDs are needed. Select `PrefillHarness` explicitly when creating the
 `TaskRolloutSpec`; ordinary chat rendering treats assistant events as completed
-history. The evaluator selects this harness and retains actual model token traces
-as rollout evidence.
+history. The evaluator selects this harness and records the model request, raw
+completion and endpoint-reported token usage. Its CLI records message traces without
+token IDs or logprobs.
 
 For the native declared-tool variant, use `--tool-prompt native-declared` and
 `--initializer /path/to/local/tokenizer`. This records the tokenizer and template
