@@ -16,7 +16,6 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 REPOSITORY = "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data"
 REVISION = "cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
-TERMINAL_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 
 RUBRIC = """
 These tasks complete an unfinished assistant message. Present its text as an assistant prefill and
@@ -38,10 +37,7 @@ def is_structural_row(row: dict, _context: ConversionContext) -> bool:
 
 
 def convert(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
-    return structure_closure_task(
-        row,
-        terminal_markers=TERMINAL_MARKERS,
-    )
+    return structure_closure_task(row)
 
 
 def sources() -> list[RlDataSource[CurationRecipe]]:

@@ -13,13 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import TypeAdapter
-from rolloutengine.harness.tools import task_prompt
+from rolloutengine.harness.prefill import prefill_prompt
 from rolloutengine.models import GradedRollout, ModelRequest
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import GradingAttempt, TaskSpec, VerifyitGrader, verifyit_spec
-from verifyit.closure_scoring import closure_response_content
 from verifyit.spec import StructureClosureSpec
 
 from experiments.post_training.structure_closure.eval_audit import AuditFailure, EvaluationAudit, case_result
@@ -45,8 +44,8 @@ def task_group(task: TaskSpec, key: str) -> str:
 
 
 def evaluation_request(task: TaskSpec, sampling: dict[str, Any]) -> ModelRequest:
-    """Use ordinary harness rendering with explicit experiment sampling and thinking settings."""
-    prompt = task_prompt(task, None, ())
+    """Use explicit prefill rendering with explicit experiment sampling and thinking settings."""
+    prompt = prefill_prompt(task)
     if sampling.keys() & (prompt.options.keys() | {"messages", "model", "prompt", "stream", "n", "extra_body", "tools"}):
         raise ValueError("Sampling cannot override task conditioning or template controls")
     body = {
@@ -96,8 +95,13 @@ def audit_rollouts(
                 raise ValueError("The graded conversation differs from the captured request and response")
             if turn.message.get("role") != "assistant" or not isinstance(turn.message.get("content"), str):
                 raise ValueError("The model response is missing assistant text")
-            if turn.message.get("reasoning_content"):
-                raise ValueError("Parsed reasoning cannot establish the raw structural continuation")
+            if (
+                turn.message.get("reasoning_content")
+                or turn.message.get("reasoning")
+                or turn.metadata.get("reasoning")
+                or turn.message.get("tool_calls")
+            ):
+                raise ValueError("Parsed response channels cannot establish the raw structural continuation")
             attempt = GradingAttempt(chat_conversation(list(conversation.messages)), stop_reason=rollout.stop_reason)
             rescored = grade_answer(task, attempt)
             scored_outcomes = (Outcome.GRADED, Outcome.SUBMISSION_FAILURE)
@@ -112,9 +116,7 @@ def audit_rollouts(
                 raise ValueError("The cohort contains a non-closure grader")
             content = ""
             if rescored.status == Outcome.GRADED:
-                content = closure_response_content(
-                    turn.message["content"], stop_reason=rollout.stop_reason, terminal_markers=spec.terminal_markers
-                )
+                content = turn.message["content"]
             results.append(
                 case_result(
                     uid=uid,

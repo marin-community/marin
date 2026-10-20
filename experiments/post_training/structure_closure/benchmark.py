@@ -94,7 +94,6 @@ def compact_json(value: object) -> str:
 
 def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list[ClosureCase]:
     """Create known-content synthetic probes, never inferred tool-intent repairs."""
-    # The sentinel is generated from task metadata.
     task_digest = hashlib.sha256(task_id.encode()).digest()
     sentinel = task_id + STRING_ENDINGS[task_digest[0] % len(STRING_ENDINGS)]
     fence_marker = FENCE_MARKERS[task_digest[1] % len(FENCE_MARKERS)]

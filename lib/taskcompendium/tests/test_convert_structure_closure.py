@@ -5,7 +5,6 @@
 
 import json
 from dataclasses import replace
-from functools import partial
 
 import pytest
 
@@ -31,10 +30,6 @@ from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
 
 TOKENS = (128000, 42, 128005)
-CONVERT = partial(
-    structure_closure_task,
-    terminal_markers=("<|eot_id|>", "<|end_of_text|>"),
-)
 
 
 @pytest.fixture
@@ -80,7 +75,7 @@ def native_row():
 def test_native_converter_uses_text_prefill_and_preserves_private_resources_and_pipeline_audit(native_row):
     row = native_row()
     # Exercise the standard conversion boundary, which enforces supplied row identity.
-    converted = convert_row(row, lambda raw, _context: CONVERT(raw), ConversionContext({}, None))
+    converted = convert_row(row, lambda raw, _context: structure_closure_task(raw), ConversionContext({}, None))
     assert isinstance(converted, NormalizedTask)
     task = converted.task
     assert task.id == row.id and task.source == row.source
@@ -105,7 +100,7 @@ def test_native_aliases_deduplicate_but_private_references_remain_distinct(nativ
     rows = [native_row(), native_row(identifier="another-native-id"), native_row(reference='{"a":[1,3]}')]
     tasks = []
     for index, row in enumerate(rows):
-        converted = CONVERT(
+        converted = structure_closure_task(
             replace(row, id=f"canonical-{index}", source=row.source.model_copy(update={"row": f"train:{index}"}))
         )
         assert isinstance(converted, NormalizedTask)

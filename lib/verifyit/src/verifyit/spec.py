@@ -159,7 +159,6 @@ class StructureClosureSpec:
     prefix: str
     expected: str
     format: ClosureFormat
-    terminal_markers: tuple[str, ...]
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.GRADE, kw_only=True)
 

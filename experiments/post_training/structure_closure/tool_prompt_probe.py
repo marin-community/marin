@@ -50,7 +50,7 @@ def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokeniz
             if not score_closure_region(expected, expected, ClosureFormat.TOOL).success:
                 raise ValueError(f"Reference tool closure failed: {variant}")
             if variant == "undeclared-compact" and prompt_ids != record["prompt_token_ids"]:
-                raise ValueError("Control arm differs from the frozen v5 prompt")
+                raise ValueError("Control arm differs from its source token record")
             records.append(
                 {
                     **record,
@@ -109,7 +109,7 @@ def main() -> None:
         "source_sha256": hashlib.sha256(source).hexdigest(),
         "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "failures": failures,
-        "purpose": "Paired diagnostic only; does not replace the frozen v5 policy cohort.",
+        "purpose": "Paired diagnostic only; source validation hashes are recorded separately.",
     }
     (args.output / "manifest.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report))

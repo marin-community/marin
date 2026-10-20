@@ -52,7 +52,7 @@ The engine resolves two registries by key:
 | `machine_factories` | `MachineRuntimeSpec.backend` | Task and verifier machines |
 | `harnesses` | `TaskRolloutSpec.harness` | The `Harness` that runs the model side of the task |
 
-No harness is registered by default. Register the tool harness under the name that your specs use, for
+No harness is registered by default. Register the shell harness under the name that your specs use, for
 example `RolloutEngine(machine_factories, {"shellbox": ToolHarness(command_timeout=30)})`.
 Harness options, such as the shell tool's name and command timeout, belong to the registered harness:
 register one harness for each configuration, and select it with `TaskRolloutSpec.harness`.
@@ -113,24 +113,33 @@ not read it.
 
 ### Assistant prefills
 
-`ToolHarness` supports ordinary conversations and assistant prefills through the same prompt renderer.
-When no interactive tools are available, it finishes after one response. Tasks with tools use its normal
-tool loop. The grader can have its own verifier environment and private resources.
+`PrefillHarness` continues the final assistant text in `ConversationInput.events` once. Register it
+and select it explicitly with `TaskRolloutSpec.harness`:
 
-An assistant prefill is the final assistant text event in `ConversationInput.events`. The shared
-`completion_request(task)` renderer leaves it last and inserts any answer-format instruction before it.
-It sets `extra_body.continue_final_message=True` and `extra_body.add_generation_prompt=False`; the
-transport must support these rendering options. The selected model tokenizes the conversation and
-prefill. No historical tokenizer identity or token sequence is imposed by the task.
+```python
+from rolloutengine.harness.prefill import PrefillHarness
 
-The model returns the generated continuation as its assistant message. Parsed response content can differ
-from raw transport text, for example when reasoning is reported separately. The task's answer format
-extracts the submission, and its grader defines correctness. Structural-closure grading concatenates its
-fixed text prefix with this continuation and scores the first completed outer structure.
+engine = RolloutEngine({}, {"prefill": PrefillHarness()})
+spec = TaskRolloutSpec(
+    task=task, harness="prefill", limits=limits, task_machine=None, verifier_machine=None
+)
+```
 
-Training still records the actual prompt and sampled response tokens with their logprobs through the
-normal model session. Those traces describe the serving model's generation, independently of source
-prompt tokenization. Backends can also use `TraceMode.MESSAGES` when only text and usage are available.
+The task must use a plain-text conversation answer. The harness keeps the assistant prefix last and
+sets `extra_body.continue_final_message=True` and `extra_body.add_generation_prompt=False`. The transport
+must support these rendering options. Ordinary chat rendering does not infer continuation from the last
+message's role.
+
+Final tool schemas can condition the continuation. Interactive tools, tool providers and agent
+capabilities are rejected during preflight. The grader can have its own verifier environment and private
+resources. The model must return the continuation as assistant text: parsed reasoning or tool-call
+channels make the attempt invalid, so parser behavior cannot silently turn a continuation into a normal
+zero reward. Structural-closure grading concatenates its fixed text prefix with this continuation and
+scores the first completed outer structure.
+
+The selected model tokenizes the conversation and prefill. Training records its actual prompt and sampled
+response tokens with their logprobs through the normal model session. Historical token IDs do not constrain
+the task. Backends can use `TraceMode.MESSAGES` when only text and usage are available.
 
 ### Model session
 
@@ -251,12 +260,12 @@ engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
   `submit_answer` tool of an `AnswerCall` task, other interaction tools, and tool providers. The agent harness
   does not give these tools to the agent. An agent that serves them needs its own harness, whose `run` can call this harness's `run`.
 
-### Tool harness
+### Shell harness
 
 `ToolHarness(*, command_timeout, shell_tool=ShellToolConfig(), tools={})` from `rolloutengine.harness.tools` serves a
 shell tool on the task machine and host tools from tool providers, and ends on a final response.
 `command_timeout` must be `None` or positive and finite.
-The tool harness exposes `shell(command: string)` when the task declares the shell capability.
+The shell harness exposes `shell(command: string)` when the task declares the shell capability.
 Each command runs through `bash -c`. Files persist between commands; shell variables do not.
 TaskSpec can own the shell interface when its prompt names a particular tool. Declare the
 function in `interaction_tools` and bind it explicitly:
@@ -270,14 +279,14 @@ interaction_tools=(FunctionDefinition(
 tool_bindings={"Bash": ShellToolBinding(command_parameter="script")},
 ```
 
-The tool harness preserves that definition and prompt. It supports one shell binding
+The shell harness preserves that definition and prompt. It supports one shell binding
 with one required, unconstrained string argument; unsupported schemas fail before machine
 acquisition. Tool names alone never select an executor. Other interaction tools and
 provider contracts require a registered tool provider or another harness.
 
 ### Tool providers
 
-A tool provider serves host tools for one action interface. Register providers with the tool harness,
+A tool provider serves host tools for one action interface. Register providers with the shell harness,
 `ToolHarness(command_timeout=30, tools={"checker:v1": provider})`; the key matches
 `ProviderRequirement.action_interface` in `environment_requirements.tool_providers`.
 No provider is registered by default.
@@ -306,7 +315,7 @@ class CheckSession:
         pass
 ```
 
-The tool harness advertises each provider's tools after the shell tool and runs a turn's calls in order.
+The shell harness advertises each provider's tools after the shell tool and runs a turn's calls in order.
 It serves the shell tool itself as a `ToolProviderSession` that runs commands on the task machine, so every tool
 call goes through the same interface: the harness looks up the call's name among the shell and provider tools.
 A call that names no advertised tool returns the observation `{"error": "Unknown tool: <name>"}`.
@@ -318,13 +327,13 @@ in the attempt's cleanup. `ToolCallResult.content` becomes the tool observation 
 Non-object arguments return the JSON error observation that shell calls use; the provider validates the rest.
 A provider-only task needs no task machine.
 
-The tool harness's check rejects these tasks before machine acquisition:
+The shell harness's check rejects these tasks before machine acquisition:
 
 - a provider requirement whose action interface has no registered provider;
 - a provider tool whose name matches the shell tool, a final tool, the answer tool, or another provider tool;
 - an interaction tool that neither the shell binding nor a provider serves, or that differs from the provider's definition.
 
-A task can declare a provider's tool in `interaction_tools` to fix its definition; the tool harness advertises it once.
+A task can declare a provider's tool in `interaction_tools` to fix its definition; the shell harness advertises it once.
 
 For tasks that declare only the shell capability, the harness supplies the interface.
 Pass `shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd")` to `ToolHarness`
@@ -425,7 +434,7 @@ observation is the `TransitionCompleted` message with the same `tool_call_id`. E
 own messages, so an observer must not change them.
 
 Harnesses emit their own payloads through `HarnessContext.events`, an `EventSink` whose `emit` never blocks.
-The tool harness emits `ToolCallCompleted`.
+The shell harness emits `ToolCallCompleted`.
 Delivery is in order and never blocks the attempt. When 1,024 events of an attempt wait for delivery, the attempt drops new events.
 After the machines close, the engine delivers the remaining events within `cleanup_timeout`.
 An observer exception is logged and ends delivery for that attempt.
@@ -454,7 +463,7 @@ Its expiration cancels the harness and starts grading with `stop_reason="total_t
 No model response means `grade.status=Outcome.UNAVAILABLE` and `grade.reward=None`.
 Backend command limits also stop commands that outlive an enclosing coroutine deadline.
 The command limit is separate from the tool-turn deadline.
-When these limits are finite, the tool harness's check requires the command limit to be less than the tool-turn deadline.
+When these limits are finite, the shell harness's check requires the command limit to be less than the tool-turn deadline.
 Configure the tool-turn deadline to allow the commands and backend cleanup within that turn.
 A timed-out shell command returns a `timed_out` tool observation. The model can continue the task.
 Expiration of the tool-turn deadline interrupts the harness with operation `advance`.
