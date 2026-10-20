@@ -50,12 +50,13 @@ def _record_start(counter: str) -> int:
 
 def _serve() -> None:
     port = int(sys.argv[sys.argv.index("--port") + 1])
+    model = sys.argv[sys.argv.index("--served-model-name") + 1] if "--served-model-name" in sys.argv else "fake-model"
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'{"data": [{"id": "fake-model"}]}')
+            self.wfile.write(json.dumps({"data": [{"id": model}]}).encode())
 
         def log_message(self, *args) -> None:
             pass
