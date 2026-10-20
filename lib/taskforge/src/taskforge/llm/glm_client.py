@@ -35,11 +35,6 @@ after a connection error, since a moved relay shows up as a refused connection. 
 changes, the client rebuilds the SDK client on the same connection pool and sends the next attempt to
 the new endpoint.
 
-An httpx connection pool works only in the event loop that opened it, so the client opens one pool for
-each event loop that uses it, for example each ``asyncio.run`` of a Zephyr task, and drops the pools
-of closed loops. A pickled client holds only its endpoint source and provider config, so a copy in
-another process, for example on a Zephyr worker, opens its own pools.
-
 vLLM's GLM tool parser reports a reply cut off by ``max_tokens`` inside a tool call as
 ``finish_reason == "tool_calls"`` with partial arguments (measured live). The client reports a
 ``tool_calls`` segment as ``LENGTH`` whenever its completion tokens use up ``max_tokens``, which
@@ -253,6 +248,9 @@ class _LoopPool:
 class GlmClient:
     """Async GLM client. Use as ``async with GlmClient(source, provider) as client``.
 
+    The client opens one connection pool in each event loop that uses it, and a pickled client holds only
+    ``source`` and ``provider``.
+
     Args:
         source: Supplies the endpoint. The client asks it again during holds and after a connection
             error.
@@ -292,7 +290,10 @@ class GlmClient:
             await pool.http.aclose()
 
     def _pool(self) -> _LoopPool:
-        """The running event loop's connection pool and SDK client, opened on first use there."""
+        """The running event loop's connection pool and SDK client, opened on first use there.
+
+        An httpx pool works only in the event loop that opened it. The pools of closed loops are dropped.
+        """
         for loop in [loop for loop in list(self._pools) if loop.is_closed()]:
             self._pools.pop(loop, None)
         loop = asyncio.get_running_loop()

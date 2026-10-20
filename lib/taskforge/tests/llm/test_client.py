@@ -344,7 +344,7 @@ def test_a_pickled_client_completes_in_each_new_event_loop(fake_glm, fast_provid
     fake_glm.stream(content="second")
     client = pickle.loads(pickle.dumps(GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)))
 
-    # Each asyncio.run is a new event loop, as in the tasks of a Zephyr worker.
+    # Each asyncio.run is a new event loop.
     replies = [asyncio.run(client.complete(MESSAGES, LLMPolicy())).content for _ in range(2)]
 
     assert replies == ["first", "second"]
