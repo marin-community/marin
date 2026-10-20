@@ -150,14 +150,24 @@ These are read-only live queries; repeat only the windows needed for comparison.
 
 The Node Details, Zephyr, Training, Runs, RL Post-training, Accelerators, Jobs,
 and Home dashboards use the same shared-dataset contract. Each endpoint validates every
-identity and time input, runs a small fixed set of domain queries, and projects all
-panel views locally. Concurrent panel requests coalesce on one logical cache key;
-the `view` parameter only filters the cached result. A cold traversal uses one
-Finelog source for Node and Zephyr, three for Training, two for Runs, two for RL
-overview, one for RL GPU detail, ten for RL executions, three for Accelerators,
-and five for Jobs. Those boundaries are intentional:
-crossing namespaces or mixing fleet-wide per-device data with compact summaries
-just to reach one RPC would make the query less predictable.
+identity and time input, loads the source group needed by the requested view,
+and projects related panel views locally. Concurrent requests share the group
+cache and identical source queries share their Arrow inputs across groups.
+Runs separates metrics from power attribution; Jobs separates its five namespaces;
+RL separates phase, Ray, engine, and execution-detail dependencies. Its GPU
+utilization chart has a narrow source; the other GPU views share detailed input.
+Training already separates metrics, attempts, task state, and retry events.
+Node and Zephyr retain one shared source because their views consume the same
+bounded input.
+
+Accelerator power/GPU/node tiles read one compact latest-power aggregate. Power
+and utilization charts share a compact history query; fleet, device, attribution,
+and fault-table views load their own groups. Home therefore does not fetch device
+rasters, training attribution, provisioning, or task/worker resource charts.
+The full Accelerator page also requests the compact history alongside its broader
+fleet charts; this adds a narrow scan but keeps Home responses small.
+Device histories use packed Arrow series, preserving every point and enforcing
+the sample limit before local expansion.
 
 `src/dashboard_dataset.py` owns only cache-independent execution rules: declared
 row/sample caps, one-thread DuckDB projection, a 512 MB memory cap, and no disk
@@ -167,6 +177,27 @@ limited to 60 time slices; aggregate charts retain up to 100. A budget breach is
 400 asking the operator to narrow the filters or window, never an unbounded retry.
 Selectors remain independent `/query` requests because discovery has different
 indexing and window requirements from panel calculation.
+
+For a cross-dashboard cost comparison, use
+`benchmarks/dashboard_query_cost.py` with an existing Finelog address. Supply a
+JSON object mapping dashboard filenames to selector names and values, such as
+`{"training.json": {"run": "selected-run"}}`, then run from the repository root:
+
+```bash
+PYTHONPATH=infra/grafana/src:infra/grafana uv run python -m benchmarks.dashboard_query_cost \
+  --grafana-dir infra/grafana --dashboard training.json \
+  --address http://127.0.0.1:19001 --to-ms <settled-end-ms> \
+  --variables variables.json --output <new-evidence-directory> --live-window
+```
+
+Repeat `--dashboard` or omit it to inspect every dashboard. Each iteration uses
+empty bridge caches, dashboard time defaults, visible panels, and panel overrides;
+`--warm` also records reuse. The harness records SQL, Arrow inputs, responses,
+elapsed time, actual SQL calls, and namespace-discovery calls. It excludes
+selectors, collapsed rows, external APIs, and browser rendering. `--live-window`
+holds the bridge wall clock near the fixed data window and adds millisecond skew
+to relative overrides; query timing remains real. For baseline comparisons,
+point both `PYTHONPATH` and `--grafana-dir` at the same archived Grafana revision.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
@@ -891,18 +922,28 @@ Set the same explicit `maxDataPoints` on panels sharing a dataset (360 for
 Training, Node, Jobs, Runs, RL, and Inference; 100 for Accelerator). Grafana's
 automatic point count depends on panel width and can otherwise send different
 `${__interval_ms}` values for the same window, defeating shared computation.
-Panel time-range overrides remain independent. The bridge also coalesces identical
+Panel time-range overrides remain independent. For dataset requests ending within
+60 seconds of server time, the bridge floors both boundaries to 15-second buckets
+before generating SQL and cache keys. This coalesces relative overrides that
+Grafana resolves milliseconds apart. It can move either boundary back by less
+than 15 seconds; the existing result-cache TTL is additional. Older historical
+windows and ranges shorter than 15 seconds retain exact boundaries. Original
+input limits are validated before alignment. Inference uses the same alignment.
+The bridge also coalesces identical
 `SourceQuery` requests across datasets and retains their Arrow results for the
 20-second cache TTL, capped at 128 MiB across source results. Exact SQL and time
-bounds remain part of the source key; historical ranges are not rounded.
+bounds after alignment remain part of the source key.
 
 Training metric views query only the visible metrics window. Attempt history and
 execution-health views load independently, so a loss chart does not wait for Iris
 task state or seven-day retry history. Attempts and execution age share one
 seven-day ordered aggregate, independent of the panel's graph range. The run
 picker refreshes on dashboard load; reload the dashboard to discover a new run.
-Dataset completion logs include the cache key, while `dashboard source query`
-logs record actual Finelog calls rather than cache hits.
+Dataset completion logs include the cache key, execution-slot queue time, and
+projection time (including its lock wait). `dashboard source query` logs record
+actual Finelog calls rather than cache hits. Compare these before proposing
+rollups: repeatedly loading an unrelated source is a query-routing problem;
+repeatedly aggregating the same required historical rows is a rollup candidate.
 
 Dashboards address the `finelog-marin` hub directly rather than through a
 datasource variable. The hub is the fleet view: the CoreWeave clusters forward
