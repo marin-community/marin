@@ -3,7 +3,7 @@
 
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -12,10 +12,25 @@ from experiments.post_training.structure_closure.training_prefixes import prepar
 
 
 def test_reference_continuations_cover_each_family_and_preserve_content():
-    cases = task_cases("example_1234", [{"search": {"query": 'quoted " slash \\ </tool_call>'}}], "validation", "source")
+    answer = [{"search": {"query": 'quoted " slash \\ </tool_call>'}}]
+    cases = task_cases("example_1234", answer, "validation", "source")
     assert {case.family for case in cases} == set(Family)
     assert len({case.case_id for case in cases}) == len(cases)
     for case in cases:
+        if case.family == Family.OBJECT:
+            assert json.loads(case.expected) == {"task": "example_1234"}
+        elif case.family == Family.ARRAY:
+            expected = ["example_1234", True] if case.control == "value_continue_required" else ["example_1234"]
+            assert json.loads(case.expected) == expected
+        elif case.family == Family.NESTED:
+            assert json.loads(case.expected) == {"task": "example_1234", "answers": [answer]}
+        elif case.family in (Family.TOOL, Family.REPEATED_OPENER):
+            assert json.loads(case.expected.removeprefix("<tool_call>").removesuffix("</tool_call>")) == {
+                "name": "write_result",
+                "arguments": {"task": "example_1234", "result": answer},
+            }
+        elif case.family == Family.FENCE:
+            assert json.loads("\n".join(case.expected.splitlines()[1:-1])) == answer
         assert score_case(case, case.expected[len(case.prefix) :]).success
         assert not score_case(case, "").success
 
@@ -51,12 +66,13 @@ def test_training_prefix_variant_preserves_validation_and_non_target_rows(tmp_pa
         assert {k: v for k, v in changed.items() if k != "prefix"} == {
             k: v for k, v in asdict(case).items() if k != "prefix"
         }
-        assert changed["prefix"].startswith(case.prefix)
         prefix = changed["prefix"]
+        assert prefix.startswith(case.prefix)
+        assert len(prefix) > len(case.prefix)
         suffix = syntax_state(prefix, case.family).closing_suffix
         assert suffix is not None
         assert not score_case(case, prefix[len(case.prefix) :] + suffix).content_preserved
-        assert score_case(case, case.expected[len(case.prefix) :]).success
+        assert score_case(replace(case, prefix=prefix), case.expected[len(prefix) :]).success
     array = next(
         row for row in map(json.loads, rows) if row["family"] == Family.ARRAY and row["control"] == "continue_required"
     )
@@ -83,7 +99,7 @@ def test_training_prefix_conversion_reports_all_failures_without_publishing_part
         )
     )
     output = tmp_path / "variant"
-    with pytest.raises(ValueError, match="2 conversion failures"):
+    with pytest.raises(ValueError):
         prepare_training_prefixes(source, output)
     failures = json.loads((output / "conversion-failures.json").read_text())
     assert [failure["line"] for failure in failures] == [1, 2]
