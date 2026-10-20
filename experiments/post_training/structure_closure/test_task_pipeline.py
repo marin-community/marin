@@ -490,7 +490,7 @@ def test_parsed_reasoning_is_unscored_instead_of_a_false_model_failure():
     )
     task = case_task(case, SOURCE)
 
-    async def parsed(request):
+    async def parsed(_request):
         return ModelTurn(
             {"role": "assistant", "content": "", "reasoning_content": "parser removed delimiters"},
             (1,),
