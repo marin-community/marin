@@ -44,7 +44,7 @@ from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, T
 
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
-from taskforge.spec.verdict import grader_checks, reward_in_range
+from taskforge.spec.verdict import GRADER_VERDICT_PATH, grader_checks, reward_in_range
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
@@ -199,10 +199,7 @@ async def grader(
             except ValueError as error:
                 return f"the grader's verdict has malformed checks: {error}"
             if not checks:
-                return (
-                    "the grader wrote no per-check results: put a non-empty detail.checks in "
-                    f"{draft.GRADER_VERDICT_PATH}"
-                )
+                return f"the grader wrote no per-check results: put a non-empty detail.checks in {GRADER_VERDICT_PATH}"
         empty = await grade_candidate(
             context,
             requirements,
