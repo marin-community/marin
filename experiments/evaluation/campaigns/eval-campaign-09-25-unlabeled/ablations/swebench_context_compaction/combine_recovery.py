@@ -99,7 +99,9 @@ def audit(manifest_path: Path, recovery_results: str) -> dict:
         with ThreadPoolExecutor(max_workers=12) as pool:
             retained = list(pool.map(lambda row: read(row["source_uri"], row), source))
             recovered = list(pool.map(lambda path: read("s3://" + path + "/result.json", None), directories))
-    report = combine(manifest, [row for row in retained if row is not None], [row for row in recovered if row is not None])
+    report = combine(
+        manifest, [row for row in retained if row is not None], [row for row in recovered if row is not None]
+    )
     return {"manifest": str(manifest_path), "recovery_results": recovery_results, **report}
 
 

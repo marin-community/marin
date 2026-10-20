@@ -226,7 +226,13 @@ def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> Harb
     if error is None:
         scored = verifier_result is not None
     elif exception_type in taxonomy.agent:
-        scored = True
+        # Installed-agent setup uses the same command runner as execution.
+        # A failure before execution began cannot be a model outcome.
+        if data.get("agent_setup") and not data.get("agent_execution"):
+            error["type"] = "AgentSetupError"
+            scored = False
+        else:
+            scored = True
     elif exception_type in taxonomy.passthrough:
         scored = verifier_result is not None
     elif exception_type in taxonomy.infrastructure:

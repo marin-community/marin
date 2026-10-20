@@ -234,6 +234,24 @@ def test_read_trial_applies_harbor_error_taxonomy(
     assert (trial.error or {}).get("type") == expected_error_type
 
 
+@pytest.mark.parametrize("execution_started", [False, True])
+def test_read_trial_does_not_score_installer_failure_as_agent_failure(tmp_path, execution_started):
+    result_file = tmp_path / "result.json"
+    result_file.write_text(
+        json.dumps(
+            {
+                "agent_setup": {"started_at": "2026-10-20T00:00:00Z"},
+                "agent_execution": {"started_at": "2026-10-20T00:00:10Z"} if execution_started else None,
+                "exception_info": {"exception_type": "AgentError", "exception_message": "command exited 1"},
+            }
+        )
+    )
+    trial = _read_trial(StoragePath(str(result_file)), _ERROR_TAXONOMY)
+    assert trial.scored is execution_started
+    assert trial.error is not None
+    assert trial.error["type"] == ("AgentError" if execution_started else "AgentSetupError")
+
+
 def _memory_remote(protocol: str, monkeypatch) -> None:
     """Route ``protocol://`` reads and writes to a fresh in-memory filesystem.
 
