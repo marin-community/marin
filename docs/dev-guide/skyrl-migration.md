@@ -398,10 +398,12 @@ the old repository; archiving and deleting a repository are different actions.
 
 ## Publish active work
 
-Freeze fork merges and rerun the snapshot at final cutover. The publication
-commands validate current fork main and every open PR head/base against the
-snapshot. They require a merged Marin cutover PR whose packaged provenance
-matches the source revision. Preview without `--execute`:
+Freeze fork merges and rerun the snapshot at final cutover. Both publication
+commands require a merged Marin cutover PR whose packaged provenance matches
+the source revision. PR publication also validates current fork main and every
+open PR head/base against the snapshot. Issue transfers check each source
+issue's state and update timestamp; unrelated PR pushes do not block recovery.
+Preview without `--execute`:
 
 ```bash
 uv run --no-project python -m scripts.skyrl_migration transfer-issues \
@@ -415,13 +417,18 @@ needs GitHub write access to both repositories and permission to transfer
 issues. The tool does not request or change access. Keep the complete snapshot
 and publication state until the cutover is verified.
 
-Issues use GitHub's transfer API, preserving the issue node identity and
-discussion while assigning a Marin issue number. Missing labels are created
-through the transfer API. The body retains attribution and changes bare `#N`
-and `GH-N` references to absolute fork URLs. Historical comments remain
-unchanged; inspect their relative references, assignees, and milestones after
-transfer. A retry finds the destination by node identity even if the first
-process died after GitHub transferred it.
+Issues use GitHub's transfer API to preserve discussions and create missing
+labels. GitHub replaces issue and comment IDs during transfer. A retry follows
+the original issue's REST URL redirect to its current identity, even if the
+first process died after GitHub transferred it. Links to transferred comments
+are matched by preserved author and timestamps.
+
+Issue bodies retain attribution and expand bare `#N` and `GH-N` references to
+absolute fork URLs, preserving explicit linked citations. Recovery accepts
+GitHub's source-reference qualification and verified discussion-link rewrites;
+other body edits stop the transfer. Completed transfers are recorded and
+skipped on retry, preserving later edits in Marin. Inspect historical relative
+references, assignees, and milestones after transfer.
 
 PR publication pushes only `ready` candidates and creates draft PRs with
 `agent-generated`, source links, source head identity, and the original author.
