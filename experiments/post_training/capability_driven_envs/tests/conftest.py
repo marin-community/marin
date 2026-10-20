@@ -11,16 +11,22 @@ evidence under ``evidence_root``: ``TASKFORGE_EVIDENCE_DIR``, else ``taskforge-e
 system temp directory.
 """
 
-import pytest
+from __future__ import annotations
 
-# These tests run in the marin-taskforge package environment; environments without it skip them.
-pytest.importorskip("taskforge")
-
+import importlib.util
 import os
 import tempfile
 from pathlib import Path
 
-from taskforge.llm.glm_client import FixedEndpoint, GlmEndpoint, Pool
+import pytest
+
+# These tests run in the marin-taskforge package environment. An environment without it, such as the
+# marin unit job, must not collect them: a skip raised while pytest loads a conftest aborts the whole
+# session rather than skipping, so the guard ignores the directory's modules instead.
+if importlib.util.find_spec("taskforge") is None:
+    collect_ignore_glob = ["*.py"]
+else:
+    from taskforge.llm.glm_client import FixedEndpoint, GlmEndpoint, Pool
 
 BASE_URL_ENV = "TASKFORGE_GLM_BASE_URL"
 TOKEN_ENV = "GLM_HIGH_TOKEN"
