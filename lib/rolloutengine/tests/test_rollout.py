@@ -1556,6 +1556,31 @@ async def test_context_limit_keeps_served_evidence_and_grades_only_completed_ope
     assert record.rollout.conversations[-1].loss_mask == ((1,) if completed_turns else ())
 
 
+async def test_context_limit_after_compaction_keeps_prior_training_tokens_and_grade():
+    async def agent(complete):
+        await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        await complete(Prompt(({"role": "user", "content": "The answer was 12. Confirm."},), {}))
+
+    class LimitedModel(ReplayModel):
+        async def complete(self, request):
+            if self.requests:
+                raise GenerationLimitReached((90, 91))
+            return await super().complete(request)
+
+    record = await engine(
+        LimitedModel([{"role": "assistant", "content": "12"}]),
+        harnesses={"agent": AgentHarness(lambda _context, complete: agent(complete))},
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent"))
+
+    first, unserved = record.rollout.conversations
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+    assert record.rollout.stop_reason == "length"
+    assert (first.prompt_token_ids, first.response_token_ids, first.loss_mask) == ((10, 11), (20,), (1,))
+    assert first.logprobs == (-0.5,)
+    assert unserved.response_token_ids == ()
+    assert unserved.loss_mask == ()
+
+
 @pytest.mark.parametrize(
     "usage, budget, requests, stop_reason",
     [
