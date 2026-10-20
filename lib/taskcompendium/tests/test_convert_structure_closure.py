@@ -26,7 +26,7 @@ from taskcompendium.models import (
     TokenizedInput,
 )
 from taskcompendium.pipeline.conversion import convert_row
-from taskcompendium.pipeline.fingerprints import semantic_digest
+from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
@@ -123,3 +123,6 @@ def test_native_aliases_deduplicate_but_private_references_remain_distinct(nativ
     assert digests[0] == digests[1]
     assert digests[0] != digests[2]
     assert semantic_digest(tasks[0], include_reference=False) == semantic_digest(tasks[2], include_reference=False)
+    keys = [deduplication_key(task) for task in tasks]
+    assert keys[0] == keys[1]
+    assert keys[0] != keys[2]
