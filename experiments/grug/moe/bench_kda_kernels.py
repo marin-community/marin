@@ -24,7 +24,7 @@ import numpy as np
 from experiments.grug.moe import kda_prep_pallas as prep_mod
 from experiments.grug.moe import kda_state_pallas as state_mod
 from experiments.grug.moe.kda import doc_starts, kda_fused
-from experiments.grug.moe.kda_prep_pallas import ChunkPrep, GateFn, GateKind, PrepConfig, Segments
+from experiments.grug.moe.kda_prep_pallas import ChunkPrep, GateFn, GateKind, PrepConfig
 from experiments.grug.moe.kda_state_pallas import StateConfig, StateGrads
 
 B, L, H, D = 16, 4096, 48, 128
@@ -73,7 +73,6 @@ def _prep_cfg(**kw) -> PrepConfig:
         tail_block_d=32,
         tail_num_warps=4,
         interpret=False,
-        segments=Segments.PRECOMPUTED.value,
         chunks=1,
         chunk_stages=1,
     )
@@ -212,12 +211,13 @@ def _layer_benches():
         state_block_v=64,
     )
     lean = dict(state_primal_block_v=64, state_num_stages=3)
-    folded = dict(lean, prep_segments=Segments.FOLDED)
+    bf16 = dict(state_saved_dtype=jnp.bfloat16, state_grads_chunks=8, state_grads_num_stages=2)
     variants = {
         "current": {},
         "lean s3": lean,
-        "lean s3 + folded segments": folded,
-        "lean s3 + folded segments + xla grads": dict(folded, state_grads=StateGrads.XLA),
+        "lean s3 + xla grads": dict(lean, state_grads=StateGrads.XLA),
+        "lean s3 + bf16 saved grads c8 s2": dict(lean, **bf16),
+        "lean s3 + bf16 saved + xla grads": dict(lean, state_saved_dtype=jnp.bfloat16, state_grads=StateGrads.XLA),
     }
     for name, extra in variants.items():
         kw = dict(base, **extra)
@@ -267,7 +267,7 @@ def _parity():
     for vname, extra in (
         ("lean primal", dict(state_primal_block_v=64)),
         ("lean s3", dict(state_primal_block_v=64, state_num_stages=3)),
-        ("folded segments", dict(prep_segments=Segments.FOLDED)),
+        ("prep c4 s2", dict(prep_chunks=4, prep_chunk_stages=2)),
         ("bf16 saved", dict(state_saved_dtype=jnp.bfloat16)),
     ):
         primal, out, grads = run(dict(base, **extra))
