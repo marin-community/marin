@@ -104,7 +104,7 @@ def test_math_source_preserves_api_sampling_policy(
 ):
     data = tmp_path / "math.jsonl"
     data.write_text(json.dumps({"id": "one", "problem": "Six times seven?", "answer": "42"}) + "\n")
-    benchmark = MATH500Benchmark(data_file=data)
+    benchmark = MATH500Benchmark(data_file=str(data))
     model = _model(endpoint, model_class, header={"Authorization": "Bearer offline-test"})
     args = Namespace(model="api", model_args="", gen_kwargs=overrides, limit=1, max_tokens=8)
 
@@ -142,7 +142,7 @@ def test_math_source_preserves_4o_output_cap_and_caller_precedence(
 ):
     data = tmp_path / "math.jsonl"
     data.write_text(json.dumps({"id": "one", "problem": "Six times seven?", "answer": "42"}) + "\n")
-    benchmark = MATH500Benchmark(data_file=data)
+    benchmark = MATH500Benchmark(data_file=str(data))
     model = _model(endpoint, model_class, model_name, header={"Authorization": "Bearer offline-test"})
     args = Namespace(model="api", model_args="", gen_kwargs=overrides, limit=1, max_tokens=max_tokens)
 
