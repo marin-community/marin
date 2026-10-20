@@ -139,23 +139,23 @@ def analyze_failed_runs(
     *,
     pass_threshold: float,
     max_new_ideas: int,
-    batch_size: int,
-    policy: LLMPolicy,
-    merge_policy: LLMPolicy,
+    shard_size: int,
+    extract_ideas_llm_policy: LLMPolicy,
+    merge_ideas_llm_policy: LLMPolicy,
     catalog_version: str,
 ) -> Dataset[CapabilityIdea]:
     """Build a pipeline of capability ideas from the policy's failed rollouts.
 
-    Recorded conversations supply the model options and messages seen by the policy. Keep ``batch_size`` at about
+    Recorded conversations supply the model options and messages seen by the policy. Keep ``shard_size`` at about
     1,000 rollouts or fewer so merge prompts fit the model context. Run the plan outside an event loop, for example
     ``ctx.execute(plan).results``.
     """
-    merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_policy)
+    merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_ideas_llm_policy)
     return (
-        Dataset.from_list(list(batched(rollouts, batch_size)))
-        .flat_map(lambda batch: batch)
+        Dataset.from_list(list(batched(rollouts, shard_size)))
+        .flat_map(lambda shard: shard)
         .filter(lambda graded: policy_failed(graded, pass_threshold))
-        .flat_map(partial(yield_ideas, make_client=make_client, policy=policy))
+        .flat_map(partial(yield_ideas, make_client=make_client, policy=extract_ideas_llm_policy))
         .reduce(merge, partial(merge_idea_lists, merge=merge))
         .flat_map(partial(to_ideas, catalog_version=catalog_version))
     )
