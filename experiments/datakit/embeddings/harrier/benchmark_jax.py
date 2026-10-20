@@ -11,7 +11,7 @@ from pathlib import Path
 
 import jax
 import numpy as np
-from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_REPO, HARRIER_REVISION
+from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_MAX_TOKENS, HARRIER_REPO, HARRIER_REVISION
 from marin.processing.embeddings.harrier_jax import HarrierJaxConfig, load_harrier_jax
 
 
@@ -31,7 +31,7 @@ def main() -> None:
         revision=HARRIER_REVISION,
         tokenizer_revision=HARRIER_REVISION,
         dimensions=HARRIER_DIM,
-        max_tokens=8_192,
+        max_tokens=HARRIER_MAX_TOKENS,
         compute_dtype="bfloat16",
         platform=args.platform,
     )

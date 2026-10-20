@@ -41,7 +41,7 @@ input can exceed the token limit when its sequence bucket is larger.
 The loader mirrors a pinned Hugging Face snapshot once to a region-local
 30-day cache for cluster workers. Set `cache_ttl_days=0` for a local model path
 or direct Hub loading. The existing task-curation driver still selects
-Russell's Torch CPU embedder; callers of `curation_embedding_pipeline` can
+the Torch CPU embedder; callers of `curation_embedding_pipeline` can
 pass `partial(load_harrier_jax, config)` as its `embedder_factory` on GPU or
 TPU workers.
 

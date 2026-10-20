@@ -956,7 +956,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 Defaults to False because some models (e.g., Qwen) intentionally pad their embedding matrices
                 beyond the tokenizer vocab size for hardware efficiency (e.g., divisibility by 4).
             state_dict_prefix: Prefix to add to checkpoint keys when loading base-model weights into
-                a Levanter causal-LM model. The tensors are not copied.
+                a Levanter causal-LM model.
         """
 
         hf_config = self.hf_config_from_hf_checkpoint(ref)

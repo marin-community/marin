@@ -36,7 +36,6 @@ from experiments.datakit.embeddings.harrier.tei_client import TeiEmbeddingClient
 logger = logging.getLogger(__name__)
 
 EMBEDDING_ATTR_DATA_VERSION = "2026.08.11"
-HARRIER_MAX_TOKENS = 8_192
 HARRIER_MAX_RAW_TEXT_CHARS = 100_000
 HARRIER_MAX_WORKERS = 256
 TEMP_TTL_DAYS = 1

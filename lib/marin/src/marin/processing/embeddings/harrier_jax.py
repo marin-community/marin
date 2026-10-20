@@ -21,6 +21,9 @@ from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 from transformers.models.qwen3 import Qwen3Config as HfQwen3Config
 
+BATCH_AXIS_NAME = "batch"
+DATA_AXIS_NAME = "data"
+
 
 @dataclass(frozen=True)
 class HarrierJaxConfig:
@@ -41,7 +44,7 @@ class HarrierJaxConfig:
 
 
 def _embed_batch(model: Qwen3LMHeadModel, input_ids: NamedArray, lengths: NamedArray) -> NamedArray:
-    batch = input_ids.resolve_axis("batch")
+    batch = input_ids.resolve_axis(BATCH_AXIS_NAME)
     position = input_ids.resolve_axis("position")
     hidden = model.activations(input_ids, attn_mask=AttentionMask.causal())
     pooled = hax.take(hidden, position, lengths - 1).rearrange((batch, model.config.Embed))
@@ -50,18 +53,18 @@ def _embed_batch(model: Qwen3LMHeadModel, input_ids: NamedArray, lengths: NamedA
     return hax.named(vectors / jnp.maximum(norms, 1e-12), (batch, model.config.Embed))
 
 
-_compiled_embed_batch = hax.named_jit(_embed_batch, axis_resources={"batch": "data"})
+_compiled_embed_batch = hax.named_jit(_embed_batch, axis_resources={BATCH_AXIS_NAME: DATA_AXIS_NAME})
 
 
 class HarrierJaxEmbedder:
-    """Encode text with a replicated Qwen3 model and data-parallel fixed-shape batches."""
+    """Return normalized Harrier embeddings for input text."""
 
     def __init__(self, config: HarrierJaxConfig) -> None:
         self.config = config
         devices = jax.local_devices()
         if not devices or devices[0].platform != config.platform:
             raise ValueError(f"Harrier requires JAX {config.platform} devices")
-        self.mesh = Mesh(np.array(devices), ("data",))
+        self.mesh = Mesh(np.array(devices), (DATA_AXIS_NAME,))
         self.tokenizer = cast(
             PreTrainedTokenizerBase,
             AutoTokenizer.from_pretrained(config.model, revision=config.tokenizer_revision, padding_side="right"),
@@ -90,7 +93,7 @@ class HarrierJaxEmbedder:
                 converter.load_pretrained(
                     Qwen3LMHeadModel,
                     config=model_config,
-                    axis_mapping={"batch": "data"},
+                    axis_mapping={BATCH_AXIS_NAME: DATA_AXIS_NAME},
                     dtype=jnp.dtype(config.compute_dtype),
                     state_dict_prefix="model",
                 ),
@@ -122,7 +125,7 @@ class HarrierJaxEmbedder:
                     config.batch_size_per_device, max(1, config.batch_token_limit_per_device // sequence_size)
                 )
                 batch_size = per_device * device_count
-                batch = Axis("batch", batch_size)
+                batch = Axis(BATCH_AXIS_NAME, batch_size)
                 position = Axis("position", sequence_size)
                 for start in range(0, len(indices), batch_size):
                     selected = indices[start : start + batch_size]
@@ -132,10 +135,14 @@ class HarrierJaxEmbedder:
                         padded_ids[row, : lengths[index]] = token_ids[index]
                         padded_lengths[row] = lengths[index]
                     ids = hax.shard_with_axis_mapping(
-                        hax.named(jnp.asarray(padded_ids), (batch, position)), {"batch": "data"}, mesh=self.mesh
+                        hax.named(jnp.asarray(padded_ids), (batch, position)),
+                        {BATCH_AXIS_NAME: DATA_AXIS_NAME},
+                        mesh=self.mesh,
                     )
                     token_lengths = hax.shard_with_axis_mapping(
-                        hax.named(jnp.asarray(padded_lengths), (batch,)), {"batch": "data"}, mesh=self.mesh
+                        hax.named(jnp.asarray(padded_lengths), (batch,)),
+                        {BATCH_AXIS_NAME: DATA_AXIS_NAME},
+                        mesh=self.mesh,
                     )
                     vectors = _compiled_embed_batch(self.model, ids, token_lengths)
                     output[selected] = np.asarray(vectors.array)[: len(selected)]
