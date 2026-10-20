@@ -155,9 +155,11 @@ That total must equal `num_nodes * gpus_per_node`. For example, four 8-GPU polic
 node-sized rollout engines require 64 GPUs. Leaving rollout DP at one describes only 36 GPUs and is
 rejected during graph construction.
 
-The preflight also requires positive dimensions, checks batch divisibility, and rejects a runtime
-profile whose installed backend contradicts `trainer.strategy`. The `fully_async` entry point has a
-stricter batch contract: `train_batch_size` must equal `policy_mini_batch_size`.
+The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
+forward microbatch size to equal the training microbatch size. It checks local engine placement,
+rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
+setting. For every launcher, preflight checks policy and reference Megatron parallelism against
+the GPUs assigned to each role.
 
 ## Artifact and runtime boundaries
 
@@ -183,6 +185,7 @@ Before submitting a large run:
 
 1. Print the plan with the intended immutable version and selection options.
 2. Check the resolved role plan and topology, especially engine count and DP/TP/PP/EP.
+   Check that explicit forward and training microbatch sizes agree.
    For `fully_async`, confirm the train batch and policy mini-batch are equal.
 3. Confirm the vendored runtime supports the chosen strategy, CUDA stack, model, and vLLM
    geometry. If its identity changed, use a fresh RL artifact version unless its checkpoints are

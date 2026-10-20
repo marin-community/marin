@@ -20,10 +20,10 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
@@ -33,6 +33,7 @@ from marin.rl.skyrl import (
     skyrl_runtime_digest,
     skyrl_step,
     skyrl_temporary_run_path,
+    validate_megatron_geometry,
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
@@ -96,8 +97,6 @@ def _role_plan() -> SkyRLRolePlan:
         colocate_all=True,
         policy_num_nodes=1,
         policy_num_gpus_per_node=4,
-        colocate_policy_ref=True,
-        reference_num_nodes=1,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -128,7 +127,7 @@ def _spec() -> SkyRLSpec:
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
         config_yaml=_config_yaml(),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=SkyRLRuntime(),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -164,29 +163,6 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     )
 
 
-def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
-    # Reject incompatible microbatch sizes before allocating the GPU workers.
-    base = _spec()
-    plan = dataclasses.replace(base.topology.role_plan, micro_train_batch_size_per_gpu=2)
-    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
-    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 1
-    with pytest.raises(ValueError, match="equal micro_forward_batch_size_per_gpu"):
-        dataclasses.replace(
-            base,
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-            topology=dataclasses.replace(base.topology, role_plan=plan),
-            config_yaml=yaml.safe_dump(recipe),
-        )
-    # Matching sizes still validate: the gate rejects the mismatch, not Megatron itself.
-    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 2
-    dataclasses.replace(
-        base,
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-        topology=dataclasses.replace(base.topology, role_plan=plan),
-        config_yaml=yaml.safe_dump(recipe),
-    )
-
-
 @pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
 @pytest.mark.parametrize("value", [False, True])
 def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:
@@ -211,7 +187,6 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
-        reference_num_nodes=4,
         num_inference_engines=1,
         inference_engine_data_parallel_size=8,
         inference_engine_expert_parallel_size=8,
@@ -229,7 +204,7 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     spec = dataclasses.replace(
         _spec(),
         config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=SkyRLRuntime(),
         topology=SkyRLTopology(
             num_nodes=6,
             gpus_per_node=8,
@@ -245,21 +220,6 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     assert launch["skyrl"]["generator"]["speculative_decoding"]["training"] == {}
     assert launch["run"]["export_hf"] is False
     assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
-
-
-def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
-    plan = dataclasses.replace(
-        _role_plan(),
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=8,
-        reference_num_nodes=4,
-        num_inference_engines=4,
-        inference_engine_data_parallel_size=8,
-        inference_engine_expert_parallel_size=8,
-    )
-
-    SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
 
 def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
@@ -298,7 +258,6 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     plan = dataclasses.replace(
         _role_plan(),
         colocate_all=False,
-        colocate_policy_ref=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=8,
         reference_num_nodes=2,
@@ -308,11 +267,21 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     )
     with pytest.raises(ValueError, match="core role plan exceeds the allocated topology"):
         SkyRLTopology(num_nodes=5, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    topology = SkyRLTopology(num_nodes=7, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"]["algorithm"]["use_kl_loss"] = True
+    recipe["trainer"]["policy"] = {
+        "megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 8}
+    }
+    recipe["trainer"]["ref"] = {"megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 16}}
+    with pytest.raises(ValueError, match=r"Megatron ref has 16 GPUs.*data-parallel size by EP"):
+        dataclasses.replace(_spec(), topology=topology, config_yaml=yaml.safe_dump(recipe))
+    recipe["trainer"]["ref"]["megatron_config"]["expert_model_parallel_size"] = 8
     spec = dataclasses.replace(
         _spec(),
-        config_yaml=_config_yaml(strategy="megatron").replace("use_kl_loss: false", "use_kl_loss: true"),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-        topology=SkyRLTopology(num_nodes=7, gpus_per_node=8, gpu_variant="H100", role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+        runtime=SkyRLRuntime(),
+        topology=topology,
     )
     step = skyrl_step(spec, _execution())
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
@@ -328,40 +297,13 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     }
 
 
-def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
-    spec = _spec()
-    plan = dataclasses.replace(_role_plan(), train_batch_size=32, policy_mini_batch_size=16)
-
-    with pytest.raises(
-        ValueError,
-        match="fully_async entrypoint requires train_batch_size == policy_mini_batch_size; got 32 and 16",
-    ):
-        dataclasses.replace(
-            spec,
-            config_yaml=f"entrypoint: fully_async\n{_config_yaml()}",
-            topology=dataclasses.replace(spec.topology, role_plan=plan),
-        )
-
-
-def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
     spec = _spec()
     base = skyrl_step(spec, _execution())
     moved = skyrl_step(spec, _execution("cw-us-east-02a"))
     resized = skyrl_step(
         spec,
         dataclasses.replace(_execution(), cpu=64, memory="400GB", disk="2TB"),
-    )
-    provenance = tmp_path / "runtime-provenance.json"
-    provenance.write_text('{"source_commit": "changed"}\n')
-    monkeypatch.setattr("marin.rl.skyrl.SKYRL_PROVENANCE", provenance)
-    changed_runtime = skyrl_step(
-        dataclasses.replace(
-            spec,
-            runtime=dataclasses.replace(spec.runtime),
-        ),
-        _execution(),
     )
     changed_plan = dataclasses.replace(spec.topology.role_plan, train_batch_size=32)
     changed_roles = skyrl_step(
@@ -375,7 +317,6 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
 
     assert base.fingerprint() == moved.fingerprint()
     assert base.fingerprint() == resized.fingerprint()
-    assert base.fingerprint() != changed_runtime.fingerprint()
     assert base.fingerprint() != changed_roles.fingerprint()
 
 
@@ -663,31 +604,37 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     assert completed.returncode == 4
 
 
-def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> None:
-    """The mismatch is otherwise silent until the pod has its GPUs: the launcher installs one
-    backend's closure, the trainer asks for the other, and the run dies on an import error naming
-    neither the profile nor the strategy."""
-    spec = _spec()
-
-    with pytest.raises(ValueError, match="megatron"):
+def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
+    # Reject incompatible microbatch sizes before allocating the GPU workers.
+    base = _spec()
+    plan = dataclasses.replace(base.topology.role_plan, micro_train_batch_size_per_gpu=2)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 1
+    with pytest.raises(ValueError, match="equal micro_forward_batch_size_per_gpu"):
         dataclasses.replace(
-            spec,
-            config_yaml=_config_yaml(strategy="fsdp2"),
+            base,
+            runtime=SkyRLRuntime(),
+            topology=dataclasses.replace(base.topology, role_plan=plan),
+            config_yaml=yaml.safe_dump(recipe),
         )
-
-
-@pytest.mark.parametrize(
-    "config_yaml",
-    [
-        pytest.param(_config_yaml(strategy="megatron"), id="names the matching strategy"),
-        pytest.param(_config_yaml(), id="names no strategy"),
-    ],
-)
-def test_a_config_that_does_not_contradict_the_profile_is_accepted(config_yaml: str) -> None:
-    spec = _spec()
-
+    # Matching sizes still validate: the gate rejects the mismatch, not Megatron itself.
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 2
     dataclasses.replace(
-        spec,
-        config_yaml=config_yaml,
-        runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
+        base,
+        runtime=SkyRLRuntime(),
+        topology=dataclasses.replace(base.topology, role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
     )
+
+
+def test_megatron_geometry_rejects_incomplete_expert_groups() -> None:
+    geometry = MegatronGeometry(1, 2, 1, 8, 1)
+    with pytest.raises(
+        ValueError, match=r"Megatron policy has 8 GPUs.*TP=1, PP=2, CP=1, EP=8.*data-parallel size by EP"
+    ):
+        validate_megatron_geometry(geometry, role="policy", num_gpus=8)
+
+
+def test_megatron_geometry_accepts_complete_expert_groups() -> None:
+    # A separate reference role with DP8 can form the same EP8 groups as the policy.
+    validate_megatron_geometry(MegatronGeometry(1, 2, 1, 8, 1), role="ref", num_gpus=16)

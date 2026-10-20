@@ -17,9 +17,10 @@ Iris. Workers install that source in editable mode with the frozen
 Megatron/vLLM profile. No task clones the SkyRL fork.
 
 The captured runtime supports Megatron training. Marin's curriculum arms use
-Megatron for both Qwen and Snowball. Snowball shares its PP2/EP8 geometry and
-1800GB host-memory allocation with the asynchronous launcher. The obsolete
-FSDP profile and recipe fields are removed.
+Megatron for both Qwen and Snowball. The Snowball recipes follow
+[the GPU-qualified launch changes in #10163](https://github.com/marin-community/marin/pull/10163),
+including separate reference nodes, recomputation and optimizer offload.
+The obsolete FSDP profile and recipe fields are removed.
 
 ```mermaid
 flowchart LR
