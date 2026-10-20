@@ -166,7 +166,7 @@ def _kernel_benches(sweep: bool):
         _report(f"state_bwd alone ({saved} dS; + xla grads)", state_bwd_only(_state_cfg(saved_dtype=saved)), *bargs)
         grid = [(1, 1, 32, 4), (2, 2, 32, 4), (4, 2, 32, 4), (8, 2, 32, 4), (4, 3, 32, 4), (8, 3, 32, 4)]
         if sweep:
-            grid += [(4, 2, 64, 4), (4, 2, 32, 8), (16, 3, 32, 4), (8, 4, 32, 4)]
+            grid += [(2, 2, 16, 4), (4, 2, 16, 4), (4, 3, 16, 4), (2, 2, 32, 8), (4, 2, 32, 8), (8, 2, 16, 8)]
         for cpb, st, gbv, gw in grid:
             cfg = _state_cfg(
                 saved_dtype=saved, grads_chunks=cpb, grads_num_stages=st, grads_block_v=gbv, grads_num_warps=gw
