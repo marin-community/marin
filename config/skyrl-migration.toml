@@ -52,6 +52,15 @@ reason = "Open-MOPD task and image preflights import this root-level helper"
 glob = "cloud/iris/configs/open_mopd_*.json"
 reason = "default manifests loaded by the retained Open-MOPD fidelity and evaluation commands"
 [[keep]]
+glob = "cloud/iris/configs/qwen_megatron_smoke.yaml"
+reason = "Megatron launch recipe exercised by the retained launch-config acceptance tests"
+[[keep]]
+glob = "cloud/iris/configs/snowball_mopd_ultra*_smoke.yaml"
+reason = "inherited synchronous and asynchronous OPD launch acceptance recipes"
+[[keep]]
+glob = "cloud/iris/configs/snowball_mopd_ultra_32k.yaml"
+reason = "base recipe for the retained asynchronous 32K OPD acceptance config"
+[[keep]]
 glob = "cloud/iris/runtime_bundle_files.txt"
 reason = "launcher bundle inventory"
 [[keep]]

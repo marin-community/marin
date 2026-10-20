@@ -826,7 +826,6 @@ def _launch_config_yaml(
             "parent_cluster_config": parent_cluster_config,
         },
         "ray": {
-            "port": 6379,
             "spill_backend": "local",
             "spill_dir": "/tmp/skyrl-ray-spill",
             "rendezvous_dir": prefix_join(output.attempts_root, "rendezvous"),

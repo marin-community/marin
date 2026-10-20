@@ -57,7 +57,6 @@ def _raw_config() -> dict[str, Any]:
             },
         },
         "ray": {
-            "port": 6379,
             "spill_backend": "local",
             "spill_dir": "/tmp/skyrl-ray-spill",
             "rendezvous_dir": "s3://runs/smoke/rendezvous",

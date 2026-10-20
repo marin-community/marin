@@ -10,6 +10,7 @@ import fsspec
 import pytest
 
 from cloud.iris import task_runtime
+from cloud.iris.ray_ports import RayPort
 from cloud.iris.ray_storage import RaySpillBackend
 from cloud.iris.task_runtime import sync_debug_artifacts
 from marinskyrl.environment_contract import (
@@ -22,13 +23,17 @@ from marinskyrl.environment_contract import (
     write_process_manifest,
 )
 
+pytestmark = pytest.mark.usefixtures("iris_ray_ports")
+
 
 @pytest.mark.parametrize("rank", [0, 1])
 @pytest.mark.parametrize(
     ("mode", "explicit_root"),
     [(DebugMode.LIGHT, False), (DebugMode.LIGHT, True), (DebugMode.OFF, False)],
 )
-def test_supervisors_share_worker_diagnostics_with_uploader(tmp_path: Path, monkeypatch, rank, mode, explicit_root):
+def test_supervisors_share_worker_diagnostics_with_uploader(
+    tmp_path: Path, monkeypatch, rank, mode, explicit_root, iris_ray_ports
+):
     job_name = f"debug-wiring-{uuid.uuid4().hex}"
     monkeypatch.setenv(RUN_ID_ENV, job_name)
     monkeypatch.setenv(DEBUG_ARTIFACT_DIR_ENV, str(tmp_path / "explicit-debug") if explicit_root else "")
@@ -42,14 +47,13 @@ def test_supervisors_share_worker_diagnostics_with_uploader(tmp_path: Path, monk
         ]
     )
     args = Namespace(
-        ray_port=6379,
         ray_log_dir=None,
         rendezvous_dir=str(tmp_path),
         rendezvous_timeout=1,
         ray_spill_backend=RaySpillBackend.LOCAL,
         ray_spill_dir=str(tmp_path / "spill"),
     )
-    task_runtime.write_rendezvous(args.rendezvous_dir, "192.0.2.1", args.ray_port, "test-gang")
+    task_runtime.write_rendezvous(args.rendezvous_dir, "192.0.2.1", iris_ray_ports[RayPort.HEAD], "test-gang")
 
     # Stop at the external Ray launch, where child processes inherit the task environment.
     def stop_at_ray_start(command, **_kwargs):

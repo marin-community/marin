@@ -1,7 +1,11 @@
 diff --git a/cloud/iris/iris_backend.py b/cloud/iris/iris_backend.py
-index bcb3a1c9e0fc102893cfc01acd2ee0e5bbe18b78..69c186eb3957ad2ec03a37fd47c02caa2c97f4cc 100644
+index bcb3a1c9e0fc102893cfc01acd2ee0e5bbe18b78..c75c429db3729ad6f47215992f1bcea2781d5cce 100644
 --- a/cloud/iris/iris_backend.py
 +++ b/cloud/iris/iris_backend.py
+@@ -55,0 +56 @@ from cloud.iris.runtime_bundle import build_runtime_bundle
++from cloud.iris.ray_ports import RayPort
+@@ -285 +285,0 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
+-        ray_port=int(ray["port"]),
 @@ -291 +291 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
 -        runtime_commit=runtime["launcher_commit"],
 +        source_digest=runtime["source_digest"],
@@ -17,9 +21,13 @@ index bcb3a1c9e0fc102893cfc01acd2ee0e5bbe18b78..69c186eb3957ad2ec03a37fd47c02caa
 @@ -842 +842 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
 -    print(f"[rl-iris] Runtime:    {args.runtime_commit} ({args.runtime_profile.value})", flush=True)
 +    print(f"[rl-iris] Runtime:    {args.source_digest} ({args.runtime_profile.value})", flush=True)
-@@ -1101 +1101 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+@@ -964 +963,0 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+-    env_vars["OT_AGENT_IRIS_RAY_PORT"] = str(args.ray_port)
+@@ -1101 +1100 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
 -                setup_scripts=[task_setup_script(args.runtime_commit, args.runtime_profile)],
 +                setup_scripts=[task_setup_script(args.source_digest, args.runtime_profile)],
+@@ -1105,0 +1105 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
++            ports=[port.value for port in RayPort],
 diff --git a/cloud/iris/launch.py b/cloud/iris/launch.py
 index 11d36573d6f39da75acbb9177d3b5c2e9d0bf071..d8db13992b94c515e842abeb792832a70fa74aef 100644
 --- a/cloud/iris/launch.py
@@ -43,12 +51,21 @@ index 11d36573d6f39da75acbb9177d3b5c2e9d0bf071..d8db13992b94c515e842abeb792832a7
 +        print(resolve_launcher_source().digest)
 +        return 0
 diff --git a/cloud/iris/launch_config.py b/cloud/iris/launch_config.py
-index ea2cda670db60e0525cd3a4277ed63d297a7d5ba..dfe694284272a1a88aa6117f47a3ed207f061953 100644
+index ea2cda670db60e0525cd3a4277ed63d297a7d5ba..05991c9c729e266b7c781e251b08858362d3475d 100644
 --- a/cloud/iris/launch_config.py
 +++ b/cloud/iris/launch_config.py
 @@ -65 +65 @@ class RuntimeConfig:
 -    launcher_commit: str = MISSING
 +    source_digest: str = MISSING
+@@ -126 +125,0 @@ class RayConfig:
+-    port: int = 6379
+@@ -314,2 +313 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
+-        ray["port"] <= 0
+-        or ray["rendezvous_timeout"] <= 0
++        ray["rendezvous_timeout"] <= 0
+@@ -320 +318 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
+-            "ray port, rendezvous timeout, and cluster join timeout must be positive; "
++            "ray rendezvous timeout and cluster join timeout must be positive; "
 diff --git a/cloud/iris/open_mopd_evaluation.py b/cloud/iris/open_mopd_evaluation.py
 index 0760045c9b0b21962e5556508bb2b32c608d9f57..d2a3e34a4e4d991704ee49e43c68a0012b867611 100644
 --- a/cloud/iris/open_mopd_evaluation.py
@@ -111,6 +128,36 @@ index db61c67acb9ded58ee4971499eafa1df9966c9fd..fd0b138f83e36aba811add9c510e3944
 @@ -546 +546 @@ def main(argv: list[str] | None = None) -> int:
 -        "launcher_commit": args.launcher_commit,
 +        "source_digest": args.source_digest,
+diff --git a/cloud/iris/ray_ports.py b/cloud/iris/ray_ports.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5c517cbe1ba2462bbcba7886e2d5a3579ec6ca35
+--- /dev/null
++++ b/cloud/iris/ray_ports.py
+@@ -0,0 +1,24 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++"""Ray endpoints allocated by Iris for each task on a shared host."""
++
++import os
++from enum import StrEnum
++
++
++class RayPort(StrEnum):
++    HEAD = "ray_head"
++    DASHBOARD = "ray_dashboard"
++    CLIENT = "ray_client"
++    METRICS = "ray_metrics"
++    RUNTIME_ENV_AGENT = "ray_runtime_env_agent"
++    DASHBOARD_AGENT_GRPC = "ray_dashboard_agent_grpc"
++    DASHBOARD_AGENT_LISTEN = "ray_dashboard_agent_listen"
++    NODE_MANAGER = "ray_node_manager"
++    OBJECT_MANAGER = "ray_object_manager"
++
++
++def allocated_ray_port(port: RayPort) -> int:
++    """Return the task's required scheduler allocation for a Ray endpoint."""
++    return int(os.environ[f"IRIS_PORT_{port.value.upper()}"])
 diff --git a/cloud/iris/runtime_bundle.py b/cloud/iris/runtime_bundle.py
 index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..76dff3a6817cdbb2ae97b96c85f3bebd13c37388 100644
 --- a/cloud/iris/runtime_bundle.py
@@ -334,13 +381,107 @@ index 9fb5a71ffa4317ad024112dbcf508eedaa89b722..d3f6b9513bfc79975a0aa0a6b7a53b65
 @@ -24 +24 @@ def run_config(config_path: Path) -> None:
 -                "launcher_commit": str(config.runtime.launcher_commit),
 +                "source_digest": str(config.runtime.source_digest),
+diff --git a/cloud/iris/task_runtime.py b/cloud/iris/task_runtime.py
+index 5f7d72c486ca1e1cd327ff4149cdba1c784ba407..b937a6ef9ccbe90c78d40e937c39eaf848738c87 100644
+--- a/cloud/iris/task_runtime.py
++++ b/cloud/iris/task_runtime.py
+@@ -84,0 +85 @@ from cloud.iris.paths import resolve_repo_path
++from cloud.iris.ray_ports import RayPort, allocated_ray_port
+@@ -1011,23 +1011,0 @@ def clear_rendezvous(rendezvous_dir: str) -> None:
+-# Ray port allocation on cw-us-east-02a — PIN every named system port OUTSIDE the
+-# worker_ports range so Ray's own randomized agent ports can never collide with it.
+-#
+-# Ray assigns several system components (metrics_export, runtime_env_agent,
+-# dashboard_agent_grpc, dashboard_agent_listen, node/object_manager) by picking a
+-# RANDOM free port from the same ephemeral zone as the default worker_ports range
+-# (10002–19999), and Ray's pre-start validation aborts the node when a random agent
+-# port lands inside worker_ports:
+-#   ValueError: Ray component worker_ports is trying to use a port number <N>
+-#   that is used by other components.
+-# Shifting worker_ports does NOT help — the random agent ports follow. The fix:
+-# keep worker_ports at Ray's DEFAULT 10002–19999 and PIN every agent port Ray would
+-# otherwise randomize to a fixed value in the low 8xxx band — OUTSIDE 10002–19999 and
+-# distinct from gcs(6379)/dashboard(8265)/client_server(10001). Applied on BOTH head
+-# and worker.
+-RAY_METRICS_EXPORT_PORT = 8090
+-RAY_RUNTIME_ENV_AGENT_PORT = 8092
+-RAY_DASHBOARD_AGENT_GRPC_PORT = 8093
+-RAY_DASHBOARD_AGENT_LISTEN_PORT = 8094
+-RAY_NODE_MANAGER_PORT = 8076
+-RAY_OBJECT_MANAGER_PORT = 8077
+-
+-
+@@ -1035,4 +1013,2 @@ def _ray_port_flags() -> list[str]:
+-    """Ray port flags shared by head + worker: pin EVERY named system port that Ray
+-    would otherwise randomize to a fixed value OUTSIDE the default worker_ports range
+-    (10002–19999), so no random agent port can ever collide with worker_ports (see the
+-    collision note above). worker_ports is left at Ray's default."""
++    # Iris tasks share host networking. Named endpoints must use scheduler allocations;
++    # worker processes ask the kernel for ports outside Iris's reserved allocation range.
+@@ -1040,6 +1016,8 @@ def _ray_port_flags() -> list[str]:
+-        f"--metrics-export-port={RAY_METRICS_EXPORT_PORT}",
+-        f"--runtime-env-agent-port={RAY_RUNTIME_ENV_AGENT_PORT}",
+-        f"--dashboard-agent-grpc-port={RAY_DASHBOARD_AGENT_GRPC_PORT}",
+-        f"--dashboard-agent-listen-port={RAY_DASHBOARD_AGENT_LISTEN_PORT}",
+-        f"--node-manager-port={RAY_NODE_MANAGER_PORT}",
+-        f"--object-manager-port={RAY_OBJECT_MANAGER_PORT}",
++        f"--metrics-export-port={allocated_ray_port(RayPort.METRICS)}",
++        f"--runtime-env-agent-port={allocated_ray_port(RayPort.RUNTIME_ENV_AGENT)}",
++        f"--dashboard-agent-grpc-port={allocated_ray_port(RayPort.DASHBOARD_AGENT_GRPC)}",
++        f"--dashboard-agent-listen-port={allocated_ray_port(RayPort.DASHBOARD_AGENT_LISTEN)}",
++        f"--node-manager-port={allocated_ray_port(RayPort.NODE_MANAGER)}",
++        f"--object-manager-port={allocated_ray_port(RayPort.OBJECT_MANAGER)}",
++        "--min-worker-port=0",
++        "--max-worker-port=0",
+@@ -1118 +1095,0 @@ def ray_start_head(
+-    ray_port: int,
+@@ -1127 +1104,3 @@ def ray_start_head(
+-        f"--port={ray_port}",
++        f"--port={allocated_ray_port(RayPort.HEAD)}",
++        f"--dashboard-port={allocated_ray_port(RayPort.DASHBOARD)}",
++        f"--ray-client-server-port={allocated_ray_port(RayPort.CLIENT)}",
+@@ -1801 +1780 @@ def run_head(
+-    ray_port = args.ray_port
++    ray_port = allocated_ray_port(RayPort.HEAD)
+@@ -1852 +1830,0 @@ def run_head(
+-        ray_port,
+@@ -1881 +1859 @@ def run_head(
+-    with ray_metrics_telemetry(head_ip, RAY_METRICS_EXPORT_PORT, CONTROLLER_ROLE):
++    with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
+@@ -2009 +1987 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
+-    with ray_metrics_telemetry(node_ip, RAY_METRICS_EXPORT_PORT, WORKER_ROLE):
++    with ray_metrics_telemetry(node_ip, allocated_ray_port(RayPort.METRICS), WORKER_ROLE):
+@@ -2069 +2046,0 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
+-        ray_port=int(config.ray.port),
+diff --git a/cloud/iris/tests/conftest.py b/cloud/iris/tests/conftest.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a0b7f6b8b896dc2611b72f23921961d04f2badc9
+--- /dev/null
++++ b/cloud/iris/tests/conftest.py
+@@ -0,0 +1,14 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++import pytest
++
++from cloud.iris.ray_ports import RayPort
++
++
++@pytest.fixture
++def iris_ray_ports(monkeypatch):
++    ports = {port: 12000 + index for index, port in enumerate(RayPort)}
++    for port, value in ports.items():
++        monkeypatch.setenv(f"IRIS_PORT_{port.value.upper()}", str(value))
++    return ports
 diff --git a/cloud/iris/tests/test_launch_config.py b/cloud/iris/tests/test_launch_config.py
-index e8b2629de3f789cdf13a6ab8e433d3ca9a6ea8fd..19298f6a1c58923353183130ded4f5f828ccba38 100644
+index e8b2629de3f789cdf13a6ab8e433d3ca9a6ea8fd..d8377728e54734aa12d195750a73e44178032728 100644
 --- a/cloud/iris/tests/test_launch_config.py
 +++ b/cloud/iris/tests/test_launch_config.py
 @@ -41 +41 @@ def _raw_config() -> dict[str, Any]:
 -            "launcher_commit": "a" * 40,
 +            "source_digest": "a" * 64,
+@@ -60 +59,0 @@ def _raw_config() -> dict[str, Any]:
+-            "port": 6379,
 diff --git a/cloud/iris/tests/test_open_mopd_evaluation.py b/cloud/iris/tests/test_open_mopd_evaluation.py
 index 841ae67e8fe703957117561ee592b95cb72fc77e..db5f2254a7cedb7178d9e02b6e7977ad9c138e7b 100644
 --- a/cloud/iris/tests/test_open_mopd_evaluation.py
@@ -370,6 +511,86 @@ index 6657534dd4f715b8d822fc9655fbf223555ce7f7..d6578df8fee2171a0efaad0b9bf67a8c
 @@ -496 +496 @@ def test_submission_requires_deviation_acknowledgement(
 -    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
 +    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+diff --git a/cloud/iris/tests/test_ray_spill_policy.py b/cloud/iris/tests/test_ray_spill_policy.py
+index e4b655e087325225d4873dd1f733afc22829f123..22626413443352afbbdef5814ae13d0428c338eb 100644
+--- a/cloud/iris/tests/test_ray_spill_policy.py
++++ b/cloud/iris/tests/test_ray_spill_policy.py
+@@ -5,0 +6 @@ import pytest
++from ray._private.parameter import RayParams
+@@ -11,0 +13 @@ from cloud.iris import task_runtime as runtime  # noqa: E402
++from cloud.iris.ray_ports import RayPort  # noqa: E402
+@@ -20,0 +23,38 @@ from cloud.iris.ray_storage import (  # noqa: E402
++pytestmark = pytest.mark.usefixtures("iris_ray_ports")
++
++
++def test_concurrent_ray_heads_use_disjoint_scheduler_ports(tmp_path, monkeypatch):
++    commands = []
++    monkeypatch.setattr(runtime.subprocess, "run", lambda command, **_kwargs: commands.append(command))
++    endpoints = []
++    for first_port in (12000, 12100):
++        allocated = {port: first_port + index for index, port in enumerate(RayPort)}
++        for port, value in allocated.items():
++            monkeypatch.setenv(f"IRIS_PORT_{port.value.upper()}", str(value))
++        runtime.ray_start_head("127.0.0.1", LocalRaySpillTarget(str(tmp_path / str(first_port))))
++        flags = dict(argument.split("=", 1) for argument in commands[-1] if "=" in argument)
++        ports = {
++            "gcs_server_port": int(flags["--port"]),
++            "dashboard_port": int(flags["--dashboard-port"]),
++            "ray_client_server_port": int(flags["--ray-client-server-port"]),
++            "metrics_export_port": int(flags["--metrics-export-port"]),
++            "runtime_env_agent_port": int(flags["--runtime-env-agent-port"]),
++            "metrics_agent_port": int(flags["--dashboard-agent-grpc-port"]),
++            "dashboard_agent_listen_port": int(flags["--dashboard-agent-listen-port"]),
++            "node_manager_port": int(flags["--node-manager-port"]),
++            "object_manager_port": int(flags["--object-manager-port"]),
++        }
++        # Iris allocates in Ray's old default worker range. Validate the actual
++        # pinned Ray parameters so agents cannot conflict with worker ports.
++        parameters = RayParams(
++            **ports,
++            min_worker_port=int(flags["--min-worker-port"]),
++            max_worker_port=int(flags["--max-worker-port"]),
++        )
++        parameters.update_pre_selected_port()
++        assert ports["gcs_server_port"] == allocated[RayPort.HEAD]
++        assert set(ports.values()) == set(allocated.values())
++        endpoints.append(set(ports.values()))
++    assert endpoints[0].isdisjoint(endpoints[1])
++
++
+@@ -66 +106 @@ def test_local_spill_directory_exists_before_ray_start(tmp_path, monkeypatch, ro
+-        runtime.ray_start_head("10.0.0.1", 6379, target)
++        runtime.ray_start_head("10.0.0.1", target)
+diff --git a/cloud/iris/tests/test_task_runtime_debug_artifacts.py b/cloud/iris/tests/test_task_runtime_debug_artifacts.py
+index 39e7e82aa1d928be9357d7a9612d6316bea65719..c1f35e6007d1abcf7565b180fbae21d5b705534f 100644
+--- a/cloud/iris/tests/test_task_runtime_debug_artifacts.py
++++ b/cloud/iris/tests/test_task_runtime_debug_artifacts.py
+@@ -12,0 +13 @@ from cloud.iris import task_runtime
++from cloud.iris.ray_ports import RayPort
+@@ -24,0 +26,2 @@ from marinskyrl.environment_contract import (
++pytestmark = pytest.mark.usefixtures("iris_ray_ports")
++
+@@ -31 +34,3 @@ from marinskyrl.environment_contract import (
+-def test_supervisors_share_worker_diagnostics_with_uploader(tmp_path: Path, monkeypatch, rank, mode, explicit_root):
++def test_supervisors_share_worker_diagnostics_with_uploader(
++    tmp_path: Path, monkeypatch, rank, mode, explicit_root, iris_ray_ports
++):
+@@ -45 +49,0 @@ def test_supervisors_share_worker_diagnostics_with_uploader(tmp_path: Path, monk
+-        ray_port=6379,
+@@ -52 +56 @@ def test_supervisors_share_worker_diagnostics_with_uploader(tmp_path: Path, monk
+-    task_runtime.write_rendezvous(args.rendezvous_dir, "192.0.2.1", args.ray_port, "test-gang")
++    task_runtime.write_rendezvous(args.rendezvous_dir, "192.0.2.1", iris_ray_ports[RayPort.HEAD], "test-gang")
+diff --git a/cloud/iris/tests/test_task_runtime_source_selection.py b/cloud/iris/tests/test_task_runtime_source_selection.py
+index 674543c7b6e35b4703eaf4a630a649ffc48fcfcf..69e2ac19f213a67182ff1e3cb98a2a53c7587476 100644
+--- a/cloud/iris/tests/test_task_runtime_source_selection.py
++++ b/cloud/iris/tests/test_task_runtime_source_selection.py
+@@ -10,0 +11 @@ from types import SimpleNamespace
++import pytest
+@@ -14,0 +16,2 @@ from marinskyrl.environment_contract import DEBUG_ARTIFACT_DIR_ENV
++pytestmark = pytest.mark.usefixtures("iris_ray_ports")
++
+@@ -90 +92,0 @@ def _runtime_args(
+-        ray_port=6379,
 diff --git a/cloud/iris/tests/test_vendored_runtime_bundle.py b/cloud/iris/tests/test_vendored_runtime_bundle.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..f9364dedb2fb757f71ca03b43cd2385b868c50ff

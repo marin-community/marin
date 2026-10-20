@@ -82,6 +82,7 @@ from marinskyrl.process_diagnostics import (
     write_process_outcome,
 )
 from cloud.iris.paths import resolve_repo_path
+from cloud.iris.ray_ports import RayPort, allocated_ray_port
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -1008,41 +1009,18 @@ def clear_rendezvous(rendezvous_dir: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-# Ray port allocation on cw-us-east-02a — PIN every named system port OUTSIDE the
-# worker_ports range so Ray's own randomized agent ports can never collide with it.
-#
-# Ray assigns several system components (metrics_export, runtime_env_agent,
-# dashboard_agent_grpc, dashboard_agent_listen, node/object_manager) by picking a
-# RANDOM free port from the same ephemeral zone as the default worker_ports range
-# (10002–19999), and Ray's pre-start validation aborts the node when a random agent
-# port lands inside worker_ports:
-#   ValueError: Ray component worker_ports is trying to use a port number <N>
-#   that is used by other components.
-# Shifting worker_ports does NOT help — the random agent ports follow. The fix:
-# keep worker_ports at Ray's DEFAULT 10002–19999 and PIN every agent port Ray would
-# otherwise randomize to a fixed value in the low 8xxx band — OUTSIDE 10002–19999 and
-# distinct from gcs(6379)/dashboard(8265)/client_server(10001). Applied on BOTH head
-# and worker.
-RAY_METRICS_EXPORT_PORT = 8090
-RAY_RUNTIME_ENV_AGENT_PORT = 8092
-RAY_DASHBOARD_AGENT_GRPC_PORT = 8093
-RAY_DASHBOARD_AGENT_LISTEN_PORT = 8094
-RAY_NODE_MANAGER_PORT = 8076
-RAY_OBJECT_MANAGER_PORT = 8077
-
-
 def _ray_port_flags() -> list[str]:
-    """Ray port flags shared by head + worker: pin EVERY named system port that Ray
-    would otherwise randomize to a fixed value OUTSIDE the default worker_ports range
-    (10002–19999), so no random agent port can ever collide with worker_ports (see the
-    collision note above). worker_ports is left at Ray's default."""
+    # Iris tasks share host networking. Named endpoints must use scheduler allocations;
+    # worker processes ask the kernel for ports outside Iris's reserved allocation range.
     return [
-        f"--metrics-export-port={RAY_METRICS_EXPORT_PORT}",
-        f"--runtime-env-agent-port={RAY_RUNTIME_ENV_AGENT_PORT}",
-        f"--dashboard-agent-grpc-port={RAY_DASHBOARD_AGENT_GRPC_PORT}",
-        f"--dashboard-agent-listen-port={RAY_DASHBOARD_AGENT_LISTEN_PORT}",
-        f"--node-manager-port={RAY_NODE_MANAGER_PORT}",
-        f"--object-manager-port={RAY_OBJECT_MANAGER_PORT}",
+        f"--metrics-export-port={allocated_ray_port(RayPort.METRICS)}",
+        f"--runtime-env-agent-port={allocated_ray_port(RayPort.RUNTIME_ENV_AGENT)}",
+        f"--dashboard-agent-grpc-port={allocated_ray_port(RayPort.DASHBOARD_AGENT_GRPC)}",
+        f"--dashboard-agent-listen-port={allocated_ray_port(RayPort.DASHBOARD_AGENT_LISTEN)}",
+        f"--node-manager-port={allocated_ray_port(RayPort.NODE_MANAGER)}",
+        f"--object-manager-port={allocated_ray_port(RayPort.OBJECT_MANAGER)}",
+        "--min-worker-port=0",
+        "--max-worker-port=0",
     ]
 
 
@@ -1115,7 +1093,6 @@ def _ray_mem_flags() -> list[str]:
 
 def ray_start_head(
     head_ip: str,
-    ray_port: int,
     spill_target: RaySpillTarget,
 ) -> None:
     spill_target.prepare_node()
@@ -1124,7 +1101,9 @@ def ray_start_head(
         "start",
         "--head",
         f"--node-ip-address={head_ip}",
-        f"--port={ray_port}",
+        f"--port={allocated_ray_port(RayPort.HEAD)}",
+        f"--dashboard-port={allocated_ray_port(RayPort.DASHBOARD)}",
+        f"--ray-client-server-port={allocated_ray_port(RayPort.CLIENT)}",
         "--dashboard-host=0.0.0.0",
         *_ray_port_flags(),
         *_ray_mem_flags(),
@@ -1798,7 +1777,7 @@ def run_head(
     num_tasks = _num_tasks()
     gang_epoch = uuid.uuid4().hex
     head_ip = _own_ip()
-    ray_port = args.ray_port
+    ray_port = allocated_ray_port(RayPort.HEAD)
     ray_address = f"{head_ip}:{ray_port}"
     node_id = f"rank0-{socket.gethostname()}"
     _log(f"ROLE=head rank=0/{num_tasks} head_ip={head_ip} ray_port={ray_port}")
@@ -1849,7 +1828,6 @@ def run_head(
 
     ray_start_head(
         head_ip,
-        ray_port,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
     )
     _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
@@ -1878,7 +1856,7 @@ def run_head(
     else:
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
 
-    with ray_metrics_telemetry(head_ip, RAY_METRICS_EXPORT_PORT, CONTROLLER_ROLE):
+    with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
         env = training_driver_env(derived_gloo_ifname)
         env["RAY_ADDRESS"] = ray_address  # skyrl-train's bare ray.init() attaches here
         env["PYTHONUNBUFFERED"] = "1"
@@ -2006,7 +1984,7 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
     # A signal without that result tears down Ray but remains a non-successful
     # task outcome so Iris cannot mistake a bounced gang peer for completed work.
     head_completed = False
-    with ray_metrics_telemetry(node_ip, RAY_METRICS_EXPORT_PORT, WORKER_ROLE):
+    with ray_metrics_telemetry(node_ip, allocated_ray_port(RayPort.METRICS), WORKER_ROLE):
         while True:
             if head_succeeded(args.rendezvous_dir, payload.gang_epoch):
                 head_completed = True
@@ -2066,7 +2044,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
-        ray_port=int(config.ray.port),
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
         rendezvous_dir=str(config.ray.rendezvous_dir),

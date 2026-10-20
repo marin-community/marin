@@ -53,6 +53,7 @@ from marinskyrl.resource_locator import (
 )
 from skyrl_train.rollouts.harbor_settings import EnvironmentType
 from cloud.iris.runtime_bundle import build_runtime_bundle
+from cloud.iris.ray_ports import RayPort
 from marinskyrl.environment_contract import (
     DEBUG_ARTIFACT_DIR_ENV,
     DEBUG_MODE_ENV,
@@ -282,7 +283,6 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         cpu=float(allocation["cpu"]),
         memory=allocation["memory"],
         disk=allocation["disk"],
-        ray_port=int(ray["port"]),
         ray_spill_dir=ray["spill_dir"],
         ray_spill_backend=RaySpillBackend(ray["spill_backend"]),
         rendezvous_dir=ray["rendezvous_dir"],
@@ -961,7 +961,6 @@ def launch(args: SimpleNamespace, expected_source_digest: str) -> LaunchOutcome:
                 print(f"[rl-iris] FR-slug re-scope: {_fr_cvar} {_old} -> {_new}", flush=True)
     if args.rendezvous_dir:
         env_vars["OT_AGENT_IRIS_RENDEZVOUS_DIR"] = args.rendezvous_dir
-    env_vars["OT_AGENT_IRIS_RAY_PORT"] = str(args.ray_port)
     # Forward the launch host's secrets (mirrors launch_eval_iris.py passthrough).
     #
     # IMPORTANT — do NOT forward AWS_*/R2_* here. The cw-us-east-02a cluster
@@ -1103,6 +1102,7 @@ def launch(args: SimpleNamespace, expected_source_digest: str) -> LaunchOutcome:
             constraints=constraints or None,
             coscheduling=coscheduling,
             replicas=replicas,
+            ports=[port.value for port in RayPort],
             max_retries_failure=args.max_retries,
             max_task_failures=args.max_retries,
             priority_band=priority_band,

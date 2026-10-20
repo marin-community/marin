@@ -22,6 +22,10 @@ Megatron for both Qwen and Snowball. The Snowball recipes follow
 including separate reference nodes, recomputation and optimizer offload.
 The obsolete FSDP profile and recipe fields are removed.
 
+Iris assigns each task's named Ray ports. This lets concurrent jobs share a GPU
+host without connecting to another job's Ray head or competing for fixed agent
+ports. The head publishes its assigned address through the launch rendezvous.
+
 ```mermaid
 flowchart LR
     Marin["Marin experiment<br/>root uv.lock"] -->|"launch YAML / subprocess"| Launcher

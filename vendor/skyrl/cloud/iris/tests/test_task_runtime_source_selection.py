@@ -8,9 +8,12 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 
 from cloud.iris import task_runtime
 from marinskyrl.environment_contract import DEBUG_ARTIFACT_DIR_ENV
+
+pytestmark = pytest.mark.usefixtures("iris_ray_ports")
 
 
 def test_training_driver_starts_from_the_immutable_runtime_checkout(monkeypatch) -> None:
@@ -87,7 +90,6 @@ def _runtime_args(
     rendezvous_dir: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        ray_port=6379,
         ray_log_dir=None,
         rendezvous_dir=rendezvous_dir,
         ray_spill_backend=task_runtime.RaySpillBackend.LOCAL,

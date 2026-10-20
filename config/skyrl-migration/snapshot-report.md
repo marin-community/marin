@@ -1,6 +1,6 @@
 # SkyRL migration dry run
 
-Source: `3a8e8a72681011012ebb59c0c1ed34688ad6fdea`. Retained 499 files; discarded 829.
+Source: `3a8e8a72681011012ebb59c0c1ed34688ad6fdea`. Retained 504 files; discarded 824.
 
 This is a source candidate. Runtime bootstrap and nightly acceptance remain required.
 
@@ -17,8 +17,8 @@ This is a source candidate. Runtime bootstrap and nightly acceptance remain requ
 | [#916](https://github.com/marin-community/MarinSkyRL/pull/916) |  | needs-decision | 11 |
 | [#923](https://github.com/marin-community/MarinSkyRL/pull/923) |  | needs-decision | 11 |
 | [#924](https://github.com/marin-community/MarinSkyRL/pull/924) |  | needs-decision | 9 |
-| [#925](https://github.com/marin-community/MarinSkyRL/pull/925) |  | conflict | 18 |
-| [#932](https://github.com/marin-community/MarinSkyRL/pull/932) |  | conflict | 124 |
+| [#925](https://github.com/marin-community/MarinSkyRL/pull/925) |  | conflict | 17 |
+| [#932](https://github.com/marin-community/MarinSkyRL/pull/932) |  | conflict | 123 |
 | [#934](https://github.com/marin-community/MarinSkyRL/pull/934) |  | conflict | 6 |
 | [#944](https://github.com/marin-community/MarinSkyRL/pull/944) |  | conflict | 31 |
 | [#945](https://github.com/marin-community/MarinSkyRL/pull/945) |  | needs-decision | 2 |
@@ -35,7 +35,7 @@ This is a source candidate. Runtime bootstrap and nightly acceptance remain requ
 | [#1027](https://github.com/marin-community/MarinSkyRL/pull/1027) |  | needs-decision | 3 |
 | [#1029](https://github.com/marin-community/MarinSkyRL/pull/1029) |  | needs-decision | 1 |
 | [#1030](https://github.com/marin-community/MarinSkyRL/pull/1030) |  | conflict | 18 |
-| [#1031](https://github.com/marin-community/MarinSkyRL/pull/1031) |  | needs-decision | 1 |
+| [#1031](https://github.com/marin-community/MarinSkyRL/pull/1031) |  | needs-decision | 2 |
 | [#907](https://github.com/marin-community/MarinSkyRL/pull/907) | 905 | needs-decision | 2 |
 | [#931](https://github.com/marin-community/MarinSkyRL/pull/931) | 916 | blocked-parent | 0 |
 | [#940](https://github.com/marin-community/MarinSkyRL/pull/940) | 934 | blocked-parent | 0 |

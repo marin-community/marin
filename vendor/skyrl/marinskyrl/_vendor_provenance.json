@@ -2,7 +2,7 @@
   "patches": [
     {
       "path": "skyrl-migration/local-changes.patch",
-      "sha256": "305a205e42bd1b0fb170651f349ada77258759268a1db2ad9a6f67ce0833d371"
+      "sha256": "292cec6bc57af790c8c4cb3bbdc6b04d5844b3a86498a63840c16d8bb21f7b80"
     }
   ],
   "source": "marin-community/MarinSkyRL",

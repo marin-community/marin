@@ -494,11 +494,16 @@ jobs:
           cache-dependency-glob: "vendor/skyrl/uv.lock"
       - name: Check independent lock, Marin contract, and built wheel
         run: uv run --no-project python -m scripts.skyrl_migration check-vendor
-      - name: Exercise the isolated source bundle, OPD launcher, and verifier
+      - name: Exercise the isolated source bundle, launchers, and verifier
         working-directory: vendor/skyrl
         run: |
-          uv run --isolated --frozen --no-group dev --with pytest==8.4.2 pytest -q \
+          uv run --isolated --frozen --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
             cloud/iris/tests/test_vendored_runtime_bundle.py \
+            cloud/iris/tests/test_ray_spill_policy.py \
+            cloud/iris/tests/test_task_runtime_source_selection.py \
+            cloud/iris/tests/test_task_runtime_debug_artifacts.py \
+            cloud/iris/tests/test_launch_config.py \
+            cloud/iris/tests/test_checkpoint_export_config.py \
             cloud/iris/tests/test_open_mopd_fidelity.py \
             cloud/iris/tests/test_open_mopd_evaluation.py \
             skyrl-gym/tests/test_aime_answer_normalization.py

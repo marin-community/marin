@@ -123,7 +123,6 @@ class IrisConfig:
 class RayConfig:
     """Ray bootstrap settings shared by every task replica."""
 
-    port: int = 6379
     spill_backend: str = RaySpillBackend.LOCAL.value
     spill_dir: str = MISSING
     rendezvous_dir: str = MISSING
@@ -311,13 +310,12 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     _validate_inputs(raw["inputs"])
     ray = raw["ray"]
     if (
-        ray["port"] <= 0
-        or ray["rendezvous_timeout"] <= 0
+        ray["rendezvous_timeout"] <= 0
         or ray["cluster_join_timeout"] <= 0
         or ray["driver_liveness_timeout"] < 0
     ):
         raise ValueError(
-            "ray port, rendezvous timeout, and cluster join timeout must be positive; "
+            "ray rendezvous timeout and cluster join timeout must be positive; "
             "driver liveness timeout cannot be negative"
         )
     resolve_ray_spill_target(
