@@ -10,6 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 
 MANIFEST_FILE = "mlx-build.json"
+PUBLICATION_DOCUMENTS = {"README.md", "LICENSE"}
 
 
 class Recipe(StrEnum):
@@ -26,7 +27,10 @@ def build_files(model: Path) -> dict[str, str]:
     return {
         str(path.relative_to(model)): file_digest(path)
         for path in sorted(model.rglob("*"))
-        if path.is_file() and path.name != MANIFEST_FILE and "__pycache__" not in path.parts
+        if path.is_file()
+        and path.name != MANIFEST_FILE
+        and path.relative_to(model).as_posix() not in PUBLICATION_DOCUMENTS
+        and "__pycache__" not in path.parts
     }
 
 

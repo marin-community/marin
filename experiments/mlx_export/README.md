@@ -64,7 +64,8 @@ source directory and refuses to overwrite an existing build. After an interrupte
 remove that failed model artifact directory before retrying.
 
 Each model carries `mlx-build.json`, which records the source repository, full commit SHA,
-recipe, and file hashes. Scoring checks this manifest; comparison rejects a dump from another
+recipe, and file hashes, excluding the root `README.md` and `LICENSE` added at publication.
+Scoring checks this manifest; comparison rejects a dump from another
 build, recipe, source, or golden reference. The report includes the build and golden hashes.
 These checks establish which inputs were compared; they do not replace the numerical parity gates.
 

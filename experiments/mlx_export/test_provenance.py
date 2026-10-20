@@ -20,6 +20,11 @@ def test_parity_rejects_a_dump_from_different_inputs(tmp_path, changed):
     dump = {"build": verified_build(model), "golden_sha256": file_digest(golden)}
     assert validate_dump(dump, model=model, recipe=Recipe.MIXED_4BIT, golden=golden) == dump["build"]
 
+    # Publication adds the card and license after numerical qualification.
+    (model / "README.md").write_text("Qualified model card")
+    (model / "LICENSE").write_text("Model license")
+    assert validate_dump(dump, model=model, recipe=Recipe.MIXED_4BIT, golden=golden) == dump["build"]
+
     recipe = Recipe.MIXED_4BIT
     if changed == "weights":
         (model / "weights.safetensors").write_bytes(b"different model weights")
