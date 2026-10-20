@@ -77,6 +77,17 @@ def _control_command(script: str) -> str:
     )
 
 
+def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage | DockerfileSource:
+    if isinstance(source, RegistryImage):
+        return source
+    source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
+    if source.dockerfile.parent != source.context:
+        raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
+    if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
+        raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
+    return source
+
+
 async def ensure_snapshot(
     client: AsyncDaytona,
     source: RegistryImage | DockerfileSource,
@@ -92,6 +103,7 @@ async def ensure_snapshot(
     Registry sources use the reference string; pin a digest to avoid reusing a
     snapshot after a mutable tag changes.
     """
+    source = _validated_source(source)
     if name is None:
         identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
         name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
@@ -444,13 +456,7 @@ class DaytonaMachineFactory:
         )
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
-        source = self._check_spec(spec)
-        if isinstance(source, DockerfileSource):
-            source = DockerfileSource(source.context.resolve(), source.dockerfile.resolve())
-            if source.dockerfile.parent != source.context:
-                raise UnsupportedMachineSpec("Daytona requires the Dockerfile at the build context root")
-            if re.search(r"^\s*ADD(?:\s|$)", source.dockerfile.read_text(), re.IGNORECASE | re.MULTILINE):
-                raise UnsupportedMachineSpec("Daytona Dockerfiles with ADD require a prebuilt registry image")
+        source = _validated_source(self._check_spec(spec))
         resources = Resources(
             cpu=spec.cpus,
             memory=math.ceil(spec.memory_mb / 1024) if spec.memory_mb is not None else None,

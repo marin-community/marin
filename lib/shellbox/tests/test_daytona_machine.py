@@ -839,6 +839,20 @@ def test_daytona_rejects_add_inputs_before_snapshot_creation(tmp_path, instructi
     assert not client.snapshot.snapshots
 
 
+@pytest.mark.parametrize("invalid_source", ["add", "outside_context"])
+@pytest.mark.parametrize("name", [None, "preflight-snapshot"])
+def test_snapshot_preflight_rejects_unsupported_build_sources(tmp_path, invalid_source, name):
+    context = tmp_path / "context"
+    context.mkdir()
+    dockerfile = (tmp_path if invalid_source == "outside_context" else context) / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:24.04\nADD payload /opt/\n")
+    client = LocalDaytona()
+    with pytest.raises(UnsupportedMachineSpec):
+        asyncio.run(ensure_snapshot(client, DockerfileSource(context, dockerfile), Resources(cpu=1), name=name))
+    assert not client.snapshot.snapshots
+    assert client.params is None
+
+
 @pytest.mark.parametrize("startup_timeout", [None, 0.01])
 def test_daytona_pending_snapshot_times_out_and_closes_client(startup_timeout) -> None:
     client = LocalDaytona()
