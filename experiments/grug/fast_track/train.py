@@ -952,6 +952,25 @@ def _lm_head_grad_metrics(raw_norms: jax.Array, batch, clip: float | None) -> di
     }
 
 
+TOKEN_EMBED_STATS_PREFIX = "train/embed/"
+TOKEN_EMBED_ROW_QUANTILES = (0.01, 0.5)
+
+
+def _token_embed_stats(before: jax.Array, after: jax.Array) -> dict[str, jax.Array]:
+    """``token_embed`` after the step: Frobenius norm, row-norm min / quantiles / max, and ``||dE|| / ||E||``."""
+    after32, before32 = after.astype(jnp.float32), before.astype(jnp.float32)
+    rows = reshard(jnp.sqrt(jnp.sum(jnp.square(after32), axis=-1)), P(None))
+    quantiles = jnp.quantile(rows, jnp.asarray(TOKEN_EMBED_ROW_QUANTILES))
+    out = {
+        "frob_norm": jnp.sqrt(jnp.sum(jnp.square(after32))),
+        "row_norm_min": jnp.min(rows),
+        **{f"row_norm_p{100 * q:g}": quantiles[i] for i, q in enumerate(TOKEN_EMBED_ROW_QUANTILES)},
+        "row_norm_max": jnp.max(rows),
+        "rel_update": jnp.sqrt(jnp.sum(jnp.square(after32 - before32))) / jnp.sqrt(jnp.sum(jnp.square(before32))),
+    }
+    return {f"{TOKEN_EMBED_STATS_PREFIX}{k}": v for k, v in out.items()}
+
+
 def _write_lm_head_grad_dump(dump_dir: str, step: int, norms: jax.Array, batch) -> None:
     """Write ``step``'s per-token norms (``_lm_head_grad_metrics`` units), tokens, loss weights and segment ids."""
     arrays = {"norm": norms, "tokens": batch.tokens, "loss_weight": batch.loss_weight}
@@ -1093,9 +1112,11 @@ def _make_train_step(
     extra_mlp_start_step: int = 0,
     lm_head_grad_probe: bool = False,
     lm_head_grad_clip: float | None = None,
+    token_embed_stats: bool = False,
 ):
     """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
-    ``lm_head_grad_probe`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``).
+    ``lm_head_grad_probe`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
+    ``token_embed_stats`` the ``_token_embed_stats``.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
     (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
     between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
@@ -1154,6 +1175,8 @@ def _make_train_step(
             master_params = None
         if offload_opt_state:
             opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+        if token_embed_stats:
+            metrics.update(_token_embed_stats(qb_params.token_embed, params.token_embed))
 
         if ema_beta is None:
             ema_params = None
@@ -1575,6 +1598,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 "train/aux/",
                                 "train/optim/",
                                 LM_HEAD_GRAD_PREFIX,
+                                TOKEN_EMBED_STATS_PREFIX,
                             )
                         )
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
@@ -1984,6 +2008,7 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         extra_mlp_start_step=int(trainer.num_train_steps * config.trainer.extra_mlp_start_frac),
         lm_head_grad_probe=config.model.lm_head_grad_probe,
         lm_head_grad_clip=config.model.lm_head_grad_clip,
+        token_embed_stats=config.model.token_embed_stats,
     )
     return train_step_fn, diagnostic_watch_step
 

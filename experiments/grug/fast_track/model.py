@@ -928,6 +928,9 @@ class GrugModelConfig:
     lm_head_grad_dump_every: int = 0
     """With ``lm_head_grad_probe``: also write the whole batch's per-token norms and token ids every this many steps
     (and densely early on, see ``train.lm_head_grad_dump_due``); 0: no dumps."""
+    token_embed_stats: bool = False
+    """Log ``token_embed``'s Frobenius norm, row-norm min / p1 / p50 / max and relative update every train step
+    (``train/embed/``). Logging only."""
     lm_head_grad_clip: float | None = None
     """With ``lm_head_grad_probe``: clip each training token's gradient w.r.t. the lm_head input to this norm, in
     the probe's per-token units (the gradient of the token's own loss term), ``g * min(1, c / ||g||)``. The probe

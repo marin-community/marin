@@ -3,6 +3,7 @@
 
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import NamedTuple
 
 import jax
@@ -215,6 +216,64 @@ def _scale_by_adam_decoupled_decay(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def _fixed_decoupled_decay(weight_decay: float) -> optax.GradientTransformation:
+    """``u + weight_decay * p`` on every leaf, not annealed. Followed by ``scale(-lr)`` this is AdamW's decoupled
+    decay, ``p <- p (1 - lr_t weight_decay) - lr_t u``."""
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("_fixed_decoupled_decay requires params")
+        return jax.tree.map(lambda u, p: u + weight_decay * p, updates, params), state
+
+    return optax.GradientTransformation(lambda params: optax.EmptyState(), update_fn)
+
+
+def _row_norms(x: jax.Array) -> jax.Array:
+    return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True))
+
+
+def scale_by_row_sphere_adam(b1: float, b2: float, eps: float, learning_rate: jax.Array) -> optax.GradientTransformation:
+    """Row-wise AdamH for an embedding table ``[rows, D]``: the plain Adam step ``p - lr u``, then each row
+    rescaled back to its norm before the step, so every row keeps its init norm. Rows whose gradient is zero this
+    step (tokens absent from the batch) are left untouched, so no row drifts; their moments still decay. Returns
+    the full parameter delta (no ``scale(-lr)`` after it)."""
+    adam = optax.scale_by_adam(b1, b2, eps)
+
+    def update_fn(grads, state, params=None):
+        if params is None:
+            raise ValueError("scale_by_row_sphere_adam requires params")
+        updates, state = adam.update(grads, state, params)
+
+        def leaf(g, u, p):
+            if p.ndim != 2:
+                raise ValueError(f"row-wise AdamH needs a [rows, D] table, got shape {p.shape}")
+            active = jnp.any(g != 0, axis=-1, keepdims=True)
+            p32 = p.astype(jnp.float32)
+            stepped = p32 - learning_rate * u.astype(jnp.float32)
+            renormed = stepped * (_row_norms(p32) / jnp.maximum(_row_norms(stepped), 1e-10))
+            return jnp.where(active, renormed - p32, 0.0).astype(p.dtype)
+
+        return jax.tree.map(leaf, grads, updates, params), state
+
+    return optax.GradientTransformation(adam.init, update_fn)
+
+
+class EmbedOptimizer(StrEnum):
+    """How ``token_embed`` is optimized (``GrugMoeMuonHConfig.embed_optimizer``)."""
+
+    ADAM_GROUP = "adam_group"
+    """In the shared ``adam`` group (AdEMAMix when on; no decay on ``token_embed``)."""
+    ADEMAMIX = "ademamix"
+    """Own ``embed`` group: the ``adam`` group's moments (AdEMAMix when on) plus fixed ``embed_weight_decay``."""
+    ADAM = "adam"
+    """Own ``embed`` group: plain Adam moments (no AdEMAMix) plus fixed ``embed_weight_decay``."""
+    ROW_ADAMH = "row_adamh"
+    """Own ``embed`` group: ``scale_by_row_sphere_adam`` at the Adam LR (no AdEMAMix, no decay)."""
+
+
+_TOKEN_EMBED = re.compile(r"(?:^|\.)token_embed$")
+
+
 def _power_decay_schedule(peak: float, floor: float, warmup_steps: int, total_steps: int, power: float):
     """Linear warmup to ``peak``, then ``floor + (peak - floor) * (1 - p**power)``, ``p`` = post-warmup progress."""
 
@@ -413,6 +472,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Decay of the AdEMAMix slow EMA, warmed up over ``adam_ademamix_warmup`` as in the paper."""
     router_lr_mult: float = 1.0
     """LR multiplier of the router weights alone (of ``adam_lr`` or, with ``router_group=muonh``, the MuonH LR)."""
+    embed_optimizer: EmbedOptimizer = EmbedOptimizer.ADAM_GROUP
+    """How ``token_embed`` (the input table alone) is optimized, at the Adam LR (``EmbedOptimizer``)."""
+    embed_weight_decay: float = 0.0
+    """Fixed (not annealed) decoupled decay of ``token_embed``, ``p <- p (1 - adam_lr_t wd) - adam_lr_t u``; needs
+    ``embed_optimizer`` ``ademamix`` or ``adam``."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -471,6 +535,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 adam = _scale_by_adam_decoupled_decay(adam, self.gate_router_weight_decay, 0.0, num_train_steps)
             return clipped(adam, optax.scale(-lr))
 
+        def embed_at(lr):
+            if self.embed_optimizer == EmbedOptimizer.ROW_ADAMH:
+                return clipped(scale_by_row_sphere_adam(self.beta1, self.beta2, self.epsilon, lr))
+            if self.embed_optimizer == EmbedOptimizer.ADAM:
+                moments = optax.scale_by_adam(self.beta1, self.beta2, self.epsilon)
+            else:
+                moments = adam_moments(self.beta1, self.beta2)
+            decay = (_fixed_decoupled_decay(self.embed_weight_decay),) if self.embed_weight_decay else ()
+            return clipped(moments, *decay, optax.scale(-lr))
+
         def optimizer(learning_rate, adam_lr):
             transforms = {
                 "muonh": muonh_at(learning_rate),
@@ -484,6 +558,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "null_gain": adam_at(adam_lr),
                 "embed2": adam_at(adam_lr * self.embed2_lr_mult),
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
+                "embed": embed_at(adam_lr),
             }
             return optax.multi_transform(
                 {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in transforms.items()}, self.create_mask
@@ -494,6 +569,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     def __post_init__(self):
         if self.kda_beta_group not in ("kda_beta", "adam"):
             raise ValueError(f"kda_beta_group must be kda_beta or adam, got {self.kda_beta_group!r}")
+        if self.embed_weight_decay and self.embed_optimizer not in (EmbedOptimizer.ADEMAMIX, EmbedOptimizer.ADAM):
+            raise ValueError("embed_weight_decay needs embed_optimizer ademamix or adam")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
@@ -519,6 +596,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if re.search(r"token_embed(2|3)", path_lower) and self.embed2_lr_mult != 1.0:
                 return "embed2"
+            if _TOKEN_EMBED.search(path_lower) and self.embed_optimizer != EmbedOptimizer.ADAM_GROUP:
+                return "embed"
             if "token_embed" in path_lower:
                 return "adam"
             if _is_router_weight(path_lower):
