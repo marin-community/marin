@@ -238,7 +238,7 @@ def exec_in_container(
     request: controller_pb2.Controller.ExecInContainerRequest,
     context: RequestContext,
 ) -> controller_pb2.Controller.ExecInContainerResponse:
-    """Execute a command in the current Attempt for one task."""
+    """Execute a command in the current Attempt for one task the caller owns."""
     del context
     try:
         task_id = JobName.from_wire(request.task_id)
@@ -246,6 +246,7 @@ def exec_in_container(
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
 
+    _authorize_task_owner(dependencies, task_id)
     task = _task_with_attempts(dependencies, task_id, request.task_id)
     proxied = _proxy_if_federated(dependencies, task_id, lambda peer: peer.exec_in_container(request))
     if proxied is not None:
@@ -303,10 +304,23 @@ def _task_with_attempts(
     wire_name: str,
 ) -> tasks.TaskWithAttempts:
     _authorize_federated_debug_target(dependencies, task_id.root_job)
-    task = tasks.read_task_with_attempts(dependencies.db, task_id)
+    with dependencies.db.read_snapshot() as tx:
+        task = tasks.read_task_with_attempts(tx, task_id)
     if task is None:
         raise ConnectError(Code.NOT_FOUND, f"Task {wire_name} not found")
     return task
+
+
+def _authorize_task_owner(dependencies: AttemptDependencies, task_id: JobName) -> None:
+    """Require the caller to own the task's job or be admin.
+
+    A federation peer passes this check because it acts for the jobs it handed
+    off; callers limit it to those jobs separately.
+    """
+    identity = get_verified_identity()
+    if identity is not None and identity.role == FEDERATION_PEER_ROLE:
+        return
+    authorize_owner_if_configured(dependencies.auth, task_id.user)
 
 
 def _authorize_federated_debug_target(dependencies: AttemptDependencies, root_job: JobName) -> None:

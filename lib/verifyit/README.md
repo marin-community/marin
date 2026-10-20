@@ -39,13 +39,34 @@ process exit after a verdict has been written.
 | `judge` | reference-answer or checklist rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
+The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
+`PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
+Missing imports of those modules score zero, including an empty submission.
+Workspace-qualified candidate packages add the workspace parent to Python's import path.
+Unlisted missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
+`protected_paths_files` lists tests-directory manifests of trusted workspace paths restored by setup.
+Every batch is checked before returning a candidate startup or collection failure.
+
 For the `math` and `numeric` grading modes, the last `\boxed{...}` occurrence determines the
 candidate when the output contains a box marker. Its braces must be balanced and its content must be
 nonempty. Otherwise, the candidate receives reward `0.0`, even when an earlier marker contains the
-expected answer. Without a box marker, `math` grades the last nonempty line and `numeric` grades the
-last number. Numeric expected values and absolute and relative tolerances must be finite. Tolerances
-must also be nonnegative. The effective tolerance,
-`max(tolerance_abs, tolerance_rel * abs(expected))`, must be finite.
+expected answer. Without a box marker, both modes read the last nonempty line. Numeric mode
+extracts exactly one integer, decimal, scientific-notation value or integer fraction from that line.
+Surrounding prose is ignored, including negation: `Definitely not 42` extracts `42`.
+When a box is present, its entire content must be a numeric literal, optionally wrapped in math delimiters.
+Thousands separators require groups of three digits. Multiple literals such as `12 or 13` or
+`2 + 2`, malformed numbers and nonfinite values are malformed submissions and receive reward `0.0`.
+
+Numeric `expected` is a required literal string; `tolerance_abs` and `tolerance_rel`
+are required finite nonnegative floats. For example, `expected = "1/2"`, `tolerance_abs = 0.0`,
+`tolerance_rel = 0.0` accepts both `1/2` and `0.5` without losing integer or decimal precision.
+The effective tolerance is `max(tolerance_abs, tolerance_rel * abs(expected))`. Float tolerances
+are converted to exact rational values through their decimal spelling before comparison;
+`0.01` permits an exact difference of `1/100`. Native float expected values are rejected
+because rounding may already have changed their meaning. `grade_numeric_candidate_float`
+compares already parsed floats directly with an explicit absolute tolerance; MMMU uses
+`0.0` and JEEBench uses `0.01` to retain their source scoring rules.
+Literal components and expanded decimal powers are limited to 4096 digits before parsing.
 
 [`spec.py`](src/verifyit/spec.py) owns the frozen mode dataclasses plus `parse_spec` and
 `render_spec`. Spec paths are relative to the directory containing `verifier.toml`. `grade.py`
@@ -57,6 +78,12 @@ Answer specs expose `empty_output = "zero"` by default. Explicit `"grade"` passe
 text to the mode's contract; missing files still score zero. Rewards must be finite numbers
 in `[0, 1]`. Malformed verdicts, incomplete judge replies, and failed structured script producers
 become unscored infrastructure errors. Interrupted test runs cannot retain positive credit.
+
+Pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
+checks the interpreter and JSON-report plugin from a temporary directory isolated from task
+imports. A healthy baseline makes the failed task run a scored startup error; an unavailable
+baseline remains an infrastructure error. The task's original import paths and tests still
+run unchanged, so a candidate named after a standard-library module is graded as submitted.
 
 For `judge` reference and checklist rubrics, `max_completion_tokens` sets the initial chat request
 budget (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger
@@ -76,29 +103,41 @@ configures its scorer; callers own isolation when invoking its direct API.
 `adapters/` prepares framework observations for the shared modes. Frameworks retain task
 execution, dispatch, and dependency pins; installing this package does not enable an adapter.
 `preparation/` retains raw inputs and named normalization policies. Preparation failures carry
-Harbor's error categories from the pinned config-only `harbor-config` dependency.
+Verifyit's own attribution category, which determines whether an incomplete attempt can be scored.
 
 `json_comparison.json_values_equal` compares decoded JSON values with strict types and an optional
 float tolerance. `modes.grade_nl2bash` compares shell-output records as a multiset, preserving
 repeated records and rejecting unexpected errors.
 
-`candidate_spec(mode, parameters)` validates the shared exact, numeric, MCQ and predicted-action
-contracts for callers that already extracted a submission. `grade_text_candidate` scores extracted
-text; `grade_predicted_action_candidate` scores decoded function calls. These APIs perform no
-filesystem or harness operations. Predicted-action matching preserves duplicate calls and requires
-all calls to match one to one. Argument objects stay decoded in JSON descriptors; `render_spec`
-encodes each argument object as a JSON string in TOML so nested JSON null values survive
-`parse_spec`.
+`structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
+fences. `closure_scoring` compares a completed outer region with a known reference and reports
+syntax, content preservation, and trailing output separately. `tool_call_markup` classifies
+completed `<tool_call>` markup in decoded assistant text. These helpers inspect text; the caller
+retains the sampled tokens, supplies any generation stop markers, and decides when a completed
+attempt can be scored.
+
+`candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
+from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
+already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
+accepts: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
+`structured_exact` and `predicted_action`. Text modes take a string, `structured_exact` takes a
+decoded JSON value, and `predicted_action` takes a tuple of `FunctionCall`. A file the specification
+names, such as the `json-schema` schema, comes from `resources`, keyed by its path relative to the
+tests directory. A specification the mode rejects yields an `invalid_task` reward; a candidate of
+the wrong type raises `TypeError`. Judge, Reasoning Gym, execution and script modes run only
+through the file grader. Predicted-action matching preserves duplicate calls and requires all calls
+to match one to one. Argument objects stay decoded in JSON tables; `render_spec` encodes each
+argument object as a JSON string in TOML so nested JSON null values survive `parse_spec`.
 
 ## Install and use
 
 ```bash
-uv tool install --python ">=3.11" \
-  "verifyit[answer] @ git+https://github.com/marin-community/marin@<sha>#subdirectory=lib/verifyit"
+uv tool install --python ">=3.11" "marin-verifyit[math]"
 ```
 
-Extras are `answer`, `schema`, `judge`, `reasoning-gym`, and `all`. Execution modes use the task
-image's toolchain.
+The `math` extra installs `math-verify` and `sympy` for symbolic expression grading. Exact,
+numeric, and multiple-choice modes work with the base package. Other extras are `schema`,
+`judge`, `reasoning-gym`, and `all`. Execution modes use the task image's toolchain.
 
 ```python
 from pathlib import Path
@@ -119,6 +158,27 @@ uv run --group test pytest lib/verifyit/tests
 
 ## Candidate scoring
 
-Callers that already extracted an answer can use generic candidate scorers in `verifyit.candidate` and `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset policy belongs to the converter that emits a grader: source parsing conventions, calendar postconditions and abstention rules should be packaged as task-owned scripts.
+Callers that already extracted an answer use `verifyit.candidate.grade_candidate` for the in-process modes, or the per-mode candidate functions in `verifyit.modes`. Standard specs and script graders share the `Reward` and `Status` contract. Dataset declarations select the grader and lower source fields into its inputs. Shared comparisons belong in VerifyIT; source-specific reward functions stay with the dataset, in its grade scripts and the vendored source scorers they ship.
 
-A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Private fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
+For text candidates stored in a file, supply the contract and resource locations explicitly:
+
+```bash
+python -m verifyit.candidate_file \
+  --spec /tests/contract.toml --answer /app/answer.txt \
+  --workspace /app --logs-dir /logs/verifier \
+  --resources-manifest /tests/resources.json
+```
+
+The resource manifest is a JSON list of paths relative to its containing directory; use `[]`
+when there are no resources. The command passes the entire file text to `grade_candidate`,
+preserving its extraction rules, and writes the same verdict and reward files as `verifyit`.
+A missing answer scores zero. This entrypoint accepts text candidates; callers holding decoded
+JSON or function calls use the Python API.
+
+A `ScriptSpec` runs an ordinary grading script. The script may compose VerifyIT comparisons or implement its own scoring, and can declare `verdict_file` to distinguish scored results, invalid tasks and infrastructure failures. Fixtures are relative to the tests directory; candidate evidence belongs to the workspace.
+
+`StructuredExactSpec` compares acquired JSON values through `grade_structured_exact_candidate`.
+Its TOML reference is encoded as a JSON string so null and nested JSON types survive
+`render_spec` and `parse_spec`; JSON tables keep decoded values. Its `numeric_types`
+defaults to `"value"`; set `"strict"` to distinguish integers from floats. Structured and predicted-action
+candidate JSON rejects duplicate object keys.

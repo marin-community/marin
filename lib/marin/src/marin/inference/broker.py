@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from marin.inference.types import (
+    BrokerStatus,
     InferenceRequest,
     InferenceResponse,
     InferenceWorkerMetadata,
@@ -81,6 +82,7 @@ class InferenceBroker:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._lock = threading.Lock()
+        self._clock = clock
         # Request leases make fetched-but-unanswered work visible again if a
         # worker dies while holding it.
         self._request_lease_timeout_seconds = request_lease_timeout_seconds
@@ -90,6 +92,14 @@ class InferenceBroker:
         # Insertion-ordered set of request ids for diagnostics.
         self._pending: dict[str, None] = {}
         self._worker_metadata: dict[str, InferenceWorkerMetadata] = {}
+        self._queued_at: dict[str, float] = {}
+        self._submitted_requests = 0
+        self._dispatched_requests = 0
+        self._completed_requests = 0
+        self._failed_responses = 0
+        self._dropped_responses = 0
+        self._queue_wait_total = 0.0
+        self._queue_wait_max = 0.0
 
     def register_worker(self, worker_id: str, metadata: InferenceWorkerMetadata) -> None:
         with self._lock:
@@ -103,6 +113,8 @@ class InferenceBroker:
         with self._lock:
             self._requests.push(request)
             self._pending[request.request_id] = None
+            self._queued_at[request.request_id] = self._clock()
+            self._submitted_requests += 1
 
     def fetch_requests(self, *, max_items: int) -> list[LeasedInferenceRequest]:
         fetched: list[LeasedInferenceRequest] = []
@@ -113,6 +125,12 @@ class InferenceBroker:
                     break
                 fetched.append(LeasedInferenceRequest(lease_id=lease.lease_id, request=lease.item))
                 self._request_leases[lease.item.request_id] = lease
+                queued_at = self._queued_at.pop(lease.item.request_id, None)
+                if queued_at is not None:
+                    wait = self._clock() - queued_at
+                    self._queue_wait_total += wait
+                    self._queue_wait_max = max(self._queue_wait_max, wait)
+                    self._dispatched_requests += 1
         return fetched
 
     def submit_responses(self, responses: Iterable[LeasedInferenceResponse]) -> None:
@@ -123,12 +141,15 @@ class InferenceBroker:
                 lease = self._request_leases.get(response.request_id)
                 if lease is None or lease.lease_id != leased_response.lease_id or not self._requests.done(lease):
                     dropped_ids.append(response.request_id)
+                    self._dropped_responses += 1
                     if lease is not None and lease.lease_id == leased_response.lease_id:
                         self._request_leases.pop(response.request_id, None)
                     continue
                 self._request_leases.pop(response.request_id, None)
                 self._responses.append(response)
                 self._pending.pop(response.request_id, None)
+                self._completed_requests += 1
+                self._failed_responses += int(response.status_code >= 400)
         if dropped_ids:
             logger.warning(
                 "InferenceBroker dropped responses for inactive request leases count=%d request_ids=%s",
@@ -150,3 +171,22 @@ class InferenceBroker:
     def pending(self) -> list[str]:
         with self._lock:
             return list(self._pending)
+
+    def status(self) -> BrokerStatus:
+        """Snapshot broker queues and lifetime counters without exposing request contents."""
+        with self._lock:
+            return BrokerStatus(
+                queued_requests=self._requests.size(),
+                leased_requests=self._requests.pending(),
+                buffered_responses=len(self._responses),
+                submitted_requests=self._submitted_requests,
+                dispatched_requests=self._dispatched_requests,
+                completed_requests=self._completed_requests,
+                failed_responses=self._failed_responses,
+                dropped_responses=self._dropped_responses,
+                mean_queue_wait_seconds=(
+                    self._queue_wait_total / self._dispatched_requests if self._dispatched_requests else 0.0
+                ),
+                max_queue_wait_seconds=self._queue_wait_max,
+                workers=dict(self._worker_metadata),
+            )

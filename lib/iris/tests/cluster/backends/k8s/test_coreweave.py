@@ -12,6 +12,7 @@ K8sControllerProvider).
 import base64
 import json
 import os
+from pathlib import Path
 
 import pytest
 from iris.cluster.config import (
@@ -24,11 +25,16 @@ from iris.cluster.config import (
     IrisClusterConfig,
     KubernetesProviderConfig,
     KueueConfig,
+    NodeHealthConfig,
+    NodeStorageHealthConfig,
     PlatformConfig,
     ScaleGroupConfig,
     SliceConfig,
     StorageConfig,
+    resolve_config_secrets,
+    resolve_principal_references,
 )
+from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
@@ -472,6 +478,49 @@ def test_preflight_controller_caches_signing_key_without_mutating_kubernetes(mon
     secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-env")
     assert base64.b64decode(secret["data"]["IRIS_SIGNING_KEY"]).decode() == "key-before-build"
 
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("change_spec", [False, True])
+def test_directory_only_deploy_keeps_payload_in_controller_secret(tmp_path: Path, monkeypatch, change_spec: bool):
+    directory = tmp_path / "directory.json"
+    before = {"human-999": "before@example.com"}
+    after = {"human-999": "after@example.com"}
+    directory.write_text(json.dumps(before))
+    # A stale pod fallback in the operator shell must not replace the persistent source.
+    monkeypatch.setenv("IRIS_PRINCIPAL_DIRECTORY", "stale")
+    provider, k8s = _make_provider()
+    config = _make_cluster_config()
+    config.auth = AuthConfig(
+        principal_directory=["env:IRIS_PRINCIPAL_DIRECTORY", f"file:{directory}"],
+        allowed_submitters=["principal:human-999"],
+    )
+    _seed_prerequisites(k8s, config)
+    provider.preflight_controller(config)
+    assert k8s.get_json(K8sResource.SECRETS, "iris-controller-env") is None
+    if change_spec:
+        directory = tmp_path / "new-directory.json"
+        config.auth.principal_directory = ("env:IRIS_PRINCIPAL_DIRECTORY", f"file:{directory}")
+    directory.write_text(json.dumps(after))
+    provider.start_controller(config)
+
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-env")
+    payload = base64.b64decode(secret["data"]["IRIS_PRINCIPAL_DIRECTORY"]).decode()
+    expected = after if change_spec else before
+    assert json.loads(payload) == expected
+    configmap = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")
+    assert "before@example.com" not in json.dumps(configmap)
+    assert "after@example.com" not in json.dumps(configmap)
+    rendered = IrisClusterConfig.model_validate_json(configmap["data"]["config.json"])
+    assert rendered.auth.allowed_submitters == ["principal:human-999"]
+    monkeypatch.setenv("IRIS_PRINCIPAL_DIRECTORY", payload)
+    runtime = resolve_principal_references(resolve_config_secrets(rendered))
+    auth = create_controller_auth(runtime.auth, cluster_name=runtime.name)
+    assert auth.allowed_submitters == (expected["human-999"],)
+    deployment = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
+    env_from = deployment["spec"]["template"]["spec"]["containers"][0]["envFrom"]
+    assert {entry["secretRef"]["name"] for entry in env_from} == {"iris-controller-env"}
+    assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
     provider.shutdown()
 
 
@@ -1087,3 +1136,84 @@ def test_iris_priority_class_manifest_rejects_unknown_band():
 def _apply_stub(k8s: InMemoryK8sService, kind: str, name: str, namespace: str = "iris") -> None:
     """Apply a minimal stub resource into the in-memory K8s store."""
     k8s.apply_json({"kind": kind, "metadata": {"name": name, "namespace": namespace}, "spec": {}})
+
+
+# ============================================================================
+# Tests: egress NetworkPolicy
+# ============================================================================
+
+
+def _egress_policy_rules(k8s: InMemoryK8sService, mode: str) -> list[dict]:
+    policy = k8s.get_json(K8sResource.NETWORK_POLICIES, f"iris-egress-{mode}")
+    assert policy is not None
+    spec = policy["spec"]
+    assert spec["podSelector"] == {"matchLabels": {"iris.egress": mode}}
+    assert set(spec["policyTypes"]) == {"Ingress", "Egress"}
+    assert spec["ingress"] == []
+    return spec["egress"]
+
+
+_DNS_RULE = {
+    "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}}],
+    "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}],
+}
+_PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]
+
+
+@pytest.mark.parametrize(
+    ("service_cidr", "blocked"),
+    [
+        pytest.param("10.16.0.0/16", _PRIVATE_RANGES, id="service-range-already-private"),
+        pytest.param("198.18.0.0/15", [*_PRIVATE_RANGES, "198.18.0.0/15"], id="service-range-public"),
+    ],
+)
+def test_start_controller_creates_one_network_policy_per_egress_policy(service_cidr, blocked):
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.service_cidr = service_cidr
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.start_controller(cluster_config)
+
+    assert _egress_policy_rules(k8s, "none") == [_DNS_RULE]
+    assert _egress_policy_rules(k8s, "internet") == [
+        _DNS_RULE,
+        {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
+    ]
+
+
+@pytest.mark.parametrize("change", ["health_config", "literal_endpoint", "injected_credential"])
+def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(monkeypatch, change):
+    provider, k8s = _make_provider()
+    config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    config.kubernetes_provider.node_health = NodeHealthConfig(
+        storage=NodeStorageHealthConfig(scratch="s3://test-bucket/health")
+    )
+    config.defaults.task_env["AWS_ENDPOINT_URL"] = "https://regional.example"
+    config.defaults.inject_env = ["AWS_SESSION_TOKEN"]
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "first-test-token")
+    _seed_prerequisites(k8s, config)
+    provider.start_controller(config)
+    agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
+    container = agent["spec"]["containers"][0]
+    assert {"operator": "Exists"} in agent["spec"]["tolerations"]
+    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env"}}]
+    assert {"name": "AWS_ENDPOINT_URL", "value": "https://regional.example"} in container["env"]
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    assert "AWS_ACCESS_KEY_ID" in secret["data"]
+    assert not any(item["name"] == "AWS_ACCESS_KEY_ID" for item in container["env"])
+    original_config = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"]
+    if change == "health_config":
+        config.kubernetes_provider.node_health.storage.failure_threshold = 4
+    elif change == "literal_endpoint":
+        config.defaults.task_env["AWS_ENDPOINT_URL"] = "https://other-regional.example"
+    else:
+        monkeypatch.setenv("AWS_SESSION_TOKEN", "rotated-test-token")
+    provider.start_controller(config)
+    changed = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
+    assert changed["metadata"]["annotations"] != agent["metadata"]["annotations"]
+    updated_config = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"]
+    assert original_config != updated_config
+    assert "first-test-token" not in original_config
+    assert "rotated-test-token" not in updated_config
+    provider.shutdown()

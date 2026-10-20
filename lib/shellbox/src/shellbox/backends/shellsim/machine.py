@@ -1,36 +1,68 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ShellSim implementation of the machine and persistent shell contracts."""
+"""ShellSim implementation of the machine and persistent shell contracts.
+
+Action bookkeeping belongs to the event loop. A captured cancellation token can be signalled
+without taking the execution lock owned by the worker being interrupted.
+"""
 
 import asyncio
 import io
+import logging
 import re
 import shlex
 import tarfile
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import shellsim
 
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+    SHELL_SIMULATOR_CAPABILITIES,
+    Backend,
     Command,
+    CommandSemantics,
+    ExecutionRequirements,
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     ShellStatus,
     ShellUpdate,
     UnsupportedMachineSpec,
+    check_execution_requirements,
 )
 
 DEFAULT_CPU_LIMIT = 10_000_000_000
-DEFAULT_DISK_LIMIT = 256 * 1024 * 1024
+DEFAULT_DISK_LIMIT = 512 * 1024 * 1024
 DEFAULT_OUTPUT_LIMIT = 128 * 1024 * 1024
-DEFAULT_MEMORY_MB = 256
+DEFAULT_MEMORY_MB = 2048
+SIMULATOR_PANIC_EXIT_CODE = 1
+INTERRUPT_GRACE = 5.0
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+logger = logging.getLogger(__name__)
+
+
+def _log_worker_failure[T](worker: asyncio.Task[T]) -> None:
+    """Observe late native failures without replacing the caller's cancellation."""
+    if worker.cancelled():
+        return
+    error = worker.exception()
+    if error is not None:
+        logger.error("ShellSim worker failed after interruption", exc_info=error)
+
+
+@dataclass(frozen=True)
+class _RunningAction:
+    cancellation: shellsim.CancellationToken
+    worker: asyncio.Task[shellsim.RunResult]
+    shell: shellsim.ShellSession | None
 
 
 class ShellSimShellSession:
@@ -40,11 +72,22 @@ class ShellSimShellSession:
 
     def __init__(self, machine: "ShellSimMachine"):
         self.machine = machine
+        self.shell = machine.simulation.create_shell()
 
     async def execute(
         self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
     ) -> ShellUpdate:
-        result = await self.machine._run_source(command)
+        """Return a complete action; ``wait`` is an interactive polling hint."""
+        try:
+            result = await self.machine._run_source(command, shell=self.shell)
+        except shellsim.SimulationError as error:
+            output = str(error).encode()
+            return ShellUpdate(
+                output[:output_limit_bytes],
+                ShellStatus.COMPLETED,
+                SIMULATOR_PANIC_EXIT_CODE,
+                len(output) > output_limit_bytes,
+            )
         output = result.stdout + result.stderr
         return ShellUpdate(
             output[:output_limit_bytes],
@@ -62,25 +105,36 @@ class ShellSimShellSession:
         raise UnsupportedMachineSpec("ShellSim has no interactive stdin")
 
     async def interrupt(self) -> None:
-        raise UnsupportedMachineSpec("ShellSim has no live foreground action to interrupt")
+        """Interrupt this shell's current action; an idle snapshot leaves later actions alone."""
+        action = self.machine._active
+        if action is not None and action.shell is self.shell:
+            action.cancellation.cancel()
+            deadline = asyncio.get_running_loop().time() + INTERRUPT_GRACE
+            if not await self.machine._drain_worker(action.worker, deadline):
+                raise RuntimeError("ShellSim did not stop after interruption; machine is closed")
 
     async def close(self) -> None:
-        return
+        await self.interrupt()
 
 
 class ShellSimMachine:
     """One in-memory simulated machine and its private virtual filesystem."""
 
-    def __init__(self, spec: MachineSpec, *, cpu: int, disk: int, output: int):
+    def __init__(
+        self, spec: MachineSpec, *, source: PackageSpec, context: shellsim.Context, cpu: int, disk: int, output: int
+    ):
         self.spec = spec
-        self.simulation = shellsim.Environment(
+        self.simulation = context.Environment(
+            pypi_packages=source.pypi_packages,
+            tools=source.tools,
             cpu=cpu,
             memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
-            disk=disk,
+            disk=spec.storage_mb * 1024 * 1024 if spec.storage_mb is not None else disk,
             output=output,
         )
         self._lock = asyncio.Lock()
         self._closed = False
+        self._active: _RunningAction | None = None
         self._shell = ShellSimShellSession(self)
         self.simulation.mkdir(spec.workdir, parents=True)
         for log_dir in ("/logs/agent", "/logs/verifier", "/logs/artifacts"):
@@ -89,17 +143,79 @@ class ShellSimMachine:
             if ENV_NAME.fullmatch(name) is None:
                 raise ValueError(f"Invalid environment variable name: {name}")
         environment = " ".join(f"export {name}={shlex.quote(value)};" for name, value in spec.env.items())
-        initial = self.simulation.run(f"cd {shlex.quote(spec.workdir)}; {environment}")
+        initial = self._shell.shell.run(f"cd {shlex.quote(spec.workdir)}; {environment}")
         initial.check_returncode()
 
-    async def _run_source(self, source: str, stdin: bytes = b"") -> shellsim.RunResult:
+    @asynccontextmanager
+    async def _operation(self) -> AsyncIterator[None]:
+        """Reject closed machines before queueing and recheck after acquiring the worker lock."""
         if self._closed:
             raise RuntimeError("Machine is closed")
         async with self._lock:
-            result = await asyncio.to_thread(self.simulation.run, source, stdin)
+            if self._closed:
+                raise RuntimeError("Machine is closed")
+            yield
+
+    async def _drain_worker[T](self, worker: asyncio.Task[T], deadline: float) -> bool:
+        """Return True once the worker finishes, or close the machine and return False on expiry.
+
+        Repeated waiter cancellation is deferred through this deadline, then re-raised.
+        """
+        interrupted = False
+        loop = asyncio.get_running_loop()
+        while not worker.done():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait({worker}, timeout=remaining)
+            except asyncio.CancelledError:
+                interrupted = True
+        completed = worker.done()
+        if completed:
+            _log_worker_failure(worker)
+        else:
+            self._closed = True
+            worker.add_done_callback(_log_worker_failure)
+            logger.warning("ShellSim interruption grace expired; machine is closed")
+        if interrupted:
+            raise asyncio.CancelledError
+        return completed
+
+    async def _await_worker[T](
+        self, worker: asyncio.Task[T], cancellation: shellsim.CancellationToken | None = None
+    ) -> T:
+        """Keep serialization through cleanup, closing the machine if native work cannot stop."""
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            if cancellation is not None:
+                cancellation.cancel()
+            deadline = asyncio.get_running_loop().time() + INTERRUPT_GRACE
+            await self._drain_worker(worker, deadline)
+            raise
+
+    async def _run_source(
+        self, source: str, stdin: bytes = b"", *, shell: shellsim.ShellSession | None = None
+    ) -> shellsim.RunResult:
+        async with self._operation():
+            return await self._run_source_locked(source, stdin, shell=shell)
+
+    async def _run_source_locked(
+        self, source: str, stdin: bytes = b"", *, shell: shellsim.ShellSession | None = None
+    ) -> shellsim.RunResult:
+        """Retain action ownership under the lock until cleanup completes or its grace expires."""
+        runner = self.simulation.run if shell is None else shell.run
+        cancellation = shellsim.CancellationToken()
+        worker = asyncio.create_task(asyncio.to_thread(runner, source, stdin, cancellation=cancellation))
+        self._active = _RunningAction(cancellation, worker, shell)
+        try:
+            result = await self._await_worker(worker, cancellation)
             if self.simulation.terminated:
                 raise RuntimeError(f"ShellSim terminated: {result.stop_reason}")
             return result
+        finally:
+            self._active = None
 
     async def open_shell(self) -> ShellSimShellSession:
         if self._closed:
@@ -115,13 +231,25 @@ class ShellSimMachine:
             if ENV_NAME.fullmatch(name) is None:
                 raise ValueError(f"Invalid environment variable name: {name}")
         cwd = command.cwd or self.spec.workdir
-        environment = " ".join(f"export {name}={shlex.quote(value)};" for name, value in command.env.items())
+        environment = " ".join(
+            f"export {name}={shlex.quote(value)};" for name, value in {**self.spec.env, **command.env}.items()
+        )
         source = f"sh -c {shlex.quote(f'cd {shlex.quote(cwd)}; {environment} {shlex.join(command.argv)}')}"
         try:
             result = await asyncio.wait_for(self._run_source(source, command.stdin), timeout=command.timeout)
         except TimeoutError:
-            self._closed = True
             return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        except shellsim.SimulationError as error:
+            stderr = str(error).encode()
+            limit = command.output_limit_bytes
+            return Result(
+                SIMULATOR_PANIC_EXIT_CODE,
+                b"",
+                stderr[:limit],
+                False,
+                len(stderr) > limit,
+                ExitReason.EXITED,
+            )
         limit = command.output_limit_bytes
         return Result(
             result.returncode,
@@ -133,26 +261,22 @@ class ShellSimMachine:
         )
 
     async def upload(self, source: Path, target: str) -> None:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
-        async with self._lock:
+        async with self._operation():
             if source.is_dir():
-                await asyncio.to_thread(self.simulation.mount, source, target)
+                await self._await_worker(asyncio.create_task(asyncio.to_thread(self.simulation.mount, source, target)))
                 return
             self.simulation.mkdir(str(PurePosixPath(target).parent), parents=True)
             self.simulation.write_file(target, source.read_bytes(), mode=source.stat().st_mode & 0o7777)
 
     async def download(self, source: str, target: Path) -> None:
-        if self._closed:
-            raise RuntimeError("Machine is closed")
-        async with self._lock:
+        async with self._operation():
             if target.exists() and target.is_dir():
                 archive = f"/__harbor_download_{uuid.uuid4().hex}.tar"
                 command = f"tar -cf {shlex.quote(archive)} -C {shlex.quote(source)} ."
-                result = await asyncio.to_thread(self.simulation.run, command)
+                result = await self._run_source_locked(command)
                 result.check_returncode()
                 payload = self.simulation.read_file(archive)
-                self.simulation.run(f"rm -f {shlex.quote(archive)}")
+                await self._run_source_locked(f"rm -f {shlex.quote(archive)}")
                 with tarfile.open(fileobj=io.BytesIO(payload)) as contents:
                     contents.extractall(target, filter="data")
                 return
@@ -160,28 +284,68 @@ class ShellSimMachine:
             target.write_bytes(self.simulation.read_file(source))
 
     async def close(self) -> None:
+        """Close admission and allow at most one grace period for native cleanup."""
         self._closed = True
+        deadline = asyncio.get_running_loop().time() + INTERRUPT_GRACE
+        # No action can start after admission closes; None still permits an active file transfer.
+        action = self._active
+        if action is not None:
+            action.cancellation.cancel()
+            if not await self._drain_worker(action.worker, deadline):
+                return
+        try:
+            async with asyncio.timeout_at(deadline):
+                async with self._lock:
+                    pass
+        except TimeoutError:
+            logger.warning("ShellSim close grace expired while waiting for file transfer cleanup")
 
 
 class ShellSimMachineFactory:
-    """Start a fresh ShellSim built-in environment for each trial."""
+    """Share installation policy and prepared software across fresh worker machines."""
+
+    backend: Backend = Backend.SHELLSIM
 
     def __init__(
         self,
         *,
+        context: shellsim.Context | None = None,
         cpu: int = DEFAULT_CPU_LIMIT,
         disk: int = DEFAULT_DISK_LIMIT,
         output: int = DEFAULT_OUTPUT_LIMIT,
     ):
+        self.context = context if context is not None else shellsim.Context(trusted_precompiled=True)
         self.cpu = cpu
         self.disk = disk
         self.output = output
 
-    async def create(self, spec: MachineSpec) -> ShellSimMachine:
-        if spec.cpus is not None or spec.storage_mb is not None or spec.gpus:
-            raise UnsupportedMachineSpec("ShellSim does not provide machine CPU, storage, or GPU allocations")
-        if not isinstance(spec.source, ShellSimBuiltins):
-            raise UnsupportedMachineSpec("ShellSim uses only its built-in commands; select ShellSimBuiltins")
+    def _check_spec(self, spec: MachineSpec) -> PackageSpec:
+        if spec.cpus is not None or spec.gpus:
+            raise UnsupportedMachineSpec("ShellSim does not provide host CPU or GPU allocations")
+        if not isinstance(spec.source, PackageSpec):
+            raise UnsupportedMachineSpec("ShellSim requires a PackageSpec source")
         if spec.network is not NetworkPolicy.DENY:
             raise UnsupportedMachineSpec("ShellSim has no guest network")
-        return ShellSimMachine(spec, cpu=self.cpu, disk=self.disk, output=self.output)
+        return spec.source
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        self._check_spec(spec)
+        check_execution_requirements(
+            requirements,
+            spec,
+            semantics=CommandSemantics.SHELL_SIMULATOR,
+            capabilities=SHELL_SIMULATOR_CAPABILITIES,
+            image_reference=None,
+        )
+
+    async def create(self, spec: MachineSpec) -> ShellSimMachine:
+        source = self._check_spec(spec)
+        return await asyncio.to_thread(
+            ShellSimMachine,
+            spec,
+            source=source,
+            context=self.context,
+            cpu=self.cpu,
+            disk=self.disk,
+            output=self.output,
+        )

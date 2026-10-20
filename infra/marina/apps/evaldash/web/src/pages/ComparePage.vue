@@ -43,7 +43,7 @@ const selectionQuery = computed(() => {
   if (!params.has('cohort') && meta.value) params.set('cohort', meta.value.default_cohort)
   return params.toString()
 })
-const { data, loading, error, refresh } = useApi<Comparison>(() =>
+const { data, error, refresh } = useApi<Comparison>(() =>
   `api/compare?${selectionQuery.value}&models=${encodeURIComponent(selected.value.join(','))}`,
 )
 const { data: panel, loading: loadingModels, error: modelsError, refresh: refreshModels } = useApi<Panel>(() =>
@@ -51,7 +51,7 @@ const { data: panel, loading: loadingModels, error: modelsError, refresh: refres
 )
 const mixedCohorts = computed(() => new URLSearchParams(selectionQuery.value).get('cohort') === 'all')
 const availableModels = computed(() =>
-  loadingModels.value || modelsError.value || mixedCohorts.value
+  modelsError.value || mixedCohorts.value
     ? []
     : (panel.value?.rows ?? [])
         .filter((row) => Object.values(row.cells).some((cell) => cell.value !== 0))
@@ -83,7 +83,9 @@ function fromQuery(): string[] {
 }
 
 function load() {
-  if (comparing.value) refresh()
+  if (!comparing.value) return
+  if (data.value?.models.join(',') !== selected.value.join(',')) data.value = null
+  refresh()
 }
 
 onMounted(() => {
@@ -98,7 +100,10 @@ watch(
   },
   { deep: true },
 )
-watch(selectionQuery, refreshModels)
+watch(selectionQuery, () => {
+  data.value = null
+  refreshModels()
+})
 watch(selected, load)
 watch(
   () => meta.value?.default_cohort,
@@ -181,7 +186,7 @@ const chartSeries = computed(() =>
         Models ({{ selected.length }}/{{ MAX_COMPARE }})
       </div>
       <p v-if="mixedCohorts" class="text-sm text-status-warning">Choose one cohort on the Panel before comparing models.</p>
-      <p v-else-if="loadingModels" class="text-sm text-text-muted">Loading models…</p>
+      <p v-else-if="loadingModels && !panel" class="text-sm text-text-muted">Loading models…</p>
       <p v-else-if="modelsError" class="text-sm text-status-danger">{{ modelsError }}</p>
       <p v-else-if="!availableModels.length" class="text-sm text-text-muted">No models have non-zero scores in this selection.</p>
       <div class="flex flex-wrap gap-2">
@@ -213,7 +218,7 @@ const chartSeries = computed(() =>
 
     <EmptyState v-if="!comparing" icon="⚖" message="Pick at least two models to compare." />
 
-    <div v-else-if="data && !loading && !error" class="space-y-6">
+    <div v-else-if="data && !error" class="space-y-6">
       <PolicyRejections :rejections="data.policy_rejections" scope="this comparison" />
       <!-- shared-benchmark ranking -->
       <div>

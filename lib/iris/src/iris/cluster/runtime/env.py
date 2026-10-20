@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 IRIS_ATTEMPT_UID_ENV = "IRIS_ATTEMPT_UID"
+# Bearer token the task's Iris client presents to the controller as the job's owner.
+IRIS_TASK_TOKEN_ENV = "IRIS_TASK_TOKEN"
 IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
@@ -221,6 +223,7 @@ def build_common_iris_env(
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
+    task_token: str | None,
     environment: job_pb2.EnvironmentConfig,
     constraints: Sequence[job_pb2.Constraint],
     ports: Sequence[str],
@@ -252,6 +255,8 @@ def build_common_iris_env(
     if controller_address:
         env["IRIS_CONTROLLER_ADDRESS"] = controller_address
         env["IRIS_CONTROLLER_URL"] = controller_address
+    if task_token:
+        env[IRIS_TASK_TOKEN_ENV] = task_token
 
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"

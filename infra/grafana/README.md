@@ -30,10 +30,12 @@ fetch server-side, so nothing outside the container reaches it.
 
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
-GET /finelog/{cluster}/v1/{node,training,runs,rl,async-rl,accelerator,jobs}/overview
+GET /finelog/{cluster}/v1/{node,training,runs,rl,accelerator,jobs}/overview
                                                     bounded shared dashboard datasets
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
+GET /finelog/{cluster}/v1/rl/execution           selected job's executions
+GET /finelog/{cluster}/v1/rl/gpu                 node-GPU detail for ranges up to 7h
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/relay_status                  direct regional relay heartbeats
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
@@ -146,13 +148,14 @@ that extracted `src/`, and pass its parent as `--grafana-dir`. Keep the identity
 window, and request sequence the same, and use a separate output directory.
 These are read-only live queries; repeat only the windows needed for comparison.
 
-The Node Details, Zephyr, Training, Runs, RL (sync and async), Accelerators, Jobs,
+The Node Details, Zephyr, Training, Runs, RL Post-training, Accelerators, Jobs,
 and Home dashboards use the same shared-dataset contract. Each endpoint validates every
 identity and time input, runs a small fixed set of domain queries, and projects all
 panel views locally. Concurrent panel requests coalesce on one logical cache key;
 the `view` parameter only filters the cached result. A cold traversal uses one
-Finelog source for Node and Zephyr, three for Training, two for Runs, three for RL,
-nine for async RL, three for Accelerators, and five for Jobs. Those boundaries are intentional:
+Finelog source for Node and Zephyr, three for Training, two for Runs, two for RL
+overview, one for RL GPU detail, ten for RL executions, three for Accelerators,
+and five for Jobs. Those boundaries are intentional:
 crossing namespaces or mixing fleet-wide per-device data with compact summaries
 just to reach one RPC would make the query less predictable.
 
@@ -268,8 +271,20 @@ take Grafana down with it.
 
 The controller and finelog IPs are resolved from GCE labels and refreshed after a
 connection failure. A dead controller or GitHub returns 5xx (not empty rows) and the
-failure is not cached, so a panel shows an error rather than blank data; `iris/.../health`
+expected failures are cached as message-only errors without traceback or response
+objects, so retries still show an error rather than blank data; `iris/.../health`
 is the exception — it returns `reachable=false` so the panel can render the outage.
+
+Pod scans process one API page at a time. The control-plane crashloop alert
+queries only the watched deployments using their label selectors; broad pod
+scans remain for workload, termination, and architecture views. Malformed JSON
+is reported as an HTTP upstream failure without retaining its response body.
+
+Dashboard dataset loading and projection allow at most two computations at a
+time, including vLLM views. Waiting requests do not load Arrow inputs. The shared
+Arrow source cache has a 128 MiB referenced-buffer budget; this is separate from
+active query and projection memory. Expected cached errors retain only their
+message and HTTP classification. Grafana's Cloud Run container has 4 GiB.
 
 ## Layout
 
@@ -312,17 +327,25 @@ of repeating the Kubernetes object name.
 | Node | Node details | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
-| Workload | RL Post-training (sync) | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
-| Workload | RL Post-training (async) | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
+| Workload | RL Post-training | `rl_runs.json` | How is one RL run doing, sync or async? | training type, cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
 | Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
 
-Getting a run onto an RL Post-training view is a MarinSkyRL-side question: which launch paths export
-the telemetry environment, what a run id should look like, and which training loop the run stamps on
-its records. Each view's run picker offers only its own loop. MarinSkyRL documents it at
-`docs/grafana-rl-runs.md`.
+The RL Post-training pickers and panels describe themselves on the board. MarinSkyRL documents
+telemetry export at `docs/grafana-rl-runs.md`.
+
+RL panels have a 360-point budget. Overview, GPU and execution requests pass
+Grafana's interval. Execution panels use a 30-second minimum; run-wide charts use one minute.
+The bridge raises either interval as needed to keep each trend within 360 points.
+
+Execution panels require an Iris `job_id`. Runs without one show missing-job errors on the
+execution panels; the run-wide panels still render.
+
+Node-GPU detail uses `/v1/rl/gpu` for ranges of 7h or less. Longer ranges show
+"Zoom to 7h or less for GPU detail." without querying Finelog. The other run-wide
+panels use `/v1/rl/overview` and keep the selected window, up to seven days.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
@@ -524,8 +547,8 @@ standalone Pushover monitor applies — see
 `telemetry_gone` while Iris still counts the tasks and `run_down` when it no
 longer does, a loss floor a whole unit above its trailing floor that the
 six-sigma band did not catch, a gradient norm above 2, or three skipped steps in
-fifteen minutes. `TrainingRunHealthDegraded` takes the announce-only
-`notification=slack` exception for token drops, router collapse, a throughput or
+fifteen minutes. `TrainingRunHealthDegraded` takes the `notification=slack`
+route for token drops, router collapse, a throughput or
 MFU floor, a worse evaluation, a stale `iris.task_state` row, and retries.
 
 These three watch a wider enrolment: a run that either the Iris rollup or fresh
@@ -544,8 +567,8 @@ execution ID separates concurrent pipelines under one root job. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 The CoreWeave storage-telemetry freshness warning and `TrainingRunHealthDegraded`
-carry the explicit `notification=slack` exception, so they announce without
-launching an ops agent.
+carry the explicit `notification=slack` exception, so they announce in Slack
+and open a session on the default `operator` channel.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email
@@ -585,15 +608,11 @@ Grafana posts cannot be joined by anything else — and the timestamp is exactly
 what Loom needs to route the thread to the triage session. The bridge posts
 instead, which also means one message per alert rather than two side by side.
 
-Both receivers post through the bridge, so every alert lands in one channel with
-one credential and one rendering, and alert text is escaped the same way either
-way. They differ only in what follows: `ops-critical` opens a Loom triage run on
-the thread it announced, while `ops-slack` — the fallback for malformed or
-unlabeled alerts — announces and stops, because an alert carrying no severity to
-route on carries no incident to triage. The tradeoff is that a fallback
-notification does not reach Slack while the bridge is down; email remains an
-independent path for critical alerts, and the fallback sees almost no traffic
-because every alert rule sets a severity.
+Both receivers post through the bridge and open a Loom triage run on the alert's
+Slack thread. They share one channel, credential, and rendering. `ops-critical`
+also sends email; `ops-slack` handles explicitly notified warnings and the root
+fallback for unlabeled alerts. A fallback notification does not reach Slack while
+the bridge is down; email remains an independent path for critical alerts.
 
 The Loom receiver posts to the bridge on `127.0.0.1`; it is not exposed through
 Grafana or IAP. For each firing group the bridge first posts the alert to
@@ -726,7 +745,7 @@ Creating the secrets:
    `printf '%s' "<app-password>" | gcloud secrets create marin-grafana-smtp-credentials --project=hai-gcp-models --data-file=-`
 6. Send a test notification to `ops-critical` and confirm email arrives, one alert
    message lands in the channel, and its thread gains a triage-session link. Test
-   `ops-slack` too: it should post one message and no session link.
+   `ops-slack` too: it should post one message with a session link in its thread.
 
 ## Develop
 
