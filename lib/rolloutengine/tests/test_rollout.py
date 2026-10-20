@@ -800,7 +800,7 @@ ANSWER_ARTIFACT = VerifierArtifact(source="/workspace/answer", target="/workspac
     ("stalled", "output_paths", "grader_fields", "failure"),
     [
         ("download-kind", ("/workspace/answer",), {}, GradingFailure.STAGING),
-        ("artifact-kind", (), {"artifacts": (ANSWER_ARTIFACT,)}, GradingFailure.STAGING),
+        ("artifact-kind", (), {"artifacts": (ANSWER_ARTIFACT,)}, GradingFailure.TIMEOUT),
         ("-xf", (), {"artifacts": (ANSWER_ARTIFACT,)}, GradingFailure.STAGING),
         ("collect-step", (), {"collect": (VerifierCommand(argv=("true", "collect-step")),)}, GradingFailure.TIMEOUT),
         (
@@ -821,7 +821,8 @@ ANSWER_ARTIFACT = VerifierArtifact(source="/workspace/answer", target="/workspac
     ],
 )
 async def test_a_verifier_deadline_names_the_phase_it_expired_in(stalled, output_paths, grader_fields, failure):
-    """A deadline that runs out in the runtime's own work is the host's; in the task author's commands, the task's."""
+    """A deadline that runs out in the runtime's own work is the host's; in the task author's commands or while
+    the candidate's artifacts are collected, the task's."""
 
     class StallingFactory(DockerMachineFactory):
         backend = Backend.DOCKER
@@ -2420,7 +2421,7 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
     elif failure == "remove":
         result = await runner.run_task(spec)
         rollout, grade = result.rollout, result.grade
-        assert (grade.status, grade.reward, grade.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.STAGING)
+        assert (grade.status, grade.reward, grade.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)
         # The archive stays on the task machine, so the grader never starts.
         assert len(factory.machines) == 1
     else:

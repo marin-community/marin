@@ -354,8 +354,11 @@ async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissi
             task, answered(task, "12"), FixtureImageFactory(), GRADER_MACHINE, task_machine=agent
         )
         if artifact_case in {"inspect_timeout", "tar_failed", "tar_timeout"}:
-            # Inspecting and archiving an artifact are the runtime's commands, not the task author's.
-            assert (result.status, result.reward, result.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.STAGING)
+            assert (result.status, result.reward, result.failure) == (
+                Outcome.INFRA_ERROR,
+                None,
+                GradingFailure.EXECUTION if artifact_case == "tar_failed" else GradingFailure.TIMEOUT,
+            )
         else:
             valid = artifact_case in {"directory", "file", "excluded_link"}
             assert (result.status, result.reward) == (

@@ -151,7 +151,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         raise _StepFailed(
             _infra_error(
                 f"Cannot inspect grading artifact {artifact.source}: timed out",
-                GradingFailure.STAGING,
+                GradingFailure.TIMEOUT,
                 _diagnostics(result),
             )
         )
@@ -165,7 +165,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         raise _StepFailed(
             _infra_error(
                 f"Cannot inspect grading artifact {artifact.source}: exit={result.exit_code}",
-                GradingFailure.STAGING,
+                GradingFailure.EXECUTION,
                 _diagnostics(result),
             )
         )
@@ -179,7 +179,8 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
     remote_archive = f"{remote_directory}/archive.tar"
     primary_error = None
     try:
-        # The agent can write this file, but the root-owned parent prevents pathname replacement.
+        # The agent can write this file, but the root-owned parent prevents pathname replacement. Making
+        # the directory is the runtime's own preparation; everything else here reads what the candidate wrote.
         await _run_staging(
             machine,
             Command(
@@ -196,7 +197,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
             ),
             "Cannot create protected artifact directory",
         )
-        await _run_staging(
+        await _run_checked(
             machine,
             Command(
                 argv=(
@@ -220,7 +221,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         raise
     finally:
         try:
-            await _run_staging(
+            await _run_checked(
                 machine,
                 Command(("rm", "-rf", remote_directory), timeout=timeout, user=ROOT, env={"PATH": "/usr/bin:/bin"}),
                 "Cannot remove private artifact archive",
@@ -537,7 +538,8 @@ async def _grade_staged(
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
     files = _grading_files(task, attempt, grading, submissions)
     try:
-        # The collect commands are the task author's, like the grader's own command.
+        # The collect commands are the task author's, and the artifacts are what the candidate wrote, so a
+        # deadline that expires while either runs is the task's, like one in the grader's own command.
         progress.phase = GradingPhase.GRADER
         for command in grading.collect:
             assert task_machine is not None
@@ -552,7 +554,6 @@ async def _grade_staged(
                 ),
                 "Cannot collect grading inputs",
             )
-        progress.phase = GradingPhase.STAGING
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             root = Path(directory)
             downloaded = []
@@ -561,6 +562,7 @@ async def _grade_staged(
                 local = root / f"artifact-{index}"
                 if await _download_artifact(task_machine, artifact, local, grading.limit):
                     downloaded.append((local, artifact.target))
+            progress.phase = GradingPhase.STAGING
             archive_path = root / "grading.tar"
             write_archive(archive_path, files, downloaded)
             async with asyncio.timeout(machine_spec.startup_timeout):
