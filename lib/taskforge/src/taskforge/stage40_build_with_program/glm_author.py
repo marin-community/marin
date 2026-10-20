@@ -6,9 +6,9 @@
 ``GlmAuthor`` sends the rules (``AUTHOR_SYSTEM``), then the proposal, the SDK reference
 (``sdk_reference``, generated from signatures and docstrings) and the standard template's source.
 The model replies with a ``ProgramSubmission``, whose validator loads the source with
-``stage30_author.loader.load_program_source``, so a program the loader refuses goes back to the
-model in the client's structured repair request, with the loader's message. A reply cut off by
-the output limit gets no repair: the call raises ``StructuredOutputError`` at once.
+``program_sdk.load_program``, so a program the loader refuses goes back to the model in the client's
+structured repair request, with the loader's message. A reply cut off by the output limit gets no
+repair: the call raises ``StructuredOutputError`` at once.
 
 The author lives with the build stage because its prompt documents the build SDK and the template.
 It keeps each request as sent, ending with the field instruction ``complete_structured`` appends,
@@ -44,9 +44,10 @@ from taskforge.spec import draft
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author import program as program_module
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision
-from taskforge.stage30_author.loader import ALLOWED_IMPORTS, GRADER_STEP, load_program_source
+from taskforge.stage30_author.loader import ALLOWED_IMPORTS, GRADER_STEP
 from taskforge.stage40_build_with_program import context as context_module
 from taskforge.stage40_build_with_program import outputs, sandbox_effects, sdk
+from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.step_store import SDK_VERSION
 from taskforge.stage40_build_with_program.template import standard
 
@@ -196,7 +197,7 @@ class ProgramSubmission(BaseModel):
     @field_validator("source")
     @classmethod
     def loads(cls, source: str) -> str:
-        load_program_source(source)
+        load_program(source)
         return source
 
 
@@ -372,7 +373,7 @@ class GlmAuthor:
         _write(record_dir / COMPLETIONS_FILE, _COMPLETIONS.dump_json(result.completions, indent=2))
         source = result.value.source
         _write(self.workpiece_dir / PROGRAM_FILE, source.encode())
-        program = load_program_source(source)
+        program = load_program(source)
         record = {
             "program_digest": program.digest,
             "sdk_version": SDK_VERSION,

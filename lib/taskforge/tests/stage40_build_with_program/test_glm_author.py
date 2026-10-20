@@ -9,7 +9,6 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
 from taskforge.stage30_author.author import PROGRAM_FILE, Revision, RevisionKind
-from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.glm_author import (
     AUTHOR_DIR,
     COMPLETIONS_FILE,
@@ -19,6 +18,7 @@ from taskforge.stage40_build_with_program.glm_author import (
     ProgramSubmission,
     sdk_reference,
 )
+from taskforge.stage40_build_with_program.program_sdk import load_program
 from tests.stage30_author.programs import PROGRAM
 from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE
 
@@ -56,7 +56,7 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     )
 
     assert authored.source == PROGRAM
-    assert authored.program is load_program_source(PROGRAM)
+    assert authored.program is load_program(PROGRAM)
     assert (workpiece_dir / PROGRAM_FILE).read_text() == PROGRAM
     assert "may not import 'os'" in fake_glm.requests[1]["messages"][-2]["content"]
     assert (

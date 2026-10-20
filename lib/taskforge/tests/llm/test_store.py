@@ -82,3 +82,17 @@ def test_request_fields_are_part_of_the_key(fake_glm, tmp_path, run_store):
     assert [r.content for r in results] == ["free", "aaa", "aaa"]
     assert len(fake_glm.requests) == 2
     assert fake_glm.requests[1]["structured_outputs"] == {"regex": "a+"}
+
+
+def test_concurrent_identical_requests_make_one_call(fake_glm, fast_provider, tmp_path):
+    fake_glm.stream(content="only answer", interval=0.05)
+    fake_glm.stream(content="second answer")
+
+    async def call_twice():
+        async with GlmClient(fake_source(fake_glm), fast_provider) as client:
+            store = CallStore(tmp_path, client)
+            return await asyncio.gather(ask("q")(store), ask("q")(store))
+
+    first, second = asyncio.run(call_twice())
+    assert len(fake_glm.requests) == 1
+    assert first.content == second.content == "only answer"

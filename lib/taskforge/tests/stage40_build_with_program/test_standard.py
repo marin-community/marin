@@ -22,9 +22,9 @@ from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import VERDICT_REWARD, answer_grader
 from taskforge.stage10_proposal.model import SolverMachine
-from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock
 from taskforge.stage40_build_with_program.outputs import Fixtures, Grader, Sources
+from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build, step_output
 from taskforge.stage40_build_with_program.sdk import (
     ATTEMPTS,
@@ -139,7 +139,7 @@ async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_t
     fake_glm.stream(content=json.dumps({"system": "", "instruction": "Show that 6 * 7 = 42. End with ANSWER = <n>."}))
     fake_glm.stream(content=json.dumps({"system": "", "instruction": "Read question.txt. End with `ANSWER = <n>`."}))
     queries: list[Mapping[str, object]] = []
-    program = load_program_source(inspect.getsource(standard))
+    program = load_program(inspect.getsource(standard))
 
     draft = await build(program, proposal, services, glm_client, tmp_path, queries)
     again = await build(program, proposal, services, glm_client, tmp_path, queries)

@@ -21,7 +21,7 @@ import httpx
 from rigging.timing import ExponentialBackoff
 
 from taskforge.llm.agent import AgentTool
-from taskforge.llm.glm_client import RETRYABLE_STATUSES
+from taskforge.llm.client import RETRYABLE_STATUSES
 
 logger = logging.getLogger(__name__)
 

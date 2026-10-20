@@ -73,7 +73,6 @@ from taskforge.llm.web import web_tools
 from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
 from taskforge.stage10_proposal.model import TaskProposal
-from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
     BuildFailure,
@@ -81,6 +80,7 @@ from taskforge.stage40_build_with_program.context import (
     ExpiredClock,
 )
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
+from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, TaskDraft, load_draft, run_build
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
 
@@ -327,7 +327,7 @@ async def build_result(request: BuildRequest) -> BuildResult:
     async with _resources(request) as (model, services):
         try:
             await run_build(
-                load_program_source(request.program_source),
+                load_program(request.program_source),
                 request.proposal,
                 request.workpiece_id,
                 request.round_dir,

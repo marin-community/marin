@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.3 chat completions through the ``openai`` SDK and token-id sampling, retried by one loop.
+"""GLM-5.3 chat completions through the ``openai`` SDK, retried by one loop.
 
 ``GlmClient`` implements ``taskforge.llm.client.ModelClient``, with ``LLMProviderConfig`` supplying
 the model, the retry budget and backoff, the hold and stall timeouts and the connection pool. The
@@ -45,15 +45,6 @@ sent them.
 continuations off, then validates the reply and asks for repairs through ``taskforge.llm.structured``.
 That module also appends a user turn describing each field, since the chat template renders nothing
 from ``response_format``.
-
-``generate`` samples from prompt token ids without a chat template, through the router's token-id
-route (``GENERATE_PATH``), for rollouts that must keep their exact tokens. It sends one
-non-streamed POST over the same connection pool and the same retry and hold loop as ``complete``,
-so the statuses, holds and context overflow behave as above. No stall timeout applies; the caller's
-turn timeout bounds the request. The body asks for ``return_token_bytes``, and the route answers
-with each sampled id's bytes. A 503 reporting ``token_bytes_unavailable`` means the router's
-tokenizer does not match the model, which no retry fixes, so the call raises
-``ModelRequestRejected``.
 """
 
 import asyncio
@@ -61,7 +52,9 @@ import json
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections import Counter
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import TracebackType
@@ -76,6 +69,7 @@ from pydantic import BaseModel
 from rigging.timing import ExponentialBackoff
 
 from taskforge.llm.client import (
+    RETRYABLE_STATUSES,
     Attempt,
     AttemptOutcome,
     Completion,
@@ -84,8 +78,6 @@ from taskforge.llm.client import (
     ModelRequestRejected,
     ModelUnavailable,
     StructuredResult,
-    TokenCompletion,
-    TokenEvidenceError,
     ToolCall,
     Usage,
 )
@@ -103,7 +95,6 @@ logger = logging.getLogger(__name__)
 
 API_ROOT = "/v1"
 """The path suffix of an OpenAI-compatible base URL. The router serves ``/health`` at the URL without it."""
-RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 CONTEXT_LIMIT_PATTERN = re.compile(r"maximum context length is (\d+) tokens")
 SDK_REQUEST_FIELDS = frozenset({"tools", "tool_choice", "response_format", "parallel_tool_calls"})
 """Fields the client passes to ``chat.completions.create`` as keyword arguments, putting the rest in ``extra_body``."""
@@ -112,15 +103,10 @@ CONNECT_TIMEOUT = 10.0
 WRITE_TIMEOUT = 30.0
 KEEPALIVE_EXPIRY = 30.0
 """Seconds an idle pooled connection may be reused, so a connection idle through a long author turn is not
-reused blindly; a stalled read also retires the whole pool (``_reset_pool``)."""
+reused blindly; a stalled read also replaces the whole pool (``_reset_pool``)."""
 POOL_RESET_INTERVAL = 30.0
 """Least seconds between two pool resets, so a burst of stalls on one bad path replaces the pool once."""
 HEALTH_TIMEOUT = 20.0
-GENERATE_PATH = "/inference/v1/generate"
-"""The router's token-id route, beside the OpenAI-compatible ``/v1`` root."""
-ROUTING_KEY_HEADER = "x-routing-key"
-TOKEN_BYTES_UNAVAILABLE = "token_bytes_unavailable"
-"""The 503 error code the token-id route returns when its tokenizer cannot supply token bytes."""
 
 
 class Pool(StrEnum):
@@ -190,21 +176,6 @@ class _Segment:
     finished: float
 
 
-def _without_logprobs(chunk: ChatCompletionChunk) -> ChatCompletionChunk:
-    """``chunk`` with its choices' logprobs dropped, for the SDK's stream accumulator only.
-
-    ``ChatCompletionStreamState.handle_chunk`` rebuilds the whole accumulated snapshot, logprobs list included, on
-    every chunk, so a reply with per-token logprobs costs quadratic CPU on the event loop (8,000 tokens: 43 s in one
-    call), which starves every other request in the process. The raw events keep the logprobs; ``rollout_model``
-    reads tokens and logprobs from them, never from the snapshot.
-    """
-    if not any(choice.logprobs is not None for choice in chunk.choices):
-        return chunk
-    return chunk.model_copy(
-        update={"choices": [choice.model_copy(update={"logprobs": None}) for choice in chunk.choices]}
-    )
-
-
 def _carries_token(chunk: ChatCompletionChunk) -> bool:
     """Check a chunk for generated text in its content, reasoning or tool-call deltas.
 
@@ -237,8 +208,6 @@ def _retry_after(response: httpx.Response) -> float:
 def _status_failure(response: httpx.Response) -> _AttemptFailed:
     status = response.status_code
     body = response.text[:ERROR_BODY_LIMIT]
-    if status == 503 and TOKEN_BYTES_UNAVAILABLE in body:
-        return _AttemptFailed(AttemptOutcome.REJECTED, body, status)
     if status == 404 and "route" in body.lower():
         return _AttemptFailed(AttemptOutcome.ROUTE_MISSING, body, status)
     if status == 400 and CONTEXT_LIMIT_PATTERN.search(body):
@@ -274,61 +243,6 @@ def request_kwargs(
     }
 
 
-def generate_body(model: str, token_ids: Sequence[int], max_tokens: int, policy: LLMPolicy) -> dict[str, object]:
-    """Build the exact token-id route body the client sends.
-
-    ``sampling_params`` carries the policy's ``sampling_params()``, the same fields chat completions
-    send; the route rejects ``min_p`` and ``logit_bias``. ``logprobs: 0`` returns the sampled
-    token's own raw logprob, and ``return_token_bytes`` returns each sampled id's bytes.
-    """
-    return {
-        "model": model,
-        "token_ids": list(token_ids),
-        "sampling_params": {"max_tokens": max_tokens, **policy.sampling_params(), "logprobs": 0},
-        "return_token_bytes": True,
-        "stream": False,
-    }
-
-
-def token_completion(payload: Mapping[str, Any], wall_time: float, attempts: tuple[Attempt, ...]) -> TokenCompletion:
-    """Read a token-id route response.
-
-    Raises:
-        TokenEvidenceError: ``token_bytes`` is absent, does not align with ``token_ids``, or has no
-            bytes for a sampled id; or the logprob entries do not align with ``token_ids``.
-    """
-    choice = payload["choices"][0]
-    token_ids = tuple(choice["token_ids"])
-    token_bytes = choice.get("token_bytes")
-    if token_bytes is None:
-        raise TokenEvidenceError("the response has no token_bytes; the route must honor return_token_bytes")
-    if len(token_bytes) != len(token_ids):
-        raise TokenEvidenceError(f"{len(token_ids)} token ids but {len(token_bytes)} token_bytes entries")
-    missing = [index for index, data in enumerate(token_bytes) if data is None]
-    if missing:
-        ids = [token_ids[index] for index in missing[:8]]
-        raise TokenEvidenceError(f"sampled ids {ids} at indices {missing[:8]} came back without bytes")
-    entries = (choice.get("logprobs") or {}).get("content") or []
-    if len(entries) != len(token_ids):
-        raise TokenEvidenceError(f"{len(token_ids)} token ids but {len(entries)} logprob entries")
-    usage = payload["usage"]
-    prompt_details = usage.get("prompt_tokens_details") or {}
-    return TokenCompletion(
-        token_ids=token_ids,
-        logprobs=tuple(float(entry["logprob"]) for entry in entries),
-        token_bytes=tuple(bytes(data) for data in token_bytes),
-        finish_reason=FinishReason(choice["finish_reason"]),
-        usage=Usage(
-            prompt_tokens=usage["prompt_tokens"],
-            completion_tokens=usage["completion_tokens"],
-            reasoning_tokens=0,
-            cached_tokens=prompt_details.get("cached_tokens") or 0,
-        ),
-        wall_time=wall_time,
-        attempts=attempts,
-    )
-
-
 class GlmClient:
     """Async GLM client. Use as ``async with GlmClient(source, provider) as client``.
 
@@ -346,7 +260,8 @@ class GlmClient:
             initial=provider.backoff_initial, maximum=provider.backoff_maximum, factor=provider.backoff_factor
         )
         self._http = self._new_pool()
-        self._retired: list[httpx.AsyncClient] = []
+        self._in_flight: Counter[httpx.AsyncClient] = Counter()
+        self._retired: set[httpx.AsyncClient] = set()
         self._pool_reset_at = -POOL_RESET_INTERVAL
         self._endpoint = source.current()
         self._sdk = self._sdk_client(self._endpoint)
@@ -368,24 +283,46 @@ class GlmClient:
             )
         )
 
-    def _reset_pool(self) -> None:
+    async def _reset_pool(self) -> None:
         """Open a fresh connection pool after a stalled read, so the retry cannot reuse a connection that may be dead.
 
         A stall has other causes the reset does not touch, such as the relay refusing connections or this process's
         own event loop blocking for longer than the connect timeout; the bounded retry with backoff carries the call
         through those, and the reset interval keeps the two from compounding into a reconnect storm.
 
-        The old pool is retired, not closed: other calls may still be streaming on its live connections. Retired
-        pools close with the client.
+        Other calls may still be streaming on the old pool's connections, so the old pool is retired and closes when
+        the last request leased from it ends (``_leased``). httpx drops an expired idle connection only when a request
+        next uses its pool, so a retired pool left open would hold its sockets until the client exits.
         """
         now = time.monotonic()
         if now - self._pool_reset_at < POOL_RESET_INTERVAL:
             return
         self._pool_reset_at = now
-        logger.warning("GLM read stalled; replacing the connection pool (retired pools: %d)", len(self._retired) + 1)
-        self._retired.append(self._http)
+        old = self._http
+        logger.warning(
+            "GLM read stalled; replacing the connection pool (%d requests still on the old one)", self._in_flight[old]
+        )
         self._http = self._new_pool()
         self._sdk = self._sdk_client(self._endpoint)
+        if self._in_flight[old]:
+            self._retired.add(old)
+        else:
+            await old.aclose()
+
+    @asynccontextmanager
+    async def _leased(self) -> AsyncIterator[tuple[openai.AsyncOpenAI, httpx.AsyncClient]]:
+        """The current SDK client and its pool, which stays open until the request using them ends."""
+        sdk, pool = self._sdk, self._http
+        self._in_flight[pool] += 1
+        try:
+            yield sdk, pool
+        finally:
+            self._in_flight[pool] -= 1
+            if not self._in_flight[pool]:
+                del self._in_flight[pool]
+                if pool in self._retired:
+                    self._retired.remove(pool)
+                    await pool.aclose()
 
     async def __aenter__(self) -> Self:
         return self
@@ -497,53 +434,6 @@ class GlmClient:
         """
         return await complete_structured(self, messages, output_type, policy, self._provider.structured_repairs)
 
-    async def generate(
-        self, token_ids: Sequence[int], policy: LLMPolicy, *, max_tokens: int, routing_key: str
-    ) -> TokenCompletion:
-        """Sample from ``token_ids`` through the token-id route (``GENERATE_PATH``), without a chat template.
-
-        The request retries and holds as ``complete`` does, and a context overflow raises
-        ``ContextExhausted``. ``routing_key`` goes out as ``ROUTING_KEY_HEADER``, so a rollout's
-        requests share a node's prefix cache. The route reports no reasoning split, so
-        ``usage.reasoning_tokens`` is 0.
-
-        Raises:
-            TokenEvidenceError: The response's ids, logprobs and token bytes do not align.
-        """
-        started = time.monotonic()
-        attempts: list[Attempt] = []
-        body = generate_body(self._provider.model, token_ids, max_tokens, policy)
-
-        async def send(events: list[str]) -> dict[str, Any]:
-            return await self._generate_once(body, routing_key, events)
-
-        payload = await self._retrying(send, 0, max_tokens, attempts)
-        return token_completion(payload, time.monotonic() - started, tuple(attempts))
-
-    async def _generate_once(self, body: Mapping[str, object], routing_key: str, events: list[str]) -> dict[str, Any]:
-        """Send one token-id route request, appending the raw response body to ``events``."""
-        endpoint = self._endpoint
-        headers = {"Authorization": f"Bearer {endpoint.token}", ROUTING_KEY_HEADER: routing_key}
-        timeout = httpx.Timeout(connect=CONNECT_TIMEOUT, read=None, write=WRITE_TIMEOUT, pool=None)
-        try:
-            response = await self._http.post(
-                f"{endpoint.base_url.removesuffix(API_ROOT)}{GENERATE_PATH}", json=body, headers=headers, timeout=timeout
-            )
-        except httpx.TransportError as error:
-            raise _AttemptFailed(AttemptOutcome.TRANSPORT_ERROR, f"{type(error).__name__}: {error}") from error
-        if response.status_code != 200:
-            raise _status_failure(response)
-        events.append(response.text)
-        try:
-            payload = response.json()
-        except json.JSONDecodeError as error:
-            raise _AttemptFailed(AttemptOutcome.STREAM_ERROR, f"malformed response body: {error}") from error
-        if "error" in payload:
-            raise _AttemptFailed(AttemptOutcome.STREAM_ERROR, json.dumps(payload["error"])[:ERROR_BODY_LIMIT])
-        if payload["choices"][0]["finish_reason"] == FinishReason.ABORT:
-            raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
-        return payload
-
     async def _segment(
         self,
         messages: Sequence[Message],
@@ -600,7 +490,7 @@ class GlmClient:
                 if failure.outcome is AttemptOutcome.TRANSPORT_ERROR:
                     self._refresh_endpoint()
                 if failure.outcome is AttemptOutcome.STALLED:
-                    self._reset_pool()
+                    await self._reset_pool()
                 if failure.outcome is AttemptOutcome.ROUTE_MISSING or await self._pool_empty():
                     if hold_started is None:
                         hold_started = time.monotonic()
@@ -638,24 +528,25 @@ class GlmClient:
         started = time.monotonic()
         ttft: float | None = None
         try:
-            chunks = await self._sdk.chat.completions.create(**kwargs)
-            assert isinstance(chunks, openai.AsyncStream)
-            async with chunks:
-                last_token = time.monotonic()
-                while True:
-                    remaining = stall_timeout - (time.monotonic() - last_token)
-                    try:
-                        chunk = await asyncio.wait_for(anext(chunks), timeout=max(remaining, 0.0))
-                    except StopAsyncIteration:
-                        break
-                    events.append(chunk.model_dump_json())
-                    state.handle_chunk(_without_logprobs(chunk))
-                    if _carries_token(chunk):
-                        last_token = time.monotonic()
-                        if ttft is None:
-                            ttft = last_token - started
-                    if any(choice.finish_reason == FinishReason.ABORT for choice in chunk.choices):
-                        raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
+            async with self._leased() as (sdk, _):
+                chunks = await sdk.chat.completions.create(**kwargs)
+                assert isinstance(chunks, openai.AsyncStream)
+                async with chunks:
+                    last_token = time.monotonic()
+                    while True:
+                        remaining = stall_timeout - (time.monotonic() - last_token)
+                        try:
+                            chunk = await asyncio.wait_for(anext(chunks), timeout=max(remaining, 0.0))
+                        except StopAsyncIteration:
+                            break
+                        events.append(chunk.model_dump_json())
+                        state.handle_chunk(chunk)
+                        if _carries_token(chunk):
+                            last_token = time.monotonic()
+                            if ttft is None:
+                                ttft = last_token - started
+                        if any(choice.finish_reason == FinishReason.ABORT for choice in chunk.choices):
+                            raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
         except TimeoutError as error:
             raise _AttemptFailed(AttemptOutcome.STALLED, f"no token for {stall_timeout}s") from error
         except openai.APIStatusError as error:
@@ -704,11 +595,12 @@ class GlmClient:
         """
         endpoint = self._endpoint
         try:
-            response = await self._http.get(
-                f"{endpoint.base_url.removesuffix(API_ROOT)}/health",
-                headers={"Authorization": f"Bearer {endpoint.token}"},
-                timeout=HEALTH_TIMEOUT,
-            )
+            async with self._leased() as (_, pool):
+                response = await pool.get(
+                    f"{endpoint.base_url.removesuffix(API_ROOT)}/health",
+                    headers={"Authorization": f"Bearer {endpoint.token}"},
+                    timeout=HEALTH_TIMEOUT,
+                )
         except httpx.TransportError:
             return False
         if response.status_code != 200:

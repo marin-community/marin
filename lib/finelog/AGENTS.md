@@ -133,6 +133,11 @@ controller) depend on `marin-finelog-server` explicitly. Here it is only a
 `dev` dependency, pulled in for the embedded-server smoke test and the
 dashboard demo.
 
+The native wheel uses Cargo's `wheel` profile: size optimization, thin LTO,
+and one codegen unit for the embedded fallback. Maturin selects this profile
+for Python builds; the release workflow honors the same package setting.
+Standalone deployments use the separate `release` or `fast` profiles.
+
 By default the extension comes from the pre-built PyPI wheel, so in-dir
 `uv run` never compiles Rust. To build it from source (live Rust dev), run
 `python scripts/rust_mode.py dev` at the repo root — it points

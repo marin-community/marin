@@ -79,6 +79,7 @@ def test_tool_call_then_answer_replays_reasoning_and_records_turns(fake_glm, led
     assert result.usage.completion_tokens == 10
     second = fake_glm.requests[1]
     assert second["tools"][0]["function"]["name"] == "echo"
+    assert [request["prompt_cache_key"] for request in fake_glm.requests] == ["workpiece-1:0:author"] * 2
     replayed = second["messages"][2]
     assert replayed["reasoning_content"] == "I should echo."
     assert replayed["tool_calls"][0]["function"] == {"name": "echo", "arguments": '{"text": "hi"}'}

@@ -31,7 +31,6 @@ from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author import load_process
 from taskforge.stage30_author.author import Revision, RevisionKind, program_manifest
 from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
-from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program import agentic_author as aa
 from taskforge.stage40_build_with_program.agentic_author import (
     AgenticAuthorConfig,
@@ -47,8 +46,10 @@ from taskforge.stage40_build_with_program.agentic_author import (
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildInfrastructureFailure, ExpiredClock
 from taskforge.stage40_build_with_program.glm_author import AUTHOR_DIR, GlmAuthor
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
+from taskforge.stage40_build_with_program.program_sdk import load_program, sdk_exports
 from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft, run_build
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
+from taskforge.stage40_build_with_program.step_store import StoreCorruption
 from taskforge.stage40_build_with_program.template import standard
 from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE, declaring
 
@@ -179,7 +180,7 @@ def session_ledger(root: Path) -> JsonlLedger:
 
 async def in_process_loader(source: str) -> ProgramManifest:
     """Loads in this process: the tests check the session, and the child loader has its own tests."""
-    return ProgramManifest.model_validate(program_manifest(load_program_source(source)))
+    return ProgramManifest.model_validate(program_manifest(load_program(source)))
 
 
 def session_build(
@@ -191,7 +192,7 @@ def session_build(
     build_services = replace(services, ledger=ledger)
 
     async def builder(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
-        program = load_program_source(source)
+        program = load_program(source)
         return await run_build(
             program,
             proposal,
@@ -293,7 +294,7 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
 
     target = authored(workpiece, 0, 0)
     assert (target / "program.py").read_bytes() == (agentic(workpiece, 0, 0) / "workspace" / "program.py").read_bytes()
-    program = load_program_source(PROGRAM)
+    program = load_program(PROGRAM)
     assert read(target / "program.json") == json.loads(json.dumps(program_manifest(program)))
     record = read(target / "author.json")
     assert record["author_kind"] == "agentic" and record["status"] == "accepted" and record["tested"] is True
@@ -344,7 +345,7 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
     assert step_statuses(session_ledger(tmp_path).path_for(WORKPIECE)) == misses
     stage_ledger = JsonlLedger(tmp_path / "ledger")
     await run_build(
-        load_program_source(outcome.source or ""),
+        load_program(outcome.source or ""),
         proposal,
         WORKPIECE,
         workpiece / "rounds" / "0",
@@ -422,7 +423,7 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
     """The default loader runs in a child process, so a spinning module body costs the session one refusal."""
 
     async def bounded(source: str) -> ProgramManifest:
-        return await load_program_in_process(source, wall_timeout=2)
+        return await load_program_in_process(source, sdk_exports(), wall_timeout=2)
 
     spinning = inspect.getsource(standard).replace("PROGRAM = ", f"{SPINNING_CLASS}PROGRAM = ")
     workpiece = tmp_path / "workpiece"
@@ -592,6 +593,45 @@ async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_un
     assert len(model.replies) == 1, "the session ended at the build"
     assert not any("ran for more than" in text for text in tool_texts(model))
     assert not (authored(workpiece, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+
+
+async def test_a_storage_fault_in_a_build_ends_the_round_unseen_by_the_author(tmp_path, services, proposal, ledger):
+    async def corrupt_store(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
+        raise StoreCorruption("Blob sha256:00 of step grader does not match its digest")
+
+    workpiece = tmp_path / "workpiece"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+    build = replace(session_build(tmp_path, model, services, proposal, 0), builder=corrupt_store)
+
+    with pytest.raises(StoreCorruption):
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
+
+    assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "storage"
+    assert len(model.replies) == 1, "the session ended at the build"
+    assert not any("does not match its digest" in text for text in tool_texts(model))
+    assert not (authored(workpiece, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+
+
+async def test_an_os_error_the_program_raises_reaches_the_author(tmp_path, author):
+    missing = PROGRAM.replace(
+        '    return Sources(notes="", findings=())', '    raise FileNotFoundError("fixtures/matrices.json")'
+    )
+    workpiece = tmp_path / "workpiece"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": missing})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+    await author(workpiece, model)
+
+    assert tool_outputs(model)[1].startswith("build failed (")
+    assert "fixtures/matrices.json" in tool_outputs(model)[1]
+    assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] != "storage"
 
 
 async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_reference(tmp_path, author):

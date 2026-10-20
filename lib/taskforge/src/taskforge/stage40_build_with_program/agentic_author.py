@@ -25,8 +25,11 @@ backoff from ``HOST_RETRY_BACKOFF`` inside the tool, at once re-raised for a cau
 record, so the round spends no revision and a relaunch hands the workspace to a fresh session. A
 ``BuildExpired`` in ``run_build`` (a wall, step or grader clock) is re-raised at once, without a
 retry, and ends the round the same way, so the driver holds the workpiece as abandoned instead of asking
-for a rewrite. A failed build still writes its ``run.json``, ``status: "infrastructure"`` for the
-host's and ``status: "expired"`` with its ``clock`` for an expiry. A loader child the host killed
+for a rewrite. An ``OSError`` raised outside the program's frames (``infrastructure.storage_fault``: the
+step store failed, or a blob or memo is missing or corrupt) is re-raised at once too, as the
+coordinator's build stage does, since no program change repairs the store. A failed build still writes
+its ``run.json``, ``status: "infrastructure"`` for the host's, ``status: "expired"`` with its ``clock``
+for an expiry and ``status: "storage"`` for a storage fault. A loader child the host killed
 (``LoaderProcessFailed``) raises the same failure with cause ``BUILD_PROCESS``. A proposal whose
 solver machine the session's services cannot provide (``infrastructure.machine_available``: a
 container on a host without an image builder, a package machine without the local backend) raises
@@ -86,7 +89,7 @@ from taskforge.stage30_author.author import (
     RevisionKind,
 )
 from taskforge.stage30_author.load_process import LoaderProcessFailed, ProgramManifest, load_program_in_process
-from taskforge.stage30_author.loader import GRADER_STEP
+from taskforge.stage30_author.loader import GRADER_STEP, program_file
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
     BuildFailure,
@@ -94,8 +97,14 @@ from taskforge.stage40_build_with_program.context import (
     RLEnvBuildContext,
 )
 from taskforge.stage40_build_with_program.glm_author import RECORD_FILE, REVISION_PROMPT, author_messages, sdk_reference
-from taskforge.stage40_build_with_program.infrastructure import HOST_REJECTIONS, InfrastructureCause, machine_available
+from taskforge.stage40_build_with_program.infrastructure import (
+    HOST_REJECTIONS,
+    InfrastructureCause,
+    machine_available,
+    storage_fault,
+)
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
+from taskforge.stage40_build_with_program.program_sdk import sdk_exports
 from taskforge.stage40_build_with_program.run import TaskDraft, step_output
 from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate
 from taskforge.stage40_build_with_program.sdk import grade_diagnostics, grading_language
@@ -247,8 +256,8 @@ class ProgramBuilder(Protocol):
         ``run_dir``.
 
         Raises what the build raises; the session turns ``BuildFailure`` and other exceptions into text for the
-        model, re-raises ``ModelUnavailable`` and ``BuildExpired``, and retries a ``BuildInfrastructureFailure``
-        before re-raising it.
+        model, re-raises ``ModelUnavailable``, ``BuildExpired`` and an ``OSError`` raised outside the program's
+        frames, and retries a ``BuildInfrastructureFailure`` before re-raising it.
         """
         ...
 
@@ -268,7 +277,7 @@ async def load_in_child(source: str) -> ProgramManifest:
         BuildInfrastructureFailure: the loader child exited without a result (``BUILD_PROCESS``).
     """
     try:
-        return await load_program_in_process(source, wall_timeout=LOAD_TIMEOUT)
+        return await load_program_in_process(source, sdk_exports(), wall_timeout=LOAD_TIMEOUT)
     except LoaderProcessFailed as error:
         raise BuildInfrastructureFailure(InfrastructureCause.BUILD_PROCESS, str(error)) from error
 
@@ -612,6 +621,12 @@ class AuthorSession:
             self.builds.append(record)
             raise
         except Exception as error:
+            if storage_fault(error, {program_file(source)}):
+                record |= {"status": "storage", "step": None, "wall": time.monotonic() - started}
+                record |= {"steps": ledger_steps(ledger, offset), "text": _traceback_tail(error)}
+                _write_json(run_dir / RUN_FILE, record)
+                self.builds.append(record)
+                raise
             status, step, text = _failure_text(error)
             record |= {"status": status, "step": step}
             record |= {"wall": time.monotonic() - started, "steps": ledger_steps(ledger, offset), "text": text}
