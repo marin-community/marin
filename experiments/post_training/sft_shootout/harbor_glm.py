@@ -165,15 +165,16 @@ def serve(app: Starlette, host: str) -> int:
 
 
 @contextlib.contextmanager
-def capability_endpoint(app: Starlette, name: str) -> Iterator[str]:
-    """Serve ``app`` as an Iris link endpoint and yield its capability URL (a bearer credential)."""
+def capability_endpoint(app: Starlette, name: str) -> Iterator[tuple[str, str]]:
+    """Serve ``app`` as an Iris link endpoint; yield its capability URL (a bearer credential) and local address."""
     host = get_job_info().advertise_host
     port = serve(app, host)
     endpoint_name = f"/glm-harbor/{name}-{uuid.uuid4().hex[:8]}"
     ctx = iris_ctx()
     with ctx.registry.registered(endpoint_name, f"http://{host}:{port}", {}, access=EndpointAccess.ENDPOINT_ACCESS_LINK):
         minted = ctx.client.mint_endpoint_token(endpoint_name, ttl=Duration.from_hours(24))
-        yield (minted.capability_url or f"{CAPABILITY_ORIGIN}{capability_path(endpoint_name, minted.token)}").rstrip("/")
+        capability = minted.capability_url or f"{CAPABILITY_ORIGIN}{capability_path(endpoint_name, minted.token)}"
+        yield capability.rstrip("/"), f"http://{host}:{port}"
 
 
 def student_model(student: str) -> ModelConfig:
@@ -287,6 +288,11 @@ def policy_agent(args: argparse.Namespace, served_info: dict | None) -> dict:
             "max_tokens": kwargs[MODEL_INFO_KEY][MAX_OUTPUT_TOKENS_KEY],
         }
     return {**{k: v for k, v in agent.items() if k != "name"}, **AGENTS[args.agent], "kwargs": kwargs}
+
+
+def in_sandbox(agent: dict) -> bool:
+    """Whether the agent runs in the sandbox (it has an agent-phase allow-list) rather than in Harbor's process."""
+    return "agent_domain_allow_list" in agent.get("kwargs", {})
 
 
 def job_config(args: argparse.Namespace, agent: dict, api_base: str | None, jobs_dir: Path) -> dict:
@@ -411,12 +417,16 @@ def main() -> None:
                     student=served_student(args.student), budget_tokens=int(window * args.budget_fraction)
                 )
             app = build_proxy(teacher, window, RequestLog(work / "requests.jsonl"), relay)
-            capability = stack.enter_context(capability_endpoint(app, args.name))
+            capability, local = stack.enter_context(capability_endpoint(app, args.name))
             if urlparse(capability).hostname != AGENT_DOMAIN_ALLOW_LIST:
                 raise RuntimeError(
                     f"the capability URL's host is not the agent-phase allow-list {AGENT_DOMAIN_ALLOW_LIST}"
                 )
-            config = job_config(args, agent, f"{capability}/v1", work / "jobs")
+            # Agents in the sandbox (those with an agent-phase allow-list) reach the proxy only through the
+            # capability URL. The rest run in this container's Harbor process and use the local address: every
+            # gateway round trip costs seconds when cw-us-east-02a endpoints are busy (v7-walltime-20261020.md).
+            api_base = capability if in_sandbox(agent) else local
+            config = job_config(args, agent, f"{api_base}/v1", work / "jobs")
         returncode = run_harbor(args, config, work)
 
     job_dir = work / "jobs" / args.name
@@ -469,6 +479,7 @@ def main() -> None:
             "setup_and_verifier": "task policy (allow_internet)",
         },
         "capability_url": {
+            "agent_calls_proxy_at": "capability URL" if in_sandbox(agent) else "local address (not through the gateway)",
             "in_sandbox": (
                 "env only (HOSTED_VLLM_API_BASE, OPENAI_API_BASE)"
                 if args.agent == "mini-swe-agent"
