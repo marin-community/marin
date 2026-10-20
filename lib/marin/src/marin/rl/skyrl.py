@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin ArtifactStep adapter for the external MarinSkyRL trainer."""
+"""Marin ArtifactStep adapter for the vendored SkyRL executable."""
 
 from __future__ import annotations
 
@@ -60,14 +60,14 @@ def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
 
 
 class SkyRLRuntimeProfile(StrEnum):
-    """Frozen upstream dependency set for a SkyRL training strategy."""
+    """Frozen dependency set for a SkyRL training strategy."""
 
     MEGATRON = "megatron"
 
 
 @dataclass(frozen=True)
 class SkyRLRuntime:
-    """Content-addressed SkyRL source and independently locked dependency profile."""
+    """SkyRL provenance digest and independently locked dependency profile."""
 
     profile: SkyRLRuntimeProfile
     source_digest: str = field(init=False, default_factory=skyrl_runtime_digest)
@@ -172,7 +172,7 @@ class SkyRLTopology:
         if not plan.colocate_policy_ref:
             planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
         allocated_gpus = self.num_nodes * self.gpus_per_node
-        # MarinSkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
+        # SkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
         if planned_gpus > allocated_gpus:
             placement = "colocated policy/rollout" if plan.colocate_all else "policy + rollout"
@@ -527,7 +527,7 @@ def _materialize_role_plan_config(config: dict[str, object], role_plan: SkyRLRol
 
 
 def _validate_entrypoint_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
-    """Reject entrypoint-specific constraints that MarinSkyRL would otherwise discover at startup."""
+    """Reject entrypoint-specific constraints that SkyRL would otherwise discover at startup."""
     entrypoint = _declared_config_value(config, "entrypoint")
     if entrypoint == "fully_async" and role_plan.train_batch_size != role_plan.policy_mini_batch_size:
         raise ValueError(
@@ -618,7 +618,7 @@ class SkyRLRunConfig:
 
 
 class SkyRLRun(Artifact):
-    """Terminal result from a MarinSkyRL run."""
+    """Terminal result from a SkyRL run."""
 
     hf_model_uri: str | None
     global_step: int | None
@@ -853,7 +853,7 @@ def skyrl_step(
     *,
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
-    """Build a versioned MarinSkyRL training artifact."""
+    """Build a versioned SkyRL training artifact."""
     step_name = spec.name
     deps = tuple(
         dict.fromkeys(

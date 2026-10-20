@@ -357,9 +357,6 @@ SNOWBALL_FULL = ScalePreset(
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=128,
         policy_mini_batch_size=64,
-        # Historical FSDP runs at micro=1 needed 32 sequential micro-steps, each
-        # re-gathering the full 134GB of shards; policy_train was ~1660s of a
-        # ~1770s step. micro=4 quartered the all-gather traffic per step.
         micro_train_batch_size_per_gpu=4,
         n_samples_per_prompt=8,
     ),
