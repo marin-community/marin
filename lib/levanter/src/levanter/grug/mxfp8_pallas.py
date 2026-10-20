@@ -306,7 +306,10 @@ def mx_quantize_rows_and_row_blocks_pallas(
 
 def _row_blocks_fit(x: jax.Array) -> bool:
     t, k = x.shape
-    return t >= MX_BLOCK and k % COL_TILE == 0 and x.size <= _MAX_CALL_ELEMENTS
+    fits = t >= MX_BLOCK and k % COL_TILE == 0 and x.size <= _MAX_CALL_ELEMENTS
+    if not fits:
+        logger.warning("MXFP8 quantize_row_blocks: XLA quantizer for shape %s", x.shape)
+    return fits
 
 
 def quantize_row_blocks(x: jax.Array, block_starts: jax.Array, block_rows: jax.Array) -> tuple[jax.Array, jax.Array]:
