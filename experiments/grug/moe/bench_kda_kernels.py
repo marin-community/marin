@@ -211,10 +211,9 @@ def _layer_benches():
     variants = {
         "current": {},
         "lean s3": lean,
-        "lean s3 + prep c4 s2": dict(lean, prep_chunks=4, prep_chunk_stages=2),
-        "lean s3 + prep c8 s2": dict(lean, prep_chunks=8, prep_chunk_stages=2),
+        "lean s3 + xla grads": dict(lean, state_grads=StateGrads.XLA),
         "lean s3 + bf16 saved grads c8 s2": dict(lean, **bf16),
-        "lean s3 + bf16 saved + prep c4 s2": dict(lean, **bf16, prep_chunks=4, prep_chunk_stages=2),
+        "lean s3 + bf16 saved + xla grads": dict(lean, state_saved_dtype=jnp.bfloat16, state_grads=StateGrads.XLA),
     }
     for name, extra in variants.items():
         kw = dict(base, **extra)
