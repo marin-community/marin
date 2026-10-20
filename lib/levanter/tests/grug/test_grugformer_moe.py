@@ -1913,12 +1913,15 @@ def test_combine_gather_sum_keeps_bf16_sums_in_float32():
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16], ids=["float32", "bfloat16"])
-def test_ring_dedup_down_project_combine_matches_autodiff(dtype):
+def test_ring_dedup_down_project_combine_matches_autodiff(dtype, monkeypatch):
     """The expert-side down projection and combine match autodiff through ``ragged_dot`` and the weighted
     sum, although its routing-weight gradient comes from ``<hidden, dhidden> / weight`` instead of the expert
     outputs. In float32 everything agrees to rounding. In bfloat16 the routing-weight gradient carries two
     roundings (``dy`` and ``dhidden``) where autodiff's ``<cotangent, y>`` carries one, so its error against a
     float32 reference stays within 1.5x of autodiff's. Padding dispatch rows and empty slots get no gradient."""
+    # Both sides use XLA's ragged_dot, so the comparison isolates the custom VJP from backend kernels (TPU's Mosaic
+    # grouped matmul rejects this test's bf16 operands under the highest matmul precision).
+    monkeypatch.setenv("RAGGED_DOT_IMPL", "xla")
     received_rows, topk, dispatch_rows, inter, hidden = 24, 4, 64, 16, 32
     group_sizes = np.array([20, 0, 26, 10], np.int32)
     kept = int(group_sizes.sum())
