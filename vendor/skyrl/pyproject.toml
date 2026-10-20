@@ -42,7 +42,7 @@ dependencies = [
     "openapi-schema-validator",
     "pandas",
     "polars",
-    "pydantic>=2.12,<3",
+    "pydantic>=2.12.2,<3",
     "pyarrow>=18",
     "pycosat==0.6.6",
     "pyyaml>=6.0",

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from email.parser import Parser
+import json
+import os
 from pathlib import Path
 import subprocess
+import re
+import sys
 import tomllib
 import zipfile
 
@@ -15,6 +19,8 @@ import pytest
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 PYPROJECT = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
+
+
 @dataclass(frozen=True)
 class BuiltWheel:
     names: set[str]
@@ -166,3 +172,55 @@ def test_policy_closures_match_supported_architectures(
     assert names.isdisjoint(forbidden)
     vllm = next(requirement for requirement in exported if requirement.name == "vllm")
     assert vllm.url is not None and vllm.url.endswith(f"manylinux_2_28_{architecture}.whl")
+
+
+def test_standalone_recipe_wheel_authors_without_launcher_dependencies(tmp_path: Path) -> None:
+    output = tmp_path / "wheel"
+    subprocess.run(["uv", "build", "--wheel", "packages/marinskyrl-recipe", "--out-dir", str(output)], cwd=REPOSITORY_ROOT, check=True)
+    wheel = next(output.glob("*.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        names = set(archive.namelist())
+        metadata = Parser().parsestr(archive.read(next(name for name in names if name.endswith(".dist-info/METADATA"))).decode())
+    assert "marinskyrl/__init__.py" not in names
+    assert all(name.startswith("marinskyrl/recipe_schema/") or ".dist-info/" in name for name in names)
+    environment = tmp_path / "schema-environment"
+    subprocess.run(["uv", "venv", "--python", f"{sys.version_info.major}.{sys.version_info.minor}", str(environment)], check=True)
+    interpreter = environment / "bin/python"
+    requirements = (Requirement(raw) for raw in metadata.get_all("Requires-Dist", []))
+    pydantic = next(requirement for requirement in requirements if requirement.name == "pydantic")
+    minimum = next(bound.version for bound in pydantic.specifier if bound.operator == ">=")
+    subprocess.run(["uv", "pip", "install", "--python", str(interpreter), f"pydantic=={minimum}"], check=True)
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(interpreter), "--no-index", str(wheel)], check=True
+    )
+    program = """
+import json
+from pathlib import Path
+import sysconfig
+
+import pydantic
+import marinskyrl.recipe_schema as schema
+
+assert Path(schema.__file__).resolve() == Path(sysconfig.get_path("purelib")) / "marinskyrl/recipe_schema/__init__.py"
+budget = schema.ContextBudget(request_window_tokens=256, max_new_tokens_per_turn=64, max_turns=4)
+recipe = schema.SkyRLRecipe.combine(
+    base=schema.SkyRLRecipe(context_budget=budget),
+    arm=schema.RecipePatch(data=schema.Data(sampling=schema.Sampling(domain_weights={"math": 1, "code": 2}))),
+).with_settings(["data.sampling.domain_weights.math=3"])
+restored = schema.SkyRLRecipe.from_document(recipe.to_skyrl())
+print(json.dumps({"source": schema.__file__, "pydantic": pydantic.__version__, "document": restored.to_skyrl()}))
+"""
+    result = subprocess.run(
+        [str(interpreter), "-c", program],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": ""},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["document"] == {
+        "context_budget": {"request_window_tokens": 256, "max_new_tokens_per_turn": 64, "max_turns": 4},
+        "data": {"sampling": {"domain_weights": {"math": 3, "code": 2}}},
+    }

@@ -121,6 +121,7 @@ def _fake_frozen_runtime(
     return environment, os.environ | {
         "EXPECTED_SYSTEM_PYTHON": str(fake_bin / "python3.12"),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PYTHONPATH": "",
     }
 
 
