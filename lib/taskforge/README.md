@@ -254,10 +254,13 @@ asking the author for a revision. A host fault is a machine the host could not c
 (classified by the message table in `sandbox.host_failures`, which validation's classifier reads too),
 an unreachable controller, or a startup or verifier deadline that expired while a sandbox started,
 received files or ran a command (`SANDBOX_DEADLINE`): the grader's own command has its own timeout,
-so the deadline is the sandbox's latency. `grade_candidate` grades once more on fresh machines when
-the grader command timed out, and returns the second grade. A step-store memo or blob that reads back
-unreadable or altered raises `step_store.StoreCorruption`, an `OSError`, which the build child
-reports as a storage fault.
+so the deadline is the sandbox's latency. A task image publish fails as the host's
+(`IMAGE_JOB_FAILED`) when a build or push job did not schedule, was lost or killed, or the push
+failed (`image_builder.ImageJobFailed`), and as the program's `BuildFailure` when the build job ran
+and kaniko failed on the Dockerfile (`image_builder.BuildFailed`). `grade_candidate` grades once
+more on fresh machines when the grader command timed out, and returns the second grade. A step-store
+memo or blob that reads back unreadable or altered raises `step_store.StoreCorruption`, an `OSError`,
+which the build child reports as a storage fault.
 
 A build that runs past a clock raises `BuildExpired`, a third outcome beside `BuildFailure` (the
 program's) and `BuildInfrastructureFailure` (the host's), carrying the `ExpiredClock` it ran past and

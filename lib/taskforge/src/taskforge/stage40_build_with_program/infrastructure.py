@@ -17,6 +17,10 @@ Only errors the program cannot have caused are infrastructure:
   loop abandons the workpiece at once without retrying the build.
 * ``NO_IMAGE_BUILDER``: the build publishes a task image and this host has no ``ImageBuilder``.
   Also deterministic on the host.
+* ``IMAGE_JOB_FAILED``: a job publishing the task image failed for a host reason
+  (``sandbox.image_builder.ImageJobFailed``): it did not schedule, its worker was lost, it was
+  killed, the push failed, or the registry did not serve back the pushed image. An image whose build
+  job ran and failed (``BuildFailed``) is the program's.
 * ``SCHEDULING_TIMEOUT``: the factory itself gave up waiting for a machine (Iris could not
   schedule the sandbox). The engine's verifier deadline also covers the verifier machine's start,
   so every such deadline exceeds ``SANDBOX_SCHEDULING_TIMEOUT``; a shorter one would cancel the
@@ -92,6 +96,8 @@ class InfrastructureCause(StrEnum):
 
     NO_FACTORY = "no_factory"
     NO_IMAGE_BUILDER = "no_image_builder"
+    IMAGE_JOB_FAILED = "image_job_failed"
+    """A build or push job of ``publish_image`` failed for a host reason (``image_builder.ImageJobFailed``)."""
     SCHEDULING_TIMEOUT = "scheduling_timeout"
     SANDBOX_DEADLINE = "sandbox_deadline"
     """A startup or verifier deadline expired while a machine started, received files or ran a command."""
