@@ -41,7 +41,7 @@ from taskforge.stage40_build_with_program.sandbox_effects import (
     publish_image,
 )
 from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
-from taskforge.stage50_validate.lowering import VERIFIER_TIMEOUT
+from taskforge.stage50_validate.lowering import TASK_MACHINE, VERIFIER_TIMEOUT
 from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory, shell_grader
 from tests.stage40_build_with_program.conftest import FACTORIES, SAMPLING, WORKPIECE, RecordingImageBuilder, declaring
 
@@ -318,17 +318,20 @@ async def test_an_image_or_spec_the_program_chose_stays_the_programs_failure(con
     assert interrupted.value.__cause__ is error
 
 
-def test_verifier_deadlines_outlast_the_sandbox_scheduling_timeout():
-    """A verifier deadline at or under the factory's scheduling timeout cancels the machine wait first.
+def test_machine_and_verifier_deadlines_outlast_the_sandbox_scheduling_timeout():
+    """A verifier or startup deadline at or under the factory's scheduling timeout cancels the machine wait first.
 
     The factory's ``TimeoutError`` is then never raised, the engine reports a bare deadline, and a
     sandbox that never starts spends a program revision instead of failing as infrastructure. Both
-    deadlines leave the factory its whole budget and the grader its own on top.
+    verifier deadlines leave the factory its whole budget and the grader its own on top, and both
+    machine startup deadlines leave a sandbox scheduled late in that budget time to prepare.
     """
     assert GRADE_CANDIDATE_VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
     assert VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
     assert GRADE_CANDIDATE_MACHINE.startup_timeout is not None
     assert GRADE_CANDIDATE_MACHINE.startup_timeout > SANDBOX_SCHEDULING_TIMEOUT
+    assert TASK_MACHINE.startup_timeout is not None
+    assert TASK_MACHINE.startup_timeout > SANDBOX_SCHEDULING_TIMEOUT
 
 
 @pytest.mark.parametrize("stalled", ["run", "upload"], ids=["command", "upload"])

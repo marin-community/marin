@@ -27,6 +27,7 @@ from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
 from taskforge.stage50_validate.control_drafts import (
     CONTROLS_FILE,
     ControlDraft,
+    check_controls_not_graded,
     control_payload,
     load_controls,
     output_paths_text,
@@ -253,6 +254,35 @@ async def test_a_control_writes_an_output_path_outside_the_workspace(glm_client,
     turn = payload.turns[0]
     assert isinstance(turn, AssistantToolCalls)
     assert f"> {report}" in str(turn.calls[0].object_arguments()["command"])
+
+
+def test_a_file_control_repeats_a_prototyped_candidate_only_with_the_same_files():
+    """Candidates of a file task share the conventional reply, so the files tell the submissions apart."""
+    reference = "The answer is in /workspace/out.txt."
+    grader = replace(
+        GRADER,
+        reference_reply=reference,
+        reference_files=(draft.file("workspace/out.txt", "42\n"),),
+        prototyped=(
+            GradedCandidate(reference, (draft.file("workspace/out.txt", "42\n"),), Outcome.GRADED, 1.0),
+            GradedCandidate("Done", (draft.file("workspace/out.txt", "40\n"),), Outcome.GRADED, 0.0),
+        ),
+    )
+
+    def file_control(control_id: str, reply: str, content: str) -> ControlDraft:
+        return ControlDraft.model_validate(
+            {
+                **control(control_id, "negative", "plausible_wrong", "acceptance", reply, None, 0.0),
+                "files": [{"path": "/workspace/out.txt", "content": content}],
+            }
+        )
+
+    exempt = file_control("ref", reference, "42\n")
+    fresh = file_control("fresh", "Done", "41\n")
+    repeat = file_control("repeat", "Done", "40\n")
+    check_controls_not_graded([exempt, fresh], grader)
+    with pytest.raises(ValueError, match=r"controls \['repeat'\] are candidates the grader step graded"):
+        check_controls_not_graded([exempt, fresh, repeat], grader)
 
 
 def test_a_relative_control_path_is_refused_as_not_an_output_path():
