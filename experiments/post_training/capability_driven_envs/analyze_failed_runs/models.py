@@ -65,7 +65,13 @@ class MaybeIdea:
     idea: Capability
     evidence: frozenset[str]
     """The run IDs. A merged idea holds the union of the evidence of its ideas, so a rollout counts once."""
+    tasks: frozenset[str]
+    """The IDs of the tasks of the evidence, joined in the same way."""
 
     @property
     def num_rollouts(self) -> int:
         return len(self.evidence)
+
+    @property
+    def num_tasks(self) -> int:
+        return len(self.tasks)

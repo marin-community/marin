@@ -130,7 +130,7 @@ class RolloutEngine:
             delivery = await events.close(spec.limits.cleanup_timeout)
         finally:
             events.cancel()
-        rollout = attempt.recorder.rollout(run_id, attempt.outputs)
+        rollout = attempt.recorder.rollout(run_id, spec.task.id, attempt.outputs)
         metrics = {**rollout.metrics, **delivery}
         grade = attempt.grade
         if attempt.recorder.no_response_reason is not None:

@@ -52,13 +52,19 @@ def analyze_failed_runs(
     extract_ideas_llm_policy: LLMPolicy,
     merge_ideas_llm_policy: LLMPolicy,
     catalog_version: str,
+    min_tasks_per_idea: int = 2,
 ) -> Dataset[CapabilityIdea]:
     """Build a pipeline of capability ideas from the policy's failed rollouts.
 
     Recorded conversations supply the model options and messages seen by the policy. Keep ``shard_size`` at about
     1,000 rollouts or fewer so merge prompts fit the model context. Run the plan outside an event loop, for example
     ``ctx.execute(plan).results``.
+
+    An idea must cite failed rollouts of at least ``min_tasks_per_idea`` tasks, or of every failed task when there are
+    fewer. Otherwise one defective grader, on a task with many samples, can make an idea by itself.
     """
+    failed_tasks = {graded.rollout.task_id for graded in rollouts if policy_failed(graded, pass_threshold)}
+    min_tasks = min(min_tasks_per_idea, len(failed_tasks))
     merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_ideas_llm_policy)
     return (
         Dataset.from_list(list(batched(rollouts, shard_size)))
@@ -66,7 +72,7 @@ def analyze_failed_runs(
         .filter(lambda graded: policy_failed(graded, pass_threshold))
         .flat_map(partial(yield_ideas, make_client=make_client, policy=extract_ideas_llm_policy))
         .reduce(merge, partial(merge_idea_lists, merge=merge))
-        .flat_map(partial(to_ideas, catalog_version=catalog_version))
+        .flat_map(partial(to_ideas, catalog_version=catalog_version, min_tasks=min_tasks))
     )
 
 
@@ -88,7 +94,7 @@ def yield_ideas(graded: GradedRollout, *, make_client: MakeClient, policy: LLMPo
         counters.pipeline.update_counter(ROLLOUTS_WITHOUT_IDEAS, 1)
         return
     for idea in reply.ideas:
-        yield MaybeIdea(idea, frozenset({graded.rollout.run_id}))
+        yield MaybeIdea(idea, frozenset({graded.rollout.run_id}), frozenset({graded.rollout.task_id}))
 
 
 def merge_ideas(
@@ -119,9 +125,11 @@ def merge_ideas(
     reply = _complete(make_client, messages, Groups, policy, attempts=MERGE_ATTEMPTS)
     merged: dict[str, MaybeIdea] = {}
     for group in reply.capabilities:
-        evidence = frozenset().union(*(lines[key].evidence for key in group.members if key in lines))
-        if evidence and group.id not in merged:
-            merged[group.id] = MaybeIdea(Capability(**group.model_dump(exclude={"members"})), evidence)
+        members = [lines[key] for key in group.members if key in lines]
+        if members and group.id not in merged:
+            idea = Capability(**group.model_dump(exclude={"members"}))
+            evidence = frozenset().union(*(member.evidence for member in members))
+            merged[group.id] = MaybeIdea(idea, evidence, frozenset().union(*(member.tasks for member in members)))
     return sorted(merged.values(), key=lambda candidate: -candidate.num_rollouts)[:max_new_ideas]
 
 
@@ -133,9 +141,12 @@ def merge_idea_lists(
     return full[0] if len(full) == 1 else merge(chain.from_iterable(full))
 
 
-def to_ideas(ideas: list[MaybeIdea], *, catalog_version: str) -> list[CapabilityIdea]:
-    """The catalog idea of each merged idea, with the run IDs of its evidence in the capability record."""
-    return [_idea(candidate, catalog_version) for candidate in ideas]
+def to_ideas(ideas: list[MaybeIdea], *, catalog_version: str, min_tasks: int) -> list[CapabilityIdea]:
+    """The catalog idea of each merged idea that cites rollouts of at least ``min_tasks`` tasks.
+
+    The capability record holds the run IDs of the evidence.
+    """
+    return [_idea(candidate, catalog_version) for candidate in ideas if candidate.num_tasks >= min_tasks]
 
 
 def _complete[T: BaseModel](

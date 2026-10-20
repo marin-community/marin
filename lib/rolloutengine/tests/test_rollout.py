@@ -1093,6 +1093,7 @@ async def test_shell_and_provider_calls_share_one_dispatch_and_a_done_result_end
     transitions = [event.payload for event in observer.events if isinstance(event.payload, TransitionCompleted)]
     assert transitions[-1].observations[-1] == {"role": "tool", "tool_call_id": "submit", "content": "12\n"}
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell", "check"]
+    assert record.rollout.task_id == task.id
     assert [tool["function"]["name"] for tool in record.rollout.conversations[0].options["tools"]] == [
         "shell",
         "check",

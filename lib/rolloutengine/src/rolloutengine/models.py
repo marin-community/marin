@@ -154,6 +154,8 @@ class Rollout:
 
     run_id: str
     """The ID of the attempt, the same as in its events."""
+    task_id: str
+    """The ID of the task attempted by this rollout."""
     conversations: tuple[ConversationRecord, ...]
     """One record for each conversation that the harness started, in order."""
     stop_reason: str

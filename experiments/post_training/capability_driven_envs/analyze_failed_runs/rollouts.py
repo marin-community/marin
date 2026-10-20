@@ -60,6 +60,7 @@ def _summary(graded: GradedRollout) -> dict[str, Any]:
     )
     return {
         "run_id": rollout.run_id,
+        "task_id": rollout.task_id,
         "outcome": grade.status.value,
         "reward": grade.reward,
         "stop_reason": rollout.stop_reason,
