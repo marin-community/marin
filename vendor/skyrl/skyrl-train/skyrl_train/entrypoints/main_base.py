@@ -299,6 +299,10 @@ class BasePPOExp:
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
         self.tokenizer = self.get_tokenizer()
+        from skyrl_train.pi_teacher_runtime import prepare_pi_teacher  # noqa: PLC0415
+
+        self.prepared_pi_teacher = prepare_pi_teacher(self.cfg)
+        self.pi_teacher_engines = None
         self.train_dataset = self.get_train_dataset()
         self.eval_dataset = self.get_eval_dataset()
         self.colocate_pg = self.get_colocate_pg()
@@ -387,6 +391,8 @@ class BasePPOExp:
         return prompts_dataset
 
     def task_dataset(self, data_files):
+        if OmegaConf.select(self.cfg, "scenario.preset") is not None:
+            return self.harbor_task_dataset(data_files)
         from skyrl_train.dataset.nemotron_ultra import NemotronTaskDataset  # noqa: PLC0415
         from skyrl_train.dataset.tasks import SourceTaskDataset  # noqa: PLC0415
         from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings  # noqa: PLC0415 - optional training dependencies
@@ -525,21 +531,28 @@ class BasePPOExp:
             )
         return self.get_task_runner(cfg, inference_engine_client)
 
-    def get_task_runner(self, cfg, inference_engine_client, *, harbor_config=None):
+    def get_task_runner(self, cfg, inference_engine_client, *, harbor_config=None, evaluation=False):
         """Build the shared task worker pool for training or validation."""
         from skyrl_train.rollouts.workers import RolloutWorkerPool, RolloutWorkerResources  # noqa: PLC0415
         from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec  # noqa: PLC0415
 
         resources = RolloutWorkerResources.from_config(cfg)
         terminal_data = list(cfg.data.get("terminal_bench_data", []))
-        if terminal_data and not cfg.get("terminal_bench_config"):
-            raise ValueError("data.terminal_bench_data requires terminal_bench_config")
+        pi_preset = OmegaConf.select(cfg, "scenario.preset") is not None
+        if (terminal_data or pi_preset) and not cfg.get("terminal_bench_config"):
+            raise ValueError("Harbor tasks require terminal_bench_config")
         return RolloutWorkerPool(
             TaskRolloutWorkerSpec.from_config(
                 cfg,
                 inference_engine_client.engines,
                 harbor_config=harbor_config if harbor_config is not None else cfg.get("terminal_bench_config"),
                 sessions=self.sessions,
+                teacher_tokenizer=(
+                    self.prepared_pi_teacher.tokenizer
+                    if self.prepared_pi_teacher is not None and not evaluation
+                    else None
+                ),
+                teacher_engines=self.pi_teacher_engines if not evaluation else None,
             ),
             resources,
         )
@@ -562,6 +575,7 @@ class BasePPOExp:
         """
         from skyrl_train.rollouts.context import TrainingContext  # noqa: PLC0415
         from skyrl_train.trainer import RayPPOTrainer  # noqa: PLC0415
+        from skyrl_train.pi_teacher_runtime import student_eval_harbor_config  # noqa: PLC0415
 
         return RayPPOTrainer(
             context=TrainingContext.from_config(cfg, train_dataset, trajectory_runner),
@@ -576,9 +590,14 @@ class BasePPOExp:
                 self.get_task_runner(
                     cfg,
                     inference_engine_client,
-                    harbor_config=cfg.terminal_bench_config
+                    harbor_config=(
+                        student_eval_harbor_config(cfg.terminal_bench_config, inference_engine_client.model_name)
+                        if self.prepared_pi_teacher is not None
+                        else cfg.terminal_bench_config
+                    )
                     if EvaluationRunner(cfg.trainer.evaluation_runner) is EvaluationRunner.HARBOR
                     else None,
+                    evaluation=True,
                 )
                 if EvaluationRunner(cfg.trainer.evaluation_runner) is not EvaluationRunner.TRAINING
                 else trajectory_runner
@@ -619,9 +638,11 @@ class BasePPOExp:
 
         tokenizer = self.tokenizer
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
+        from skyrl_train.pi_teacher_runtime import start_pi_managed_teacher  # noqa: PLC0415
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
         inference_engine_client = self.create_inference_engine_client()
+        self.pi_teacher_engines = start_pi_managed_teacher(self.cfg, self.prepared_pi_teacher)
 
         trajectory_runner: TrajectoryRunner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
 
@@ -700,6 +721,11 @@ class BasePPOExp:
                         asyncio.run(trainer.shutdown())
                     except Exception as e:
                         logger.warning(f"Error shutting down trainer: {e}")
+                if self.pi_teacher_engines is not None:
+                    from skyrl_train.pi_teacher_runtime import close_pi_managed_teacher  # noqa: PLC0415
+
+                    asyncio.run(close_pi_managed_teacher(self.pi_teacher_engines))
+                    self.pi_teacher_engines = None
 
 
 @ray.remote(num_cpus=1, max_retries=0)

@@ -42,6 +42,27 @@ def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bun
     assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
 
 
+def test_sibling_harbor_source_is_verified_with_the_skyrl_runtime(bundled_source):
+    source, _ = bundled_source
+    harbor = source.root.parent / "harbor"
+    (harbor / "src/harbor").mkdir(parents=True)
+    (harbor / "src/harbor/agents.py").write_text("pi_capture = True\n")
+    (harbor / "pyproject.toml").write_text('[project]\nname = "harbor"\n')
+    (harbor / "README.md").write_text("Harbor\n")
+    (harbor / "LICENSE").write_text("Apache-2.0\n")
+    (source.root / "harbor").symlink_to("../harbor", target_is_directory=True)
+
+    updated = runtime_bundle.resolve_launcher_source()
+    assert updated.digest != source.digest
+    with runtime_bundle.build_runtime_bundle(updated.digest) as workspace:
+        bundled = workspace / "harbor/src/harbor/agents.py"
+        assert bundled.read_text() == "pi_capture = True\n"
+        assert runtime_bundle.validate_bundled_runtime(workspace) == updated.digest
+        bundled.write_text("pi_capture = False\n")
+        with pytest.raises(RuntimeError, match="does not match its recorded identity"):
+            runtime_bundle.validate_bundled_runtime(workspace)
+
+
 def test_changed_bundled_training_config_is_rejected(bundled_source):
     _, workspace = bundled_source
     (workspace / "skyrl-train/skyrl_train/config/ppo_base_config.yaml").write_text("trainer: {max_steps: 999}\n")

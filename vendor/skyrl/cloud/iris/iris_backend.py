@@ -647,10 +647,15 @@ def _effective_gdn_backend(args: SimpleNamespace) -> str:
 
 def _rl_config_uses_daytona(config: DictConfig) -> bool:
     """Return whether the configured task backend requires Daytona credentials."""
-    uses_harbor = str(config.runtime.entrypoint) in {
-        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH],
-        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
-    } or bool(config.skyrl.get("data", {}).get("terminal_bench_data"))
+    uses_harbor = (
+        str(config.runtime.entrypoint)
+        in {
+            RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH],
+            RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
+        }
+        or bool(config.skyrl.get("data", {}).get("terminal_bench_data"))
+        or bool(OmegaConf.select(config, "skyrl.scenario.preset"))
+    )
     backend = OmegaConf.select(
         config,
         "skyrl.terminal_bench_config.harbor.environment_type",

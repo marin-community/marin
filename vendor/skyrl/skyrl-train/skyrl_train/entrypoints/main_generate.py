@@ -12,6 +12,7 @@ from loguru import logger
 from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
 
+from skyrl_train.config.pi_training import validate_pi_evaluation_results
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import (
     BasePPOExp,
@@ -79,6 +80,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 tokenizer=self.tokenizer,
                 trajectory_sink=trajectory_sink,
             )
+            validate_pi_evaluation_results(self.cfg, results)
         finally:
             try:
                 await trajectory_runner.shutdown()

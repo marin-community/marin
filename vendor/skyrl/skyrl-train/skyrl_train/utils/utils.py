@@ -26,6 +26,7 @@ from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_polic
 from skyrl_train.config.behavior_logprobs import configure_behavior_logprob_sampling
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.objective_spec import rollout_logprobs_required, validate_objective
+from skyrl_train.config.pi_training import validate_pi_training_config
 from skyrl_train.debug_mode import apply_debug_mode
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import parse_trajectory_reward_shaping_config
 from skyrl_train.trajectory_runners.trajectory_retention_config import parse_trajectory_retention_config
@@ -447,6 +448,7 @@ def _iter_config_kwargs(node):
 
 
 def validate_cfg(cfg: DictConfig):
+    validate_pi_training_config(cfg)
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")

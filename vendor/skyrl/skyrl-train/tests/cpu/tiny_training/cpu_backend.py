@@ -446,8 +446,10 @@ class CPUInferenceEngine(InferenceEngineInterface):
             tokenize=True,
             return_dict=False,
             add_generation_prompt=body.get("add_generation_prompt", False),
+            tools=body.get("tools"),
+            **body.get("chat_template_kwargs", {}),
         )
-        return {"tokens": encoded}
+        return {"tokens": encoded["input_ids"] if isinstance(encoded, dict) else encoded}
 
     async def completion(self, request_payload: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError("the CPU engine serves token-in-token-out generation only")

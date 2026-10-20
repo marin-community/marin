@@ -1,0 +1,19 @@
+# @package _global_
+scenario:
+  preset: teacher_demo_pi_base
+trainer:
+  algorithm:
+    policy_loss_type: sft
+    advantage_estimator: uniform
+    dynamic_sampling:
+      type: null
+generator:
+  n_samples_per_prompt: 1
+terminal_bench_config:
+  harbor:
+    verifier_disable: true
+  installed_agent:
+    agent:
+      name: pi
+      pi:
+        mode: teacher_trace

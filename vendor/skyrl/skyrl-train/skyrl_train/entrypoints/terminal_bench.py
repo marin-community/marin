@@ -6,20 +6,13 @@ import ray
 import hydra
 from omegaconf import DictConfig
 from skyrl_train.entrypoints.main_base import BasePPOExp, config_dir, run_ray_driver
-from skyrl_train.rollouts.workers import RolloutWorkerPool, RolloutWorkerResources
-from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
 from skyrl_train.dataset.harbor import HarborTaskDataset
 
 
 class TerminalBenchExp(BasePPOExp):
     def get_trajectory_runner(self, cfg, tokenizer, inference_engine_client):
         del tokenizer
-        return RolloutWorkerPool(
-            TaskRolloutWorkerSpec.from_config(
-                cfg, inference_engine_client.engines, harbor_config=cfg.terminal_bench_config
-            ),
-            RolloutWorkerResources.from_config(cfg),
-        )
+        return self.get_task_runner(cfg, inference_engine_client, harbor_config=cfg.terminal_bench_config)
 
     def _task_dataset(self, data_files) -> HarborTaskDataset:
         return self.harbor_task_dataset(data_files)

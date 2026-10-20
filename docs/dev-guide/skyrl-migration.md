@@ -19,6 +19,8 @@ Megatron/vLLM profile. No task clones the SkyRL fork.
 The launcher reuses `vendor/skyrl/.venv` for its CPU dependencies. It clears
 Marin's Python environment selection before invoking uv, so that environment
 uses only SkyRL's project and lock. GPU workers have their own environments.
+The [vendored Pi scenarios](pi-scenarios.md) also bundle the sibling Harbor
+source through SkyRL's independently locked local dependency.
 
 The captured runtime supports Megatron training. Marin's curriculum arms use
 Megatron for both Qwen and Snowball. The Snowball recipes follow

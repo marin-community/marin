@@ -23,6 +23,10 @@ RUNTIME_SOURCE_PREFIXES = (
     "skyrl-train/skyrl_train/",
     "skyrl-gym/skyrl_gym/",
     "open_mopd_versions.py",
+    "harbor/src/",
+    "harbor/pyproject.toml",
+    "harbor/README.md",
+    "harbor/LICENSE",
 )
 
 
@@ -85,7 +89,10 @@ def _bundle_paths(root: Path) -> tuple[Path, ...]:
         if {"tests", "__pycache__"}.intersection(path.parts) or path.suffix in {".pyc", ".pyo"}:
             continue
         original = root / path
-        original.resolve().relative_to(root.resolve())
+        allowed_root = (
+            (root.parent / "harbor") if path.parts[0] == "harbor" and (root / "harbor").is_symlink() else root
+        )
+        original.resolve().relative_to(allowed_root.resolve())
         if not original.is_file():
             raise FileNotFoundError(f"Runtime source file is missing: {name}")
         paths.append(path)
