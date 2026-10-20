@@ -32,15 +32,18 @@ The second command writes `train.jsonl` and `validation.jsonl` as ordinary
 TaskSpecs, with a manifest of source hashes, counts and output hashes. Every row
 must convert before either split is published. Each task has a user instruction,
 an assistant text prefill and a private `StructureClosureSpec`. No historical
-token IDs are needed. The model receives public messages through the existing
-harness; its actual token traces remain rollout evidence.
+token IDs are needed. Select `PrefillHarness` explicitly when creating the
+`TaskRolloutSpec`; ordinary chat rendering treats assistant events as completed
+history. The evaluator selects this harness and retains actual model token traces
+as rollout evidence.
 
 For the native declared-tool variant, use `--tool-prompt native-declared` and
 `--initializer /path/to/local/tokenizer`. This records the tokenizer and template
 fingerprints used to serialize the tool body, while keeping the task's input as
 text. Tool declarations are advertised schemas; these probes do not execute the
 synthetic `write_result` function. The serving backend must return the missing
-continuation as text. Structured tool actions are scored submission failures.
+continuation as text. Parsed reasoning and tool actions are unscored transport
+failures. Wrong raw-text answers remain scored failures.
 
 `training_prefixes` creates a separate near-boundary training variant. It advances
 ordinary continuation prefixes to a verified premature-closing boundary and
@@ -93,7 +96,7 @@ For example, `sampling.json` may contain:
 
 The experiment requests thinking for the reasoning family and disables it for
 the other families using the template's `enable_thinking` parameter. Prefill flags
-and tool declarations come from the task. These are part of the captured request
+come from `PrefillHarness`; tool declarations come from the task. These are part of the captured request
 and are checked by the auditor. Verify support for these template controls on
 the chosen backend; CPU tests do not validate a deployed model's rendering.
 

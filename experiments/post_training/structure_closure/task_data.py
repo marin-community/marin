@@ -11,6 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from taskcompendium.grader import verifyit_package
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -40,7 +41,6 @@ from experiments.post_training.structure_closure.token_data import (
     write_result_tool,
 )
 
-TERMINAL_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 IMPORTER_REVISION = "1"
 
 
@@ -50,7 +50,6 @@ def case_task(case: ClosureCase, source: Source, *, tools: tuple[FunctionDefinit
         prefix=case.prefix,
         expected=case.expected,
         format=closure_format(case.family),
-        terminal_markers=TERMINAL_MARKERS,
     )
     validate_structure_closure(spec)
     return TaskSpec(
@@ -95,7 +94,7 @@ def paired_task_probes(case: ClosureCase, source: Source, tokenizer: PreTrainedT
 
 def task_digest(task: TaskSpec) -> str:
     """Fingerprint both public conditioning and the private grading contract."""
-    return hashlib.sha256(task.model_dump_json().encode()).hexdigest()
+    return canonical_sha256(task.model_dump(mode="json"))
 
 
 def prepare_tasks(cases_directory: Path, output: Path, *, tool_prompt: ToolPrompt, initializer: Path | None) -> dict:

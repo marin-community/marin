@@ -104,7 +104,6 @@ def test_generated_cohort_runs_each_family_through_tasks_harness_and_grader(tmp_
         answers[tuple((event.role, event.content) for event in task.context.events)] = spec.expected[len(spec.prefix) :]
 
     async def complete(request):
-        # The standard submission instruction is inserted before the assistant prefill.
         key = (
             (request.messages[0]["role"], request.messages[0]["content"]),
             (request.messages[-1]["role"], request.messages[-1]["content"]),
@@ -278,6 +277,7 @@ def test_benchmark_builder_uses_disjoint_parent_tasks_and_persists_both_splits(t
     assert {task.id for task in training}.isdisjoint(task.id for task in load_validation(output))
 
 
+@pytest.mark.asyncio
 async def test_text_prefill_and_experiment_settings_reach_chat_endpoint():
     captured = []
 
@@ -345,8 +345,8 @@ def test_cohort_keeps_interrupted_attempts_and_later_successful_cases():
     assert report["groups"]["json_object"]["unscored"] == 1
 
 
-def test_valid_but_wrong_tool_action_is_a_scored_model_failure():
-    async def complete(request):
+def test_parsed_tool_action_is_unscored_instead_of_a_false_model_failure():
+    async def complete(_request):
         return ModelTurn(
             {
                 "role": "assistant",
@@ -366,9 +366,9 @@ def test_valid_but_wrong_tool_action_is_a_scored_model_failure():
         evaluate_task(task, complete, limits=rollout_limits(max_turns=1), trace=TraceMode.MESSAGES, sampling=SAMPLING)
     )
     audit = audit_rollouts([task], [record], sampling=SAMPLING)
-    assert audit.complete
-    assert not audit.results[0].success
-    assert record.result.grade.reward == 0
+    assert not audit.complete
+    assert not audit.results
+    assert record.result.grade.reward is None
 
 
 def test_audit_cli_retains_malformed_rows_and_writes_incomplete_comparison(tmp_path, monkeypatch):
@@ -437,6 +437,7 @@ def test_near_boundary_variant_rejects_modified_source_splits(tmp_path, split):
     assert not output.exists()
 
 
+@pytest.mark.asyncio
 async def test_raw_completion_transport_preserves_reasoning_closing_delimiter(tokenizer):
     case = next(
         case
