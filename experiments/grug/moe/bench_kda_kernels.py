@@ -12,10 +12,13 @@ primal forward (scan forward) and the recompute + backward (scan backward's ``ja
 """
 
 import argparse
+import functools
 import statistics
 import time
 
 import jax
+import jax.experimental.pallas
+import jax.experimental.pallas.triton
 import jax.numpy as jnp
 import numpy as np
 
@@ -23,7 +26,7 @@ from experiments.grug.moe import kda_prep_pallas as prep_mod
 from experiments.grug.moe import kda_state_pallas as state_mod
 from experiments.grug.moe.kda import doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import ChunkPrep, GateFn, GateKind, PrepConfig
-from experiments.grug.moe.kda_state_pallas import StateBwd, StateConfig, StateGrads
+from experiments.grug.moe.kda_state_pallas import StateConfig, StateGrads, StateLayout
 
 B, L, H, D = 16, 4096, 48, 128
 C = 32
@@ -71,7 +74,6 @@ def _prep_cfg(**kw) -> PrepConfig:
         tail_block_d=32,
         tail_num_warps=4,
         interpret=False,
-        fused_bwd=False,
     )
     base.update(kw)
     return PrepConfig(**base)
@@ -88,8 +90,9 @@ def _state_cfg(**kw) -> StateConfig:
         grads=StateGrads.PALLAS,
         primal_block_v=0,
         primal_num_warps=4,
-        bwd=StateBwd.SPLIT,
-        bwd_num_warps=8,
+        layout=StateLayout.DK_ROWS,
+        grads_block_v=32,
+        grads_num_warps=4,
     )
     base.update(kw)
     return StateConfig(**base)
@@ -103,6 +106,38 @@ def _report(name: str, fn, *args):
     except Exception as e:  # a candidate config can fail to compile (registers, shared memory)
         print(f"BENCH {name:58s} FAILED {type(e).__name__}: {str(e)[:300]}", flush=True)
         return None
+
+
+def _ds_dvp(qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg: StateConfig):
+    """The state backward kernel's per-chunk dS and dV_pseudo (the grads kernel's inputs)."""
+    gb, n, c, dk = kw.shape
+    dv = dout.shape[-1]
+    transposed = cfg.layout == StateLayout.DV_ROWS
+    bv = cfg.block_v
+    return jax.experimental.pallas.pallas_call(
+        state_mod._state_bwd_t_kernel if transposed else state_mod._state_bwd_kernel,
+        grid=(gb, dv // bv),
+        in_specs=[
+            state_mod._full(n, c, dk),
+            state_mod._full(n, c, c),
+            state_mod._full(n, c, dk),
+            state_mod._full(n, c, dk),
+            state_mod._full(n, dk),
+            state_mod._seq_slab(n * c, H, bv),
+            state_mod._state_slab(dk, bv),
+        ],
+        out_specs=[
+            state_mod._tslab(n, bv, dk) if transposed else state_mod._vslab(n, dk, bv),
+            state_mod._vslab(n, c, bv),
+            state_mod._state_slab(dk, bv),
+        ],
+        out_shape=[
+            jax.ShapeDtypeStruct((gb, n, dv, dk) if transposed else (gb, n, dk, dv), jnp.float32),
+            jax.ShapeDtypeStruct((gb, n, c, dv), jnp.float32),
+            jax.ShapeDtypeStruct((gb, dk, dv), jnp.float32),
+        ],
+        compiler_params=jax.experimental.pallas.triton.CompilerParams(num_warps=4, num_stages=2),
+    )(qi, attn, kw, kcd, decay, dout, dst)[:2]
 
 
 def _kernel_benches(sweep: bool):
@@ -119,9 +154,6 @@ def _kernel_benches(sweep: bool):
     _report("seg_decay_fwd", jax.jit(lambda a, p, b: prep_mod._seg_decay_fwd_call(a, (p, b), starts, pcfg)), a, *gate)
     _report("prep_fwd (primal, w4)", prep_fwd(pcfg, False), q, k, v, gseg, beta)
     _report("prep_fwd (save_t, w4)", prep_fwd(pcfg, True), q, k, v, gseg, beta)
-    if sweep:
-        for w in (2, 8):
-            _report(f"prep_fwd (save_t, w{w})", prep_fwd(_prep_cfg(num_warps=w), True), q, k, v, gseg, beta)
 
     *outs, t = prep_fwd(pcfg, True)(q, k, v, gseg, beta)
     prep = ChunkPrep(*outs)
@@ -134,42 +166,41 @@ def _kernel_benches(sweep: bool):
     def state_lean(cfg):
         return jax.jit(lambda *x: state_mod._state_fwd_lean_call(*x, jnp.bfloat16, cfg))
 
-    _report("state_fwd (saving, bv64 w4)", state_fwd(_state_cfg()), *sargs)
-    for bv in (32, 64, 128):
-        for w in (4, 8) if sweep or bv == 64 else (4,):
-            _report(
-                f"state_fwd_lean (bv{bv} w{w})", state_lean(_state_cfg(primal_block_v=bv, primal_num_warps=w)), *sargs
-            )
-    if sweep:
-        for bv, w, st in ((32, 4, 2), (128, 4, 2), (128, 8, 2), (64, 8, 2), (64, 4, 1), (64, 4, 3)):
-            cfg = _state_cfg(block_v=bv, num_warps=w, num_stages=st)
-            _report(f"state_fwd (saving, bv{bv} w{w} s{st})", state_fwd(cfg), *sargs)
+    dk_rows, dv_rows = StateLayout.DK_ROWS, StateLayout.DV_ROWS
+    _report("state_fwd (saving, dk_rows bv64 w4 s2)", state_fwd(_state_cfg()), *sargs)
+    _report("state_fwd_lean (dk_rows bv64 w4 s2)", state_lean(_state_cfg(primal_block_v=64)), *sargs)
+    fwd_grid = [(64, 4, 2), (64, 4, 3), (32, 4, 2), (128, 4, 2), (128, 8, 2), (64, 8, 2)] if sweep else [(64, 4, 2)]
+    for bv, w, st in fwd_grid:
+        cfg = _state_cfg(layout=dv_rows, block_v=bv, num_warps=w, num_stages=st)
+        _report(f"state_fwd (saving, dv_rows bv{bv} w{w} s{st})", state_fwd(cfg), *sargs)
+        cfg = cfg._replace(primal_block_v=bv, primal_num_warps=w)
+        _report(f"state_fwd_lean (dv_rows bv{bv} w{w} s{st})", state_lean(cfg), *sargs)
 
-    out, h, vnew, _ = state_fwd(_state_cfg())(*sargs)
     rng = np.random.RandomState(1)
-    dout = jnp.asarray(rng.randn(*out.shape), jnp.bfloat16)
-    dst = jnp.zeros_like(s0)
-    bargs = (prep.q_inflate, prep.attn, prep.kw, prep.k_cumdecay, prep.decay, h, vnew, dout, dst)
+    for layout in (dk_rows, dv_rows):
+        out, h, vnew, _ = state_fwd(_state_cfg(layout=layout))(*sargs)
+        dout = jnp.asarray(rng.randn(*out.shape), jnp.bfloat16)
+        dst = jnp.zeros_like(s0)
+        bargs = (prep.q_inflate, prep.attn, prep.kw, prep.k_cumdecay, prep.decay, h, vnew, dout, dst)
 
-    def state_bwd(cfg):
-        return jax.jit(lambda *x: state_mod._state_bwd_call(*x, cfg))
+        def state_bwd(cfg):
+            return jax.jit(lambda *x: state_mod._state_bwd_call(*x, cfg))
 
-    def state_bwd_only(cfg):
-        def f(qi, attn, kw, kcd, decay, h, vnew, dout, dst):
-            return state_mod._state_bwd_call(
-                qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg._replace(grads=StateGrads.XLA)
-            )[4]
+        def state_grads(cfg):
+            return jax.jit(lambda *x: state_mod._state_grads_call(*x, cfg))
 
-        return jax.jit(f)
+        bwd_cfg = _state_cfg(layout=layout, grads=StateGrads.XLA if layout == dk_rows else StateGrads.PALLAS)
+        ds_dvp = jax.jit(functools.partial(_ds_dvp, cfg=bwd_cfg))(*bargs)
+        gargs = (prep.q_inflate, prep.attn, prep.kw, prep.k_cumdecay, h, vnew, dout, *ds_dvp)
 
-    _report("state_bwd + grads (split, bv64, pallas grads)", state_bwd(_state_cfg()), *bargs)
-    _report("state_bwd alone (split, bv64; dvp only)", state_bwd_only(_state_cfg()), *bargs)
-    for w in (4, 8, 16):
-        _report(f"state_bwd_fused (w{w})", state_bwd(_state_cfg(bwd=StateBwd.FUSED, bwd_num_warps=w)), *bargs)
-    if sweep:
-        for st in (1, 3):
-            cfg = _state_cfg(bwd=StateBwd.FUSED, bwd_num_warps=8, num_stages=st)
-            _report(f"state_bwd_fused (w8 s{st})", state_bwd(cfg), *bargs)
+        bwd_grid = [(64, 4, 2), (64, 4, 3), (128, 4, 2), (128, 8, 2), (32, 4, 2)] if sweep else [(64, 4, 2)]
+        for bv, w, st in bwd_grid:
+            cfg = _state_cfg(layout=layout, block_v=bv, num_warps=w, num_stages=st)
+            _report(f"state_bwd + grads ({layout} bv{bv} w{w} s{st}; grads b32 w4)", state_bwd(cfg), *bargs)
+        grads_grid = [(32, 4), (64, 4), (64, 8), (128, 8), (16, 4)] if sweep else [(32, 4)]
+        for gbv, gw in grads_grid:
+            cfg = _state_cfg(layout=layout, grads_block_v=gbv, grads_num_warps=gw)
+            _report(f"state_grads alone ({layout} b{gbv} w{gw})", state_grads(cfg), *gargs)
 
     cts = ChunkPrep(*(jnp.asarray(rng.randn(*x.shape) * 0.1, x.dtype) for x in prep))
 
@@ -180,24 +211,11 @@ def _kernel_benches(sweep: bool):
             )
         )
 
-    _report("prep_bwd (wy + tail + seg, w4/w4)", prep_bwd(pcfg), q, k, v, a, beta, *gate, t, cts)
-    for w in (4, 8):
-        _report(
-            f"prep_bwd_fused (+ seg, w{w})",
-            prep_bwd(_prep_cfg(fused_bwd=True, bwd_num_warps=w)),
-            q,
-            k,
-            v,
-            a,
-            beta,
-            *gate,
-            t,
-            cts,
-        )
+    _report("prep_bwd (wy + tail + seg, w4/w4 tail b32)", prep_bwd(pcfg), q, k, v, a, beta, *gate, t, cts)
     if sweep:
-        for bw, tw in ((8, 4), (4, 8), (8, 8), (2, 4)):
-            cfg = _prep_cfg(bwd_num_warps=bw, tail_num_warps=tw)
-            _report(f"prep_bwd (wy w{bw} + tail w{tw} + seg)", prep_bwd(cfg), q, k, v, a, beta, *gate, t, cts)
+        for tb, tw in ((64, 4), (128, 4), (64, 8), (16, 4)):
+            cfg = _prep_cfg(tail_block_d=tb, tail_num_warps=tw)
+            _report(f"prep_bwd (wy w4 + tail b{tb} w{tw} + seg)", prep_bwd(cfg), q, k, v, a, beta, *gate, t, cts)
 
 
 def _layer_benches():
@@ -216,10 +234,9 @@ def _layer_benches():
     )
     variants = {
         "current": {},
-        "lean primal bv64": dict(state_primal_block_v=64),
-        "fused state bwd": dict(state_bwd=StateBwd.FUSED),
-        "fused prep bwd": dict(fused_prep_bwd=True),
-        "all three": dict(state_primal_block_v=64, state_bwd=StateBwd.FUSED, fused_prep_bwd=True),
+        "lean primal dk_rows bv64": dict(state_primal_block_v=64),
+        "dv_rows": dict(state_layout=StateLayout.DV_ROWS),
+        "dv_rows + lean primal bv64": dict(state_layout=StateLayout.DV_ROWS, state_primal_block_v=64),
     }
     for name, extra in variants.items():
         kw = dict(base, **extra)
@@ -268,8 +285,8 @@ def _parity():
     names = ("dq", "dk", "dv", "da", "dbeta", "drate", "dbias")
     for vname, extra in (
         ("lean primal", dict(state_primal_block_v=64)),
-        ("fused state bwd", dict(state_bwd=StateBwd.FUSED)),
-        ("fused prep bwd", dict(fused_prep_bwd=True)),
+        ("dv_rows", dict(state_layout=StateLayout.DV_ROWS)),
+        ("dv_rows + lean", dict(state_layout=StateLayout.DV_ROWS, state_primal_block_v=64)),
     ):
         primal, out, grads = run(dict(base, **extra))
 

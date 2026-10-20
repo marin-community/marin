@@ -18,7 +18,7 @@ import pytest
 
 from experiments.grug.moe.kda import chunk_kda, kda_fused, recurrent_kda
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind
-from experiments.grug.moe.kda_state_pallas import StateBwd, StateGrads
+from experiments.grug.moe.kda_state_pallas import StateGrads, StateLayout
 
 jax.config.update("jax_default_matmul_precision", "float32")
 
@@ -330,14 +330,15 @@ def test_kda_fused_gate_and_grouped_kv_match_unfused(packed, sub_chunk_size):
 
 
 @pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("save_states", [False, True])
 @pytest.mark.parametrize(
-    ("primal_block_v", "state_bwd", "fused_prep_bwd"),
-    [(32, StateBwd.SPLIT, False), (0, StateBwd.FUSED, False), (0, StateBwd.SPLIT, True), (32, StateBwd.FUSED, True)],
+    ("primal_block_v", "layout"),
+    [(32, StateLayout.DK_ROWS), (0, StateLayout.DV_ROWS), (32, StateLayout.DV_ROWS)],
 )
-def test_kda_fused_kernel_variants_match_default(packed, primal_block_v, state_bwd, fused_prep_bwd):
-    """The lean primal state pass, the fused state backward and the fused prep backward reproduce the default
-    kernels' values and gradients (the GB200 configuration: 32-token chunks in one decay tile, the on-chip
-    sigmoid gate with its -5 floor, packed documents)."""
+def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_block_v, layout):
+    """The lean primal state pass and the transposed-state kernels reproduce the default kernels' values and
+    gradients (the GB200 configuration: 32-token chunks in one decay tile, the on-chip sigmoid gate with its
+    -5 floor, packed documents), with the per-chunk states recomputed or saved for the backward."""
     rng = np.random.RandomState(31)
     b, length, heads, d = 2, 96, 3, 32
     q, k, v = (jnp.asarray(rng.randn(b, length, heads, d), jnp.float32) for _ in range(3))
@@ -356,8 +357,9 @@ def test_kda_fused_kernel_variants_match_default(packed, primal_block_v, state_b
         interpret=True,
         state_grads=StateGrads.PALLAS,
         state_block_v=16,
+        save_chunk_states=save_states,
     )
-    variant = dict(base, state_primal_block_v=primal_block_v, state_bwd=state_bwd, fused_prep_bwd=fused_prep_bwd)
+    variant = dict(base, state_primal_block_v=primal_block_v, state_layout=layout)
 
     def loss(kw, q, k, v, a, beta, rate, bias):
         return jnp.sum(w * kda_fused(q, k, v, a, beta, gate=(rate, bias), **kw))

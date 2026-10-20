@@ -83,7 +83,7 @@ from experiments.grug.fast_track.sparse_attention import (
 )
 from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, gate_log_decay
-from experiments.grug.moe.kda_state_pallas import StateGrads
+from experiments.grug.moe.kda_state_pallas import StateGrads, StateLayout
 
 _GATED_NORM_RANK = 128
 _QB_HIST_BINS = 10_000
@@ -809,6 +809,11 @@ class GrugModelConfig:
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
     kda_state_block_v: int = 32
     """d_v tile of the fused KDA state pass: 64 with ``kda_state_grads=xla`` is 8% faster on GB200 (same math)."""
+    kda_state_primal_block_v: int = 0
+    """> 0: the primal (scan-forward) KDA state pass runs a kernel with this d_v tile that skips the per-chunk
+    states only the backward reads; 0 keeps the saving kernel (same math)."""
+    kda_state_layout: StateLayout = StateLayout.DK_ROWS
+    """On-chip orientation of the fused KDA state pass's state (``StateLayout``; same math)."""
     moe_shared_placement: SharedExpertPlacement = SharedExpertPlacement.FUSED
     moe_dispatch: MoeDispatch = MoeDispatch.FAST_TRACK
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a learned per-sublayer
@@ -1943,6 +1948,8 @@ class KdaKernelOptions(NamedTuple):
     save_chunk_states: bool
     state_grads: StateGrads
     state_block_v: int
+    state_primal_block_v: int
+    state_layout: StateLayout
 
 
 def _kda_kernel_rotating(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaKernelOptions):
@@ -1980,6 +1987,8 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaK
             save_chunk_states=options.save_chunk_states,
             state_grads=options.state_grads,
             state_block_v=options.state_block_v,
+            state_primal_block_v=options.state_primal_block_v,
+            state_layout=options.state_layout,
         )
     if gate is not None:
         g = gate_log_decay(gate_fn, g.astype(jnp.float32), gate[0], gate[1])
@@ -2173,7 +2182,12 @@ class KimiDeltaAttention(eqx.Module):
         else:
             kernel_fn = _kda_kernel
         options = KdaKernelOptions(
-            cfg.kda_chunk_size, cfg.kda_save_chunk_states, cfg.kda_state_grads, cfg.kda_state_block_v
+            cfg.kda_chunk_size,
+            cfg.kda_save_chunk_states,
+            cfg.kda_state_grads,
+            cfg.kda_state_block_v,
+            cfg.kda_state_primal_block_v,
+            cfg.kda_state_layout,
         )
         run = functools.partial(kernel_fn, options=options)
         args = (q, k, v, g, beta, extras)

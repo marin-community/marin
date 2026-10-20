@@ -72,7 +72,6 @@ class PrepConfig(NamedTuple):
     tail_block_d: int
     tail_num_warps: int
     interpret: bool
-    fused_bwd: bool  # one backward kernel (``_prep_bwd_fused_kernel``); needs sub_chunk == chunk_size
 
 
 def _iota2_rows(n: int, m: int) -> jax.Array:
@@ -504,88 +503,6 @@ def _wy_bwd_sub_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2nor
     dkc_ref[...] = dkc
 
 
-def _prep_bwd_fused_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm, gated, segmented, erased):
-    """``_wy_bwd_sub_kernel`` and the ``raw_frame`` ``_tail_bwd_kernel`` in one kernel for a chunk that is one
-    decay tile (``sub_chunk_size == chunk_size``): the GEMM cotangents of ``e * beta``, ``k`` and the scaled
-    ``q`` stay on-chip instead of round-tripping HBM in fp32, and q / k / g / beta are read once."""
-    gate_refs, starts_ref, erase_ref, refs = _split_refs(refs, gated, segmented, erased)
-    t_ref, dkcd_ref, dvp_ref, dqi_in_ref, dattn_ref, dkw_ref, ddecay_ref = refs[:7]
-    dv_ref, dq_ref, dk_ref, dg_ref, db_ref, *derase_ref = refs[7:]
-    c, dk = k_ref.shape
-    docs = _doc_masks(starts_ref)
-    idx = _doc_index(starts_ref)
-    idx_rows = _idx_rows(starts_ref, c, c)
-    beta = b_ref[...].astype(f32)[:, None]
-    q_scale = dk**-0.5
-    t = t_ref[...]
-    row, col = _iota2(c, 0), _iota2(c, 1)
-
-    dvp = dvp_ref[...].astype(f32)
-    v = v_ref[...].astype(f32)
-    dvb = _mm(t, dvp, mm_dtype, trans_a=True)
-    dv_ref[...] = (dvb * beta).astype(dv_ref.dtype)
-    dbeta = jnp.sum(dvb * v, axis=1)
-    dt = _mm(dvp, v * beta, mm_dtype, trans_b=True)
-
-    k_raw = k_ref[...].astype(f32)
-    k, rk = _norm_qk(k_raw, l2norm, 1.0)
-    gcum, gt, eg, _, w = _gates(_cum_log_decay(g_ref, gate_refs, docs), docs)
-    e = _erase_key(k, erase_ref)
-    xa = e * beta
-    kbe_state = xa * eg
-    if docs is not None:
-        kbe_state = kbe_state * docs.carry_in[:, None]
-    dkcd = dkcd_ref[...].astype(f32)
-    dt = dt + _mm(dkcd, kbe_state, mm_dtype, trans_b=True)
-    deb = _mm(t, dkcd, mm_dtype, trans_a=True) * eg
-    dqs = dqi_in_ref[...].astype(f32) * eg
-    strict, lower = col < row, col <= row
-    if docs is not None:
-        deb = deb * docs.carry_in[:, None]
-        dqs = dqs * docs.carry_in[:, None]
-        strict, lower = strict & docs.same, lower & docs.same
-    da = _mm(_mm(t, dt, mm_dtype, trans_a=True), t, mm_dtype, trans_b=True)
-    dp = jnp.where(strict, -da, 0.0)
-    dsm = jnp.where(lower, dattn_ref[...].astype(f32), 0.0)
-    q_raw = q_ref[...].astype(f32)
-    q, rq = _norm_qk(q_raw, l2norm, q_scale)
-    tile = _sub_tile(gcum, gcum, idx, idx_rows, 0, c)
-    h = k * tile.col
-    deb = deb + _mm(dp, h, mm_dtype) * tile.row
-    dqs = dqs + _mm(dsm, h, mm_dtype) * tile.row
-    dh = _mm(dp, xa * tile.row, mm_dtype, trans_a=True) + _mm(dsm, q * tile.row, mm_dtype, trans_a=True)
-    dkc = dh * tile.col
-
-    # The elementwise tail (``_tail_bwd_kernel`` with ``raw_frame``) on whole tiles.
-    dkw = dkw_ref[...].astype(f32)
-    if docs is not None:
-        dkw = dkw * docs.last_doc[:, None]
-    kw_grad = dkw * k * w
-    dgc = dqs * q + deb * xa - dkc * k - kw_grad
-    dbeta = dbeta + jnp.sum(deb * e, axis=1)
-    de = deb * beta
-    dqn = dqs * q_scale
-    if erase_ref is not None:
-        derase_ref[0][...] = erase_ref.input_grad(de * k).astype(derase_ref[0].dtype)
-        de = de * erase_ref.gate()
-    dkn = de + dkc + dkw * w
-    ddecay = ddecay_ref[...] if docs is None else ddecay_ref[...] * docs.carry_through
-    dgt = jnp.sum(kw_grad, axis=0) + ddecay * jnp.exp(gt)
-    if docs is not None:
-        dg = jnp.where(_iota2_rows(c, dk) == c - 1, dgc + dgt[None, :], dgc)
-    else:
-        dg = jnp.sum(dgc, axis=0)[None, :] - jnp.cumsum(dgc, axis=0) + dgc + dgt[None, :]
-    dg_ref[...] = dg.astype(dg_ref.dtype)
-    db_ref[...] = dbeta.astype(db_ref.dtype)
-    if l2norm:
-        q_dot = jnp.sum(q_raw * dqn, axis=1)
-        k_dot = jnp.sum(k_raw * dkn, axis=1)
-        dqn = rq[:, None] * dqn - q_raw * (rq * rq * rq * q_dot)[:, None]
-        dkn = rk[:, None] * dkn - k_raw * (rk * rk * rk * k_dot)[:, None]
-    dq_ref[...] = dqn.astype(dq_ref.dtype)
-    dk_ref[...] = dkn.astype(dk_ref.dtype)
-
-
 def _wy_bwd_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm, gated, segmented, erased):
     """Backward through every GEMM of the prep: Vp = T Vb, Kcd = T Kbe, T = (I - A)^-1,
     A = -tril(Kbe Kd^T), and attn = tril(Qi Kd^T).
@@ -909,9 +826,8 @@ def _group_sum(x: jax.Array, group: int, dtype) -> jax.Array:
 
 
 def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg: PrepConfig):
-    g_seg = None
     if starts is not None:  # heavy kernels on the restarted cumsum G; dL/dG -> dL/dg after
-        g_seg = (g, gate)
+        g_in, gate_in = g, gate
         g, gate = _seg_decay_fwd_call(g, gate, starts, cfg), None
     b, length, heads, dk = q.shape
     dv_dim = v.shape[-1]
@@ -934,37 +850,6 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
     def internal(*shape):
         return jax.ShapeDtypeStruct((gb, n, *shape), f32)
 
-    if cfg.fused_bwd:
-        dv, dq, dk_, dg, dbeta, *derase = pl.pallas_call(
-            functools.partial(_prep_bwd_fused_kernel, mm_dtype=mmd, l2norm=cfg.l2norm, **flags),
-            grid=(gb, n),
-            in_specs=[
-                *_seq_specs(c, heads, dk),
-                *_seq_specs(c, heads, dk, dv_dim, group=group),
-                *_seq_specs(c, heads, dk),
-                _seq_vec_spec(c, heads),
-                *gate_specs,
-                *_specs(c, c, dk, dv_dim, dk, c, dk),
-                _vec_spec(dk),
-            ],
-            out_specs=[
-                *_seq_specs(c, heads, dv_dim, dk, dk, dk),
-                _seq_vec_spec(c, heads),
-                *(_seq_specs(c, heads, dk) if erased else []),
-            ],
-            out_shape=[
-                jax.ShapeDtypeStruct((b, length, heads, dv_dim), kv_ct_dtype or v.dtype),
-                jax.ShapeDtypeStruct(q.shape, q.dtype),
-                jax.ShapeDtypeStruct((b, length, heads, dk), kv_ct_dtype or k.dtype),
-                jax.ShapeDtypeStruct(g.shape, f32 if gated else g.dtype),
-                jax.ShapeDtypeStruct(beta.shape, beta.dtype),
-                *([jax.ShapeDtypeStruct(erase.shape, erase.dtype)] if erased else []),
-            ],
-            compiler_params=plt.CompilerParams(num_warps=cfg.bwd_num_warps, num_stages=1),
-            interpret=cfg.interpret,
-            name="kda_prep_bwd_fused",
-        )(q, k, v, g, beta, *extra, t, cts.k_cumdecay, cts.v_pseudo, cts.q_inflate, cts.attn, cts.kw, cts.decay)
-        return _prep_bwd_finish(q, k, v, g, gate, starts, erase, dq, dk_, dv, dg, dbeta, derase, g_seg, cfg)
     raw_frame = cfg.sub_chunk > 0
     if raw_frame:  # (dkbe, dkd, dqi) slots carry the cotangents of (e * beta, k, scaled q)
         wy_kernel = functools.partial(_wy_bwd_sub_kernel, sub=cfg.sub_chunk)
@@ -1034,25 +919,16 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
         interpret=cfg.interpret,
         name="kda_prep_bwd_tail",
     )(q, k, g, beta, *extra, dqi, cts.kw, cts.decay, dkbe, dkd, dbeta_v)
-    return _prep_bwd_finish(q, k, v, g, gate, starts, erase, dq, dk_, dv, dg, dbeta, derase, g_seg, cfg)
-
-
-def _prep_bwd_finish(q, k, v, g, gate, starts, erase, dq, dk_, dv, dg, dbeta, derase, g_seg, cfg: PrepConfig):
-    """The backward's cotangents from the heavy kernels' outputs: dL/dG -> dL/dg through the document cumsum
-    (``g_seg`` = the original (g, gate) when segmented) or the fused gate, and grouped k/v summed per kv head."""
-    group = q.shape[2] // k.shape[2]
     dgate = None
-    if starts is not None:
-        g_in, gate_in = g_seg
+    if segmented:
         dg, dgate = _seg_decay_bwd_call(g_in, gate_in, starts, dg, cfg)
-    elif gate is not None:  # dg is d/d(log-decay); chain through the gate in XLA
-        gated = _gate_fn(gate, cfg)
+    elif gated:  # dg is d/d(log-decay); chain through the gate in XLA
         p, bias = gate
         da, dp, dbias = gate_grads(gated, g.astype(f32), p.astype(f32), bias.astype(f32), dg)
         dgate = (jnp.sum(dp, axis=(0, 1)).astype(p.dtype), jnp.sum(dbias, axis=(0, 1)).astype(bias.dtype))
         dg = da.astype(g.dtype)
     dstarts = None if starts is None else jnp.zeros_like(starts)  # document starts are data
-    derase = derase[0] if erase is not None else None
+    derase = derase[0] if erased else None
     dk_ = _group_sum(dk_, group, k.dtype)
     return dq, dk_, _group_sum(dv, group, v.dtype), dg, dbeta, dgate, dstarts, derase
 
@@ -1097,7 +973,6 @@ def fused_chunk_prep(
     bwd_num_warps: int = 8,
     tail_block_d: int = 32,
     tail_num_warps: int = 8,
-    fused_bwd: bool = False,
     interpret: bool = False,
 ) -> ChunkPrep:
     """Fused KDA intra-chunk prep (differentiable).
@@ -1133,8 +1008,6 @@ def fused_chunk_prep(
         num_warps, bwd_num_warps: Triton warps per program (forward / backward kernels).
         tail_block_d, tail_num_warps: d_k column block / warps of the backward's
             elementwise tail kernel.
-        fused_bwd: run the backward as one kernel (GEMMs and elementwise tail, ``bwd_num_warps``); needs
-            ``sub_chunk_size == chunk_size``.
         interpret: run in the Pallas interpreter (CPU tests).
 
     Returns:
@@ -1152,8 +1025,6 @@ def fused_chunk_prep(
     sub = sub_chunk_size or 0
     if sub_chunk_size is not None and (sub < 16 or sub & (sub - 1) or chunk_size % sub):
         raise ValueError(f"sub_chunk_size must be a power of two >= 16 dividing chunk_size, got {sub}")
-    if fused_bwd and sub != chunk_size:
-        raise ValueError(f"fused_bwd needs sub_chunk_size == chunk_size, got {sub_chunk_size} vs {chunk_size}")
     cfg = PrepConfig(
         chunk_size,
         GateKind(gate_fn.kind).value,
@@ -1167,6 +1038,5 @@ def fused_chunk_prep(
         tail_block_d,
         tail_num_warps,
         interpret,
-        fused_bwd,
     )
     return _prep(q, k, v, g, beta, gate, doc_starts, erase, cfg)
