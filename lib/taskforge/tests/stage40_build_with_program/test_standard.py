@@ -16,7 +16,8 @@ from verifyit.spec import ExactSpec
 
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
-from taskforge.spec.draft import VERDICT_REWARD, answer_grader
+from taskforge.spec.draft import answer_grader
+from taskforge.spec.verdict import VERDICT_REWARD
 from taskforge.stage10_proposal.model import SolverMachine
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock
 from taskforge.stage40_build_with_program.outputs import Fixtures, Grader, Sources

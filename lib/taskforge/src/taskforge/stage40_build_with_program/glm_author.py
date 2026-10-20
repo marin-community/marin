@@ -41,7 +41,7 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
-from taskforge.spec import draft
+from taskforge.spec import draft, verdict
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author import program as program_module
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision
@@ -103,7 +103,7 @@ timeout=...)` runs `python3 /tests/grade.py` after the attempt, in the task imag
 (`publish_image(context, DockerBuild(...))`), otherwise on Taskforge's grader-base image (CPython \
 3.12, standard library only). It reads the extracted final answer at `/app/answer.txt` \
 (`answer_path=draft.ANSWER_PATH`), the captured `output_paths` at their own absolute paths and its \
-private data under `/tests`, never stdin, and writes its verdict to `draft.GRADER_VERDICT_PATH`: \
+private data under `/tests`, never stdin, and writes its verdict to `verdict.GRADER_VERDICT_PATH`: \
 `{{"reward": r, "detail": {{"checks": [{{"name": ..., "passed": ..., "weight": ...}}, ...]}}}}`, one \
 check per independently gradable property, exiting 0 for every candidate. No grader runs in the \
 solver's machine. A private grader file must not have the same bytes as any solver-visible file: \
@@ -278,7 +278,7 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
         (
             "requirements",
             "machine",
-            "Resources",
+            "MachineLimits",
             "file",
             "answer_grader",
             "grader_environment",
@@ -287,9 +287,9 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "reward_file",
             "assemble",
             "ANSWER_PATH",
-            "GRADER_VERDICT_PATH",
         ),
     ),
+    ("The verdict file (`from taskforge.spec import verdict`)", verdict, ("GRADER_VERDICT_PATH",)),
     (
         "Verifyit specs for `draft.answer_grader`",
         verifyit_spec,
