@@ -429,3 +429,6 @@ so a Paloma gate rejects this classifier. G is gold-answer BPB. The English accu
 At d1280, G was +4.1% [+3.0%, +5.1%], but the English intervals were wider than their harm limits, so the judge gave `inconclusive`.
 In the full pool, web is 17% of the tokens. There, the same classifier on the web sources gave G +0.4%, which the judge cannot resolve at d768.
 To improve a scorer for some sources, compare it against random on those sources only. Then confirm it on the full pool at a larger rung.
+With three seeds, the 95% intervals are 4–7 points wide for knowledge and 1–4 points for commonsense, so a small gain is `inconclusive`.
+For the confirmation, use new seeds and set the seed count before the runs. 12 seeds for each arm make the intervals about half as wide, at four times the cost.
+The intervals do not include the effect of a search over many candidates, so do not accept a candidate from the search runs alone.
