@@ -499,17 +499,6 @@ GROUP BY 1 ORDER BY lag_seconds DESC
         SourceQuery("attribution", attribution_sql, ACCELERATOR_MAX_ATTRIBUTION_ROWS),
     )
     source_views = {
-        "fleet": (
-            "mean_utilization",
-            "mean_tensor",
-            "hottest",
-            "power_series",
-            "utilization_series",
-            "tensor",
-            "hbm",
-            "temperature_series",
-            "fault_count",
-        ),
         "devices": ("freshness", "model_power", "sm", "temperature_distribution"),
         "attribution": ("run_power",),
     }
