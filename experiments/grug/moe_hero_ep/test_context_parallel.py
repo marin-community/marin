@@ -3,6 +3,9 @@
 
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
+# The test imports the model only in the subprocess. This import lets the CI test selector see that dependency.
+import experiments.grug.moe_hero_ep.model  # noqa: F401
+
 
 def test_context_parallel_logits_match_unsharded_sequence():
     # The MLPs flatten each device's own (rows, sequence shard) block, so under context parallelism
