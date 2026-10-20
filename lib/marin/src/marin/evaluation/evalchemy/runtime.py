@@ -1,37 +1,90 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned Evalchemy client runtime for endpoint-backed evaluations.
+"""Independent, checkout-local Evalchemy runtime and content provenance."""
 
-Evalchemy runs from an isolated uvx environment on the standard Iris task image. The immutable Git
-revision identifies the CLI, graders, and benchmark data without requiring a separate task image.
-"""
+import subprocess
+from pathlib import Path
 
-from marin.external_dependencies import EVALCHEMY
+from iris.cluster.client.bundle import DEFAULT_EXCLUDE
+from rigging.cache import combined_content_hash, file_content_hash
+from rigging.config_discovery import find_project_root
 
+EVALCHEMY_RUNTIME_PROJECT = "vendor/evalchemy"
 EVALCHEMY_REQUIRED_EXTRAS = ("serve-eval",)
-EVALCHEMY_REQUIREMENT = EVALCHEMY.requirement(EVALCHEMY_REQUIRED_EXTRAS)
-
-# Evalchemy's current dependency graph has Python 3.12 wheels. Letting uvx select Python 3.13 makes
-# pandas 2.2.2 build from source during a cold start.
 EVALCHEMY_PYTHON_VERSION = "3.12"
-_PYTHON_ABI = f"cp{EVALCHEMY_PYTHON_VERSION.replace('.', '')}"
 
-# FineStore writes evaluator artifacts to both GCS and CoreWeave S3. Evalchemy's lean endpoint core
-# leaves those cloud filesystem implementations to its caller.
-#
-# Keep CPU-only PyTorch as a compatibility floor for benchmark orchestration and grading code.
-# Inference stays in the separately served model process; direct wheel URLs prevent uv from
-# resolving a CUDA build when a benchmark extra declares an unconstrained torch dependency.
-_CPU_TORCH_VERSION = "2.11.0"
-_CPU_TORCH_X86_64 = (
-    "torch @ https://download.pytorch.org/whl/cpu/"
-    f"torch-{_CPU_TORCH_VERSION}%2Bcpu-{_PYTHON_ABI}-{_PYTHON_ABI}-manylinux_2_28_x86_64.whl"
-    " ; sys_platform == 'linux' and platform_machine == 'x86_64'"
+_EVALUATOR_DIRECTORIES = (
+    "vendor/evalchemy/eval",
+    "vendor/evalchemy/packages",
 )
-_CPU_TORCH_AARCH64 = (
-    "torch @ https://download.pytorch.org/whl/cpu/"
-    f"torch-{_CPU_TORCH_VERSION}%2Bcpu-{_PYTHON_ABI}-{_PYTHON_ABI}-manylinux_2_28_aarch64.whl"
-    " ; sys_platform == 'linux' and platform_machine == 'aarch64'"
+_EVALUATOR_FILES = (
+    "vendor/evalchemy/pyproject.toml",
+    "vendor/evalchemy/uv.lock",
 )
-EVALCHEMY_EXTRA_PACKAGES = ("s3fs", "gcsfs", _CPU_TORCH_X86_64, _CPU_TORCH_AARCH64)
+_RUNTIME_DIRECTORIES = (*_EVALUATOR_DIRECTORIES, "lib/finestore/src", "lib/rigging/src")
+_RUNTIME_FILES = (
+    *_EVALUATOR_FILES,
+    "lib/finestore/pyproject.toml",
+    "lib/rigging/pyproject.toml",
+    "lib/marin/src/marin/evaluation/evalchemy/client.py",
+    "lib/marin/src/marin/evaluation/evalchemy/runner.py",
+    "lib/marin/src/marin/evaluation/evalchemy/runtime.py",
+)
+
+
+def _source_hash(directories: tuple[str, ...], files: tuple[str, ...]) -> str:
+    root = find_project_root(Path(__file__))
+    if root is None:
+        raise ValueError("Vendored Evalchemy requires a Marin source checkout")
+    for directory in directories:
+        source = root / directory
+        if not source.is_dir():
+            raise FileNotFoundError(f"Evalchemy runtime source directory is unavailable: {source}")
+    for filename in files:
+        if not (root / filename).is_file():
+            raise FileNotFoundError(f"Evalchemy runtime source file is unavailable: {root / filename}")
+
+    if (root / ".git").exists():
+        # Match Iris bundle membership: changed tracked files and nonignored new
+        # files both ship. Gitignored scratch files do not identify the runtime.
+        result = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *directories, *files],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        candidates = {root / filename for filename in result.stdout.split("\0") if filename}
+    else:
+        # Extracted Iris bundles contain no Git metadata. Their shipped files
+        # already reflect Git membership; inspect only the declared source roots.
+        candidates = {root / filename for filename in files}
+        candidates.update(candidate for directory in directories for candidate in (root / directory).rglob("*"))
+
+    components = []
+    for candidate in sorted(candidates):
+        relative = candidate.relative_to(root)
+        # Optional benchmark packages generate build metadata inside source roots.
+        if DEFAULT_EXCLUDE.search(relative.as_posix()) or any(
+            part in {"build", "dist"} or part.endswith((".egg-info", ".dist-info")) for part in relative.parts
+        ):
+            continue
+        if candidate.is_file():
+            components.append(f"{relative.as_posix()}:{file_content_hash(candidate)}")
+    return combined_content_hash(components)
+
+
+def evalchemy_evaluator_source_hash() -> str:
+    """Identify evaluator inputs used to cache immutable evaluation steps."""
+    return _source_hash(_EVALUATOR_DIRECTORIES, _EVALUATOR_FILES)
+
+
+def evalchemy_runtime_source_hash() -> str:
+    """Identify evaluator, storage dependencies and Marin adapters for provenance."""
+    return _source_hash(_RUNTIME_DIRECTORIES, _RUNTIME_FILES)
+
+
+def evalchemy_runtime_descriptor(extras: tuple[str, ...], source_hash: str) -> str:
+    selected = ",".join(sorted(set(extras)))
+    return f"evalchemy[{selected}] @ {EVALCHEMY_RUNTIME_PROJECT}#sha256={source_hash}"
