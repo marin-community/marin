@@ -60,8 +60,10 @@ from taskforge.spec.draft import (
     ANSWER_PATH,
     FILESYSTEM_CAPABILITY,
     GRADER_VERDICT_PATH,
+    LOCAL_COPY_ON_WRITE,
     LOCAL_CPYTHON,
-    LOCAL_READ_ONLY_ROOTS,
+    LOCAL_READ_ONLY,
+    LOCAL_UNWRITABLE_ROOTS,
     PYTHON_GRADER_ARGV,
     SHELL_CAPABILITY,
     MachineSettings,
@@ -150,6 +152,13 @@ class RecordingFactory:
 
     async def create(self, spec: MachineSpec):
         raise AssertionError(f"Unexpected machine for {spec}")
+
+
+@dataclass(frozen=True)
+class LocalRecordingFactory(RecordingFactory):
+    """A local factory that is registered for lowering and states its mode for system directories."""
+
+    system_directories: str
 
 
 def shell_message(call_id: str, command: str) -> dict:
@@ -732,19 +741,51 @@ def test_a_package_machine_takes_no_image_and_one_requirement_per_package():
         requirements(image=None, packages=("numpy pandas\nscipy",))
 
 
-def test_a_grader_base_task_writing_under_a_read_only_root_keeps_its_image_on_the_local_host():
-    """Files the task ships under /opt cannot land on the local backend, so the task machine stays a container."""
-    shipped = cpython_task().model_copy(
+def opt_task() -> TaskSpec:
+    """``cpython_task`` shipping a file under /opt, a system directory of the local backend."""
+    return cpython_task().model_copy(
         update={"resources": ResourceGroups(worker=(file("opt/audit/README.md", "audit"),))}
     )
-    lowered = lower_on_iris(shipped, (Backend.GVISOR, Backend.LOCAL))
-    plain = lower_on_iris(cpython_task(), (Backend.GVISOR, Backend.LOCAL))
 
-    assert machine_sources(lowered)[0] == ("gvisor", RegistryImage(GRADER_BASE_IMAGE))
-    assert machine_sources(lowered)[1] == ("local", LOCAL_CPYTHON)
+
+def lower_beside_local(task: TaskSpec, local: RecordingFactory) -> TaskRolloutSpec:
+    return lower(
+        task,
+        host=MachineHost.IRIS,
+        task_machine=SHELLSIM,
+        verifier_machine=VERIFIER,
+        limits=LIMITS,
+        factories={Backend.GVISOR.value: RecordingFactory(Backend.GVISOR), Backend.LOCAL.value: local},
+    )
+
+
+def test_a_copy_on_write_local_factory_keeps_a_task_writing_under_opt_on_the_local_backend():
+    lowered = lower_beside_local(opt_task(), LocalRecordingFactory(Backend.LOCAL, LOCAL_COPY_ON_WRITE))
+
+    assert machine_sources(lowered) == (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))
+
+
+@pytest.mark.parametrize(
+    "local",
+    [LocalRecordingFactory(Backend.LOCAL, LOCAL_READ_ONLY), RecordingFactory(Backend.LOCAL)],
+    ids=["read-only", "mode-unstated"],
+)
+def test_a_read_only_local_factory_moves_a_task_writing_under_opt_to_the_container_backend(local: RecordingFactory):
+    """Files the task ships under /opt cannot land on a read-only local backend, so the task machine stays a
+    container."""
+    lowered = lower_beside_local(opt_task(), local)
+    plain = lower_beside_local(cpython_task(), local)
+
+    assert machine_sources(lowered) == (("gvisor", RegistryImage(GRADER_BASE_IMAGE)), ("local", LOCAL_CPYTHON))
     assert machine_sources(plain)[0] == ("local", LOCAL_CPYTHON)
 
 
-def test_the_local_read_only_roots_match_shellbox():
+def test_the_local_modes_and_unwritable_roots_match_shellbox():
     local = pytest.importorskip("shellbox.backends.local.machine", reason="the local backend imports on Linux only")
-    assert LOCAL_READ_ONLY_ROOTS == local.SYSTEM_DIRECTORIES
+    modes = local.SystemDirectories
+    overlaid = tuple(root for root in local.SYSTEM_DIRECTORIES if root not in local.OVERLAID_DIRECTORIES)
+
+    assert (LOCAL_READ_ONLY, LOCAL_COPY_ON_WRITE) == (modes.READ_ONLY, modes.COPY_ON_WRITE)
+    assert set(LOCAL_UNWRITABLE_ROOTS) == set(modes)
+    assert LOCAL_UNWRITABLE_ROOTS[modes.READ_ONLY] == local.SYSTEM_DIRECTORIES
+    assert LOCAL_UNWRITABLE_ROOTS[modes.COPY_ON_WRITE] == overlaid

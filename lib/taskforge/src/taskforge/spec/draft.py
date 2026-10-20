@@ -29,6 +29,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Protocol, runtime_checkable
 
 from pydantic import JsonValue
 from rolloutengine.engine import RolloutEngine
@@ -92,25 +93,6 @@ a bare ``PackageSpec()`` has the built-in shell tools and no ``python3``. The ca
 """
 
 LOCAL_CPYTHON = PackageSpec(pypi_packages=())
-LOCAL_READ_ONLY_ROOTS = (
-    "/bin",
-    "/etc",
-    "/lib",
-    "/lib32",
-    "/lib64",
-    "/libx32",
-    "/opt",
-    "/run/systemd/resolve",
-    "/sbin",
-    "/sys",
-    "/usr",
-)
-"""The host directories the local backend mounts read-only, shellbox's ``SYSTEM_DIRECTORIES``.
-
-A machine that must write under one of them, a task shipping files to ``/opt`` for instance, cannot
-run on the local backend, and ``host_requirements`` keeps its image. ``tests/spec/test_draft.py``
-holds this tuple equal to shellbox's on hosts where the local backend imports.
-"""
 """``GRADER_BASE_IMAGE``'s software on the local backend: a uv-managed CPython 3.12 and no PyPI packages.
 
 shellbox's local factory resolves the empty requirement list into an empty hash lock, then installs the
@@ -118,6 +100,35 @@ interpreter (``shellbox.backends.local.python_environment.DEFAULT_PYTHON_VERSION
 under the factory's package cache when the first such machine starts, and mounts both read-only as
 the machine's ``HostImage``, the venv's ``bin`` first on ``PATH``. Later machines on the host reuse
 the build. ``sh``, ``setsid``, ``tar`` and the other commands come from the host's system directories.
+"""
+LOCAL_READ_ONLY = "read_only"
+"""shellbox's ``SystemDirectories.READ_ONLY``, the local factory's default mode for system directories."""
+LOCAL_COPY_ON_WRITE = "copy_on_write"
+"""shellbox's ``SystemDirectories.COPY_ON_WRITE``, the mode ``sandbox.factories.local_sandbox`` sets."""
+LOCAL_UNWRITABLE_ROOTS: Mapping[str, tuple[str, ...]] = {
+    LOCAL_READ_ONLY: (
+        "/bin",
+        "/etc",
+        "/lib",
+        "/lib32",
+        "/lib64",
+        "/libx32",
+        "/opt",
+        "/run/systemd/resolve",
+        "/sbin",
+        "/sys",
+        "/usr",
+    ),
+    LOCAL_COPY_ON_WRITE: ("/run/systemd/resolve", "/sys"),
+}
+"""The host directories a local machine cannot write, by its factory's mode for system directories.
+
+The local backend mounts shellbox's ``SYSTEM_DIRECTORIES`` into every machine: read-only, or overlaid
+copy-on-write with a writable layer of the machine's own on all but ``/sys`` and the resolver's directory.
+A machine that must write under one of its mode's roots, a task shipping files to ``/opt`` beside a
+read-only factory for instance, cannot run on the local backend, and ``host_requirements`` keeps its image.
+shellbox's enum imports on Linux only, so ``tests/spec/test_draft.py`` holds these modes and roots equal
+to shellbox's on hosts where the local backend imports.
 """
 
 
@@ -623,6 +634,13 @@ def machine_backend(requirements: EnvironmentRequirements, host: MachineHost) ->
     return Backend.SHELLSIM
 
 
+@runtime_checkable
+class SystemDirectoriesFactory(Protocol):
+    """A machine factory that says how its machines see the host's system directories, as the local one does."""
+
+    system_directories: str
+
+
 def host_requirements(
     requirements: EnvironmentRequirements, factories: Mapping[str, MachineFactory], writes: Sequence[str] = ()
 ) -> EnvironmentRequirements:
@@ -630,15 +648,20 @@ def host_requirements(
 
     With a local factory, a machine on ``GRADER_BASE_IMAGE`` runs ``LOCAL_CPYTHON`` on the local
     backend, unless one of the absolute paths in ``writes`` (its files and its working directory)
-    falls under ``LOCAL_READ_ONLY_ROOTS``, in which case it keeps the image on the host's container
-    backend, as it does without a local factory. A package machine (``requirements(packages=...)``)
+    falls under ``LOCAL_UNWRITABLE_ROOTS`` for the factory's ``system_directories``, in which case it
+    keeps the image on the host's container backend, as it does without a local factory. A
+    copy-on-write factory, the one Taskforge builds on Iris, leaves only ``/sys`` and the resolver's
+    directory out, so a task shipping files to ``/opt`` runs locally; a factory that does not state
+    its mode is taken as read-only, shellbox's default. A package machine (``requirements(packages=...)``)
     runs on the local backend only, its packages installed into a uv venv at machine start; on a
     host without a local factory, ``RolloutEngine.check`` rejects it as an unknown factory. Every
     other requirement is unchanged.
     """
-    if requirements.docker_image != GRADER_BASE_IMAGE or Backend.LOCAL.value not in factories:
+    local = factories.get(Backend.LOCAL.value)
+    if requirements.docker_image != GRADER_BASE_IMAGE or local is None:
         return requirements
-    if any(_under(path, LOCAL_READ_ONLY_ROOTS) for path in writes):
+    mode = local.system_directories if isinstance(local, SystemDirectoriesFactory) else LOCAL_READ_ONLY
+    if any(_under(path, LOCAL_UNWRITABLE_ROOTS[mode]) for path in writes):
         return requirements
     return requirements.model_copy(update={"docker_image": None, "package_spec": LOCAL_CPYTHON})
 
