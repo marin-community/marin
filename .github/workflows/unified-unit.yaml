@@ -118,13 +118,6 @@ jobs:
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
 
-      - name: Test Harbor Hub acquisition in its pinned runtime
-        if: contains(matrix.test_paths, 'experiments/post_training/task_curation/tests/test_harbor_hub.py')
-        run: >-
-          uv run --isolated --project config/external/harbor --frozen
-          --with pytest python -m pytest --noconftest -o addopts=''
-          experiments/post_training/task_curation/tests/test_harbor_hub.py -q
-
   slow:
     if: ${{ github.event_name == 'schedule' }}
     name: slow
