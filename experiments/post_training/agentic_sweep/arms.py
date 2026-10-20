@@ -32,6 +32,7 @@ import hashlib
 import io
 import itertools
 import json
+import logging
 import os
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
@@ -46,6 +47,7 @@ from fray.iris_backend import FrayIrisClient
 from fray.types import ANY_REGION, Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import get_job_info
+from levanter.checkpoint import discover_checkpoint_candidates
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.plateau import PlateauDroppingConfig, row_key
@@ -55,7 +57,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache, tokenize
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, apply_output_path
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
@@ -323,15 +325,60 @@ def run_training(
         environment["HF_TOKEN"] = os.environ["HF_TOKEN"]
     request = JobRequest(
         name=cast(TrainLmConfig, config.train_config).trainer.id.replace(".", "p"),
-        entrypoint=Entrypoint.from_callable(run_worker, args=(config,)),
+        entrypoint=Entrypoint.from_callable(run_arm_worker, args=(config,)),
         resources=config.resources,
         environment=create_environment(extras=["gpu"], env_vars=environment),
         timeout=Duration.from_seconds(12 * 60 * 60),
         max_retries_failure=0,
-        # A retry restarts from the job's --resume-checkpoint (or from scratch), never from a mid-epoch checkpoint.
         max_retries_preemption=preemption_retries,
     )
     current_client().submit(request, adopt_existing=False).wait(raise_on_failure=True)
+
+
+def prepare_arm_attempt(config: TrainLmConfig, output_path: str | None = None) -> TrainLmConfig:
+    """Resolve committed epoch checkpoints again on every GPU attempt."""
+    if output_path is not None:
+        config = apply_output_path(config, output_path)
+    trainer = config.trainer
+    own_root = trainer.checkpointer.expanded_path(trainer.id)
+    roots = [own_root]
+    if trainer.load_checkpoint_path is not None:
+        roots.extend(trainer.checkpoint_search_paths(trainer.id))
+    epochs = list(itertools.accumulate(cast(SweepExportsConfig, config.adapter).epoch_updates))
+    candidates = [
+        candidate for candidate in discover_checkpoint_candidates(*dict.fromkeys(roots)) if candidate.step + 1 in epochs
+    ]
+    latest = candidates[-1] if candidates else None
+    if latest is None and trainer.load_checkpoint is True:
+        raise ValueError(f"No committed epoch checkpoint found in {roots}")
+    start_step = 0 if latest is None else latest.step + 1
+    logging.getLogger(__name__).info(
+        "Arm attempt checkpoint root=%s restore=%s completed_updates=%d",
+        own_root,
+        None if latest is None else latest.path,
+        start_step,
+    )
+    trackers = tuple(
+        replace(tracker, start_step=start_step) if isinstance(tracker, EpochTrackerConfig) else tracker
+        for tracker in trainer.tracker
+    )
+    return replace(
+        config,
+        trainer=replace(
+            trainer,
+            load_checkpoint=latest is not None,
+            load_checkpoint_path=None if latest is None else latest.path,
+            tracker=trackers,
+        ),
+    )
+
+
+def run_arm_worker(config: TrainLmOnPodConfig) -> None:
+    """Restore full training state before initializing the attempt's trackers."""
+    configure_coreweave_s3()
+    run_worker(
+        replace(config, train_config=prepare_arm_attempt(cast(TrainLmConfig, config.train_config), config.output_path))
+    )
 
 
 def pipeline(
@@ -358,12 +405,6 @@ def pipeline(
     identity = run_identity(arm, parent_name, run_date, plateau, data_variant)
     version = datetime.strptime(run_date, "%Y%m%d").strftime("%Y.%m.%d")
     ends = list(itertools.accumulate(epoch.updates for epoch in epochs))
-    start_step = 0
-    if resume_checkpoint is not None:
-        metadata = json.loads(StoragePath(prefix_join(resume_checkpoint, "metadata.json")).read_text())
-        start_step = int(metadata["step"]) + 1
-        if start_step not in ends[:-1]:
-            raise ValueError("Arms resume only from an epoch-end checkpoint")
     source = ArtifactStep.adopt(
         f"datasets/karan/{identity}-{manifest_sha256[:12]}", version, data_source, config=manifest
     )
@@ -441,9 +482,7 @@ def pipeline(
             cast(WandbConfig, config.trainer.tracker),
             entity="marin-community",
             name=name,
-            # A resumed run (and a preemption retry of it) logs to its own W&B run, so its steps never collide
-            # with the interrupted run's.
-            resume="never" if resume_checkpoint is None else "allow",
+            resume="allow",
             replicate_path=ctx.output_path,
             mode="online",
             save_code=False,
@@ -452,17 +491,21 @@ def pipeline(
             config,
             trainer=replace(
                 config.trainer,
-                id=name + (f"-from{start_step}" if resume_checkpoint is not None else ""),
+                id=name,
                 seed=42,
-                load_checkpoint=resume_checkpoint is not None,
-                load_checkpoint_path=resume_checkpoint,
+                load_checkpoint=None if resume_checkpoint in (None, "auto") else True,
+                load_checkpoint_path=(
+                    prefix_join(ctx.output_path, "checkpoints")
+                    if resume_checkpoint in (None, "auto")
+                    else resume_checkpoint
+                ),
                 per_device_parallelism=2,
                 per_device_eval_parallelism=2,
                 tracker=(wandb, JsonLoggerConfig()),
             ),
             data_seed=42,
         )
-        config = arm_settings(config, epochs, ctx.output_path, manifest["pad_token_id"], plateau, start_step)
+        config = arm_settings(config, epochs, ctx.output_path, manifest["pad_token_id"], plateau)
         return replace(pod, train_config=config, env_vars={"WANDB_MODE": "online", **GPU_LOG_ENV})
 
     def train(config: TrainLmOnPodConfig) -> None:

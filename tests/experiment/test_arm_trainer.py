@@ -35,6 +35,7 @@ from experiments.post_training.agentic_sweep.arms import (
     arm_epochs,
     arm_settings,
     epoch_file,
+    prepare_arm_attempt,
     row_context,
     verify_arm,
     verify_caches,
@@ -321,21 +322,28 @@ def test_resume_from_an_epoch_checkpoint_is_bit_exact(tmp_path, plateau):
         assert all("plateau_dropped_fraction" in row for row in rows)
         assert rows[0]["plateau_dropped_tokens"] == rows[1]["plateau_dropped_tokens"] == 0
 
-    resumed = _train_config(tmp_path, plain, 3, "resumed", _llama, plateau)
-    epoch_tracker = resumed.trainer.tracker[-1]
-    resumed = replace(
-        resumed,
+    first_config = _train_config(tmp_path, plain, 1, "resumed", _llama, plateau)
+    first_config = replace(
+        first_config,
         trainer=replace(
-            resumed.trainer,
-            load_checkpoint=True,
-            load_checkpoint_path=str(tmp_path / "full" / "checkpoints" / "step-3"),
-            tracker=(*resumed.trainer.tracker[:-1], replace(epoch_tracker, start_step=4)),
+            first_config.trainer,
+            checkpointer=replace(first_config.trainer.checkpointer, base_path=str(tmp_path / "unresolved")),
         ),
     )
+    first_attempt = prepare_arm_attempt(first_config, str(tmp_path / "resumed"))
+    first_attempt = replace(first_attempt, adapter=replace(first_attempt.adapter, export_epochs=[]))
+    assert first_attempt.trainer.load_checkpoint is False
+    main(first_attempt)
+    (tmp_path / "resumed" / "checkpoints" / "step-11").mkdir()
+    resumed = prepare_arm_attempt(
+        _train_config(tmp_path, plain, 3, "resumed", _llama, plateau), str(tmp_path / "resumed")
+    )
+    assert resumed.trainer.load_checkpoint_path == str(tmp_path / "resumed" / "checkpoints" / "step-3")
+    assert resumed.trainer.tracker[-1].start_step == 4
     main(resumed)
     resumed_rows = _epoch_rows(tmp_path / "resumed")
-    assert [row["completed_updates"] for row in resumed_rows] == [8, 12]
-    assert resumed_rows == rows[1:]
+    assert [row["completed_updates"] for row in resumed_rows] == [4, 8, 12]
+    assert resumed_rows == rows
     for shard in (tmp_path / "full" / "hf" / "step-11").glob("*.safetensors"):
         expected = load_file(str(shard))
         restored = load_file(str(tmp_path / "resumed" / "hf" / "step-11" / shard.name))

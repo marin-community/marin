@@ -54,6 +54,13 @@ class EpochTracker(NoopTracker):
         self.sums = dict.fromkeys(TOTALS, 0.0)
         self.epoch_rows: dict[int, dict[str, Any]] = {}
         self.published_epochs: set[int] = set()
+        history = StoragePath(prefix_join(output_path, "epoch-metrics.jsonl"))
+        if start_step and history.exists():
+            for line in history.read_text().splitlines():
+                row = json.loads(line)
+                if row["completed_updates"] <= start_step:
+                    self.epoch_rows[row["epoch"]] = row
+                    self.published_epochs.add(row["epoch"])
 
     def log(self, metrics: Mapping[str, Any], *, step: int | None, commit: bool | None = None):
         if step is None:
