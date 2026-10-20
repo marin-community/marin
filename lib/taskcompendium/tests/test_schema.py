@@ -27,7 +27,6 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.fingerprints import semantic_digest
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import chat_request
 
@@ -53,25 +52,6 @@ def specification():
         grader=EXACT_DONE,
         source=Source(dataset="org/project", revision="pinned-revision", row="0", importer_revision="1"),
     )
-
-
-def test_assistant_prefill_survives_wire_and_remains_last_in_model_request(specification):
-    context = ConversationInput(events=(*specification.context.events, TextMessage(role="assistant", content='{"x":')))
-    task = TaskSpec.model_validate({**specification.model_dump(), "context": context})
-    restored = TaskSpec.model_validate_json(task.model_dump_json())
-    assert restored.context == context
-    request = chat_request(restored)
-    assert request["messages"][-1] == {"role": "assistant", "content": '{"x":'}
-    assert request["messages"][-2]["role"] == "user"
-    assert request["extra_body"] == {"continue_final_message": True, "add_generation_prompt": False}
-    changed = task.model_copy(
-        update={
-            "context": context.model_copy(
-                update={"events": (*context.events[:-1], TextMessage(role="assistant", content='{"y":'))}
-            )
-        }
-    )
-    assert semantic_digest(changed, include_reference=False) != semantic_digest(task, include_reference=False)
 
 
 @pytest.mark.parametrize(

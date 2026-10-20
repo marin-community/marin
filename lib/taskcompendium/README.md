@@ -58,7 +58,7 @@ budget. Overflow fails the whole transfer. Selections cannot overlap `/tests`,
 
 `ConversationInput.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; a runtime preserves this history when presenting the task to the model. `answer_type` does not prescribe a wrapper such as JSON; `answer_format` does.
 
-A final assistant text event is an unfinished response to continue. Completion requests leave this prefill last, insert answer-format instructions before it, and ask the transport to continue that message without adding another assistant header. The serving model chooses its tokenizer; historical token IDs are source provenance. The recorded response contains only the generated continuation.
+Conversation events preserve their declared roles. A runtime harness determines how to use them: ordinary chat requests include completed assistant turns, while an explicitly selected `PrefillHarness` continues the final assistant text. The serving model chooses its tokenizer; historical token IDs are source provenance.
 
 `ConversationInput` is not a lossless Responses API transcript. It excludes provider reasoning items. The NeMo importer omits an unencrypted historical reasoning summary only when a visible assistant message or function call follows it. It rejects encrypted reasoning and reasoning left at the decision point. Exact provider continuation from reasoning state is outside this contract.
 
