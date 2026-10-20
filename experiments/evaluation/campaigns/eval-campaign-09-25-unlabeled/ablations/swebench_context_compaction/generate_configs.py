@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from marin.external_dependencies import HARBOR
 
 ROOT = Path(__file__).resolve().parent
 CAMPAIGN = ROOT.parent.parent
 MODEL_CONFIGS = CAMPAIGN / "model-configs"
 BASE_HARBOR_CONFIG = CAMPAIGN / "harbor-configs" / "swebench-verified.yaml"
-HARBOR_COMMIT = "2993c283f2111467b8d072485a7ca336be6f4473"
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,7 @@ def generate() -> None:
         harbor["datasets"] = [dict(dataset) for dataset in base_harbor["datasets"]]
         harbor["datasets"][0][
             "registry_url"
-        ] = f"https://raw.githubusercontent.com/marin-community/harbor/{HARBOR_COMMIT}/registry.json"
+        ] = f"https://raw.githubusercontent.com/marin-community/harbor/{HARBOR.commit}/registry.json"
         _write_yaml(ROOT / "configs" / "harbor" / f"{arm.key}.yaml", harbor)
 
         for model in MODELS:
