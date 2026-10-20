@@ -45,3 +45,17 @@ def test_rl_trains_on_two_policy_and_four_inference_nodes_sharing_the_split_dire
     assert launch["skyrl"]["generator"]["num_inference_engines"] == 16
     assert launch["skyrl"]["generator"]["eval_n_samples_per_prompt"] == 4
     assert launch["skyrl"]["trainer"]["eval_interval"] == taskforge_rl.EVAL_INTERVAL
+
+
+def test_guided_shell_mode_selects_the_harness_settings() -> None:
+    sessions = {}
+    for mode in taskforge_rl.GuidedShell:
+        with build_context(BuildContext(versions=VersionCodex(default="2026.10.20"))):
+            launch = _launch(taskforge_rl.build_run(taskforge_rl.Stage.BASELINE, guided_shell=mode))
+        sessions[mode] = launch["skyrl"]["environment"]["task_sessions"].get("guided_shell")
+
+    assert sessions == {
+        taskforge_rl.GuidedShell.OFF: None,
+        taskforge_rl.GuidedShell.CONTROL: {"instructions": False, "workspace_alias": False, "max_parse_retries": 0},
+        taskforge_rl.GuidedShell.ON: {},
+    }

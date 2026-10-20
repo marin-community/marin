@@ -120,6 +120,23 @@ CPUS_PER_ROLLOUT_WORKER = 8
 VERIFIER_THREADS_PER_WORKER = 64
 
 
+class GuidedShell(StrEnum):
+    """MarinSkyRL's guided shell harness: ``on`` folds the workspace instruction into the task message, links
+    ``workspace -> .`` and retries unparsed tool calls; ``control`` keeps RolloutEngine's prompt and behaviour but
+    records the same tool metrics; ``off`` runs RolloutEngine's harness without them."""
+
+    OFF = "off"
+    CONTROL = "control"
+    ON = "on"
+
+
+GUIDED_SHELL_SETTINGS = {
+    GuidedShell.OFF: None,
+    GuidedShell.CONTROL: {"instructions": False, "workspace_alias": False, "max_parse_retries": 0},
+    GuidedShell.ON: {},
+}
+
+
 class Stage(StrEnum):
     BASELINE = "baseline"
     RL = "rl"
@@ -215,6 +232,7 @@ LAUNCHER_SETTINGS = frozenset(
         "generator.run_engines_locally",
         "generator.backend",
         "generator.chat_template",
+        "environment.task_sessions.guided_shell",
     }
 )
 
@@ -248,6 +266,7 @@ def recipe(
     checkpoint_interval: int,
     export: bool,
     settings: tuple[str, ...],
+    guided_shell: GuidedShell = GuidedShell.OFF,
 ) -> dict:
     """Render the MarinSkyRL source recipe for one stage."""
     training = stage is Stage.RL
@@ -342,7 +361,17 @@ def recipe(
             "eval_n_samples_per_prompt": eval_samples,
             "inference_stats_interval": 1,
         },
-        "environment": {"task_sessions": {"local": {}, "max_verifier_workers": VERIFIER_THREADS_PER_WORKER}},
+        "environment": {
+            "task_sessions": {
+                "local": {},
+                "max_verifier_workers": VERIFIER_THREADS_PER_WORKER,
+                **(
+                    {}
+                    if GUIDED_SHELL_SETTINGS[guided_shell] is None
+                    else {"guided_shell": dict(GUIDED_SHELL_SETTINGS[guided_shell])}
+                ),
+            }
+        },
         "trajectory_runner": {
             "max_concurrent_tasks": MAX_CONCURRENT_TASKS,
             "rollout_workers": {
@@ -433,6 +462,7 @@ def build_run(
     export: bool = False,
     job_timeout_seconds: int = 0,
     settings: tuple[str, ...] = (),
+    guided_shell: GuidedShell = GuidedShell.OFF,
 ) -> ArtifactStep[SkyRLRun]:
     plan = stage_plan(
         stage,
@@ -459,6 +489,7 @@ def build_run(
         checkpoint_interval=checkpoint_interval,
         export=export,
         settings=settings,
+        guided_shell=guided_shell,
     )
     identity = fingerprint_hash(
         canonical_json(
@@ -534,6 +565,13 @@ def build_run(
 @click.option("--checkpoint-interval", type=click.IntRange(min=1), default=CHECKPOINT_INTERVAL, show_default=True)
 @click.option("--export", is_flag=True, help="Export the final policy as a Hugging Face checkpoint.")
 @click.option("--job-timeout-seconds", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option(
+    "--guided-shell",
+    type=click.Choice([mode.value for mode in GuidedShell]),
+    default=GuidedShell.OFF.value,
+    show_default=True,
+    help="MarinSkyRL guided shell harness: on (v1 harness), control (v0 behaviour with tool metrics), or off.",
+)
 @click.option("--set", "settings", multiple=True, metavar="KEY=VALUE")
 @rl_build_options
 def main(
@@ -551,6 +589,7 @@ def main(
     checkpoint_interval: int,
     export: bool,
     job_timeout_seconds: int,
+    guided_shell: str,
     settings: tuple[str, ...],
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
@@ -569,6 +608,7 @@ def main(
         export=export,
         job_timeout_seconds=job_timeout_seconds,
         settings=settings,
+        guided_shell=GuidedShell(guided_shell),
     )
 
 
