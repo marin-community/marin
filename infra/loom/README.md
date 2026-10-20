@@ -282,9 +282,9 @@ Declare scheduled agent or script watches under `marin-loom:watches` in
 `weekday-job-check` entry shows agent configuration. Use `promptFile` for prompts
 stored under `infra/loom`; Pulumi includes their contents in the manifest.
 
-The `mid-november-goals` watch runs the `pm` profile
-([instructions](profiles/pm/AGENTS.md)), which updates the Marin high-level
-board and the goals document below its `Status` heading. It needs:
+The `goals` watch runs the `pm` profile ([instructions](profiles/pm/AGENTS.md)),
+which keeps the Marin high-level board and the goals document below its
+`Status` heading in line with the goals the document lists. It needs:
 
 - the `LOOM_PM_BOARD_TOKEN` secret in `hai-gcp-models`, holding a fine-grained
   token with `marin-community` Projects read and write access, because Loom's

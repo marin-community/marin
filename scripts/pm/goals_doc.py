@@ -5,6 +5,7 @@
 
 `write-status` replaces everything below the doc's `Status` heading with a Markdown subset:
 paragraphs, `#`-`###` headings, `- ` items nested by two spaces, `**bold**`, `[text](url)`.
+`board-goals` keeps the board's Goal options in line with the doc's goals.
 GitHub calls use the token in `BOARD_GITHUB_TOKEN`, which needs organization project write
 access. Docs calls impersonate a service account because the VM metadata token lacks the
 documents scope.
@@ -38,6 +39,11 @@ NO_GOAL = "No goal"
 INLINE_RE = re.compile(r"\*\*(?P<bold>.+?)\*\*|\[(?P<text>[^\]]+)\]\((?P<url>[^)\s]+)\)")
 LIST_ITEM_RE = re.compile(r"^(?P<indent> *)- (?P<text>.+)$")
 HEADING_RE = re.compile(r"^(?P<marks>#+) (?P<text>.+)$")
+GOAL_OPTIONS_MUTATION = """
+mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]) {
+  updateProjectV2Field(input: {fieldId: $field, singleSelectOptions: $options}) { clientMutationId }
+}
+"""
 ISSUE_REF_RE = re.compile(r"^(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)#(?P<number>\d+)$")
 
 
@@ -409,6 +415,56 @@ def board_set(org: str, project: int, token: str, issue: str, values: dict[str, 
     return f"{action} {issue}: " + ", ".join(f"{name} = {value}" for name, value in values.items())
 
 
+def goal_options(field: dict, goals: list[str], renames: dict[str, str], used: set[str]) -> list[dict]:
+    """Return the Goal options for `goals` in order, keeping the ids of kept and renamed options.
+
+    Keeping an option's id keeps it on the items that have it. An option that would be removed while
+    an item in `used` still has it raises, so items never lose their goal silently.
+    """
+    current = {option["name"]["raw"]: option for option in field["options"]}
+    unknown = sorted(set(renames) - set(current))
+    if unknown:
+        raise ValueError(f"cannot rename missing Goal options {unknown}")
+    by_name = {renames.get(name, name): option for name, option in current.items()}
+    removed = sorted(name for name, option in current.items() if renames.get(name, name) not in goals and name in used)
+    if removed:
+        raise ValueError(f"board items still have Goal options {removed}; move them before removing the options")
+    options = []
+    for goal in goals:
+        option = by_name.get(goal)
+        if option is None:
+            options.append({"name": goal, "color": "GRAY", "description": ""})
+        else:
+            options.append(
+                {"id": option["id"], "name": goal, "color": option["color"], "description": option["description"]["raw"]}
+            )
+    return options
+
+
+def board_goals(org: str, project: int, token: str, goals: list[str], renames: dict[str, str]) -> str:
+    """Replace the board's Goal options with `goals`, renaming options per `renames`."""
+    fields = _project_fields(org, project, token)
+    field = _named_field(fields, GOAL_FIELD)
+    used = set()
+    for item in _project_items(org, project, token, fields):
+        goal = _field_value(item, GOAL_FIELD)
+        if isinstance(goal, dict):
+            used.add(goal["name"]["raw"])
+    options = goal_options(field, goals, renames, used)
+    result = _call(
+        f"{GITHUB_API}/graphql",
+        token,
+        "POST",
+        {
+            "query": GOAL_OPTIONS_MUTATION,
+            "variables": {"field": field["node_id"], "options": options},
+        },
+    )
+    if result.get("errors"):
+        raise RuntimeError(f"updating the Goal options failed: {result['errors']}")
+    return "Goal options: " + ", ".join(goals)
+
+
 def _docs_token(service_account: str) -> str:
     return subprocess.run(
         [
@@ -429,12 +485,17 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     board = commands.add_parser("board", help="Print the project board grouped by its Goal field.")
     board_set_command = commands.add_parser("board-set", help="Add an issue to the board and set its fields.")
-    for command in (board, board_set_command):
+    board_goals_command = commands.add_parser("board-goals", help="Replace the board's Goal options.")
+    for command in (board, board_set_command, board_goals_command):
         command.add_argument("--org", required=True)
         command.add_argument("--project", type=int, required=True)
     board_set_command.add_argument("--issue", required=True, help="OWNER/REPO#NUMBER")
     board_set_command.add_argument("--goal", help="Goal option name.")
     board_set_command.add_argument("--status", help="Status option name.")
+    board_goals_command.add_argument("goals", nargs="+", help="Goal option names, in order.")
+    board_goals_command.add_argument(
+        "--rename", action="append", default=[], metavar="OLD=NEW", help="Rename an option and keep it on its items."
+    )
     for name, help_text in (
         ("read", "Print the document as Markdown."),
         ("write-status", "Replace everything below the Status heading with a Markdown file ('-' reads stdin)."),
@@ -445,8 +506,12 @@ def main() -> None:
     commands.choices["write-status"].add_argument("status", type=argparse.FileType("r"))
     args = parser.parse_args()
 
-    if args.command in ("board", "board-set"):
+    if args.command in ("board", "board-set", "board-goals"):
         token = os.environ[BOARD_TOKEN_ENV]
+    if args.command == "board-goals":
+        renames = dict(rename.split("=", 1) for rename in args.rename)
+        print(board_goals(args.org, args.project, token, args.goals, renames))
+        return
     if args.command == "board":
         sys.stdout.write(board_markdown(args.org, args.project, token))
         return

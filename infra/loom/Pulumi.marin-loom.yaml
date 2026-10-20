@@ -464,14 +464,14 @@ config:
       serviceTag: codehealth-refinement
       ref: refs/heads/main
   marin-loom:watches:
-    mid-november-goals:
+    goals:
       enabled: true
       cron: "0 8-16/2 * * *"
       timezone: America/Los_Angeles
       runTimeoutSeconds: 3600
       profile: pm
       repo: marin-community/marin
-      promptFile: watches/mid-november-goals.md
+      promptFile: watches/goals.md
       slackChannels: []
     # Disabled until an operator selects the jobs and notification destination.
     weekday-job-check:
