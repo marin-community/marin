@@ -3,6 +3,7 @@
 import asyncio
 import collections
 import functools
+from threading import Event
 from types import SimpleNamespace
 
 import numpy as np
@@ -121,11 +122,14 @@ class FakePolicyGroup:
 
 
 class FakeEngines:
+    def __init__(self):
+        self.generation_paused_event = Event()
+
     async def pause_generation(self):
-        pass
+        self.generation_paused_event.set()
 
     async def resume_generation(self, policy_step):
-        pass
+        self.generation_paused_event.clear()
 
 
 class FakeTracker:
