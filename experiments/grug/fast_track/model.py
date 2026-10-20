@@ -968,6 +968,11 @@ class GrugModelConfig:
     channels come from the previous token (within documents), enabling one-layer induction."""
     logit_soft_cap: float | None = None
     """Tanh soft-cap on the lm_head logits, ``c * tanh(z / c)`` (Gemma 2); None: off."""
+    ce_grad_in_forward_token_block_size: int | None = None
+    """Rows per scan step of the reduced training cross-entropy when its forward also computes the gradients
+    (``levanter.grug.loss`` ``grad_in_forward_token_block_size``): 3 GEMMs instead of ``xla_fast_bwd``'s 4, holding
+    the ``[T, D]`` and ``[D, V]`` gradients from the forward to the backward. None keeps ``xla_fast_bwd``. No
+    ``logit_soft_cap``."""
     init_std_mult_gates: float = 1.0
     """Init-std multiplier of the MuonH-trained sigmoid gate matrices (KDA ``w_g`` / ``w_beta``, MoE gates)."""
     kda_write_gate: bool = False
@@ -6690,6 +6695,9 @@ class Transformer(eqx.Module):
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
+        # A per-token loss has no fixed row cotangents, so it keeps "xla_fast_bwd".
+        grad_in_forward = None if reduction == "none" else self.config.ce_grad_in_forward_token_block_size
+
         def lm_loss(h: jax.Array) -> jax.Array:
             head_in, lm_head = self._lm_head_operands(h, token_ids)
             ce = functools.partial(
@@ -6699,9 +6707,10 @@ class Transformer(eqx.Module):
                 labels,
                 logsumexp_weight=logsumexp_weight,
                 dtype=loss_dtype,
-                implementation="xla_fast_bwd",
-                block_sizes=_ce_block_sizes(),
+                implementation=None if grad_in_forward else "xla_fast_bwd",
+                block_sizes=None if grad_in_forward else _ce_block_sizes(),
                 logit_soft_cap=_logit_cap(self.config),
+                grad_in_forward_token_block_size=grad_in_forward,
             )
             return ce(weight=loss_weight, reduction=reduction)
 
