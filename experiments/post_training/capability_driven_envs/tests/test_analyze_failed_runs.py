@@ -28,6 +28,7 @@ from zephyr.context import ZephyrContext
 from zephyr.coordinator import ZephyrExecutionResult
 
 from experiments.post_training.capability_driven_envs.analyze_failed_runs import (
+    FAILURE_OPERATION,
     ROLLOUTS_WITHOUT_IDEAS,
     Capability,
     Group,
@@ -87,14 +88,14 @@ ROLLOUTS = [
         Outcome.GRADED,
         0.0,
         {"role": "assistant", "content": "1"},
-        failure=RolloutFailure("ConnectionError", {"operation": "model"}),
+        failure=RolloutFailure("ConnectionError", {FAILURE_OPERATION: "model"}),
     ),
     evaluated(
         "deadline",
         Outcome.UNAVAILABLE,
         None,
         {"role": "assistant", "content": "Let me count: one, two, three"},
-        failure=RolloutFailure("TimeoutError", {"operation": "attempt"}),
+        failure=RolloutFailure("TimeoutError", {FAILURE_OPERATION: "attempt"}),
     ),
 ]
 
