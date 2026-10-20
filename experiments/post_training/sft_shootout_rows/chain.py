@@ -15,8 +15,10 @@ RS-multi, relay and recovery together, and the matched plain on its own.
 --parent names the base every arm fine-tunes and --relay-student the student the relay rounds must have served
 (default: both Snowball v0.1). Plain, RS-multi, recovery and validation rows do not depend on either.
 
---dry-run passes --dry-run to every build and to verify_arms: same pins and checks, DRY_RUN_NOT_FOR_TRAINING markers,
-no _SUCCESS.
+A production chain first runs pool_gate (plain shards all finished, each relay family's STOP marker present and no
+round uploaded without _SUCCESS, no capability token in any finished shard) and builds nothing unless it passes.
+--dry-run skips the gate and passes --dry-run to every build and to verify_arms: same pins and checks,
+DRY_RUN_NOT_FOR_TRAINING markers, no _SUCCESS.
 
     python -m experiments.post_training.sft_shootout_rows.chain --builder-commit <sha> --output <fresh prefix> \\
         [--trace-prefix <s3 .../traces-v7/>] [--relay-trace-prefix <s3 .../traces-v7-v0/>] [--parent v0.1|v0] \\
@@ -78,6 +80,9 @@ def main() -> None:
     ]
     common += ["--tokenizer-dir", args.tokenizer_dir] if args.tokenizer_dir else []
     common += ["--dry-run"] if args.dry_run else []
+
+    if not args.dry_run:
+        run("pool_gate", "--trace-prefix", args.trace_prefix, "--relay-trace-prefix", args.relay_trace_prefix)
 
     def build(arm: str, output: str, *extra: str) -> dict:
         traces = (
