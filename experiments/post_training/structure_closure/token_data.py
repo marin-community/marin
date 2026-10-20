@@ -19,6 +19,8 @@ from experiments.post_training.structure_closure.benchmark import (
     CLOSE_REQUIRED,
     CONTINUE_REQUIRED,
     OPENER_RETENTION,
+    REFERENCE_SEPARATOR,
+    RESULT_TOOL_NAME,
     VALUE_CONTINUE_REQUIRED,
     ClosureCase,
     Family,
@@ -39,7 +41,7 @@ def write_result_tool() -> dict:
     return {
         "type": "function",
         "function": {
-            "name": "write_result",
+            "name": RESULT_TOOL_NAME,
             "description": "Record the result for a task.",
             "parameters": {
                 "type": "object",
@@ -77,10 +79,10 @@ def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> C
         raise ValueError(f"Unsupported native tool control: {case.control}")
     instruction = case.instruction
     if case.control != CLOSE_REQUIRED:
-        lead, reference = instruction.rsplit("\nReference:\n", 1)
+        lead, reference = instruction.rsplit(REFERENCE_SEPARATOR, 1)
         if reference != case.expected:
             raise ValueError("Instruction reference differs from the case reference")
-        instruction = lead + "\nReference:\n" + expected
+        instruction = lead + REFERENCE_SEPARATOR + expected
     return replace(case, prefix=expected[:cut], expected=expected, instruction=instruction)
 
 

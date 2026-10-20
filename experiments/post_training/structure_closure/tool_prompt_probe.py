@@ -13,6 +13,7 @@ from transformers import PreTrainedTokenizerFast
 from verifyit.closure_scoring import ClosureFormat, score_closure_region
 from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
+from experiments.post_training.structure_closure.benchmark import CLOSE_REQUIRED, Family
 from experiments.post_training.structure_closure.token_data import (
     LOCAL_TOKEN_ROUNDTRIP_PASSED,
     TokenizedCaseRecord,
@@ -84,7 +85,7 @@ def main() -> None:
         raise ValueError("Frozen validation source hash mismatch")
     cases = [json.loads(line) for line in source.splitlines()]
     cases = sorted(
-        (case for case in cases if case["family"] == "tool_delimiter" and case["control"] == "close_required"),
+        (case for case in cases if case["family"] == Family.TOOL and case["control"] == CLOSE_REQUIRED),
         key=lambda case: case["case_id"],
     )
     if not 0 < args.tasks <= len(cases):
