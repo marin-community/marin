@@ -921,6 +921,12 @@ class GrugModelConfig:
     channels come from the previous token (within documents), enabling one-layer induction."""
     logit_soft_cap: float | None = None
     """Tanh soft-cap on the lm_head logits, ``c * tanh(z / c)`` (Gemma 2); None: off."""
+    lm_head_grad_probe: bool = False
+    """Log each token's gradient norm w.r.t. the lm_head input (the final normed hidden state) every step
+    (``lm_head_grad_probe``; train-step stats under ``train/lm_head_grad/``). Training math is unchanged."""
+    lm_head_grad_dump_every: int = 0
+    """With ``lm_head_grad_probe``: also write the whole batch's per-token norms and token ids every this many steps
+    (and densely early on, see ``train.lm_head_grad_dump_due``); 0: no dumps."""
     init_std_mult_gates: float = 1.0
     """Init-std multiplier of the MuonH-trained sigmoid gate matrices (KDA ``w_g`` / ``w_beta``, MoE gates)."""
     kda_write_gate: bool = False
@@ -1011,6 +1017,8 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
+        if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
+            raise ValueError("lm_head_grad_dump_every needs lm_head_grad_probe")
         if self.moe_k_layers and (
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
@@ -6343,9 +6351,11 @@ class Transformer(eqx.Module):
         future_aux_weight: jax.Array | None = None,
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
+        head_grad_probe: Float[Array, "B S"] | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss, the mid head); evals leave it off
-        so they score the plain next-token loss."""
+        so they score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the main lm_head
+        cross-entropy's input through ``lm_head_grad_probe``: its gradient is each token's input-gradient norm."""
         hidden, router_metrics = self(
             token_ids,
             mask=mask,
@@ -6384,7 +6394,7 @@ class Transformer(eqx.Module):
             )
             return ce(weight=loss_weight, reduction=reduction)
 
-        cross_entropy_loss = lm_loss(hidden)
+        cross_entropy_loss = lm_loss(hidden if head_grad_probe is None else lm_head_grad_probe(hidden, head_grad_probe))
         replay_loss = None
         if head_replay is not None:
             # Replay a stored (final hidden, label) batch through the lm_head only: the head's gradient is
@@ -6536,6 +6546,28 @@ class Transformer(eqx.Module):
 
 
 FINAL_HIDDEN_KEY = "_final_hidden"
+
+
+@jax.custom_vjp
+def lm_head_grad_probe(h: Float[Array, "B S D"], probe: Float[Array, "B S"]) -> Float[Array, "B S D"]:
+    """Identity on ``h``. Backward passes ``h``'s cotangent through unchanged and returns each token's cotangent L2
+    norm (float32, over the hidden dim) as ``probe``'s cotangent, so differentiating w.r.t. a zeros ``probe``
+    reads the per-token gradient norms entering the lm_head with no host callback. A clipping variant would
+    rescale the cotangent here."""
+    del probe
+    return h
+
+
+def _lm_head_grad_probe_fwd(h, probe):
+    del probe
+    return h, None
+
+
+def _lm_head_grad_probe_bwd(_, g):
+    return g, jnp.sqrt(jnp.sum(jnp.square(g.astype(jnp.float32)), axis=-1))
+
+
+lm_head_grad_probe.defvjp(_lm_head_grad_probe_fwd, _lm_head_grad_probe_bwd)
 
 
 def _null_slot_metrics(cfg: GrugModelConfig, routing_counts: Float[Array, "L N"]) -> dict[str, jax.Array]:

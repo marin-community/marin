@@ -37,7 +37,7 @@ from haliax.partitioning import set_mesh
 from jax._src import distributed as jax_distributed
 from jax.experimental import multihost_utils
 from jax.experimental.serialize_executable import deserialize_and_load, serialize
-from jax.sharding import Mesh, NamedSharding
+from jax.sharding import Mesh, NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
@@ -300,6 +300,9 @@ class GrugTrainerConfig:
     token_dump_path: str | None = None
     # The token dump also records each token's loss with every token skipping these layers (``LayerSkip``).
     token_dump_skip_layers: tuple[int, ...] = ()
+    # With ``lm_head_grad_dump_every``: write the train batch's per-token lm_head input-gradient norms and token ids
+    # to ``<lm_head_grad_dump_dir>/step-<step>.npz`` on the ``lm_head_grad_dump_due`` steps.
+    lm_head_grad_dump_dir: str | None = None
     # After these steps, run ``ROUTING_DUMP_SEQUENCES`` fixed held-out sequences and write their routing and routed
     # neuron activity to ``<routing_dump_dir>/step-<step>.npz`` (``write_routing_dump``).
     routing_dump_dir: str | None = None
@@ -884,6 +887,92 @@ def _layer_skip_mask(rule: LayerSkipRule | None, tokens: jax.Array, mask) -> Lay
     return LayerSkip(rule.layers, ~skip)
 
 
+LM_HEAD_GRAD_PREFIX = "train/lm_head_grad/"
+# The step's per-token norms ``[B, S]`` (float32, loss-token units), kept on device unless a dump fetches them.
+LM_HEAD_GRAD_NORM_KEY = "_lm_head_grad_norm"
+LM_HEAD_GRAD_QUANTILES = (0.5, 0.9, 0.99, 0.999)
+LM_HEAD_GRAD_MEDIAN_MULTIPLES = (2, 5, 10)
+# Half-open ranges of each token's position within its document.
+LM_HEAD_GRAD_POSITION_BUCKETS = ((0, 1), (1, 16), (16, 256), (256, 1024), (1024, 4096))
+# Loss spikes come early: dump every LM_HEAD_GRAD_EARLY_DUMP_EVERY steps up to this step, then every
+# ``lm_head_grad_dump_every``.
+LM_HEAD_GRAD_EARLY_DUMP_STEPS = 200
+LM_HEAD_GRAD_EARLY_DUMP_EVERY = 10
+
+
+def lm_head_grad_dump_due(step: int, every: int) -> bool:
+    """Whether the 0-based train ``step`` writes an lm_head gradient dump (``every`` = 0: never)."""
+    if every <= 0:
+        return False
+    early = step <= LM_HEAD_GRAD_EARLY_DUMP_STEPS and step % LM_HEAD_GRAD_EARLY_DUMP_EVERY == 0
+    return early or step % every == 0
+
+
+def _lm_head_grad_metrics(raw_norms: jax.Array, batch) -> dict[str, jax.Array]:
+    """Stats of the per-token lm_head input-gradient norms over the batch's loss tokens.
+
+    The loss is a mean over the loss-weighted tokens, so ``raw_norms`` carry a factor 1 / sum(loss_weight); the
+    norms here are scaled by that sum: each is the gradient norm of the token's own loss term (its cross-entropy
+    plus its z-loss share), comparable across batch sizes. Tokens with zero loss weight are excluded from the stats
+    (``masked_max`` checks they are 0)."""
+    weight = batch.loss_weight.astype(jnp.float32)
+    loss_tokens = jnp.sum(weight)
+    norms = raw_norms * loss_tokens
+    valid = weight > 0
+    count = jnp.maximum(jnp.sum(valid.astype(jnp.float32)), 1.0)
+    valid_norms = jnp.where(valid, norms, 0.0)
+    everywhere = reshard(jnp.where(valid, norms, jnp.nan), P(None, None))
+    quantiles = jnp.nanquantile(everywhere, jnp.asarray(LM_HEAD_GRAD_QUANTILES))
+    median = quantiles[0]
+    out = {
+        "loss_tokens": loss_tokens,
+        "mean": jnp.sum(valid_norms) / count,
+        "rms": jnp.sqrt(jnp.sum(jnp.square(valid_norms)) / count),
+        "max": jnp.max(valid_norms),
+        "masked_max": jnp.max(jnp.where(valid, 0.0, norms)),
+        **{f"p{100 * q:g}": quantiles[i] for i, q in enumerate(LM_HEAD_GRAD_QUANTILES)},
+        **{
+            f"frac_above_{k}x_median": jnp.sum((valid & (norms > k * median)).astype(jnp.float32)) / count
+            for k in LM_HEAD_GRAD_MEDIAN_MULTIPLES
+        },
+    }
+    positions = _doc_positions(batch.tokens, batch.attn_mask)
+    for lo, hi in LM_HEAD_GRAD_POSITION_BUCKETS:
+        in_bucket = valid & (positions >= lo) & (positions < hi)
+        name = f"{lo}" if hi == lo + 1 else f"{lo}-{hi - 1}"
+        out[f"pos_mean/{name}"] = jnp.sum(jnp.where(in_bucket, norms, 0.0)) / jnp.maximum(
+            jnp.sum(in_bucket.astype(jnp.float32)), 1.0
+        )
+    return {
+        **{f"{LM_HEAD_GRAD_PREFIX}{k}": jax.lax.stop_gradient(v) for k, v in out.items()},
+        LM_HEAD_GRAD_NORM_KEY: norms,
+    }
+
+
+def _write_lm_head_grad_dump(dump_dir: str, step: int, norms: jax.Array, batch) -> None:
+    """Write ``step``'s per-token norms (``_lm_head_grad_metrics`` units), tokens, loss weights and segment ids."""
+    arrays = {"norm": norms, "tokens": batch.tokens, "loss_weight": batch.loss_weight}
+    segment_ids = _segment_ids(batch)
+    if segment_ids is not None:
+        arrays["segment_ids"] = segment_ids
+    host = multihost_utils.process_allgather(arrays, tiled=True)
+    if jax.process_index() != 0:
+        return
+    buffer = io.BytesIO()
+    np.savez_compressed(
+        buffer,
+        step=np.asarray(step),
+        norm=np.asarray(host["norm"], np.float32),
+        tokens=np.asarray(host["tokens"], np.int32),
+        loss_weight=np.asarray(host["loss_weight"], np.float16),
+        **({"segment_ids": np.asarray(host["segment_ids"], np.int32)} if "segment_ids" in host else {}),
+    )
+    path = f"{dump_dir}/step-{step:06d}.npz"
+    with fsspec.open(path, "wb") as f:
+        f.write(buffer.getvalue())
+    logger.info("Wrote the lm_head gradient dump to %s", path)
+
+
 def _loss_and_grads(
     params,
     batch,
@@ -891,8 +980,12 @@ def _loss_and_grads(
     z_loss: float | None,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_active: jax.Array | bool = True,
+    lm_head_grad_probe: bool = False,
 ):
-    def loss_fn(model):
+    """With ``lm_head_grad_probe`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come back as
+    the gradient of a zeros probe (``model.lm_head_grad_probe``) differentiated next to the params."""
+
+    def loss_fn(model, probe):
         compute_params = _cast_to_compute(mp, model)
         skip = _layer_skip_mask(layer_skip, batch.tokens, batch.attn_mask)
         loss, metrics = compute_params.next_token_loss(
@@ -905,12 +998,17 @@ def _loss_and_grads(
             train_terms=True,
             layer_skip=skip,
             extra_mlp_active=extra_mlp_active,
+            head_grad_probe=probe,
         )
         if skip is not None:
             metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
         return loss, metrics
 
-    return jax.value_and_grad(loss_fn, has_aux=True)(params)
+    if not lm_head_grad_probe:
+        return jax.value_and_grad(lambda model: loss_fn(model, None), has_aux=True)(params)
+    probe = jnp.zeros_like(batch.tokens, dtype=jnp.float32)
+    (loss, metrics), (grads, raw_norms) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(params, probe)
+    return (loss, {**metrics, **_lm_head_grad_metrics(raw_norms, batch)}), grads
 
 
 def _accumulated_loss_and_grads(
@@ -989,13 +1087,17 @@ def _make_train_step(
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_step: int = 0,
+    lm_head_grad_probe: bool = False,
 ):
     """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
+    ``lm_head_grad_probe`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``).
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
     (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
     between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
+    if lm_head_grad_probe and grad_accum_microbatches > 1:
+        raise ValueError("lm_head_grad_probe does not support gradient accumulation")
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
             watch_targets = tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -1016,7 +1118,9 @@ def _make_train_step(
                 grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active
             )
         else:
-            (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, layer_skip, extra_active)
+            (loss, summarized_metrics), grads = _loss_and_grads(
+                qb_params, batch, mp, z_loss, layer_skip, extra_active, lm_head_grad_probe
+            )
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -1465,6 +1569,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 "train/attn_res/",
                                 "train/aux/",
                                 "train/optim/",
+                                LM_HEAD_GRAD_PREFIX,
                             )
                         )
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
@@ -1487,6 +1592,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     levanter.tracker.log(jax.device_get(drop_metrics), step=step)
                 if rec.watch_stats is not None:
                     levanter.tracker.log(jax.device_get(rec.watch_stats), step=step)
+                dump_dir = config.trainer.lm_head_grad_dump_dir
+                if dump_dir is not None and lm_head_grad_dump_due(step, config.model.lm_head_grad_dump_every):
+                    _write_lm_head_grad_dump(dump_dir, step, metrics[LM_HEAD_GRAD_NORM_KEY], rec.batch)
             if step_state is not None:
                 if checkpointer is not None:
                     with callbacks.progress_event_scope(
@@ -1869,6 +1977,7 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         layer_skip=config.trainer.layer_skip,
         # Late by default, once the entropy head has learned something.
         extra_mlp_start_step=int(trainer.num_train_steps * config.trainer.extra_mlp_start_frac),
+        lm_head_grad_probe=config.model.lm_head_grad_probe,
     )
     return train_step_fn, diagnostic_watch_step
 
