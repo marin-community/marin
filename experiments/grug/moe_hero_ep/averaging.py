@@ -65,7 +65,7 @@ class CheckpointPin:
     tokenizer_revision: str
     manifest_digest: str
     tokenizer_revision_evidence: str
-    """Durable source proving the tokenizer revision when the saved config pins only its name."""
+    """Durable revision evidence or explicit accepted assumption when the saved config pins only its name."""
 
 
 @dataclasses.dataclass(frozen=True)

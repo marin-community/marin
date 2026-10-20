@@ -47,7 +47,10 @@ uv run python -m experiments.grug.moe_hero_ep.format_inventory \
 
 Historical saved run configurations name the tokenizer without its revision.
 Record the evidence connecting the source to the selected immutable tokenizer;
-passing a revision string alone does not establish that connection.
+passing a revision string alone does not establish that connection. If historical
+bytes cannot be established and the user accepts a revision assumption, retain
+that explicit decision in the referenced record and mark historical bytes as
+unverified.
 `inventory.json.selected` contains the `CheckpointPin` records for
 `AverageConfig.checkpoints`. Preserve access to the emitted `saved-config.json`
 at each pin's `config_path` when moving execution to the verified worker.
@@ -345,11 +348,31 @@ materializes ordinary Hero weights. Compare its logits with unmerged execution
 at matching precision. Report an original-FP32-base merge separately if produced.
 A completed export does not establish D's quality or serving-parity gates.
 
-For merge parity, run `sft_logits` on the compact state and the ordinary merged
-model on the same pinned token rows, base rounding and evaluation dtype. Declare
-the logits/probability tolerance before evaluating; retain the largest error
-and any changed greedy choices. The tiny local roundtrip test is an implementation
-check; full-model parity remains an accelerator measurement.
+Use [MergeParityRequest](https://github.com/marin-community/marin/blob/main/experiments/grug/moe_hero_ep/sft_merge_parity.py)
+to measure compact-state versus ordinary-D parity on pinned real token rows:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.sft_merge_parity \
+  merge-parity-request.json <fresh-parity-directory>
+```
+
+The request pins `reference` (C), `sft`, C's exact source `model`, compact and
+ordinary checkpoint metadata, a `PtPanel` path/raw SHA256, at most 32 explicit
+`row_index`/`prediction_position` probes, and a compatible expert/replica mesh.
+Declare maximum absolute logit error, probability error and greedy disagreement
+count before measurement. Use the source forward backend and its compatible
+mesh; the separate dropless evaluation configuration is not interchangeable
+with C's recorded training configuration.
+
+The command writes `report.json` with full-vocabulary errors, both greedy
+choices, top scores and source/precision provenance, and exits nonzero if the
+declared gates fail. It derives nonzero trained input rows from actual compact
+state and requires each selected ID in a valid probe prefix in the same causal
+segment. Include real rendered chat rows as well as PT rows: a plain C4 panel
+can omit every chat input token. Every output column is compared regardless of
+which IDs appear in the input. The local tiny roundtrip is an implementation
+check; full-model merge parity remains an accelerator measurement and does not
+establish serving parity.
 
 The [serving parity helpers](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/testing/inference/backend_parity.py)
 compare frozen native next-token scores with serving observations and check
