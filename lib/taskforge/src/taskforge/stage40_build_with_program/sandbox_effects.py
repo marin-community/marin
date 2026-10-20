@@ -48,6 +48,7 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerFormat, AnswerType, EnvironmentRequirements, Source, TaskResource
 
 from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, grading_environment
+from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import BUILD_LIMITS, DockerBuild, check_build_limits
 from taskforge.spec import draft
 from taskforge.spec.controls import candidate_turns
@@ -339,8 +340,10 @@ async def publish_image(context: RLEnvBuildContext, build: DockerBuild) -> str:
     reference is memoized with the step's output.
 
     Raises:
-        BuildFailure: the build context exceeds ``BUILD_LIMITS``.
-        BuildInfrastructureFailure: this host has no image builder.
+        BuildFailure: the build context exceeds ``BUILD_LIMITS``, or the image failed to build from it
+            (``image_builder.BuildFailed``).
+        BuildInfrastructureFailure: this host has no image builder (``NO_IMAGE_BUILDER``), or a build or
+            push job failed for a host reason (``IMAGE_JOB_FAILED``, from ``image_builder.ImageJobFailed``).
     """
     images = context.services.images
     if images is None:
@@ -349,4 +352,9 @@ async def publish_image(context: RLEnvBuildContext, build: DockerBuild) -> str:
         check_build_limits(build, BUILD_LIMITS)
     except ValueError as error:
         raise BuildFailure(f"publish_image: {error}") from error
-    return await images.publish(build, image_repository(context.workpiece_id))
+    try:
+        return await images.publish(build, image_repository(context.workpiece_id))
+    except BuildFailed as error:
+        raise BuildFailure(f"publish_image: {error}") from error
+    except ImageJobFailed as error:
+        raise BuildInfrastructureFailure(InfrastructureCause.IMAGE_JOB_FAILED, f"publish_image: {error}") from error

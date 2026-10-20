@@ -5,11 +5,13 @@
 
 import json
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import cast
 
 import pytest
-from iris.client import IrisClient
+from iris.client import IrisClient, Job
 from iris.client.client import IrisContext, iris_ctx_scope
+from iris.client.workload import JobState
 from iris.cluster.client import ClusterClient, JobInfo, set_job_info
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import job_pb2
@@ -17,8 +19,11 @@ from iris.rpc import job_pb2
 from taskforge.sandbox.image_builder import (
     BLANKED_ENV,
     REGISTRY_CREDENTIAL_ENV,
+    BuildFailed,
+    ImageJobFailed,
     RegistryCredential,
     submit_job,
+    wait_succeeded,
 )
 from taskforge.sandbox.image_push import REGISTRY_AUTH_ENV
 
@@ -105,3 +110,40 @@ def test_jobs_submitted_from_a_coordinator_task_inherit_none_of_its_environment(
     assert build["DESTINATION"] == "registry.example/r:t"
     assert REGISTRY_AUTH_ENV not in build
     assert push[REGISTRY_AUTH_ENV] == "push-auth"
+
+
+@dataclass(frozen=True)
+class EndedStatus:
+    state: JobState
+    error_message: str
+
+
+class EndedJob:
+    """A ``Job`` whose ``wait`` returns at once with ``state``, or raises ``TimeoutError`` for ``None``."""
+
+    job_id = "/alice/taskforge-image-build-x"
+
+    def __init__(self, state: JobState | None):
+        self.state = state
+
+    def wait(self, **kwargs: object) -> EndedStatus:
+        if self.state is None:
+            raise TimeoutError("still running")
+        return EndedStatus(self.state, "the job's log tail")
+
+
+@pytest.mark.parametrize("state", [JobState.UNSCHEDULABLE, JobState.WORKER_FAILED, JobState.KILLED, None])
+@pytest.mark.parametrize("failed", [BuildFailed, ImageJobFailed])
+def test_a_job_the_host_ended_is_an_image_job_failure_whichever_job_it_is(state, failed):
+    with pytest.raises(ImageJobFailed):
+        wait_succeeded(cast(Job, EndedJob(state)), failed)
+
+
+@pytest.mark.parametrize("failed", [BuildFailed, ImageJobFailed])
+def test_a_job_that_ran_and_failed_raises_the_callers_failure(failed):
+    with pytest.raises(failed, match="ended failed: the job's log tail"):
+        wait_succeeded(cast(Job, EndedJob(JobState.FAILED)), failed)
+
+
+def test_a_job_that_succeeded_raises_nothing():
+    wait_succeeded(cast(Job, EndedJob(JobState.SUCCEEDED)), BuildFailed)

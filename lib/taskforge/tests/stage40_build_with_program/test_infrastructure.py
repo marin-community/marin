@@ -25,6 +25,7 @@ from taskcompendium.models import AnswerType, PlainText, TaskSpec
 
 from taskforge.ledger.records import EntryKind
 from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
+from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 from taskforge.stage10_proposal.model import SolverMachine
@@ -238,6 +239,33 @@ async def test_a_host_without_an_image_builder_is_infrastructure(context):
         await publish_image(context(), build)
 
     assert failure.value.cause == InfrastructureCause.NO_IMAGE_BUILDER
+
+
+class FailingImageBuilder:
+    def __init__(self, error: Exception):
+        self.error = error
+
+    async def publish(self, build: DockerBuild, repository: str) -> str:
+        raise self.error
+
+
+async def test_an_image_job_the_host_failed_is_infrastructure(context):
+    build = DockerBuild(files=(draft.file("Dockerfile", "FROM busybox\n"),))
+    images = FailingImageBuilder(ImageJobFailed("job /alice/build ended worker_failed: worker lost"))
+
+    with pytest.raises(BuildInfrastructureFailure) as failure:
+        await publish_image(context(images=images), build)
+
+    assert failure.value.cause == InfrastructureCause.IMAGE_JOB_FAILED
+    assert "worker lost" in failure.value.message
+
+
+async def test_an_image_that_fails_to_build_is_the_programs_failure(context):
+    build = DockerBuild(files=(draft.file("Dockerfile", "FROM busybox\nRUN false\n"),))
+    images = FailingImageBuilder(BuildFailed("job /alice/build ended failed: RUN false returned 1"))
+
+    with pytest.raises(BuildFailure, match="RUN false returned 1"):
+        await publish_image(context(images=images), build)
 
 
 @pytest.mark.parametrize(
