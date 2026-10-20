@@ -1,12 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
+# These tests run in the marin-taskforge package environment; environments without it skip them.
+pytest.importorskip("taskforge")
+
 import asyncio
 import json
 import re
 from pathlib import Path
 
-import pytest
 from taskforge.llm.client import ModelUnavailable
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, Environment, parse

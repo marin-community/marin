@@ -22,7 +22,9 @@ import pytest
 
 # These tests run in the marin-taskforge package environment. An environment without it, such as the
 # marin unit job, must not collect them: a skip raised while pytest loads a conftest aborts the whole
-# session rather than skipping, so the guard ignores the directory's modules instead.
+# session rather than skipping, so the guard ignores the directory's modules instead. pytest applies
+# collect_ignore_glob only to files it finds in a directory, not to a file passed by explicit path, as the marin
+# unit job passes them, so every test module here also skips itself with pytest.importorskip("taskforge").
 if importlib.util.find_spec("taskforge") is None:
     collect_ignore_glob = ["*.py"]
 else:
