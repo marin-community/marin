@@ -106,7 +106,8 @@ def test_audit_matches_training_reward_for_signed_zero_and_terminal_markers(coho
 
 
 @pytest.mark.parametrize(
-    "failure", ["missing", "duplicate", "prefix", "unavailable", "metric", "reward", "infra", "legacy_scorer"]
+    "failure",
+    ["missing", "duplicate", "prefix", "unavailable", "metric", "reward", "infra", "legacy_scorer", "null_response"],
 )
 def test_audit_rejects_incomplete_or_inconsistent_evidence(cohort, rows, failure):
     if failure == "missing":
@@ -121,6 +122,8 @@ def test_audit_rejects_incomplete_or_inconsistent_evidence(cohort, rows, failure
         rows[1]["env_metrics"]["closure_region_v1/json_object/close_required/success"] = 1.0
     elif failure == "reward":
         rows[1]["score"] = [0.0, 1.0]
+    elif failure == "null_response":
+        rows[1]["output_response"] = None
     elif failure == "legacy_scorer":
         rows[1]["env_metrics"] = {
             name.replace("closure_region_v1/", "closure/"): value for name, value in rows[1]["env_metrics"].items()

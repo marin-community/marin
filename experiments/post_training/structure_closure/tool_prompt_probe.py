@@ -81,6 +81,8 @@ def main() -> None:
         raise FileExistsError(args.output)
     source = (args.tokens / "validation.jsonl").read_bytes()
     manifest = json.loads((args.tokens / "manifest.json").read_text())
+    if manifest["status"] != LOCAL_TOKEN_ROUNDTRIP_PASSED:
+        raise ValueError("Frozen validation token conversion did not pass")
     if hashlib.sha256(source).hexdigest() != manifest["hashes"]["validation"]:
         raise ValueError("Frozen validation source hash mismatch")
     cases = [json.loads(line) for line in source.splitlines()]

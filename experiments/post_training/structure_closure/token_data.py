@@ -173,18 +173,27 @@ def prepare_tokens(
             raise ValueError(f"Source hash mismatch: {split}")
         destination = output / f"{split}.jsonl"
         with source.open() as inputs, destination.open("x") as outputs:
-            for line in inputs:
-                raw = json.loads(line)
-                case = ClosureCase(**(raw | {"family": Family(raw["family"])}))
+            for line_number, line in enumerate(inputs, start=1):
+                raw = {}
                 try:
+                    raw = json.loads(line)
+                    if not isinstance(raw, dict):
+                        raise ValueError("Case must be a JSON object")
+                    case = ClosureCase(**(raw | {"family": Family(raw["family"])}))
                     record = tokenized_case_record(case, tokenizer, tool_prompt=tool_prompt)
                     prompt_length = len(record["prompt_token_ids"])
                     target_length = len(record["target_token_ids"])
                     if prompt_length + target_length > context_tokens:
                         raise ValueError("Reference continuation exceeds context budget")
-                except ValueError as error:
+                except (KeyError, TypeError, ValueError) as error:
                     failures.append(
-                        {"case_id": case.case_id, "family": case.family, "split": split, "error": str(error)}
+                        {
+                            "case_id": raw.get("case_id") if isinstance(raw, dict) else None,
+                            "family": raw.get("family") if isinstance(raw, dict) else None,
+                            "split": split,
+                            "line": line_number,
+                            "error": str(error),
+                        }
                     )
                     continue
                 outputs.write(json.dumps(record, separators=(",", ":")) + "\n")

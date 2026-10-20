@@ -145,6 +145,8 @@ def audit_evaluation(
             verification = row.get("verification")
             if verification is None or verification["status"] != "verified":
                 raise ValueError("Verifier score is unavailable")
+            if not isinstance(row["output_response"], str):
+                raise ValueError("Model response is missing or is not text")
             content = closure_response_content(
                 row["output_response"], stop_reason=row["stop_reason"], terminal_markers=SNOWBALL_TURN_END_MARKERS
             )
