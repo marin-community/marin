@@ -95,7 +95,7 @@ BASELINE_NODES = 2
 BASELINE_EVAL_INTERVAL = 1000
 # A thinking turn on these tasks runs 5-15k tokens and can reach the 32k cap; the window holds a few
 # such turns plus shell output.
-CONTEXT_BUDGET = {"request_window_tokens": 65536, "max_new_tokens_per_turn": 32768, "max_turns": 16}
+CONTEXT_BUDGET = {"request_window_tokens": 65536, "max_new_tokens_per_turn": 32768, "max_turns": 20}
 # Qwen's recommended Thinking-2507 decoding. Training samples at temperature one to stay on-policy.
 EVAL_SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
 TRAIN_SAMPLING = {"temperature": 1.0, "top_p": 1.0, "top_k": -1}
@@ -104,7 +104,7 @@ TRAIN_SAMPLING = {"temperature": 1.0, "top_p": 1.0, "top_k": -1}
 ROLLOUTS_PER_ENGINE = 128
 ROLLOUT_WORKERS = 8
 CPUS_PER_ROLLOUT_WORKER = 8
-VERIFIER_THREADS_PER_WORKER = 32
+VERIFIER_THREADS_PER_WORKER = 64
 
 
 class Stage(StrEnum):
