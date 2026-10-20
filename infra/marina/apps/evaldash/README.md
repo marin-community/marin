@@ -77,8 +77,8 @@ Filtering launches by eval retains all their sibling runs and the full launch's 
 `/meta` returns `run_facets` over all records, including smoke runs, separately from panel facets.
 Its model, benchmark, cohort, and filter lists are computed when a catalog snapshot loads or refreshes.
 Requests reuse those lists and read current archive flags independently; archiving does not require a
-new catalog generation. Metadata requests run in a worker thread so database waits leave the async
-event loop available to other requests.
+new catalog generation. Synchronous metadata work runs in a worker thread so database waits leave the
+async event loop available to other requests.
 
 Model detail links record the selected cohort in `?cohort=`, including `all` and `unversioned`,
 so reopening a link restores the same runs and scores. Links without a cohort resolve to the
