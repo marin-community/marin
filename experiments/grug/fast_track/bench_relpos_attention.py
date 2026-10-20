@@ -10,6 +10,8 @@ Prints per-call fwd and fwd+bwd times and the max deviation of the native path f
     python -m experiments.grug.fast_track.bench_relpos_attention
 """
 
+import importlib
+import sys
 import time
 
 import jax
@@ -74,7 +76,20 @@ def _max_deviation(name: str, actual, expected) -> None:
         print(f"DIFF {name} {label}: max-normalized {rel:.3e}", flush=True)
 
 
+def _variant(spec: str) -> None:
+    """Time one forward variant in this process: ``prefetch,load`` flags of the Inkling SM100 forward."""
+    # The CUDA-only kernel module imports cutlass at import time.
+    K = importlib.import_module("levanter.grug.attention._fa4_cute_inkling_fwd_sm100").InklingFlashAttentionForwardSm100
+
+    prefetch, load = (flag == "1" for flag in spec.split(","))
+    K.PREFETCH_BAND, K.LOAD_BAND = prefetch, load
+    _run(f"MLA 48/48 sm100 band512 prefetch={prefetch} load={load}", "gpu_fa4_cute_sm100", Q_HEADS, True)
+
+
 def main() -> None:
+    if len(sys.argv) > 1:
+        _variant(sys.argv[1])
+        return
     print(jax.devices(), flush=True)
     _run("S6 GQA 48/6 sm100 noband", "gpu_fa4_cute_sm100", 6, False)
     _run("MHA 48/48 sm100 noband", "gpu_fa4_cute_sm100", Q_HEADS, False)

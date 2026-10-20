@@ -1335,8 +1335,6 @@ def segmented_flash_attention_forward_sm100_launcher(
         q_stage=config.q_stage,
         # Keep the schedule measured in the hero comparison; persistent scheduling is unmeasured here.
         is_static_persistent=False,
-        # A non-None sentinel selects the score-mod path the Inkling subclass overrides.
-        score_mod="inkling_inline" if use_rel_bias else None,
         mask_mod=_native_segment_mask_mod(modules),
         has_aux_tensors=True,
     )
@@ -1423,9 +1421,7 @@ def segmented_flash_attention_forward_sm100_launcher(
             v_bshd,
             out_bshd,
             lse,
-            # The score-mod path hands the scale to a ``Float32 | None`` kernel parameter, which does not
-            # convert a Python float.
-            cutlass.Float32(softmax_scale),
+            softmax_scale,
             aux_data=utils.AuxData(tensors=aux_tensors),
             blocksparse_tensors=sparse,
             stream=stream,
