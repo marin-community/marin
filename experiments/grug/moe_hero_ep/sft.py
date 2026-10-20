@@ -12,6 +12,7 @@ import dataclasses
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -349,8 +350,68 @@ def make_sft_step(config: SftConfig):
     return step
 
 
+def compact_optimizer_report(state: SftState) -> dict:
+    """Check Adam's exact compact moment trees, without comparing unrelated frozen shapes.
+
+    This checks the parameter/state boundary and declared buffers. It does not
+    infer allocation ancestry from tensor values or certify optimizer kernels.
+    """
+    errors = []
+    if state.step.shape != () or state.step.dtype != jnp.int32:
+        raise ValueError("SFT update counter must be a scalar int32")
+    step = int(state.step)
+    parameters = jax.tree_util.tree_flatten_with_path(state.params)[0]
+    for path, value in parameters:
+        name = jax.tree_util.keystr(path)
+        adapter = name.startswith(".adapters.") and re.search(r"\.lora_(?:q|k|v|o|gate|up|down)\.[ab]$", name)
+        if name not in (".input_delta", ".output_delta") and not adapter:
+            errors.append(f"Noncompact parameter: {name}")
+        if value.dtype != jnp.float32:
+            errors.append(f"Non-FP32 parameter: {name}")
+    groups = (
+        ("adapters", state.params.adapters, state.adapter_opt_state),
+        ("vocabulary", (state.params.input_delta, state.params.output_delta), state.vocab_opt_state),
+    )
+    for group, params, optimizer in groups:
+        if not isinstance(optimizer, tuple) or len(optimizer) != 2:
+            errors.append(f"Unexpected {group} optimizer state")
+            continue
+        adam, schedule = optimizer
+        if type(adam) is not optax.ScaleByAdamState or type(schedule) is not optax.ScaleByScheduleState:
+            errors.append(f"Unexpected {group} Adam/schedule state types")
+            continue
+        for label, moment in (("mu", adam.mu), ("nu", adam.nu)):
+            if jax.tree.structure(moment) != jax.tree.structure(params):
+                errors.append(f"{group}.{label} does not match the compact parameter tree")
+                continue
+            for (path, expected), actual in zip(
+                jax.tree_util.tree_flatten_with_path(params)[0], jax.tree.leaves(moment), strict=True
+            ):
+                if actual.shape != expected.shape or actual.dtype != expected.dtype:
+                    errors.append(f"{group}.{label}{jax.tree_util.keystr(path)} shape/dtype differs")
+        if any(count.shape != () or count.dtype != jnp.int32 for count in (adam.count, schedule.count)):
+            errors.append(f"Unexpected {group} optimizer counters")
+        elif int(adam.count) != step or int(schedule.count) != step:
+            errors.append(f"{group} Adam/schedule counters do not equal SFT step {step}")
+    parameter_bytes = sum(value.nbytes for _, value in parameters)
+    optimizer_bytes = sum(value.nbytes for value in jax.tree.leaves((state.adapter_opt_state, state.vocab_opt_state)))
+    expected_bytes = 2 * parameter_bytes + 4 * jnp.dtype(jnp.int32).itemsize
+    if optimizer_bytes != expected_bytes:
+        errors.append("Optimizer buffers differ from two compact FP32 moments plus four counters")
+    return {
+        "schema_version": 1,
+        "optimizer_step": step,
+        "compact_optimizer_only": not errors,
+        "errors": errors,
+        "trainable_parameter_bytes": parameter_bytes,
+        "optimizer_state_bytes": optimizer_bytes,
+        "expected_optimizer_state_bytes": expected_bytes,
+        "scope": "exact compact parameter and Adam moment trees, shapes, dtypes, counters and bytes",
+    }
+
+
 def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | None = None) -> dict:
-    """Conservatively audit optimized matrix/scatter/custom-call result shapes.
+    """Conservatively audit optimized dot/multiply/scatter/custom-call result shapes.
 
     Inspect all operations regardless of autodiff metadata or kernel name. In
     particular QuACK Wgrad uses the same generic launcher as activation GEMMs.
@@ -420,10 +481,6 @@ def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | N
         shapes,
         weight_parameter_prefixes=(
             "frozen.",
-            "params.adapters.",
-            "params.input_delta",
-            "params.output_delta",
-            "state.params.",
             "m.",
         ),
     )
@@ -434,12 +491,14 @@ def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | N
         "experiments/grug/moe_hero_ep/sft_hlo.py",
         "experiments/grug/moe_hero_ep/model.py",
         "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
+        "lib/levanter/src/levanter/grug/_moe/sonic.py",
+        "lib/levanter/src/levanter/grug/_moe/topk.py",
         "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
         "lib/levanter/src/levanter/grug/_moe/quack_moe_cute.py",
     )
     source_digests = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources}
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "backend": jax.default_backend(),
         "hlo_digest": digest(text),
         "model_digest": digest(draccus.encode(model.config)),
@@ -447,7 +506,10 @@ def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | N
         **dataclasses.asdict(audit),
         "inspected_projection_shapes": {str(shape): sorted(paths) for shape, paths in sorted(shapes.items())},
         "avoids_full_base_gradients": audit.avoids_full_base_gradients,
-        "scope": "declared optimized dot/scatter/custom-call results; opaque kernel internals require source audit",
+        "scope": (
+            "declared optimized dot/multiply/scatter/custom-call results and tracked integer casts; "
+            "opaque kernel internals and other operations require source audit"
+        ),
         "compiled_output_bytes": memory.output_size_in_bytes,
         "compiled_temporary_bytes": memory.temp_size_in_bytes,
     }

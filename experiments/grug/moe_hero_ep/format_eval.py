@@ -770,6 +770,8 @@ class SmokeRecord(Record):
     warmup_updates: int = Field(ge=0)
     updates: tuple[SmokeUpdate, ...] = Field(min_length=1)
     compiled_gradient_report: str
+    compact_optimizer_report: str
+    compact_optimizer_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     avoids_full_base_gradients: bool
     preserves_activation_gradients: bool
 
@@ -792,6 +794,23 @@ def validate_smoke_checkpoint(record: SmokeRecord) -> dict:
         }
     ):
         raise ValueError("Measured smoke terminal checkpoint disagrees with its base, schedule, or actual counters")
+    optimizer_raw = StoragePath(record.compact_optimizer_report).read_bytes()
+    if hashlib.sha256(optimizer_raw).hexdigest() != record.compact_optimizer_report_sha256:
+        raise ValueError("Smoke compact optimizer report bytes changed")
+    optimizer = json.loads(optimizer_raw)
+    if (
+        optimizer.get("schema_version") != 1
+        or optimizer.get("compact_optimizer_only") is not True
+        or optimizer.get("errors") != []
+        or optimizer.get("optimizer_step") != 0
+        or optimizer.get("execution_id") != record.execution_id
+        or optimizer.get("checkpoint_metadata_digest") != record.checkpoint_metadata_digest
+        or optimizer.get("measurement_identity_digest") != record.measurement_identity_digest
+        or optimizer.get("trainable_parameter_bytes") != record.trainable_parameter_bytes
+        or optimizer.get("optimizer_state_bytes") != record.optimizer_state_bytes
+        or optimizer.get("expected_optimizer_state_bytes") != record.optimizer_state_bytes
+    ):
+        raise ValueError("Smoke lacks passing structural evidence of fresh compact Adam state")
     return metadata
 
 
@@ -841,6 +860,8 @@ def assemble_smoke(
     compiled = json.loads(compiled_path.read_text())
     if not compiled.get("avoids_full_base_gradients") or compiled.get("optimizer_frozen_parameter_inputs") != 0:
         raise ValueError("Compiled evidence does not show compact gradients and optimizer inputs")
+    optimizer_path = telemetry_directory / "compact-optimizer-report.json"
+    optimizer_sha256 = hashlib.sha256(optimizer_path.read_bytes()).hexdigest()
     gradient_norms = [row["input_delta_gradient_norm"] for row in raw]
     if any(not math.isfinite(value) for value in gradient_norms) or not any(value > 0 for value in gradient_norms):
         raise ValueError("No measured input-delta gradient proves activation backpropagation through the frozen base")
@@ -864,6 +885,8 @@ def assemble_smoke(
         warmup_updates=warmup_updates,
         updates=updates,
         compiled_gradient_report=str(compiled_path),
+        compact_optimizer_report=str(optimizer_path),
+        compact_optimizer_report_sha256=optimizer_sha256,
         avoids_full_base_gradients=True,
         preserves_activation_gradients=True,
     )

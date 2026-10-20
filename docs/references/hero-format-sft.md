@@ -304,8 +304,23 @@ a workflow prerequisite; `LaunchEvidence` does not store or enforce it. Set the
 runtime `MARIN_PREFIX` to the reviewed `--output-prefix`. Each invocation creates
 the `--launch-config` file exclusively, so use a fresh filename for submission.
 
-The smoke writes raw update telemetry, checkpoint timings and
-`telemetry/compiled-gradient-report.json` under its training output. Copy the
+The smoke writes raw update telemetry, checkpoint timings,
+`telemetry/compiled-gradient-report.json` and
+`telemetry/compact-optimizer-report.json` under its training output. The optimizer
+report checks the exact compact parameter and Adam moment trees, FP32 dtypes,
+counter values and buffer sizes before the first update. Smoke assembly pins
+its raw SHA256, execution, base and measurement identity and requires step-zero
+counters and a passing structural report. This does not inspect moment values.
+Matching a frozen tensor's shape does not establish optimizer contamination.
+
+Compiled audit schema 3 keeps ambiguous frozen-shaped results in
+`unverified_weight_shaped_results`. Parameter operands and routing selectors
+alone cannot certify them. Integer custom-call outputs are parsed separately;
+no-write collective destination buffers require matching decoded TTIR and PTX.
+The audit covers declared dot, multiply, scatter and custom-call results and
+tracked integer casts. This includes one-token broadcast/multiply outer products.
+Opaque kernel internals and other operations need source review. Unsupported declared types or
+computation bodies and any remaining unverified result fail qualification. Copy the
 telemetry directory locally and assemble its measured record using the actual
 warmup, microbatch, accumulation and optimizer settings:
 

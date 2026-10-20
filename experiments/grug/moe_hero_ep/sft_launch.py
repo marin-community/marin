@@ -39,6 +39,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.sft import (
     BaseReference,
     SftConfig,
+    compact_optimizer_report,
     compiled_gradient_report,
     export_sft,
     initialize_from_checkpoint,
@@ -356,8 +357,14 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
             replica_axis_size=config.replica_axis_size,
             resources=config.resources,
         )
-        state_bytes = sum(x.nbytes for x in jax.tree.leaves((state.adapter_opt_state, state.vocab_opt_state)))
-        trainable_bytes = sum(x.nbytes for x in jax.tree.leaves(state.params))
+        optimizer_audit = compact_optimizer_report(state)
+        optimizer_audit.update(
+            execution_id=trainer.id,
+            checkpoint_metadata_digest=config.reference.metadata_digest,
+            measurement_identity_digest=measurement_identity,
+        )
+        state_bytes = optimizer_audit["optimizer_state_bytes"]
+        trainable_bytes = optimizer_audit["trainable_parameter_bytes"]
         # Every segment owns a compact checkpoint with its full current schedule,
         # including a reused smoke that already reached the first inspection.
         last_saved_step = None
@@ -366,6 +373,9 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
         telemetry_path = StoragePath(config.output_path) / "telemetry"
         if jax.process_index() == 0:
             telemetry_path.mkdirs()
+            (telemetry_path / "compact-optimizer-report.json").write_text(json.dumps(optimizer_audit, indent=2) + "\n")
+        if not optimizer_audit["compact_optimizer_only"]:
+            raise RuntimeError(f"SFT optimizer violates the compact state boundary: {optimizer_audit['errors']}")
         schedule = BatchSchedule(trainer.train_batch_size)
         dataset = build_train_dataset(
             config.data,
