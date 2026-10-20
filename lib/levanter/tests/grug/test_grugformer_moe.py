@@ -1919,8 +1919,7 @@ def test_ring_dedup_down_project_combine_matches_autodiff(dtype, monkeypatch):
     outputs. In float32 everything agrees to rounding. In bfloat16 the routing-weight gradient carries two
     roundings (``dy`` and ``dhidden``) where autodiff's ``<cotangent, y>`` carries one, so its error against a
     float32 reference stays within 1.5x of autodiff's. Padding dispatch rows and empty slots get no gradient."""
-    # Both sides use XLA's ragged_dot, so the comparison isolates the custom VJP from backend kernels (TPU's Mosaic
-    # grouped matmul rejects this test's bf16 operands under the highest matmul precision).
+    # Both sides use XLA's ragged_dot, so the comparison isolates the custom VJP from backend kernels.
     monkeypatch.setenv("RAGGED_DOT_IMPL", "xla")
     received_rows, topk, dispatch_rows, inter, hidden = 24, 4, 64, 16, 32
     group_sizes = np.array([20, 0, 26, 10], np.int32)
@@ -1953,9 +1952,11 @@ def test_ring_dedup_down_project_combine_matches_autodiff(dtype, monkeypatch):
         return out, vjp(jnp.asarray(cotangent, out.dtype))
 
     args = (jnp.asarray(activations, dtype), jnp.asarray(w2, dtype), jnp.asarray(weights))
-    with jax.default_matmul_precision("highest"):
+    # TPU's ragged_dot rejects bfloat16 operands at the highest matmul precision, which only float32 needs.
+    with jax.default_matmul_precision("highest" if dtype == jnp.float32 else "default"):
         out, grads = jax.jit(functools.partial(value_and_grads, expert_side))(*args)
         expected_out, expected_grads = jax.jit(functools.partial(value_and_grads, reference))(*args)
+    with jax.default_matmul_precision("highest"):
         f32_args = tuple(a.astype(jnp.float32) for a in args)
         _, f32_grads = jax.jit(functools.partial(value_and_grads, reference))(*f32_args)
 
