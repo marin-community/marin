@@ -3,9 +3,10 @@
 from dataclasses import dataclass
 from typing import Any
 
-from rolloutengine.lowering import SHELLBOX_SESSION
-from rolloutengine.spec import LoweredTaskSpec
-from rolloutengine.task_session import session_start
+from rolloutengine.harness.shell import task_prompt
+from rolloutengine.models import TaskRolloutSpec
+from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
+from skyrl_gym.task_records import episode_prompt
 from taskcompendium.runtime.shell import resolve_shell_tool
 
 from skyrl_train.inference_engines.base import ConversationType
@@ -23,7 +24,7 @@ class TrajectoryMetadata:
 
 @dataclass(frozen=True)
 class TaskInput:
-    lowered: LoweredTaskSpec
+    spec: TaskRolloutSpec
     metadata: TrajectoryMetadata
     group_grader: GroupGraderSpec | None = None
 
@@ -35,10 +36,8 @@ class PreferenceInput:
     metadata: TrajectoryMetadata
 
 
-def task_messages(lowered: LoweredTaskSpec) -> ConversationType:
-    tool = (
-        resolve_shell_tool(lowered.task, lowered.session.shell_tool)
-        if lowered.session.task_session == SHELLBOX_SESSION
-        else None
-    )
-    return list(session_start(lowered.task, tool, ()).messages)
+def task_messages(spec: TaskRolloutSpec) -> ConversationType:
+    if not is_shell_harness(spec.harness):
+        return list(episode_prompt(spec.task).messages)
+    tool = resolve_shell_tool(spec.task, shell_harness(spec.harness).shell_tool)
+    return list(task_prompt(spec.task, tool, ()).messages)

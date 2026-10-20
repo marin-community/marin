@@ -12,13 +12,13 @@ from verifyit.closure_scoring import (
     score_closure,
     score_closure_region,
 )
-from rolloutengine.contracts import ModelTurn, SessionStart, Transition
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.models import ModelTurn, Prompt
+from rolloutengine.models import TaskRolloutSpec
 from verifyit.structure_closure import PrefixStatus
-from rolloutengine.task_session import session_start
 from shellbox.machine import Machine
 from taskcompendium.grading_result import GradeResult, Outcome
 
+from skyrl_gym.task_records import TaskTransition, episode_prompt
 from skyrl_gym.source_task import session_parameters
 
 STRUCTURE_CLOSURE_SESSION = "structure_closure"
@@ -49,19 +49,19 @@ class ClosurePrompt(BaseModel):
 class ClosureReplaySession:
     """Grade syntax and content separately, without executing the described tools."""
 
-    def __init__(self, lowered: LoweredTaskSpec, _machine: Machine | None):
+    def __init__(self, lowered: TaskRolloutSpec, _machine: Machine | None):
         self.task = lowered.task
         self.prompt = ClosurePrompt.model_validate(session_parameters(self.task).extras)
         self.result = GradeResult(Outcome.UNAVAILABLE, None, "No model continuation was completed")
 
-    async def prepare(self) -> SessionStart:
+    async def prepare(self) -> Prompt:
         return replace(
-            session_start(self.task, shell_tool=None, provider_tools=()),
-            prompt_token_ids=self.prompt.prompt_token_ids,
+            episode_prompt(self.task),
+            token_ids=self.prompt.prompt_token_ids,
             options={"skip_special_tokens": False},
         )
 
-    async def advance(self, turn: ModelTurn) -> Transition:
+    async def advance(self, turn: ModelTurn) -> TaskTransition:
         content = closure_response_content(
             turn.text, stop_reason=turn.stop_reason, terminal_markers=SNOWBALL_TURN_END_MARKERS
         )
@@ -78,7 +78,7 @@ class ClosureReplaySession:
             },
         )
         metric = f"{CLOSURE_REGION_SCORER}/{self.prompt.family}/{self.prompt.control}"
-        return Transition(
+        return TaskTransition(
             done=True,
             reward=float(score.success),
             grade=self.result,

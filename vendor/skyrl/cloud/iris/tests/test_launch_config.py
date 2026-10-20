@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import yaml
 from omegaconf import OmegaConf
-from rolloutengine.contracts import ModelTurn
+from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 

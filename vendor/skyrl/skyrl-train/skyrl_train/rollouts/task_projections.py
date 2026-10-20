@@ -15,7 +15,8 @@ from skyrl_gym.verification import (
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from skyrl_gym.task_records import grade_skipped, skipped_grade
-from rolloutengine.contracts import RolloutContractError, RolloutData
+from rolloutengine.models import RolloutContractError
+from skyrl_train.rollouts.training_record import TrainingRollout
 
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
@@ -74,7 +75,7 @@ def verification_result(grade: GradeResult) -> VerificationResult:
 
 
 def rollout_loss_eligible(
-    rollout: RolloutData,
+    rollout: TrainingRollout,
     error_handling: ErrorHandlingConfig,
     *,
     logprobs_required: bool,
@@ -93,7 +94,7 @@ def rollout_loss_eligible(
 
 
 def _failure_policy(
-    rollout: RolloutData,
+    rollout: TrainingRollout,
     error_handling: ErrorHandlingConfig,
     logprobs_required: bool,
 ) -> tuple[ErrorTreatment, str | None]:
@@ -113,7 +114,7 @@ def _failure_policy(
     )
 
 
-def _rollout_rewards(rollout: RolloutData) -> RewardResult:
+def _rollout_rewards(rollout: TrainingRollout) -> RewardResult:
     graded = rollout.grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}
     skipped = grade_skipped(rollout.grade)
     token_rewards = None
@@ -150,7 +151,7 @@ def _rollout_rewards(rollout: RolloutData) -> RewardResult:
     )
 
 
-def _student_topk(rollout: RolloutData) -> AlignedStudentTopK | None:
+def _student_topk(rollout: TrainingRollout) -> AlignedStudentTopK | None:
     candidates = [step.turn.metadata.get("student_topk_indices") for step in rollout.steps]
     scores = [step.turn.metadata.get("behavior_topk_logprobs") for step in rollout.steps]
     if all(value is None for value in (*candidates, *scores)):
@@ -179,7 +180,7 @@ def _student_topk(rollout: RolloutData) -> AlignedStudentTopK | None:
 
 
 def _training_decision(
-    rollout: RolloutData,
+    rollout: TrainingRollout,
     error_handling: ErrorHandlingConfig,
     *,
     logprobs_required: bool,
@@ -242,7 +243,7 @@ class WholeTaskProjection:
     error_handling: ErrorHandlingConfig = DEFAULT_ERROR_HANDLING_CONFIG
     harbor_error_handling: ErrorHandlingConfig | None = None
 
-    def project(self, rollouts: Sequence[RolloutData], request: TaskRequestBatch) -> TrajectoryBatch:
+    def project(self, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> TrajectoryBatch:
         required = logprobs_requested(request, self.runner_config)
         policies = _task_error_policies(request, self.error_handling, self.harbor_error_handling)
         decisions = [
@@ -270,7 +271,7 @@ class StepTaskProjection:
     error_handling: ErrorHandlingConfig = DEFAULT_ERROR_HANDLING_CONFIG
     harbor_error_handling: ErrorHandlingConfig | None = None
 
-    def project(self, rollouts: Sequence[RolloutData], request: TaskRequestBatch) -> TrajectoryBatch:
+    def project(self, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> TrajectoryBatch:
         trajectory_ids = request.trajectory_ids
         if trajectory_ids is None:
             raise ValueError("Per-turn training samples require trajectory_ids")
@@ -315,7 +316,7 @@ def logprobs_requested(request: TaskRequestBatch, runner_config: DictConfig) -> 
 
 
 def _training_batch(
-    rollouts: Sequence[RolloutData],
+    rollouts: Sequence[TrainingRollout],
     decisions: Sequence[_TrainingDecision],
     logprobs_required: bool,
     runner_config: DictConfig,
@@ -373,7 +374,7 @@ def _training_batch(
     return batch
 
 
-def _row_logprobs(rollout: RolloutData, decision: _TrainingDecision, required: bool) -> np.ndarray | None:
+def _row_logprobs(rollout: TrainingRollout, decision: _TrainingDecision, required: bool) -> np.ndarray | None:
     if not rollout.response_token_ids:
         return np.zeros(1, dtype=np.float32)
     if rollout.logprobs is not None:
@@ -421,7 +422,7 @@ def _attach_failure_channels(batch: TrajectoryBatch, decisions: Sequence[_Traini
         batch["server_errors"] = server_errors
 
 
-def _attach_student_topk(batch: TrajectoryBatch, rollouts: Sequence[RolloutData]) -> None:
+def _attach_student_topk(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
     selected = [_student_topk(rollout) for rollout in rollouts]
     template = next((value for value in selected if value is not None), None)
     if template is not None:
@@ -444,7 +445,7 @@ def _attach_student_topk(batch: TrajectoryBatch, rollouts: Sequence[RolloutData]
 
 
 def _model_channel(
-    rollout: RolloutData,
+    rollout: TrainingRollout,
     key: str,
     length: int,
     trailing_shape: tuple[int, ...],
@@ -462,7 +463,7 @@ def _model_channel(
     return values
 
 
-def _attach_routed_experts(batch: TrajectoryBatch, rollouts: Sequence[RolloutData]) -> None:
+def _attach_routed_experts(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
     routes = [step.turn.metadata.get(ROUTED_EXPERTS_KEY) for rollout in rollouts for step in rollout.steps]
     route_template = next((value for value in routes if value is not None and len(value)), None)
     if route_template is not None:
@@ -473,7 +474,7 @@ def _attach_routed_experts(batch: TrajectoryBatch, rollouts: Sequence[RolloutDat
 
 
 def _token_channels(
-    batch: TrajectoryBatch, rollouts: Sequence[RolloutData], key: str, dtype: type[np.generic], fill: int = 0
+    batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], key: str, dtype: type[np.generic], fill: int = 0
 ) -> list[np.ndarray] | None:
     """One scalar per response token from each turn's ``key`` metadata, or None when no turn carries it."""
     if all(step.turn.metadata.get(key) is None for rollout in rollouts for step in rollout.steps):
@@ -484,13 +485,13 @@ def _token_channels(
     ]
 
 
-def _attach_policy_steps(batch: TrajectoryBatch, rollouts: Sequence[RolloutData]) -> None:
+def _attach_policy_steps(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
     steps = _token_channels(batch, rollouts, RESPONSE_POLICY_STEPS_KEY, np.int32, fill=UNSTAMPED_POLICY_STEP)
     if steps is not None:
         batch["rollout_policy_steps"] = steps
 
 
-def _attach_span_tags(batch: TrajectoryBatch, rollouts: Sequence[RolloutData]) -> None:
+def _attach_span_tags(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
     tags = _token_channels(batch, rollouts, RESPONSE_SPAN_TAGS_KEY, np.int64)
     if tags is not None:
         batch["response_span_tags"] = [row.tolist() for row in tags]
@@ -501,10 +502,10 @@ def _task_error_policies(
 ) -> list[ErrorHandlingConfig]:
     if harbor is None:
         return [default] * len(request.rows)
-    return [harbor if "harbor" in row.lowered.task.tags else default for row in request.rows]
+    return [harbor if "harbor" in row.spec.task.tags else default for row in request.rows]
 
 
-def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[RolloutData], request: TaskRequestBatch) -> None:
+def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:
     """Count task evidence and preserve environment-specific metrics."""
     metrics = batch.get("rollout_metrics") or {}
     failed = [
@@ -540,7 +541,7 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[RolloutData],
             metrics[key] = metrics.get(key, 0.0) + value
 
 
-def _step_rollouts(rollout: RolloutData) -> list[RolloutData]:
+def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:
     """Use exact served prompts and score each transition at its final action token."""
     if not rollout.steps:
         return [rollout]

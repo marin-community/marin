@@ -7,14 +7,41 @@ import argparse
 import ast
 import importlib
 import inspect
+import os
+import subprocess
 from pathlib import Path
 
 MARIN_PACKAGES = {"rolloutengine", "shellbox", "taskcompendium", "verifyit"}
+PYTHON_ENVIRONMENT_KEYS = {"PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"}
+
+
+def check_project(source: Path) -> None:
+    """Run the import contract in SkyRL's frozen CPU environment."""
+    environment = {key: value for key, value in os.environ.items() if key not in PYTHON_ENVIRONMENT_KEYS}
+    subprocess.run(
+        [
+            "uv",
+            "run",
+            "--isolated",
+            "--project",
+            str(source.resolve()),
+            "--frozen",
+            "--no-group",
+            "dev",
+            "python",
+            str(Path(__file__).resolve()),
+            "imports",
+            "--source",
+            str(source.resolve()),
+        ],
+        env=environment,
+        check=True,
+    )
 
 
 def check_imports(source: Path) -> None:
     """Check imported symbols and explicit constructor keywords without loading CUDA."""
-    for directory in ("cloud", "marinskyrl", "skyrl-train/skyrl_train"):
+    for directory in ("cloud", "marinskyrl", "skyrl-train/skyrl_train", "skyrl-gym/skyrl_gym"):
         for path in (source / directory).rglob("*.py"):
             if "tests" in path.parts:
                 continue
@@ -45,8 +72,13 @@ def check_imports(source: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("project", "imports"))
     parser.add_argument("--source", type=Path, required=True)
-    check_imports(parser.parse_args().source)
+    args = parser.parse_args()
+    if args.command == "project":
+        check_project(args.source)
+    else:
+        check_imports(args.source)
 
 
 if __name__ == "__main__":

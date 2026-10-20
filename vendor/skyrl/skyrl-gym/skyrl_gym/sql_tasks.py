@@ -13,12 +13,12 @@ from typing import Any
 from uuid import uuid4
 
 import pandas as pd
-from rolloutengine.contracts import ModelTurn, SessionStart, Transition
+from rolloutengine.models import ModelTurn, Prompt
 from shellbox.machine import Command, ExitReason, Machine
+from skyrl_gym.task_records import TaskTransition, episode_prompt
 from skyrl_gym.source_task import session_parameters
 from taskcompendium.grading_result import GradeResult, Outcome
-from rolloutengine.spec import LoweredTaskSpec
-from rolloutengine.task_session import session_start
+from rolloutengine.models import TaskRolloutSpec
 from verifyit.modes.grade_exact import grade_exact_candidate
 from verifyit.spec import ExactSpec
 
@@ -167,7 +167,7 @@ def _reference_failure(error: sqlite3.Error | ValueError) -> GradeResult:
 class SeededSQLTaskSession:
     """Compare one query on seeded and perturbed public databases."""
 
-    def __init__(self, lowered: LoweredTaskSpec, machine: Machine | None, *, executor: Executor | None = None):
+    def __init__(self, lowered: TaskRolloutSpec, machine: Machine | None, *, executor: Executor | None = None):
         task = lowered.task
         parameters = session_parameters(task)
         self.task = task
@@ -180,7 +180,7 @@ class SeededSQLTaskSession:
         self.cases: list[tuple[str, scoring.QueryRows]] = []
         self.result = GradeResult(Outcome.UNAVAILABLE, None, "The task has no completed query")
 
-    async def prepare(self) -> SessionStart:
+    async def prepare(self) -> Prompt:
         if self.spec is None:
             self.result = GradeResult(
                 Outcome.INFRA_ERROR,
@@ -188,7 +188,7 @@ class SeededSQLTaskSession:
                 "Invalid SQL task",
                 diagnostics={"verifier_error": "invalid reward_model.ground_truth"},
             )
-            return session_start(self.task, shell_tool=None, provider_tools=())
+            return episode_prompt(self.task)
         assert self.machine is not None
         root = Path(self.local_files.enter_context(TemporaryDirectory(prefix="skyrl-sql-reference-")))
         try:
@@ -198,11 +198,11 @@ class SeededSQLTaskSession:
         else:
             self.directory = await _upload_queries(self.machine, [path for path, _ in cases])
             self.cases = [(path.name, reference) for path, reference in cases]
-        return session_start(self.task, shell_tool=None, provider_tools=())
+        return episode_prompt(self.task)
 
-    async def advance(self, turn: ModelTurn) -> Transition:
+    async def advance(self, turn: ModelTurn) -> TaskTransition:
         if self.result.status != Outcome.UNAVAILABLE:
-            return Transition(done=True, reward=0.0, grade=self.result, metrics=dict(self.result.diagnostics))
+            return TaskTransition(done=True, reward=0.0, grade=self.result, metrics=dict(self.result.diagnostics))
         assert self.machine is not None and self.spec is not None
         accepted, query = scoring.guard_candidate_sql(scoring.extract_sql(turn.text))
         reward = 0.0
@@ -219,7 +219,7 @@ class SeededSQLTaskSession:
                 reward = 1.0
                 detail = "Result sets match on seeded and perturbed databases"
         self.result = GradeResult(Outcome.GRADED, reward, diagnostics={"detail": detail})
-        return Transition(done=True, reward=reward, grade=self.result, metrics={"detail": detail})
+        return TaskTransition(done=True, reward=reward, grade=self.result, metrics={"detail": detail})
 
     async def grade(
         self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
@@ -236,7 +236,7 @@ class SeededSQLTaskSession:
 class SQLTaskSession:
     """Execute SQL tools between model turns and grade the final result set."""
 
-    def __init__(self, lowered: LoweredTaskSpec, machine: Machine | None, *, executor: Executor | None = None):
+    def __init__(self, lowered: TaskRolloutSpec, machine: Machine | None, *, executor: Executor | None = None):
         task = lowered.task
         assert machine is not None
         parameters = session_parameters(task)
@@ -253,14 +253,14 @@ class SQLTaskSession:
         )
         self.reference_sql = extras["reward_spec"]["ground_truth"]
         self.verifyit = bool(config.get("verifyit_enabled", False))
-        self.max_turns = lowered.session.max_turns
+        self.max_turns = lowered.limits.max_turns
         self.directory = ""
         self.reference = scoring.QueryRows(0, [])
         self.failure: GradeResult | None = None
         self.transcript: list[str] = []
         self.grades: list[GradeResult] = []
 
-    async def prepare(self) -> SessionStart:
+    async def prepare(self) -> Prompt:
         root = Path(self.local_files.enter_context(TemporaryDirectory(prefix="skyrl-sql-reference-")))
         try:
             self.reference = await self.blocking.run(
@@ -270,12 +270,12 @@ class SQLTaskSession:
             self.failure = _reference_failure(error)
         else:
             self.directory = await _upload_queries(self.machine, [root / QUERY_DATABASE_FILENAME])
-        return session_start(self.task, shell_tool=None, provider_tools=())
+        return episode_prompt(self.task)
 
-    async def advance(self, turn: ModelTurn) -> Transition:
+    async def advance(self, turn: ModelTurn) -> TaskTransition:
         if self.failure is not None:
             self.grades.append(self.failure)
-            return Transition(done=True, reward=0.0, grade=self.failure, metrics=dict(self.failure.diagnostics))
+            return TaskTransition(done=True, reward=0.0, grade=self.failure, metrics=dict(self.failure.diagnostics))
         for tag in ("</sql>", "</solution>"):
             if tag in turn.text and turn.text.split(tag, 1)[1]:
                 raise ValueError(f"The model response must end at {tag}")
@@ -292,7 +292,7 @@ class SQLTaskSession:
                 reward = float(_set_equal(self.reference.rows, candidate, verifyit=self.verifyit))
             grade = GradeResult(Outcome.GRADED, reward, passed=reward == 1.0)
             self.grades.append(grade)
-            return Transition(done=True, reward=reward, grade=grade)
+            return TaskTransition(done=True, reward=reward, grade=grade)
         match = re.search(r"<sql>(.*?)</sql>", turn.text, re.DOTALL)
         if match is None:
             observation = "Your previous action is invalid. Follow the format of outputting thinking process and sql tool, and try again."
@@ -313,7 +313,9 @@ class SQLTaskSession:
         self.transcript.append(observation)
         grade = GradeResult(Outcome.UNAVAILABLE, None, "Tool execution is not a terminal verdict")
         self.grades.append(grade)
-        return Transition(done=False, reward=0.0, grade=grade, observations=({"role": "user", "content": observation},))
+        return TaskTransition(
+            done=False, reward=0.0, grade=grade, observations=({"role": "user", "content": observation},)
+        )
 
     async def grade(
         self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]

@@ -10,7 +10,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     PlainText,
     ResourceGroups,
-    SessionGrader,
+    NoGrader,
     Source,
     TaskSpec,
 )
@@ -46,7 +46,7 @@ def source_task(
         environment_requirements=EnvironmentRequirements() if environment is None else environment,
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
-        grader=SessionGrader(),
+        grader=NoGrader(reason="SkyRL grades each task turn", contract=parameters.model_dump()),
         resources=ResourceGroups(verifier=(inline_resource("config.json", parameters.model_dump_json().encode()),)),
         source=source,
     )

@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from rolloutengine.agent_session import AgentCompletion
-from rolloutengine.contracts import ModelTurn, SessionStart
+from rolloutengine.harness.external import AgentCompletion
+from rolloutengine.models import ModelTurn, Prompt
 
 from skyrl_train.json_serialization import to_jsonable
 
@@ -13,7 +13,7 @@ def recorded_completion(complete: AgentCompletion, trace_path: Path) -> AgentCom
     """Wrap a completion with paired JSONL request and response records."""
     request_index = 0
 
-    async def recorded_complete(request: SessionStart) -> ModelTurn:
+    async def recorded_complete(request: Prompt) -> ModelTurn:
         nonlocal request_index
         index = request_index
         request_index += 1

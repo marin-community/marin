@@ -5,8 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from skyrl_gym.source_task import session_parameters
-from rolloutengine.spec import LoweredTaskSpec
-from taskcompendium.models import SessionGrader
+from rolloutengine.models import TaskRolloutSpec
+from taskcompendium.models import NoGrader
 
 from skyrl_gym.envs.nemotron_ultra import GENRM_AGENTS
 
@@ -32,10 +32,10 @@ class GenRMGroupGraderParameters(BaseModel):
     config: dict[str, Any]
 
 
-def task_group_grader(lowered: LoweredTaskSpec) -> GroupGraderSpec | None:
+def task_group_grader(lowered: TaskRolloutSpec) -> GroupGraderSpec | None:
     """Derive a group grader from the SkyRL environment payload."""
     task = lowered.task
-    if lowered.session.task_session != "nemotron_ultra" or not isinstance(task.grader, SessionGrader):
+    if lowered.harness != "nemotron_ultra" or not isinstance(task.grader, NoGrader):
         return None
     parameters = session_parameters(task)
     extras = parameters.extras

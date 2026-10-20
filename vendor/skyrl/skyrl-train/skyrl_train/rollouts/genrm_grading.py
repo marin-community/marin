@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 
 import requests
-from rolloutengine.contracts import RolloutData
+from skyrl_train.rollouts.training_record import TrainingRollout
 from skyrl_gym.envs.nemotron_ultra.genrm import grade_genrm_group, response_object
 from skyrl_gym.envs.nemotron_ultra.judge import OpenAIJudge
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -14,7 +14,7 @@ from taskcompendium.submission import conversation_messages
 from skyrl_train.rollouts.group_grader import GenRMGroupGraderParameters, GroupGraderSpec
 
 
-def _with_grade(rollout: RolloutData, grade: GradeResult, metrics: dict[str, float]) -> RolloutData:
+def _with_grade(rollout: TrainingRollout, grade: GradeResult, metrics: dict[str, float]) -> TrainingRollout:
     # Group grades replace provisional per-turn rewards and credit.
     has_token_rewards = grade.status == Outcome.GRADED and any(
         step.transition.reward is not None for step in rollout.steps
@@ -40,10 +40,10 @@ def _with_grade(rollout: RolloutData, grade: GradeResult, metrics: dict[str, flo
 def grade_genrm_rollouts(
     task: TaskSpec,
     specification: GroupGraderSpec,
-    rollouts: Sequence[RolloutData],
+    rollouts: Sequence[TrainingRollout],
     eligible: Sequence[bool],
     phase: str,
-) -> list[RolloutData]:
+) -> list[TrainingRollout]:
     """Replace provisional grades with comparisons among valid peers."""
     parameters = GenRMGroupGraderParameters.model_validate_json(specification.parameters_json)
     config = parameters.config

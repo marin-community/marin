@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import tomllib
@@ -45,6 +46,8 @@ AGENT_LABEL = "agent-generated"
 PR_BRANCH_PREFIX = "skyrl-migration/pr-"
 DESTINATION_MARKER = "skyrl-destination"
 DESTINATION_PATTERN = re.compile(r"<!-- " + DESTINATION_MARKER + r": ([0-9a-f]{40}) -->")
+LOCAL_CHANGES_PATCH = "skyrl-migration/local-changes.patch"
+WHEEL_RUNTIME_ROOTS = {"cloud", "marinskyrl", "skyrl_train", "skyrl_gym", "chat_templates", "open_mopd_versions.py"}
 
 
 def run(
@@ -483,7 +486,7 @@ def stage(snapshot_dir: Path, output: Path) -> None:
         path = snapshot_dir / "migration-patches" / patch["path"]
         if file_digest(path) != patch["sha256"]:
             raise ValueError(f"Migration patch changed after capture: {path}")
-        run("git", "-C", str(tree), "apply", "--3way", "--index", f"--directory={VENDOR}", str(path))
+        run("git", "-C", str(tree), "apply", "--3way", "--index", "--unidiff-zero", f"--directory={VENDOR}", str(path))
     if chosen["patches"]:
         write_json(
             destination / PROVENANCE,
@@ -559,6 +562,9 @@ def vendor_patch(tree: Path, *revisions: str) -> bytes:
         "diff",
         "--binary",
         "--full-index",
+        # Empty context markers are trailing whitespace to repository formatters.
+        # Full blob identities retain the base for three-way replay without context lines.
+        "--unified=0",
         f"--relative={VENDOR}/",
         *revisions,
         "--",
@@ -571,6 +577,17 @@ def refresh_manifest(contents: str, patches: list[str]) -> str:
     """Replace migration patch inputs while preserving the retention policy."""
     contents = re.sub(r"(?m)^patches\s*=\s*\[[^\]]*\]\s*\n", "", contents)
     return f"patches = {json.dumps(patches)}\n" + contents
+
+
+def select_local_patch(snapshot_dir: Path, patch_path: Path) -> None:
+    """Record the replay delta in the snapshot's selection and retention policy."""
+    chosen = read_json(snapshot_dir / "selection.json")
+    chosen["patches"] = (
+        [{"path": LOCAL_CHANGES_PATCH, "sha256": file_digest(patch_path)}] if patch_path.stat().st_size else []
+    )
+    write_json(snapshot_dir / "selection.json", chosen)
+    policy = snapshot_dir / "retention.toml"
+    policy.write_text(refresh_manifest(policy.read_text(), [patch["path"] for patch in chosen["patches"]]))
 
 
 def refresh_candidate(previous: Path, current: Path, updated: Path, candidate: Path) -> RefreshReport:
@@ -601,18 +618,14 @@ def refresh_candidate(previous: Path, current: Path, updated: Path, candidate: P
     shutil.rmtree(overlay / VENDOR)
     copy_source_files(current, overlay / VENDOR, list(local_files))
     git(overlay, "add", "--all")
-    patch_name = "skyrl-migration/local-changes.patch"
+    patch_name = LOCAL_CHANGES_PATCH
     patch_path = updated / "migration-patches" / patch_name
     patch_path.parent.mkdir(parents=True, exist_ok=True)
     local_patch = vendor_patch(overlay, "--cached")
     patch_path.write_bytes(local_patch)
     (candidate.parent / "local-changes-before-replay.patch").write_bytes(local_patch)
     shutil.rmtree(overlay)
-    chosen = read_json(updated / "selection.json")
-    chosen["patches"] = [{"path": patch_name, "sha256": file_digest(patch_path)}] if patch_path.stat().st_size else []
-    write_json(updated / "selection.json", chosen)
-    policy = updated / "retention.toml"
-    policy.write_text(refresh_manifest(policy.read_text(), [patch["path"] for patch in chosen["patches"]]))
+    select_local_patch(updated, patch_path)
     try:
         stage(updated, candidate)
     except subprocess.CalledProcessError as error:
@@ -632,14 +645,9 @@ def finish_refresh(report: RefreshReport) -> None:
         raise ValueError("Resolve the candidate conflicts and git add the resolved files before finishing")
     # Store the resolved delta against the new origin before recreating the candidate.
     # Future plan/stage runs then need only the new snapshot's Git objects.
-    patch_path = updated / "migration-patches/skyrl-migration/local-changes.patch"
+    patch_path = updated / "migration-patches" / LOCAL_CHANGES_PATCH
     patch_path.write_bytes(vendor_patch(candidate / "tree", "refs/migration/retained"))
-    chosen = read_json(updated / "selection.json")
-    patch_name = "skyrl-migration/local-changes.patch"
-    chosen["patches"] = [{"path": patch_name, "sha256": file_digest(patch_path)}] if patch_path.stat().st_size else []
-    write_json(updated / "selection.json", chosen)
-    policy = updated / "retention.toml"
-    policy.write_text(refresh_manifest(policy.read_text(), [patch["path"] for patch in chosen["patches"]]))
+    select_local_patch(updated, patch_path)
     if report.status is RefreshStatus.READY:
         shutil.rmtree(candidate)
     else:
@@ -796,14 +804,13 @@ def write_report(output: Path, report: StageReport) -> None:
 
 def wheel_source_files(source: Path) -> dict[str, Path]:
     """Map the current package files and assets to their wheel member paths."""
-    roots = {"cloud", "marinskyrl", "skyrl_train", "skyrl_gym", "chat_templates", "open_mopd_versions.py"}
     files = {}
     for path in source.rglob("*"):
         name = path.relative_to(source)
         if {".git", ".venv", "__pycache__"}.intersection(name.parts) or path.suffix in {".pyc", ".pyo"}:
             continue
         member = name.as_posix().removeprefix("skyrl-train/").removeprefix("skyrl-gym/")
-        if member.split("/")[0] in roots and path.is_file():
+        if member.split("/")[0] in WHEEL_RUNTIME_ROOTS and path.is_file():
             path.resolve().relative_to(source.resolve())
             files[member] = path
     return files
@@ -816,12 +823,11 @@ def audit_wheel(wheel: Path, source: Path) -> list[str]:
         if PROVENANCE not in members or BUNDLE_MANIFEST not in members:
             raise ValueError("Wheel is missing runtime provenance or the launcher bundle manifest")
         expected = wheel_source_files(source)
-        runtime_roots = {"cloud", "marinskyrl", "skyrl_train", "skyrl_gym", "chat_templates", "open_mopd_versions.py"}
         for packaged, path in expected.items():
             if packaged not in members or hashlib.sha256(archive.read(packaged)).hexdigest() != file_digest(path):
                 raise ValueError(f"Wheel member missing or changed: {packaged}")
         unexpected = {
-            name for name in members if name.split("/")[0] in runtime_roots and not name.endswith("/")
+            name for name in members if name.split("/")[0] in WHEEL_RUNTIME_ROOTS and not name.endswith("/")
         } - expected.keys()
         if unexpected:
             raise ValueError(f"Wheel contains runtime files outside the checked-out source: {sorted(unexpected)}")
@@ -842,28 +848,9 @@ def build_audited_wheel(source: Path, output: Path) -> BuiltWheel:
 
 
 def check_vendor(source: Path) -> None:
-    """Check the independent lock and build the wheel without installing SkyRL."""
+    """Check the independent lock, isolated Marin contract, and wheel contents."""
     run("uv", "lock", "--project", str(source), "--check")
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in {"PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"}
-    }
-    run(
-        "uv",
-        "run",
-        "--isolated",
-        "--project",
-        str(source),
-        "--frozen",
-        "--no-group",
-        "dev",
-        "python",
-        str(ROOT / "infra/ci/check_skyrl_marin.py"),
-        "--source",
-        str(source),
-        env=environment,
-    )
+    run(sys.executable, str(ROOT / "infra/ci/check_skyrl_marin.py"), "project", "--source", str(source))
     with tempfile.TemporaryDirectory(prefix="skyrl-wheel-") as temporary:
         wheel = build_audited_wheel(source, Path(temporary))
         print(json.dumps({"wheel_sha256": wheel.sha256, "members": len(wheel.members)}))

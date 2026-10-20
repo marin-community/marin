@@ -43,23 +43,19 @@ Use a fresh artifact version when the digest changes. The provenance document
 records the upstream origin and captured migration patches; it does not prevent
 editing the vendored source.
 
-The nested project selects published or Git-pinned Marin packages; local
-editable Marin packages are not wired into its bundle. Its four Git dependencies
-currently require `b3206ac1c46cee3079441f394b5a6a13bb923d0e` from
-[#10190](https://github.com/marin-community/marin/pull/10190). That revision
-provides the `RolloutEngine(judge_connection=...)` interface. Older merged
-revisions lack it, and current main uses a newer harness API that requires a
-separate SkyRL port. Preserve this compatibility pin until that port or the
-required library changes land. To advance to a compatible merged revision:
+The nested project uses published Marin packages with its own frozen lock.
+Local editable Marin packages are not wired into its bundle. To advance the
+published Marin libraries while preserving the declared runtime constraints:
 
 ```bash
-uv run config/update-external.py --skyrl-marin-ref <merged-commit>
+uv run config/update-external.py --skyrl-marin-packages
 ```
 
-The updater checks ancestry, resolves only the nested lock, and checks imported
-Marin symbols and explicit constructor keywords inside the nested environment.
-A failed check restores both dependency files. This check complements runtime
-acceptance; it does not exercise the full TaskSession contract.
+The updater resolves only the nested lock and checks imported Marin symbols
+and explicit constructor keywords in the nested environment. A failed check
+restores the previous lock. Edit the nested `pyproject.toml` first when changing
+an explicit version constraint. Runtime acceptance must also exercise the
+harness; an import check alone cannot validate its execution contract.
 
 The migration tool rebuilds source candidates and prepares active work. It
 does not edit Marin's integration, publish a wheel, enable migrated nightlies,
@@ -317,6 +313,7 @@ UV_PROJECT_ENVIRONMENT="$marin_root/.venv" uv run --no-sync --project "$marin_ro
   --target-cluster cw-rno2a --job-name "$smoke_job_name" \
   --gpu H100x2 --enable-extra-resources --cpu 16 --memory 128GB --disk 150GB \
   --timeout 2400 --max-retries 0 --no-sync --no-wait \
+  --include 'acceptance/**/*' \
   --task-image ghcr.io/marin-community/iris-task@sha256:13519c59442bd70ed5ec2902869f15094992d6849d7e34e353f1338dec7ff5f8 \
   -- bash run.sh "$smoke_rows"
 ```

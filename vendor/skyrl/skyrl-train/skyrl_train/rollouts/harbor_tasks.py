@@ -9,9 +9,9 @@ from omegaconf import DictConfig
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec
+from rolloutengine.models import MachineRuntimeSpec, RolloutFailure, TaskRolloutSpec
 from taskcompendium.grading_result import GradingFailure, Outcome
-from rolloutengine.contracts import RolloutData, RolloutFailure
+from skyrl_train.rollouts.training_record import TrainingRollout
 
 from skyrl_train.rollouts.harbor_settings import (
     HARBOR_EXCEPTION,
@@ -119,9 +119,9 @@ class HarborTaskSettings:
             case other:
                 raise ValueError(f"No Shellbox factory is configured for Harbor backend {other!r}")
 
-    def lowered(self, lowered: LoweredTaskSpec, *, phase: str) -> LoweredTaskSpec:
+    def configured_spec(self, spec: TaskRolloutSpec, *, phase: str) -> TaskRolloutSpec:
         """Apply deployment overrides without changing the task definition."""
-        if self.verifier.disable and not isinstance(lowered.task.grader, NoGrader):
+        if self.verifier.disable and not isinstance(spec.task.grader, NoGrader):
             raise ValueError("Disabled Harbor verification must be selected before task import")
 
         def machine(original: MachineRuntimeSpec | None) -> MachineRuntimeSpec | None:
@@ -149,31 +149,31 @@ class HarborTaskSettings:
             value *= self.timeout_multiplier
             return value if ceiling is None else min(value, ceiling)
 
-        runtime = lowered.runtime.model_copy(
+        limits = spec.limits.model_copy(
             update={
-                "task_machine": machine(lowered.runtime.task_machine),
-                "verifier_machine": machine(lowered.runtime.verifier_machine),
-            }
-        )
-        session = lowered.session.model_copy(
-            update={
-                "max_turns": lowered.session.max_turns if self.max_turns is None else self.max_turns,
+                "max_turns": spec.limits.max_turns if self.max_turns is None else self.max_turns,
                 "total_turn_timeout": timeout(
-                    lowered.session.total_turn_timeout,
+                    spec.limits.total_turn_timeout,
                     self.eval_timeout if phase == "eval" else self.agent_timeout,
                     self.max_agent_timeout,
                 ),
                 "verifier_timeout": timeout(
-                    lowered.session.verifier_timeout,
+                    spec.limits.verifier_timeout,
                     self.verifier.override_timeout_sec,
                     self.verifier.max_timeout_sec,
                 ),
-                "attempt_timeout": lowered.session.attempt_timeout
+                "attempt_timeout": spec.limits.attempt_timeout
                 if self.attempt_timeout is None
                 else self.attempt_timeout,
             }
         )
-        return lowered.model_copy(update={"runtime": runtime, "session": session})
+        return spec.model_copy(
+            update={
+                "task_machine": machine(spec.task_machine),
+                "verifier_machine": machine(spec.verifier_machine),
+                "limits": limits,
+            }
+        )
 
 
 _GRADING_FAILURE_TYPES = {
@@ -185,7 +185,7 @@ _GRADING_FAILURE_TYPES = {
 }
 
 
-def harbor_grading_failure(rollout: RolloutData) -> RolloutData:
+def harbor_grading_failure(rollout: TrainingRollout) -> TrainingRollout:
     """Translate structured verifier failures to the configured Harbor error policy."""
     if rollout.failure is not None:
         return rollout
@@ -204,14 +204,14 @@ def harbor_grading_failure(rollout: RolloutData) -> RolloutData:
 
 
 def shape_harbor_rollouts(
-    rollouts: list[RolloutData],
+    rollouts: list[TrainingRollout],
     request: TrajectoryRequestBatch,
     settings: HarborTaskSettings,
     max_generate_length: int,
     tokenizer,
     *,
     harbor_tasks: list[bool],
-) -> list[RolloutData]:
+) -> list[TrainingRollout]:
     """Keep verifier grades and assign shaped rewards to the last valid action."""
     if not any(harbor_tasks):
         return rollouts

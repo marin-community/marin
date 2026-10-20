@@ -11,14 +11,14 @@ from typing import Any
 import pyarrow.parquet as pq
 from loguru import logger
 from transformers import PreTrainedTokenizerBase
-from rolloutengine.lowering import SHELLBOX_SESSION
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from skyrl_gym.rollout_specs import SHELLBOX_HARNESS, rollout_spec
 from shellbox.machine import Backend, NetworkPolicy
 from taskcompendium.models import NoGrader, ScriptGrader, Source, TaskSpec, VerifyitGrader
 
 from marinskyrl.packed_tasks import PackedTaskMaterializer, PackedTaskReference, select_task_references
 from marinskyrl.task_sources import DirectoryDataSource, TaskTroveParquetSource, data_source
-from skyrl_train.dataset.tasks import LOWERED_TASK_COLUMN, TaskDataset, cache_tasks
+from skyrl_train.dataset.tasks import TASK_ROLLOUT_COLUMN, TaskDataset, cache_tasks
 from skyrl_train.dataset.harbor_import import (
     HARBOR_TRIAL_SESSION,
     EnvironmentConfig,
@@ -143,16 +143,12 @@ def harbor_machine(environment: EnvironmentConfig, user: str | int | None) -> Ma
     )
 
 
-def lower_harbor_task(directory: Path, task: TaskSpec, *, session: TaskSessionSpec) -> LoweredTaskSpec:
+def lower_harbor_task(directory: Path, task: TaskSpec, *, session: Mapping[str, Any]) -> TaskRolloutSpec:
     """Use package machine settings and phase deadlines, with other limits from the caller."""
     config = TaskConfig.model_validate_toml((directory / "task.toml").read_text())
 
-    if session.task_session == HARBOR_TRIAL_SESSION:
-        return LoweredTaskSpec(
-            task=task,
-            runtime=TaskRuntimeSpec(task_machine=None, verifier_machine=None),
-            session=session,
-        )
+    if session["task_session"] == HARBOR_TRIAL_SESSION:
+        return rollout_spec(task, session)
 
     task_machine = harbor_machine(config.environment, config.agent.user)
     verifier_machine = (
@@ -161,17 +157,16 @@ def lower_harbor_task(directory: Path, task: TaskSpec, *, session: TaskSessionSp
         or (isinstance(task.grader, VerifyitGrader) and task.grader.environment is not None)
         else None
     )
-    return LoweredTaskSpec(
-        task=task,
-        runtime=TaskRuntimeSpec(task_machine=task_machine, verifier_machine=verifier_machine),
-        session=TaskSessionSpec.model_validate(
-            {
-                **session.model_dump(),
-                "task_session": SHELLBOX_SESSION,
-                "total_turn_timeout": config.agent.timeout_sec,
-                "verifier_timeout": config.verifier.timeout_sec,
-            }
-        ),
+    return rollout_spec(
+        task,
+        {
+            **session,
+            "task_session": SHELLBOX_HARNESS,
+            "total_turn_timeout": config.agent.timeout_sec,
+            "verifier_timeout": config.verifier.timeout_sec,
+        },
+        task_machine=task_machine,
+        verifier_machine=verifier_machine,
     )
 
 
@@ -179,7 +174,7 @@ def materialize_harbor_tasks(
     data_files: Sequence[str | Mapping[str, Any]],
     *,
     cache_dir: Path,
-    session: TaskSessionSpec,
+    session: Mapping[str, Any],
     grader_override: NoGrader | None = None,
 ) -> Path:
     """Combine Harbor packages and pre-lowered task Parquet for one worker pool."""
@@ -188,7 +183,7 @@ def materialize_harbor_tasks(
     if not len(sources) and not task_files:
         raise ValueError("No Harbor tasks matched the configured sources")
 
-    def tasks() -> Iterator[LoweredTaskSpec]:
+    def tasks() -> Iterator[TaskRolloutSpec]:
         with closing(PackedTaskMaterializer(cache_dir / "archives")) as materializer:
             for batch in batched(sources, MATERIALIZATION_BATCH_SIZE):
                 references = [item for item in batch if isinstance(item, PackedTaskReference)]
@@ -202,7 +197,7 @@ def materialize_harbor_tasks(
                         directory = directories[item]
                         data_source = item.stable_uri()
                         uid = item.uid()
-                    importer = harbor_trial_task if session.task_session == HARBOR_TRIAL_SESSION else harbor_task
+                    importer = harbor_trial_task if session["task_session"] == HARBOR_TRIAL_SESSION else harbor_task
                     task = importer(
                         directory,
                         source=Source(
@@ -213,7 +208,7 @@ def materialize_harbor_tasks(
                         ),
                     )
                     if grader_override is not None:
-                        if session.task_session == HARBOR_TRIAL_SESSION:
+                        if session["task_session"] == HARBOR_TRIAL_SESSION:
                             raise ValueError(
                                 "Full Harbor trials configure verification through Harbor, not grader overrides"
                             )
@@ -242,9 +237,9 @@ def materialize_harbor_tasks(
                     yield lower_harbor_task(directory, task, session=session)
         for path in task_files:
             with pq.ParquetFile(path) as parquet:
-                for batch in parquet.iter_batches(batch_size=MATERIALIZATION_BATCH_SIZE, columns=[LOWERED_TASK_COLUMN]):
+                for batch in parquet.iter_batches(batch_size=MATERIALIZATION_BATCH_SIZE, columns=[TASK_ROLLOUT_COLUMN]):
                     for row in batch.to_pylist():
-                        yield LoweredTaskSpec.model_validate_json(row[LOWERED_TASK_COLUMN])
+                        yield TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
 
     return cache_tasks(tasks(), cache_dir)
 
@@ -259,7 +254,7 @@ class HarborTaskDataset(TaskDataset):
         max_prompt_length: int,
         *,
         cache_dir: Path,
-        session: TaskSessionSpec,
+        session: Mapping[str, Any],
         grader_override: NoGrader | None = None,
         num_workers: int = 8,
     ):
@@ -269,4 +264,4 @@ class HarborTaskDataset(TaskDataset):
         super().__init__([str(self.task_path)], tokenizer, max_prompt_length, num_workers=num_workers)
 
     def uid(self, index: int) -> str:
-        return LoweredTaskSpec.model_validate_json(self.dataframe[index][LOWERED_TASK_COLUMN]).task.id
+        return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id

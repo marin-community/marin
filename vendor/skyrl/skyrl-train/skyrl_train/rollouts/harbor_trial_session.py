@@ -8,8 +8,11 @@ from pathlib import Path
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
-from rolloutengine.agent_session import AgentCompletion, AgentTaskSession
-from rolloutengine.contracts import ModelTurn, SessionStart
+from rolloutengine.harness.core import HarnessContext, ModelSession
+from rolloutengine.harness.external import AgentCompletion
+from rolloutengine.models import LimitReached, ModelTurn, Prompt, RolloutEnded, RolloutLimits
+from taskcompendium.models import TaskSpec
+from skyrl_gym.task_records import StepReward
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 
 from skyrl_train.rollouts.agent_backend import AgentGenerationStopped, AgentInferenceBackend
@@ -61,44 +64,51 @@ async def run_harbor_trial(
         return await trial.run()
 
 
-class HarborTrialSession(AgentTaskSession):
-    """Expose a Harbor trial's model requests and final verifier result to the engine."""
+class HarborTrialHarness:
+    """Let Harbor finish verification after the model reaches its rollout limit."""
 
     def __init__(self, run_trial: Callable[[AgentCompletion], Awaitable[TrialResult]], reward_key: str) -> None:
-        result: TrialResult | None = None
-        generation_stopped = asyncio.Event()
-        generation_stop_reason = ""
+        self.run_trial = run_trial
+        self.reward_key = reward_key
 
-        async def run(complete: AgentCompletion) -> None:
-            nonlocal result
+    def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
+        pass
 
-            async def bounded_complete(request: SessionStart) -> ModelTurn:
-                if generation_stopped.is_set():
-                    raise AgentGenerationStopped(generation_stop_reason)
-                response = asyncio.create_task(complete(request))
-                stopped = asyncio.create_task(generation_stopped.wait())
+    async def run(self, context: HarnessContext, session: ModelSession) -> None:
+        last: tuple[Prompt, ModelTurn] | None = None
+        stopped: str | None = None
+        model_error: RolloutEnded | None = None
+        lock = asyncio.Lock()
+
+        async def complete(prompt: Prompt) -> ModelTurn:
+            nonlocal last, stopped, model_error
+            async with lock:
+                if stopped is not None:
+                    raise AgentGenerationStopped(stopped)
+                if last is not None and prompt == last[0]:
+                    return last[1]
+                history = () if last is None else (*last[0].messages, last[1].message)
                 try:
-                    done, _ = await asyncio.wait((response, stopped), return_when=asyncio.FIRST_COMPLETED)
-                    if response in done:
-                        return response.result()
-                    raise AgentGenerationStopped(generation_stop_reason)
-                finally:
-                    response.cancel()
-                    stopped.cancel()
-                    await asyncio.gather(response, stopped, return_exceptions=True)
+                    if (
+                        last is not None
+                        and prompt.options == last[0].options
+                        and prompt.messages[: len(history)] == history
+                    ):
+                        turn = await session.reply(prompt.messages[len(history) :], token_ids=prompt.token_ids)
+                    else:
+                        turn = await session.start(prompt)
+                except LimitReached as error:
+                    stopped = error.stop_reason
+                    raise AgentGenerationStopped(stopped) from error
+                except RolloutEnded as error:
+                    stopped = "error"
+                    model_error = error
+                    raise AgentGenerationStopped(stopped) from error
+                last = (prompt, turn)
+                return turn
 
-            result = await run_trial(bounded_complete)
-
-        async def grade(messages, *, stop_reason, outputs) -> GradeResult:
-            nonlocal generation_stop_reason
-            if result is None and self.agent is not None and not self.agent.done():
-                generation_stop_reason = stop_reason
-                generation_stopped.set()
-                # The engine's verifier deadline bounds this wait. Harbor owns
-                # agent exit, verification, and environment teardown.
-                await asyncio.shield(self.agent)
-            if result is None:
-                return GradeResult(Outcome.UNAVAILABLE, None, "Harbor trial did not return a result")
-            return trial_grade(result, reward_key)
-
-        super().__init__(run, grade)
+        result = await self.run_trial(complete)
+        if last is not None:
+            session.record(data=StepReward(grade=trial_grade(result, self.reward_key)))
+        if model_error is not None:
+            raise model_error

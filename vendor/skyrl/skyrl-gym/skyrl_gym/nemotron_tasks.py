@@ -9,12 +9,12 @@ from typing import Any
 
 import reasoning_gym
 import requests
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart, Transition
+from rolloutengine.models import LENGTH_STOP_REASON, ModelTurn, Prompt
 from shellbox.machine import ExitReason, Machine
+from skyrl_gym.task_records import TaskTransition, episode_prompt
 from skyrl_gym.source_task import session_parameters
 from taskcompendium.grading_result import GradeResult, Outcome
-from rolloutengine.spec import LoweredTaskSpec
-from rolloutengine.task_session import session_start
+from rolloutengine.models import TaskRolloutSpec
 from verifyit.adapters.skyrl import grade_grid_candidate
 
 from skyrl_gym.code_execution import execute_code
@@ -92,7 +92,7 @@ class LeanAttempt:
 class NemotronTaskSession:
     """Keep row-specific task state and execute tools through the supplied Shellbox machine."""
 
-    def __init__(self, lowered: LoweredTaskSpec, machine: Machine | None, *, executor: Executor | None = None):
+    def __init__(self, lowered: TaskRolloutSpec, machine: Machine | None, *, executor: Executor | None = None):
         task = lowered.task
         parameters = session_parameters(task)
         self.task = task
@@ -118,7 +118,7 @@ class NemotronTaskSession:
             if self.agent == LEAN_AGENT
             else 1
         )
-        self.max_turns = min(source_turn_limit, lowered.session.max_turns)
+        self.max_turns = min(source_turn_limit, lowered.limits.max_turns)
         self.turns = 0
         self.grades: list[GradeResult] = []
         judges = self.config.get("judges", {})
@@ -129,14 +129,14 @@ class NemotronTaskSession:
             assert machine is not None
             self.python = PythonKernel(machine)
 
-    async def prepare(self) -> SessionStart:
+    async def prepare(self) -> Prompt:
         if self.python is not None:
             await self.python.start()
         options = {key: value for key, value in self.request.items() if key != "input"}
-        start = session_start(self.task, shell_tool=None, provider_tools=())
-        return SessionStart(start.messages, {**start.options, **options})
+        start = episode_prompt(self.task)
+        return Prompt(start.messages, {**start.options, **options})
 
-    async def advance(self, turn: ModelTurn) -> Transition:
+    async def advance(self, turn: ModelTurn) -> TaskTransition:
         self.turns += 1
         action = final_answer_text(turn.text)
         message = {**turn.message, "content": action}
@@ -144,7 +144,7 @@ class NemotronTaskSession:
         if self.agent == NS_TOOLS_AGENT and turn.stop_reason == LENGTH_STOP_REASON and message.get("tool_calls"):
             grade = GradeResult(Outcome.UNAVAILABLE, None, "The model stopped within a tool call")
             self.grades.append(grade)
-            return Transition(done=True, reward=0.0, grade=grade)
+            return TaskTransition(done=True, reward=0.0, grade=grade)
         try:
             transition = await self._advance(action, message, diagnostics, turn.stop_reason)
         except (requests.RequestException, RuntimeError, ValueError, OSError) as error:
@@ -156,7 +156,7 @@ class NemotronTaskSession:
                 "error_message": str(error),
                 "grading_action": action,
             }
-            transition = Transition(
+            transition = TaskTransition(
                 done=True,
                 reward=0.0,
                 grade=GradeResult(Outcome.INFRA_ERROR, None, "Verifier failed", diagnostics=details),
@@ -175,7 +175,7 @@ class NemotronTaskSession:
             assert self.python is not None
             if self.python.failure is not None:
                 diagnostics["candidate_failure"] = self.python.failure.reason.value
-                return Transition(
+                return TaskTransition(
                     done=True,
                     reward=0.0,
                     grade=GradeResult(Outcome.GRADED, 0.0, passed=False, diagnostics=diagnostics),
@@ -183,7 +183,7 @@ class NemotronTaskSession:
                     metrics=diagnostics,
                 )
             if observations is not None and self.turns < self.max_turns:
-                return Transition(
+                return TaskTransition(
                     done=False,
                     observations=tuple(observations),
                     reward=0.0,
@@ -195,7 +195,7 @@ class NemotronTaskSession:
             assert self.ipi_session is not None
             observations = execute_tool_calls(self.ipi_session, message)
             if observations is not None and self.turns < self.max_turns and stop_reason != LENGTH_STOP_REASON:
-                return Transition(
+                return TaskTransition(
                     done=False,
                     observations=tuple(observations),
                     reward=0.0,
@@ -204,7 +204,7 @@ class NemotronTaskSession:
                 )
         if self.grading == GradingMode.SKIP and self.agent != LEAN_AGENT:
             diagnostics["graded"] = 0.0
-            return Transition(
+            return TaskTransition(
                 done=True,
                 reward=0.0,
                 grade=skipped_grade("Grading is skipped", diagnostics=diagnostics),
@@ -224,7 +224,7 @@ class NemotronTaskSession:
             reward = attempt.reward
             diagnostics.update(attempt.diagnostics)
             if attempt.correction is not None and self.turns < self.max_turns:
-                return Transition(
+                return TaskTransition(
                     done=False,
                     reward=0.0,
                     grade=GradeResult(Outcome.UNAVAILABLE, None, "A correction will replace the failed Lean attempt"),
@@ -243,7 +243,7 @@ class NemotronTaskSession:
         if diagnostics.get("error_type") in {"schema_error", "verification_error"} or any(
             diagnostics.get("instruction_errors", [])
         ):
-            return Transition(
+            return TaskTransition(
                 done=True,
                 reward=0.0,
                 grade=GradeResult(Outcome.INFRA_ERROR, None, "Verifier configuration failed", diagnostics=diagnostics),
@@ -253,7 +253,7 @@ class NemotronTaskSession:
         verification = VerificationResult.verified(
             reward, passed=reward >= 1.0, diagnostics={**diagnostics, "grading_action": action}
         )
-        return Transition(done=True, reward=reward, grade=grade_result(verification), metrics=diagnostics)
+        return TaskTransition(done=True, reward=reward, grade=grade_result(verification), metrics=diagnostics)
 
     async def _python_calls(self, message):
         calls = message.get("tool_calls") or []

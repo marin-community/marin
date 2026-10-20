@@ -12,11 +12,11 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Dataset
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
-from rolloutengine.lowering import SHELLBOX_SESSION
-from rolloutengine.task_session import session_start
+from rolloutengine.harness.shell import task_prompt as marin_task_prompt
+from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
-from taskcompendium.models import EnvironmentRequirements, SessionGrader, Source
+from taskcompendium.models import EnvironmentRequirements, NoGrader, Source
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
 
@@ -26,20 +26,18 @@ from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
-LOWERED_TASK_COLUMN = "lowered_task_spec"
-TASK_SCHEMA = pa.schema([pa.field(LOWERED_TASK_COLUMN, pa.string(), nullable=False)])
+TASK_ROLLOUT_COLUMN = "task_rollout_spec"
+TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=False)])
 PARQUET_BATCH_SIZE = 1024
 
 
-def task_prompt(lowered: LoweredTaskSpec) -> dict:
+def task_prompt(lowered: TaskRolloutSpec) -> dict:
     """Prepare public messages and private worker inputs from a lowered task."""
     task = lowered.task
     return {
-        LOWERED_TASK_COLUMN: lowered.model_dump_json(),
+        TASK_ROLLOUT_COLUMN: lowered.model_dump_json(),
         "prompt": task_messages(lowered),
-        "env_class": TASKCOMPENDIUM_ENVIRONMENT
-        if lowered.session.task_session == SHELLBOX_SESSION
-        else lowered.session.task_session,
+        "env_class": TASKCOMPENDIUM_ENVIRONMENT if is_shell_harness(lowered.harness) else lowered.harness,
         "data_source": task.source.dataset,
     }
 
@@ -57,8 +55,12 @@ class TaskDataset(PromptDataset):
     def collate_fn(self, rows) -> list[dict]:
         inputs = []
         for _, environment, extras, uid in rows:
-            lowered = LoweredTaskSpec.model_validate_json(extras[LOWERED_TASK_COLUMN])
-            if isinstance(lowered.task.grader, SessionGrader) and lowered.session.task_session != HARBOR_TRIAL_SESSION:
+            lowered = TaskRolloutSpec.model_validate_json(extras[TASK_ROLLOUT_COLUMN])
+            if (
+                isinstance(lowered.task.grader, NoGrader)
+                and lowered.harness != HARBOR_TRIAL_SESSION
+                and {"extras", "config"} <= lowered.task.grader.contract.keys()
+            ):
                 extras = {**session_parameters(lowered.task).extras, **extras}
             extra_info = extras.get("extra_info") or {}
             ultra = extra_info.get("nemotron_ultra")
@@ -71,7 +73,7 @@ class TaskDataset(PromptDataset):
                 {
                     "uid": uid,
                     "input": TaskInput(
-                        lowered=lowered,
+                        spec=lowered,
                         metadata=TrajectoryMetadata(
                             uid=uid,
                             metric_class=environment,
@@ -87,10 +89,10 @@ class TaskDataset(PromptDataset):
 
 
 def _stored_task_prompt(row: dict) -> dict:
-    prepared = task_prompt(LoweredTaskSpec.model_validate_json(row[LOWERED_TASK_COLUMN]))
+    prepared = task_prompt(TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN]))
     # Session-specific extras stay in the serialized task: mixed task families
     # do not share an Arrow schema. Restore them when yielding a training row.
-    stored = {key: prepared[key] for key in (LOWERED_TASK_COLUMN, "env_class", "data_source")}
+    stored = {key: prepared[key] for key in (TASK_ROLLOUT_COLUMN, "env_class", "data_source")}
     # Message fields vary across tasks. JSON preserves missing fields and nested
     # values without inferring a different Arrow struct in each map worker.
     stored["prompt"] = json.dumps(prepared["prompt"], ensure_ascii=False)
@@ -103,17 +105,17 @@ def _restore_task_prompts(batch: dict) -> dict:
 
 def task_prompt_token_count(tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str) -> int:
     """Include native task tools in the initial prompt's length budget."""
-    lowered = LoweredTaskSpec.model_validate_json(row[LOWERED_TASK_COLUMN])
-    if lowered.session.task_session != SHELLBOX_SESSION:
+    lowered = TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
+    if not is_shell_harness(lowered.harness):
         return _prompt_token_count(tokenizer, row[prompt_key])
-    shell_tool = resolve_shell_tool(lowered.task, lowered.session.shell_tool)
-    start = session_start(lowered.task, shell_tool, ())
+    shell_tool = resolve_shell_tool(lowered.task, shell_harness(lowered.harness).shell_tool)
+    start = marin_task_prompt(lowered.task, shell_tool, ())
     return _prompt_token_count(tokenizer, list(start.messages), **start.options)
 
 
 def source_row_task(
     row: Mapping[str, Any], index: int, *, source_name: str, environment_configs: Mapping[str, dict]
-) -> LoweredTaskSpec:
+) -> TaskRolloutSpec:
     """Convert a source row once, with explicit session and machine settings."""
     row = dict(row)
     content = json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
@@ -148,11 +150,7 @@ def source_row_task(
     )
     runtime = None if machine is None else MachineRuntimeSpec.model_validate(machine["runtime"])
     task = source_task(prompt, row, config, source, environment=requirements)
-    return LoweredTaskSpec(
-        task=task,
-        runtime=TaskRuntimeSpec(task_machine=runtime, verifier_machine=None),
-        session=TaskSessionSpec.model_validate(session),
-    )
+    return rollout_spec(task, session, task_machine=runtime)
 
 
 def _source_task_prompt(row: dict, index: int, *, source_name: str, environment_configs: Mapping[str, dict]) -> dict:
@@ -161,20 +159,20 @@ def _source_task_prompt(row: dict, index: int, *, source_name: str, environment_
     return {**session_parameters(lowered.task).extras, **task_prompt(lowered)}
 
 
-def write_tasks(path: Path, records: Iterable[LoweredTaskSpec]) -> None:
+def write_tasks(path: Path, records: Iterable[TaskRolloutSpec]) -> None:
     """Write private lowered tasks in bounded Parquet batches."""
     with pq.ParquetWriter(path, TASK_SCHEMA) as writer:
         path.chmod(0o600)
         for batch in batched(records, PARQUET_BATCH_SIZE):
             writer.write_table(
                 pa.Table.from_pydict(
-                    {LOWERED_TASK_COLUMN: [record.model_dump_json() for record in batch]},
+                    {TASK_ROLLOUT_COLUMN: [record.model_dump_json() for record in batch]},
                     TASK_SCHEMA,
                 )
             )
 
 
-def cache_tasks(records: Iterable[LoweredTaskSpec], cache_dir: Path) -> Path:
+def cache_tasks(records: Iterable[TaskRolloutSpec], cache_dir: Path) -> Path:
     """Cache private task Parquet under its content digest."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=cache_dir) as directory:

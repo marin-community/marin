@@ -1,6 +1,7 @@
 """Explicit runtime settings for task execution tests."""
 
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec
 from shellbox.machine import NetworkPolicy
 from taskcompendium.models import (
     AnswerType,
@@ -37,7 +38,7 @@ def text_task(task_id: str = "task", *, prompt="Question", source="fixture") -> 
 
 
 def task_input(
-    lowered: LoweredTaskSpec,
+    lowered: TaskRolloutSpec,
     *,
     metric_class=None,
     teacher_route=None,
@@ -46,11 +47,10 @@ def task_input(
     metric_tags=(),
 ) -> TaskInput:
     return TaskInput(
-        lowered=lowered,
+        spec=lowered,
         metadata=TrajectoryMetadata(
             uid=lowered.task.id,
-            metric_class=metric_class
-            or ("taskcompendium" if lowered.session.task_session == "shellbox" else lowered.session.task_session),
+            metric_class=metric_class or ("taskcompendium" if is_shell_harness(lowered.harness) else lowered.harness),
             data_source=lowered.task.source.dataset if data_source is None else data_source,
             teacher_route=teacher_route,
             metric_tags=metric_tags,
@@ -78,7 +78,7 @@ def session_spec(
     *,
     max_turns: int = 2,
     **limits,
-) -> TaskSessionSpec:
+) -> dict:
     settings = dict(
         task_session=session_name,
         max_turns=max_turns,
@@ -92,7 +92,11 @@ def session_spec(
         max_total_tokens=None,
     )
     settings.update(limits)
-    return TaskSessionSpec(**settings)
+    return settings
+
+
+def session_limits(*, max_turns: int = 2, **limits) -> dict:
+    return {key: value for key, value in session_spec(max_turns=max_turns, **limits).items() if key != "task_session"}
 
 
 def lowered_task(
@@ -103,12 +107,10 @@ def lowered_task(
     backend: str | None = None,
     verifier_backend: str | None = None,
     **limits,
-) -> LoweredTaskSpec:
-    return LoweredTaskSpec(
-        task=task,
-        runtime=TaskRuntimeSpec(
-            task_machine=None if backend is None else machine_runtime(backend),
-            verifier_machine=None if verifier_backend is None else machine_runtime(verifier_backend),
-        ),
-        session=session_spec(session_name, max_turns=max_turns, **limits),
+) -> TaskRolloutSpec:
+    return rollout_spec(
+        task,
+        session_spec(session_name, max_turns=max_turns, **limits),
+        task_machine=None if backend is None else machine_runtime(backend),
+        verifier_machine=None if verifier_backend is None else machine_runtime(verifier_backend),
     )

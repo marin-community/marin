@@ -1,13 +1,75 @@
 """Convert model evidence and verifier results to the task execution records."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
-from rolloutengine.contracts import ModelTurn, Transition
+from rolloutengine.models import ModelTurn, Prompt, Transition
+from taskcompendium.models import TaskSpec
+from taskcompendium.submission import conversation_messages
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from skyrl_gym.verification import RewardResult, RolloutEvidence, VerificationResult, VerificationStatus
 
 VERIFICATION_SKIPPED = "verification_skipped"
+FOLDED_GRADE_HARNESSES = frozenset({"nemotron_ultra", "openenv"})
+
+
+def episode_prompt(task: TaskSpec) -> Prompt:
+    """Render a direct task's source messages and advertised tools without a verifier instruction."""
+    tools = [
+        {"type": "function", "function": definition.model_dump(exclude_none=True)}
+        for definition in (*task.final_tools, *task.interaction_tools)
+    ]
+    return Prompt(
+        tuple(conversation_messages(task.context.events)),
+        {"tools": tools} if tools else {},
+    )
+
+
+@dataclass(frozen=True)
+class StepReward:
+    """SkyRL training signals attached to one harness step."""
+
+    reward: float | None = None
+    grade: GradeResult | None = None
+    task_grade: GradeResult | None = None
+    token_rewards: tuple[float, ...] | None = None
+    token_credit: tuple[float, ...] | None = None
+    reward_components: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TaskTransition:
+    """A task episode's observations and training signals for one model turn."""
+
+    done: bool
+    observations: tuple[dict[str, Any], ...] = ()
+    reset_conversation: tuple[dict[str, Any], ...] | None = None
+    token_ids: tuple[int, ...] | None = None
+    metrics: dict[str, Any] = field(default_factory=dict)
+    reward: float | None = None
+    grade: GradeResult | None = None
+    task_grade: GradeResult | None = None
+    token_rewards: tuple[float, ...] | None = None
+    token_credit: tuple[float, ...] | None = None
+    reward_components: dict[str, float] = field(default_factory=dict)
+
+    def for_harness(self) -> Transition:
+        return Transition(
+            done=self.done,
+            observations=self.observations,
+            token_ids=self.token_ids,
+            metrics=self.metrics,
+            data=StepReward(
+                reward=self.reward,
+                grade=self.grade,
+                task_grade=self.task_grade,
+                token_rewards=self.token_rewards,
+                token_credit=self.token_credit,
+                reward_components=self.reward_components,
+            ),
+        )
 
 
 def skipped_grade(reason: str, *, diagnostics: dict | None = None) -> GradeResult:
@@ -57,9 +119,9 @@ def grade_result(verification: VerificationResult) -> GradeResult:
 
 def graded_transition(
     turn: ModelTurn, verification: VerificationResult, reward: RewardResult, metrics: dict
-) -> Transition:
+) -> TaskTransition:
     reward.validate_for(rollout_evidence(turn))
-    return Transition(
+    return TaskTransition(
         done=True,
         reward=reward.optimization_reward,
         token_rewards=reward.token_rewards,

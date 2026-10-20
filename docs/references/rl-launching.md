@@ -63,10 +63,11 @@ workspace. The child discards the parent's Python environment selection. SkyRL
 may depend on Marin packages inside its own environment; Marin calls SkyRL only
 through the executable.
 
-The launch document records the SHA-256 of the vendored provenance document in
-`runtime.source_digest`. That document binds the source, migration patches,
-runtime assets, and independent lock. The launcher verifies their hashes before
-bundling them for Iris. Workers install the bundled project in editable mode
+The launch document records a hash of the current runtime files, assets, and
+independent lock in `runtime.source_digest`. The isolated executable computes
+it, so ordinary vendor edits change the identity without restaging migration
+provenance. The launcher bundles these files for Iris and workers verify their
+hashes. Workers install the bundled project in editable mode
 with the frozen Megatron/vLLM profile. They do not fetch the fork or require Git.
 Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
 

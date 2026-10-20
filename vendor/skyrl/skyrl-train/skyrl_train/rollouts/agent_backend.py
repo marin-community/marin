@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from typing import Any, Protocol
 from uuid import uuid4
 
-from rolloutengine.contracts import LENGTH_STOP_REASON, ModelTurn, SessionStart
+from rolloutengine.models import LENGTH_STOP_REASON, ModelTurn, Prompt
 
 
 TRIAL_HEADER = "x-ot-trial-id"
@@ -46,10 +46,10 @@ class AgentInferenceBackend:
         self.max_model_len = max_model_len
         self.tokenize = tokenize
         self.decoder = decoder
-        self.sessions: dict[str, Callable[[SessionStart], Awaitable[ModelTurn]]] = {}
+        self.sessions: dict[str, Callable[[Prompt], Awaitable[ModelTurn]]] = {}
 
     @contextmanager
-    def session(self, trial_id: str, complete: Callable[[SessionStart], Awaitable[ModelTurn]]) -> Iterator[None]:
+    def session(self, trial_id: str, complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> Iterator[None]:
         if trial_id in self.sessions:
             raise ValueError(f"Agent session already registered: {trial_id}")
         self.sessions[trial_id] = complete
@@ -67,7 +67,7 @@ class AgentInferenceBackend:
             raise ValueError("An agent session requires exactly one completion per request")
         options = {key: value for key, value in body.items() if key not in TRANSPORT_FIELDS}
         try:
-            turn = await self.sessions[trial_id](SessionStart(tuple(body["messages"]), options))
+            turn = await self.sessions[trial_id](Prompt(tuple(body["messages"]), options))
         except AgentGenerationStopped as error:
             return {
                 "error": {

@@ -8,13 +8,14 @@ from typing import Any
 import pyarrow.parquet as pq
 from datasets import Dataset
 from skyrl_gym.source_task import session_parameters
-from rolloutengine.spec import LoweredTaskSpec, TaskSessionSpec
+from skyrl_gym.rollout_specs import SHELLBOX_HARNESS
+from rolloutengine.models import TaskRolloutSpec
 from taskcompendium.models import NoGrader
 from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.dataset.harbor import HARBOR_ID_PREFIX, materialize_harbor_tasks
 from skyrl_train.dataset.tasks import (
-    LOWERED_TASK_COLUMN,
+    TASK_ROLLOUT_COLUMN,
     PARQUET_BATCH_SIZE,
     SourceTaskDataset,
     source_row_task,
@@ -22,13 +23,13 @@ from skyrl_train.dataset.tasks import (
 )
 
 
-def terminal_task_index(path: Path) -> dict[str, LoweredTaskSpec]:
+def terminal_task_index(path: Path) -> dict[str, TaskRolloutSpec]:
     """Index lowered Harbor tasks by their package and source instance identities."""
     result = {}
     with pq.ParquetFile(path) as parquet:
-        for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_SIZE, columns=[LOWERED_TASK_COLUMN]):
+        for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_SIZE, columns=[TASK_ROLLOUT_COLUMN]):
             for row in batch.to_pylist():
-                record = LoweredTaskSpec.model_validate_json(row[LOWERED_TASK_COLUMN])
+                record = TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
                 identifiers = {
                     record.task.id.casefold(),
                     *(
@@ -44,7 +45,7 @@ def terminal_task_index(path: Path) -> dict[str, LoweredTaskSpec]:
     return result
 
 
-def resolve_terminal_task(lowered: LoweredTaskSpec, terminals: Mapping[str, LoweredTaskSpec]) -> LoweredTaskSpec:
+def resolve_terminal_task(lowered: TaskRolloutSpec, terminals: Mapping[str, TaskRolloutSpec]) -> TaskRolloutSpec:
     """Resolve a terminal source row before rollout execution."""
     task = lowered.task
     parameters = session_parameters(task)
@@ -75,7 +76,7 @@ def _nemotron_task_prompt(
     *,
     source_name: str,
     environment_configs: Mapping[str, dict],
-    terminals: Mapping[str, LoweredTaskSpec],
+    terminals: Mapping[str, TaskRolloutSpec],
 ) -> dict:
     source = source_row_task(row, index, source_name=source_name, environment_configs=environment_configs)
     extras = session_parameters(source.task).extras
@@ -103,7 +104,7 @@ class NemotronTaskDataset(SourceTaskDataset):
                 terminal_bench_data,
                 cache_dir=cache_dir,
                 grader_override=grader_override,
-                session=TaskSessionSpec.model_validate({**environment_configs["session"], "task_session": "shellbox"}),
+                session={**environment_configs["session"], "task_session": SHELLBOX_HARNESS},
             )
         )
         super().__init__(

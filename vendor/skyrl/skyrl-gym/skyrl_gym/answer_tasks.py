@@ -4,11 +4,12 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from rolloutengine.contracts import ModelTurn, Transition
+from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
 from verifyit.modes.grade_mcq import grade_mcq_candidate
 from verifyit.spec import McqSpec
 
+from skyrl_gym.task_records import TaskTransition
 from skyrl_gym.envs.aime.verifier import AIMERewardPolicy, AIMEVerifier
 from skyrl_gym.envs.cat_count.reward import cat_count_score
 from skyrl_gym.envs.gsm8k.utils import compute_score as gsm8k_score
@@ -32,17 +33,17 @@ def ground_truth(extras: dict[str, Any]) -> Any:
     return specification["ground_truth"]
 
 
-def grade_gsm8k(turn: ModelTurn, config: dict, extras: dict) -> Transition:
+def grade_gsm8k(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     method = config.get("reward_method", "strict")
     score = (
         0.0
         if method == "final_line" and turn.stop_reason not in COMPLETED_STOP_REASONS
         else gsm8k_score(turn.text, ground_truth(extras), method=method)
     )
-    return Transition(done=True, reward=score, grade=GradeResult(Outcome.GRADED, score))
+    return TaskTransition(done=True, reward=score, grade=GradeResult(Outcome.GRADED, score))
 
 
-def grade_aime(turn: ModelTurn, config: dict, extras: dict) -> Transition:
+def grade_aime(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     verifier = AIMEVerifier(
         ground_truth=ground_truth(extras),
         evaluation_token_budget=int(config.get("evaluation_token_budget", 8192)),
@@ -67,10 +68,10 @@ def grade_aime(turn: ModelTurn, config: dict, extras: dict) -> Transition:
     return graded_transition(turn, verification, reward, metrics)
 
 
-def grade_cat_count(turn: ModelTurn, config: dict, extras: dict) -> Transition:
+def grade_cat_count(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     count = int(extras["extra_info"]["n"])
     score = cat_count_score(turn.text, count, stop_reason=turn.stop_reason)
-    return Transition(
+    return TaskTransition(
         done=True,
         reward=score.reward,
         grade=GradeResult(Outcome.GRADED, float(score.exact), passed=score.exact),
@@ -85,14 +86,14 @@ def grade_cat_count(turn: ModelTurn, config: dict, extras: dict) -> Transition:
     )
 
 
-def grade_mcq(turn: ModelTurn, config: dict, extras: dict) -> Transition:
+def grade_mcq(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     expected = str(ground_truth(extras)).strip().upper()
     answer = extract_mcq_answer(turn.text)
     reward = grade_mcq_candidate(McqSpec(expected=expected, options=26), answer or "").reward
-    return Transition(done=True, reward=reward, grade=GradeResult(Outcome.GRADED, reward))
+    return TaskTransition(done=True, reward=reward, grade=GradeResult(Outcome.GRADED, reward))
 
 
-def grade_ifeval(turn: ModelTurn, config: dict, extras: dict) -> Transition:
+def grade_ifeval(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     use_verifyit = bool(config.get("verifyit_enabled", False))
     result = instruction_score(turn.text, ground_truth(extras), verifyit_enabled=use_verifyit)
     reward = result["score"]
@@ -102,26 +103,26 @@ def grade_ifeval(turn: ModelTurn, config: dict, extras: dict) -> Transition:
         if use_verifyit and result.get("error_type")
         else VerificationResult.verified(reward, passed=result["acc"] if use_verifyit else None, diagnostics=metrics)
     )
-    return Transition(done=True, reward=reward, grade=grade_result(verification), metrics=metrics)
+    return TaskTransition(done=True, reward=reward, grade=grade_result(verification), metrics=metrics)
 
 
-def grade_nupa(turn: ModelTurn, config: dict, extras: dict) -> Transition:
+def grade_nupa(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     try:
         expected = ground_truth(extras)
         parse_ground_truth(expected)
     except ValueError:
         logger.exception("Invalid NUPA ground truth")
-        return Transition(done=True, reward=0.0, grade=GradeResult(Outcome.INFRA_ERROR, None, "Invalid NUPA task"))
+        return TaskTransition(done=True, reward=0.0, grade=GradeResult(Outcome.INFRA_ERROR, None, "Invalid NUPA task"))
     verification = NUPAVerifier(ground_truth=expected).verify(rollout_evidence(turn))
     if verification.status != VerificationStatus.VERIFIED:
-        return Transition(
+        return TaskTransition(
             done=True,
             reward=0.0,
             grade=grade_result(verification),
             metrics={"verifier_error": verification.reason},
         )
     assert verification.score is not None
-    return Transition(
+    return TaskTransition(
         done=True,
         reward=verification.score,
         grade=grade_result(verification),
@@ -133,7 +134,7 @@ def grade_nupa(turn: ModelTurn, config: dict, extras: dict) -> Transition:
     )
 
 
-def grade_reasoning_gym(turn: ModelTurn, config: dict, extras: dict) -> Transition:
+def grade_reasoning_gym(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
     use_verifyit = bool(config.get("verifyit_enabled", False))
     specification = extras.get("reward_model")
     expected = specification.get("ground_truth") if isinstance(specification, Mapping) else None
@@ -141,7 +142,7 @@ def grade_reasoning_gym(turn: ModelTurn, config: dict, extras: dict) -> Transiti
         expected = normalize_ground_truth(expected)
     except (TypeError, ValueError):
         logger.exception("Invalid Reasoning Gym ground truth")
-        return Transition(
+        return TaskTransition(
             done=True,
             reward=0.0,
             grade=GradeResult(Outcome.INFRA_ERROR, None, "Invalid Reasoning Gym task"),
@@ -150,15 +151,15 @@ def grade_reasoning_gym(turn: ModelTurn, config: dict, extras: dict) -> Transiti
     try:
         reward = score_response(turn.text, expected, verifyit_enabled=use_verifyit)
     except (RuntimeError, ValueError) as error:
-        return Transition(
+        return TaskTransition(
             done=True,
             reward=0.0,
             grade=GradeResult(
                 Outcome.INFRA_ERROR, None, "Verifier failed", diagnostics={"error_type": type(error).__name__}
             ),
         )
-    return Transition(done=True, reward=reward, grade=GradeResult(Outcome.GRADED, reward))
+    return TaskTransition(done=True, reward=reward, grade=GradeResult(Outcome.GRADED, reward))
 
 
-def grade_prompt_only(turn: ModelTurn, config: dict, extras: dict) -> Transition:
-    return Transition(done=True, reward=0.0, grade=GradeResult(Outcome.GRADED, 0.0))
+def grade_prompt_only(turn: ModelTurn, config: dict, extras: dict) -> TaskTransition:
+    return TaskTransition(done=True, reward=0.0, grade=GradeResult(Outcome.GRADED, 0.0))

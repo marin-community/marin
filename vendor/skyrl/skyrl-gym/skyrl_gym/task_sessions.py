@@ -9,12 +9,12 @@ from concurrent.futures import Executor
 from functools import partial
 from typing import Any
 
-from rolloutengine.contracts import ModelTurn, SessionStart, Transition
+from rolloutengine.models import ModelTurn, Prompt
 from shellbox.machine import ExitReason, Machine
+from skyrl_gym.task_records import TaskTransition, episode_prompt
 from skyrl_gym.source_task import session_parameters
 from taskcompendium.grading_result import GradeResult, Outcome
-from rolloutengine.spec import LoweredTaskSpec
-from rolloutengine.task_session import session_start
+from rolloutengine.models import TaskRolloutSpec
 
 from skyrl_gym.answer_tasks import ground_truth
 from skyrl_gym.code_execution import execute_code
@@ -30,7 +30,7 @@ from skyrl_gym.python_execution import PythonKernel
 from skyrl_gym.task_records import terminal_grade
 from skyrl_gym.tools.search import SearchClient
 
-AnswerGrader = Callable[[ModelTurn, dict[str, Any], dict[str, Any]], Transition]
+AnswerGrader = Callable[[ModelTurn, dict[str, Any], dict[str, Any]], TaskTransition]
 logger = logging.getLogger(__name__)
 SEARCH_CODE_TIMEOUT = 10.0
 
@@ -76,7 +76,7 @@ class AnswerTaskSession:
 
     def __init__(
         self,
-        lowered: LoweredTaskSpec,
+        lowered: TaskRolloutSpec,
         machine: Machine | None,
         *,
         grader: AnswerGrader,
@@ -91,10 +91,10 @@ class AnswerTaskSession:
         self.blocking = BlockingOperations(executor)
         self.result = GradeResult(Outcome.UNAVAILABLE, None, "The task has no completed turn")
 
-    async def prepare(self) -> SessionStart:
-        return session_start(self.task, shell_tool=None, provider_tools=())
+    async def prepare(self) -> Prompt:
+        return episode_prompt(self.task)
 
-    async def advance(self, turn: ModelTurn) -> Transition:
+    async def advance(self, turn: ModelTurn) -> TaskTransition:
         transition = await self.blocking.run(self.grader, turn, self.config, self.extras)
         assert transition.done and transition.grade is not None
         self.result = transition.grade
@@ -112,18 +112,18 @@ class AnswerTaskSession:
 class MathTaskSession:
     """Return per-turn math rewards and correction prompts until success or the turn limit."""
 
-    def __init__(self, lowered: LoweredTaskSpec, machine: Machine | None):
+    def __init__(self, lowered: TaskRolloutSpec, machine: Machine | None):
         task = lowered.task
         parameters = session_parameters(task)
         self.task = task
         self.expected = ground_truth(parameters.extras)
-        self.max_turns = lowered.session.max_turns
+        self.max_turns = lowered.limits.max_turns
         self.grades: list[GradeResult] = []
 
-    async def prepare(self) -> SessionStart:
-        return session_start(self.task, shell_tool=None, provider_tools=())
+    async def prepare(self) -> Prompt:
+        return episode_prompt(self.task)
 
-    async def advance(self, turn: ModelTurn) -> Transition:
+    async def advance(self, turn: ModelTurn) -> TaskTransition:
         reward = math_score(turn.text, self.expected, method="strict", format_score=0.2 / self.max_turns)
         correct = reward == 1.0
         grade = GradeResult(Outcome.GRADED, float(correct), passed=correct)
@@ -139,7 +139,7 @@ class MathTaskSession:
                 else "Now provide only the final numeric answer in the exact format: '#### ANSWER'."
             )
             observations = ({"role": "user", "content": prompt},)
-        return Transition(
+        return TaskTransition(
             done=done, observations=observations, reward=reward, grade=grade, metrics={"steps": len(self.grades)}
         )
 
@@ -155,22 +155,22 @@ class MathTaskSession:
 class SearchTaskSession:
     """Execute search actions and grade the task transcript on completion."""
 
-    def __init__(self, lowered: LoweredTaskSpec, machine: Machine | None, *, executor: Executor | None = None):
+    def __init__(self, lowered: TaskRolloutSpec, machine: Machine | None, *, executor: Executor | None = None):
         task = lowered.task
         parameters = session_parameters(task)
         config = parameters.config
         self.task = task
         self.expected = ground_truth(parameters.extras)
-        self.max_turns = lowered.session.max_turns
+        self.max_turns = lowered.limits.max_turns
         self.blocking = BlockingOperations(executor)
         self.tool = SearchClient(**{key: config[key] for key in ("search_url", "topk", "timeout", "log_requests")})
         self.transcript: list[str] = []
         self.grades: list[GradeResult] = []
 
-    async def prepare(self) -> SessionStart:
-        return session_start(self.task, shell_tool=None, provider_tools=())
+    async def prepare(self) -> Prompt:
+        return episode_prompt(self.task)
 
-    async def advance(self, turn: ModelTurn) -> Transition:
+    async def advance(self, turn: ModelTurn) -> TaskTransition:
         for tag in ("</search>", "</answer>"):
             if tag in turn.text and turn.text.split(tag, 1)[1]:
                 raise ValueError(f"The model response must end at {tag}")
@@ -184,13 +184,13 @@ class SearchTaskSession:
         )
         self.grades.append(grade)
         if done:
-            return Transition(done=True, reward=reward, grade=grade)
+            return TaskTransition(done=True, reward=reward, grade=grade)
         match = re.search(r"<search>(.*?)</search>", turn.text, re.DOTALL)
         query = match.group(1) if match else None
         output = await self.blocking.run(self.tool.search, query)
         observation = "\n<information>" + output + "</information>\n"
         self.transcript.append(observation)
-        return Transition(
+        return TaskTransition(
             done=False,
             observations=({"role": "user", "content": observation},),
             reward=0.0,
@@ -213,7 +213,7 @@ class SearchTaskSession:
 class CodeTaskSession:
     """Grade one candidate program in Shellbox, with hidden test outputs on the worker."""
 
-    def __init__(self, lowered: LoweredTaskSpec, machine: Machine | None):
+    def __init__(self, lowered: TaskRolloutSpec, machine: Machine | None):
         task = lowered.task
         parameters = session_parameters(task)
         self.task = task
@@ -231,14 +231,14 @@ class CodeTaskSession:
             assert machine is not None
         self.result = GradeResult(Outcome.UNAVAILABLE, None, "The task has no completed turn")
 
-    async def prepare(self) -> SessionStart:
-        return session_start(self.task, shell_tool=None, provider_tools=())
+    async def prepare(self) -> Prompt:
+        return episode_prompt(self.task)
 
-    async def advance(self, turn: ModelTurn) -> Transition:
+    async def advance(self, turn: ModelTurn) -> TaskTransition:
         code = extract_code_from_model(turn.text)
         if not self.tests:
             self.result = GradeResult(Outcome.INFRA_ERROR, None, "Invalid LCB task")
-            return Transition(
+            return TaskTransition(
                 done=True,
                 reward=0.0,
                 grade=self.result,
@@ -255,9 +255,9 @@ class CodeTaskSession:
                 "Code verification unavailable",
                 diagnostics={"error_type": type(error).__name__, "error_message": str(error)},
             )
-            return Transition(done=True, reward=0.0, grade=self.result)
+            return TaskTransition(done=True, reward=0.0, grade=self.result)
         self.result = GradeResult(Outcome.GRADED, reward)
-        return Transition(done=True, reward=reward, grade=self.result, metrics={"parsed_code": code, **details})
+        return TaskTransition(done=True, reward=reward, grade=self.result, metrics={"parsed_code": code, **details})
 
     async def grade(
         self, messages: tuple[dict[str, Any], ...], *, stop_reason: str, outputs: dict[str, bytes]
@@ -274,24 +274,24 @@ class SearchCodeTaskSession:
     Each Python action receives a fresh namespace.
     """
 
-    def __init__(self, lowered: LoweredTaskSpec, machine: Machine | None, *, executor: Executor | None = None):
+    def __init__(self, lowered: TaskRolloutSpec, machine: Machine | None, *, executor: Executor | None = None):
         task = lowered.task
         assert machine is not None
         parameters = session_parameters(task)
         self.task = task
         self.expected = ground_truth(parameters.extras)
-        self.max_turns = lowered.session.max_turns
+        self.max_turns = lowered.limits.max_turns
         self.blocking = BlockingOperations(executor)
         self.search = SearchClient(**parameters.config.get("search", {}))
         self.python = PythonKernel(machine)
         self.transcript: list[str] = []
         self.grades: list[GradeResult] = []
 
-    async def prepare(self) -> SessionStart:
+    async def prepare(self) -> Prompt:
         await self.python.start()
-        return session_start(self.task, shell_tool=None, provider_tools=())
+        return episode_prompt(self.task)
 
-    async def advance(self, turn: ModelTurn) -> Transition:
+    async def advance(self, turn: ModelTurn) -> TaskTransition:
         self.transcript.append(turn.text)
         done = len(self.grades) + 1 >= self.max_turns or ("<solution>" in turn.text and "</solution>" in turn.text)
         reward = math_score("\n".join(self.transcript), self.expected) if done else 0.0
@@ -302,7 +302,7 @@ class SearchCodeTaskSession:
         )
         self.grades.append(grade)
         if done:
-            return Transition(done=True, reward=reward, grade=grade)
+            return TaskTransition(done=True, reward=reward, grade=grade)
         match = re.search(r"<tool>(.*?)</tool>", turn.text, re.DOTALL)
         tool = re.search(r"<(\w+)>(.*?)</\1>", match.group(1), re.DOTALL) if match else None
         if tool is None:
@@ -322,7 +322,7 @@ class SearchCodeTaskSession:
         else:
             output = f"Unknown tool: {tool.group(1)}"
         self.transcript.append(output)
-        return Transition(
+        return TaskTransition(
             done=False,
             observations=({"role": "user", "content": output},) if output else (),
             reward=0.0,

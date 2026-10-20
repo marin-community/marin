@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.models.agent.context import AgentContext
-from rolloutengine.contracts import ModelTurn, SessionStart
+from rolloutengine.models import ModelTurn, Prompt
 
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
@@ -18,7 +18,7 @@ async def run_installed_agent(
     agent: BaseInstalledAgent,
     environment: BorrowedMachineEnvironment,
     backend: AgentInferenceBackend,
-    complete: Callable[[SessionStart], Awaitable[ModelTurn]],
+    complete: Callable[[Prompt], Awaitable[ModelTurn]],
     *,
     instruction: str,
     setup_timeout: float,

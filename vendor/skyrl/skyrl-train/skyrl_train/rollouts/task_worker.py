@@ -20,30 +20,28 @@ from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Machine, MachineFactory
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader
 from verifyit.modes.grade_judge import JudgeConnection
-from rolloutengine.agent_session import AgentTaskSession
-from rolloutengine.contracts import (
+from rolloutengine.harness.core import Harness
+from rolloutengine.harness.external import AgentHarness
+from rolloutengine.models import (
     GenerationLimitReached,
+    GradedRollout,
+    GradedRolloutInterrupted,
     ModelRequest,
     ModelTurn,
     RolloutContractError,
-    RolloutData,
     RolloutFailure,
-    RolloutInterrupted,
     RolloutOperation,
-    TaskSession,
-    TaskSessionContext,
-    TaskSessionFactory,
-    SessionStart,
+    Prompt,
+    TaskRolloutSpec,
 )
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.spec import LoweredTaskSpec
-from rolloutengine.lowering import SHELLBOX_SESSION, validate_lowered_task
+from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
-from skyrl_gym.task_factories import adapt_self_grading_session, session_factories
+from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
 from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
 
@@ -76,6 +74,7 @@ from skyrl_train.rollouts.task_projections import (
     WholeTaskProjection,
     logprobs_requested,
 )
+from skyrl_train.rollouts.training_record import TrainingRollout, training_rollout
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
@@ -113,30 +112,21 @@ class InstalledAgentWorker(Protocol):
 
     async def shutdown(self) -> None: ...
 
-    def original_session(
-        self, lowered: LoweredTaskSpec, session_id: str, settings: HarborTaskSettings, phase: str
-    ) -> TaskSession: ...
+    def original_harness(
+        self, lowered: TaskRolloutSpec, session_id: str, settings: HarborTaskSettings, phase: str
+    ) -> Harness: ...
 
     async def run(
         self,
         machine: Machine | None,
-        complete: Callable[[SessionStart], Awaitable[ModelTurn]],
+        complete: Callable[[Prompt], Awaitable[ModelTurn]],
         *,
-        lowered: LoweredTaskSpec,
+        lowered: TaskRolloutSpec,
         session_id: str,
     ) -> None: ...
 
 
-SKYRL_AGENT_SESSION = "skyrl_agent"
-
-
-def _agent_session_factory(
-    runtime: InstalledAgentWorker,
-    session_id: str,
-    context: TaskSessionContext,
-) -> TaskSession:
-    runner = partial(runtime.run, context.machine, lowered=context.lowered, session_id=session_id)
-    return AgentTaskSession(runner, context.require_task_grader())
+SKYRL_AGENT_HARNESS = "skyrl_agent"
 
 
 async def _model_turn(
@@ -155,10 +145,10 @@ async def _model_turn(
     if template_kwargs and request.prompt_token_ids is None:
         options["chat_template_kwargs"] = template_kwargs
     continuation = None
-    if request.assistant_message_index is not None:
+    if request.continuation is not None:
         continuation = ChatContinuation(
-            served_prefix_token_ids=list(request.prefix_token_ids),
-            assistant_message_index=request.assistant_message_index,
+            served_prefix_token_ids=list(request.continuation.served_token_ids),
+            assistant_message_index=request.continuation.assistant_message_index,
         )
     try:
         with rollout_wait("model_client_await"):
@@ -223,14 +213,14 @@ async def _model_turn(
 
 
 def _failed_rollout(
-    interruption: RolloutInterrupted,
-    lowered: LoweredTaskSpec,
-) -> RolloutData:
+    interruption: GradedRolloutInterrupted,
+    lowered: TaskRolloutSpec,
+) -> TrainingRollout:
     """Retain verified turns and safe diagnostics for the training policy."""
     task = lowered.task
     error = interruption.__cause__
     assert isinstance(error, Exception)
-    if isinstance(error, (TypeError, AttributeError, AssertionError)):
+    if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
         raise error
     if interruption.operation == RolloutOperation.MODEL and not isinstance(
         error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
@@ -277,7 +267,6 @@ def _failed_rollout(
             RolloutOperation.START: "EnvironmentStartTimeoutError",
             RolloutOperation.PREPARE: "AgentSetupTimeoutError",
             RolloutOperation.GRADE: "VerifierTimeoutError",
-            RolloutOperation.CLEANUP: "CleanupTimeoutError",
         }.get(interruption.operation, "AgentTimeoutError")
     elif isinstance(error, TemplateError):
         exception_type = "TemplateError"
@@ -291,10 +280,14 @@ def _failed_rollout(
         if error.category == "context_overflow":
             exception_type = "ContextLengthExceededError"
         diagnostics.update(error_category=error.category, request_id=error.request_id, status_code=error.status_code)
-    rollout = interruption.rollout
+    if interruption.grade.failure == GradingFailure.TIMEOUT:
+        # The engine may attempt verification after a model failure. The verifier
+        # timeout determines whether pass-through can retain a scored rollout.
+        exception_type = "VerifierTimeoutError"
+    rollout = training_rollout(GradedRollout(interruption.rollout, interruption.grade), lowered)
     if (
         interruption.operation == RolloutOperation.ADVANCE
-        and lowered.session.task_session != SHELLBOX_SESSION
+        and not is_shell_harness(lowered.harness)
         and rollout.steps
         and rollout.steps[-1].transition.metrics.get("advance_incomplete")
     ):
@@ -312,7 +305,7 @@ def _failed_rollout(
     grade = rollout.grade
     if grade.status == Outcome.UNAVAILABLE and interruption.operation != RolloutOperation.GRADE and rollout.steps:
         grade = fold_grades([step.transition.grade for step in rollout.steps if step.transition.grade is not None])
-    if cleanup_errors := interruption.rollout.grade.diagnostics.get("cleanup_errors"):
+    if cleanup_errors := interruption.grade.diagnostics.get("cleanup_errors"):
         grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
     logger.warning("Task {} interrupted during {}: {}", task.id, interruption.operation, exception_type)
     return replace(
@@ -348,7 +341,7 @@ class TaskRolloutWorker:
         concurrent_harbor_tasks: int | None = None,
         retry_wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
         group_graders: Mapping[str, GroupGrader] = GROUP_GRADERS,
-        sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
+        sessions: Mapping[str, EpisodeFactory] | None = None,
         *,
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
@@ -386,9 +379,9 @@ class TaskRolloutWorker:
             if max_verifier_workers > 0
             else None
         )
-        self.sessions = session_factories(executor=self.verifier_executor)
+        self.sessions = episode_factories(executor=self.verifier_executor)
         if sessions is not None:
-            self.sessions.update({name: adapt_self_grading_session(factory) for name, factory in sessions.items()})
+            self.sessions.update(sessions)
         self.trajectory_sink: RetentionSink | None = None
 
     @contextmanager
@@ -406,45 +399,40 @@ class TaskRolloutWorker:
         finally:
             self.active_requests.discard(task)
 
-    def _configured_task_and_sessions(
-        self, lowered: LoweredTaskSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
-    ) -> tuple[LoweredTaskSpec, Mapping[str, TaskSessionFactory]]:
-        sessions = self.sessions
-        if lowered.session.task_session == HARBOR_TRIAL_SESSION:
+    def _configured_task_and_harnesses(
+        self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
+    ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
+        harnesses = episode_harnesses(lowered, self.sessions)
+        if is_shell_harness(lowered.harness):
+            harnesses[lowered.harness] = shell_harness(lowered.harness)
+        if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
-            sessions = {
-                **self.sessions,
-                HARBOR_TRIAL_SESSION: lambda context: self.installed_agents.original_session(
-                    context.lowered, session_id, harbor, phase
-                ),
-            }
+            harnesses[HARBOR_TRIAL_SESSION] = self.installed_agents.original_harness(lowered, session_id, harbor, phase)
         elif harbor is not None and self.installed_agents is not None:
-            if lowered.session.task_session != SHELLBOX_SESSION:
+            if not is_shell_harness(lowered.harness):
                 raise ValueError("SkyRL agents require a Shellbox task grader")
-            lowered = lowered.model_copy(
-                update={"session": lowered.session.model_copy(update={"task_session": SKYRL_AGENT_SESSION})}
-            )
-            sessions = {
-                **self.sessions,
-                SKYRL_AGENT_SESSION: partial(_agent_session_factory, self.installed_agents, session_id),
-            }
-        validate_lowered_task(lowered, factories=self.factories, sessions=sessions, providers={})
-        return lowered, sessions
+            lowered = lowered.model_copy(update={"harness": SKYRL_AGENT_HARNESS})
 
-    async def generate(self, request: TaskRequestBatch) -> list[RolloutData]:
+            async def agent(context, complete):
+                await self.installed_agents.run(context.machine, complete, lowered=lowered, session_id=session_id)
+
+            harnesses[SKYRL_AGENT_HARNESS] = AgentHarness(agent)
+        return lowered, harnesses
+
+    async def generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
         with self._active_request():
             return await self._generate(request)
 
-    async def _generate(self, request: TaskRequestBatch) -> list[RolloutData]:
-        lowered_tasks = [row.lowered for row in request.rows]
+    async def _generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
+        lowered_tasks = [row.spec for row in request.rows]
         group_graders = [row.group_grader for row in request.rows]
         metadata = request.batch_metadata
         phase = "train" if metadata is None else metadata.training_phase
         harbor_settings = [self.harbor if "harbor" in item.task.tags else None for item in lowered_tasks]
         policies = [self.error_handling if harbor is None else harbor.error_handling for harbor in harbor_settings]
         lowered_tasks = [
-            item if harbor is None else harbor.lowered(item, phase=phase)
+            item if harbor is None else harbor.configured_spec(item, phase=phase)
             for item, harbor in zip(lowered_tasks, harbor_settings, strict=True)
         ]
         trajectory_ids = request.trajectory_ids
@@ -452,13 +440,16 @@ class TaskRolloutWorker:
             trajectory_ids[index].to_string() if trajectory_ids is not None else uuid4().hex
             for index in range(len(lowered_tasks))
         ]
-        selected_sessions: list[Mapping[str, TaskSessionFactory]] = []
+        selected_harnesses: list[Mapping[str, Harness]] = []
         for index, lowered in enumerate(lowered_tasks):
-            lowered, sessions = self._configured_task_and_sessions(
+            lowered, harnesses = self._configured_task_and_harnesses(
                 lowered, harbor_settings[index], session_ids[index], phase
             )
-            lowered_tasks[index] = lowered
-            selected_sessions.append(sessions)
+            lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
+            selected_harnesses.append(harnesses)
+        engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
+        for engine, lowered in zip(engines, lowered_tasks, strict=True):
+            engine.check(lowered)
         tasks = [item.task for item in lowered_tasks]
         sampling = get_sampling_params_for_backend(
             self.trajectory_runner_cfg.backend, self.trajectory_runner_cfg.sampling_params
@@ -484,12 +475,7 @@ class TaskRolloutWorker:
                     session_id=session_id,
                 )
 
-            engine = RolloutEngine(
-                model,
-                self.factories,
-                sessions=selected_sessions[index],
-                judge_connection=self.judge_connection,
-            )
+            engine = engines[index]
             harbor_slots = (
                 nullcontext()
                 if harbor is None
@@ -501,14 +487,15 @@ class TaskRolloutWorker:
             while True:
                 try:
                     async with harbor_slots, self.task_slots:
-                        result = await engine.run(lowered)
-                except RolloutInterrupted as interruption:
+                        result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
+                except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
                 if (
                     isinstance(task.grader, NoGrader)
                     and result.grade.status == Outcome.UNAVAILABLE
                     and result.failure is None
                     and result.steps
+                    and not any(step.transition.grade is not None for step in result.steps)
                 ):
                     result = replace(
                         result, grade=skipped_grade(task.grader.reason, diagnostics=result.grade.diagnostics)
@@ -555,7 +542,7 @@ class TaskRolloutWorker:
             outputs = await self.generate(input_batch)
             return await self.training_batch(input_batch, outputs)
 
-    async def training_batch(self, request: TaskRequestBatch, outputs: Sequence[RolloutData]) -> TrajectoryBatch:
+    async def training_batch(self, request: TaskRequestBatch, outputs: Sequence[TrainingRollout]) -> TrajectoryBatch:
         with rollout_phase("assemble"):
             batch = self.projection.project(outputs, request)
             propagate_data_sources(request, batch)
@@ -614,7 +601,7 @@ class TaskRolloutWorker:
 class TaskRolloutWorkerSpec:
     config: DictConfig
     engines: list[InferenceEngineInterface]
-    sessions: dict[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] = field(default_factory=dict)
+    sessions: dict[str, EpisodeFactory] = field(default_factory=dict)
     harbor_config: DictConfig | None = None
 
     @classmethod
@@ -624,7 +611,7 @@ class TaskRolloutWorkerSpec:
         engines,
         *,
         harbor_config: DictConfig | None = None,
-        sessions: Mapping[str, Callable[[LoweredTaskSpec, Machine | None], TaskSession]] | None = None,
+        sessions: Mapping[str, EpisodeFactory] | None = None,
     ):
         return cls(
             detached_config(config),

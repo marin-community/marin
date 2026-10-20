@@ -109,11 +109,11 @@ def _role_plan() -> SkyRLRolePlan:
     )
 
 
-def _config_yaml(*, strategy: str | None = None) -> str:
-    strategy_line = f"  strategy: {strategy}\n" if strategy is not None else ""
+def _config_yaml(*, strategy: str = "megatron") -> str:
     return f"""\
 trainer:
-{strategy_line}  max_steps: 8
+  strategy: {strategy}
+  max_steps: 8
   algorithm:
     use_kl_loss: false
 generator:

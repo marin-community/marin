@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 
-from rolloutengine.contracts import RolloutData
+from skyrl_train.rollouts.training_record import TrainingRollout
 from taskcompendium.models import TaskSpec
 
 from skyrl_train.rollouts.genrm_grading import grade_genrm_rollouts
@@ -11,21 +11,23 @@ from skyrl_train.rollouts.group_grader import GENRM_GROUP_GRADER, GroupGraderSpe
 from skyrl_train.rollouts.task_projections import rollout_loss_eligible
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 
-GroupGrader = Callable[[TaskSpec, GroupGraderSpec, Sequence[RolloutData], Sequence[bool], str], Sequence[RolloutData]]
+GroupGrader = Callable[
+    [TaskSpec, GroupGraderSpec, Sequence[TrainingRollout], Sequence[bool], str], Sequence[TrainingRollout]
+]
 GROUP_GRADERS: Mapping[str, GroupGrader] = {GENRM_GROUP_GRADER: grade_genrm_rollouts}
 
 
 async def grade_groups(
     tasks: Sequence[TaskSpec],
     specifications: Sequence[GroupGraderSpec | None],
-    rollouts: Sequence[RolloutData],
+    rollouts: Sequence[TrainingRollout],
     group_ids: Sequence[str],
     graders: Mapping[str, GroupGrader],
     phase: str,
     error_handling: Sequence[ErrorHandlingConfig],
     *,
     logprobs_required: bool,
-) -> list[RolloutData]:
+) -> list[TrainingRollout]:
     """Grade each task group in request order before training conversion.
 
     Graders receive native records, execution eligibility, and the training phase.

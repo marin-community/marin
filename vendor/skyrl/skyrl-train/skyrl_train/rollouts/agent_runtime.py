@@ -20,8 +20,8 @@ from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from marinskyrl.resource_locator import join_resource_path
 from pydantic import BaseModel, ConfigDict, Field
-from rolloutengine.contracts import ModelTurn, SessionStart
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.models import ModelTurn, Prompt
+from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
 from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from taskcompendium.submission import conversation_messages
@@ -34,7 +34,7 @@ from skyrl_train.rollouts.agent_endpoint import registered_agent_endpoint
 from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
 from skyrl_train.rollouts.agent_service import serve_agent_app
 from skyrl_train.rollouts.installed_agent import run_installed_agent
-from skyrl_train.rollouts.harbor_trial_session import HarborTrialSession, run_harbor_trial
+from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness, run_harbor_trial
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 
 
@@ -94,9 +94,9 @@ class InstalledAgentRuntime:
     async def run(
         self,
         machine: Machine | None,
-        complete: Callable[[SessionStart], Awaitable[ModelTurn]],
+        complete: Callable[[Prompt], Awaitable[ModelTurn]],
         *,
-        lowered: LoweredTaskSpec,
+        lowered: TaskRolloutSpec,
         session_id: str,
     ) -> None:
         if self.port is None or machine is None:
@@ -116,11 +116,11 @@ class InstalledAgentRuntime:
         finally:
             await publish_attempt(trial_dir, destination)
 
-    def original_session(
-        self, lowered: LoweredTaskSpec, session_id: str, settings: HarborTaskSettings, phase: str
-    ) -> HarborTrialSession:
+    def original_harness(
+        self, lowered: TaskRolloutSpec, session_id: str, settings: HarborTaskSettings, phase: str
+    ) -> HarborTrialHarness:
         """Bind a full Harbor trial to the phase's deadlines and environment settings."""
-        if lowered.session.attempt_timeout is None:
+        if lowered.limits.attempt_timeout is None:
             raise ValueError("Full Harbor trials require a finite attempt timeout for the inference capability")
         kwargs = dict(settings.environment.kwargs)
         key_env = kwargs.pop("eval_api_key_env" if phase == "eval" else "api_key_env", None)
@@ -131,27 +131,27 @@ class InstalledAgentRuntime:
         environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
         agent = self.settings.agent.model_copy(
             update={
-                "override_timeout_sec": lowered.session.total_turn_timeout or self.settings.run_timeout,
+                "override_timeout_sec": lowered.limits.total_turn_timeout or self.settings.run_timeout,
             }
         )
         config = TrialConfig(
             task=TaskConfig(path="runtime-package"),
             agent=agent,
             environment=environment,
-            verifier={**settings.verifier.model_dump(), "override_timeout_sec": lowered.session.verifier_timeout},
-            trial_attempt_timeout_sec=lowered.session.attempt_timeout,
-            trial_cleanup_grace_sec=lowered.session.cleanup_timeout,
+            verifier={**settings.verifier.model_dump(), "override_timeout_sec": lowered.limits.verifier_timeout},
+            trial_attempt_timeout_sec=lowered.limits.attempt_timeout,
+            trial_cleanup_grace_sec=lowered.limits.cleanup_timeout,
         )
-        return HarborTrialSession(
+        return HarborTrialHarness(
             partial(self.run_original_trial, lowered=lowered, session_id=session_id, config=config),
             self.settings.trial_reward_key,
         )
 
     async def run_original_trial(
         self,
-        complete: Callable[[SessionStart], Awaitable[ModelTurn]],
+        complete: Callable[[Prompt], Awaitable[ModelTurn]],
         *,
-        lowered: LoweredTaskSpec,
+        lowered: TaskRolloutSpec,
         session_id: str,
         config: TrialConfig,
     ) -> TrialResult:
@@ -188,12 +188,12 @@ class InstalledAgentRuntime:
                     },
                 }
             )
-            run_timeout = lowered.session.total_turn_timeout or self.settings.run_timeout
+            run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout
             assert config.trial_attempt_timeout_sec is not None
             async with self._served_agent(
                 evidence,
                 run_timeout,
-                capability_lifetime=config.trial_attempt_timeout_sec + lowered.session.cleanup_timeout,
+                capability_lifetime=config.trial_attempt_timeout_sec + lowered.limits.cleanup_timeout,
                 agent=config.agent,
             ) as agent_config:
                 trial_config = TrialConfig.model_validate(
@@ -251,13 +251,13 @@ class InstalledAgentRuntime:
     async def _run_trial(
         self,
         machine: Machine,
-        complete: Callable[[SessionStart], Awaitable[ModelTurn]],
-        lowered: LoweredTaskSpec,
+        complete: Callable[[Prompt], Awaitable[ModelTurn]],
+        lowered: TaskRolloutSpec,
         trial_dir: Path,
         instruction: str,
         attempt_id: str,
     ) -> None:
-        run_timeout = lowered.session.total_turn_timeout or self.settings.run_timeout
+        run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout
         async with self._served_agent(
             trial_dir,
             run_timeout,
@@ -270,9 +270,9 @@ class InstalledAgentRuntime:
                 machine,
                 trial_dir,
                 attempt_id,
-                EnvironmentConfig(allow_internet=lowered.runtime.task_machine.network == NetworkPolicy.ALLOW),
+                EnvironmentConfig(allow_internet=lowered.task_machine.network == NetworkPolicy.ALLOW),
             )
-            with environment.with_default_user(lowered.runtime.task_machine.user):
+            with environment.with_default_user(lowered.task_machine.user):
                 await run_installed_agent(
                     agent,
                     environment,
