@@ -144,13 +144,11 @@ def analyze_failed_runs(
     merge_policy: LLMPolicy,
     catalog_version: str,
 ) -> Dataset[CapabilityIdea]:
-    """The plan of a pipeline whose results are the capability ideas that the policy's failed rollouts lack.
+    """Build a pipeline of capability ideas from the policy's failed rollouts.
 
-    Each conversation record contains the model options and messages that the policy saw. ``policy`` samples the
-    call for each rollout, and ``merge_policy`` samples the longer merges. Each batch of ``batch_size`` rollouts is
-    one shard. Its rollout calls run serially on one worker, and its failed rollouts get one merge call. Batches run
-    in parallel. Use at most about 1,000 rollouts in a batch, because a larger merge prompt can exceed the context
-    window. Run the plan outside an event loop, for example ``ctx.execute(plan).results``.
+    Recorded conversations supply the model options and messages seen by the policy. Keep ``batch_size`` at about
+    1,000 rollouts or fewer so merge prompts fit the model context. Run the plan outside an event loop, for example
+    ``ctx.execute(plan).results``.
     """
     merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_policy)
     return (
@@ -204,7 +202,7 @@ def merge_ideas(
 ) -> list[MaybeIdea]:
     """Return at most ``max_new_ideas`` merged ideas, ordered by rollout count.
 
-    Retry invalid model replies up to ``MERGE_ATTEMPTS`` times.
+    Make at most ``MERGE_ATTEMPTS`` model calls when replies are invalid.
     """
     lines = {f"k{i}": candidate for i, candidate in enumerate(ideas)}
     if not lines:
@@ -299,7 +297,7 @@ def _rollout_text(graded: GradedRollout) -> str:
 
 
 def _call_text(call: Any) -> str:
-    """A tool call as ``name(arguments)``. The record keeps the policy's message, so a malformed call stays raw JSON."""
+    """Render valid calls as ``name(arguments)`` and malformed calls as JSON."""
     function = call.get("function") if isinstance(call, Mapping) else None
     if isinstance(function, Mapping) and isinstance(function.get("name"), str):
         return f"{function['name']}({function.get('arguments', '')})"
