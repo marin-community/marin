@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, defineAsyncComponent } from "vue";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import AppBar from "@marina/AppBar.vue";
 import ValueView from "./ValueView.vue";
 const PdfView = defineAsyncComponent(() => import("./PdfView.vue"));
 const example =
@@ -235,6 +236,7 @@ onMounted(async () => {
 </script>
 
 <template>
+  <AppBar title="Filer" home="https://marina.oa.dev/" />
   <div class="workspace">
     <aside class="sidebar">
       <a class="brand" href="#" @click.prevent="open('')"

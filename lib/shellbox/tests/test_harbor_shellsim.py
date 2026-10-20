@@ -8,7 +8,7 @@ import importlib
 from pathlib import Path
 
 import pytest
-from shellbox.machine import MachineSpec, ShellSimBuiltins
+from shellbox.machine import MachineSpec, PackageSpec
 
 
 def test_shellsim_harbor_trial(tmp_path: Path) -> None:
@@ -35,7 +35,7 @@ def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
     machine_module = importlib.import_module("shellbox.backends.shellsim.machine")
 
     async def check() -> None:
-        machine = await machine_module.ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
+        machine = await machine_module.ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
         environment = object.__new__(environment_module.ShellSimEnvironment)
         environment.machine = machine
         try:

@@ -107,8 +107,10 @@ stale rather than one that never existed: the GCE controllers publish no `iris.t
 all, and a broken rollup leaves its last row readable for an hour. A longer outage stops being
 visible, which is the limit of this check.
 
-Quiet runs emit zero-valued `healthy` rows and an empty fleet emits one `fleet` row, so
-`noDataState: Alerting` stays reserved for a malformed or unavailable response.
+Quiet runs emit zero-valued `healthy` rows and an empty fleet emits one `fleet` row.
+A retryable Finelog query failure also returns a non-firing row; `FinelogFleetUnhealthy`
+reports the shared query-path failure. Grafana's `noDataState: Alerting` and
+`execErrState: Alerting` cover empty and invalid bridge responses.
 
 ## When one fires
 

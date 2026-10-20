@@ -23,6 +23,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, HostImage, MachineSpec
 from taskcompendium.grading_result import Outcome
@@ -55,7 +56,7 @@ IMAGE = "fixture/prepared-python@sha256:" + "0" * 64
 
 
 @dataclass
-class PreparedImageFactory:
+class PreparedImageFactory(DockerMachineFactory):
     """Use real bubblewrap machines with the already installed test dependencies."""
 
     local: LocalMachineFactory
@@ -124,11 +125,13 @@ def file_write_command(files):
 @pytest.mark.parametrize("case", ["math500", "tasktrove-codeforces", "tasktrove-stack_pytest"])
 async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_path, monkeypatch, machines):
     # RolloutEngine is optional in Marin CI; import it only when this manual test is selected.
+    from rolloutengine.harness.shell import ShellHarness  # noqa: PLC0415
     from rolloutengine.test_support import (  # noqa: PLC0415
+        SHELL,
         ReplayModel,
         engine,
-        lowered,
         machine_runtime,
+        rollout_spec,
         shell_call,
     )
 
@@ -192,13 +195,13 @@ async def test_quick_parquet_rollout_grades_correct_and_wrong_answers(case, tmp_
             function["arguments"] = json.dumps({"script" if tool_name else "cmd": candidate})
             messages = [call, {"role": "assistant", "content": "Done."}]
         model = ReplayModel(messages)
-        result = await engine(model, {"local": machines}).run(
-            lowered(
+        shell = ShellHarness(command_timeout=None, shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd"))
+        result = await engine(model, {"local": machines}, harnesses={SHELL: shell}).run_task(
+            rollout_spec(
                 task,
                 machine=None if case == "math500" else machine_runtime(),
                 verifier_machine=None if case == "math500" else machine_runtime(),
                 verifier_timeout=60,
-                shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd"),
             )
         )
         assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected), result.grade.error

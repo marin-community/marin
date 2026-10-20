@@ -45,8 +45,52 @@ from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_m
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
+from experiments.grug.moe_hero_ep.optimizer import ExpertNormalization, GrugMoeMuonHConfig
 
 GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
+
+
+@pytest.mark.parametrize("normalization", tuple(ExpertNormalization))
+def test_muon_expert_normalization_matches_stacked_and_pipeline_layouts(normalization):
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("expert",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh):
+        values = np.random.default_rng(18).normal(size=(3, 8, 4)).astype(np.float32)
+        values *= np.asarray([0.2, 3.0, 5.0], dtype=np.float32)[:, None, None]
+        gradients = jnp.asarray(np.random.default_rng(19).normal(size=values.shape).astype(np.float32))
+        bank = jax.device_put(jnp.asarray(values), NamedSharding(mesh, P("expert", None, None)))
+        pipeline_params = {"blocks": ({"mlp": {"expert_mlp": {"w_up": bank}}},)}
+        stacked_params = {"stacked_blocks": {"stacked": {"mlp": {"expert_mlp": {"w_up": bank[None]}}}}}
+        pipeline_grads = jax.tree.map(lambda _: gradients, pipeline_params)
+        stacked_grads = jax.tree.map(lambda _: gradients[None], stacked_params)
+        optimizer = GrugMoeMuonHConfig(
+            learning_rate=0.1,
+            warmup=0,
+            lr_schedule="constant",
+            use_syrk=False,
+            expert_normalization=normalization,
+        ).build(3)
+
+        @jax.jit
+        def step(params, state, grads):
+            updates, state = optimizer.update(grads, state, params)
+            return optax.apply_updates(params, updates), state
+
+        pipeline_state = optimizer.init(pipeline_params)
+        stacked_state = optimizer.init(stacked_params)
+        for _ in range(2):
+            pipeline_params, pipeline_state = step(pipeline_params, pipeline_state, pipeline_grads)
+            stacked_params, stacked_state = step(stacked_params, stacked_state, stacked_grads)
+            actual = pipeline_params["blocks"][0]["mlp"]["expert_mlp"]["w_up"]
+            expected = stacked_params["stacked_blocks"]["stacked"]["mlp"]["expert_mlp"]["w_up"][0]
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+
+        initial_norms = np.linalg.norm(values, axis=(1, 2))
+        final_norms = np.linalg.norm(np.asarray(actual), axis=(1, 2))
+        if normalization == ExpertNormalization.PER_EXPERT:
+            np.testing.assert_allclose(final_norms, initial_norms, rtol=1e-5, atol=1e-5)
+        else:
+            np.testing.assert_allclose(np.linalg.norm(final_norms), np.linalg.norm(initial_norms), rtol=1e-5, atol=1e-5)
+            assert np.max(np.abs(final_norms - initial_norms)) > 1e-3
 
 
 def test_muon_expert_stack_preserves_sharding_and_updates():
@@ -127,8 +171,8 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         "ragged_all_to_all",
         model.QbEstimator.HIST,
         10_000,
-        1024,
-        4096,
+        256,
+        16384,
         4,
         10,
         1_000_000_000,
@@ -201,7 +245,7 @@ def test_hero_batch_validation_matches_default_mesh():
         default_mesh_trainer._validate_and_set_defaults()
 
     assert data_axis_size == default_mesh_trainer.data_axis_size == 64
-    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 16
+    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 4
     assert trainer.per_device_eval_parallelism == default_mesh_trainer.per_device_eval_parallelism
 
 
@@ -272,11 +316,13 @@ def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_st
 
 
 def test_data_parallel_racks_keep_the_global_batch_explicit():
+    one_rack = launch.build_diagnostic_run(run_id="one-rack", dp_racks=1, num_steps=1, version="dev")
     step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
+    one_rack_config = one_rack.build_config(StepContext.for_fingerprint(one_rack.runtime_args, one_rack.deps))
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.trainer.replica_axis_size == 2
-    assert config.trainer.trainer.train_batch_size == launch.HERO_EP_BATCH_SIZE
+    assert config.trainer.trainer.train_batch_size == one_rack_config.trainer.trainer.train_batch_size
     assert step.runtime_args["train_resources"].replicas == 2 * launch.HERO_EP_NODES
 
 

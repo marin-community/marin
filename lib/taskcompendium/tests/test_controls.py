@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -16,8 +17,8 @@ from shellbox.machine import (
     DockerImage,
     Machine,
     MachineSpec,
+    PackageSpec,
     Result,
-    ShellSimBuiltins,
     UnsupportedMachineSpec,
 )
 from verifyit.spec import SchemaFormat
@@ -33,7 +34,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
     ResourceGroups,
-    SessionGrader,
     Source,
     TaskSpec,
 )
@@ -42,7 +42,13 @@ from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand,
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.resources import inline_resource
 
-from .pipeline_stages import GRADER_IMAGE, FixtureGradingMachines, ShellSimImages, UnavailableImages, script_graded
+from .pipeline_stages import (
+    GRADER_IMAGE,
+    FixtureGradingMachines,
+    ShellSimImages,
+    UnavailableImages,
+    script_graded,
+)
 
 PASS, FAIL, DEFECT = CheckStatus.PASS, CheckStatus.FAIL, CheckStatus.DEFECT
 ROW = RawRow("task", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), {})
@@ -77,7 +83,7 @@ class ImageMachine:
 
 
 @dataclass
-class RecordingImages:
+class RecordingImages(DockerMachineFactory):
     """Fresh ShellSim machines, each recording the image it stands in for."""
 
     backend = Backend.DOCKER
@@ -148,9 +154,8 @@ def test_task_without_a_golden_is_checked_with_an_empty_submission(controls):
     assert checks(in_process_task("schema"), controls) == {"empty": PASS}
 
 
-@pytest.mark.parametrize("grader", [NoGrader(reason="Source evaluator unavailable"), SessionGrader()])
-def test_graders_without_offline_grading_have_unsupported_controls(grader):
-    task = in_process_task("numeric").model_copy(update={"grader": grader})
+def test_graders_without_offline_grading_have_unsupported_controls():
+    task = in_process_task("numeric").model_copy(update={"grader": NoGrader(reason="Source evaluator unavailable")})
     report = control_suite(REFERENCE_CONTROLS, FixtureGradingMachines()).run(task)
     assert [check.status for check in report.checks] == [CheckStatus.UNSUPPORTED]
 
@@ -258,7 +263,7 @@ class OracleMachines(FixtureGradingMachines):
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int):
         if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-            return ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins(), memory_mb=memory_mb)
+            return ShellSimMachineFactory(), MachineSpec(PackageSpec(), memory_mb=memory_mb)
         return self.factory, MachineSpec(DockerImage(environment.docker_image or GRADER_IMAGE), memory_mb=memory_mb)
 
 

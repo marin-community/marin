@@ -116,6 +116,7 @@ def test_sharded_tree_size_tuple_axis_partition_spec():
     assert per_device_bytes == (8 * 4 * jnp.dtype(jnp.float32).itemsize) // 4
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("fsdp_size", [1, 2, 4, 8])
 def test_best_effort_sharding_with_mesh(fsdp_size):
     if fsdp_size > len(jax.devices()):
@@ -285,6 +286,7 @@ def test_axis_resource_is_explicit():
     assert not axis_resource_is_explicit(mesh, "unknown")
 
 
+@pytest.mark.tpu
 def test_move_tree_to_memory_kind():
     x = jnp.arange(4)
     tree = {"a": x, "b": 3}
@@ -297,6 +299,7 @@ def test_move_tree_to_memory_kind():
     assert moved_again["a"] is moved["a"]
 
 
+@pytest.mark.tpu
 def test_move_tree_to_memory_kind_is_noop_inside_jit():
     @jax.jit
     def move_inside_jit(x):

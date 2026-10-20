@@ -28,7 +28,6 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLRunConfig,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     _materialize_role_plan_config,
@@ -426,7 +425,7 @@ def build_run(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model_step,
                 relative_path="" if model == DEFAULT_MODEL else None,

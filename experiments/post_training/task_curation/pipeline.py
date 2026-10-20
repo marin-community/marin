@@ -12,12 +12,12 @@ for ``taskcompendium.pipeline.source_processing.run_source_pipeline``. SAMPLE/FU
 
 import hashlib
 import json
-import os
 import re
+import subprocess
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
-from functools import partial
+from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,6 +29,10 @@ from marin.datakit.download.huggingface import (
     finish_download,
     plan_download,
     stream_file_to_fsspec,
+)
+from marin.evaluation.harbor.driver_config import (
+    harbor_runtime_command,
+    harbor_runtime_descriptor,
 )
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
@@ -42,7 +46,7 @@ from shellbox.machine import (
     MachineFactory,
     MachineSpec,
     NetworkPolicy,
-    ShellSimBuiltins,
+    PackageSpec,
     UnsupportedMachineSpec,
 )
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, require_resolved_environment
@@ -72,12 +76,13 @@ from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION, Sour
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION, SourceVerificationPolicy
 from taskcompendium.pipeline.sources import conversion_shards, source_files_identity, staged_files
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
-from taskcompendium.runtime.local import LocalGraderMachines
+from taskcompendium.runtime.local import LOCK_FILE, LocalGraderMachines
+from verifyit.modes.grade_judge import JudgeConnection
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
+from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
@@ -89,12 +94,15 @@ from experiments.post_training.task_curation.images.build import (
 from experiments.post_training.task_curation.source import RlDataSource
 
 PIPELINE_VERSION = "2026.10.07.1"
-QUICK_VERSION = "2026.10.10.2"
+CURATION_VERSION = "2026.10.12.1"
+QUICK_VERSION = "2026.10.14.1"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
-REVIEW_REQUEST_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4
 INPUT_OVERRIDES_REVISION = "2"
+
+HARBOR_EXPORTER = Path(__file__).with_name("harbor_hub.py")
+
 
 type RowSelector = Callable[[dict[str, Any], ConversionContext], bool]
 type RowDecoder = Callable[[dict[str, Any], ConversionContext], dict[str, Any]]
@@ -165,6 +173,34 @@ class UrlSource:
         return (self.filename,)
 
 
+@dataclass(frozen=True)
+class HarborHubSource:
+    """Native archives from a pinned Harbor Hub release, parsed by the recipe reader."""
+
+    name: str
+    revision: str
+    read: FileReader
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", self.revision) is None:
+            raise ValueError("Harbor Hub sources require a content digest")
+
+    @property
+    def url(self) -> str:
+        return f"https://hub.harborframework.com/datasets/{self.name}"
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        return ("tasks/*.tar.gz",)
+
+    @property
+    def format(self) -> SourceFormat:
+        return SourceFormat.GENERATED
+
+
+type RecipeSource = HfSource | UrlSource | HarborHubSource
+
+
 def environment_requirements(
     environment: Environment, built: EnvironmentArtifact | None = None
 ) -> EnvironmentRequirements:
@@ -185,6 +221,11 @@ def environment_requirements(
         assert built.image is not None
         return EnvironmentRequirements(docker_image=built.image, command_semantics=CommandSemantics.LINUX_PROCESS)
     return EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=built.lock_url)
+
+
+def planned_lock_url(environment: Environment) -> str:
+    """Where ``environment``'s artifact stores its lock under the active artifact prefix, built or not."""
+    return str(StoragePath(environment_artifact(environment).path()) / LOCK_FILE)
 
 
 def environment_record(environment: Environment, built: EnvironmentArtifact | None) -> dict[str, Any]:
@@ -211,18 +252,18 @@ class CurationRecipe:
     """
 
     name: str
-    source: HfSource | UrlSource
+    source: RecipeSource
     convert: Converter
     version: str
     intended_use: IntendedUse
     rubric: str | None = None
     controls: Controls | None = None
-    inputs: Mapping[str, HfSource | UrlSource] = field(default_factory=dict)
+    inputs: Mapping[str, RecipeSource] = field(default_factory=dict)
     grader: Environment | None = None
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
 
     @property
-    def dataset(self) -> HfSource | UrlSource:
+    def dataset(self) -> RecipeSource:
         return self.source
 
     @property
@@ -237,6 +278,21 @@ class CampaignMachines:
     image_factory: MachineFactory | None = None
     image_cpus: int = IMAGE_MACHINE_CPUS
     local: LocalGraderMachines = field(default_factory=LocalGraderMachines)
+    simulator_catalog: str | None = None
+
+    @cached_property
+    def _simulator_factory(self) -> MachineFactory:
+        try:
+            import shellsim  # noqa: PLC0415
+            from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
+        except ImportError as error:
+            raise UnsupportedMachineSpec("Simulator controls require the Shellbox shellsim extra") from error
+        return ShellSimMachineFactory(
+            context=shellsim.Context(
+                pypi_catalog=self.simulator_catalog,
+                trusted_precompiled=self.simulator_catalog in (None, shellsim.DEFAULT_PYPI_CATALOG),
+            )
+        )
 
     def identity(self) -> dict[str, Any]:
         factory = self.image_factory
@@ -254,6 +310,7 @@ class CampaignMachines:
             "simulator": {
                 "backend": Backend.SHELLSIM.value,
                 "factory": "shellbox.backends.shellsim.machine.ShellSimMachineFactory",
+                "catalog": self.simulator_catalog,
             },
             "network": NetworkPolicy.DENY.value,
         }
@@ -261,12 +318,9 @@ class CampaignMachines:
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         require_resolved_environment(environment)
         if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
-            try:
-                from shellbox.backends.shellsim.machine import ShellSimMachineFactory  # noqa: PLC0415
-            except ImportError as error:
-                raise UnsupportedMachineSpec("Simulator controls require the Shellbox shellsim extra") from error
-            return ShellSimMachineFactory(), MachineSpec(ShellSimBuiltins(), network=NetworkPolicy.DENY)
-        if environment.packages_lock is not None:
+            packages = environment.package_spec or PackageSpec()
+            return self._simulator_factory, MachineSpec(packages, network=NetworkPolicy.DENY, memory_mb=memory_mb)
+        if environment.packages_lock is not None or environment.package_spec is not None:
             return self.local.machine(environment, memory_mb)
         if environment.docker_image is None:
             raise UnsupportedMachineSpec("Native campaign execution requires a pinned image or package lock")
@@ -280,11 +334,17 @@ class CampaignMachines:
         )
 
 
-def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_concurrency: int) -> Reviewer:
-    token = os.environ[GLM_BULK_TOKEN_ENV]
+def _reviewer(
+    review: ReviewConfig,
+    base_url: str,
+    api_key: str,
+    *,
+    review_cache: str,
+    review_concurrency: int,
+) -> Reviewer:
     if review.mode == ReviewMode.CHAT:
         return ChatReviewer(
-            OpenAIChatClient(base_url, token, timeout=REVIEW_REQUEST_TIMEOUT),
+            OpenAIChatClient(base_url, api_key, timeout=GLM_REQUEST_TIMEOUT),
             review.model,
             review.model_revision,
             query_cache_root=review_cache,
@@ -292,7 +352,7 @@ def _reviewer(review: ReviewConfig, base_url: str, *, review_cache: str, review_
             max_batch_bytes=review.max_batch_bytes,
         )
     return BatchReviewer(
-        OpenAIBatchClient(base_url, token, timeout=REVIEW_REQUEST_TIMEOUT, request_attempts=3),
+        OpenAIBatchClient(base_url, api_key, timeout=GLM_REQUEST_TIMEOUT, request_attempts=GLM_REQUEST_ATTEMPTS),
         review.model,
         review.model_revision,
         query_cache_root=review_cache,
@@ -307,6 +367,7 @@ def _pipeline_config(
     machines: GradingMachines | None,
     *,
     seed: int,
+    quality_sample_size: int,
     verification_sample_size: int,
     max_workers: int,
     worker_resources: ResourceConfig,
@@ -314,7 +375,7 @@ def _pipeline_config(
 ) -> SourcePipelineConfig:
     return SourcePipelineConfig(
         mode=mode,
-        quality_policy=SourceQualityPolicy(sample_size=100, seed=seed),
+        quality_policy=SourceQualityPolicy(sample_size=quality_sample_size, seed=seed),
         verification_policy=SourceVerificationPolicy(verification_sample_size, seed, 1, 0.95),
         review=review,
         execution=AuditExecution(
@@ -350,6 +411,7 @@ def _source_config(
         None,
         settings.machines if controls is not None else None,
         seed=settings.seed,
+        quality_sample_size=settings.quality_sample_size,
         verification_sample_size=settings.verification_sample_size,
         max_workers=settings.execution.max_workers,
         worker_resources=settings.execution.worker_resources,
@@ -358,19 +420,29 @@ def _source_config(
 
 
 def _execution_config(
-    settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None
+    settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None, controls: Controls | None
 ) -> SourcePipelineConfig:
-    if rubric is None or config.execution.reviewer is not None:
+    needs_reviewer = rubric is not None and config.execution.reviewer is None
+    needs_judge = controls is not None and settings.api_key is not None and config.judge_connection is None
+    if not needs_reviewer and not needs_judge:
         return config
-    if settings.review_cache is None:
-        raise click.UsageError("Recipe review requires --review-cache")
-    reviewer = _reviewer(
-        cast(ReviewConfig, config.review),
-        settings.base_url if settings.base_url is not None else resolve_glm_base_url(settings.relay_job),
-        review_cache=settings.review_cache,
-        review_concurrency=settings.review_concurrency,
-    )
-    return replace(config, execution=replace(config.execution, reviewer=reviewer))
+    if settings.api_key is None:
+        raise click.UsageError("Recipe review and judge controls require an API key")
+    base_url = settings.base_url if settings.base_url is not None else resolve_glm_base_url(settings.relay_job)
+    if needs_reviewer:
+        if settings.review_cache is None:
+            raise click.UsageError("Recipe review requires --review-cache")
+        reviewer = _reviewer(
+            cast(ReviewConfig, config.review),
+            base_url,
+            settings.api_key,
+            review_cache=settings.review_cache,
+            review_concurrency=settings.review_concurrency,
+        )
+        config = replace(config, execution=replace(config.execution, reviewer=reviewer))
+    if needs_judge:
+        config = replace(config, judge_connection=JudgeConnection(base_url, settings.api_key))
+    return config
 
 
 def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
@@ -395,8 +467,6 @@ def _pipeline_result(result: ConversionResult | SourcePipelineResult) -> Pipelin
             {"manifest": result.manifest_path},
             ("normalize",),
         )
-    if result.status == SourceStatus.INCOMPLETE:
-        raise SourcePipelineIncomplete(f"Source pipeline is incomplete; retained evidence: {result.manifest_path}")
     review_manifest = json.loads((StoragePath(result.review_path) / "manifest.json").read_text())
     manifest = json.loads(StoragePath(result.manifest_path).read_text())
     telemetry = json.loads(StoragePath(manifest["telemetry"]).read_text())
@@ -423,10 +493,6 @@ class RlDataArtifact(CampaignArtifact):
     manifest: dict[str, Any]
 
 
-class SourcePipelineIncomplete(RuntimeError):
-    """The quality gate could not decide or a control trial hit an infrastructure error; evidence is retained."""
-
-
 def review_rubric(pipeline: CurationRecipe) -> ReviewRubric | None:
     """Split a rubric string into criteria at blank lines."""
     if pipeline.rubric is None:
@@ -437,7 +503,9 @@ def review_rubric(pipeline: CurationRecipe) -> ReviewRubric | None:
     return ReviewRubric(id=pipeline.name, version=pipeline.version, criteria=criteria)
 
 
-def source_files(source: HfSource | UrlSource) -> SourceFiles:
+def source_files(source: RecipeSource) -> SourceFiles:
+    if isinstance(source, HarborHubSource):
+        return SourceFiles(source.name, source.revision, source.files, source.format, read=source.read)
     if isinstance(source, HfSource):
         return SourceFiles(
             source.repo,
@@ -493,8 +561,9 @@ def _run_curation(
 ) -> ConversionResult | SourcePipelineResult:
     """Run a declared source against staged inputs in quick, sample, or full mode.
 
-    QUICK records the declared grader lock without building or running it.
-    SAMPLE and FULL use the invocation mode and the campaign's resolved settings.
+    QUICK records the lock the grader's environment artifact stores under the active artifact prefix
+    without building or running it. SAMPLE and FULL use the invocation mode and the campaign's
+    resolved settings.
     """
     missing = pipeline.inputs.keys() - inputs.keys()
     if missing:
@@ -506,13 +575,9 @@ def _run_curation(
             environment = pipeline.grader
             if environment.image is not None:
                 grader_environment = environment_requirements(environment)
-            elif environment.lock is not None:
-                grader_environment = EnvironmentRequirements(
-                    command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=str(environment.lock.resolve())
-                )
             else:
-                raise ValueError(
-                    f"Quick conversion of {pipeline.name} needs a declared grader lock or resolved environment"
+                grader_environment = EnvironmentRequirements(
+                    command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock=planned_lock_url(environment)
                 )
     return run_source_pipeline(
         source_recipe(pipeline, inputs, grader_environment),
@@ -526,7 +591,7 @@ def _run_curation(
     )
 
 
-def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
+def download_identity(source: RecipeSource) -> dict[str, Any]:
     """The pinned bytes and shared preparation staged by a source download."""
     if isinstance(source, HfSource):
         return {
@@ -538,6 +603,13 @@ def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
                 if source.prepare is not None
                 else {}
             ),
+        }
+    if isinstance(source, HarborHubSource):
+        return {
+            "harbor_hub": source.name,
+            "revision": source.revision,
+            "exporter_sha256": hashlib.sha256(HARBOR_EXPORTER.read_bytes()).hexdigest(),
+            "harbor_runtime": harbor_runtime_descriptor(),
         }
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
 
@@ -582,7 +654,7 @@ def pipeline_identity(
 
 @dataclass(frozen=True)
 class DownloadRequest:
-    source: HfSource | UrlSource
+    source: RecipeSource
     output_path: str
 
 
@@ -608,6 +680,19 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
             for task in plan.tasks:
                 source.prepare(task.destination_path, campaign.context)
         return
+    if isinstance(source, HarborHubSource):
+        subprocess.run(
+            harbor_runtime_command(
+                HARBOR_EXPORTER,
+                "--release",
+                f"{source.name}@{source.revision}",
+                "--output",
+                request.output_path,
+                "--all",
+            ),
+            check=True,
+        )
+        return
     digest = hashlib.sha256()
     destination = StoragePath(request.output_path) / source.filename
     with requests.get(source.url, stream=True, timeout=URL_TIMEOUT) as response:
@@ -621,11 +706,11 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
         raise ValueError(f"{source.url} has SHA-256 {digest.hexdigest()}; expected {source.sha256}")
 
 
-def _download_request(source: HfSource | UrlSource, ctx: StepContext) -> DownloadRequest:
+def _download_request(source: RecipeSource, ctx: StepContext) -> DownloadRequest:
     return DownloadRequest(source, ctx.output_path)
 
 
-def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
+def download_step(source: RecipeSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
     """One shared artifact per distinct set of pinned bytes."""
     identity = hashlib.sha256(canonical_json(download_identity(source)).encode()).hexdigest()[:16]
     return ArtifactStep(
@@ -664,7 +749,7 @@ def _staged_file_overrides(root: str, hashes: Mapping[str, str]) -> dict[str, So
     return {name: SourceFileOverride(str(StoragePath(root) / name), checksum) for name, checksum in hashes.items()}
 
 
-def _staged_input_identity(path: str, source: HfSource | UrlSource) -> dict[str, Any]:
+def _staged_input_identity(path: str, source: RecipeSource) -> dict[str, Any]:
     files = {}
     for logical in staged_files(path, source_files(source)):
         with (StoragePath(path) / logical).open("rb") as stream:
@@ -731,7 +816,7 @@ def _run_source(
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
     assert options.recipe_settings is not None
-    config = _execution_config(options.recipe_settings, config, pipeline.rubric)
+    config = _execution_config(options.recipe_settings, config, pipeline.rubric, pipeline.controls)
     _validate_input_identity(pipeline, options.inputs, run.identity)
     file_overrides = (
         {name: SourceFileOverride(**file) for name, file in run.identity["input_overrides"]["files"].items()}
@@ -768,13 +853,15 @@ def _reviewed_step(
         grader_built = built_environment(pipeline.grader)
         grader_step = environment_artifact(pipeline.grader)
     identity = pipeline_identity(pipeline, config, grader_built)
+    assert options.recipe_settings is not None
+    identity["curation_attempt"] = options.recipe_settings.curation_attempt
     overrides = options.inputs
     if overrides.root is not None or overrides.files or overrides.auxiliary:
         identity["input_overrides"] = _input_overrides_identity(pipeline, overrides)
     digest = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:16]
     return ArtifactStep(
         name=f"data/rl/{pipeline.name}-{digest}",
-        version=PIPELINE_VERSION,
+        version=CURATION_VERSION,
         artifact_type=RlDataArtifact,
         run=partial(_run_source, pipeline, config, options),
         build_config=partial(_source_run, identity, overrides, downloaded, inputs, grader_step),

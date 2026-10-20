@@ -1,0 +1,704 @@
+import json
+import os
+import shlex
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from typing import Any, Literal
+
+from upath import UPath
+
+from harbor.agents.installed.base import (
+    BaseInstalledAgent,
+    CliFlag,
+    with_prompt_template,
+)
+from harbor.agents.utils import get_api_key_var_names_from_model_name
+from harbor.environments.base import BaseEnvironment
+from harbor.literal.proxy import (
+    CORRELATION_ID_HEADER,
+    LITERAL_LOG_FILENAME,
+    TASK_AGENT_HEADER,
+)
+from harbor.literal.rollout_build import (
+    populate_literal_context,
+)
+from harbor.models.agent.context import AgentContext
+from harbor.models.agent.name import AgentName
+from harbor.models.trajectories import (
+    Agent,
+    FinalMetrics,
+    Metrics,
+    Observation,
+    ObservationResult,
+    Step,
+    ToolCall,
+    Trajectory,
+)
+from harbor.models.trial.paths import EnvironmentPaths
+from harbor.utils.logger import logger
+
+
+_HOSTED_VLLM_PREFIX = "hosted_vllm/"
+_MODEL_DIRECTORY = "/opt/harbor-mini-swe"
+_K2_HORIZON_MODEL_FORMAT = "k2_horizon"
+_MCP_VERSION = "2.3.0"
+
+
+def _normalize_content(raw_content: Any) -> str:
+    """Normalize message content which may be a string, list of parts, or None."""
+    if raw_content is None:
+        return ""
+    if isinstance(raw_content, str):
+        return raw_content
+    if isinstance(raw_content, list):
+        parts = []
+        for part in raw_content:
+            if isinstance(part, dict):
+                parts.append(part.get("text", str(part)))
+            else:
+                parts.append(str(part))
+        return "\n".join(parts)
+    return str(raw_content)
+
+
+def _add_observation_to_last_agent_step(
+    steps: list[Step], content: str, _logger: Any, message_index: int
+) -> None:
+    """Add observation content to the most recent agent step."""
+    if steps and steps[-1].source == "agent":
+        prev_step = steps[-1]
+        if prev_step.observation and prev_step.observation.results:
+            prev_step.observation.results.append(ObservationResult(content=content))
+        else:
+            prev_step.observation = Observation(
+                results=[ObservationResult(content=content)]
+            )
+    else:
+        _logger.debug(f"Message at index {message_index} has no preceding agent step")
+
+
+def _build_step_metrics(
+    prompt_tokens: int,
+    completion_tokens: int,
+    cached_tokens: int,
+    prompt_tokens_details: dict[str, Any],
+    completion_tokens_details: dict[str, Any],
+    total_cost_usd: float,
+    total_completion_tokens: int,
+) -> Metrics | None:
+    """Build metrics for an individual step."""
+    if prompt_tokens == 0 and completion_tokens == 0:
+        return None
+
+    step_cost = None
+    if total_cost_usd > 0 and total_completion_tokens > 0 and completion_tokens > 0:
+        step_cost = (completion_tokens / total_completion_tokens) * total_cost_usd
+
+    extra_metrics: dict[str, Any] = {}
+    if prompt_tokens_details:
+        extra_metrics["prompt_tokens_details"] = prompt_tokens_details
+    if completion_tokens_details:
+        extra_metrics["completion_tokens_details"] = completion_tokens_details
+
+    return Metrics(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cached_tokens=cached_tokens if cached_tokens > 0 else None,
+        cost_usd=step_cost if step_cost and step_cost > 0 else None,
+        extra=extra_metrics if extra_metrics else None,
+    )
+
+
+def _parse_tool_calls(
+    message: dict[str, Any], content: str, step_id: int
+) -> tuple[list[ToolCall] | None, str | None]:
+    """Parse tool calls from an assistant message into ATIF ToolCall objects."""
+    message_tool_calls = message.get("tool_calls")
+    if not message_tool_calls:
+        return None, content if content else None
+
+    tool_calls: list[ToolCall] = []
+    for tc in message_tool_calls:
+        tc_id = tc.get("id", f"call_{step_id}_{len(tool_calls) + 1}")
+        func = tc.get("function") or {}
+        func_name = func.get("name", "bash")
+        raw_args = func.get("arguments", "{}")
+        if isinstance(raw_args, str):
+            try:
+                arguments = json.loads(raw_args)
+            except (json.JSONDecodeError, TypeError):
+                arguments = {"command": raw_args}
+        elif isinstance(raw_args, dict):
+            arguments = raw_args
+        else:
+            arguments = {"command": str(raw_args)}
+        tool_calls.append(
+            ToolCall(
+                tool_call_id=tc_id,
+                function_name=func_name,
+                arguments=arguments,
+            )
+        )
+
+    # In tool-calling mode, the content is typically reasoning/thinking
+    reasoning = content if content else None
+    return tool_calls if tool_calls else None, reasoning
+
+
+def convert_mini_swe_agent_to_atif(
+    mini_swe_agent_trajectory: dict[str, Any],
+    session_id: str,
+) -> Trajectory:
+    """
+    Convert mini-swe-agent v2 trajectory format to ATIF format.
+
+    Expects the v2 native tool-calling format where assistant messages
+    contain a ``tool_calls`` array and tool results use ``role: "tool"``.
+
+    Args:
+        mini_swe_agent_trajectory: The mini-swe-agent trajectory data
+        session_id: The session ID for the ATIF trajectory
+
+    Returns:
+        Trajectory: The converted ATIF trajectory
+    """
+    _logger = logger.getChild(__name__)
+
+    # Extract metadata
+    info = mini_swe_agent_trajectory.get("info") or {}
+    config = info.get("config") or {}
+    model_config = config.get("model") or {}
+    agent_config = config.get("agent") or {}
+
+    model_name = model_config.get("model_name") or "unknown"
+    mini_version = info.get("mini_version") or "unknown"
+    trajectory_format = mini_swe_agent_trajectory.get("trajectory_format", "unknown")
+
+    messages = mini_swe_agent_trajectory.get("messages") or []
+
+    steps: list[Step] = []
+    step_id = 1
+
+    # Track cumulative token counts
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_cached_tokens = 0
+    total_reasoning_tokens = 0
+    total_cost_usd = (info.get("model_stats") or {}).get("instance_cost") or 0.0
+
+    # First pass: count total completion tokens for cost apportioning
+    for message in messages:
+        extra = message.get("extra") or {}
+        response_data = extra.get("response") or {}
+        usage = response_data.get("usage") or {}
+        total_completion_tokens += usage.get("completion_tokens") or 0
+
+    # Process messages
+    for i, message in enumerate(messages):
+        role = message.get("role")
+        content = _normalize_content(message.get("content"))
+        extra = message.get("extra") or {}
+
+        # Extract token usage
+        response_data = extra.get("response") or {}
+        usage = response_data.get("usage") or {}
+
+        prompt_tokens = usage.get("prompt_tokens") or 0
+        completion_tokens = usage.get("completion_tokens") or 0
+        prompt_tokens_details = usage.get("prompt_tokens_details") or {}
+        completion_tokens_details = usage.get("completion_tokens_details") or {}
+        cached_tokens = prompt_tokens_details.get("cached_tokens") or 0
+        reasoning_tokens = completion_tokens_details.get("reasoning_tokens") or 0
+
+        total_prompt_tokens += prompt_tokens
+        total_cached_tokens += cached_tokens
+        total_reasoning_tokens += reasoning_tokens
+
+        if role == "system":
+            steps.append(
+                Step(
+                    step_id=step_id,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    source="system",
+                    message=content,
+                )
+            )
+            step_id += 1
+
+        elif role == "user":
+            if i == 1:
+                steps.append(
+                    Step(
+                        step_id=step_id,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        source="user",
+                        message=content,
+                    )
+                )
+                step_id += 1
+            else:
+                _add_observation_to_last_agent_step(steps, content, _logger, i)
+
+        elif role == "tool":
+            _add_observation_to_last_agent_step(steps, content, _logger, i)
+
+        elif role == "assistant":
+            tool_calls, reasoning = _parse_tool_calls(message, content, step_id)
+
+            metrics = _build_step_metrics(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cached_tokens=cached_tokens,
+                prompt_tokens_details=prompt_tokens_details,
+                completion_tokens_details=completion_tokens_details,
+                total_cost_usd=total_cost_usd,
+                total_completion_tokens=total_completion_tokens,
+            )
+
+            steps.append(
+                Step(
+                    step_id=step_id,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    source="agent",
+                    model_name=model_name,
+                    message=content,
+                    reasoning_content=reasoning,
+                    tool_calls=tool_calls,
+                    metrics=metrics,
+                )
+            )
+            step_id += 1
+
+    compaction_events = (info.get("context_compaction") or {}).get("events") or []
+    total_prompt_tokens += sum(
+        event.get("summary_prompt_tokens") or 0 for event in compaction_events
+    )
+    total_completion_tokens += sum(
+        event.get("summary_completion_tokens") or 0 for event in compaction_events
+    )
+
+    # Build final metrics
+    final_extra: dict[str, Any] = {}
+    if total_reasoning_tokens > 0:
+        final_extra["total_reasoning_tokens"] = total_reasoning_tokens
+    if compaction_events:
+        final_extra["context_compactions"] = len(compaction_events)
+
+    final_metrics = FinalMetrics(
+        total_prompt_tokens=total_prompt_tokens,
+        total_completion_tokens=total_completion_tokens,
+        total_cached_tokens=total_cached_tokens if total_cached_tokens > 0 else None,
+        total_cost_usd=total_cost_usd if total_cost_usd > 0 else None,
+        extra=final_extra if final_extra else None,
+    )
+
+    agent = Agent(
+        name="mini-swe-agent",
+        version=mini_version,
+        model_name=model_name,
+        extra={
+            "original_format": trajectory_format,
+            "agent_config": agent_config,
+        },
+    )
+
+    return Trajectory(
+        schema_version="ATIF-v1.2",
+        session_id=session_id,
+        agent=agent,
+        steps=steps,
+        final_metrics=final_metrics,
+        notes="Converted from mini-swe-agent trajectory format to ATIF",
+    )
+
+
+def convert_and_save_trajectory(
+    mini_swe_agent_trajectory_path: Path | UPath,
+    atif_trajectory_path: Path | UPath,
+    session_id: str,
+) -> None:
+    """
+    Convert mini-swe-agent trajectory file to ATIF format and save it.
+
+    Args:
+        mini_swe_agent_trajectory_path: Path to mini-swe-agent trajectory.json
+        atif_trajectory_path: Path to save the ATIF trajectory.json
+        session_id: The session ID for the ATIF trajectory
+    """
+    _logger = logger.getChild(__name__)
+
+    try:
+        mini_swe_agent_trajectory = json.loads(
+            mini_swe_agent_trajectory_path.read_text()
+        )
+
+        atif_trajectory = convert_mini_swe_agent_to_atif(
+            mini_swe_agent_trajectory,
+            session_id,
+        )
+
+        atif_trajectory_path.write_text(
+            json.dumps(atif_trajectory.to_json_dict(), indent=2)
+        )
+
+        _logger.debug(
+            f"Successfully converted trajectory to ATIF format: {atif_trajectory_path}"
+        )
+
+    except Exception as e:
+        _logger.error(f"Failed to convert trajectory: {e}")
+        raise
+
+
+class MiniSweAgent(BaseInstalledAgent):
+    """
+    The Mini SWE Agent uses the mini-swe-agent tool to solve tasks.
+    """
+
+    SUPPORTS_ATIF: bool = True
+
+    CLI_FLAGS = [
+        CliFlag(
+            "cost_limit",
+            cli="--cost-limit",
+            type="str",
+            default="0",
+        ),
+    ]
+
+    def __init__(
+        self,
+        reasoning_effort: str | None = None,
+        config_file: str | None = None,
+        api_base: str | None = None,
+        model_info: dict[str, Any] | None = None,
+        collect_rollout_details: bool = False,
+        model_format: Literal["openai", "k2_horizon"] = "openai",
+        max_turns: int | None = None,
+        summarization_threshold_chars: int | None = None,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self._reasoning_effort = reasoning_effort
+        self._max_turns = max_turns
+        if (
+            summarization_threshold_chars is not None
+            and summarization_threshold_chars < 1
+        ):
+            raise ValueError("summarization_threshold_chars must be positive")
+        if summarization_threshold_chars is not None and model_info is None:
+            raise ValueError("Mini-SWE summarization requires explicit model_info")
+        self._summarization_threshold_chars = summarization_threshold_chars
+        self._api_base = api_base
+        self._model_info = model_info
+        if collect_rollout_details and (api_base is None or model_info is None):
+            raise ValueError(
+                "Mini-SWE rollout capture requires api_base and explicit model_info"
+            )
+        self._collect_rollout_details = collect_rollout_details
+        self.rollout_correlation_id = (
+            uuid.uuid4().hex if collect_rollout_details else None
+        )
+        if model_format not in ("openai", _K2_HORIZON_MODEL_FORMAT):
+            raise ValueError(f"Unsupported Mini-SWE model format: {model_format}")
+        if model_format == _K2_HORIZON_MODEL_FORMAT and model_info is None:
+            raise ValueError("K2 Horizon model format requires model_info")
+        self._model_format = model_format
+        if model_info is not None:
+            if not api_base or not (self.model_alias or "").startswith(
+                _HOSTED_VLLM_PREFIX
+            ):
+                raise ValueError(
+                    "Mini-SWE model_info requires a hosted_vllm model and api_base"
+                )
+            if self._version != "2.1.0":
+                raise ValueError("Mini-SWE context limits require version 2.1.0")
+            for key in ("max_input_tokens", "max_output_tokens"):
+                if type(model_info.get(key)) is not int or model_info[key] < 1:
+                    raise ValueError(
+                        f"Mini-SWE model_info.{key} must be a positive integer"
+                    )
+            pythonpath = self._extra_env.get("PYTHONPATH", "")
+            self._extra_env["PYTHONPATH"] = (
+                f"{_MODEL_DIRECTORY}:{pythonpath}" if pythonpath else _MODEL_DIRECTORY
+            )
+        self._config_yaml: str | None = None
+        if config_file:
+            self._config_yaml = Path(config_file).read_text()
+
+    @staticmethod
+    def name() -> str:
+        return AgentName.MINI_SWE_AGENT.value
+
+    def get_version_command(self) -> str | None:
+        return (
+            '. "$HOME/.local/bin/env"; uv tool list 2>/dev/null | grep mini-swe-agent'
+        )
+
+    def parse_version(self, stdout: str) -> str:
+        # Output: "mini-swe-agent v0.1.2"
+        import re
+
+        match = re.search(r"(\d+\.\d+\S*)", stdout)
+        return match.group(1) if match else stdout.strip()
+
+    async def install(self, environment: BaseEnvironment) -> None:
+        # Install build tools (multi-OS)
+        await self.exec_as_root(
+            environment,
+            command=(
+                "if command -v apt-get &>/dev/null; then"
+                "  apt-get update && apt-get install -y curl build-essential git;"
+                " elif command -v apk &>/dev/null; then"
+                "  apk add --no-cache curl bash build-base git python3 py3-pip;"
+                " elif command -v yum &>/dev/null; then"
+                "  yum install -y curl git gcc make;"
+                " elif command -v dnf &>/dev/null; then"
+                "  dnf install -y curl git gcc make;"
+                " else"
+                '  echo "Warning: No known package manager found, assuming build tools are available" >&2;'
+                " fi"
+            ),
+            env={"DEBIAN_FRONTEND": "noninteractive"},
+        )
+        version_spec = f"=={self._version}" if self._version else ""
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -euo pipefail; "
+                "curl -LsSf https://astral.sh/uv/0.7.13/install.sh | sh && "
+                'if ! grep -q \'export PATH="$HOME/.local/bin:$PATH"\' "$HOME/.bashrc" 2>/dev/null; then'
+                '  echo \'export PATH="$HOME/.local/bin:$PATH"\' >> "$HOME/.bashrc";'
+                " fi && "
+                'source "$HOME/.local/bin/env" && '
+                f"uv tool install mini-swe-agent{version_spec} --with mcp=={_MCP_VERSION} && "
+                '"$(uv tool dir)/mini-swe-agent/bin/python" '
+                "-c 'from mcp.types import CacheableResult' && "
+                "mini-swe-agent --help"
+            ),
+        )
+        if self._model_info is not None:
+            await self.exec_as_root(environment, command=f"mkdir -p {_MODEL_DIRECTORY}")
+            for source in (
+                Path(__file__).with_name("mini_swe_model.py"),
+                Path(__file__).parents[2] / "llms" / "vllm_tokenization.py",
+            ):
+                await environment.upload_file(
+                    source, f"{_MODEL_DIRECTORY}/{source.name}"
+                )
+
+    @property
+    def _mini_swe_agent_trajectory_path(self) -> PurePosixPath:
+        """Path where mini-swe-agent writes its own trajectory format."""
+        return EnvironmentPaths.agent_dir / "mini-swe-agent.trajectory.json"
+
+    @property
+    def _atif_trajectory_path(self) -> PurePosixPath:
+        """Path where we write the ATIF-formatted trajectory."""
+        return EnvironmentPaths.agent_dir / "trajectory.json"
+
+    def populate_context_post_run(self, context: AgentContext) -> None:
+        if self._collect_rollout_details:
+            populate_literal_context(
+                context,
+                self.logs_dir / LITERAL_LOG_FILENAME,
+                self.rollout_correlation_id,
+            )
+        # Read the mini-swe-agent trajectory
+        mini_trajectory_path = self.logs_dir / "mini-swe-agent.trajectory.json"
+
+        if not mini_trajectory_path.exists():
+            self.logger.debug(
+                f"Mini-swe-agent trajectory file {mini_trajectory_path} does not exist"
+            )
+            return
+
+        try:
+            mini_trajectory = json.loads(mini_trajectory_path.read_text())
+        except Exception as e:
+            self.logger.debug(f"Failed to load mini-swe-agent trajectory: {e}")
+            return
+
+        # Extract token usage from mini-swe-agent format
+        n_input_tokens = 0
+        n_output_tokens = 0
+        n_cache_tokens = 0
+        total_cost = ((mini_trajectory.get("info") or {}).get("model_stats") or {}).get(
+            "instance_cost"
+        ) or 0
+        for message in mini_trajectory.get("messages") or []:
+            usage = ((message.get("extra") or {}).get("response") or {}).get(
+                "usage"
+            ) or {}
+
+            prompt_tokens_details = usage.get("prompt_tokens_details") or {}
+            n_cache_tokens += prompt_tokens_details.get("cached_tokens") or 0
+
+            n_input_tokens += usage.get("prompt_tokens") or 0
+            n_output_tokens += usage.get("completion_tokens") or 0
+
+        compaction_events = (
+            (mini_trajectory.get("info") or {}).get("context_compaction") or {}
+        ).get("events") or []
+        n_input_tokens += sum(
+            event.get("summary_prompt_tokens") or 0 for event in compaction_events
+        )
+        n_output_tokens += sum(
+            event.get("summary_completion_tokens") or 0 for event in compaction_events
+        )
+
+        context.n_input_tokens = n_input_tokens
+        context.n_output_tokens = n_output_tokens
+        context.n_cache_tokens = n_cache_tokens
+        context.cost_usd = total_cost
+
+        # Convert mini-swe-agent trajectory to ATIF format
+        atif_trajectory_path = self.logs_dir / "trajectory.json"
+        session_id = str(uuid.uuid4())
+        try:
+            convert_and_save_trajectory(
+                mini_swe_agent_trajectory_path=mini_trajectory_path,
+                atif_trajectory_path=atif_trajectory_path,
+                session_id=session_id,
+            )
+        except Exception as e:
+            self.logger.debug(f"Failed to convert trajectory to ATIF format: {e}")
+
+    @with_prompt_template
+    async def run(
+        self, instruction: str, environment: BaseEnvironment, context: AgentContext
+    ) -> None:
+        augmented_instruction = instruction
+        if self.mcp_servers:
+            mcp_info = "\n\nMCP Servers:\nThe following MCP servers are available for this task.\n"
+            for s in self.mcp_servers:
+                if s.transport == "stdio":
+                    args_str = " ".join(s.args)
+                    mcp_info += f"- {s.name}: stdio transport, command: {s.command} {args_str}\n"
+                else:
+                    mcp_info += f"- {s.name}: {s.transport} transport, url: {s.url}\n"
+            augmented_instruction = instruction + mcp_info
+
+        escaped_instruction = shlex.quote(augmented_instruction)
+
+        if not self.model_alias or "/" not in self.model_alias:
+            raise ValueError("Model name must be in the format provider/model_name")
+
+        env = {
+            "MSWEA_CONFIGURED": "true",  # Disable interactive setup
+            "MSWEA_COST_TRACKING": "ignore_errors",  # Ignore unknown model costs
+        }
+
+        if "MSWEA_API_KEY" in os.environ:
+            env["MSWEA_API_KEY"] = os.environ["MSWEA_API_KEY"]
+        elif self.model_alias.startswith(_HOSTED_VLLM_PREFIX):
+            # Hosted vLLM is an internal OpenAI-compatible endpoint. It ignores
+            # credentials, but mini-swe-agent requires a non-empty key.
+            env["MSWEA_API_KEY"] = "EMPTY"
+        else:
+            try:
+                api_key_vars = get_api_key_var_names_from_model_name(self.model_alias)
+                for api_key_var in api_key_vars:
+                    if api_key_var in os.environ:
+                        env[api_key_var] = os.environ[api_key_var]
+                    else:
+                        raise ValueError(
+                            f"Unset API variable for model {self.model_alias}. "
+                            f"Please set {api_key_var} or MSWEA_API_KEY environment variable"
+                        )
+            except ValueError as e:
+                raise ValueError(
+                    f"Unable to determine API key for model {self.model_alias}: {e}. "
+                    "Please set MSWEA_API_KEY environment variable as fallback"
+                )
+
+        if self._api_base is not None:
+            env["OPENAI_API_BASE"] = self._api_base
+            if self.model_alias.startswith(_HOSTED_VLLM_PREFIX):
+                # LiteLLM's hosted_vllm provider does not consult the generic
+                # OpenAI base URL; it reads this provider-specific variable.
+                env["HOSTED_VLLM_API_BASE"] = self._api_base
+        elif "OPENAI_API_BASE" in os.environ:
+            env["OPENAI_API_BASE"] = os.environ["OPENAI_API_BASE"]
+
+        cli_flags = self.build_cli_flags()
+        extra_flags = (cli_flags + " ") if cli_flags else ""
+
+        # Write custom config into the container if provided
+        # Mini-SWE replaces its default config list when any -c is supplied.
+        config_flags = (
+            "-c mini.yaml --agent-class minisweagent.agents.default.DefaultAgent "
+            if self._model_info is not None
+            else ""
+        )
+        if self._config_yaml:
+            config_path = "/tmp/mswea-config/custom.yaml"
+            heredoc_marker = f"MSWEA_CONFIG_EOF_{uuid.uuid4().hex[:8]}"
+            write_config_cmd = (
+                f"mkdir -p /tmp/mswea-config\n"
+                f"cat > '{config_path}' << '{heredoc_marker}'\n"
+                f"{self._config_yaml}\n"
+                f"{heredoc_marker}\n"
+            )
+            await self.exec_as_agent(environment, command=write_config_cmd, env=env)
+            config_flags += f"-c {config_path} "
+
+        if self._reasoning_effort:
+            config_flags += f"-c model.model_kwargs.extra_body.reasoning_effort={shlex.quote(self._reasoning_effort)} "
+
+        if self._max_turns is not None:
+            config_flags += f"-c agent.step_limit={self._max_turns} "
+
+        if self._model_info is not None:
+            # max_input_tokens denotes the total context window in Harbor.
+            if self._model_format == _K2_HORIZON_MODEL_FORMAT:
+                model_class = (
+                    "mini_swe_model.K2HorizonContextCompactingModel"
+                    if self._summarization_threshold_chars is not None
+                    else "mini_swe_model.K2HorizonContextLimitedModel"
+                )
+            else:
+                model_class = (
+                    "mini_swe_model.ContextCompactingModel"
+                    if self._summarization_threshold_chars is not None
+                    else "mini_swe_model.ContextLimitedModel"
+                )
+            overrides = {
+                "model.model_class": model_class,
+                "model.api_base": self._api_base,
+                "model.context_window": self._model_info["max_input_tokens"],
+                "model.max_output_tokens": self._model_info["max_output_tokens"],
+                "model.cost_tracking": "ignore_errors",
+            }
+            if self._summarization_threshold_chars is not None:
+                overrides["model.summarization_threshold_chars"] = (
+                    self._summarization_threshold_chars
+                )
+            if self.rollout_correlation_id:
+                overrides["model.model_kwargs.extra_headers"] = json.dumps(
+                    {
+                        CORRELATION_ID_HEADER: self.rollout_correlation_id,
+                        TASK_AGENT_HEADER: "mini-swe-agent",
+                    }
+                )
+            config_flags += (
+                " ".join(
+                    f"-c {shlex.quote(f'{key}={value}')}"
+                    for key, value in overrides.items()
+                )
+                + " "
+            )
+
+        await self.exec_as_agent(
+            environment,
+            command=(
+                '. "$HOME/.local/bin/env"; '
+                f"mini-swe-agent --yolo --model={self.model_alias} --task={escaped_instruction} "
+                f"--output={self._mini_swe_agent_trajectory_path} {extra_flags}"
+                f"{config_flags}"
+                f"--exit-immediately 2>&1 </dev/null | tee /logs/agent/mini-swe-agent.txt"
+            ),
+            env=env,
+        )

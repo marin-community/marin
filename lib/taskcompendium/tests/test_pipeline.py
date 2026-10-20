@@ -74,6 +74,7 @@ from .pipeline_stages import (
     SVAMP_RUBRIC,
     convert_svamp,
     fixture_recipe,
+    response,
     review_config,
     review_source,
     run_stages,
@@ -131,41 +132,6 @@ class BatchService:
             for row in rows:
                 row["response"]["body"]["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = "{"
         return Output("".join(json.dumps(row) + "\n" for row in rows))
-
-
-def response(task_id, confidence="high", quality="good"):
-    verdict = {
-        "task_id": task_id,
-        "quality": quality,
-        "confidence": confidence,
-        "reference_status": "consistent",
-        "defects": [],
-        "evidence": "The prompt supplies two apples and asks for the same count.",
-    }
-    return {
-        "custom_id": task_id,
-        "response": {
-            "status_code": 200,
-            "body": {
-                "choices": [
-                    {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": "call-0",
-                                    "type": "function",
-                                    "function": {"name": "review_task", "arguments": json.dumps(verdict)},
-                                }
-                            ],
-                        },
-                    }
-                ]
-            },
-        },
-    }
 
 
 @pytest.fixture

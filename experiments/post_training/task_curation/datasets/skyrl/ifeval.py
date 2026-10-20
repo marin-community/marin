@@ -28,16 +28,7 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import ifeval_utils
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
-
-IFEVAL_VERIFIER = SourceReference(
-    "ifeval",
-    "c7600581c6ff27b8ebdc5a02954952c77e15b520f8d6da7edb69839dc9948158",
-    (
-        "https://github.com/marin-community/MarinSkyRL/tree/"
-        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/ifeval"
-    ),
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -195,7 +186,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="MarinSkyRL",
                 family="instruction-following",
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/ifeval"),
-                verifier=IFEVAL_VERIFIER,
             ),
             config=CurationRecipe(
                 name="nemotron_if",
@@ -221,7 +211,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="MarinSkyRL",
                 family="instruction-following",
                 tags=("rlvr", "single-turn", "license:odc-by", "gym/ifeval"),
-                verifier=IFEVAL_VERIFIER,
             ),
             config=CurationRecipe(
                 name="rlvr_ifeval",

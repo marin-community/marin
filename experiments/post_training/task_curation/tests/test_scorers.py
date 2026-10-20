@@ -63,6 +63,11 @@ NVARC = ScorerClosure(
     ("requests", "numpy"),
 )
 
+STRUCTURED_OUTPUT = ScorerClosure(
+    {**ULTRA_BASE, **shipped(ULTRA, f"{ULTRA_ENVS}/structured_outputs.py")},
+    ("openapi_schema_validator", "xmltodict", "yaml"),
+)
+
 
 NVARC_RECORD = {"test_input": [[1, 2], [3, 4]], "expected_output": [[2, 3], [4, 5]]}
 NVARC_CHECK = """
@@ -75,6 +80,82 @@ reward, detail = nvarc.grade_inductive_arc(
 )
 print(json.dumps([reward, detail["execution_output"]["process_status"]]))
 """
+
+NVARC_TRANSDUCTIVE_CHECK = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from skyrl_gym.envs.nemotron_ultra.nvarc import parse_grid
+print(json.dumps(parse_grid(sys.stdin.read())))
+"""
+
+STRUCTURED_OUTPUT_CHECK = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from skyrl_gym.envs.nemotron_ultra.structured_outputs import grade_structured_output
+record = {
+    "schema_str": json.dumps({"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]}),
+    "schema_type": "json",
+}
+reward, detail = grade_structured_output(sys.stdin.read(), record, {})
+print(json.dumps([reward, detail["error_type"]]))
+"""
+
+ANSWER_EXTRACTION_CHECK = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
+print(json.dumps(final_answer_text(sys.stdin.read())))
+"""
+
+
+def test_ultra_final_answer_excludes_hidden_reasoning(tmp_path: Path):
+    tests = ScorerClosure(ULTRA_BASE).stage(tmp_path)
+    result = subprocess.run(
+        (sys.executable, "-I", "-c", ANSWER_EXTRACTION_CHECK, str(tests)),
+        input="<|start_think|>Tea, maybe coffee.<|end_think|>Tea is brewed from leaves.",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == "Tea is brewed from leaves."
+
+
+def test_structured_output_accepts_a_markdown_fenced_document(tmp_path: Path):
+    STRUCTURED_OUTPUT.skip_if_unavailable()
+    tests = STRUCTURED_OUTPUT.stage(tmp_path)
+    result = subprocess.run(
+        (sys.executable, "-I", "-c", STRUCTURED_OUTPUT_CHECK, str(tests)),
+        input='The requested document follows.\n```json\n{"count": 2}\n```',
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [1.0, None]
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("```text\n1 2\n3 4\n```", [[1, 2], [3, 4]]),
+        ("```json\n[[1, 2], [3, 4]]\n```", [[1, 2], [3, 4]]),
+        ("[[1, 2], [3, 4]]", [[1, 2], [3, 4]]),
+        ("\\boxed{12\n34}", [[1, 2], [3, 4]]),
+        ("<|start_think|>try a transform<|end_think|>\n```\n12\n34\n```", [[1, 2], [3, 4]]),
+        ("12", [[1, 2]]),
+    ],
+    ids=["fenced_rows", "fenced_json", "json", "boxed_compact", "reasoning_then_fenced_compact", "single_row"],
+)
+def test_nvarc_transductive_accepts_common_grid_formats(answer: str, expected: list[list[int]], tmp_path: Path):
+    NVARC.skip_if_unavailable()
+    tests = NVARC.stage(tmp_path)
+    result = subprocess.run(
+        (sys.executable, "-I", "-c", NVARC_TRANSDUCTIVE_CHECK, str(tests)),
+        input=answer,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == expected
 
 
 @pytest.mark.parametrize(

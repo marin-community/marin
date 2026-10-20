@@ -17,6 +17,7 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
             ("docker_image", requirements.docker_image),
             ("docker_build", requirements.docker_build),
             ("packages_lock", requirements.packages_lock),
+            ("package_spec", requirements.package_spec),
             ("working_directory", requirements.working_directory),
             ("setup_commands", requirements.setup_commands),
             ("environment_variables", requirements.environment_variables),

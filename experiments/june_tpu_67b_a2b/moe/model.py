@@ -39,7 +39,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoeImplementation,
     QBRoutedMoE,
-    resolve_moe_implementation,
+    validate_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, _mesh_axis_size, unshard
@@ -163,7 +163,7 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
-        resolve_moe_implementation(self.moe_implementation)
+        validate_moe_implementation(self.moe_implementation)
 
     @property
     def inferred_head_dim(self) -> int:

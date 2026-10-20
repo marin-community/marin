@@ -3,7 +3,7 @@
 
 import json
 import os
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -16,20 +16,20 @@ from marin.evaluation.harbor.agent_context import (
 )
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
-    HarborBackendsUnavailable,
     HarborDatasetKind,
     HarborErrorTaxonomy,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
 )
+from marin.evaluation.harbor.provenance import vendored_harbor_source
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
     _read_trial,
     _read_trials,
 )
-from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
-from marin.evaluation.runner import EvaluationError
-from marin.external_dependencies import HARBOR
+from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, ModelConfigRef, RunStatus
+from marin.evaluation.runner import EndpointRoute, EvaluationError, InferenceUnavailable, run_evaluation
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
@@ -157,7 +157,7 @@ def test_reconciled_model_info_rejects_a_policy_limit_above_the_served_window(po
 
 
 def _write_job_record(job_dir: Path, n_total_trials: int, config: ValidatedHarborConfig) -> None:
-    """Harbor's own job-level bookkeeping: the count the coverage denominator comes from."""
+    """Write job trial counts and benchmark metadata to result.json."""
     job_dir.mkdir(parents=True, exist_ok=True)
     job_dir.joinpath("result.json").write_text(
         json.dumps(
@@ -234,12 +234,7 @@ def test_read_trial_applies_harbor_error_taxonomy(
 
 
 def _memory_remote(protocol: str, monkeypatch) -> None:
-    """Route ``protocol://`` reads and writes to a fresh in-memory filesystem.
-
-    Patches rigging's factory (``url_to_fs``/``open_url``), which every read and write resolves through
-    at call time -- ``StoragePath`` verbs, ``atomic_rename``, and the finestore archive writer -- so the
-    whole executor path stays off real object storage.
-    """
+    """Route ``protocol://`` reads and writes to a fresh in-memory filesystem."""
 
     class RemoteMemoryFileSystem(MemoryFileSystem):
         @classmethod
@@ -293,13 +288,7 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_completed_trial_is_durable_across_driver_termination_and_restored(protocol, tmp_path, monkeypatch):
-    """A trial that finishes before the driver dies is durable at the remote path and restored intact.
-
-    Harbor writes each trial straight to the ``output_dir`` jobs tree, so a driver killed before it
-    returns leaves the completed trial on durable storage. A resumed run whose driver produces nothing
-    new must still report that trial, proving the runner reads it back from the durable path rather
-    than depending on a clean full-job return or a post-run upload sweep.
-    """
+    """Read completed trials after a driver failure and a resumed run that writes no new trials."""
     _memory_remote(protocol, monkeypatch)
     output_dir = f"{protocol}://eval-bucket-{tmp_path.name}/run"
     executor = _harbor_executor(f"resume-{tmp_path.name}")
@@ -322,7 +311,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
     monkeypatch.setattr(runner, "run_harbor_driver", dying_driver)
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_inference_session(), output_dir, {})
+        executor(_inference_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
     assert exc_info.value.status is RunStatus.FAILED
 
     durable = StoragePath(captured["jobs_dir"]) / captured["job_name"] / "trial-one" / "result.json"
@@ -333,7 +322,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
         return None
 
     monkeypatch.setattr(runner, "run_harbor_driver", resumed_driver)
-    outcome = executor(_inference_session(), output_dir, {})
+    outcome = executor(_inference_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
@@ -348,14 +337,19 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     class RecoveringSession:
         model = _running_model()
         recovery_waits = 0
-        unavailable = True
+        unavailable = False
+
+        def preemption_count(self) -> int:
+            return 0
 
         def backend_state(self) -> InferenceBackendState:
             if self.unavailable:
                 return InferenceBackendState.RECOVERING
             return InferenceBackendState.READY
 
-        def wait_until_ready(self) -> None:
+        def wait_until_ready(self, *, check_dependencies=None) -> None:
+            if check_dependencies is not None:
+                check_dependencies()
             self.recovery_waits += 1
             self.unavailable = False
 
@@ -393,6 +387,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
             )
         interrupted_result = job_dir / "trial-two" / "result.json"
         if driver_starts == 1:
+            session.unavailable = True
             interrupted_result.parent.mkdir(parents=True, exist_ok=True)
             interrupted_result.write_text(
                 json.dumps(
@@ -413,11 +408,11 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
                 json.dumps({"task_name": "trial-two", "verifier_result": {"rewards": {"reward": 1.0}}})
             )
         if backend_state() is InferenceBackendState.RECOVERING:
-            raise HarborBackendsUnavailable("inference backends are not ready")
+            raise InferenceUnavailable("inference backends are not ready")
 
     monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
 
-    outcome = executor(session, output_dir, {})
+    outcome = run_evaluation(executor, session, output_dir, {}, endpoint_route=EndpointRoute.CAPABILITY)
 
     assert session.recovery_waits == 1
     assert driver_starts == 2
@@ -429,33 +424,69 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     }
 
 
-def test_historical_harbor_descriptor_uses_locked_dependencies(tmp_path, monkeypatch):
-    commit = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
-    project = f"config/external/harbor/pins/{commit}"
-    lock_dir = tmp_path / project
-    lock_dir.mkdir(parents=True)
-    (lock_dir / "uv.lock").write_text(
-        f"""
-[[package]]
-name = "harbor"
-source = {{ git = "https://github.com/marin-community/harbor.git#{commit}" }}
-[[package]]
-name = "marin-external-harbor"
-dependencies = [{{ name = "gcsfs" }}]
-[[package]]
-name = "gcsfs"
-version = "1.0"
-"""
+@pytest.fixture
+def vendored_runtime_workspace(tmp_path):
+    for relative in (
+        "vendor/harbor/src/harbor",
+        "lib/rigging/src/rigging",
+        "lib/finestore/src/finestore",
+        "lib/marin/src/marin/evaluation/harbor",
+    ):
+        directory = tmp_path / relative
+        directory.mkdir(parents=True)
+        (directory / "__init__.py").write_text("runtime = 1\n")
+    (tmp_path / "lib/marin/src/marin/evaluation/harbor/trial_driver.py").write_text("runtime = 1\n")
+    for relative in ("vendor/harbor", "lib/rigging", "lib/finestore"):
+        (tmp_path / relative / "pyproject.toml").write_text('[project]\nname = "example"\n')
+    (tmp_path / "vendor/harbor/UPSTREAM.toml").write_text(
+        'repository = "https://example.org/harbor"\n'
+        f'commit = "{driver_config.HARBOR_SOURCE.commit}"\n'
+        'version = "0.8.1"\n'
     )
-    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: tmp_path)
-    monkeypatch.setattr(driver_config, "HARBOR", replace(HARBOR, runtime_requirements=("future==1",)))
+    (tmp_path / "vendor/harbor/uv.lock").write_text("version = 1\n")
+    return tmp_path
 
-    descriptor = driver_config.harbor_runtime_descriptor(commit, project)
 
-    assert "gcsfs==1.0" in descriptor
-    assert "future==1" not in descriptor
-    with pytest.raises(ValueError, match="pins"):
-        driver_config.harbor_runtime_descriptor("0" * 40, project)
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "vendor/harbor/src/harbor/__init__.py",
+        "vendor/harbor/pyproject.toml",
+        "vendor/harbor/uv.lock",
+        "lib/rigging/src/rigging/__init__.py",
+        "lib/finestore/src/finestore/__init__.py",
+        "lib/marin/src/marin/evaluation/harbor/trial_driver.py",
+    ],
+)
+def test_vendored_runtime_identity_changes_with_executed_sources(vendored_runtime_workspace, relative, monkeypatch):
+    project = vendored_runtime_workspace / "vendor/harbor"
+    upstream = vendored_harbor_source(project)
+    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: vendored_runtime_workspace)
+    original = driver_config.harbor_runtime_descriptor()
+
+    path = vendored_runtime_workspace / relative
+    path.write_bytes(path.read_bytes() + b"\nchanged\n")
+
+    assert driver_config.harbor_runtime_descriptor() != original
+    assert vendored_harbor_source(project) == upstream
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "vendor/harbor/src/harbor/__pycache__/__init__.cpython-312.pyc",
+        "vendor/harbor/tests/unit/test_example.py",
+        "vendor/harbor/registry.json",
+    ],
+)
+def test_vendored_runtime_identity_ignores_unexecuted_files(vendored_runtime_workspace, monkeypatch, relative):
+    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: vendored_runtime_workspace)
+    original = driver_config.harbor_runtime_descriptor()
+    path = vendored_runtime_workspace / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"unexecuted")
+
+    assert driver_config.harbor_runtime_descriptor() == original
 
 
 def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):
@@ -468,12 +499,12 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
 
     monkeypatch.setattr(driver_config, "terminate_process_group", terminate)
     monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: ["sleep", "60"])
-    monkeypatch.setattr(driver_config, "_BACKEND_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(driver_config, "BACKEND_POLL_SECONDS", 0.01)
 
     def backend_state() -> InferenceBackendState:
         return InferenceBackendState.RECOVERING
 
-    with pytest.raises(HarborBackendsUnavailable):
+    with pytest.raises(InferenceUnavailable):
         driver_config.run_harbor_driver(
             _validated_config(),
             HarborRuntimeOverlay(
@@ -494,6 +525,20 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
 
     assert len(terminated_return_codes) == 1
     assert terminated_return_codes[0] is not None
+
+
+def test_harbor_driver_environment_preserves_iris_uv_wrapper_variables(monkeypatch):
+    iris_environment = {
+        "IRIS_ATTEMPT_UID": "attempt-123",
+        "IRIS_UV_EXECUTABLE": "/usr/local/bin/uv",
+        "IRIS_WORKDIR": "/app",
+    }
+    for key, value in iris_environment.items():
+        monkeypatch.setenv(key, value)
+
+    environment = driver_config._driver_environment()
+
+    assert {key: environment[key] for key in iris_environment} == iris_environment
 
 
 def test_harbor_driver_can_use_iris_uv_wrapper(tmp_path, monkeypatch):
@@ -517,13 +562,14 @@ exec "$IRIS_UV_EXECUTABLE" "$@"
     assert completed.stdout == str(tmp_path)
 
 
-def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_path, monkeypatch):
-    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: ["false"])
+@pytest.mark.parametrize("command", ["true", "false"])
+def test_harbor_driver_classifies_fast_exit_from_unavailable_dependency(tmp_path, monkeypatch, command):
+    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: [command])
 
     def backend_state() -> InferenceBackendState:
         return InferenceBackendState.RECOVERING
 
-    with pytest.raises(HarborBackendsUnavailable):
+    with pytest.raises(InferenceUnavailable):
         driver_config.run_harbor_driver(
             _validated_config(),
             HarborRuntimeOverlay(
@@ -579,6 +625,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         ),
         task_limit=7,
         model_agent_kwargs={"extra_body": "{}"},
+        model_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="qwen3-0.6b", location="org/checkpoint"))),
         secret_env_keys=("DAYTONA_API_KEY",),
     )
     env_vars = {"DAYTONA_API_KEY": "daytona-key"}
@@ -588,6 +635,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         session,
         str(tmp_path),
         env_vars,
+        backend_state=lambda: InferenceBackendState.READY,
         judge=judge,
     )
 
@@ -609,6 +657,67 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         assert captured["env"]["HF_TOKEN"] == "hf-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
+    assert json.loads((tmp_path / "harbor_resume_identity.json").read_text())["model"]["location"] == "org/checkpoint"
+
+
+def test_harbor_executor_explicit_recovery_prunes_only_unscored_trials(tmp_path, monkeypatch):
+    executor = replace(
+        _harbor_executor("recover-unscored", n_benchmark=2),
+        retry_unscored_trials=True,
+    )
+    session = _inference_session()
+    job_name = runner._job_name(
+        executor.config.record_dataset,
+        (executor.config.digest, session.model.endpoint.model, executor.task_limit),
+    )
+    (tmp_path / "harbor_resume_identity.json").write_text(executor.resume_identity.model_dump_json())
+    job_dir = Path(str(runner._jobs_dir(str(tmp_path)))) / job_name
+    _write_job_record(job_dir, 2, executor.config)
+    scored_result = job_dir / "scored-zero" / "result.json"
+    scored_result.parent.mkdir(parents=True)
+    scored_result.write_text(
+        json.dumps(
+            {
+                "task_name": "scored-zero",
+                "verifier_result": {"rewards": {"reward": 0.0}},
+                "exception_info": {"exception_type": "AgentTimeoutError"},
+            }
+        )
+    )
+    unscored_result = job_dir / "setup-timeout" / "result.json"
+    unscored_result.parent.mkdir(parents=True)
+    unscored_result.write_text(
+        json.dumps(
+            {
+                "task_name": "setup-timeout",
+                "verifier_result": None,
+                "exception_info": {"exception_type": "InfrastructureError"},
+            }
+        )
+    )
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        assert Path(overlay.jobs_dir) / overlay.job_name == job_dir
+        assert scored_result.exists()
+        assert not unscored_result.exists()
+        unscored_result.parent.mkdir(parents=True)
+        unscored_result.write_text(
+            json.dumps(
+                {
+                    "task_name": "setup-timeout",
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                }
+            )
+        )
+
+    monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
+
+    outcome = executor(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
+
+    dataset = executor.config.record_dataset
+    assert outcome.metrics[dataset]["total"] == 2.0
+    assert outcome.canonical_metrics[dataset]["reward"] == 0.5
+    assert outcome.coverage[dataset].errors == {"AgentTimeoutError": 1}
 
 
 def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int = 1) -> HarborExecutor:
@@ -616,6 +725,7 @@ def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int
         _validated_config(dataset_selector=dataset, n_benchmark=n_benchmark, trials_per_task=trials_per_task),
         task_limit=None,
         model_agent_kwargs={},
+        model_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="qwen3-0.6b", location="org/checkpoint"))),
     )
 
 
@@ -643,7 +753,7 @@ def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeyp
     executor = _harbor_executor(f"failed-{tmp_path.name}")
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_inference_session(), str(tmp_path), {})
+        executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     # Infrastructure errors are ungraded: the run scored 0% of its attempted trials and fails the gate.
     assert exc_info.value.status is RunStatus.INFRA_FAILED
@@ -684,7 +794,7 @@ def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tm
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"gated-{tmp_path.name}", n_benchmark=20)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     dataset = executor.config.record_dataset
     metrics = outcome.metrics[dataset]
@@ -720,7 +830,7 @@ def test_harbor_executor_counts_undecided_error_against_completion_gate(tmp_path
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"undecided-{tmp_path.name}", n_benchmark=20)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     dataset = executor.config.record_dataset
     assert outcome.metrics[dataset]["total"] == 19.0
@@ -749,7 +859,7 @@ def test_harbor_executor_rejects_unknown_error_name(tmp_path, monkeypatch):
     executor = _harbor_executor(f"unknown-{tmp_path.name}")
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_inference_session(), str(tmp_path), {})
+        executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.coverage[executor.config.record_dataset].errors == {"unknown:NewHarborError": 1}
@@ -774,7 +884,7 @@ def test_harbor_executor_preserves_scored_errors(tmp_path, monkeypatch, exceptio
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"timeout-{tmp_path.name}", n_benchmark=10)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     dataset = executor.config.record_dataset
     assert outcome.metrics[dataset]["total"] == 10.0
@@ -801,7 +911,7 @@ def test_preflight_benchmark_count_matches_job_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"known-{tmp_path.name}", n_benchmark=4)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     dataset = executor.config.record_dataset
     coverage = outcome.coverage[dataset]
@@ -825,7 +935,7 @@ def test_harbor_attempt_count_includes_repeated_trials_per_task(tmp_path, monkey
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"repeated-{tmp_path.name}", n_benchmark=2, trials_per_task=3)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     coverage = outcome.coverage[executor.config.record_dataset]
     assert (coverage.n_benchmark, coverage.n_attempted, coverage.n_scored) == (6, 6, 6)
@@ -844,7 +954,7 @@ def test_harbor_executor_rejects_job_metadata_that_differs_from_preflight(tmp_pa
     executor = _harbor_executor(f"mismatch-{tmp_path.name}")
 
     with pytest.raises(EvaluationError, match="benchmark metadata differs from preflight"):
-        executor(_inference_session(), str(tmp_path), {})
+        executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
 
 def test_harbor_missing_results_reduce_scored_not_intended_count(tmp_path, monkeypatch):
@@ -861,7 +971,7 @@ def test_harbor_missing_results_reduce_scored_not_intended_count(tmp_path, monke
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"missing-{tmp_path.name}", n_benchmark=20)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     coverage = outcome.coverage[executor.config.record_dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (20, 19)
@@ -887,8 +997,44 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"zero-{tmp_path.name}")
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["unscored_trials"] == 0
+
+
+@pytest.mark.parametrize("changed_input", ["checkpoint", "judge", "policy"])
+def test_harbor_resume_rejects_changed_scoring_inputs_before_reusing_trials(tmp_path, monkeypatch, changed_input):
+    executor = _harbor_executor("aime")
+    stored_results = []
+
+    def driver(config, overlay, _env, _state):
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        trial = job_dir / "scored" / "result.json"
+        if trial.exists():
+            assert trial.read_bytes() == stored_results[0]
+            return
+        _write_job_record(job_dir, 1, config)
+        trial.parent.mkdir()
+        trial.write_text('{"task_name":"scored","verifier_result":{"rewards":{"reward":1}}}')
+        stored_results.append(trial.read_bytes())
+
+    monkeypatch.setattr(runner, "run_harbor_driver", driver)
+    session = _inference_session()
+    original = executor(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
+    resumed = executor(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
+    assert original.canonical_metrics["aime"]["reward"] == 1
+    assert resumed.canonical_metrics["aime"]["reward"] == 1
+    if changed_input == "checkpoint":
+        changed = replace(
+            executor, model_config=executor.model_config.model_copy(update={"location": "org/new-checkpoint"})
+        )
+    elif changed_input == "judge":
+        changed = replace(executor, judge_config=executor.model_config)
+    else:
+        changed = replace(executor, config=replace(executor.config, digest=f"sha256:{'2' * 64}"))
+    before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    with pytest.raises(EvaluationError, match="different dataset, model, policy"):
+        changed(session, str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
+    assert {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before

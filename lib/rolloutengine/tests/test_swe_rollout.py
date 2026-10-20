@@ -10,13 +10,14 @@ import shutil
 import subprocess
 
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.machine import Backend, ExitReason, Result
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TaskSpec, TextMessage
 
-from rolloutengine.task_session import WORKSPACE_INSTRUCTION
-from rolloutengine.test_support import ReplayModel, engine, lowered, machine_runtime
+from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION
+from rolloutengine.test_support import ReplayModel, engine, machine_runtime, rollout_spec
 
 
 class LocalGitMachine:
@@ -91,6 +92,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
         environment=EnvironmentRequirements(
             command_semantics=CommandSemantics.LINUX_PROCESS,
+            capabilities=("shell", "filesystem", "process", "git_repository"),
             docker_image="fixture@sha256:" + "0" * 64,
             working_directory="/testbed",
         ),
@@ -99,7 +101,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
     assert task.context.events == (TextMessage(role="user", content="Repair value.txt."),)
     machines = []
 
-    class Factory:
+    class Factory(DockerMachineFactory):
         backend = Backend.DOCKER
 
         async def create(self, spec):
@@ -128,8 +130,8 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    result = await engine(model, {"local": Factory()}).run(
-        lowered(task, machine=machine_runtime(), verifier_machine=machine_runtime())
+    result = await engine(model, {"local": Factory()}).run_task(
+        rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward)
     assert model.requests[0].messages[0] == {"role": "user", "content": "Repair value.txt."}
@@ -140,5 +142,5 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
     assert len(machines) == 2
     assert (machines[1].root / "testbed/value.txt").read_text() == f"{answer}\n"
     assert all(machine.closed for machine in machines)
-    assert result.loss_mask == (1, 0, 0, 1)
+    assert result.rollout.conversations[-1].loss_mask == (1, 0, 0, 1)
     assert all("eval_script" not in json.dumps(request.messages) for request in model.requests)

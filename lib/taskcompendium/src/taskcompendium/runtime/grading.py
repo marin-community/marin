@@ -57,7 +57,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, setup_user, validate_machine_spec
 from taskcompendium.runtime.output_capture import selected_output_files
 from taskcompendium.runtime.staging import StagedFile, resource_files, write_archive
-from taskcompendium.submission import conversation_messages, require_submission_compatibility
+from taskcompendium.submission import conversation_messages, native_action_text, require_submission_compatibility
 
 GRADING_TIMEOUT = 600.0
 SPEC_PATH = "/tests/verifier.toml"
@@ -82,10 +82,12 @@ class _StepFailed(Exception):
 
 
 def _verifyit_answer_bytes(submission: Submission) -> bytes:
-    """A text or JSON submission as the verifyit spec's answer file."""
+    """A text, JSON or native-action submission as the verifyit spec's answer file."""
     match submission:
         case TextSubmission(value=value):
             return value.encode()
+        case ActionSubmission(message=message):
+            return native_action_text(message).encode()
         case JsonSubmission(value=value):
             return json.dumps(value, allow_nan=False).encode()
     raise TypeError(f"A {type(submission).__name__} cannot be written as an answer file")

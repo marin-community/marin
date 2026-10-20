@@ -31,16 +31,7 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.skyrl.scorers import livecodebench, text_to_sql_scoring
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
-
-LCB_VERIFIER = SourceReference(
-    "lcb",
-    "a0fa569b0d62eed8c1439904a57b619978f9f0c53f8af732dcae0a971135d33d",
-    (
-        "https://github.com/marin-community/MarinSkyRL/tree/"
-        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/lcb"
-    ),
-)
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 HERE = Path(__file__).parent
 SCORERS = HERE / "scorers"
@@ -311,7 +302,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="MarinSkyRL",
                 family="competitive-programming",
                 tags=("rlvr", "single-turn", "benchmark", "license:mit", "gym/lcb"),
-                verifier=LCB_VERIFIER,
             ),
             config=CurationRecipe(
                 name="apps",
@@ -334,7 +324,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="MarinSkyRL",
                 family="competitive-programming",
                 tags=("rlvr", "single-turn", "license:mit", "gym/lcb"),
-                verifier=LCB_VERIFIER,
             ),
             config=CurationRecipe(
                 name="eurus2_code",
@@ -361,7 +350,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="MarinSkyRL",
                 family="competitive-programming",
                 tags=("rlvr", "single-turn", "gym/lcb"),
-                verifier=LCB_VERIFIER,
             ),
             config=CurationRecipe(
                 name="verifiable_code",
@@ -387,14 +375,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="MarinSkyRL",
                 family="text-to-sql",
                 tags=("rlvr", "single-turn", "license:apache-2.0", "gym/text_to_sql"),
-                verifier=SourceReference(
-                    "text_to_sql",
-                    "1d8cec1db5f4d68cb643344f8c777f73d197656040652ff2c7a588dd88ce7ed5",
-                    (
-                        "https://github.com/marin-community/MarinSkyRL/tree/"
-                        "e44c4bfcb62c489286a1264094e6d9c883aaf0d2/skyrl-gym/skyrl_gym/envs/text_to_sql"
-                    ),
-                ),
             ),
             config=CurationRecipe(
                 name="gretel_text_to_sql",

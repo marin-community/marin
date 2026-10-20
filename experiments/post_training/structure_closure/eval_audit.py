@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from rolloutengine.closure_scoring import (
+from verifyit.closure_scoring import (
     CLOSURE_REGION_SCORER,
     ClosureFormat,
     ContinuationOutcome,
@@ -20,9 +20,16 @@ from rolloutengine.closure_scoring import (
     continuation_outcome,
     score_closure_region,
 )
-from rolloutengine.tool_protocol import ToolCallStatus, tool_call_regions
+from verifyit.tool_call_markup import ToolCallStatus, tool_call_regions
 
-from experiments.post_training.structure_closure.token_data import TokenizedCaseRecord
+from experiments.post_training.structure_closure.benchmark import (
+    CONTINUE_REQUIRED,
+    ESCAPE_CONTINUE_REQUIRED,
+    VALUE_CONTINUE_REQUIRED,
+)
+from experiments.post_training.structure_closure.token_data import LOCAL_TOKEN_ROUNDTRIP_PASSED, TokenizedCaseRecord
+
+SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 
 
 class UidSource(StrEnum):
@@ -138,7 +145,11 @@ def audit_evaluation(
             verification = row.get("verification")
             if verification is None or verification["status"] != "verified":
                 raise ValueError("Verifier score is unavailable")
-            content = closure_response_content(row["output_response"], stop_reason=row["stop_reason"])
+            if not isinstance(row["output_response"], str):
+                raise ValueError("Model response is missing or is not text")
+            content = closure_response_content(
+                row["output_response"], stop_reason=row["stop_reason"], terminal_markers=SNOWBALL_TURN_END_MARKERS
+            )
             score = score_closure_region(case["prefix"] + content, case["expected"], ClosureFormat(case["format"]))
             metric = f"{CLOSURE_REGION_SCORER}/{case['family']}/{case['control']}"
             for name, value in asdict(score).items():
@@ -153,7 +164,7 @@ def audit_evaluation(
                 if not regions or regions[0].start != 0:
                     raise ValueError("Tool cohort does not start with an outside-thinking tool call")
                 tool_protocol_status = regions[0].status
-            if case["control"] in ("continue_required", "escape_continue_required", "value_continue_required"):
+            if case["control"] in (CONTINUE_REQUIRED, ESCAPE_CONTINUE_REQUIRED, VALUE_CONTINUE_REQUIRED):
                 control_outcome = continuation_outcome(
                     case["prefix"] + content, case["expected"], ClosureFormat(case["format"])
                 )
@@ -185,7 +196,7 @@ def main() -> None:
     contents = (args.tokens / "validation.jsonl").read_bytes()
     manifest = json.loads((args.tokens / "manifest.json").read_text())
     digest = hashlib.sha256(contents).hexdigest()
-    if manifest["status"] != "local-token-roundtrip-passed" or digest != manifest["hashes"]["validation"]:
+    if manifest["status"] != LOCAL_TOKEN_ROUNDTRIP_PASSED or digest != manifest["hashes"]["validation"]:
         raise ValueError("Validation cohort differs from the immutable token audit")
     cases = [json.loads(line) for line in contents.splitlines()]
     expected_count = sum(count for key, count in manifest["counts"].items() if key.startswith("validation/"))

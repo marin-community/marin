@@ -11,7 +11,7 @@ dependencies = [
     "pydantic>=2",
     "marin-taskcompendium",
     "marin-shellbox",
-    "marin-verifyit",
+    "openai>=1.59.9",
 ]
 
 [dependency-groups]

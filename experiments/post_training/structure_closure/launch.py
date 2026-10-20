@@ -18,7 +18,6 @@ from marin.rl.skyrl import (
     IrisSkyRLExecution,
     SkyRLRetentionPolicy,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -75,7 +74,7 @@ def build_run(
                 ),
                 sort_keys=False,
             ),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model, tokenizer_uri=MODEL_REPOSITORY, tokenizer_revision=MODEL_REVISION, relative_path=""
             ),
@@ -84,7 +83,12 @@ def build_run(
                 ArtifactDataSource(data, relative_path="validation.parquet"),
                 ArtifactDataSource(parity, relative_path="validation.parquet"),
             ),
-            topology=SkyRLTopology(num_nodes=5, gpus_per_node=8, gpu_variant="H100", role_plan=role_plan),
+            topology=SkyRLTopology(
+                num_nodes=role_plan.num_nodes,
+                gpus_per_node=role_plan.policy_num_gpus_per_node,
+                gpu_variant="H100",
+                role_plan=role_plan,
+            ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=42,
         ),

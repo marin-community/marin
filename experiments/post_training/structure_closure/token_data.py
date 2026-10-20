@@ -13,8 +13,23 @@ from pathlib import Path
 from typing import TypedDict
 
 from transformers import PreTrainedTokenizerFast
+from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
-from experiments.post_training.structure_closure.benchmark import ClosureCase, Family, Split, closure_format, score_case
+from experiments.post_training.structure_closure.benchmark import (
+    CLOSE_REQUIRED,
+    CONTINUE_REQUIRED,
+    OPENER_RETENTION,
+    REFERENCE_SEPARATOR,
+    RESULT_TOOL_NAME,
+    VALUE_CONTINUE_REQUIRED,
+    ClosureCase,
+    Family,
+    Split,
+    closure_format,
+    score_case,
+)
+
+LOCAL_TOKEN_ROUNDTRIP_PASSED = "local-token-roundtrip-passed"
 
 
 class ToolPrompt(StrEnum):
@@ -26,7 +41,7 @@ def write_result_tool() -> dict:
     return {
         "type": "function",
         "function": {
-            "name": "write_result",
+            "name": RESULT_TOOL_NAME,
             "description": "Record the result for a task.",
             "parameters": {
                 "type": "object",
@@ -39,7 +54,7 @@ def write_result_tool() -> dict:
 
 def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> ClosureCase:
     """Keep known tool content and control boundaries in the tokenizer's tool format."""
-    body = json.loads(case.expected.removeprefix("<tool_call>").removesuffix("</tool_call>"))
+    body = json.loads(case.expected.removeprefix(TOOL_OPEN).removesuffix(TOOL_CLOSE))
     rendered = tokenizer.apply_chat_template(
         [
             {"role": "user", "content": case.instruction},
@@ -49,25 +64,25 @@ def native_tool_case(case: ClosureCase, tokenizer: PreTrainedTokenizerFast) -> C
         tokenize=False,
         enable_thinking=False,
     )
-    expected = "<tool_call>" + rendered.rsplit("<tool_call>", 1)[1].split("</tool_call>", 1)[0] + "</tool_call>"
-    if json.loads(expected.removeprefix("<tool_call>").removesuffix("</tool_call>")) != body:
+    expected = TOOL_OPEN + rendered.rsplit(TOOL_OPEN, 1)[1].split(TOOL_CLOSE, 1)[0] + TOOL_CLOSE
+    if json.loads(expected.removeprefix(TOOL_OPEN).removesuffix(TOOL_CLOSE)) != body:
         raise ValueError("Native serialization changed tool content")
-    if case.control == "close_required":
-        cut = len(expected) - len("</tool_call>")
-    elif case.control == "opener_retention":
+    if case.control == CLOSE_REQUIRED:
+        cut = len(expected) - len(TOOL_CLOSE)
+    elif case.control == OPENER_RETENTION:
         cut = expected.index("{")
-    elif case.control == "continue_required":
+    elif case.control == CONTINUE_REQUIRED:
         cut = expected.index(case.task_id) + max(1, len(case.task_id) // 2)
-    elif case.control == "value_continue_required":
+    elif case.control == VALUE_CONTINUE_REQUIRED:
         cut = expected.index('"task":') + len('"task":')
     else:
         raise ValueError(f"Unsupported native tool control: {case.control}")
     instruction = case.instruction
-    if case.control != "close_required":
-        lead, reference = instruction.rsplit("\nReference:\n", 1)
+    if case.control != CLOSE_REQUIRED:
+        lead, reference = instruction.rsplit(REFERENCE_SEPARATOR, 1)
         if reference != case.expected:
             raise ValueError("Instruction reference differs from the case reference")
-        instruction = lead + "\nReference:\n" + expected
+        instruction = lead + REFERENCE_SEPARATOR + expected
     return replace(case, prefix=expected[:cut], expected=expected, instruction=instruction)
 
 
@@ -158,18 +173,27 @@ def prepare_tokens(
             raise ValueError(f"Source hash mismatch: {split}")
         destination = output / f"{split}.jsonl"
         with source.open() as inputs, destination.open("x") as outputs:
-            for line in inputs:
-                raw = json.loads(line)
-                case = ClosureCase(**(raw | {"family": Family(raw["family"])}))
+            for line_number, line in enumerate(inputs, start=1):
+                raw = {}
                 try:
+                    raw = json.loads(line)
+                    if not isinstance(raw, dict):
+                        raise ValueError("Case must be a JSON object")
+                    case = ClosureCase(**(raw | {"family": Family(raw["family"])}))
                     record = tokenized_case_record(case, tokenizer, tool_prompt=tool_prompt)
                     prompt_length = len(record["prompt_token_ids"])
                     target_length = len(record["target_token_ids"])
                     if prompt_length + target_length > context_tokens:
                         raise ValueError("Reference continuation exceeds context budget")
-                except ValueError as error:
+                except (KeyError, TypeError, ValueError) as error:
                     failures.append(
-                        {"case_id": case.case_id, "family": case.family, "split": split, "error": str(error)}
+                        {
+                            "case_id": raw.get("case_id") if isinstance(raw, dict) else None,
+                            "family": raw.get("family") if isinstance(raw, dict) else None,
+                            "split": split,
+                            "line": line_number,
+                            "error": str(error),
+                        }
                     )
                     continue
                 outputs.write(json.dumps(record, separators=(",", ":")) + "\n")
@@ -191,7 +215,7 @@ def prepare_tokens(
         "tokenizer_sha256": hashlib.sha256((initializer / "tokenizer.json").read_bytes()).hexdigest(),
         "chat_template_sha256": hashlib.sha256((initializer / "chat_template.jinja").read_bytes()).hexdigest(),
         "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "status": "failed" if failures else "local-token-roundtrip-passed",
+        "status": "failed" if failures else LOCAL_TOKEN_ROUNDTRIP_PASSED,
     }
     (output / "manifest.json").write_text(json.dumps(report, indent=2) + "\n")
     return report

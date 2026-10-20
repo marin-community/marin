@@ -32,7 +32,7 @@ learn.
 import inspect
 import json
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Final, Generic, TypeVar, cast
 
 from rigging.filesystem.cluster_config import marin_prefix, marin_region
@@ -56,6 +56,7 @@ from marin.execution.artifact import (
 )
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
+from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
@@ -310,8 +311,8 @@ def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepS
     Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its pin); the
     fingerprint, version, artifact type, and dep identities travel in ``hash_attrs`` so the runner
     applies the drift check before serving a cached output, and the step fn writes a full
-    :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it never
-    inspects ``handle.run``.
+    :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it only
+    inspects ``handle.run`` to preserve a :class:`RemoteCallable` wrapper in the lowered spec.
 
     ``memo`` caches the spec of each handle by identity, so a handle several consumers share is
     lowered once. Without it a diamond re-walks the shared subgraph — and re-runs its
@@ -368,7 +369,8 @@ def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepS
                 deps=_handle.deps,
             )
             config = _handle.build_config(ctx)
-            result = _handle.run(config)
+            run_fn = _handle.run.fn if isinstance(_handle.run, RemoteCallable) else _handle.run
+            result = run_fn(config)
             source = None
             config_json = json.loads(canonical_json(config))
             result_json = result.result_payload() if isinstance(result, Artifact) else None
@@ -399,13 +401,14 @@ def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepS
     if handle.expected_fingerprint is not None:
         hash_attrs[EXPECTED_FINGERPRINT_KEY] = handle.expected_fingerprint
 
+    step_fn = replace(handle.run, fn=fn) if isinstance(handle.run, RemoteCallable) else fn
     spec = StepSpec(
         name=handle.name,
         override_output_path=_output_path_spec(handle),
         deps=dep_specs,
         hash_attrs=hash_attrs,
         fingerprint_payload=payload,
-        fn=fn,
+        fn=step_fn,
         writes_record=True,
     )
     memo[id(handle)] = spec
