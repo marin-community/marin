@@ -509,10 +509,13 @@ def run_variant(variant: Variant, args) -> Result:
 
     res.bwd_s = res.total_s - res.fwd_s
     one_gemm = _gemm_flops(args.batch, args.hidden, args.vocab)
+    # grad_in_fwd issues 3 GEMMs in all, 2 beyond its timed loss-only primal; the others recompute
+    # the logits in the backward and issue 4.
+    issued_gemms = 3.0 if variant.impl == "grad_in_fwd" else 4.0
     res.fwd_tflops = one_gemm / res.fwd_s / 1e12
-    res.bwd_tflops = 3.0 * one_gemm / res.bwd_s / 1e12 if res.bwd_s > 0 else float("nan")
+    res.bwd_tflops = (issued_gemms - 1.0) * one_gemm / res.bwd_s / 1e12 if res.bwd_s > 0 else float("nan")
     res.total_useful_tflops = 3.0 * one_gemm / res.total_s / 1e12
-    res.total_issued_tflops = 4.0 * one_gemm / res.total_s / 1e12
+    res.total_issued_tflops = issued_gemms * one_gemm / res.total_s / 1e12
 
     stats = device.memory_stats() or {}
     res.peak_hbm_bytes = int(stats.get("peak_bytes_in_use", 0))
