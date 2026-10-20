@@ -110,12 +110,14 @@ class Analyst:
     async def __aexit__(self, *exc: object) -> None:
         return None
 
-    async def complete(self, _messages: Sequence[Message], _policy: LLMPolicy):
+    async def complete(self, messages: Sequence[Message], policy: LLMPolicy):
+        del messages, policy  # Parameter names match the ModelClient protocol.
         raise AssertionError("the analysis asks only for structured output")
 
     async def complete_structured[T: BaseModel](
-        self, messages: Sequence[Message], output_type: type[T], _policy: LLMPolicy
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
+        del policy
         text = str(messages[-1]["content"])
         self.requests.append(text)
         if output_type is RolloutIdeas:
