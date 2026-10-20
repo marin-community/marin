@@ -99,6 +99,7 @@ def smoke_recipe(request_window_tokens: int, max_new_tokens: int) -> dict:
     config["trainer"]["policy_mini_batch_size"] = ROLE_PLAN.policy_mini_batch_size
     config["trainer"]["project_name"] = "marin-snowball-curriculum-smoke"
     config["extra_env"]["VERIFYIT_JUDGE_MODEL"] = "openai/gpt-oss-120b"
+    config["extra_env"].update({"NCCL_NET": "Socket", "NCCL_IB_DISABLE": "1", "NCCL_SOCKET_FAMILY": "AF_INET"})
     return config
 
 
