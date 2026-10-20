@@ -4,10 +4,11 @@
 """Plot per-eval BPB for the 67B-A2B 65k and 262k checkpoints against Qwen3.5-35B-A3B-Base and Gemma 4 26B-A4B.
 
 Marin numbers come from the W&B runs written by ``eval_67b_a2b_step156k_paloma_lm_eval_rolling.py``.
-Qwen numbers and Gemma's Paloma numbers come from the lm-eval results published with issue #8824. #8824 scored
-Gemma only on the newer 15-subset UncheatableEval snapshot, so its 7-subset numbers come from our own rerun with the
-same lm-eval setup (W&B run ``GEMMA_UNCHEATABLE_RUN``). All use lm-eval 0.4.12 ``loglikelihood_rolling`` semantics
-on the same documents (Paloma test split, 7 legacy UncheatableEval subsets).
+Qwen numbers come from the lm-eval results published with issue #8824. Gemma numbers come from our own lm-eval
+run (W&B run ``GEMMA_RUN``): #8824's Gemma Paloma numbers came from a setup that disagrees with ours on short-document
+subsets, and #8824 scored Gemma only on the newer 15-subset UncheatableEval snapshot. All use lm-eval 0.4.12
+``loglikelihood_rolling`` semantics with ``max_length=4096`` on the same documents (Paloma test split, 7 legacy
+UncheatableEval subsets).
 
 Run::
 
@@ -29,15 +30,14 @@ mpl.use("Agg")
 WANDB_PROJECT = "marin-community/marin_moe"
 RESULTS_BASE = "https://storage.googleapis.com/marin-public/held/hero-open-weight-ppl/2026.09.05.1"
 QWEN_RESULTS_URL = f"{RESULTS_BASE}/qwen-results.json"
-GEMMA_RESULTS_URL = f"{RESULTS_BASE}/gemma-4-results.json"
-GEMMA_UNCHEATABLE_RUN = "mv3surut"
+GEMMA_RUN = "3rzcpy9e"
 CHECKPOINTS = (
     ("Marin 67B-A2B 65k ckpt (step 156k)", "step156k"),
     ("Marin 67B-A2B 262k ckpt (qk 1.75, skew8, step 157k)", "ctxext_qk175_skew8_step157k"),
 )
 QWEN_NAME = "Qwen3.5-35B-A3B-Base"
 GEMMA_NAME = "Gemma 4 26B-A4B (base)"
-# (panel label, our subset key, lm-eval task suffix); the label is also the key in the Gemma results file
+# (panel label, our subset key, lm-eval task suffix)
 PALOMA = (
     ("4chan", "4chan", "4chan_meta_sep"),
     ("C4 100 domains", "c4_100_domains", "c4_100_domains"),
@@ -86,10 +86,9 @@ def _qwen_bpb() -> dict[str, float]:
 
 
 def _gemma_bpb() -> dict[str, float]:
-    with urllib.request.urlopen(GEMMA_RESULTS_URL) as f:
-        paloma = json.load(f)["paloma"]
-    run = wandb.Api(timeout=60).run(f"{WANDB_PROJECT}/{GEMMA_UNCHEATABLE_RUN}")
-    uncheatable = {key: run.summary[f"bpb/uncheatable_marin_{key}"] for _, key in UNCHEATABLE}
+    summary = wandb.Api(timeout=60).run(f"{WANDB_PROJECT}/{GEMMA_RUN}").summary
+    paloma = {f"paloma_{task}": summary[f"bpb/paloma_{task}"] for _, _, task in PALOMA}
+    uncheatable = {key: summary[f"bpb/uncheatable_marin_{key}"] for _, key in UNCHEATABLE}
     return paloma | uncheatable
 
 
@@ -102,7 +101,7 @@ def panels(
         return [marin[f"{tag}/{suite}"][f"lm_eval_rolling/{suite}/{key}"] for _, tag in CHECKPOINTS]
 
     out = [
-        (f"Paloma · {label}", [*ours("paloma", f"{key}/bpb"), qwen[f"paloma_{task}"], gemma[label]])
+        (f"Paloma · {label}", [*ours("paloma", f"{key}/bpb"), qwen[f"paloma_{task}"], gemma[f"paloma_{task}"]])
         for label, key, task in PALOMA
     ]
     out.append(
@@ -111,7 +110,7 @@ def panels(
             [
                 *ours("paloma", "macro_bpb"),
                 statistics.mean(qwen[f"paloma_{task}"] for _, _, task in PALOMA),
-                statistics.mean(gemma[label] for label, _, _ in PALOMA),
+                statistics.mean(gemma[f"paloma_{task}"] for _, _, task in PALOMA),
             ],
         )
     )
@@ -180,8 +179,7 @@ def plot(rows: list[tuple[str, list[float]]], path: str) -> None:
     fig.suptitle(
         "Bits per byte (lower is better), lm-eval 0.4.12 loglikelihood_rolling, max_length=4096; "
         "Paloma test split (154,440 docs), UncheatableEval 7 subsets (7,052 docs).\n"
-        "Gemma UncheatableEval numbers are our rerun with the same lm-eval setup; "
-        "all other open-model numbers are from #8824.",
+        "Gemma numbers are our run with the same lm-eval setup; Qwen numbers are from #8824.",
         fontsize=11,
         color=MUTED,
         y=0.962,
