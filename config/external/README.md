@@ -87,8 +87,11 @@ The external configurations intentionally model only what Marin needs:
   revision's frozen root lock inside the cluster's standard Iris task image.
   The lock overrides Rigging's source because a pinned Marin Git workspace
   advertises its development version while the launcher needs published Marin
-  wheels. After each MarinSkyRL update, the updater installs the frozen base
-  lock in a temporary environment and runs `uv pip check`. This catches
+  wheels. The updater upgrades Rigging together with MarinSkyRL because the
+  override hides the exact Rigging version that published Marin wheels require,
+  so uv would otherwise keep the locked Rigging version. After each MarinSkyRL
+  update, the updater installs the frozen base lock in a temporary environment
+  and runs `uv pip check`. This catches
   requirements hidden by the override, including exact Rigging versions
   required by published Iris and Finestore wheels.
 - `vllm` records the promoted GPU wheels (`gpu.toml`) and a main-line source

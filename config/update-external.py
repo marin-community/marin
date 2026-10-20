@@ -47,6 +47,9 @@ class ExternalProject:
     distribution: str
     constant_name: str
     runtime_distributions: tuple[str, ...] = ()
+    # Distributions pinned through the project's override-dependencies; uv keeps their locked
+    # version unless they are upgraded with the project.
+    overridden_distributions: tuple[str, ...] = ()
 
     @property
     def directory(self) -> Path:
@@ -107,7 +110,7 @@ EXTERNAL_PROJECTS = (
         "HARBOR",
         runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
     ),
-    ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),
+    ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL", overridden_distributions=("marin-rigging",)),
 )
 
 
@@ -642,17 +645,12 @@ def main() -> None:
     previous_dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     if not args.check:
         for project in selected:
-            subprocess.run(
-                [
-                    "uv",
-                    "lock",
-                    "--project",
-                    str(project.directory),
-                    "--upgrade-package",
-                    project.distribution,
-                ],
-                check=True,
-            )
+            upgrades = [
+                argument
+                for distribution in (project.distribution, *project.overridden_distributions)
+                for argument in ("--upgrade-package", distribution)
+            ]
+            subprocess.run(["uv", "lock", "--project", str(project.directory), *upgrades], check=True)
             if project.config_name == MARINSKYRL_CONFIG_NAME:
                 validate_marinskyrl_environment(project)
 
