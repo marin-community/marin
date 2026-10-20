@@ -41,6 +41,12 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
 
+## Checkpoint averaging and format SFT
+
+See [Hero format SFT](../../../docs/references/hero-format-sft.md) for the current-Hero
+checkpoint-preparation, adapter-training, evaluation and separate 65K YaRN entrypoints.
+Averaging requires verified execution in the source weights' storage region.
+
 ## Inference export
 
 Choose a permanent checkpoint and fresh destination in the same region.

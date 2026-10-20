@@ -62,9 +62,12 @@ from levanter.grug.grug_moe import (
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
 from levanter.kernels.triton.short_conv import short_conv
+from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
+
+from experiments.grug.moe_hero_ep.yarn import yarn_frequencies
 
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
@@ -245,6 +248,11 @@ def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.
 class GrugMoeHfConfig(HfConfig):
     model_type = GRUG_MOE_MODEL_TYPE
 
+    def __init__(self, *, max_position_embeddings: int = 4096, **kwargs):
+        # HF validates YaRN against this value while constructing rotary params.
+        self.max_position_embeddings = max_position_embeddings
+        super().__init__(**kwargs)
+
 
 def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
     for name in names:
@@ -317,6 +325,7 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    yarn: YarnRotaryEmbeddingsConfig | None = None
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -408,7 +417,22 @@ class GrugModelConfig:
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
-        rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
+        scaling = _hf_config_attr(hf_config, ("rope_parameters", "rope_scaling"))
+        theta = float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0))
+        if scaling is not None:
+            theta = float(scaling.get("rope_theta", theta))
+        rope = RotaryConfig(theta=theta)
+        yarn = None
+        if scaling is not None and scaling.get("rope_type", "default") != "default":
+            if scaling.get("rope_type") != "yarn":
+                raise ValueError("Hero HF import only supports explicit YaRN rope_scaling")
+            yarn = YarnRotaryEmbeddingsConfig.make_from_hf_config(rope.theta, scaling)
+            partial = scaling.get("partial_rotary_factor", _hf_config_attr(hf_config, ("partial_rotary_factor",), 0.5))
+            if partial != 0.5:
+                raise ValueError("Hero YaRN requires the source model's half-head rotary convention")
+            amplitude = 1.0 if yarn.factor == 1 else 1 + 0.1 * yarn.mscale * math.log(yarn.factor)
+            if not math.isclose(float(scaling.get("attention_factor", amplitude)), amplitude):
+                raise ValueError("HF YaRN attention_factor disagrees with the recorded native mscale")
         latent_dim = _hf_config_attr(hf_config, ("latent_dim",))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
@@ -441,6 +465,7 @@ class GrugModelConfig:
             qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
             qk_mult_long_scale=float(_hf_config_attr(hf_config, ("qk_mult_long_scale",), 1.0)),
             rope=rope,
+            yarn=yarn,
             rope_fused=bool(_hf_config_attr(hf_config, ("rope_fused",), False)),
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
             sconv_kernel=int(_hf_config_attr(hf_config, ("sconv_kernel",), 4)),
@@ -451,7 +476,7 @@ class GrugModelConfig:
         # One name per field: core fields take the universal transformers spelling, MoE fields the
         # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
         # stays tolerant of the older spellings so existing artifacts keep loading.
-        config = {
+        config: dict[str, Any] = {
             "architectures": [GRUG_MOE_ARCHITECTURE],
             "vocab_size": vocab_size,
             # core — universal transformers names
@@ -486,6 +511,13 @@ class GrugModelConfig:
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
         }
+        if self.yarn is not None:
+            if self.yarn.theta != self.rope.theta:
+                raise ValueError("YaRN theta must match the source Hero rotary configuration")
+            _, scaling = self.yarn.to_hf_config()
+            scaling["attention_factor"] = 1 + 0.1 * self.yarn.mscale * math.log(self.yarn.factor)
+            config["rope_scaling"] = scaling
+            config["partial_rotary_factor"] = 0.5
         if config_overrides is not None:
             config.update(config_overrides)
         return GrugMoeHfConfig(**config)
@@ -506,6 +538,7 @@ def _apply_rotary_embedding_fused(
     rotary_dim: int,
     rope: RotaryConfig,
     disable_rope: jax.Array | bool,
+    yarn: YarnRotaryEmbeddingsConfig | None = None,
 ) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
     # Rotates adjacent (interleaved) dimension pairs (i, i+1) within the rotary half -- a valid RoPE
     # convention, but NOT bit-equivalent to the non-fused ``apply_rotary_embedding`` path, which pairs
@@ -513,9 +546,14 @@ def _apply_rotary_embedding_fused(
     # interchangeable mid-training (a from-scratch run learns whichever convention it starts with).
     half = rotary_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half, dtype=jnp.float32) / half))
+    amplitude = 1.0
+    if yarn is not None:
+        if yarn.theta != rope.theta:
+            raise ValueError("YaRN theta must match the source Hero rotary configuration")
+        inv_freq, amplitude = yarn_frequencies(rotary_dim, yarn)
     angles = jnp.arange(seq_len, dtype=jnp.float32)[:, None] * inv_freq[None, :]
-    cos = jnp.cos(angles)
-    sin = jnp.sin(angles)
+    cos = jnp.cos(angles) * amplitude
+    sin = jnp.sin(angles) * amplitude
     first_factor = jnp.repeat(cos, 2, axis=-1)
     second_factor = jnp.reshape(jnp.stack([-sin, sin], axis=-1), (seq_len, rotary_dim))
     if rotary_dim < head_dim:
@@ -571,6 +609,37 @@ class ShortConv(eqx.Module):
         return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
 
 
+class LoraProjection(eqx.Module):
+    """Low-rank correction in the Hero matrix layout, scaled by alpha / rank."""
+
+    a: jax.Array
+    b: jax.Array
+    scale: float = eqx.field(static=True)
+
+    @staticmethod
+    def init(weight: jax.Array, rank: int, alpha: float, *, key: PRNGKeyArray) -> "LoraProjection":
+        spec = _partition_spec_of(weight) or P(None, None)
+        return LoraProjection(
+            a=reshard(random.normal(key, (weight.shape[0], rank)) / math.sqrt(weight.shape[0]), P(spec[0], None)),
+            b=reshard(jnp.zeros((rank, weight.shape[1]), dtype=jnp.float32), P(None, spec[1])),
+            scale=alpha / rank,
+        )
+
+    def __call__(self, x: jax.Array, out_sharding: P | None = None) -> jax.Array:
+        # Trainable leaves and Adam moments remain FP32; GEMMs match the activation precision.
+        input_spec = _partition_spec_of(x) or P(*((None,) * x.ndim))
+        rank_spec = P(*(tuple(input_spec) + (None,) * x.ndim)[: x.ndim - 1], None)
+        low_rank = jnp.einsum("...d,dr->...r", x, self.a.astype(x.dtype), out_sharding=rank_spec)
+        return jnp.einsum("...r,ro->...o", low_rank, self.b.astype(x.dtype), out_sharding=out_sharding) * self.scale
+
+
+def _project(
+    x: jax.Array, weight: jax.Array, adapter: LoraProjection | None, out_sharding: P | None = None
+) -> jax.Array:
+    projected = jnp.einsum("...d,do->...o", x, weight, out_sharding=out_sharding)
+    return projected if adapter is None else projected + adapter(x, _partition_spec_of(projected))
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
@@ -579,6 +648,10 @@ class CausalSelfAttention(eqx.Module):
     attn_gate: Float[Array, "D N"]
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
     cfg: GrugModelConfig = eqx.field(static=True)
+    lora_q: LoraProjection | None = None
+    lora_k: LoraProjection | None = None
+    lora_v: LoraProjection | None = None
+    lora_o: LoraProjection | None = None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
@@ -608,9 +681,9 @@ class CausalSelfAttention(eqx.Module):
         # stay in it, the attention output returns to it, and `w_o` writes it.
         residual_seq_axis = _sequence_axis_of(x)
 
-        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
-        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
-        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        q_flat = _project(x, self.w_q, self.lora_q)
+        k_flat = _project(x, self.w_k, self.lora_k)
+        v_flat = _project(x, self.w_v, self.lora_v)
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -677,14 +750,31 @@ class CausalSelfAttention(eqx.Module):
                 rotary_dim=head_dim // 2,
                 rope=self.cfg.rope,
                 disable_rope=disable_rope,
+                yarn=self.cfg.yarn,
             )
         else:
 
             def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
                 half = head_dim // 2
-                q_rot, k_rot = apply_rotary_embedding(
-                    qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-                )
+                if self.cfg.yarn is None:
+                    q_rot, k_rot = apply_rotary_embedding(
+                        qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+                    )
+                else:
+                    if self.cfg.yarn.theta != self.cfg.rope.theta:
+                        raise ValueError("YaRN theta must match the source Hero rotary configuration")
+                    inv_freq, amplitude = yarn_frequencies(half, self.cfg.yarn)
+                    angles = jnp.arange(seq_len, dtype=jnp.float32)[:, None] * inv_freq[None, :]
+                    cos = (jnp.cos(angles) * amplitude)[None, :, None, :]
+                    sin = (jnp.sin(angles) * amplitude)[None, :, None, :]
+
+                    def rotate(x):
+                        first, second = jnp.split(x[..., :half], 2, axis=-1)
+                        return jnp.concatenate([first * cos - second * sin, second * cos + first * sin], axis=-1).astype(
+                            x.dtype
+                        )
+
+                    q_rot, k_rot = rotate(qh), rotate(kh)
                 return (
                     jnp.concatenate([q_rot, qh[..., half:]], axis=-1),
                     jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
@@ -735,7 +825,7 @@ class CausalSelfAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, residual_seq_axis, "model"),
         )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=P(_BATCH_AXES, residual_seq_axis, None))
+        return _project(attn_out, self.w_o, self.lora_o, P(_BATCH_AXES, residual_seq_axis, None))
 
 
 class RMSNorm(eqx.Module):
@@ -785,6 +875,9 @@ class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
     w_down: jax.Array
+    lora_gate: LoraProjection | None = None
+    lora_up: LoraProjection | None = None
+    lora_down: LoraProjection | None = None
 
     @staticmethod
     def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
@@ -812,9 +905,9 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         x_flat = _flatten_tokens(x)
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
+        gate = _project(x_flat, self.w_gate, self.lora_gate)
+        up = _project(x_flat, self.w_up, self.lora_up)
+        out_flat = _project(activation_fn(gate) * up, self.w_down, self.lora_down, _token_spec())
         return _unflatten_tokens(out_flat, x)
 
 
@@ -1317,12 +1410,18 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        *,
+        embedding_delta: tuple[jax.Array, jax.Array] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
 
         cfg = self.config
         hidden = _embedding_gather(self.token_embed, token_ids)
+        if embedding_delta is not None:
+            selected_ids, delta = embedding_delta
+            matches = (token_ids[..., None] == selected_ids).astype(hidden.dtype)
+            hidden = hidden + matches @ delta.astype(hidden.dtype)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
