@@ -122,7 +122,7 @@ spec, so a move of either is a single-site change.
   in a verifier machine given `environment=`), `python_grader(script, config, environment=,
   answer_path=, timeout=)` (`python3 /tests/grade.py` in a verifier machine) or
   `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`. RolloutEngine grades an
-  LLM judge (a verifyit `JudgeSpec`) on the host through the judge service of `TaskRolloutSpec.judge_connection`
+  LLM judge (`judge_grader`) on the host through the judge service of `TaskRolloutSpec.judge_connection`
   or `VERIFYIT_JUDGE_BASE_URL`, with no verifier machine, so its `RolloutEngine.check` fails on a host
   that has neither.
   `grader_environment(task_image)` is the verifier machine's environment: the task image, or

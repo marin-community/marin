@@ -397,7 +397,7 @@ async def test_a_decision_task_runs_without_its_grader_and_is_graded_on_the_host
     assert isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
     assert client.requests[0][0]["z_candidate_answer"] == DECISION_REPLY
     (record,) = [json.loads(p.read_bytes()) for p in (tmp_path / "evidence" / "solver").glob("*/attempt-*.json")]
-    assert record["rollout"]["grade"]["detail"] == {"level": 3.4, "bar": 2.0, "accepted": True}
+    assert record["grade"]["detail"] == {"level": 3.4, "bar": 2.0, "accepted": True}
 
 
 async def test_a_decision_trial_that_ends_before_its_first_reply_is_an_agent_timeout(tmp_path, relower, fakes):

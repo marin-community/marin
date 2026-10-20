@@ -458,7 +458,10 @@ def judge_grader(rubric: Rubric, reference: str) -> GraderPackage:
 
     For deliverables whose prose is the product. The grader is a verifyit ``JudgeSpec`` naming the judge of
     the default strength (``spec.judge``, a stub the author never sets), with the rubric spec
-    (``JUDGE_SPEC_PATH``) as its context. It runs in a verifier machine on the grader base image.
+    (``JUDGE_SPEC_PATH``) as its context. RolloutEngine grades it on the host through the judge service of
+    ``TaskRolloutSpec.judge_connection`` or ``VERIFYIT_JUDGE_BASE_URL``, with no verifier machine: the
+    grader-base environment it declares is there because TaskCompendium's ``VerifyitGrader`` requires one
+    for a mode that does not grade in process, and nothing starts it (``grading_environment``).
 
     Raises:
         ValueError: ``reference`` is empty.
