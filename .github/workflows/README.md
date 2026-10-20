@@ -119,6 +119,8 @@ tests and the production launcher cutover remain separate gates; see
 at 09:00 UTC. The Grug CUTLASS case runs weekly or by manual selection.
 `Marin - SkyRL CPU Nightly` runs CatCount learning and checkpoint/resume gates
 at 06:00 UTC. Both use the checked-out nested runtime and its independent lock.
+The GPU failure reporter retains the source tracking issue's title prefix so
+transferred failure history continues in the same issue.
 
 ## External dependency updates
 

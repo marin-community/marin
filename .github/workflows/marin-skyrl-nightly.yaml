@@ -169,6 +169,7 @@ jobs:
       - uses: marin-community/marin-style/actions/report-failure@d855d6304ad0532c131ef2e208db84ed7acf4721
         with:
           lane: skyrl-nightly
+          issue-title-prefix: "[nightly-gsm8k-h100-and-grug-megatron-h100]"
           trigger-token: ${{ secrets.LOOM_TRIGGER_GH_TOKEN }}
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           triage-notes: >-
