@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Propose tasks from the capability catalog through Taskforge's stages, and review each proposal.
+"""Propose tasks from the capability catalog through Taskforge's stages, and triage each proposal.
 
 The driver follows the staged path from the catalog to proposals, then to ``stage20_triage``, then
 to the build, and stops before the build. ``generate_tasks`` follows the unstaged path instead: GLM
@@ -10,19 +10,17 @@ capability, the driver:
 
 1. plans ``--slots`` slots and writes a proposal per slot with
    ``proposal_source.CapabilitySource``, in the environments ``--environment`` names;
-2. evaluates every proposal with ``stage20_triage.program.evaluate``: the structural checks, then
-   ``--rubric-samples`` samples of a ``GlmRubric`` shown ``catalog.capability_idea_record(idea)``.
+2. triages every proposal with ``stage20_triage.preflight.preflight``, Taskforge's default triage:
+   the deterministic checks, with no model call.
 
-Repairing REPAIR verdicts, building accepted proposals with ``stage40_build_with_program`` and validating the
-drafts belong to a stage coordinator, which Taskforge does not include, so the driver stops after
-the verdicts. When a capability's plan stays invalid or its model calls run out of retries, the
-driver records the error as that capability's failure and still writes the run's outputs, the
-proposals included when only their review failed:
+Building accepted proposals with ``stage40_build_with_program`` and validating the drafts belong to
+Taskforge's stage coordinator (``taskforge.stage_coordinator``), so the driver stops after the
+verdicts. When a capability's plan stays invalid or its model calls run out of retries, the driver
+records the error as that capability's failure and still writes the run's outputs:
 
-* ``OUTPUT_DIR/calls/``, the rubric's ``CallStore``, written as the calls finish.
 * ``OUTPUT_DIR/<capability id>/`` with ``plan.request.json`` and ``plan.completions.json``, and per
-  slot ``slot-NN.request.json``, ``slot-NN.completions.json``, then ``slot-NN.md`` and, unless the
-  review failed, ``slot-NN.verdict.json`` for a proposal, or ``slot-NN.failure.txt`` for a slot failure.
+  slot ``slot-NN.request.json``, ``slot-NN.completions.json``, then ``slot-NN.md`` and
+  ``slot-NN.verdict.json`` for a proposal, or ``slot-NN.failure.txt`` for a slot failure.
 * ``OUTPUT_DIR/summary.json``, mapping each capability id to its failure or to the decision or
   failure of each slot.
 
@@ -48,17 +46,14 @@ from taskforge.content_hash import pretty_json
 from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.glm_client import EndpointSource, GlmClient, Pool
 from taskforge.llm.policy import LLMPolicy
-from taskforge.llm.store import CallStore
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.stage10_proposal.model import Environment, render
 from taskforge.stage10_proposal.source import ProposalBatch, SlotProposal
-from taskforge.stage20_triage.checks import ALL_COMBINATIONS, CHECKS, CheckContext
-from taskforge.stage20_triage.program import GlmRubric, evaluate
+from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage20_triage.verdict import Verdict
 
 from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,
-    capability_idea_record,
     example_catalog_path,
 )
 from experiments.post_training.capability_driven_envs.generate_tasks import (
@@ -69,21 +64,20 @@ from experiments.post_training.capability_driven_envs.generate_tasks import (
     endpoint_source,
     selected_ideas,
 )
-from experiments.post_training.capability_driven_envs.proposal_source import CapabilitySource, source_ref
+from experiments.post_training.capability_driven_envs.proposal_source import CapabilitySource
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV
 
 logger = logging.getLogger(__name__)
 
-CALLS_DIR = "calls"
 MODEL_ERRORS = (StructuredOutputError, ModelRequestRejected, ModelUnavailable)
-"""The errors that fail one capability's proposals or their review, rather than the run."""
+"""The errors that fail one capability's proposals, rather than the run."""
 
 
 @dataclass(frozen=True)
 class ProposedCapability:
     """A capability's proposal batch and the verdict of each proposal, by slot, or the error that stopped it.
 
-    ``batch`` is ``None`` when proposing failed, and ``verdicts`` is empty when the review failed after it.
+    ``batch`` is ``None``, and ``verdicts`` empty, when proposing failed.
     """
 
     capability_id: str
@@ -92,36 +86,18 @@ class ProposedCapability:
     failure: str | None
 
 
-def capability_rubric(
-    model: ModelClient, calls_dir: Path, policy: LLMPolicy, samples: int, ideas: Mapping[str, CapabilityIdea]
-) -> GlmRubric:
-    """Build the rubric that shows each proposal the ``capability_idea_record`` of its capability."""
-    records = {source_ref(idea): capability_idea_record(idea) for idea in ideas.values()}
-    return GlmRubric(CallStore(calls_dir, model), policy, samples, records)
-
-
-async def propose_capability(
-    source: CapabilitySource, rubric: GlmRubric, idea: CapabilityIdea, slots: int
-) -> ProposedCapability:
-    """Propose ``slots`` slots for ``idea`` and evaluate every proposal.
+async def propose_capability(source: CapabilitySource, idea: CapabilityIdea, slots: int) -> ProposedCapability:
+    """Propose ``slots`` slots for ``idea`` and triage every proposal with ``preflight``.
 
     A model error or a plan still invalid after its repair becomes the capability's ``failure``. The
-    function returns it in place of raising it, so the other capabilities proceed, and keeps the batch
-    when only the review failed.
+    function returns it in place of raising it, so the other capabilities proceed.
     """
-    context = CheckContext(allowed_combinations=ALL_COMBINATIONS)
     try:
         batch = await source.propose(idea, slots)
     except MODEL_ERRORS as error:
         return ProposedCapability(idea.capability_id, None, {}, str(error))
-    outcomes = [s for s in batch.slots if isinstance(s, SlotProposal)]
-    try:
-        verdicts = await asyncio.gather(*(evaluate(s.proposal, CHECKS, rubric, context) for s in outcomes))
-    except MODEL_ERRORS as error:
-        return ProposedCapability(idea.capability_id, batch, {}, f"review: {error}")
-    return ProposedCapability(
-        idea.capability_id, batch, {s.slot: v for s, v in zip(outcomes, verdicts, strict=True)}, None
-    )
+    verdicts = {s.slot: await preflight(s.proposal) for s in batch.slots if isinstance(s, SlotProposal)}
+    return ProposedCapability(idea.capability_id, batch, verdicts, None)
 
 
 async def propose_tasks(
@@ -129,17 +105,14 @@ async def propose_tasks(
     ideas: Mapping[str, CapabilityIdea],
     slots: int,
     environments: frozenset[Environment],
-    rubric_samples: int,
-    calls_dir: Path,
     policy: LLMPolicy,
 ) -> list[ProposedCapability]:
-    """Propose and evaluate every capability of ``ideas`` concurrently."""
+    """Propose and triage every capability of ``ideas`` concurrently."""
     source = CapabilitySource(model, policy, environments)
-    rubric = capability_rubric(model, calls_dir, policy, rubric_samples, ideas)
 
     async def logged(idea: CapabilityIdea) -> ProposedCapability:
-        proposed = await propose_capability(source, rubric, idea, slots)
-        logger.info("%s: %s", idea.capability_id, proposed.failure or f"{len(proposed.verdicts)} proposals reviewed")
+        proposed = await propose_capability(source, idea, slots)
+        logger.info("%s: %s", idea.capability_id, proposed.failure or f"{len(proposed.verdicts)} proposals triaged")
         return proposed
 
     return await asyncio.gather(*(logged(idea) for idea in ideas.values()))
@@ -174,8 +147,7 @@ def write_outputs(output_dir: Path, proposed: Sequence[ProposedCapability]) -> N
             (directory / f"{name}.completions.json").write_text(pretty_json(outcome.completions))
             if isinstance(outcome, SlotProposal):
                 (directory / f"{name}.md").write_text(render(outcome.proposal))
-                if outcome.slot in capability.verdicts:
-                    (directory / f"{name}.verdict.json").write_text(capability.verdicts[outcome.slot].to_json())
+                (directory / f"{name}.verdict.json").write_text(capability.verdicts[outcome.slot].to_json())
             else:
                 (directory / f"{name}.failure.txt").write_text(outcome.error)
     summary = {capability.capability_id: capability_summary(capability) for capability in proposed}
@@ -187,11 +159,9 @@ async def _propose(
     ideas: Mapping[str, CapabilityIdea],
     slots: int,
     environments: frozenset[Environment],
-    rubric_samples: int,
-    calls_dir: Path,
 ) -> list[ProposedCapability]:
     async with GlmClient(source, GLM_PROVIDER) as client:
-        return await propose_tasks(client, ideas, slots, environments, rubric_samples, calls_dir, LLMPolicy())
+        return await propose_tasks(client, ideas, slots, environments, LLMPolicy())
 
 
 @click.command()
@@ -216,9 +186,6 @@ async def _propose(
     required=True,
     help="A task environment the build host runs; repeatable. The plan proposes slots in these alone.",
 )
-@click.option(
-    "--rubric-samples", type=click.IntRange(min=1), default=3, show_default=True, help="Rubric samples per proposal."
-)
 @click.option("--base-url", help="The GLM router's OpenAI-compatible base URL, ending in /v1.")
 @click.option(
     "--relay-job",
@@ -241,12 +208,11 @@ def main(
     capabilities: tuple[str, ...],
     slots: int,
     environments: tuple[str, ...],
-    rubric_samples: int,
     base_url: str | None,
     relay_job: str | None,
     pool: str,
 ) -> None:
-    """Propose tasks from the capability catalog and review each proposal with the GLM rubric.
+    """Propose tasks from the capability catalog and triage each proposal with the preflight.
 
     Give exactly one of --base-url (a port-forwarded router) and --relay-job (inside an Iris task).
     """
@@ -260,7 +226,7 @@ def main(
         raise click.ClickException(f"capability ids unsafe as directory names: {unsafe}")
     output_dir.mkdir(parents=True)
     hosted = frozenset(Environment(environment) for environment in environments)
-    proposed = asyncio.run(_propose(source, ideas, slots, hosted, rubric_samples, output_dir / CALLS_DIR))
+    proposed = asyncio.run(_propose(source, ideas, slots, hosted))
     write_outputs(output_dir, proposed)
     click.echo(output_dir / SUMMARY_FILE)
 

@@ -94,8 +94,8 @@ built from `DOCUMENT_REPAIR_PROMPT`.
 source for catalog capabilities, which takes its model, sampling policy and host environments at
 construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a solver
 machine and a research decision, then writes each document under the regex with GLM thinking first.
-`propose_tasks` in the same package proposes and reviews the catalog's capabilities from the
-command line.
+`propose_tasks` in the same package proposes the catalog's capabilities from the command line and
+triages each proposal with `preflight`.
 
 ## Triage
 
