@@ -113,13 +113,13 @@ not refill rejected tasks. Report every stage against that fixed denominator.
 
 ### Processing stages
 
-1. **Quality decision on Ortet.** Produce `keep`, `reject`, or `uncertain`, reason
+1. **Quality decision.** Produce `keep`, `reject`, or `uncertain`, reason
    codes, and evidence. Review missing context, inconsistent references,
    answer leakage, ambiguous requirements, and agreement between task and
    verifier. Inspect bounded private grading evidence only in the authorized
    review packet. Preserve existing mechanical/resource checks and executed
    grader controls; model judgment does not replace admission.
-2. **DeepSeek Flash annotation on Ortet.** For kept tasks, generate a 15–40-word
+2. **DeepSeek Flash annotation.** For kept tasks, generate a 15–40-word
    operational summary, domain/skill tags, interaction mode, and provisional
    difficulty with rationale and confidence. Describe the required knowledge
    and operation. Inputs contain public instructions and public answer/tool
@@ -135,7 +135,7 @@ not refill rejected tasks. Report every stage against that fixed denominator.
    quotas and reduce repeated operations within large sources. Embedding
    similarity alone is neither a rejection rule nor a difficulty measurement.
 
-The Ortet decision-model and DeepSeek Flash service IDs, immutable revisions,
+The decision-model and DeepSeek Flash service IDs, immutable revisions,
 request limits, and output schemas must be pinned before inference. They remain
 unverified. Measure tokens, latency, failures, and cost on a small initial batch
 before processing the full pilot. Persist successful requests and bounded retry
