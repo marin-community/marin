@@ -783,7 +783,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
 @pytest.mark.parametrize("fail", [False, True])
 @pytest.mark.parametrize("tensor_parallel_size,data_parallel_size", [(8, 1), (1, 8)])
 def test_pipeline_service_endpoint_and_shutdown_lifecycle(
-    monkeypatch, task_index, fail, tensor_parallel_size, data_parallel_size
+    monkeypatch, dashboard_ports, task_index, fail, tensor_parallel_size, data_parallel_size
 ):
     events = []
     endpoints = []
