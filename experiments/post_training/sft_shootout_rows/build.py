@@ -178,6 +178,8 @@ CHANGELOG = (
     "BASES --parent and --relay-student pick v0.1 (default) or v0; a relay build checks every round's driver_config "
     "student against --relay-student",
     "STYLEFROMERROR recovery labels each TMax failure's style by the parser error it draws (rows unchanged)",
+    "EXCLUDETRIALS --exclude-trials drops listed attempts (trial_name, retry) before selection; manifest "
+    "excluded_trials; arms built on --plain must use the same list",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
@@ -287,6 +289,38 @@ def load_traces(uris: list[str], files: list[dict] | None = None) -> list[dict]:
     if len(set(keys)) != len(keys):
         raise ValueError("A (trial id, conversation) pair appears twice across the trace files")
     return traces
+
+
+def exclude_trials(traces: list[dict], uri: str) -> tuple[list[dict], dict]:
+    """Drop the attempts listed in `uri` (JSON lines) before any selection; return the rest and the manifest record.
+
+    Each line names one Harbor trial by trial_name, with an optional retry (the attempt index, attempts/NNN; absent
+    means every attempt) and an optional task_id that must match. For trials whose pass cannot be trusted, e.g. the
+    sandbox disk filled. An entry that matches nothing is recorded with 0 rows: the arm may not read that run type.
+    """
+    data = StoragePath(uri).read_bytes()
+    entries = [json.loads(line) for line in data.decode().splitlines() if line.strip()]
+    removed = [0] * len(entries)
+    kept = []
+    for trace in traces:
+        hit = None
+        for i, entry in enumerate(entries):
+            if trace.get("trial_name") == entry["trial_name"] and entry.get("retry") in (None, trace.get("retry")):
+                if entry.get("task_id") not in (None, trace["task_id"]):
+                    raise ValueError(
+                        f"Excluded trial {entry['trial_name']} is task {trace['task_id']}, not {entry['task_id']}"
+                    )
+                hit = i
+        if hit is None:
+            kept.append(trace)
+        else:
+            removed[hit] += 1
+    record = {
+        "file": uri,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "entries": [entry | {"trace_rows_removed": n} for entry, n in zip(entries, removed, strict=True)],
+    }
+    return kept, record
 
 
 def trace_file_info(uri: str, data: bytes, rows: list[dict]) -> dict:
@@ -602,6 +636,10 @@ def parse_args() -> argparse.Namespace:
         choices=("first", "fewest-reasoning"),
         default="first",
         help="plain only: per task, the first passing attempt (default) or the one with the fewest reasoning tokens",
+    )
+    parser.add_argument(
+        "--exclude-trials",
+        help="JSON lines of {trial_name, retry?, task_id?}: attempts dropped before selection (see exclude_trials)",
     )
     parser.add_argument("--output", required=True)
     parser.add_argument("--tokenizer-dir", help="local v0 tokenizer files (hash-checked); default: the regional copy")
@@ -1142,6 +1180,11 @@ def main() -> None:
         tokenizer = v0_tokenizer(args.tokenizer_dir, directory)
         trace_files: list[dict] = []
         traces = load_traces(args.traces, trace_files)
+        excluded = None
+        if args.exclude_trials:
+            traces, excluded = exclude_trials(traces, args.exclude_trials)
+        if plain is not None and (plain.get("excluded_trials") or {}).get("sha256") != (excluded or {}).get("sha256"):
+            raise ValueError("--exclude-trials must be the list the --plain arm was built with")
         gate = token_gate(trace_files)
         student_check = check_relay_student(args.traces, args.relay_student) if args.arm == "relay" else None
         kept, dropped = candidates(
@@ -1174,6 +1217,7 @@ def main() -> None:
         if recovery_stats is not None:
             manifest["recovery"] = recovery_stats
         manifest["require_clean_completion"] = args.require_clean_completion
+        manifest["excluded_trials"] = excluded
         if student_check is not None:
             manifest["relay_student_check"] = student_check
         upload(out, output, manifest, production=not (args.test_inputs or args.dry_run))

@@ -22,7 +22,7 @@ DRY_RUN_NOT_FOR_TRAINING markers, no _SUCCESS.
 
     python -m experiments.post_training.sft_shootout_rows.chain --builder-commit <sha> --output <fresh prefix> \\
         [--trace-prefix <s3 .../traces-v7/>] [--relay-trace-prefix <s3 .../traces-v7-v0/>] [--parent v0.1|v0] \\
-        [--relay-student v0.1|v0] [--dry-run]
+        [--relay-student v0.1|v0] [--exclude-trials <jsonl>] [--dry-run]
 """
 
 import argparse
@@ -57,6 +57,7 @@ def main() -> None:
     parser.add_argument("--builder-commit", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--tokenizer-dir")
+    parser.add_argument("--exclude-trials", help="attempts every arm drops before selection (build.py exclude_trials)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     args.relay_trace_prefix = args.relay_trace_prefix or args.trace_prefix
@@ -79,6 +80,7 @@ def main() -> None:
         "--require-clean-completion",
     ]
     common += ["--tokenizer-dir", args.tokenizer_dir] if args.tokenizer_dir else []
+    common += ["--exclude-trials", args.exclude_trials] if args.exclude_trials else []
     common += ["--dry-run"] if args.dry_run else []
 
     if not args.dry_run:
