@@ -3,9 +3,9 @@
 
 """Typed trial outcomes: a trial either produced a grade or failed for a classified ``Cause``.
 
-``Graded`` holds a rollout whose grade is a judgment of the submission: ``GRADED``, or
+``Graded`` holds a rollout and its grade, a judgment of the submission: ``GRADED``, or
 ``SUBMISSION_FAILURE`` (the model ended without a valid submission, which scores zero). An agent that runs
-out of ``TaskSessionSpec.total_turn_timeout`` is a budget stop like running out of turns, so it is
+out of ``RolloutLimits.total_turn_timeout`` is a budget stop like running out of turns, so it is
 ``Graded`` too (``classify.trial_outcome``), and so is a verifyit pytest grade of 0 because the candidate's own code
 did not load (``Graded.candidate_code_error``): a failed attempt, flagged so the band and the summary can show it.
 Everything else is ``Ungraded``: task setup, infrastructure and grader failures that say nothing about the
@@ -15,7 +15,7 @@ submission. Statistics use graded outcomes only; ungraded ones make the evidence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, RolloutData
+from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON, Rollout
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.grading_result import Outcome as GradeStatus
 
@@ -45,19 +45,22 @@ class Cause(StrEnum):
     """The task's own setup failed: a setup command exited non-zero or timed out, or the environment
     lacks the capabilities the task requires. A task defect, not flakiness."""
     SESSION_PREPARE = "session_prepare"
+    """The harness failed, or returned, before its first model turn (RolloutEngine's ``PREPARE``)."""
     ATTEMPT_TIMEOUT = "attempt_timeout"
-    """``TaskSessionSpec.attempt_timeout`` expired."""
+    """``RolloutLimits.attempt_timeout`` expired, during machine start, the turns or grading. The engine does
+    not grade such an attempt, also when the harness ignored the deadline's cancellation and ended after it."""
     AGENT_TIMEOUT = "agent_timeout"
-    """``TaskSessionSpec.total_turn_timeout`` expired before the first response, so there was nothing
+    """``RolloutLimits.total_turn_timeout`` expired before the first response, so there was nothing
     to grade. A deadline after that is a ``Graded`` trial with ``timed_out`` set."""
     MODEL_UNAVAILABLE = "model_unavailable"
     """The model client spent its attempts or its infrastructure hold."""
     MODEL_TIMEOUT = "model_timeout"
-    """One model call outlived ``TaskSessionSpec.model_turn_timeout``."""
+    """One model call outlived ``RolloutLimits.model_turn_timeout``."""
     MODEL_REJECTED = "model_rejected"
     """The server rejected a request in a way a retry cannot fix."""
     TOOL_EXECUTION = "tool_execution"
-    """A shell tool step raised (the machine failed, not the command)."""
+    """A shell tool step raised (the machine failed, not the command), or outlived
+    ``RolloutLimits.tool_turn_timeout``."""
     GENERATION_LIMIT = "generation_limit"
     """The first prompt left no generation budget, so nothing was graded."""
     GRADER_RAISED = "grader_raised"
@@ -110,20 +113,17 @@ GRADED_STATUSES = frozenset({GradeStatus.GRADED, GradeStatus.SUBMISSION_FAILURE}
 
 @dataclass(frozen=True)
 class Graded:
-    rollout: RolloutData
+    rollout: Rollout
+    grade: GradeResult
     candidate_code_error: bool
     """A verifyit pytest grade of 0 because the candidate's own code failed to import or be collected
     (``classify.candidate_code_error``): a failed attempt, kept distinct so the band and the summary can show it."""
 
     def __post_init__(self) -> None:
-        if self.rollout.grade.status not in GRADED_STATUSES:
-            raise ValueError(f"A {self.rollout.grade.status} rollout is not graded")
+        if self.grade.status not in GRADED_STATUSES:
+            raise ValueError(f"A {self.grade.status} rollout is not graded")
         if self.candidate_code_error and self.reward != 0.0:
             raise ValueError(f"A candidate code error scores 0, not {self.reward}")
-
-    @property
-    def grade(self) -> GradeResult:
-        return self.rollout.grade
 
     @property
     def timed_out(self) -> bool:
@@ -138,11 +138,17 @@ class Graded:
 
 @dataclass(frozen=True)
 class Ungraded:
-    """A trial without a grade. ``rollout`` is the last completed record, when the engine kept one."""
+    """A trial without a usable grade.
+
+    ``rollout`` is the record the engine kept, and ``grade`` the grade it gave: an unusable one, the grade of
+    the completed turns of an interrupted attempt, or an unavailable grade when it stopped before grading.
+    Both are ``None`` when the engine kept no record.
+    """
 
     cause: Cause
     detail: str
-    rollout: RolloutData | None
+    rollout: Rollout | None
+    grade: GradeResult | None
 
     @property
     def retryable(self) -> bool:
