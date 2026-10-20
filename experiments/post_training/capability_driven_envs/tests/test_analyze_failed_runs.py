@@ -21,7 +21,7 @@ from rolloutengine.models import (
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerCall, TaskSpec
-from taskforge.llm.client import StructuredResult
+from taskforge.llm.client import ContextExhausted, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 
@@ -42,6 +42,7 @@ STOP_LOOPS = Skill(
     name="Stop repeating a call", outcome="Change the approach after a repeated result.", includes=("Notice it",)
 )
 CHECK_WORK = Skill(name="Check the work", outcome="Verify an answer before it is final.", includes=("Recompute",))
+CUT_OFF = StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION,))
 
 
 def evaluated(
@@ -81,13 +82,14 @@ ROLLOUTS = [
 
 class Analyst:
     """Names the loop skill for a rollout with a lookup call and the check skill for the others, and merges the lines
-    with the same name. A rollout that says "cut off", and a merge of more than ``max_skills`` skills, fail as a reply
-    at the output limit does."""
+    with the same name. A rollout that says "cut off" fails as a reply at the output limit does, and a merge of more
+    than ``max_skills`` skills raises ``merge_error``."""
 
     model = "fake"
 
-    def __init__(self, max_skills: int = 100):
+    def __init__(self, max_skills: int = 100, merge_error: Exception = CUT_OFF):
         self.max_skills = max_skills
+        self.merge_error = merge_error
         self.rollouts: list[str] = []
         self.merges: list[list[dict]] = []
 
@@ -101,13 +103,13 @@ class Analyst:
         if output_type is RolloutSkills:
             self.rollouts.append(text)
             if "cut off" in text:
-                raise StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION,))
+                raise CUT_OFF
             value = RolloutSkills(skills=(STOP_LOOPS if "lookup" in text else CHECK_WORK,))
         else:
             lines = [json.loads(line) for line in text.splitlines()]
             self.merges.append(lines)
             if len(lines) > self.max_skills and "rollouts" not in lines[0]:
-                raise StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION,))
+                raise self.merge_error
             names = dict.fromkeys(line["name"] for line in lines)
             groups = (
                 Group(
@@ -185,9 +187,14 @@ async def test_a_rollout_whose_skill_call_fails_gives_no_skills_unless_too_many_
         await analyze([loops[0], wrong("cut", "cut off")], Analyst())
 
 
-async def test_a_merge_that_stays_invalid_merges_in_two_levels(monkeypatch):
+@pytest.mark.parametrize(
+    "merge_error,merges",
+    [(CUT_OFF, [4, 4, 4, 2, 2, 4]), (ContextExhausted("the prompt is too long", ()), [4, 2, 2, 4])],
+    ids=["reply-cut-off", "prompt-too-long"],
+)
+async def test_a_merge_that_fails_merges_in_two_levels(monkeypatch, merge_error, merges):
     monkeypatch.setattr(module, "CHUNK_ROLLOUTS", 2)
-    analyst = Analyst(max_skills=2)
+    analyst = Analyst(max_skills=2, merge_error=merge_error)
 
     ideas = await analyze([loop("loop-1"), loop("loop-2"), wrong("wrong-1"), wrong("wrong-2")], analyst)
 
@@ -195,8 +202,9 @@ async def test_a_merge_that_stays_invalid_merges_in_two_levels(monkeypatch):
         (STOP_LOOPS.name, ["loop-1", "loop-2"]),
         (CHECK_WORK.name, ["wrong-1", "wrong-2"]),
     ]
-    # Three samples of the merge of all four skills, two chunk merges, and the merge of the four chunk capabilities.
-    assert [len(lines) for lines in analyst.merges] == [4, 4, 4, 2, 2, 4]
+    # The merge of all four skills (three samples of a cut-off reply, or one rejected prompt), two chunk merges, and
+    # the merge of the four chunk capabilities.
+    assert [len(lines) for lines in analyst.merges] == merges
 
 
 def test_a_merged_capability_cannot_give_its_member_ids_as_behaviors():

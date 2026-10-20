@@ -14,7 +14,8 @@ training tasks. The calls see only what the policy saw and wrote, never a grader
 
 The merge reply lists the ID of each skill, so it grows with the rollouts, and GLM sometimes runs away to the output
 limit in a long structured reply. Thus a merge is sampled again after an invalid reply. When the merge of all the
-skills still fails, the skills merge in two levels: one merge for each chunk of rollouts, then one merge of the lists.
+skills still fails, or its prompt is too long for the context window, the skills merge in two levels: one merge for
+each chunk of rollouts, then one merge of the lists.
 """
 
 import asyncio
@@ -30,7 +31,7 @@ from rolloutengine.models import GradedRollout
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec, TextMessage
 from taskforge.content_hash import digest
-from taskforge.llm.client import ModelClient
+from taskforge.llm.client import ContextExhausted, ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 
@@ -183,7 +184,7 @@ async def analyze_failed_runs(
 
     A rollout whose reply stays invalid after the client's repairs gives no skills. When more than ``MAX_FAILED_SHARE``
     of the rollouts give none, the analysis raises ``ValueError``. A two-level merge whose reply stays invalid raises
-    ``StructuredOutputError``.
+    ``StructuredOutputError``, and one whose prompt is too long raises ``ContextExhausted``.
     """
     failures = policy_failures(rollouts, pass_threshold)
     if not failures:
@@ -191,7 +192,7 @@ async def analyze_failed_runs(
     skills = await _rollout_skills(client, failures, policy)
     try:
         groups = await _merged(client, MERGE_SKILLS_PROMPT, _skill_lines(skills), max_capabilities, merge_policy)
-    except StructuredOutputError as error:
+    except (StructuredOutputError, ContextExhausted) as error:
         logger.warning("The merge of %d skills failed, so they merge in two levels: %s", len(skills), error)
         groups = await _merged_in_two_levels(client, skills, max_capabilities, merge_policy)
     ideas, seen = [], set()
