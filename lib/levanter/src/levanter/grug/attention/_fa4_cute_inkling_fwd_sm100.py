@@ -88,26 +88,37 @@ class InklingFlashAttentionForwardSm100(FlashAttentionForwardSm100):
         rel_extent = width - REL_BIAS_BLOCK
         band_tile = n_block - m_block * (self.m_block_size // self.n_block_size) + rel_extent // self.n_block_size
         in_band = cute.elem_less(Int32(-1), band_tile) and cute.elem_less(band_tile, width // self.n_block_size)
-        rBand = cute.make_rmem_tensor((self.n_block_size,), band.element_type)
+        # The band row as packed bf16 pairs: a bf16 register tensor would take one 32-bit register per element.
+        rBand = cute.make_rmem_tensor((self.n_block_size // 2,), cutlass.Uint32)
         if const_expr(self.PREFETCH_BAND):
             self._load_band(rBand, band, in_band, band_tile, thr_tmem_load, tScS, batch_idx, head_idx, m_block)
 
         # Wait for Si
         pipeline_s_p_o.consumer_wait_w_index_phase(stage, mma_si_consumer_phase)
         tSrS_t2r = cute.make_rmem_tensor(thr_tmem_load.partition_D(tScS).shape, self.qk_acc_dtype)
-        cute.copy(thr_tmem_load, tStS_t2r, tSrS_t2r)
         if const_expr(not self.PREFETCH_BAND):
             self._load_band(rBand, band, in_band, band_tile, thr_tmem_load, tScS, batch_idx, head_idx, m_block)
         if in_band:
             # The softmax scales raw scores by scale * log2(e); adding band / scale yields S * scale + band.
             inv_scale = Float32(_LOG2_E) / softmax.scale_log2
-            # Element i of the thread's fragment is key column n0 + i (the order apply_mask_sm100 relies on).
-            for i in cutlass.range_constexpr(0, self.n_block_size, 2):
-                tSrS_t2r[i], tSrS_t2r[i + 1] = cute.arch.fma_packed_f32x2(
-                    (rBand[i].to(Float32), rBand[i + 1].to(Float32)),
-                    (inv_scale, inv_scale),
-                    (tSrS_t2r[i], tSrS_t2r[i + 1]),
-                )
+            # Read S in its TMEM-load chunks and add each band chunk as it lands, so the band registers free up
+            # while the S row fills (128 + 64 live registers would exceed the softmax warps' budget).
+            num_chunks = cute.size(tStS_t2r.shape[2])
+            chunk = self.n_block_size // num_chunks
+            bits = cute.make_rmem_tensor((2,), cutlass.Uint32)
+            bits_f32 = cute.make_tensor(cute.recast_ptr(bits.iterator, dtype=Float32), cute.make_layout(2))
+            for j in cutlass.range_constexpr(num_chunks):
+                cute.copy(thr_tmem_load, tStS_t2r[None, None, j], tSrS_t2r[None, None, j])
+                # Element i of the thread's fragment is key column n0 + i (the order apply_mask_sm100 relies on).
+                for p in cutlass.range_constexpr(j * chunk // 2, (j + 1) * chunk // 2):
+                    # bf16 -> f32 is exact: the bf16 bits are the f32's high half (low half of the pair first).
+                    bits[0] = rBand[p] << 16
+                    bits[1] = rBand[p] & cutlass.Uint32(0xFFFF0000)
+                    tSrS_t2r[2 * p], tSrS_t2r[2 * p + 1] = cute.arch.fma_packed_f32x2(
+                        (bits_f32[0], bits_f32[1]), (inv_scale, inv_scale), (tSrS_t2r[2 * p], tSrS_t2r[2 * p + 1])
+                    )
+        else:
+            cute.copy(thr_tmem_load, tStS_t2r, tSrS_t2r)
 
         if const_expr(mask_fn is not None):
             mask_fn(tSrS_t2r, n_block=n_block)
@@ -170,10 +181,14 @@ class InklingFlashAttentionForwardSm100(FlashAttentionForwardSm100):
                 # Column modes are (8-column run, run index): one run is 16 contiguous bytes, and the 32 lanes'
                 # rows of a run are adjacent (the tiled layout), so each load is one coalesced 512-byte access.
                 runs_per_tile = self.n_block_size // BAND_TILE_COLUMNS
+                pairs_per_run = BAND_TILE_COLUMNS // 2
                 for c in cutlass.range_constexpr(runs_per_tile):
+                    run = band_bh[query_idx, (None, band_tile * runs_per_tile + c)]
                     cute.autovec_copy(
-                        band_bh[query_idx, (None, band_tile * runs_per_tile + c)],
-                        cute.local_tile(rBand, (BAND_TILE_COLUMNS,), (c,)),
+                        cute.make_tensor(
+                            cute.recast_ptr(run.iterator, dtype=cutlass.Uint32), cute.make_layout(pairs_per_run)
+                        ),
+                        cute.local_tile(rBand, (pairs_per_run,), (c,)),
                     )
         else:
-            rBand.fill(0.0)
+            rBand.fill(0)
