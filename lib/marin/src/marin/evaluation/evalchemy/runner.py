@@ -9,41 +9,51 @@ import json
 import logging
 import shlex
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from rigging.filesystem.cluster_config import marin_temp_bucket
 
 from marin.evaluation.eval_measurements import task_item_count
 from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
-from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, ChatTokenizerBackend, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runtime import (
-    EVALCHEMY_EXTRA_PACKAGES,
     EVALCHEMY_PYTHON_VERSION,
-    EVALCHEMY_REQUIREMENT,
+    EVALCHEMY_REQUIRED_EXTRAS,
+    EVALCHEMY_RUNTIME_PROJECT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
-from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, declared_metric
+from marin.evaluation.lm_eval_samples import (
+    preserved_sample_sources,
+    rebuild_lm_eval_samples,
+    summarize_native_eval_samples,
+)
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
-    BenchmarkMetadataRef,
     EvalTaskRef,
     RunStatus,
     TaskCoverage,
 )
 from marin.evaluation.rollouts import normalize_rollouts
-from marin.evaluation.runner import EvaluationError, EvaluationOutcome
+from marin.evaluation.runner import (
+    BACKEND_POLL_SECONDS,
+    EvaluationError,
+    EvaluationOutcome,
+    InferenceBackendFinished,
+    InferenceUnavailable,
+    check_inference_backend,
+)
 from marin.inference.iris import RemoteInferenceSession
-from marin.inference.types import RunningModel
+from marin.inference.types import InferenceBackendState, RunningModel
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_NUM_CONCURRENT = 16
+DEFAULT_NUM_CONCURRENT = 64
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
@@ -93,12 +103,11 @@ def _child_env(env_vars: Mapping[str, str], **extra: str) -> dict[str, str]:
 class EvalchemyRuntimeConfig:
     """Execution policy for the Evalchemy HTTP-client child."""
 
-    requirement: str = EVALCHEMY_REQUIREMENT
-    python_version: str = EVALCHEMY_PYTHON_VERSION
-    extra_packages: tuple[str, ...] = EVALCHEMY_EXTRA_PACKAGES
+    extras: tuple[str, ...] = EVALCHEMY_REQUIRED_EXTRAS
     cpu: float = 8.0
     memory: str = "32g"
     disk: str = "50g"
+    dataset_cache: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +117,7 @@ class EvalchemyRunConfig:
     name: str
     tasks: tuple[EvalTaskConfig, ...]
     apply_chat_template: bool = False
+    chat_tokenizer_backend: ChatTokenizerBackend = ChatTokenizerBackend.SERVER
     debug: bool = False
     # None passes no generation cap to Evalchemy, which then sizes each benchmark's responses from the
     # served context window minus its stored longest prompt (evalchemy#132).
@@ -117,8 +127,8 @@ class EvalchemyRunConfig:
     batch_size: str | None = None
     seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
-    chat_template_kwargs: dict[str, bool | None] = field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | str] = field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeConfig | None = None
     runtime: EvalchemyRuntimeConfig = field(default_factory=EvalchemyRuntimeConfig)
@@ -126,31 +136,13 @@ class EvalchemyRunConfig:
 
 @dataclass(frozen=True)
 class EvalchemyOutcome:
-    """A completed FineStore archive, child job identity, coverage, and recovered partial-task metrics."""
+    """Validated evaluator metrics, sample coverage, and child job identity."""
 
     jobs: dict[str, str]
-    result: FineStoreEvalchemyResult
+    metrics: dict[str, dict[str, float]]
     coverage: dict[str, TaskCoverage]
-    recovered_metrics: dict[str, dict[str, float]]
     canonical_metrics: dict[str, dict[str, float]]
     tasks: tuple[EvalTaskRef, ...]
-
-
-def _apply_recovered_metrics(
-    metrics: dict[str, dict[str, float]], recovered_metrics: Mapping[str, dict[str, float]]
-) -> None:
-    """Replace affected leaf metrics and drop lm-eval group aggregates built from failed rows."""
-    group_children = {aggregate: {task for task in metrics if task.startswith(f"{aggregate}_")} for aggregate in metrics}
-    for task, recovered in recovered_metrics.items():
-        if recovered:
-            metrics[task] = recovered
-        else:
-            metrics.pop(task, None)
-    for aggregate, children in group_children.items():
-        if children & recovered_metrics.keys():
-            # The aggregate came from the original lm-eval result, which includes failed requests.
-            # Recovered leaves contain successful samples for the measurement adapter to roll up.
-            metrics.pop(aggregate, None)
 
 
 def _coverage_with_aggregate_counts(
@@ -186,40 +178,6 @@ def _coverage_with_aggregate_counts(
     return reconciled
 
 
-def _apply_recovered_canonical_metrics(
-    canonical_metrics: dict[str, dict[str, float]],
-    recovered_metrics: Mapping[str, dict[str, float]],
-    tasks: tuple[EvalTaskRef, ...],
-) -> None:
-    """Project recovered source metrics through the evaluator-recorded vocabulary."""
-    benchmarks: dict[str, BenchmarkMetadataRef] = {}
-    by_directory: dict[str, list[BenchmarkMetadataRef]] = {}
-    for task in tasks:
-        if task.benchmark is None:
-            continue
-        directory = eval_task_directory(task.name, task.num_fewshot, task.task_alias)
-        benchmarks[f"{directory}/{task.benchmark.task}"] = task.benchmark
-        by_directory.setdefault(directory, []).append(task.benchmark)
-    for task_key, recovered in recovered_metrics.items():
-        benchmark = benchmarks.get(task_key)
-        if benchmark is None and len(by_directory.get(task_key, ())) == 1:
-            benchmark = by_directory[task_key][0]
-        if benchmark is None:
-            canonical_metrics.pop(task_key, None)
-            continue
-        normalized: dict[str, float] = {}
-        for metric in benchmark.metrics:
-            picked = declared_metric(recovered, metric.source_name)
-            if picked is None and metric.source_name.endswith(REPEAT_MEAN_SUFFIX):
-                picked = declared_metric(recovered, metric.source_name.removesuffix(REPEAT_MEAN_SUFFIX))
-            if picked is not None:
-                normalized[metric.name] = picked[1]
-        if normalized:
-            canonical_metrics[task_key] = normalized
-        else:
-            canonical_metrics.pop(task_key, None)
-
-
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
     tokenizer = model.tokenizer
     if tokenizer is None:
@@ -245,6 +203,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             ],
             "out_path": output_dir,
             "apply_chat_template": config.apply_chat_template,
+            "chat_tokenizer_backend": config.chat_tokenizer_backend,
             "debug": config.debug,
             "max_gen_toks": config.max_gen_toks,
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
@@ -255,21 +214,28 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             "seed": config.seed,
             "extra_model_args": dict(config.extra_model_args),
             "max_length": config.max_length,
+            "dataset_cache": (
+                config.runtime.dataset_cache
+                if config.runtime.dataset_cache is not None
+                else marin_temp_bucket(30, "evalchemy-datasets", source_prefix=output_dir)
+            ),
         }
     )
 
 
 def _evalchemy_client_command(runtime: EvalchemyRuntimeConfig) -> tuple[str, ...]:
     command = [
-        "uvx",
-        "--no-config",
+        "uv",
+        "run",
+        "--project",
+        EVALCHEMY_RUNTIME_PROJECT,
+        "--frozen",
+        "--no-default-groups",
         "--python",
-        runtime.python_version,
-        "--from",
-        runtime.requirement,
+        EVALCHEMY_PYTHON_VERSION,
     ]
-    for package in runtime.extra_packages:
-        command.extend(("--with", package))
+    for extra in runtime.extras:
+        command.extend(("--extra", extra))
     command.append("python")
     return tuple(command)
 
@@ -279,13 +245,15 @@ def _run_evalchemy_child(
     config: EvalchemyRunConfig,
     output_dir: str,
     env_vars: Mapping[str, str],
+    *,
+    backend_state: Callable[[], InferenceBackendState],
 ) -> str:
     judge_env: dict[str, str] = {}
     if config.judge is not None:
         try:
             judge_api_key = env_vars["JUDGE_API_KEY"]
         except KeyError as exc:
-            raise ValueError("FinanceBench judge configuration requires JUDGE_API_KEY") from exc
+            raise ValueError("External judge configuration requires JUDGE_API_KEY") from exc
         judge_env = {
             "JUDGE_API_KEY": judge_api_key,
             "JUDGE_BASE_URL": config.judge.base_url,
@@ -293,8 +261,12 @@ def _run_evalchemy_child(
         }
     client = iris_ctx().client
     child_id = uuid.uuid4().hex[:8]
-    uvx_command = shlex.join(_evalchemy_client_command(config.runtime))
-    command = f'exec {uvx_command} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
+    runtime_command = shlex.join(_evalchemy_client_command(config.runtime))
+    command = (
+        'cd "$IRIS_WORKDIR"\n'
+        f'export UV_PROJECT_ENVIRONMENT="$IRIS_WORKDIR/{EVALCHEMY_RUNTIME_PROJECT}/.venv"\n'
+        f'exec {runtime_command} "$IRIS_WORKDIR/{_EVAL_CLIENT_SCRIPT}"'
+    )
     eval_job = client.submit(
         entrypoint=Entrypoint.from_command("bash", "-c", command),
         name=f"eval-{config.name.replace('.', '-')}-{child_id}",
@@ -304,6 +276,7 @@ def _run_evalchemy_child(
             disk=config.runtime.disk,
         ),
         environment=EnvironmentSpec(
+            setup_scripts=[],
             env_vars=_child_env(
                 env_vars,
                 JAX_PLATFORMS="cpu",
@@ -312,7 +285,7 @@ def _run_evalchemy_child(
                 TQDM_MININTERVAL="30",
                 **judge_env,
                 **{CONFIG_ENV_KEY: _run_config_json(model, config, output_dir)},
-            )
+            ),
         ),
         max_retries_failure=0,
     )
@@ -324,8 +297,21 @@ def _run_evalchemy_child(
         model.endpoint.model,
     )
     try:
-        eval_job.wait(timeout=float("inf"))
+        while True:
+            check_inference_backend(backend_state())
+            try:
+                eval_job.wait(timeout=BACKEND_POLL_SECONDS)
+                break
+            except TimeoutError:
+                continue
+        check_inference_backend(backend_state())
+    except (InferenceUnavailable, InferenceBackendFinished):
+        # Cancel this attempt before the runner resumes the same archive.
+        eval_job.cancel()
+        eval_job.wait(timeout=float("inf"), raise_on_failure=False)
+        raise
     except JobFailedError as exc:
+        check_inference_backend(backend_state())
         raise EvalPipelineError(
             f"Evalchemy job {eval_path} failed: {exc}",
             stage=PipelineStage.EVAL,
@@ -341,30 +327,33 @@ def run_evalchemy(
     output_dir: str,
     *,
     env_vars: Mapping[str, str],
+    backend_state: Callable[[], InferenceBackendState],
 ) -> EvalchemyOutcome:
-    """Run Evalchemy and validate its results artifacts and normalized samples in FineStore."""
+    """Run one Evalchemy attempt and validate and normalize its FineStore artifacts."""
     if not config.tasks:
         raise ValueError("Evalchemy requires at least one task")
     if "://" not in output_dir:
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
-    eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
+    eval_job = _run_evalchemy_child(model, config, output_dir, env_vars, backend_state=backend_state)
+    return read_evalchemy_outcome(config, output_dir, eval_job)
+
+
+def read_evalchemy_outcome(config: EvalchemyRunConfig, output_dir: str, eval_job: str) -> EvalchemyOutcome:
+    """Validate and normalize saved Evalchemy outputs without repeating inference."""
     try:
         result = FineStoreEvalchemyResult(path=output_dir)
-        result.task_metrics()
+        metrics = result.task_metrics()
         summary = summarize_native_eval_samples(
             output_dir,
             tasks=config.tasks,
         )
-        rebuild_lm_eval_samples(
-            output_dir,
-            tasks=summary.tasks,
-            writer_id=f"marin-evalchemy-samples-{uuid.uuid4().hex}",
-        )
+        if preserved_sample_sources(output_dir):
+            rebuild_lm_eval_samples(
+                output_dir,
+                tasks=summary.tasks,
+                writer_id=f"marin-evalchemy-samples-{uuid.uuid4().hex}",
+            )
         normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
-        summary = summarize_native_eval_samples(
-            output_dir,
-            tasks=config.tasks,
-        )
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),
@@ -372,6 +361,34 @@ def run_evalchemy(
             jobs={_EVAL_JOB_ROLE: eval_job},
             log_tails={},
         ) from exc
+    coverage = _coverage_with_aggregate_counts(summary.coverage, metrics)
+    inconsistent_tasks = sorted(
+        task
+        for task, entry in coverage.items()
+        if entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR) and summary.scored_counts.get(task) != entry.n_scored
+    )
+    if inconsistent_tasks:
+        raise EvaluationError(
+            f"Evalchemy must aggregate the scored samples after infrastructure failures: {inconsistent_tasks}",
+            status=RunStatus.INFRA_FAILED,
+            jobs={_EVAL_JOB_ROLE: eval_job},
+            coverage=coverage,
+        )
+    if not metrics:
+        infrastructure_failures = sum(entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values())
+        if not infrastructure_failures:
+            raise EvaluationError(
+                f"eval finished but no task metrics were readable under {output_dir!r}",
+                status=RunStatus.ARTIFACT_FAILED,
+                jobs={_EVAL_JOB_ROLE: eval_job},
+                coverage=coverage,
+            )
+        raise EvaluationError(
+            f"eval finished with no successful inference responses under {output_dir!r}",
+            status=RunStatus.INFRA_FAILED,
+            jobs={_EVAL_JOB_ROLE: eval_job},
+            coverage=coverage,
+        )
     logger.info(
         "Evalchemy run %s wrote %d sample(s) to the finestore archive under %s, covering %d task(s)",
         config.name,
@@ -381,9 +398,8 @@ def run_evalchemy(
     )
     return EvalchemyOutcome(
         jobs={_EVAL_JOB_ROLE: eval_job},
-        result=result,
-        coverage=summary.coverage,
-        recovered_metrics=summary.recovered_metrics,
+        metrics=metrics,
+        coverage=coverage,
         canonical_metrics=summary.canonical_metrics,
         tasks=summary.tasks,
     )
@@ -401,10 +417,17 @@ class EvalchemyExecutor:
         output_dir: str,
         env_vars: Mapping[str, str],
         *,
+        backend_state: Callable[[], InferenceBackendState],
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
         try:
-            outcome = run_evalchemy(session.model, self.config, output_dir, env_vars=env_vars)
+            outcome = run_evalchemy(
+                session.model,
+                self.config,
+                output_dir,
+                env_vars=env_vars,
+                backend_state=backend_state,
+            )
         except EvalPipelineError as exc:
             status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.ARTIFACT_FAILED
             raise EvaluationError(
@@ -413,32 +436,10 @@ class EvalchemyExecutor:
                 jobs=exc.jobs,
                 log_tails=exc.log_tails,
             ) from exc
-        metrics = outcome.result.task_metrics()
-        _apply_recovered_metrics(metrics, outcome.recovered_metrics)
-        coverage = _coverage_with_aggregate_counts(outcome.coverage, metrics)
-        canonical_metrics = dict(outcome.canonical_metrics)
-        _apply_recovered_canonical_metrics(canonical_metrics, outcome.recovered_metrics, outcome.tasks)
-        if not metrics:
-            infrastructure_failures = sum(
-                entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in coverage.values()
-            )
-            if not infrastructure_failures:
-                raise EvaluationError(
-                    f"eval finished but no task metrics were readable under {output_dir!r}",
-                    status=RunStatus.ARTIFACT_FAILED,
-                    jobs=outcome.jobs,
-                    coverage=coverage,
-                )
-            raise EvaluationError(
-                f"eval finished with no successful inference responses under {output_dir!r}",
-                status=RunStatus.INFRA_FAILED,
-                jobs=outcome.jobs,
-                coverage=coverage,
-            )
         return EvaluationOutcome(
-            metrics=metrics,
-            canonical_metrics=canonical_metrics,
+            metrics=outcome.metrics,
+            canonical_metrics=outcome.canonical_metrics,
             tasks=outcome.tasks,
             jobs=outcome.jobs,
-            coverage=coverage,
+            coverage=outcome.coverage,
         )

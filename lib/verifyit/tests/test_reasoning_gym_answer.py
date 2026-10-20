@@ -300,3 +300,17 @@ def test_dataset_construction_failure_is_infrastructure(tests_dir, workspace, mo
     spec_path.write_text(render_spec(ReasoningGymSpec(dataset="needle_haystack", params="params.json")))
     reward = run(spec_path, workspace)
     assert (reward.status, reward.reward) == (Status.INFRA_ERROR, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("reply", "reward"),
+    [
+        ("Reasoning.\n\n## Answer\n\n**Richard**\n\n---\nNotes.", 1.0),
+        ("## Answer\nOluwadamiloju\n\n## Explanation\nRichard is the reference.", 0.0),
+        ("## Answer\nOluwadamiloju\n\n## Answer\nRichard", 1.0),
+        ("The answer is Richard.", 0.0),
+    ],
+)
+def test_markdown_answer_section_preserves_the_scorers_exact_answer_contract(tests_dir, workspace, reply, reward):
+    answer(workspace, reply)
+    assert grade(tests_dir, workspace).reward == reward

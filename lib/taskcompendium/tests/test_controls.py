@@ -34,7 +34,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
     ResourceGroups,
-    SessionGrader,
     Source,
     TaskSpec,
 )
@@ -43,7 +42,13 @@ from taskcompendium.pipeline.models import CheckStatus, Controls, OracleCommand,
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.resources import inline_resource
 
-from .pipeline_stages import GRADER_IMAGE, FixtureGradingMachines, ShellSimImages, UnavailableImages, script_graded
+from .pipeline_stages import (
+    GRADER_IMAGE,
+    FixtureGradingMachines,
+    ShellSimImages,
+    UnavailableImages,
+    script_graded,
+)
 
 PASS, FAIL, DEFECT = CheckStatus.PASS, CheckStatus.FAIL, CheckStatus.DEFECT
 ROW = RawRow("task", Source(dataset="fixture", revision="1", row="0", importer_revision="1"), {})
@@ -149,9 +154,8 @@ def test_task_without_a_golden_is_checked_with_an_empty_submission(controls):
     assert checks(in_process_task("schema"), controls) == {"empty": PASS}
 
 
-@pytest.mark.parametrize("grader", [NoGrader(reason="Source evaluator unavailable"), SessionGrader()])
-def test_graders_without_offline_grading_have_unsupported_controls(grader):
-    task = in_process_task("numeric").model_copy(update={"grader": grader})
+def test_graders_without_offline_grading_have_unsupported_controls():
+    task = in_process_task("numeric").model_copy(update={"grader": NoGrader(reason="Source evaluator unavailable")})
     report = control_suite(REFERENCE_CONTROLS, FixtureGradingMachines()).run(task)
     assert [check.status for check in report.checks] == [CheckStatus.UNSUPPORTED]
 

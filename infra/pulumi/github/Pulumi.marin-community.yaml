@@ -52,13 +52,14 @@ config:
         - marin-community/MarinSkyRL
         - marin-community/evalchemy
         - marin-community/harbor
+        - marin-community/marin
         - marin-community/marin-style
         - marin-community/tpu-inference
         - marin-community/vllm
       source_kind: manual
       source_ref: owner-recovery:loom-trigger-token
       disposition: keep
-      note: Consumed outside marin; MarinSkyRL has a default-branch workflow reference.
+      note: Consumed by fork failure reporters and the SkyRL nightly migrated into Marin.
     - name: SLACK_WEBHOOK_URL
       scope: organization
       presence: present

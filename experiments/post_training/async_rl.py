@@ -25,6 +25,7 @@ telemetry settings before the job takes a GPU.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from types import MappingProxyType
@@ -38,16 +39,15 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
-    _STRATEGY_FOR_PROFILE,
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     _role_plan_config_values,
@@ -92,24 +92,9 @@ RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
 
 
 @dataclass(frozen=True)
-class MegatronGeometry:
-    """Megatron parallelism of one model, keyed as its ``megatron_config`` section."""
-
-    tensor_model_parallel_size: int
-    pipeline_model_parallel_size: int
-    context_parallel_size: int
-    expert_model_parallel_size: int
-    expert_tensor_parallel_size: int
-
-
-@dataclass(frozen=True)
 class TrainingRecipe:
-    """How one policy trains: runtime, topology, parallel geometry and optimizer."""
+    """Topology, parallel geometry, and optimizer settings for one policy."""
 
-    # MarinSkyRL runtime profile: the frozen dependency set the run installs.
-    profile: SkyRLRuntimeProfile
-    # Nodes the job holds: the policy nodes plus one per engine.
-    num_nodes: int
     # Placement and batch shape; Marin writes these into the SkyRL config from the role plan.
     role_plan: SkyRLRolePlan
     # AdamW learning rate; MarinSkyRL's Snowball Megatron configs use 1e-6.
@@ -120,23 +105,16 @@ class TrainingRecipe:
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
     megatron: MegatronGeometry
-    # Host memory per training task. Megatron checkpoint staging needs 1800GB; the policy spec's
-    # 512GB is sized for an FSDP load.
+    # Host memory includes Megatron checkpoint staging buffers.
     host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: Mapping[str, object]
-
-    @property
-    def strategy(self) -> str:
-        return _STRATEGY_FOR_PROFILE[self.profile]
 
 
 # Snowball 67B-A2B on the 40-GPU topology: four policy nodes with the reference colocated,
 # pipeline depth 2 with 16-way data parallelism and experts sharded eight ways, and one engine node
 # sharding experts across its eight ranks (DP8/EP8).
 SNOWBALL_RECIPE = TrainingRecipe(
-    profile=SkyRLRuntimeProfile.MEGATRON,
-    num_nodes=5,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=4,
@@ -272,7 +250,7 @@ DERIVED_CONTEXT_SETTINGS = frozenset(
     }
 )
 # Keys this launcher derives from the rendered trainer.eval_interval and trainer.max_steps.
-EVAL_DERIVED_SETTINGS = frozenset({"trainer.eval_before_train", "trainer.ckpt_interval"})
+EVAL_DERIVED_SETTINGS = frozenset({"trainer.eval_before_train", "trainer.ckpt_interval", "trainer.hf_save_interval"})
 
 
 def apply_setting(config: dict, setting: Setting) -> None:
@@ -349,7 +327,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "max_turns": 1,
     }
     config["trainer"] = {
-        "strategy": recipe.strategy,
+        "strategy": "megatron",
         # Keep Transformer Engine's attention backend; true forces the flash-attn package
         # (NVTE_FUSED_ATTN=0).
         "flash_attn": False,
@@ -371,8 +349,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         # Validation prompts scored per in-run evaluation.
         "eval_batch_size": 256,
         "eval_interval": preset.eval_interval,
-        # No periodic HF export; the terminal export MarinSkyRL runs after training stays.
-        "hf_save_interval": -1,
         "resume_mode": "latest",
         "max_ckpts_to_keep": RETENTION.resume_checkpoint_count,
         # Sampling and shuffling seed; --set trainer.seed=N changes it and the run's address with it.
@@ -482,6 +458,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
+    # Enable terminal export without an earlier periodic export; its interval must align with checkpoints.
+    trainer["hf_save_interval"] = math.ceil(trainer["max_steps"] / trainer["ckpt_interval"]) * trainer["ckpt_interval"]
     check_loop_shape(config)
     return config
 
@@ -507,7 +485,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(profile=recipe.profile),
+            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=policy.tokenizer_uri,
@@ -517,7 +495,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             train_data=(ArtifactDataSource(pool, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
-                num_nodes=recipe.num_nodes,
+                num_nodes=recipe.role_plan.num_nodes,
                 gpus_per_node=GPUS_PER_NODE,
                 gpu_variant=GPU_VARIANT,
                 role_plan=recipe.role_plan,

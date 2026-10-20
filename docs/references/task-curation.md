@@ -15,6 +15,114 @@ sources = all_sources()  # stable Atlas ID -> RlDataSource
 
 Building the catalog performs no downloads, inference or job submission.
 
+## Pipeline overview
+
+The driver runs each dataset's conversion graph, then binds the embedding graph
+to the completed source artifacts. QUICK converts without review; SAMPLE reviews
+a bounded panel; FULL expands accepted sources and verifies kept tasks.
+`--embed coverage` writes the Atlas export; a separate loader imports it into
+Postgres. `--corpus PATH/corpus.json --embed coverage` resumes from saved
+conversions after checking their manifest hashes. Converted and admitted
+populations remain distinct throughout the export.
+
+```mermaid
+flowchart TD
+    sources["Pinned dataset declarations"] --> conversion["Dataset-owned conversion graph"]
+    conversion --> quick["QUICK: converted TaskSpecs"]
+    conversion --> reviewed["SAMPLE/FULL: review, verify, admit"]
+    reviewed --> catalog["FineStore campaign catalog: results and evidence"]
+    quick --> text["Public task inputs → direct instruction text"]
+    reviewed --> text
+    text --> task_vectors["Harrier task embeddings"]
+    curriculum["Pinned curriculum → text anchors"] --> curriculum_vectors["Harrier curriculum embeddings"]
+    task_vectors -.-> cache["FineStore inference cache"]
+    curriculum_vectors -.-> cache
+    task_vectors -->|vector Parquet| alignment["Exact curriculum scoring + task joins"]
+    curriculum_vectors -->|vector Parquet| alignment
+    alignment --> release["Release manifest references assignments"]
+    release --> coverage["Coverage counts + bounded task samples"]
+    coverage --> loader["Explicit Atlas loader → Postgres"]
+    loader --> atlas["Atlas: By source / By curriculum"]
+    catalog --> grades["Separate curation-grade loader → Postgres"]
+    grades -->|curation grades view| atlas
+```
+
+Both embedding branches use the same model revision, embedding instruction
+(retrieval rubric), tokenization and normalization. Optional
+`--representation rewrite` replaces direct instruction
+text with a cached LLM description. Alignment reads vector Parquet, keeps the
+curriculum matrix in worker memory and scores batches exactly. A curriculum edit
+reuses task vectors. Atlas imports precomputed counts and samples; the full task
+release and vectors stay in object storage.
+
+| Part | Implementation and data models |
+|---|---|
+| Source selection and graph execution | [driver.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/driver.py), [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [TaskSpec](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py) |
+| Embedding, alignment and export graph | [embedding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/embedding.py) |
+| Public input and text preparation | [semantics.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/semantics.py): `TaskSemanticInput`, `TaskDescription` |
+| Shared embedding pass and inference | [embedding.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/embedding.py), [HarrierEmbedder](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/processing/embeddings/harrier.py) |
+| Curriculum anchors, ranking and task joins | [curriculum models](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curriculum/models.py), [alignment.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/alignment.py): `CurriculumVectors`, `TaskMatches`; [task_alignment.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/task_alignment.py): `TaskAlignment` |
+| Full release and compact coverage | [embedding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/embedding.py): release publication; [coverage.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/coverage.py); [EmbeddingSpec, AlignmentRelease, CurriculumCoverage](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/models.py) |
+| Atlas import and serving | [curriculum loader](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/load_curriculum.py), [grade loader](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/load.py), [curriculum API](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/server/curriculum.py), [Atlas reference](rl-data-atlas.md) |
+
+## Storage and publication
+
+The curation driver defaults to `s3://marin-us-east-02a/marin` on CoreWeave.
+`--artifact-root URL` selects another root explicitly and overrides the ambient
+`MARIN_PREFIX`. Local `--cache-dir PATH` takes precedence for local execution.
+`--output-root`, `--report-path` and `--review-cache` remain explicit locations;
+use the same CW bucket for retained remote runs and a new versioned output
+directory for each campaign.
+
+For remote QUICK runs, `--output-root` holds `campaign.json`, `corpus.json` and
+`catalog/`; reusable source artifacts live under `--artifact-root`. For reviewed
+runs, version the parent directory of `--report-path`. Shared content-addressed
+caches can be reused across campaigns.
+
+Artifacts retain their existing `<root>/<name>/<version>` paths. QUICK conversions
+use `rl-semantics/converted/<source>-<identity>/<version>`; reviewed sources use
+`data/rl/<name>-<identity>/<version>`. Completed fixed versions are reused. Changes
+to inputs or recipes require a new identity or version; `dev` is for disposable
+work. Source manifests and `corpus.json` record exact artifact locations and
+manifest hashes. Consumers should follow these references rather than list
+directories and infer the latest version.
+
+By default, each campaign has a FineStore catalog beside its report. Production FULL
+campaigns use `--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/production`
+to accumulate results across versioned report directories, with assessment enabled.
+`--cache-dir` selects local execution and a local artifact root, so shared
+publication rejects it; local and SAMPLE runs keep separate catalogs. Remote runs
+reuse completed artifacts under `--artifact-root` and model requests under the
+explicit `--review-cache`. Reuse those locations, pinned inputs, recipe versions,
+rubric and model revisions across campaigns. A new report directory or enabling
+assessment does not force recomputation of completed work. Switching artifact
+roots does not copy completed work or model-request caches; verify their reuse
+before executing a campaign from a new root. Moving the publication catalog alone
+does not change the artifact or model-request cache locations.
+Source records retain each run's result and artifact path. FineStore's conflict check covers one writer
+session; another writer can replace the same key. Catalog keys include run IDs
+to separate results, but these conventions do not enforce access control.
+Credentials with object write access can overwrite underlying files. Campaign
+reports and `corpus.json` are mutable, so a shared unversioned `--output-root`
+is unsuitable for publication.
+
+Use `--source` to grade only new or changed sources. Shared publication preserves
+unselected source entries, declarations and assessments without executing their
+pipelines.
+Published non-skipped attempts, including failed attempts, establish each source's
+latest accepted run start time. A superseded source keeps its newer state while the rest of the
+campaign publishes. Registry removal does not implicitly retire a production source.
+After publication, run the [Atlas loader](rl-data-atlas.md#updating-atlas) explicitly;
+Postgres refresh is independent of model execution and Marina rollout.
+
+When building grader environments outside the driver, set `MARIN_PREFIX` to the
+same artifact root:
+
+```bash
+MARIN_PREFIX=s3://marin-us-east-02a/marin \
+  uv run python -m experiments.post_training.task_curation.images --all
+```
+
 ## Dataset-owned invocation
 
 `RlDataSource.pipeline` is one graph-building callable:
@@ -83,7 +191,7 @@ directly. Atlas reads these facts without invoking or inspecting the callable.
 | `experiments/post_training/task_curation/images/` | `build.py`, which builds declared environments and records each as an artifact, and the build CLI |
 | `taskcompendium.runtime.local` | The uv environments that local graders run in on the Zephyr worker |
 | `experiments/post_training/task_curation/sources.py` | The source registry, `all_sources()` and `runnable_sources()` |
-| `experiments/post_training/task_curation/source.py`, `source_metadata.py` | Source declarations and inventory metadata |
+| `experiments/post_training/task_curation/source.py` | Source declarations and inventory metadata |
 | `experiments/post_training/task_curation/catalog_snapshot.py` | Published curation inventory, grades and archived evidence |
 | `experiments/post_training/task_curation/config.py` | Invocation options and concrete recipe settings; service binding belongs to `process_rows` |
 | `experiments/post_training/task_curation/pipeline.py` | `CurationRecipe`, `process_rows` and its `data/rl/<name>-<hash>` artifact |
@@ -131,12 +239,12 @@ The `CurationRecipe` configuration has these fields:
 | Field | Meaning |
 |---|---|
 | `name` | Catalog key and artifact name. |
-| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)`. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)` or `HarborHubSource(name, revision, read)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
 | `rubric` | Optional review rubric string, one criterion per paragraph. |
-| `controls` | Optional `Controls(golden, memory_mb)` for grader verification. |
+| `controls` | Optional `Controls(golden, negative, memory_mb, negative_reward)` for grader verification. |
 | `inputs` | Auxiliary pinned sources, staged by name in `ConversionContext.inputs`. |
 | `grader` | The `Environment` that grade scripts need, such as `GRADER_PACKAGES` from `datasets/environments.py`. The pipeline builds it and decides where it runs (see [Environments](#environments)); the converter reads the result as `ConversionContext.grader_environment`. |
 | `resource_budget_bytes` | Decoded resource bytes admitted by reviewed modes, default 1,000,000; larger tasks are deferred as `resources_over_budget`. Quick mode skips this budget. |
@@ -150,6 +258,26 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 `None` when the declaration names no `grader`.
 `required_grader_environment(context)` returns the environment or raises.
 
+`HarborHubSource(name, revision, read)` acquires a complete release pinned by
+`sha256:...`. It caches the original task archives as
+`tasks/<task-reference-hash>.tar.gz`, verifies their extracted contents with the
+vendored Harbor runtime, and records the task references in `release.json`.
+The recipe's `read(StoragePath, ConversionContext)` yields rows from each archive,
+using the same custom-reader interface as HF sources. Acquisition does not
+convert task files or impose a package size cutoff. Dataset-level scoring files
+are not supported.
+
+The existing download cache, sampling, and local-input overrides apply. Retries
+reuse completed archives; use a fresh override directory for a different release
+or task selection. The cache identity includes the release, acquisition code, and
+vendored runtime's source and lock digests. To acquire selected tasks locally,
+inspect the CLI in its isolated environment:
+
+```bash
+uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --frozen \
+  python -m experiments.post_training.task_curation.harbor_hub --help
+```
+
 ## Environments
 
 An `Environment` declares grader build inputs. The converter records agent and
@@ -157,24 +285,25 @@ grader requirements on each TaskSpec; execution selects suitable Shellbox machin
 
 | Field | Meaning |
 |---|---|
-| `pypi` | Exact `name==version` pins, compiled at build time with `uv pip compile --generate-hashes` for Python 3.12 on `x86_64-unknown-linux-gnu`. |
-| `lock` | A uv-compiled requirements lock with hashes, used verbatim. It excludes `pypi`. |
+| `requirements` | Direct Python requirements, each an exact `name==version` pin or a `name @ https://...` URL naming a commit, compiled at build time with `uv pip compile --generate-hashes` for Python 3.12 on `x86_64-unknown-linux-gnu`, with transitive packages limited to releases before the `EXCLUDE_NEWER` cutoff in `images/build.py` so every build of an identity resolves the same lock. |
 | `apt` | Debian package names. |
-| `data` | Downloads; only `nltk:<package>` is supported. |
+| `files` | Absolute guest paths, each receiving a member (a file or directory) of an https archive pinned by URL and SHA-256. The path is the same in both placements and the worker binds it read-only, so it cannot lie under the host system directories such as `/usr` or inside another placed path. |
+| `env` | Environment variables for the grader in both placements. |
 | `image` | A digest-pinned image used as-is. It excludes every other field. |
-| `dockerfile` | A checked-in, self-contained Dockerfile fragment that installs a toolchain, such as Lean and Mathlib, using only `ARG`, `ENV` and `RUN`. The generated Dockerfile runs its lines after the apt step and before the lock sync; its bytes enter the identity. It excludes `image`. |
+| `dockerfile` | A checked-in, self-contained Dockerfile fragment that installs a toolchain, such as Lean and Mathlib, using only `ARG`, `ENV` and `RUN`. The generated Dockerfile runs its lines after the apt and files steps and before the lock sync; its bytes enter the identity. It excludes `image`. |
 
 | Declaration | Placement | Recorded `EnvironmentRequirements` |
 |---|---|---|
 | `image` set | A sandbox of that image | `command_semantics=LINUX_PROCESS`, `docker_image=image` |
 | `dockerfile` set, or `apt` names a package outside `WORKER_IMAGE_APT` | A sandbox of an image built for the environment | `command_semantics=LINUX_PROCESS`, `docker_image=<built digest>` |
-| Anything else | A bubblewrap sandbox on the Zephyr worker | `command_semantics=LINUX_PROCESS`, `packages_lock=<lock URL>` |
+| Anything else | A bubblewrap sandbox on the Zephyr worker, with each `files` path mounted read-only and `env` set | `command_semantics=LINUX_PROCESS`, `packages_lock=<lock URL>` |
 
 `WORKER_IMAGE_APT` in `environment.py` lists the Debian packages the `task`
 stage of `lib/iris/Dockerfile` installs, such as `build-essential` and `git`.
 An environment that needs only those runs in the worker. `GRADER_PACKAGES`, the
-lock every grade script in the catalog imports with the NLTK `punkt_tab` and
-`wordnet` data, runs in the worker. The TaskTrove competitive-programming
+requirements every grade script in the catalog imports with the NLTK `punkt_tab`
+tokenizer placed under `/srv/nltk_data` and `NLTK_DATA` pointing there, runs in
+the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
 `LEAN_GRADER_PACKAGES` adds the Lean 4 and Mathlib fragment
@@ -189,15 +318,15 @@ identity; lock-backed worker environments retain their existing identities.
 
 ## Graders and controls
 
-A task's grader is one of four kinds:
+A task's grader is one of three kinds:
 
 - `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
   in process; with `environment=required_grader_environment(context)` it grades
-  in a fresh machine of the grader's environment.
+  in a fresh machine of the grader's environment. A `judge` grades on the host,
+  through its judge service, also when it declares an environment.
 - `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
   TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
   to a file (`FileReward`).
-- `SessionGrader` marks a task graded by its registered interactive session.
 - `NoGrader` records a source evaluator this repository cannot run, with the
   source contract. Its rows never reach `final/`.
 
@@ -236,7 +365,10 @@ comparators or rewrite tests to accept a reference.
 Controls check a grader before its tasks are admitted. For each sampled task the
 pipeline grades exactly one submission: `golden(task)`, which must score 1, or,
 when the declaration has no `golden` or it returns `None` because the task has no
-known answer, an empty submission, which shows that the grader runs. A grader that
+known answer, `negative(task)` when supplied, otherwise an empty submission.
+A negative must score zero unless `negative_reward(task)` declares its expected
+partial reward. MultiChallenge uses this to account for `NO` criteria that an
+empty reply satisfies. A grader that
 runs in a machine grades the empty submission in a fresh machine of its environment,
 staged as for a rollout whose agent replied with empty text and wrote nothing: an
 empty answer file where the grader reads one, a conversation ending in the empty
@@ -257,11 +389,69 @@ image, such as a conversation task, runs its oracle in the grader's machine. The
 oracle's output is then graded like any other submission. In-process numeric,
 MCQ, exact and action graders are also checked per task during preparation.
 
-Sources graded by an LLM judge (verifyit's judge mode), such as the TaskTrove
-judged, open-QA and MultiChallenge sources, have no control path yet. When every
-task the panel converts is judge-graded, verification samples nothing and
-records `skipped` with reason `judge grader; no control path yet`, and kept rows
-are admitted like rows of in-process graders.
+Judge controls require an explicit `JudgeConnection`. The recipe settings' API
+key and base URL configure it even when the recipe has no review rubric. A
+local constraint, exact-match gate or submission rejection cannot establish
+endpoint readiness: a judge control passes only after a remote verdict. For
+example, an instruction-following negative rejected by an IFEval constraint
+fails verification instead of certifying an untested endpoint. Sources without
+controls still record verification as skipped.
+
+Remote verdicts are not reused across verification runs because the connection
+does not identify an immutable model deployment. This affects cached evidence,
+not the runtime's ability to grade a submission.
+
+Nemotron Lean controls run with 8 GiB of memory. The grader first compiles a
+trusted Mathlib proof as uid 65534 inside the network-denied image. Failure of
+that probe, a compiler timeout or a failed compiler process without a diagnostic
+for the submitted proof is an infrastructure error. Invalid proofs and `sorry`
+score zero.
+
+Reasoning Gym's native VerifyIt mode and Nemotron grader share
+`verifyit.modes.extract.extract_markdown_answer`. It extracts the last `# Answer`
+heading (one to six `#` characters), stopping at the next heading, horizontal
+rule or code fence, and strips outer emphasis. It does not guess answers from
+prose sentences. Each
+grading mode chooses which answer wrappers its contract accepts.
+
+The tool-judge challenge set and its source provenance live under
+`experiments/post_training/task_curation/scripts/fixtures`. Cases pin the hashes
+of the normalized tasks they were labelled against. With `GLM_BULK_TOKEN` set,
+first enter an Iris job that can reach the relay, then run the command below.
+Replace `/OWNER/RELAY_JOB` with the Iris job ID of your relay deployment:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
+  experiments.post_training.task_curation.scripts.calibrate_tool_judge \
+  --relay-job /OWNER/RELAY_JOB --repeats 3 --output calibration.json
+```
+
+Tool-action judges retry a truncated completion once with a 16,384-token
+budget. Malformed or contradictory labels remain unscored. Each request keeps
+its 120-second timeout; allow both attempts within the caller's verifier deadline.
+
+The report records each trial's status, failure reason and duration, per-category
+agreement, requested concurrency, verdict coverage and prompt hashes. Aggregate
+accuracy is withheld below 90% scored coverage. Require the same minimum
+coverage before comparing model validation scores. A load probe with known-invalid
+submissions measures judge availability; it is not a model validation score.
+This tool-call challenge set does not calibrate other tool-use
+sources or the GenRM, abstention, MultiChallenge, jailbreak and instruction
+families. Those sources keep the default recipe version 3 in
+`datasets/nemotron_ultra/components.py` until repeated labelled cases for each
+source establish their expected reward contracts across repeated verdicts.
+Results for this challenge set apply only to toolcall-schema rows. Calibration,
+load and replay reports are not checked in; the PR that relies on one links it
+from an artifact prefix, and the repository keeps only the labelled cases,
+normalized task snapshots and provenance the script reads.
+
+For model-output validation, check the message that TaskSpec actually grades.
+A serving endpoint can remove thinking markers from chat content while retaining
+them in exact response tokens. Recover the final text from those tokens before
+constructing the assistant message, and preserve parsed native tool calls.
+Changing a separate display-text field does not repair the grading boundary.
+Saved-token replay can diagnose this mismatch; it does not recover an API message
+that the original validation dump omitted.
 
 Lock-backed bubblewrap graders share content-addressed Python environments on
 each host. On Iris, they use the executable `/cache/task-curation` mount because
@@ -308,7 +498,9 @@ Sample and full modes run the reviewed procedure below.
    machine, rerun up to twice more after an infrastructure error. At a 95% pass
    fraction, unsampled tasks can skip validation. Otherwise validate every kept
    task, retaining passes, rejecting failures and deferring unavailable results.
-   Judge-graded sources skip this step. This threshold is independent of sampled
+   Remote-judge controls use the campaign's authenticated judge endpoint outside
+   the network-denied grader sandbox; credentials stay out of task specifications
+   and persisted campaign evidence. This threshold is independent of sampled
    GLM quality grades.
 7. Admit rows and write the outputs.
 
@@ -359,7 +551,7 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
 ```
 
 Build the [registered environments](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/images/README.md#building)
-first, with the same `MARIN_PREFIX`:
+first, with `MARIN_PREFIX` set to the driver's artifact root:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.images --all
@@ -367,15 +559,16 @@ uv run python -m experiments.post_training.task_curation.images --identity IDENT
 ```
 
 Each environment without an `image` becomes the artifact
-`images/env-<identity[:16]>`, which stores its hash lock as `requirements.lock`.
-The identity hashes the `pypi` pins or the lock's bytes, `apt`, `data`, the
-`dockerfile` fragment's bytes, Python 3.12, the platform, the digest-pinned
+`images/env-<identity[:16]>`, which stores its hash lock as `requirements.lock`
+and, when it places files or sets variables, `files.tar` and `environment.json`.
+The identity hashes the `requirements`, `apt`, `files` with their archives'
+URLs, digests and members, `env`, the `dockerfile` fragment's bytes, Python 3.12, the platform, the digest-pinned
 base image, the files of `verifyit` (which every built environment puts on the
 grader's import path) and the placement, so a rerun with an unchanged
 declaration does nothing. An environment placed in a built image also gets a
 generated Dockerfile: the pinned `iris-task` base, `apt-get install` of `apt`,
-the `dockerfile` fragment's lines, `uv pip sync --require-hashes` of the lock,
-the NLTK data and `verifyit`. The build pushes it
+`COPY files/ /`, `ENV` lines for `env`, the `dockerfile` fragment's lines, `uv
+pip sync --require-hashes` of the lock and `verifyit`. The build pushes it
 as `ghcr.io/marin-community/iris-task:task-curation-env-<identity[:16]>` and
 records the digest. An image build needs a `docker login` for ghcr.io; every
 build needs, for a CoreWeave `MARIN_PREFIX`, the `CW_KEY_ID` and
@@ -387,9 +580,10 @@ Local graders run in bubblewrap sandboxes on the Zephyr worker, each over a
 private root, so the worker pods need Iris's privileged container profile
 (`--container-profile CONTAINER_PROFILE_PRIVILEGED`). On first use, each worker downloads the environment's lock from its artifact and builds a
 self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
-`/tmp/task-curation-env-<identity>`, with the NLTK data and `verifyit`; the
-sandbox mounts only that directory and the system directories, and concurrent
-graders on one host build it once.
+`/tmp/task-curation-env-<identity>`, with `verifyit` and the placed files from
+`files.tar`; the sandbox mounts that directory, the system directories and each
+placed file at its declared path, runs graders with the declared `env`, and
+concurrent graders on one host build it once.
 Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
 The gVisor launcher uses the enclosing Iris job's controller, or `--controller-url`
 outside a job, to create sandbox jobs. Daytona creates remote sandboxes through its API.

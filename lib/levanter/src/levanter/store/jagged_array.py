@@ -90,13 +90,16 @@ def charge_store_read_budget(path: Optional[str]) -> None:
     with _charged_store_reads_lock:
         if path in _charged_store_reads:
             return
-        _charged_store_reads.add(path)
     fs, fs_path = url_to_fs(path)
     try:
         total_bytes = fs.du(fs_path, total=True)
     except FileNotFoundError:
         return
-    record_transfer(total_bytes, path)
+    with _charged_store_reads_lock:
+        if path in _charged_store_reads:
+            return
+        record_transfer(total_bytes, path)
+        _charged_store_reads.add(path)
 
 
 @contextlib.contextmanager

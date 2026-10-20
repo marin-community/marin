@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import tarfile
 import threading
 from dataclasses import replace
 from functools import partial
@@ -17,16 +18,24 @@ from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.iris.machine import IrisMachineFactory
 from taskcompendium.convert.answers import exact_answer_task
-from taskcompendium.models import TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import (
+    CommandSemantics,
+    EnvironmentRequirements,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
+)
 from taskcompendium.pipeline.controls import reference_reply
-from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, FilterPolicy, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
-from taskcompendium.pipeline.sources import prepared_component_path
+from taskcompendium.pipeline.sources import prepared_component_path, source_shards, staged_file_rows
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
-from verifyit.spec import ExactSpec
+from verifyit.spec import EmptyOutputPolicy, ExactSpec, JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -34,8 +43,9 @@ from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignRuntime, PipelineResult, error_chain
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
+from experiments.post_training.task_curation.datasets.nemotron_ultra.graders import semantic_empty_negative
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
-from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.environment import Archive, Environment
 from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
@@ -44,6 +54,7 @@ from experiments.post_training.task_curation.pipeline import (
     CampaignMachines,
     CurationRecipe,
     DownloadRequest,
+    HarborHubSource,
     HfSource,
     UrlSource,
     download_source,
@@ -54,10 +65,13 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.image_builds import (
+    COMPILED_LOCK,
+    DATA_PATH,
     REPOSITORY,
+    REQUIREMENTS,
     install_fake_build_tools,
-    tracked_lock,
 )
+from experiments.post_training.task_curation.tests.review_server import JudgeReply
 
 AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
 
@@ -122,27 +136,26 @@ def test_image_factory_enters_identity_only_with_controls(config):
 
 
 @pytest.fixture
-def grader_lock(tmp_path, monkeypatch):
+def grader_build(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
-    return tracked_lock(tmp_path)
 
 
-def test_a_changed_grader_environment_renames_the_artifact(grader_lock, config):
-    grader = Environment(lock=grader_lock)
+def test_a_changed_grader_environment_renames_the_artifact(grader_build, config):
+    grader = Environment(requirements=REQUIREMENTS)
     pipeline = replace(math500(), grader=grader)
     run(environment_artifact(grader, REPOSITORY))
     original = source_step(
         pipeline, PipelineOptions(config.mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=config))
     )
     assert environment_artifact(grader).name in [dep.name for dep in original.deps]
-    grader_lock.write_text("numpy==2.3.4\n")
-    run(environment_artifact(grader, REPOSITORY))
-    assert step_name(pipeline, config) != original.name
+    changed = replace(grader, requirements=("numpy==2.3.4",))
+    run(environment_artifact(changed, REPOSITORY))
+    assert step_name(replace(pipeline, grader=changed), config) != original.name
 
 
-def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_image(grader_lock):
-    environment = Environment(lock=grader_lock, apt=("build-essential", "jq"))
+def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_image(grader_build):
+    environment = Environment(requirements=REQUIREMENTS, apt=("build-essential", "jq"))
     (built,) = run(environment_artifact(environment, REPOSITORY))
     requirements = environment_requirements(environment, built_environment(environment))
     assert built.image is not None and built.image.startswith(f"{REPOSITORY}@sha256:")
@@ -151,36 +164,52 @@ def test_apt_packages_beyond_the_worker_image_run_in_a_sandbox_of_the_built_imag
 
 
 @pytest.mark.parametrize(
-    "declare",
+    "environment",
     [
-        pytest.param(lambda lock: Environment(lock=lock, apt=("build-essential", "git")), id="worker-image-apt"),
-        pytest.param(lambda lock: Environment(lock=lock), id="lock-only"),
-        pytest.param(lambda lock: Environment(pypi=("numpy==2.3.5",)), id="pypi-only"),
+        pytest.param(Environment(requirements=REQUIREMENTS, apt=("build-essential", "git")), id="worker-image-apt"),
+        pytest.param(Environment(requirements=REQUIREMENTS), id="requirements-only"),
     ],
 )
-def test_environments_the_worker_image_covers_run_in_the_worker_from_their_lock(grader_lock, declare):
-    environment = declare(grader_lock)
+def test_environments_the_worker_image_covers_run_in_the_worker_from_their_lock(grader_build, environment):
     (built,) = run(environment_artifact(environment, REPOSITORY))
     requirements = environment_requirements(environment, built_environment(environment))
     assert requirements.docker_image is None
     assert requirements.packages_lock == built.lock_url
-    assert hashlib.sha256(StoragePath(requirements.packages_lock).read_bytes()).hexdigest() == built.lock_sha256
+    assert StoragePath(requirements.packages_lock).read_text() == COMPILED_LOCK
+
+
+PINNED_ARCHIVE = Archive("https://archives.invalid/data.zip", "0" * 64, "english")
 
 
 @pytest.mark.parametrize(
     "declare",
     [
-        pytest.param(lambda lock: Environment(pypi=("numpy==2.3.5",), lock=lock), id="pypi-and-lock"),
-        pytest.param(lambda lock: Environment(pypi=("numpy>=2",)), id="unpinned-pypi"),
-        pytest.param(lambda lock: Environment(image="ghcr.io/marin-community/iris-task:latest"), id="unpinned-image"),
-        pytest.param(lambda lock: Environment(image=AGENT_IMAGE, lock=lock), id="image-with-packages"),
-        pytest.param(lambda lock: Environment(lock=lock, data=("punkt_tab",)), id="data-without-a-downloader"),
-        pytest.param(lambda lock: Environment(lock=lock, apt=("jq; rm -rf /",)), id="apt-not-a-package-name"),
+        pytest.param(lambda: Environment(requirements=("numpy>=2",)), id="unpinned-requirement"),
+        pytest.param(
+            lambda: Environment(requirements=("verifiable-instructions @ https://github.com/x/y/archive/main.tar.gz",)),
+            id="url-requirement-without-a-commit",
+        ),
+        pytest.param(lambda: Environment(image="ghcr.io/marin-community/iris-task:latest"), id="unpinned-image"),
+        pytest.param(lambda: Environment(image=AGENT_IMAGE, requirements=REQUIREMENTS), id="image-with-packages"),
+        pytest.param(lambda: Environment(files={"share/data/english": PINNED_ARCHIVE}), id="relative-file-path"),
+        pytest.param(
+            lambda: Environment(files={"/usr/local/share/data/english": PINNED_ARCHIVE}),
+            id="file-under-system-directory",
+        ),
+        pytest.param(
+            lambda: Environment(files={DATA_PATH: PINNED_ARCHIVE, f"{DATA_PATH}/extra": PINNED_ARCHIVE}),
+            id="file-inside-another-file",
+        ),
+        pytest.param(lambda: Environment(files={DATA_PATH: replace(PINNED_ARCHIVE, sha256="abc")}), id="bad-sha256"),
+        pytest.param(
+            lambda: Environment(files={DATA_PATH: replace(PINNED_ARCHIVE, member="../etc")}), id="escaping-member"
+        ),
+        pytest.param(lambda: Environment(apt=("jq; rm -rf /",)), id="apt-not-a-package-name"),
     ],
 )
-def test_environment_declarations_reject_contradictory_or_unpinned_needs(grader_lock, declare):
+def test_environment_declarations_reject_contradictory_or_unpinned_needs(declare):
     with pytest.raises(ValueError):
-        declare(grader_lock)
+        declare()
 
 
 def test_rubric_paragraphs_become_review_criteria():
@@ -474,3 +503,141 @@ def test_url_download_stages_the_file_only_when_its_digest_matches(tmp_path, ser
     with pytest.raises(ValueError, match="SHA-256"):
         download_source(DownloadRequest(bad, str(tmp_path / "bad")), campaign=CampaignRuntime())
     assert not (tmp_path / "bad" / "rows.jsonl").exists()
+
+
+def convert_judge_fixture(row, context):
+    task = convert_fixture(row, context)
+    assert isinstance(task, TaskSpec)
+    package = verifyit_package(
+        JudgeSpec(
+            references=(row.data["answer"],),
+            rubric="labels",
+            model="fixture-judge",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            empty_output=EmptyOutputPolicy.GRADE,
+        ),
+        environment=EnvironmentRequirements(docker_image=AGENT_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS),
+    )
+    return task.model_copy(update={"grader": package.grader})
+
+
+def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
+    tmp_path, config, monkeypatch, review_server
+):
+    primary = tmp_path / "source"
+    primary.mkdir()
+    (primary / "rows.jsonl").write_text('{"prompt":"Two plus two?","answer":"4"}\n')
+    recipe = replace(
+        math500(),
+        source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+        convert=convert_judge_fixture,
+        rubric=None,
+        controls=Controls(negative=semantic_empty_negative),
+        grader=None,
+    )
+    runtime = CampaignRuntime()
+    options = PipelineOptions(
+        SourceProcessingMode.FULL,
+        runtime,
+        inputs=InputOverrides(root=str(primary)),
+        recipe_settings=RecipeSettings(
+            config=replace(
+                config,
+                review=None,
+                execution=AuditExecution(),
+                machines=None,
+                verification_policy=SourceVerificationPolicy(10, 0, 1, 1),
+            ),
+            base_url=f"http://127.0.0.1:{review_server.server_port}/v1",
+            api_key="fixture-key",
+        ),
+    )
+    review_server.judge_replies = [JudgeReply("FAIL")]
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    client = LocalClient()
+    try:
+        with (
+            set_current_client(client),
+            ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
+            runtime.activate(context),
+        ):
+            artifact = run(source_step(recipe, options), max_concurrent=1)[0]
+        result = cast(PipelineResult, artifact.result)
+        verification = json.loads((StoragePath(result.evidence["verify"]) / "report.json").read_text())
+        assert verification["status"] == "passed"
+        assert len(review_server.requests) == 1
+        assert review_server.requests[0]["model"] == "fixture-judge"
+    finally:
+        client.shutdown()
+
+
+def archive_rows(path, context):
+    with path.open("rb") as stream, tarfile.open(fileobj=stream, mode="r|gz") as archive:
+        for member in archive:
+            if member.name == "instruction.md":
+                content = archive.extractfile(member)
+                assert content is not None
+                yield {"prompt": content.read().decode(), "answer": "1"}
+
+
+def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    original_run = pipeline_module.subprocess.run
+    acquired = []
+
+    def exporter(command, **kwargs):
+        if str(pipeline_module.HARBOR_EXPORTER) not in command:
+            return original_run(command, **kwargs)
+        release = command[command.index("--release") + 1]
+        output = StoragePath(command[command.index("--output") + 1])
+        acquired.append(release)
+        (output / "tasks/task.tar.gz").write_bytes(release.encode(), auto_mkdir=True)
+        (output / "release.json").write_text(json.dumps({"release": release}))
+        return None
+
+    monkeypatch.setattr(pipeline_module.subprocess, "run", exporter)
+    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, read=archive_rows)
+    runtime = CampaignRuntime()
+    client = LocalClient()
+    try:
+        with set_current_client(client):
+            first = run(download_step(source, runtime), max_concurrent=1)[0]
+            repeated = run(download_step(source, runtime), max_concurrent=1)[0]
+            changed = replace(source, revision="sha256:" + "c" * 64)
+            other = run(download_step(changed, runtime), max_concurrent=1)[0]
+        assert first.path == repeated.path != other.path
+        assert acquired == [f"{source.name}@{source.revision}", f"{changed.name}@{changed.revision}"]
+        for artifact, expected in zip((first, other), acquired, strict=True):
+            assert (StoragePath(artifact.path) / "tasks/task.tar.gz").read_text() == expected
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.QUICK, SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_path, config, mode):
+    source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, read=archive_rows)
+    recipe = replace(math500(), source=source, convert=convert_fixture, rubric=None, controls=None, grader=None)
+    options = PipelineOptions(mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=replace(config, mode=mode)))
+    automatic = source_step(recipe, options)
+    assert len(automatic.deps) == 1
+    root = tmp_path / "input"
+    (root / "tasks").mkdir(parents=True)
+    payload = root / "tasks/task.tar.gz"
+    instruction = root / "instruction.md"
+    instruction.write_text("one")
+    with tarfile.open(payload, "w:gz") as archive:
+        archive.add(instruction, arcname="instruction.md")
+    spec = pipeline_module.source_files(source)
+    shard = source_shards(str(root), spec)[0]
+    rows = list(staged_file_rows(str(root), shard, spec, ConversionContext({}, None)))
+    assert rows[0]["data"] == {"prompt": "one", "answer": "1"}
+    local_options = replace(options, inputs=InputOverrides(root=str(root)))
+    first = source_step(recipe, local_options)
+    assert first.deps == ()
+    instruction.write_text("two")
+    with tarfile.open(payload, "w:gz") as archive:
+        archive.add(instruction, arcname="instruction.md")
+    second = source_step(recipe, local_options)
+    if mode != SourceProcessingMode.QUICK:
+        assert first.name != second.name

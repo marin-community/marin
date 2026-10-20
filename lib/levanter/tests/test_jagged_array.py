@@ -4,17 +4,47 @@
 import math
 import tempfile
 
+import fsspec
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import rigging.filesystem.cross_region as cross_region
+from rigging.filesystem.cross_region import TransferBudget, TransferBudgetExceeded
 from rigging.filesystem.storage_path import StoragePath
 
-from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch, _ts_open_async
+import levanter.store.jagged_array as jagged_array
+from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch, _ts_open_async, charge_store_read_budget
 
 
 def _reject_mkdirs(self) -> None:
     raise AssertionError(f"read-only open attempted to create {self}")
+
+
+def test_cross_region_store_budget_retries_after_rejected_charge(tmp_path, monkeypatch):
+    path = f"gs://marin-us-central2/{tmp_path.name}"
+    memory_fs = fsspec.filesystem("memory")
+    memory_fs.pipe(f"{tmp_path.name}/data", b"x" * 1000)
+    budget = TransferBudget(limit_bytes=500)
+
+    monkeypatch.delenv(cross_region.MARIN_CROSS_REGION_OVERRIDE_ENV, raising=False)
+    monkeypatch.setattr(cross_region, "cached_marin_region", lambda: "us-central1")
+    monkeypatch.setattr(
+        cross_region,
+        "_cached_bucket_location",
+        lambda bucket: "us-central2" if bucket == "marin-us-central2" else None,
+    )
+    monkeypatch.setattr(cross_region, "_global_transfer_budget", budget)
+    monkeypatch.setattr(jagged_array, "url_to_fs", lambda _: (memory_fs, tmp_path.name))
+
+    with pytest.raises(TransferBudgetExceeded):
+        charge_store_read_budget(path)
+    assert budget.bytes_used == 0
+
+    budget.reset(limit_bytes=2000)
+    charge_store_read_budget(path)
+    charge_store_read_budget(path)
+    assert budget.bytes_used == 1000
 
 
 def test_read_only_open_does_not_create_directories(tmp_path, monkeypatch):

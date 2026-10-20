@@ -47,16 +47,22 @@ a {
   color: inherit;
   text-decoration: none;
 }
+#app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
+}
 .workspace {
   display: flex;
-  min-height: 100vh;
+  min-height: 0;
+  overflow: auto;
 }
 .sidebar {
   width: 246px;
   flex-shrink: 0;
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: 100%;
   background: #f3f5f8;
   border-right: 1px solid #e1e5eb;
   display: flex;

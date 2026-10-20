@@ -35,7 +35,8 @@ try:
 except (ImportError, ModuleNotFoundError):
     pass
 
-# Two families of Pallas-Triton kernels, chosen per GPU family by _triton_kernel_family:
+# Two families of Pallas-Triton kernels. implementation="triton" chooses one per GPU family with
+# _triton_kernel_family; "triton_group_grid" and "triton_tile_map" choose one explicitly.
 #
 # - Group grid, adapted from openxla/tokamax@ad75b704:
 #   tokamax/_src/ops/ragged_dot/pallas_triton.py. In particular:
@@ -45,7 +46,7 @@ except (ImportError, ModuleNotFoundError):
 # - Tile map: forward and dlhs launch one program per (group, row tile, column tile) from a
 #   device-side tile map, as megablox's make_group_metadata, instead of a full row grid per group;
 #   dlhs reads the weights transposed in place, and drhs uses one flat grid over all groups.
-Implementation: TypeAlias = Literal["auto", "megablox", "triton", "xla"]
+Implementation: TypeAlias = Literal["auto", "megablox", "triton", "triton_group_grid", "triton_tile_map", "xla"]
 _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
 _TRITON_DEFAULT_BLOCK_N = 128
@@ -358,30 +359,45 @@ class TritonBlockConfig:
 
 class _GpuFamily(StrEnum):
     AMD_INSTINCT = "amd_instinct"
+    # Data-center Blackwell: sm_100 and sm_103 (B200, GB200, B300).
     NVIDIA_BLACKWELL = "nvidia_blackwell"
-    NVIDIA = "nvidia"
-    # Any other GPU, or no GPU (the CPU interpreter).
+    # sm_90 (H100, H200, GH200).
+    NVIDIA_HOPPER = "nvidia_hopper"
+    # Any other GPU, or no GPU (the CPU interpreter). Earlier NVIDIA GPUs such as A100 and consumer
+    # Blackwell (sm_120) have too little shared memory per block for the Hopper and Blackwell configs.
     OTHER = "other"
 
 
 def _gpu_family() -> _GpuFamily:
     if jax.default_backend() != "gpu":
         return _GpuFamily.OTHER
-    device_kind = jax.devices("gpu")[0].device_kind
-    if "Instinct" in device_kind:
+    device = jax.devices("gpu")[0]
+    if "Instinct" in device.device_kind:
         return _GpuFamily.AMD_INSTINCT
-    if _is_blackwell_gpu_backend():
+    if "NVIDIA" not in device.device_kind:
+        return _GpuFamily.OTHER
+    major = device.compute_capability.split(".")[0]
+    if major == "9":
+        return _GpuFamily.NVIDIA_HOPPER
+    if major == "10":
         return _GpuFamily.NVIDIA_BLACKWELL
-    if "NVIDIA" in device_kind:
-        return _GpuFamily.NVIDIA
     return _GpuFamily.OTHER
 
 
-# The group-grid blocks, for layouts and GPU families without a tuned entry below.
-_TILE_MAP_GENERIC_CONFIG = TritonBlockConfig(
-    block_m=128, block_n=_TRITON_DEFAULT_BLOCK_N, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=1
-)
-_TILE_MAP_BLACKWELL_ROW_CONFIG = dataclasses.replace(_TILE_MAP_GENERIC_CONFIG, block_n=_TRITON_BLACKWELL_BLOCK_N)
+# Tile-map blocks for GPU families without a tuned entry below, such as A100, L4 and consumer Blackwell, which
+# run the tile-map kernels only under implementation="triton_tile_map". Swept on H100 among configs whose operand
+# stages fit in 99 KiB of shared memory, the per-block limit of sm_86, sm_89 and sm_120.
+_TILE_MAP_GENERIC_CONFIGS: dict[RaggedLayout, TritonBlockConfig] = {
+    RaggedLayout.FWD: TritonBlockConfig(
+        block_m=128, block_n=256, block_k=32, num_warps=8, num_stages=4, num_xcds=1, group_m=8
+    ),
+    RaggedLayout.DLHS: TritonBlockConfig(
+        block_m=128, block_n=256, block_k=32, num_warps=8, num_stages=4, num_xcds=1, group_m=1
+    ),
+    RaggedLayout.DRHS: TritonBlockConfig(
+        block_m=128, block_n=128, block_k=32, num_warps=4, num_stages=3, num_xcds=1, group_m=8
+    ),
+}
 _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
     # Swept on MI350X (gfx950) at the June (G=32, K and N of 1280-2560) and Mixtral-like (G=8, 4096x14336)
     # expert shapes; see lib/levanter/scripts/bench/bench_ragged_dot_triton.py.
@@ -396,16 +412,42 @@ _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
             block_m=256, block_n=128, block_k=64, num_warps=4, num_stages=1, num_xcds=8, group_m=8
         ),
     },
-    _GpuFamily.NVIDIA_BLACKWELL: {
-        RaggedLayout.FWD: _TILE_MAP_BLACKWELL_ROW_CONFIG,
-        RaggedLayout.DLHS: _TILE_MAP_BLACKWELL_ROW_CONFIG,
+    # Swept on H100 and GB200 at the same shapes.
+    _GpuFamily.NVIDIA_HOPPER: {
+        RaggedLayout.FWD: TritonBlockConfig(
+            block_m=128, block_n=256, block_k=64, num_warps=8, num_stages=4, num_xcds=1, group_m=8
+        ),
+        RaggedLayout.DLHS: TritonBlockConfig(
+            block_m=128, block_n=256, block_k=64, num_warps=8, num_stages=4, num_xcds=1, group_m=8
+        ),
+        RaggedLayout.DRHS: TritonBlockConfig(
+            block_m=128, block_n=256, block_k=64, num_warps=8, num_stages=3, num_xcds=1, group_m=8
+        ),
     },
+    _GpuFamily.NVIDIA_BLACKWELL: dict.fromkeys(
+        RaggedLayout,
+        TritonBlockConfig(block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=3, num_xcds=1, group_m=8),
+    ),
 }
+# H100 drhs with fewer rows per group than this runs faster with smaller blocks: 12% faster at the
+# June shape with 512 rows per group, about even at 1024, and slower from 2048 up.
+_HOPPER_DRHS_FEW_ROWS_PER_GROUP = 2048
+_HOPPER_DRHS_FEW_ROWS_CONFIG = TritonBlockConfig(
+    block_m=128, block_n=128, block_k=32, num_warps=4, num_stages=4, num_xcds=1, group_m=8
+)
 
 
-def _tile_map_block_config(layout: RaggedLayout, m: int, k: int, n: int) -> TritonBlockConfig:
+def _tile_map_block_config(layout: RaggedLayout, m: int, k: int, n: int, num_groups: int) -> TritonBlockConfig:
     """Device-dependent block config for one layout, fitted to ``m x k x n`` (rows x contraction x columns)."""
-    config = _TILE_MAP_CONFIGS.get(_gpu_family(), {}).get(layout, _TILE_MAP_GENERIC_CONFIG)
+    family = _gpu_family()
+    if (
+        family == _GpuFamily.NVIDIA_HOPPER
+        and layout == RaggedLayout.DRHS
+        and k < _HOPPER_DRHS_FEW_ROWS_PER_GROUP * num_groups
+    ):
+        config = _HOPPER_DRHS_FEW_ROWS_CONFIG
+    else:
+        config = _TILE_MAP_CONFIGS.get(family, _TILE_MAP_GENERIC_CONFIGS)[layout]
     return config.fit(m, k, n)
 
 
@@ -678,20 +720,20 @@ def _tile_map_pallas_call(
         rows, m = lhs.shape
         n = rhs.shape[1]
         num_groups = group_sizes.shape[0]
-        config = (config or _tile_map_block_config(layout, m, rows, n)).fit(m, rows, n)
+        config = (config or _tile_map_block_config(layout, m, rows, n, num_groups)).fit(m, rows, n)
         bounds = jnp.cumulative_sum(group_sizes.astype(jnp.int32), include_initial=True)
         return _tile_map_contracting_matmul(rows, m, n, num_groups, lhs.dtype, config)(lhs, rhs, bounds)
 
     m, k = lhs.shape
     num_groups = rhs.shape[0]
     n = rhs.shape[2] if layout == RaggedLayout.FWD else rhs.shape[1]
-    config = (config or _tile_map_block_config(layout, m, k, n)).fit(m, k, n)
+    config = (config or _tile_map_block_config(layout, m, k, n, num_groups)).fit(m, k, n)
     tiles = _row_tile_metadata(group_sizes, m, config.block_m)
     return _tile_map_row_matmul(m, k, n, num_groups, lhs.dtype, layout, config)(lhs, rhs, tiles)
 
 
 class TritonKernelFamily(StrEnum):
-    """The two Pallas-Triton kernel families behind ``implementation="triton"``."""
+    """The two Pallas-Triton kernel families behind the ``triton`` implementations."""
 
     GROUP_GRID = "group_grid"
     TILE_MAP = "tile_map"
@@ -701,8 +743,8 @@ _TRITON_KERNELS: dict[TritonKernelFamily, Callable[[jax.Array, jax.Array, jax.Ar
     TritonKernelFamily.GROUP_GRID: _group_grid_pallas_call,
     TritonKernelFamily.TILE_MAP: _tile_map_pallas_call,
 }
-# GPU families that run the tile-map kernels; every other GPU, NVIDIA included, runs the group-grid kernels.
-_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT})
+# GPU families that run the tile-map kernels; any other GPU runs the group-grid kernels.
+_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT, _GpuFamily.NVIDIA_HOPPER, _GpuFamily.NVIDIA_BLACKWELL})
 
 
 def _triton_kernel_family() -> TritonKernelFamily:
@@ -744,17 +786,20 @@ def _triton_pallas_call(
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
+    family: TritonKernelFamily,
     ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
 ) -> jax.Array:
-    """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts, with this GPU's kernel family."""
+    """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts, with one kernel family."""
     for layout, dim_nums in _LAYOUT_DIM_NUMS.items():
         if ragged_dot_dimension_numbers == dim_nums:
-            return _TRITON_KERNELS[_triton_kernel_family()](lhs, rhs, group_sizes, layout)
+            return _TRITON_KERNELS[family](lhs, rhs, group_sizes, layout)
     raise NotImplementedError(f"Unsupported ragged dot dimension numbers for Triton: {ragged_dot_dimension_numbers}")
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=())
-def _ragged_dot_triton_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+@functools.partial(jax.custom_vjp, nondiff_argnums=(3,))
+def _ragged_dot_triton_impl(
+    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array, family: TritonKernelFamily
+) -> jax.Array:
     """Pallas-Triton grouped matmul with explicit backward pass.
 
     Uses custom_vjp so JAX never tries to autodiff directly through pallas_call.
@@ -763,22 +808,22 @@ def _ragged_dot_triton_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Arr
     """
     if not _has_pallas_triton:
         raise NotImplementedError("Pallas Triton backend is not available")
-    return _triton_pallas_call(lhs, rhs, group_sizes)
+    return _triton_pallas_call(lhs, rhs, group_sizes, family)
 
 
-def _ragged_dot_triton_fwd(lhs, rhs, group_sizes):
-    out = _triton_pallas_call(lhs, rhs, group_sizes)
+def _ragged_dot_triton_fwd(lhs, rhs, group_sizes, family):
+    out = _triton_pallas_call(lhs, rhs, group_sizes, family)
     return out, (lhs, rhs, group_sizes)
 
 
-def _ragged_dot_triton_bwd(residuals, dout):
+def _ragged_dot_triton_bwd(family, residuals, dout):
     lhs, rhs, group_sizes = residuals
 
     # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T
-    dlhs = _triton_pallas_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
+    dlhs = _triton_pallas_call(dout, rhs, group_sizes, family, _DLHS_DIM_NUMS)
 
     # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N]
-    drhs = _triton_pallas_call(lhs, dout, group_sizes, _DRHS_DIM_NUMS)
+    drhs = _triton_pallas_call(lhs, dout, group_sizes, family, _DRHS_DIM_NUMS)
 
     return dlhs, drhs, None  # None for group_sizes (integer, no gradient)
 
@@ -803,6 +848,7 @@ def _preferred_implementations(implementation: Implementation) -> tuple[Implemen
     # Allow override via env var for A/B benchmarking:
     #   RAGGED_DOT_IMPL=xla     → force XLA
     #   RAGGED_DOT_IMPL=triton  → force Triton
+    #   RAGGED_DOT_IMPL=triton_tile_map or triton_group_grid → force Triton with one kernel family
     env_override = os.environ.get("RAGGED_DOT_IMPL")
     if env_override is not None:
         return (env_override,)  # type: ignore[return-value]
@@ -823,7 +869,11 @@ def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes:
     if name == "megablox":
         return _ragged_dot_megablox_impl(lhs, rhs, group_sizes)
     if name == "triton":
-        return _ragged_dot_triton_impl(lhs, rhs, group_sizes)
+        return _ragged_dot_triton_impl(lhs, rhs, group_sizes, _triton_kernel_family())
+    if name == "triton_group_grid":
+        return _ragged_dot_triton_impl(lhs, rhs, group_sizes, TritonKernelFamily.GROUP_GRID)
+    if name == "triton_tile_map":
+        return _ragged_dot_triton_impl(lhs, rhs, group_sizes, TritonKernelFamily.TILE_MAP)
     if name == "xla":
         return _ragged_dot_xla_impl(lhs, rhs, group_sizes)
     raise ValueError(f"Unknown ragged_dot implementation: {name}")
@@ -844,7 +894,8 @@ def ragged_dot(
         group_sizes_: [experts] number of tokens per expert.
         ar: Whether to perform an all-reduce over the model axis on the output.
         implementation: Backend selection. ``"auto"`` selects per-platform default.
-            ``"triton"`` forces GPU Pallas Triton kernel. ``"megablox"`` forces
+            ``"triton"`` forces GPU Pallas Triton kernels, of the family this GPU runs by
+            default; ``"triton_group_grid"`` and ``"triton_tile_map"`` force one family. ``"megablox"`` forces
             TPU megablox. ``"xla"`` forces ``jax.lax.ragged_dot_general``.
 
     Returns:

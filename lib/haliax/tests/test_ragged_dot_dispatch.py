@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import importlib
 from typing import Literal
 
@@ -34,8 +33,18 @@ def _accelerator_implementation() -> Literal["megablox", "triton"]:
 
 
 def test_accelerator_implementation_value_and_gradients_match_xla():
+    _assert_value_and_gradients_match_xla(_accelerator_implementation())
+
+
+@pytest.mark.parametrize("implementation", ["triton_group_grid", "triton_tile_map"])
+def test_explicit_triton_family_value_and_gradients_match_xla(implementation):
+    if _accelerator_implementation() != "triton":
+        pytest.skip("requires the GPU Pallas Triton backend")
+    _assert_value_and_gradients_match_xla(implementation)
+
+
+def _assert_value_and_gradients_match_xla(implementation):
     lhs, rhs, group_sizes = _inputs()
-    implementation = _accelerator_implementation()
 
     def loss(lhs, rhs, implementation):
         return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation=implementation) ** 2)
@@ -79,8 +88,11 @@ def test_gpu_auto_selects_triton_instead_of_xla(monkeypatch):
     expected = jnp.full((lhs.shape[0], rhs.shape[2]), 17.0, dtype=lhs.dtype)
     monkeypatch.setattr(ragged_dot_module.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(ragged_dot_module, "_has_pallas_triton", True)
+    monkeypatch.setattr(
+        ragged_dot_module, "_triton_kernel_family", lambda: ragged_dot_module.TritonKernelFamily.TILE_MAP
+    )
 
-    def triton_result(lhs, rhs, group_sizes):
+    def triton_result(lhs, rhs, group_sizes, family):
         return jnp.full((lhs.shape[0], rhs.shape[2]), expected[0, 0], dtype=lhs.dtype)
 
     def unexpected_xla(*args):
@@ -108,15 +120,17 @@ def test_triton_default_block_sizes_keep_non_blackwell_n_tile(monkeypatch):
 
 def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     lhs, rhs, group_sizes = _inputs()
+    family = ragged_dot_module.TritonKernelFamily.GROUP_GRID
     calls = []
 
     def fake_triton_pallas_call(
         lhs,
         rhs,
         group_sizes,
+        family,
         ragged_dot_dimension_numbers=ragged_dot_module._DEFAULT_DIM_NUMS,
     ):
-        calls.append(ragged_dot_dimension_numbers)
+        calls.append((family, ragged_dot_dimension_numbers))
         return jax.lax.ragged_dot_general(
             lhs=lhs,
             rhs=rhs,
@@ -128,7 +142,7 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     monkeypatch.setattr(ragged_dot_module, "_triton_pallas_call", fake_triton_pallas_call)
 
     def triton_loss(lhs, rhs):
-        return jnp.sum(ragged_dot_module._ragged_dot_triton_impl(lhs, rhs, group_sizes))
+        return jnp.sum(ragged_dot_module._ragged_dot_triton_impl(lhs, rhs, group_sizes, family))
 
     def xla_loss(lhs, rhs):
         return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation="xla"))
@@ -143,33 +157,10 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     assert jnp.allclose(triton_grads[0], xla_grads[0], rtol=1e-5, atol=1e-5)
     assert jnp.allclose(triton_grads[1], xla_grads[1], rtol=1e-5, atol=1e-5)
     assert calls == [
-        ragged_dot_module._DEFAULT_DIM_NUMS,
-        ragged_dot_module._DLHS_DIM_NUMS,
-        ragged_dot_module._DRHS_DIM_NUMS,
+        (family, ragged_dot_module._DEFAULT_DIM_NUMS),
+        (family, ragged_dot_module._DLHS_DIM_NUMS),
+        (family, ragged_dot_module._DRHS_DIM_NUMS),
     ]
-
-
-@dataclasses.dataclass(frozen=True)
-class _FakeGpu:
-    device_kind: str
-    compute_capability: str | None = None
-
-
-@pytest.mark.parametrize(
-    "device, expected",
-    [
-        (_FakeGpu("AMD Instinct MI350X"), "tile_map"),
-        (_FakeGpu("AMD Instinct MI300X"), "tile_map"),
-        (_FakeGpu("NVIDIA H100 80GB HBM3", "9.0"), "group_grid"),
-        (_FakeGpu("NVIDIA B200", "10.0"), "group_grid"),
-    ],
-    ids=["mi350x", "mi300x", "h100", "b200"],
-)
-def test_triton_kernel_family_uses_tile_map_only_on_amd_instinct(monkeypatch, device, expected):
-    monkeypatch.setattr(ragged_dot_module.jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(ragged_dot_module.jax, "devices", lambda backend=None: [device])
-
-    assert ragged_dot_module._triton_kernel_family() == ragged_dot_module.TritonKernelFamily(expected)
 
 
 # Group sizes over 300 rows and 4 groups, chosen so that row tiles straddle group boundaries.
@@ -235,12 +226,9 @@ def _assert_close_to_reference(actual, expected, rtol):
 
 def _triton_f32_dots_use_tf32() -> bool:
     """Triton's dot defaults f32 inputs to TF32 on NVIDIA GPUs and on gfx942 (MI300X, MI325X), and to IEEE on gfx950."""
-    nvidia = (ragged_dot_module._GpuFamily.NVIDIA, ragged_dot_module._GpuFamily.NVIDIA_BLACKWELL)
-    if ragged_dot_module._gpu_family() in nvidia:
-        return True
-    # ROCm reports the gfx architecture name as the compute capability.
     device = jax.devices()[0]
-    return device.platform == "gpu" and device.compute_capability == "gfx942"
+    # ROCm reports the gfx architecture name as the compute capability.
+    return device.platform == "gpu" and ("NVIDIA" in device.device_kind or device.compute_capability == "gfx942")
 
 
 def _run_kernel_family(family: str, lhs, rhs, sizes, layout: str):
@@ -278,7 +266,12 @@ def test_triton_kernel_families_match_ragged_dot_general(family, layout, group_s
     _assert_close_to_reference(actual, expected, rtol)
 
 
-@pytest.mark.parametrize("group_sizes", [[512, 512, 512, 512], [5, 1000, 0, 1043]], ids=["balanced", "skewed"])
+# H100 picks its drhs blocks by rows per group, below and from 2048.
+@pytest.mark.parametrize(
+    "group_sizes",
+    [[512, 512, 512, 512], [5, 1000, 0, 1043], [2048, 2048, 2048, 2048]],
+    ids=["balanced", "skewed", "many_rows_per_group"],
+)
 def test_triton_ragged_dot_value_and_gradients_match_reference_with_device_blocks(group_sizes):
     _require_triton_gpu()
     rows, k, n = sum(group_sizes), 256, 384

@@ -378,7 +378,13 @@ class Trainer:
             self._xla_dump_upload(info)
 
     def add_completed_step_hook(self, fn: Callable[[StepInfo], Any] | Callback, *, every: int = 1) -> None:
-        """Run a hook after each multiple of completed updates, including the first interval."""
+        """Schedule callbacks by completed optimizer updates (``state.step``).
+
+        With ``every=2``, this runs after updates 2, 4, and 6. Legacy hooks
+        schedule on zero-based ``StepInfo.step`` and skip indices 0 and 1,
+        so the same interval first runs after update 3. Both invoke ``on_step``;
+        this API changes the schedule, not the callback interface.
+        """
         self.hooks.completed_step_hooks.add_hook(fn, every=every)
 
     def request_checkpoint(self, retention: CheckpointRetention) -> None:
