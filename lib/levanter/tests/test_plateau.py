@@ -1,3 +1,6 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import haliax as hax
 import jax
 import jax.numpy as jnp
