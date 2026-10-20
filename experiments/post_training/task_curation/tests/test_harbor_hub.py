@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("harbor", reason="Requires the isolated config/external/harbor runtime")
+pytest.importorskip("harbor", reason="Requires the isolated vendor/harbor runtime")
 
 from experiments.post_training.task_curation import harbor_hub
 

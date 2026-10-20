@@ -104,7 +104,8 @@ def resolve_judge_model_config(model_key: str | None, config_path: Path | None) 
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
     geometry = batch.accelerator.geometry
     serving = geometry.label if geometry is not None else "worker-resolved"
-    task_count = geometry.task_count if geometry is not None else 1
+    serving = f"{serving} instances={batch.model.serve.instances}"
+    task_count = (geometry.task_count if geometry is not None else 1) * batch.model.serve.instances
     click.echo(
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
@@ -132,7 +133,8 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
             f"{agent_context}"
-            f"records={batch.records_prefix}"
+            f"records={batch.records_prefix}  "
+            f"results={evaluation.identity.output_dir}"
         )
 
 
@@ -176,6 +178,11 @@ def cli() -> None:
     help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
 )
 @click.option(
+    "--retry-unscored-harbor-trials",
+    is_flag=True,
+    help="Retry known unscored Harbor trials in --resume-results-path; preserve scored and unknown-error outcomes.",
+)
+@click.option(
     "--platform",
     type=click.Choice([p.value for p in Platform]),
     default=None,
@@ -202,9 +209,20 @@ def cli() -> None:
     "--version",
     "version",
     default=None,
-    help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
+    help=(
+        "Submitter-controlled cohort label, e.g. '2026.07.20' or 'rl-fix-sweep'. "
+        "This is provenance metadata, not an eval-policy conformance claim."
+    ),
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
+@click.option(
+    "--resume-results-path",
+    default=None,
+    help=(
+        "Existing object-store results path for a single Harbor evaluation. "
+        "Use only after every earlier driver for that path has ended."
+    ),
+)
 @click.option(
     "--run-id", default=None, help="Stable launch ID; repeat the command with this ID to reuse completed evals."
 )
@@ -235,6 +253,7 @@ def launch(
     evals_arg: str | None,
     evalchemy_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
+    retry_unscored_harbor_trials: bool,
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
@@ -243,6 +262,7 @@ def launch(
     seed: int | None,
     version: str | None,
     description: str | None,
+    resume_results_path: str | None,
     run_id: str | None,
     no_wait: bool,
     dry_run: bool,
@@ -290,14 +310,19 @@ def launch(
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
         judge_model=selected_judge,
         judge_accelerator=judge_accelerator,
+        retry_unscored_harbor_trials=retry_unscored_harbor_trials,
         version=version,
         description=description,
+        resume_results_path=resume_results_path,
         run_id=run_id,
     )
     try:
         batch = prepare_evaluation_batch(spec)
     except ValueError as exc:
-        param_hint = "--evalchemy-config/--harbor-config" if evalchemy_config or harbor_config else "--evals"
+        if resume_results_path is not None:
+            param_hint = "--resume-results-path"
+        else:
+            param_hint = "--evalchemy-config/--harbor-config" if evalchemy_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
     if dry_run:
         _print_plan(spec, batch)
