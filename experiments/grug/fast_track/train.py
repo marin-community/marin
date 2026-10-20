@@ -72,7 +72,9 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.library_kernels import load_library_kernels
 from experiments.grug.fast_track.model import (
+    FINAL_NORM_INPUT_RMS_KEY,
     DenseMLP,
+    GradProbeSite,
     GrugModelConfig,
     LayerSkip,
     Transformer,
@@ -888,8 +890,18 @@ def _layer_skip_mask(rule: LayerSkipRule | None, tokens: jax.Array, mask) -> Lay
 
 
 LM_HEAD_GRAD_PREFIX = "train/lm_head_grad/"
+LM_HEAD_GRAD_PRE_PREFIX = "train/lm_head_grad_pre/"
+FINAL_NORM_INPUT_RMS_PREFIX = "train/final_norm_input_rms/"
 # The step's per-token norms ``[B, S]`` (float32, loss-token units), kept on device unless a dump fetches them.
 LM_HEAD_GRAD_NORM_KEY = "_lm_head_grad_norm"
+LM_HEAD_GRAD_PRE_NORM_KEY = "_lm_head_grad_norm_pre"
+FINAL_NORM_INPUT_RMS_QUANTILES = (0.01, 0.5, 0.99)
+# Dump field -> metrics key of the per-token arrays written when present.
+LM_HEAD_GRAD_DUMP_FIELDS = {
+    "norm": LM_HEAD_GRAD_NORM_KEY,
+    "norm_pre": LM_HEAD_GRAD_PRE_NORM_KEY,
+    "rms_pre": FINAL_NORM_INPUT_RMS_KEY,
+}
 LM_HEAD_GRAD_QUANTILES = (0.5, 0.9, 0.99, 0.999)
 LM_HEAD_GRAD_MEDIAN_MULTIPLES = (2, 5, 10)
 # Half-open ranges of each token's position within its document.
@@ -908,17 +920,10 @@ def lm_head_grad_dump_due(step: int, every: int) -> bool:
     return early or step % every == 0
 
 
-def _lm_head_grad_metrics(raw_norms: jax.Array, batch, clip: float | None) -> dict[str, jax.Array]:
-    """Stats of the per-token lm_head input-gradient norms over the batch's loss tokens.
-
-    The loss is a mean over the loss-weighted tokens, so ``raw_norms`` carry a factor 1 / sum(loss_weight); the
-    norms here are scaled by that sum: each is the gradient norm of the token's own loss term (its cross-entropy
-    plus its z-loss share), comparable across batch sizes. Tokens with zero loss weight are excluded from the stats
-    (``masked_max`` checks they are 0). With ``clip`` (``lm_head_grad_clip``), ``frac_clipped`` is the fraction of
-    loss tokens whose pre-clip norm exceeds it."""
+def _grad_norm_stats(norms: jax.Array, batch, clip: float | None) -> dict[str, jax.Array]:
+    """``_lm_head_grad_metrics``' stats of one probe site's per-token norms (loss-token units)."""
     weight = batch.loss_weight.astype(jnp.float32)
     loss_tokens = jnp.sum(weight)
-    norms = raw_norms * loss_tokens
     valid = weight > 0
     count = jnp.maximum(jnp.sum(valid.astype(jnp.float32)), 1.0)
     valid_norms = jnp.where(valid, norms, 0.0)
@@ -946,10 +951,40 @@ def _lm_head_grad_metrics(raw_norms: jax.Array, batch, clip: float | None) -> di
         out[f"pos_mean/{name}"] = jnp.sum(jnp.where(in_bucket, norms, 0.0)) / jnp.maximum(
             jnp.sum(in_bucket.astype(jnp.float32)), 1.0
         )
-    return {
-        **{f"{LM_HEAD_GRAD_PREFIX}{k}": jax.lax.stop_gradient(v) for k, v in out.items()},
-        LM_HEAD_GRAD_NORM_KEY: norms,
+    return out
+
+
+def _lm_head_grad_metrics(
+    raw_norms: dict[GradProbeSite, jax.Array], rms_pre: jax.Array | None, batch, clip: float | None
+) -> dict[str, jax.Array]:
+    """Stats of the per-token gradient norms of each probe site over the batch's loss tokens, the per-token norms
+    themselves (for dumps) and, at the pre-norm site, stats of each token's RMS entering ``final_norm``.
+
+    The loss is a mean over the loss-weighted tokens, so ``raw_norms`` carry a factor 1 / sum(loss_weight); the
+    norms here are scaled by that sum: each is the gradient norm of the token's own loss term (its cross-entropy
+    plus its z-loss share), comparable across batch sizes. Tokens with zero loss weight are excluded from the stats
+    (``masked_max`` checks they are 0). With ``clip`` (``lm_head_grad_clip``), the post-norm ``frac_clipped`` is
+    the fraction of loss tokens whose pre-clip norm exceeds it."""
+    loss_tokens = jnp.sum(batch.loss_weight.astype(jnp.float32))
+    out: dict[str, jax.Array] = {}
+    sites = {
+        GradProbeSite.POST_NORM: (LM_HEAD_GRAD_PREFIX, LM_HEAD_GRAD_NORM_KEY, clip),
+        GradProbeSite.PRE_NORM: (LM_HEAD_GRAD_PRE_PREFIX, LM_HEAD_GRAD_PRE_NORM_KEY, None),
     }
+    for site, raw in raw_norms.items():
+        prefix, key, site_clip = sites[site]
+        norms = raw * loss_tokens
+        stats = _grad_norm_stats(norms, batch, site_clip)
+        out.update({f"{prefix}{k}": jax.lax.stop_gradient(v) for k, v in stats.items()})
+        out[key] = norms
+    if rms_pre is not None:
+        valid = batch.loss_weight > 0
+        everywhere = reshard(jnp.where(valid, rms_pre, jnp.nan), P(None, None))
+        quantiles = jnp.nanquantile(everywhere, jnp.asarray(FINAL_NORM_INPUT_RMS_QUANTILES))
+        out[f"{FINAL_NORM_INPUT_RMS_PREFIX}min"] = jnp.min(jnp.where(valid, rms_pre, jnp.inf))
+        for i, q in enumerate(FINAL_NORM_INPUT_RMS_QUANTILES):
+            out[f"{FINAL_NORM_INPUT_RMS_PREFIX}p{100 * q:g}"] = quantiles[i]
+    return out
 
 
 TOKEN_EMBED_STATS_PREFIX = "train/embed/"
@@ -971,9 +1006,11 @@ def _token_embed_stats(before: jax.Array, after: jax.Array) -> dict[str, jax.Arr
     return {f"{TOKEN_EMBED_STATS_PREFIX}{k}": v for k, v in out.items()}
 
 
-def _write_lm_head_grad_dump(dump_dir: str, step: int, norms: jax.Array, batch) -> None:
-    """Write ``step``'s per-token norms (``_lm_head_grad_metrics`` units), tokens, loss weights and segment ids."""
-    arrays = {"norm": norms, "tokens": batch.tokens, "loss_weight": batch.loss_weight}
+def _write_lm_head_grad_dump(dump_dir: str, step: int, metrics: dict, batch) -> None:
+    """Write ``step``'s per-token norms (``_lm_head_grad_metrics`` units: ``norm`` post-norm, ``norm_pre`` pre-norm),
+    ``rms_pre`` (each token's RMS entering ``final_norm``), tokens, loss weights and segment ids."""
+    per_token = {field: metrics[key] for field, key in LM_HEAD_GRAD_DUMP_FIELDS.items() if key in metrics}
+    arrays = {**per_token, "tokens": batch.tokens, "loss_weight": batch.loss_weight}
     segment_ids = _segment_ids(batch)
     if segment_ids is not None:
         arrays["segment_ids"] = segment_ids
@@ -984,7 +1021,7 @@ def _write_lm_head_grad_dump(dump_dir: str, step: int, norms: jax.Array, batch) 
     np.savez_compressed(
         buffer,
         step=np.asarray(step),
-        norm=np.asarray(host["norm"], np.float32),
+        **{field: np.asarray(host[field], np.float32) for field in per_token},
         tokens=np.asarray(host["tokens"], np.int32),
         loss_weight=np.asarray(host["loss_weight"], np.float16),
         **({"segment_ids": np.asarray(host["segment_ids"], np.int32)} if "segment_ids" in host else {}),
@@ -1002,13 +1039,13 @@ def _loss_and_grads(
     z_loss: float | None,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_active: jax.Array | bool = True,
-    lm_head_grad_probe: bool = False,
+    lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
 ):
-    """With ``lm_head_grad_probe`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come back as
-    the gradient of a zeros probe (``model.lm_head_grad_probe``) differentiated next to the params."""
+    """With ``lm_head_grad_probe_site`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come
+    back as the gradients of zeros probes (``model.lm_head_grad_probe``) differentiated next to the params."""
 
-    def loss_fn(model, probe):
+    def loss_fn(model, probes):
         compute_params = _cast_to_compute(mp, model)
         skip = _layer_skip_mask(layer_skip, batch.tokens, batch.attn_mask)
         loss, metrics = compute_params.next_token_loss(
@@ -1021,17 +1058,26 @@ def _loss_and_grads(
             train_terms=True,
             layer_skip=skip,
             extra_mlp_active=extra_mlp_active,
-            head_grad_probe=probe,
+            head_grad_probe=probes.get(GradProbeSite.POST_NORM),
+            pre_norm_grad_probe=probes.get(GradProbeSite.PRE_NORM),
         )
         if skip is not None:
             metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
         return loss, metrics
 
-    if not lm_head_grad_probe:
-        return jax.value_and_grad(lambda model: loss_fn(model, None), has_aux=True)(params)
-    probe = jnp.zeros_like(batch.tokens, dtype=jnp.float32)
-    (loss, metrics), (grads, raw_norms) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(params, probe)
-    return (loss, {**metrics, **_lm_head_grad_metrics(raw_norms, batch, lm_head_grad_clip)}), grads
+    if lm_head_grad_probe_site is None:
+        return jax.value_and_grad(lambda model: loss_fn(model, {}), has_aux=True)(params)
+    if lm_head_grad_probe_site == GradProbeSite.BOTH:
+        sites = (GradProbeSite.POST_NORM, GradProbeSite.PRE_NORM)
+    else:
+        sites = (lm_head_grad_probe_site,)
+    probes = {site: jnp.zeros_like(batch.tokens, dtype=jnp.float32) for site in sites}
+    (loss, metrics), (grads, raw_norms) = jax.value_and_grad(loss_fn, argnums=(0, 1), has_aux=True)(params, probes)
+    rms_pre = metrics.pop(FINAL_NORM_INPUT_RMS_KEY, None)
+    probe_metrics = _lm_head_grad_metrics(raw_norms, rms_pre, batch, lm_head_grad_clip)
+    if rms_pre is not None:
+        probe_metrics[FINAL_NORM_INPUT_RMS_KEY] = rms_pre
+    return (loss, {**metrics, **probe_metrics}), grads
 
 
 def _accumulated_loss_and_grads(
@@ -1110,19 +1156,19 @@ def _make_train_step(
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_step: int = 0,
-    lm_head_grad_probe: bool = False,
+    lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
     token_embed_stats: bool = False,
 ):
     """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
-    ``lm_head_grad_probe`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
+    ``lm_head_grad_probe_site`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
     ``token_embed_stats`` the ``_token_embed_stats``.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
     (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
     between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
-    if lm_head_grad_probe and grad_accum_microbatches > 1:
+    if lm_head_grad_probe_site is not None and grad_accum_microbatches > 1:
         raise ValueError("lm_head_grad_probe does not support gradient accumulation")
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
@@ -1145,7 +1191,7 @@ def _make_train_step(
             )
         else:
             (loss, summarized_metrics), grads = _loss_and_grads(
-                qb_params, batch, mp, z_loss, layer_skip, extra_active, lm_head_grad_probe, lm_head_grad_clip
+                qb_params, batch, mp, z_loss, layer_skip, extra_active, lm_head_grad_probe_site, lm_head_grad_clip
             )
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
@@ -1598,6 +1644,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 "train/aux/",
                                 "train/optim/",
                                 LM_HEAD_GRAD_PREFIX,
+                                LM_HEAD_GRAD_PRE_PREFIX,
+                                FINAL_NORM_INPUT_RMS_PREFIX,
                                 TOKEN_EMBED_STATS_PREFIX,
                             )
                         )
@@ -1623,7 +1671,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     levanter.tracker.log(jax.device_get(rec.watch_stats), step=step)
                 dump_dir = config.trainer.lm_head_grad_dump_dir
                 if dump_dir is not None and lm_head_grad_dump_due(step, config.model.lm_head_grad_dump_every):
-                    _write_lm_head_grad_dump(dump_dir, step, metrics[LM_HEAD_GRAD_NORM_KEY], rec.batch)
+                    _write_lm_head_grad_dump(dump_dir, step, metrics, rec.batch)
             if step_state is not None:
                 if checkpointer is not None:
                     with callbacks.progress_event_scope(
@@ -2006,7 +2054,7 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         layer_skip=config.trainer.layer_skip,
         # Late by default, once the entropy head has learned something.
         extra_mlp_start_step=int(trainer.num_train_steps * config.trainer.extra_mlp_start_frac),
-        lm_head_grad_probe=config.model.lm_head_grad_probe,
+        lm_head_grad_probe_site=config.model.lm_head_grad_probe_site if config.model.lm_head_grad_probe else None,
         lm_head_grad_clip=config.model.lm_head_grad_clip,
         token_embed_stats=config.model.token_embed_stats,
     )

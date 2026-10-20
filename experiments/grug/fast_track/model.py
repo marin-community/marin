@@ -216,6 +216,18 @@ KDA_CHUNK_TILES: dict[int, int | None] = {16: None, 32: 32, 64: 32}
 _KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
 
 
+class GradProbeSite(StrEnum):
+    """Where ``lm_head_grad_probe`` reads per-token gradient norms."""
+
+    POST_NORM = "post_norm"  # the lm_head input, after final_norm (and final_gated_norm)
+    PRE_NORM = "pre_norm"  # the residual stream entering final_norm
+    BOTH = "both"
+
+
+# Under a pre-norm probe: each token's RMS of the residual entering final_norm, [B, S] float32 (stop-gradient).
+FINAL_NORM_INPUT_RMS_KEY = "_final_norm_input_rms"
+
+
 class SkipProbeTarget(StrEnum):
     """What the ``skip_probe_layer`` probes predict."""
 
@@ -925,6 +937,9 @@ class GrugModelConfig:
     """Log each token's gradient norm w.r.t. the lm_head input (the final normed hidden state) every step
     (``lm_head_grad_probe``; train-step stats under ``train/lm_head_grad/``). Without ``lm_head_grad_clip`` the
     training math is unchanged."""
+    lm_head_grad_probe_site: GradProbeSite = GradProbeSite.POST_NORM
+    """Where ``lm_head_grad_probe`` reads the norms (``GradProbeSite``); the pre-norm site logs under
+    ``train/lm_head_grad_pre/`` with each token's input RMS under ``train/final_norm_input_rms/``."""
     lm_head_grad_dump_every: int = 0
     """With ``lm_head_grad_probe``: also write the whole batch's per-token norms and token ids every this many steps
     (and densely early on, see ``train.lm_head_grad_dump_due``); 0: no dumps."""
@@ -1029,6 +1044,8 @@ class GrugModelConfig:
             raise ValueError("lm_head_grad_dump_every needs lm_head_grad_probe")
         if self.lm_head_grad_clip is not None and (not self.lm_head_grad_probe or self.lm_head_grad_clip <= 0):
             raise ValueError("lm_head_grad_clip needs lm_head_grad_probe and a positive threshold")
+        if self.lm_head_grad_clip is not None and self.lm_head_grad_probe_site == GradProbeSite.PRE_NORM:
+            raise ValueError("lm_head_grad_clip clips at the post-norm probe site")
         if self.moe_k_layers and (
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
@@ -5464,8 +5481,11 @@ class Transformer(eqx.Module):
         router_tie_active: bool | None = None,
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
+        pre_norm_grad_probe: Float[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``extra_mlp_active`` (traced bool) turns on the ``extra_mlp_layers`` MLPs (off: no token reaches them).
+        ``pre_norm_grad_probe`` (zeros ``[B, S]``) passes the stream entering ``final_norm`` through
+        ``lm_head_grad_probe`` and adds each token's RMS of it as ``FINAL_NORM_INPUT_RMS_KEY``.
         ``layer_skip`` (an eval ablation, AttnRes only) drops the listed layers' attention and MLP outputs for
         the tokens it marks.
         ``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
@@ -5624,6 +5644,10 @@ class Transformer(eqx.Module):
         router_metrics.update(final_gate_stats)
         router_metrics.update(bigram_gate_stats)
         router_metrics.pop(_LM_HEAD_EXTRA, None)
+        if pre_norm_grad_probe is not None:
+            rms = jnp.sqrt(jnp.mean(jnp.square(jax.lax.stop_gradient(hidden).astype(jnp.float32)), axis=-1))
+            router_metrics[FINAL_NORM_INPUT_RMS_KEY] = rms
+            hidden = lm_head_grad_probe(hidden, pre_norm_grad_probe, jnp.asarray(jnp.inf, jnp.float32))
         hidden = self.final_norm(hidden)
         if self.final_gated_norm is not None:
             hidden = self.final_gated_norm(hidden)
@@ -6362,11 +6386,13 @@ class Transformer(eqx.Module):
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
         head_grad_probe: Float[Array, "B S"] | None = None,
+        pre_norm_grad_probe: Float[Array, "B S"] | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss, the mid head); evals leave it off
         so they score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the main lm_head
         cross-entropy's input through ``lm_head_grad_probe``: its gradient is each token's input-gradient norm, and
-        ``lm_head_grad_clip`` clips that gradient per token."""
+        ``lm_head_grad_clip`` clips that gradient per token. ``pre_norm_grad_probe`` does the same at the stream
+        entering ``final_norm`` (``Transformer.__call__``)."""
         hidden, router_metrics = self(
             token_ids,
             mask=mask,
@@ -6375,7 +6401,10 @@ class Transformer(eqx.Module):
             router_tie_active=router_tie_active,
             layer_skip=layer_skip,
             extra_mlp_active=extra_mlp_active,
+            pre_norm_grad_probe=pre_norm_grad_probe,
         )
+        final_norm_rms = router_metrics.pop(FINAL_NORM_INPUT_RMS_KEY, None)
+        probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
         mid_hidden = router_metrics.pop(_MID_HIDDEN, None)
         final_conf_logits = router_metrics.pop(_FINAL_CONF_LOGITS, None)
         skip_probe_logits = router_metrics.pop(_SKIP_PROBE_LOGITS, None)
@@ -6520,6 +6549,7 @@ class Transformer(eqx.Module):
                 # Dense model: no router to summarize.
                 return loss, {
                     "train/cross_entropy_loss": cross_entropy_loss,
+                    **probe_metrics,
                     **final_gate_metrics,
                     **entropy_metrics,
                     **mid_metrics,
@@ -6533,6 +6563,7 @@ class Transformer(eqx.Module):
             if self.config.num_null_experts:
                 summarized_metrics.update(_null_slot_metrics(self.config, router_metrics["routing_counts_per_layer"]))
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+            summarized_metrics.update(probe_metrics)
             if replay_loss is not None:
                 summarized_metrics["train/head_replay_loss"] = replay_loss
             if head_replay is not None:
