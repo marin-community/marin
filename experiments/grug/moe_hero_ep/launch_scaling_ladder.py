@@ -53,7 +53,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import temporary_checkpoint_base_path
+from marin.training.training import checkpoint_resume_paths, temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -152,6 +152,7 @@ RESUME_SAVE_INTERVAL = timedelta(hours=1)
 # (#8506, 2026-09-23). A run stalled this long without saving resumes from its newest permanent
 # checkpoint instead.
 RESUME_CHECKPOINT_TTL_DAYS = 3
+HERO_RESUME_CHECKPOINT_PREFIX = "s3://hero-checkpoints"
 # A rung runs up to 176 tasks for hundreds of GPU-days, where a hardware fault or a host
 # out-of-memory on one task is routine. A rung resumes from its newest checkpoint, thus a retry
 # continues the run instead of repeating it. Retry deeply so one bad task does not end a rung.
@@ -312,8 +313,16 @@ def build_ladder_run(
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
-        temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS)
-        load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path]
+        temporary_checkpoint_path = temporary_checkpoint_base_path(
+            ctx.output_path,
+            ttl_days=RESUME_CHECKPOINT_TTL_DAYS,
+            temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX if size == "d6144" else None,
+        )
+        load_checkpoint_path = checkpoint_resume_paths(
+            ctx.output_path,
+            ttl_days=RESUME_CHECKPOINT_TTL_DAYS,
+            temp_prefix=HERO_RESUME_CHECKPOINT_PREFIX if size == "d6144" else None,
+        )
         if initialize_from_checkpoint is not None:
             load_checkpoint_path.append(initialize_from_checkpoint)
         trainer = hero_trainer_config(

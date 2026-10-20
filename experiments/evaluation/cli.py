@@ -25,6 +25,7 @@ from rigging.config_discovery import find_project_root
 
 from experiments.evaluation.evals import EvalchemyDefinition, HarborDefinition, resolve_eval_keys
 from experiments.evaluation.launch import (
+    DEFAULT_EVAL_CONCURRENCY,
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
     launch_group,
@@ -109,7 +110,8 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
         f"target_cluster={batch.accelerator.target_cluster or 'none'}  "
-        f"priority={priority_band_name(batch.priority_band)}"
+        f"priority={priority_band_name(batch.priority_band)}  instances={batch.instances}  "
+        f"max_concurrent={batch.max_concurrent}"
     )
     if batch.judge is not None:
         click.echo(
@@ -188,6 +190,20 @@ def cli() -> None:
 )
 @click.option("--accelerator", default=None, help="Slice override, e.g. 'v6e-8' or 'H100x8'.")
 @click.option("--limit", type=int, default=None, help="Override max eval instances per task.")
+@click.option(
+    "--instances",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Candidate serving instances, each using the selected accelerator; multiple instances share a broker.",
+)
+@click.option(
+    "--max-concurrent",
+    type=click.IntRange(min=1),
+    default=DEFAULT_EVAL_CONCURRENCY,
+    show_default=True,
+    help="Maximum concurrent evaluators sharing inference.",
+)
 @click.option("--seed", type=int, default=None, help="Override the Evalchemy sampling seed for this launch.")
 @click.option(
     "--version",
@@ -206,6 +222,9 @@ def cli() -> None:
         "Existing object-store results path for a single Harbor evaluation. "
         "Use only after every earlier driver for that path has ended."
     ),
+)
+@click.option(
+    "--run-id", default=None, help="Stable launch ID; repeat the command with this ID to reuse completed evals."
 )
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
@@ -238,17 +257,20 @@ def launch(
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
+    max_concurrent: int,
+    instances: int,
     seed: int | None,
     version: str | None,
     description: str | None,
     resume_results_path: str | None,
+    run_id: str | None,
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
     federated_cluster: str | None,
     priority: str | None,
 ) -> None:
-    """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
+    """Submit evaluations against a shared candidate endpoint for MODEL."""
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
@@ -279,6 +301,8 @@ def launch(
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
+        max_concurrent=max_concurrent,
+        instances=instances,
         seed=seed,
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
@@ -290,6 +314,7 @@ def launch(
         version=version,
         description=description,
         resume_results_path=resume_results_path,
+        run_id=run_id,
     )
     try:
         batch = prepare_evaluation_batch(spec)
@@ -305,7 +330,7 @@ def launch(
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         group = launch_group(batch, client)
         click.echo(
-            f"submitted group {group.group_id} ({len(group.evaluations)} evals, one serve) "
+            f"submitted group {group.group_id} ({len(group.evaluations)} evals sharing inference) "
             f"through cluster {EVALUATION_CONTROLLER_CLUSTER!r}"
         )
         for evaluation in group.evaluations:

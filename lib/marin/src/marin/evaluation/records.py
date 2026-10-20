@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
@@ -76,8 +76,39 @@ class BenchmarkMetricRef(BaseModel):
     higher_is_better: bool
 
 
+class BenchmarkSourceRef(TypedDict):
+    """The dataset, split, and revision used by a benchmark."""
+
+    dataset: str
+    split: str
+    revision: str | None
+
+
+class BenchmarkReducerRef(TypedDict):
+    """The reduction and metric names used to aggregate benchmark grades."""
+
+    name: str
+    accuracy: str
+    stderr: str
+    repeat_ddof: int
+    groups: dict[str, str]
+    group_suffix: str
+    group_weights: dict[str, float]
+    trial_metric: str | None
+    selected_trial: int | None
+
+
+class BenchmarkPromptLengthRef(TypedDict):
+    """The size and digest of a benchmark's measured prompt corpus."""
+
+    distinct_prompt_count: int
+    longest_prompt_chars: int
+    longest_prompt_tokens: int
+    sha256: str
+
+
 class BenchmarkMetadataRef(BaseModel):
-    """The benchmark protocol emitted by an evaluation harness."""
+    """The benchmark protocol and evaluator provenance."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -88,6 +119,10 @@ class BenchmarkMetadataRef(BaseModel):
     metrics: tuple[BenchmarkMetricRef, ...]
     n_benchmark: int | None = Field(ge=0)
     n_attempted: int | None = Field(ge=0)
+    source: BenchmarkSourceRef | None = None
+    reducers: tuple[BenchmarkReducerRef, ...] = ()
+    prompt_length: BenchmarkPromptLengthRef | None = None
+    requires_judge: bool = False
 
     @model_validator(mode="after")
     def validate_protocol(self) -> "BenchmarkMetadataRef":
@@ -336,7 +371,7 @@ class EvalRef(BaseModel):
 
 
 class HardwareRef(BaseModel):
-    """The slice the model was served on. ``region_or_cluster`` is the GCP region or CW cluster name."""
+    """Serving allocation: ``task_count`` slices per instance, placed in a GCP region or CW cluster."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -344,6 +379,7 @@ class HardwareRef(BaseModel):
     accelerator: str
     region_or_cluster: str | None
     task_count: int = 1
+    instances: int = 1
 
 
 class HostedJudgeRef(BaseModel):
@@ -496,6 +532,8 @@ class EvalRunRecord(BaseModel):
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef
     status: RunStatus
+    step_status: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """StepSpec state observed by a dashboard reader. Absent on records from older launchers."""
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]

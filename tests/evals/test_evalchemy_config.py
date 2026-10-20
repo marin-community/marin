@@ -6,7 +6,7 @@
 These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
 the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
 task do not collide), the lm-eval command the child runs per task (route selection between the
-completions and chat APIs included), and the empty-results guard. Everything else (job submission,
+completions and chat APIs included), and the FineStore output target. Everything else (job submission,
 serving, the eval itself) is exercised by the cluster smoke.
 """
 
@@ -117,8 +117,8 @@ def test_file_config_fields_reach_the_evalchemy_command():
     assert command[command.index("--seed") + 1] == "1234"
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
-    assert model_args["transport_retry_budget"] == "1800"
-    assert model_args["transport_attempt_timeout"] == "1800"
+    assert model_args["transport_retry_budget"] == "2700.0"
+    assert model_args["transport_attempt_timeout"] == "900.0"
     assert model_args["max_length"] == "32768"
 
 
@@ -280,6 +280,7 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert model_args["base_url"] == "http://10.0.0.1:30000/v1/completions"
     assert model_args["model"] == "Qwen/Qwen3-0.6B"
     assert model_args["tokenizer"] == "Qwen/Qwen3-0.6B"
+    assert float(model_args["transport_retry_budget"]) > float(model_args["timeout"])
 
 
 def test_build_command_uses_evaluator_default_when_fewshot_is_unset():

@@ -421,6 +421,28 @@ def test_pipeline_catalog_lowers_a_gang_and_rejects_incompatible_overrides(tmp_p
         replace(config, engine=LevanterEngineConfig())
 
 
+def test_broker_deadlines_allow_the_configured_evaluation_request_timeout():
+    model = ModelConfig(
+        name="test",
+        location="test/model",
+        serve=ServeConfig(auto_overrides=False),
+        resource_hint=ResourceHint(memory="32g"),
+    )
+    choice = MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x1")
+
+    config = inference_config_for_model(
+        model, choice, env_vars={}, priority=0, instances=8, request_timeout_seconds=3600
+    )
+
+    assert config.broker is not None
+    assert (
+        3600
+        < config.broker.worker.request_timeout_seconds
+        < config.broker.request_lease_timeout_seconds
+        < config.broker.proxy.request_timeout_seconds
+    )
+
+
 @pytest.mark.parametrize("flag", ["--tensor-parallel-size", "--pipeline-parallel-size", "--headless"])
 @pytest.mark.parametrize("equals", [False, True])
 def test_pipeline_rejects_raw_topology_overrides(flag, equals):

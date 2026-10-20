@@ -7,9 +7,7 @@ Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG``; the parent builds it in
 :mod:`marin.evaluation.evalchemy.runner`. Each task runs through the evalchemy fork's ``evalchemy``
 CLI once (one invocation per task so each carries its own ``num_fewshot``) with lm-eval's
 ``local-completions`` (or ``local-chat-completions``) API model pointed at the served URL. Evalchemy
-writes its aggregate JSON, sample JSONL, and normalized sample rows directly to the FineStore archive
-at ``out_path``. The ordinary ``--output_path`` is a temporary directory used for Evalchemy's local
-completion check and is discarded after each task.
+writes result documents and normalized sample rows directly to FineStore tables at ``out_path``.
 """
 
 from __future__ import annotations
@@ -30,9 +28,8 @@ CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 EVALCHEMY_RESULTS_PREFIX = "results_"
 EVALCHEMY_RESULTS_SUFFIX = ".json"
 _EVALCHEMY_RESULTS_TABLE = "evalchemy_results"
-_REQUEST_TIMEOUT = 1800
-_TRANSPORT_RETRY_BUDGET = 1800
-_TRANSPORT_ATTEMPT_TIMEOUT = _REQUEST_TIMEOUT
+EVALCHEMY_REQUEST_TIMEOUT_SECONDS = 1800
+_REQUEST_TIMEOUT = EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 
 # Without a configured cap, an lm-eval-native generation task gets the served context minus this
 # prompt reserve, so the model config's context window sets its budget the way Evalchemy's own
@@ -162,10 +159,11 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         # active request off earlier restarts its generation and can saturate the endpoint with
         # abandoned work; the retry budget still bounds each trial to the policy window.
         "timeout": _REQUEST_TIMEOUT,
-        "transport_retry_budget": _TRANSPORT_RETRY_BUDGET,
-        "transport_attempt_timeout": _TRANSPORT_ATTEMPT_TIMEOUT,
     }
     args.update(config.get("extra_model_args", {}))
+    # The total retry budget must cover a valid long generation and leave room for retries.
+    args.setdefault("transport_retry_budget", 3 * float(args["timeout"]))
+    args.setdefault("transport_attempt_timeout", float(args["timeout"]))
     if use_chat and config["chat_template_kwargs"]:
         # lm-eval splits model args at every comma; Evalchemy decodes this before building the HTTP payload.
         encoded = base64.urlsafe_b64encode(json.dumps(config["chat_template_kwargs"]).encode("utf-8")).decode("ascii")
@@ -240,8 +238,6 @@ def completed_result(root: str, source_prefix: str) -> bool:
         row.get("source_prefix") == source_prefix and row.get("scored") is True
         for row in table.to_pylist(maps_as_pydicts="strict")
     )
-
-
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     tasks = config["tasks"]

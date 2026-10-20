@@ -7,18 +7,15 @@ import asyncio
 
 from shellbox.machine import MachineFactory, MachineSpec
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import JudgeSpec
 
 from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
-    SessionGrader,
     TaskSpec,
-    VerifyitGrader,
+    grades_with_judge,
     require_resolved_environment,
-    verifyit_spec,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
 from taskcompendium.runtime.grading import grade_in_sandbox
@@ -34,15 +31,12 @@ def grade_task(
 ) -> GradeResult:
     """Grade with an explicit judge connection, in process, or in a fresh grading machine.
 
-    A ``NoGrader`` task is unavailable. A session grader runs only inside its rollout session.
-    Judge and machine failures become infrastructure errors.
+    A ``NoGrader`` task is unavailable. Judge and machine failures become infrastructure errors.
     """
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
-    if isinstance(grader, SessionGrader):
-        raise TypeError("A session grader runs inside its rollout session")
-    if isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec):
+    if grades_with_judge(grader):
         return grade_remote_judge_answer(task, attempt, judge_connection)
     if grader.environment is None:
         return grade_answer(task, attempt)

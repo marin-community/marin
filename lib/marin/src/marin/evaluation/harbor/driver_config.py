@@ -191,7 +191,8 @@ class HarborRuntimeOverlay:
     archive_dataset: str
 
 
-def _driver_command(runtime_project: str, command: str, *paths: Path) -> list[str]:
+def harbor_runtime_command(runtime_project: str, script: Path, *arguments: str) -> list[str]:
+    """Build a Python command for the pinned Harbor runtime."""
     return [
         "uv",
         "run",
@@ -200,10 +201,13 @@ def _driver_command(runtime_project: str, command: str, *paths: Path) -> list[st
         str(_harbor_env_dir(runtime_project)),
         "--frozen",
         "python",
-        str(_TRIAL_DRIVER),
-        command,
-        *(str(path) for path in paths),
+        str(script),
+        *arguments,
     ]
+
+
+def _driver_command(runtime_project: str, command: str, *paths: Path) -> list[str]:
+    return harbor_runtime_command(runtime_project, _TRIAL_DRIVER, command, *(str(path) for path in paths))
 
 
 def _driver_environment(driver_env: Mapping[str, str] | None = None) -> dict[str, str]:
