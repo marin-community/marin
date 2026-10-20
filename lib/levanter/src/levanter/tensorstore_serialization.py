@@ -779,7 +779,14 @@ def _serialize_arrays(
 
     async def write_shard(store_future, shard, plan, region: _ShardWrite):
         async def stage():
-            return await _transfer_shard_to_pageable_host(shard, region.local_slice)
+            staged = await _transfer_shard_to_pageable_host(shard, region.local_slice)
+            if staged.size * staged.itemsize > 32 * 1024**2:
+                logger.warning(
+                    "CKDEBUG staged %s index %s shape %s nbytes %d staged_max %.6g device_max %.6g",
+                    store_future, region.index, staged.shape, staged.nbytes,
+                    float(np.abs(staged).max()), float(np.abs(np.asarray(shard.data)).max()),
+                )
+            return staged
 
         await issue_write(
             _estimate_array_nbytes(shard.data) // plan.write_replicas,
