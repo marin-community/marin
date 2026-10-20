@@ -28,6 +28,10 @@ exists() {  # <remote path>
   uv run python -c "import sys; from rigging.filesystem.storage_path import StoragePath; sys.exit(not StoragePath('$1').exists())"
 }
 
+# Which credentials this lane holds, as fingerprints (sha256 prefix), so a secret rotation can be checked from the log.
+fingerprint() { { set +x; } 2>/dev/null; printf %s "${!1:-}" | sha256sum | cut -c1-12; }
+echo "credential fingerprints: GLM_BULK_TOKEN=$(fingerprint GLM_BULK_TOKEN) DAYTONA_API_KEY=$(fingerprint DAYTONA_API_KEY)"
+
 generate() {  # <task list> <name> <attempts> <output> [--relay]
   uv run python $dir/harbor_glm.py --agent "$agent" --family "$family" --package-revision "$revision" --tasks "$tasks" \
     --task-list "$1" --name "$2" --n-attempts "$3" --n-concurrent "$concurrency" --skip-if-done --output "$4" \
