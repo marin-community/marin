@@ -49,6 +49,12 @@ def prepare_training_prefixes(source: Path, output: Path) -> dict:
         raise FileExistsError(output)
     original = (source / "train.jsonl").read_bytes()
     validation = (source / "validation.jsonl").read_bytes()
+    manifest_path = source / "manifest.json"
+    source_manifest = manifest_path.read_bytes()
+    manifest = json.loads(source_manifest)
+    for split, payload in ((Split.TRAIN, original), (Split.VALIDATION, validation)):
+        if hashlib.sha256(payload).hexdigest() != manifest["hashes"][split]:
+            raise ValueError(f"Source hash mismatch: {split}")
     lines = []
     failures = []
     counts = Counter()
@@ -76,7 +82,7 @@ def prepare_training_prefixes(source: Path, output: Path) -> dict:
     manifest = {
         "kind": "training-near-boundary-prefixes",
         "source": str(source.resolve()),
-        "source_manifest_sha256": hashlib.sha256((source / "manifest.json").read_bytes()).hexdigest(),
+        "source_manifest_sha256": hashlib.sha256(source_manifest).hexdigest(),
         "source_train_sha256": hashlib.sha256(original).hexdigest(),
         "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "hashes": {

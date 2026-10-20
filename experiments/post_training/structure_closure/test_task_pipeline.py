@@ -15,6 +15,7 @@ from rolloutengine.models import ModelTurn, RolloutFailure, TraceMode
 from rolloutengine.test_support import rollout_limits
 from taskcompendium.models import Source, TaskSpec, TextMessage, verifyit_spec
 from verifyit.spec import StructureClosureSpec
+from verifyit.tool_call_markup import THINK_CLOSE
 
 from experiments.post_training.structure_closure.benchmark import (
     CLOSE_REQUIRED,
@@ -23,7 +24,7 @@ from experiments.post_training.structure_closure.benchmark import (
     build_benchmark,
     task_cases,
 )
-from experiments.post_training.structure_closure.evaluate import evaluate_cohort, evaluate_task
+from experiments.post_training.structure_closure.evaluate import completion_model, evaluate_cohort, evaluate_task
 from experiments.post_training.structure_closure.rollout_audit import (
     EVALUATION_RECORD,
     audit_rollouts,
@@ -422,3 +423,85 @@ def test_audit_cli_retains_malformed_rows_and_writes_incomplete_comparison(tmp_p
     assert report["failures"][0]["uid"] == "line:2"
     assert len(report["results"]) == 1
     assert "comparison_error" in report
+
+
+@pytest.mark.parametrize("split", ["train", "validation"])
+def test_near_boundary_variant_rejects_modified_source_splits(tmp_path, split):
+    cases = tmp_path / "cases"
+    write_cases(cases)
+    path = cases / f"{split}.jsonl"
+    path.write_bytes(path.read_bytes() + b"\n")
+    output = tmp_path / "variant"
+    with pytest.raises(ValueError):
+        prepare_training_prefixes(cases, output)
+    assert not output.exists()
+
+
+async def test_raw_completion_transport_preserves_reasoning_closing_delimiter(tokenizer):
+    case = next(
+        case
+        for case in task_cases("parent", [], "validation", "source")
+        if case.family == Family.REASONING and case.control == CLOSE_REQUIRED
+    )
+    task = case_task(case, SOURCE)
+    captured = []
+
+    async def serve(request):
+        assert request.url.path == "/v1/completions"
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "completion",
+                "object": "text_completion",
+                "created": 1,
+                "model": "test-model",
+                "choices": [{"index": 0, "finish_reason": "stop", "text": THINK_CLOSE, "logprobs": None}],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 1, "total_tokens": 21},
+            },
+        )
+
+    async with AsyncOpenAI(
+        api_key="test",
+        base_url="https://example.invalid/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(serve)),
+    ) as client:
+        record = await evaluate_task(
+            task,
+            completion_model(client, model="test-model", tokenizer=tokenizer),
+            limits=rollout_limits(max_turns=1),
+            trace=TraceMode.MESSAGES,
+            sampling=SAMPLING,
+        )
+    assert captured[0]["prompt"].endswith(case.prefix)
+    assert record.result.rollout.conversations[0].steps[0].turn.text == THINK_CLOSE
+    assert record.result.grade.reward == 1
+    audit = audit_rollouts([task], [record], sampling=SAMPLING)
+    assert audit.complete
+    assert audit.results[0].success
+
+
+def test_parsed_reasoning_is_unscored_instead_of_a_false_model_failure():
+    case = next(
+        case
+        for case in task_cases("parent", [], "validation", "source")
+        if case.family == Family.REASONING and case.control == CLOSE_REQUIRED
+    )
+    task = case_task(case, SOURCE)
+
+    async def parsed(request):
+        return ModelTurn(
+            {"role": "assistant", "content": "", "reasoning_content": "parser removed delimiters"},
+            (1,),
+            (2,),
+            (-1,),
+            "stop",
+        )
+
+    record = asyncio.run(
+        evaluate_task(task, parsed, limits=rollout_limits(max_turns=1), trace=TraceMode.MESSAGES, sampling=SAMPLING)
+    )
+    audit = audit_rollouts([task], [record], sampling=SAMPLING)
+    assert not audit.complete
+    assert not audit.results
+    assert len(audit.failures) == 1
