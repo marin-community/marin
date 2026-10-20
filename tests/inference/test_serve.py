@@ -1212,6 +1212,7 @@ def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
         if topology == "brokered":
             broker = InferenceBroker(request_lease_timeout_seconds=30)
             worker = InferenceWorker(
+                worker_id="test-worker",
                 broker=broker,
                 upstream=RunningModel(endpoint=OpenAIEndpoint(base_url=f"{upstream_base_url}/v1", model="fake-model")),
                 request_timeout_seconds=5,
