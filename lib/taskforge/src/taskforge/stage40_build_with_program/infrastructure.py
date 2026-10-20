@@ -42,6 +42,12 @@ controller refuses for the request itself (a code outside ``HOST_RPC_CODES``), a
 commands that fail. Shellbox raises a bare ``RuntimeError`` for both a failed Docker build and an
 unreachable Docker daemon, so those stay the program's too.
 
+An ``OSError`` raised outside the program's own frames (``storage_fault``) is the step store's: a
+storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``). It is not a
+``BuildInfrastructureFailure``, but neither the coordinator's build stage nor the agentic author
+hands it to the author, since no program change repairs the store. One raised by the program's own
+code is the program's.
+
 The proposal pins the solver's machine, so the host never chooses it: ``machine_available`` raises
 ``NO_FACTORY`` for a package machine on a host without the local backend and ``NO_IMAGE_BUILDER`` for
 a container proposal on a host without an image builder. ``run_build`` and the agentic author's
@@ -49,7 +55,8 @@ a container proposal on a host without an image builder. ``run_build`` and the a
 or its program spends a model call.
 """
 
-from collections.abc import Callable, Iterator, Mapping
+import traceback
+from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -134,6 +141,35 @@ def _chain(error: BaseException) -> Iterator[BaseException]:
         yield current
         seen.add(id(current))
         current = current.__cause__ or current.__context__
+
+
+def exception_chain(error: BaseException) -> list[BaseException]:
+    """List ``error`` and the exceptions it was raised from or during, outermost first."""
+    chain: list[BaseException] = []
+    link: BaseException | None = error
+    while link is not None and link not in chain:
+        chain.append(link)
+        if link.__cause__ is not None:
+            link = link.__cause__
+        elif link.__suppress_context__:
+            link = None
+        else:
+            link = link.__context__
+    return chain
+
+
+def raised_in_program(error: BaseException, program_files: Collection[str]) -> bool:
+    """Whether a traceback in ``error``'s chain passes through ``program_files``, the program's step functions' files."""
+    return any(
+        frame.filename in program_files
+        for link in exception_chain(error)
+        for frame in traceback.extract_tb(link.__traceback__)
+    )
+
+
+def storage_fault(error: BaseException, program_files: Collection[str]) -> bool:
+    """Whether ``error`` is an ``OSError`` raised outside the program's frames, which only the step store raises."""
+    return isinstance(error, OSError) and not raised_in_program(error, program_files)
 
 
 def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure | None:
