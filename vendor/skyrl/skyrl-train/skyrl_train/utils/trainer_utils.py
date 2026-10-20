@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from skyrl_train.batch_metrics import consumed_stop_metrics
 from typing import List, Dict, Any, Union, Callable, Optional
 from omegaconf import OmegaConf, DictConfig
 from enum import Enum
@@ -175,24 +175,6 @@ def sanitize_data_source(data_source: str) -> str:
     if data_source is None:
         return "unknown"
     return data_source.replace("/", "_")
-
-
-def consumed_stop_metrics(stop_reasons: Sequence[str | None] | None, sequence_count: int) -> dict[str, float]:
-    """Count length stops on admitted sequences; the fraction needs every stop reason."""
-    reasons = [None] * sequence_count if stop_reasons is None else stop_reasons
-    known = sum(reason is not None and reason != "" for reason in reasons)
-    length_stops = sum(reason == "length" for reason in reasons)
-    metrics = {
-        "sequences": float(sequence_count),
-        "length_stop_count": float(length_stops),
-        "known_stop_count": float(known),
-        "unknown_stop_count": float(sequence_count - known),
-    }
-    if sequence_count:
-        metrics["stop_reason_coverage"] = known / sequence_count
-        if known == sequence_count:
-            metrics["length_stop_fraction"] = length_stops / sequence_count
-    return {f"consumed/{name}": value for name, value in metrics.items()}
 
 
 def async_step_metrics(

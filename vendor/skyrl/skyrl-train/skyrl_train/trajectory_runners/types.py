@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any, Dict, List, Literal, NotRequired, Optional, TypedDict, Union
 
@@ -143,3 +144,52 @@ class TrajectoryBatch(TypedDict):
     exclude_from_baseline: Optional[List[bool]]
     # DPO pairing evidence: +1 chosen / -1 rejected per row, emitted as adjacent pairs.
     pair_roles: NotRequired[List[int]]
+
+
+@dataclass(frozen=True)
+class BatchFields:
+    """Whole-batch channel presence and geometry used by every row slice."""
+
+    present: frozenset[str]
+    first_group_list_fields: frozenset[str]
+    route_geometry: tuple[int, int, np.dtype] | None
+    token_rewards: bool
+
+    def without_routes(self) -> "BatchFields":
+        return replace(
+            self,
+            present=self.present - {"rollout_routed_experts"},
+            first_group_list_fields=self.first_group_list_fields - {"rollout_routed_experts"},
+            route_geometry=None,
+        )
+
+    @classmethod
+    def from_batch(cls, batch: TrajectoryBatch) -> "BatchFields":
+        """Describe field presence and the first captured route geometry of one group."""
+        geometry = next(
+            (
+                (*row.shape[1:], row.dtype)
+                for row in batch.get("rollout_routed_experts") or ()
+                if row is not None and row.ndim == 3
+            ),
+            None,
+        )
+        return cls(
+            present=frozenset(key for key, value in batch.items() if value is not None),
+            first_group_list_fields=frozenset(key for key, value in batch.items() if isinstance(value, list)),
+            route_geometry=geometry,
+            token_rewards=any(isinstance(reward, list) for reward in batch["rewards"]),
+        )
+
+    @classmethod
+    def from_groups(cls, groups: Sequence["BatchFields"]) -> "BatchFields":
+        """Combine ordered group descriptors using the first group's list-field policy."""
+        present = frozenset(key for group in groups for key in group.present)
+        if "unshaped_rewards" in present and any("unshaped_rewards" not in group.present for group in groups):
+            present = present | {"unshaped_reward_available"}
+        return cls(
+            present=present,
+            first_group_list_fields=groups[0].first_group_list_fields,
+            route_geometry=next((group.route_geometry for group in groups if group.route_geometry is not None), None),
+            token_rewards=any(group.token_rewards for group in groups),
+        )

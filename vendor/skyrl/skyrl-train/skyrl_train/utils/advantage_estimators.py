@@ -12,6 +12,7 @@ from typing import Optional, Tuple
 import loguru
 import numpy as np
 import torch
+from skyrl_train.training_batch import TrainingInputBatch
 from jaxtyping import Float
 from omegaconf import DictConfig
 
@@ -27,6 +28,76 @@ from skyrl_train.utils.policy_math import masked_whiten, right_pad_to_match
 from skyrl_train.group_admission import GroupAdvantageInvariant, GroupAdvantageKind
 
 GRPO_FLAT_REWARD_STD_TOLERANCE = 1e-6
+
+
+def apply_loop_advantages(data: TrainingInputBatch) -> TrainingInputBatch:
+    """Add masked loop credit after normalization, preserving the outcome returns."""
+    loop_advantages = data.get("loop_advantages")
+    if loop_advantages is None:
+        return data
+    advantages = data["advantages"]
+    loop_advantages = loop_advantages.to(device=advantages.device, dtype=advantages.dtype)
+    data["advantages"] = advantages + loop_advantages * data["response_mask"]
+    return data
+
+
+def drop_advantage_inputs(data: TrainingInputBatch) -> TrainingInputBatch:
+    """Retain optimizer inputs after advantage estimation and loop credit."""
+    data.pop("rewards")
+    data.pop("loop_advantages", None)
+    data.metadata.pop("uids")
+    return data
+
+
+OUTCOME_ADVANTAGE_ESTIMATORS = frozenset((AdvantageEstimator.RLOO, AdvantageEstimator.RLOO_N, AdvantageEstimator.GRPO))
+
+
+def batch_advantages(data: TrainingInputBatch, algorithm, *, invariant: GroupAdvantageInvariant):
+    """Compute full-batch credit through the outcome core or configured token estimator."""
+    if algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS:
+        scalar = outcome_advantages(
+            data["rewards"].sum(-1),
+            data.metadata["uids"],
+            algorithm,
+            exclude_from_baseline=data.metadata.get("exclude_from_baseline"),
+            invariant=invariant,
+        )
+        advantages = scalar[:, None] * data["response_mask"]
+        return advantages, advantages
+    return compute_advantages_and_returns(
+        token_level_rewards=data["rewards"],
+        response_mask=data["response_mask"],
+        index=data.metadata["uids"],
+        adv_estimator=algorithm.advantage_estimator,
+        config=algorithm,
+        values=data["values"],
+        gamma=algorithm.gamma,
+        lambd=algorithm.lambd,
+        grpo_norm_by_std=algorithm.grpo_norm_by_std,
+        exclude_from_baseline=data.metadata.get("exclude_from_baseline"),
+        token_level_shaping=data.get("token_level_shaping"),
+        group_advantage_invariant=invariant,
+    )
+
+
+def outcome_advantages(
+    scores: torch.Tensor, uids, algorithm: DictConfig, *, exclude_from_baseline, invariant
+) -> torch.Tensor:
+    """Compute global scalar outcome advantages with the configured estimator."""
+    advantages, _ = compute_advantages_and_returns(
+        token_level_rewards=scores.clone()[:, None],
+        response_mask=torch.ones((len(scores), 1), dtype=torch.int64, device=scores.device),
+        index=uids,
+        adv_estimator=algorithm.advantage_estimator,
+        config=algorithm,
+        values=None,
+        gamma=algorithm.gamma,
+        lambd=algorithm.lambd,
+        grpo_norm_by_std=algorithm.grpo_norm_by_std,
+        exclude_from_baseline=exclude_from_baseline,
+        group_advantage_invariant=invariant,
+    )
+    return advantages[:, 0]
 
 
 @register_advantage_estimator(AdvantageEstimator.UNIFORM, group_contract=NoGroupAdvantage())
