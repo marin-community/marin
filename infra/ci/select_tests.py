@@ -158,6 +158,14 @@ DEFAULT_LEG_TIMEOUT = 15
 # Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "skyrl-wheel": (
+        "vendor/skyrl/",
+        "config/skyrl-migration",
+        "scripts/skyrl_migration.py",
+        "infra/ci/check_skyrl_marin.py",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ),
     "evalchemy-unit": (
         "vendor/evalchemy/",
         "lib/finestore/",

@@ -301,6 +301,10 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
+        ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
+        ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
+        ("config/skyrl-migration.toml", ["skyrl-wheel"]),
+        ("config/skyrl-migration/runtime-fixes.patch", ["skyrl-wheel"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
@@ -354,11 +358,12 @@ def test_evaluator_changes_select_the_isolated_evalchemy_suite(tmp_path: Path, p
 @pytest.mark.parametrize(
     "suite_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
 )
-@pytest.mark.parametrize("suite", ["shellbox", "evalchemy", "harbor"])
+@pytest.mark.parametrize("suite", ["shellbox", "skyrl", "evalchemy", "harbor"])
 def test_required_unit_check_propagates_isolated_suite_result(suite: str, suite_result: str, expected_exit: int) -> None:
     workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
     aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]
     results = dict.fromkeys(aggregate["needs"], "success")
+    assert suite in results
     results[suite] = suite_result
     script = re.sub(
         r"\$\{\{ needs\.(\w+)\.result \}\}",

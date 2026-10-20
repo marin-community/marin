@@ -5,7 +5,10 @@
 
 import importlib.util
 import json
+import os
 import runpy
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -58,6 +61,62 @@ def _promoted_manifest() -> dict:
             },
         ],
     }
+
+
+def test_skyrl_dependency_check_rejects_importable_but_incompatible_constructor(tmp_path):
+    updater = _update_external()
+    package = tmp_path / "rolloutengine"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    engine = package / "engine.py"
+    engine.write_text("class RolloutEngine:\n    def __init__(self, model, factories): pass\n")
+    consumer = tmp_path / "skyrl-train/skyrl_train/task_worker.py"
+    consumer.parent.mkdir(parents=True)
+    consumer.write_text(
+        "from rolloutengine.engine import RolloutEngine\n"
+        "def run():\n    return RolloutEngine(None, {}, judge_connection=None)\n"
+    )
+    incompatible = subprocess.run(
+        [sys.executable, str(updater.SKYRL_MARIN_CHECK), "imports", "--source", str(tmp_path)],
+        cwd=tmp_path,
+        env=dict(os.environ, PYTHONPATH=str(tmp_path)),
+        capture_output=True,
+        text=True,
+    )
+    assert incompatible.returncode != 0
+    assert "judge_connection" in incompatible.stderr
+    engine.write_text("class RolloutEngine:\n    def __init__(self, model, factories, *, judge_connection=None): pass\n")
+    compatible = subprocess.run(
+        [sys.executable, str(updater.SKYRL_MARIN_CHECK), "imports", "--source", str(tmp_path)],
+        cwd=tmp_path,
+        env=dict(os.environ, PYTHONPATH=str(tmp_path)),
+        capture_output=True,
+        text=True,
+    )
+    assert compatible.returncode == 0, compatible.stderr
+
+
+@pytest.mark.parametrize("compatible", [False, True])
+def test_skyrl_marin_update_preserves_working_lock_when_validation_fails(tmp_path, monkeypatch, compatible):
+    updater = _update_external()
+    lock = tmp_path / "uv.lock"
+    lock.write_text("original lock\n")
+
+    def uv(command, **kwargs):
+        if command[1] == "lock":
+            lock.write_text("updated lock\n")
+        elif not compatible:
+            raise subprocess.CalledProcessError(1, command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", uv)
+    if compatible:
+        updater.update_skyrl_marin(tmp_path)
+        assert lock.read_text() == "updated lock\n"
+    else:
+        with pytest.raises(subprocess.CalledProcessError):
+            updater.update_skyrl_marin(tmp_path)
+        assert lock.read_text() == "original lock\n"
 
 
 def test_tpu_vllm_requirements_match_fork_descriptor():

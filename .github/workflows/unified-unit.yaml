@@ -513,9 +513,39 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  skyrl:
+    name: skyrl-wheel
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'skyrl-wheel') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "vendor/skyrl/uv.lock"
+      - name: Check independent lock, Marin contract, and built wheel
+        run: uv run --no-project python -m scripts.skyrl_migration check-vendor
+      - name: Exercise the isolated source bundle, launchers, and verifier
+        working-directory: vendor/skyrl
+        run: |
+          uv run --isolated --frozen --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
+            cloud/iris/tests/test_vendored_runtime_bundle.py \
+            cloud/iris/tests/test_ray_spill_policy.py \
+            cloud/iris/tests/test_task_runtime_source_selection.py \
+            cloud/iris/tests/test_task_runtime_debug_artifacts.py \
+            cloud/iris/tests/test_launch_config.py \
+            cloud/iris/tests/test_checkpoint_export_config.py \
+            cloud/iris/tests/test_open_mopd_fidelity.py \
+            cloud/iris/tests/test_open_mopd_evaluation.py \
+            skyrl-gym/tests/test_aime_answer_normalization.py \
+            skyrl-gym/tests/test_nemotron_judge_assets.py
+
   unit_tests:
     name: unit-tests
-    needs: [select, unit, levanter_torch, levanter_tpu, evalchemy, harbor, shellbox, taskcompendium, rolloutengine, taskforge, iris_e2e_smoke]
+    needs: [select, unit, levanter_torch, levanter_tpu, evalchemy, harbor, shellbox, taskcompendium, rolloutengine, taskforge, iris_e2e_smoke, skyrl]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -531,6 +561,7 @@ jobs:
             "${{ needs.taskcompendium.result }}" \
             "${{ needs.rolloutengine.result }}" \
             "${{ needs.taskforge.result }}" \
+            "${{ needs.skyrl.result }}" \
             "${{ needs.iris_e2e_smoke.result }}"
           do
             case "$result" in

@@ -62,15 +62,6 @@ CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
 )
 
 
-MARIN_SKYRL = ExternalDependency(
-    config_name="MarinSkyRL",
-    distribution="marinskyrl",
-    repository="https://github.com/marin-community/MarinSkyRL.git",
-    version="0.1.0",
-    commit="81ae0ef7033c500207b191a2ae7c3806f6dc78ff",
-    runtime_requirements=(),
-)
-
 VLLM_GPU_RELEASE = VllmGpuRelease(
     release_tag="marin-vllm-gpu-20260924-01911be34fac",
     source_commit="01911be34fac8715347962a8d791ca34a879e01e",
@@ -106,4 +97,4 @@ TPU_INFERENCE_FORK_REQUIREMENT = (
     "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@a8fc5c9f6d14ac5a3b1f97d5c296d6015a73cabe"
 )
 
-EXTERNAL_DEPENDENCIES = (MARIN_SKYRL,)
+EXTERNAL_DEPENDENCIES = ()
