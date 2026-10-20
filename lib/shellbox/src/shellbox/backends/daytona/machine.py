@@ -88,7 +88,9 @@ async def ensure_snapshot(
 
     Launchers can prepare snapshots without starting a sandbox. An explicit name
     uses the caller's image-to-snapshot mapping; otherwise the name includes the
-    image contents and resource requirements, as it does during machine creation.
+    image source key and resource requirements, as it does during machine creation.
+    Registry sources use the reference string; pin a digest to avoid reusing a
+    snapshot after a mutable tag changes.
     """
     if name is None:
         identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
