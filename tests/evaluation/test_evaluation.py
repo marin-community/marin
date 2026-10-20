@@ -6,7 +6,7 @@
 import hashlib
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -89,7 +89,7 @@ from marin.inference.config import (
     SpeculativeServingConfig,
 )
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
-from marin.inference.types import OpenAIEndpoint, RunningModel
+from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.storage_path import StoragePath
 
@@ -238,6 +238,7 @@ def _successful_evaluation(
     output_dir: str,
     _env_vars: Mapping[str, str],
     *,
+    backend_state: Callable[[], InferenceBackendState],
     judge: RemoteInferenceSession | None = None,
 ) -> EvaluationOutcome:
     output = StoragePath(output_dir)
@@ -251,6 +252,7 @@ def _failed_evaluation(
     _output_dir: str,
     _env_vars: Mapping[str, str],
     *,
+    backend_state: Callable[[], InferenceBackendState],
     judge: RemoteInferenceSession | None = None,
 ) -> EvaluationOutcome:
     raise EvaluationError(
@@ -389,6 +391,7 @@ def test_evaluation_steps_share_candidate_and_judge(tmp_path, monkeypatch):
         _output_dir: str,
         _env_vars: Mapping[str, str],
         *,
+        backend_state: Callable[[], InferenceBackendState],
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
         observed_candidates.append(session)
@@ -438,7 +441,7 @@ def test_evaluation_restart_skips_completed_step_without_serving(tmp_path, monke
 def test_evaluation_restart_only_runs_unfinished_evals(tmp_path, monkeypatch):
     executed: list[str] = []
 
-    def executor(_session, output_dir, _env_vars, *, judge=None):
+    def executor(_session, output_dir, _env_vars, *, backend_state, judge=None):
         executed.append(output_dir)
         return EvaluationOutcome(metrics={"task": {"accuracy": 0.5}})
 
@@ -472,6 +475,7 @@ def test_evaluation_steps_refresh_direct_endpoint_between_evaluations(tmp_path, 
         _output_dir: str,
         _env_vars: Mapping[str, str],
         *,
+        backend_state: Callable[[], InferenceBackendState],
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
         observed_urls.append(session.model.endpoint.base_url)
@@ -692,6 +696,7 @@ def test_evaluation_step_gates_transport_failure_coverage(tmp_path, monkeypatch,
         _output_dir: str,
         _env_vars: Mapping[str, str],
         *,
+        backend_state: Callable[[], InferenceBackendState],
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
         return EvaluationOutcome(
@@ -1065,15 +1070,15 @@ def test_pipeline_retry_preserves_completed_evaluations(tmp_path, monkeypatch, v
     completed: list[str] = []
     attempts: list[str] = []
 
-    def successful(session, output_dir, env_vars, *, judge=None):
+    def successful(session, output_dir, env_vars, *, backend_state, judge=None):
         completed.append(output_dir)
-        return _successful_evaluation(session, output_dir, env_vars, judge=judge)
+        return _successful_evaluation(session, output_dir, env_vars, backend_state=backend_state, judge=judge)
 
-    def interrupted(session, output_dir, env_vars, *, judge=None):
+    def interrupted(session, output_dir, env_vars, *, backend_state, judge=None):
         attempts.append(output_dir)
         if len(attempts) == 1:
             raise EvaluationError("interrupted evaluation", status=RunStatus.INFRA_FAILED)
-        return _successful_evaluation(session, output_dir, env_vars, judge=judge)
+        return _successful_evaluation(session, output_dir, env_vars, backend_state=backend_state, judge=judge)
 
     def launch(batch, _client):
         executions = (successful, interrupted)
@@ -1131,7 +1136,7 @@ def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypa
     )
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor(session, output_dir, {})
+        executor(session, output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert exc_info.value.status is RunStatus.ARTIFACT_FAILED
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
@@ -1161,7 +1166,7 @@ def test_evalchemy_executor_rejects_incomplete_task_beside_scored_results(tmp_pa
     )
 
     with pytest.raises(EvaluationError, match="bad_0shot") as exc_info:
-        executor(_remote_session(), output_dir, {})
+        executor(_remote_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert exc_info.value.status is RunStatus.ARTIFACT_FAILED
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
@@ -1192,7 +1197,7 @@ def test_evalchemy_executor_accepts_scored_partial_results_and_reports_drops(
     )
     executor = EvalchemyExecutor(EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig("gsm8k", 5),)))
 
-    outcome = executor(_remote_session(), output_dir, {})
+    outcome = executor(_remote_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert outcome.metrics == {"gsm8k_5shot": {"exact_match,none": 1.0}}
     assert outcome.coverage["gsm8k_5shot"] == TaskCoverage(
@@ -1234,7 +1239,9 @@ def test_run_evalchemy_rejects_partial_aggregate_with_inconsistent_scored_count(
     )
 
     with pytest.raises(EvaluationError) as exc_info:
-        run_evalchemy(_remote_session().model, config, output_dir, env_vars={})
+        run_evalchemy(
+            _remote_session().model, config, output_dir, env_vars={}, backend_state=lambda: InferenceBackendState.READY
+        )
 
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
@@ -1277,7 +1284,7 @@ def test_evalchemy_executor_rejects_aggregates_that_include_infrastructure_failu
     )
 
     with pytest.raises(EvaluationError) as partial_error:
-        executor(_remote_session(), partial_output_dir, {})
+        executor(_remote_session(), partial_output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert partial_error.value.status is RunStatus.INFRA_FAILED
     assert partial_error.value.coverage == {
@@ -1307,7 +1314,7 @@ def test_evalchemy_executor_rejects_aggregates_that_include_infrastructure_failu
     )
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_remote_session(), failed_output_dir, {})
+        executor(_remote_session(), failed_output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.coverage == {
@@ -1353,7 +1360,7 @@ def test_evalchemy_executor_rejects_multiple_choice_aggregate_with_inconsistent_
     executor = EvalchemyExecutor(EvalchemyRunConfig(name="mmlu", tasks=(EvalTaskConfig(name="mmlu", num_fewshot=0),)))
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_remote_session(), output_dir, {})
+        executor(_remote_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.coverage["mmlu_0shot"] == TaskCoverage(
@@ -1398,7 +1405,7 @@ def test_evalchemy_executor_preserves_evaluator_partial_aggregates(tmp_path, mon
         )
     )
 
-    outcome = executor(_remote_session(), output_dir, {})
+    outcome = executor(_remote_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert outcome.metrics == {"partial": metrics}
     assert outcome.canonical_metrics == {"partial": {"mrcr_accuracy": 0.6}}
@@ -1435,7 +1442,7 @@ def test_evalchemy_executor_uses_aggregate_count_when_custom_task_omits_sample_s
         )
     )
 
-    outcome = executor(_remote_session(), output_dir, {})
+    outcome = executor(_remote_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert outcome.coverage == {
         "mmlu-pro": TaskCoverage(n_benchmark=3, n_attempted=3, n_scored=3, n_correct=None, n_unanswered=0)
@@ -1480,7 +1487,7 @@ def test_evalchemy_executor_uses_code_task_scored_count_when_samples_omit_scores
         )
     )
 
-    outcome = executor(_remote_session(), output_dir, {})
+    outcome = executor(_remote_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert outcome.coverage == {
         "humanevalplus": TaskCoverage(
@@ -1517,7 +1524,7 @@ def test_evalchemy_executor_normalizes_native_prompts_into_rollouts(tmp_path, mo
         )
     )
 
-    executor(_remote_session(), output_dir, {})
+    executor(_remote_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     rows = list(ReadView(output_dir).iter_rows(ARCHIVE_ROLLOUTS_TABLE))
     assert [(row["participant_type"], row["content"]) for row in rows] == [
@@ -2185,6 +2192,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         ),
         str(output_dir),
         {"DAYTONA_API_KEY": "daytona-key"},
+        backend_state=lambda: InferenceBackendState.READY,
     )
 
     assert outcome.canonical_metrics["aime"]["reward"] == 1.0
@@ -2510,7 +2518,7 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     executed: list[str] = []
     priorities: list[int] = []
 
-    def executor(_session, output_dir, _env_vars, *, judge=None):
+    def executor(_session, output_dir, _env_vars, *, backend_state, judge=None):
         executed.append(output_dir)
         return EvaluationOutcome(metrics={"task": {"accuracy": 0.5}})
 

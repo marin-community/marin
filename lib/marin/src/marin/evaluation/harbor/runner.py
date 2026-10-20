@@ -25,9 +25,9 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
-from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceUnavailable, inference_attempt_state
+from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceUnavailable
 from marin.inference.iris import RemoteInferenceSession
-from marin.inference.types import RunningModel
+from marin.inference.types import InferenceBackendState, RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -304,15 +304,14 @@ def _run_harbor_job(
     environment: str,
     output_dir: str,
     driver_env: Mapping[str, str],
-    inference_sessions: tuple[RemoteInferenceSession, ...],
+    backend_state: Callable[[], InferenceBackendState],
     benchmark: BenchmarkMetadataRef,
     trials_per_task: int,
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
-    before = tuple(session.preemption_count() for session in inference_sessions)
     try:
-        run_harbor_driver(config, overlay, driver_env, lambda: inference_attempt_state(inference_sessions, before))
+        run_harbor_driver(config, overlay, driver_env, backend_state)
     except InferenceUnavailable:
         _remove_unscored_trials(job_dir, config.error_taxonomy)
         raise
@@ -431,7 +430,7 @@ class HarborExecutor:
         model: RunningModel,
         output_dir: str,
         driver_env: Mapping[str, str],
-        inference_sessions: tuple[RemoteInferenceSession, ...],
+        backend_state: Callable[[], InferenceBackendState],
         verifier_env: Mapping[str, str],
         judge_model: RunningModel | None,
     ) -> HarborRunResult:
@@ -468,7 +467,7 @@ class HarborExecutor:
             environment=self.config.environment,
             output_dir=output_dir,
             driver_env=driver_env,
-            inference_sessions=inference_sessions,
+            backend_state=backend_state,
             benchmark=benchmark,
             trials_per_task=self.config.trials_per_task,
         )
@@ -479,15 +478,15 @@ class HarborExecutor:
         output_dir: str,
         env_vars: Mapping[str, str],
         *,
+        backend_state: Callable[[], InferenceBackendState],
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
-        """Run Harbor while supervising the candidate and any hosted judge inference sessions."""
+        """Run Harbor with candidate inference and an optional hosted judge."""
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token
         verifier_env = {}
-        inference_sessions = (session,)
         judge_model = None
         if judge is not None:
             judge_model = judge.model
@@ -496,13 +495,12 @@ class HarborExecutor:
                 "OPENAI_BASE_URL": judge_model.endpoint.base_url,
                 "MODEL_NAME": judge_model.endpoint.model,
             }
-            inference_sessions += (judge,)
         return _evaluation_outcome(
             lambda: self._run(
                 session.model,
                 output_dir,
                 driver_env,
-                inference_sessions,
+                backend_state,
                 verifier_env,
                 judge_model,
             ),

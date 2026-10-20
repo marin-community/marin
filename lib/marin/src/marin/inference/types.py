@@ -150,9 +150,18 @@ class InferenceRequestProvider(Protocol):
 
     def worker_metadata(self) -> dict[str, InferenceWorkerMetadata]: ...
 
-    def heartbeat(self, worker_id: str) -> None: ...
+    def heartbeat(self, worker_id: str) -> None:
+        """Renew liveness using the identity supplied to register_worker."""
+        ...
 
-    def submit_stream_event(self, event: StreamEvent) -> bool: ...
+    def submit_stream_event(self, event: StreamEvent) -> bool:
+        """Submit an event for the current request lease; stop forwarding on False.
+
+        Start at sequence zero with StreamStart, then increment the sequence for
+        each chunk and terminal event. Before StreamStart is accepted, report
+        errors through submit_responses; afterward, send StreamError.
+        """
+        ...
 
     def finish(self) -> None: ...
 

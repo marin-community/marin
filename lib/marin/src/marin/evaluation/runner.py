@@ -168,9 +168,10 @@ class EvaluationError(RuntimeError):
 class EvalExecutor(Protocol):
     """Execute one resumable attempt using the supplied endpoint and output_dir.
 
-    Monitor inference dependencies while child work runs. Stop all child work
+    Poll backend_state while child work runs. Stop all child work
     before raising InferenceUnavailable so the runner can safely reuse output_dir.
-    Raise EvaluationError for evaluation failures that should not be retried.
+    Raise EvaluationError for evaluation failures; infrastructure failures can
+    be retried when the attempt's inference dependencies were interrupted.
     """
 
     def __call__(
@@ -179,6 +180,7 @@ class EvalExecutor(Protocol):
         output_dir: str,
         env_vars: Mapping[str, str],
         *,
+        backend_state: Callable[[], InferenceBackendState],
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome: ...
 
@@ -400,18 +402,19 @@ def run_evaluation(
 
     def attempt(_attempt_number: int) -> EvaluationOutcome:
         before = tuple(inference.preemption_count() for inference in sessions)
+        backend_state = partial(inference_attempt_state, sessions, before)
         execution_session = _local_endpoint_session(session) if endpoint_route is EndpointRoute.DIRECT else session
         # Adapters stop child work before returning or raising EvaluationError.
         try:
-            outcome = executor(execution_session, output_dir, env_vars, judge=judge)
+            outcome = executor(execution_session, output_dir, env_vars, backend_state=backend_state, judge=judge)
         except EvaluationError as error:
             if error.status is RunStatus.INFRA_FAILED:
-                check_inference_backend(inference_attempt_state(sessions, before))
+                check_inference_backend(backend_state())
             raise
         transport_failures = any(
             entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in outcome.coverage.values()
         )
-        interrupted = inference_attempt_state(sessions, before) is InferenceBackendState.RECOVERING
+        interrupted = backend_state() is InferenceBackendState.RECOVERING
         if transport_failures and interrupted:
             raise InferenceUnavailable("inference interrupted before evaluator completion")
         return outcome

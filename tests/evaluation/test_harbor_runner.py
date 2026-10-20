@@ -310,7 +310,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
     monkeypatch.setattr(runner, "run_harbor_driver", dying_driver)
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_inference_session(), output_dir, {})
+        executor(_inference_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
     assert exc_info.value.status is RunStatus.FAILED
 
     durable = StoragePath(captured["jobs_dir"]) / captured["job_name"] / "trial-one" / "result.json"
@@ -321,7 +321,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
         return None
 
     monkeypatch.setattr(runner, "run_harbor_driver", resumed_driver)
-    outcome = executor(_inference_session(), output_dir, {})
+    outcome = executor(_inference_session(), output_dir, {}, backend_state=lambda: InferenceBackendState.READY)
 
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
@@ -583,6 +583,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         session,
         str(tmp_path),
         env_vars,
+        backend_state=lambda: InferenceBackendState.READY,
         judge=judge,
     )
 
@@ -638,7 +639,7 @@ def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeyp
     executor = _harbor_executor(f"failed-{tmp_path.name}")
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_inference_session(), str(tmp_path), {})
+        executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     # Infrastructure errors are ungraded: the run scored 0% of its attempted trials and fails the gate.
     assert exc_info.value.status is RunStatus.INFRA_FAILED
@@ -679,7 +680,7 @@ def test_harbor_executor_counts_agent_failure_without_verifier_as_zero_reward(tm
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"gated-{tmp_path.name}", n_benchmark=20)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     dataset = executor.config.record_dataset
     metrics = outcome.metrics[dataset]
@@ -715,7 +716,7 @@ def test_harbor_executor_counts_undecided_error_against_completion_gate(tmp_path
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"undecided-{tmp_path.name}", n_benchmark=20)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     dataset = executor.config.record_dataset
     assert outcome.metrics[dataset]["total"] == 19.0
@@ -744,7 +745,7 @@ def test_harbor_executor_rejects_unknown_error_name(tmp_path, monkeypatch):
     executor = _harbor_executor(f"unknown-{tmp_path.name}")
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_inference_session(), str(tmp_path), {})
+        executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.coverage[executor.config.record_dataset].errors == {"unknown:NewHarborError": 1}
@@ -769,7 +770,7 @@ def test_harbor_executor_preserves_scored_errors(tmp_path, monkeypatch, exceptio
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"timeout-{tmp_path.name}", n_benchmark=10)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     dataset = executor.config.record_dataset
     assert outcome.metrics[dataset]["total"] == 10.0
@@ -796,7 +797,7 @@ def test_preflight_benchmark_count_matches_job_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"known-{tmp_path.name}", n_benchmark=4)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     dataset = executor.config.record_dataset
     coverage = outcome.coverage[dataset]
@@ -820,7 +821,7 @@ def test_harbor_attempt_count_includes_repeated_trials_per_task(tmp_path, monkey
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"repeated-{tmp_path.name}", n_benchmark=2, trials_per_task=3)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     coverage = outcome.coverage[executor.config.record_dataset]
     assert (coverage.n_benchmark, coverage.n_attempted, coverage.n_scored) == (6, 6, 6)
@@ -839,7 +840,7 @@ def test_harbor_executor_rejects_job_metadata_that_differs_from_preflight(tmp_pa
     executor = _harbor_executor(f"mismatch-{tmp_path.name}")
 
     with pytest.raises(EvaluationError, match="benchmark metadata differs from preflight"):
-        executor(_inference_session(), str(tmp_path), {})
+        executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
 
 def test_harbor_missing_results_reduce_scored_not_intended_count(tmp_path, monkeypatch):
@@ -856,7 +857,7 @@ def test_harbor_missing_results_reduce_scored_not_intended_count(tmp_path, monke
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"missing-{tmp_path.name}", n_benchmark=20)
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     coverage = outcome.coverage[executor.config.record_dataset]
     assert (coverage.n_attempted, coverage.n_scored) == (20, 19)
@@ -882,7 +883,7 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"zero-{tmp_path.name}")
 
-    outcome = executor(_inference_session(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {}, backend_state=lambda: InferenceBackendState.READY)
 
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())

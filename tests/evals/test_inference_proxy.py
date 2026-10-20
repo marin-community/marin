@@ -564,7 +564,7 @@ def mock_cluster() -> Iterator[MockInferenceCluster]:
     broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with serve_deterministic_openai_stub() as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
-        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
+        worker = InferenceWorker(worker_id="test-worker", broker=broker, upstream=upstream, request_timeout_seconds=5)
         with (
             _serve_inference_proxy(
                 broker=broker,
@@ -644,7 +644,10 @@ def test_worker_preserves_compression_only_for_raw_streams(streaming) -> None:
         )
     )
     worker = InferenceWorker(
-        broker=broker, upstream=RunningModel(OpenAIEndpoint("http://upstream/v1", "test")), request_timeout_seconds=5
+        worker_id="test-worker",
+        broker=broker,
+        upstream=RunningModel(OpenAIEndpoint("http://upstream/v1", "test")),
+        request_timeout_seconds=5,
     )
     with httpx.Client(transport=transport) as client:
         result = worker._forward_one(client, lease)
@@ -667,7 +670,7 @@ async def test_stream_response_cleans_up_when_http_delivery_stops(failure) -> No
     blocked = asyncio.Event()
     broker = InferenceBroker(request_lease_timeout_seconds=10)
     with _streaming_upstream(release) as upstream:
-        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
+        worker = InferenceWorker(worker_id="test-worker", broker=broker, upstream=upstream, request_timeout_seconds=5)
         with (
             run_inference_worker(worker, max_in_flight=1),
             InferenceProxy(
@@ -806,7 +809,7 @@ def test_broker_forwards_incremental_stream_and_exposes_worker_loss(interrupt) -
     now = [0.0]
     broker = InferenceBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
     with _streaming_upstream(release) as upstream:
-        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
+        worker = InferenceWorker(worker_id="test-worker", broker=broker, upstream=upstream, request_timeout_seconds=5)
         with (
             run_inference_worker(worker, max_in_flight=1),
             serve_inference_proxy(
@@ -914,6 +917,7 @@ def test_inference_worker_preserves_raw_transport_fields() -> None:
         )
 
     worker = InferenceWorker(
+        worker_id="test-worker",
         broker=InferenceBroker(request_lease_timeout_seconds=5),
         upstream=RunningModel(endpoint=OpenAIEndpoint(base_url="http://upstream/v1", model="gpt2")),
         request_timeout_seconds=5,
@@ -1126,6 +1130,7 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
     ) as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(
+            worker_id="test-worker",
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=5,
@@ -1151,6 +1156,7 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
     with serve_deterministic_openai_stub(prompt_pauses={"slow": release_slow}) as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(
+            worker_id="test-worker",
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=0.05,
@@ -1176,6 +1182,7 @@ async def test_inference_worker_returns_502_for_upstream_connection_failure() ->
     broker.submit_request(_completion_inference_request(request_id="connect-failure", prompt="connect failure"))
     upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://127.0.0.1:{_closed_port()}/v1", model="gpt2"))
     worker = InferenceWorker(
+        worker_id="test-worker",
         broker=broker,
         upstream=upstream,
         request_timeout_seconds=1,
@@ -1198,6 +1205,7 @@ async def test_inference_worker_preserves_status_for_non_json_upstream_response(
     broker.submit_request(_completion_inference_request(request_id="non-json", prompt="non json"))
     with _serve_text_upstream(status_code=503, body="temporarily unavailable") as upstream:
         worker = InferenceWorker(
+            worker_id="test-worker",
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=1,

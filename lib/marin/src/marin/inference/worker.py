@@ -41,7 +41,7 @@ class InferenceWorker:
         broker: InferenceRequestProvider,
         upstream: RunningModel,
         request_timeout_seconds: float,
-        worker_id: str = "local",
+        worker_id: str,
     ) -> None:
         self._broker = broker
         self._upstream = upstream
