@@ -29,8 +29,8 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import assemble, requirements
-from taskforge.stage10_proposal.model import TaskProposal, parse
-from taskforge.stage20_triage.verdict import accept
+from taskforge.stage10_proposal.model import Environment, SolverMachine, TaskProposal, parse
+from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
 from taskforge.stage30_author.loader import SdkExports, load_program_source
 from taskforge.stage30_author.program import (
@@ -91,22 +91,34 @@ build:
 resources: ["workspace/numbers.txt"]
 ---
 ## Task
-Multiply the two numbers in /workspace/numbers.txt.
+Multiply the two numbers in /workspace/numbers.txt. The file holds two positive integers on one
+line, separated by a space. Read them, multiply them, and reply with the product alone inside the
+answer box, written as a plain integer with no units, no separators and no explanation around it.
 
 ## Realism and workflow
-A clerk checks a product.
+A clerk checks a product before an invoice goes out. The clerk opens the order file, reads the
+quantity and the unit price, multiplies them, and compares the result with the total the system
+printed. The task keeps that one step: read two numbers from a file and report their product.
 
 ## Research plan
-None.
+None. The numbers are written by the build into the task's own file, and the product is computed
+from them, so no external fact, document or dataset is needed. The proposal declares no research
+items, and the body names no lookup in any outside source for the builder or the solver.
 
 ## Build plan
-Write the numbers and the grader.
+Write the numbers and the grader. The build writes workspace/numbers.txt with the two numbers six
+and seven, and a grader that reads the answer box and compares the reply with the product. The
+build checks its own file by recomputing the product before it publishes the task.
 
 ## Grader design and controls
-Full credit only for 42.
+Full credit only for 42. The grader is an exact match on the integer in the answer box after
+stripping surrounding whitespace. A positive control replies 42 and earns full credit; a negative
+control replies 13, the sum of the numbers, and earns nothing; an empty reply earns nothing.
 
 ## Risks and null conditions
-None.
+None. The numbers are small and fixed, so the product cannot overflow and the answer format is
+unambiguous. A solver that guesses cannot reach the product by chance often, and the file holds
+no hint of the answer. No condition makes this task impossible to build in ShellSim.
 """
 )
 BUDGET = WorkpieceBudget(max_build_revisions=1, max_validation_retries=1)
@@ -226,7 +238,7 @@ def no_call(*args: object, **kwargs: object) -> NoReturn:
 
 
 STAGES = StageFunctions(
-    triage=accept,
+    triage=preflight,
     author=static_author(PROGRAM),
     load_program=load_toy_program,
     build=run_build,
@@ -339,6 +351,37 @@ async def test_run_workpiece_records_an_event_per_stage_and_a_relaunch_changes_n
     relaunch = await run_workpiece(coordinator(tmp_path, untouched), WORKPIECE, PROPOSAL, InMemoryEventLog())
     assert relaunch is Terminal.ACCEPTED
     assert tree_bytes(tmp_path) == before
+
+
+NULL_PROPOSAL = replace(
+    PROPOSAL,
+    header=replace(PROPOSAL.header, build=(), resources=(), null_reason="the capability has no gradable artifact here"),
+)
+ESCAPING_PROPOSAL = replace(PROPOSAL, header=replace(PROPOSAL.header, resources=("../numbers.txt",)))
+MACHINELESS_SHELLSIM = replace(PROPOSAL, header=replace(PROPOSAL.header, solver_machine=SolverMachine.NONE))
+
+
+@pytest.mark.parametrize(
+    ("proposal", "reason"),
+    [
+        (ESCAPING_PROPOSAL, "header_schema_valid: resources must be relative paths inside the build root"),
+        (NULL_PROPOSAL, "null proposal: the capability has no gradable artifact here"),
+        (MACHINELESS_SHELLSIM, "solver_machine_fits: only a reasoning proposal may declare none"),
+    ],
+)
+async def test_the_default_preflight_rejects_a_proposal_with_the_failing_check_before_any_later_stage(
+    tmp_path, proposal, reason
+):
+    assert proposal.header.environment is Environment.SHELLSIM
+    log = InMemoryEventLog()
+    stages = replace(STAGES, author=no_call, load_program=no_call, build=no_call, validate=no_call, review=no_call)
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, proposal, log) is Terminal.REJECTED
+
+    assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
+    triaged, terminal = log.events()[1:]
+    assert triaged.attrs["reason"] == terminal.attrs["reason"]
+    assert terminal.attrs["reason"].startswith("triage rejected the proposal: ")
+    assert reason in terminal.attrs["reason"]
 
 
 async def test_a_retry_after_a_failed_save_of_a_finished_workpiece_writes_its_events(tmp_path):

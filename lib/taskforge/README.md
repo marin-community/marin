@@ -23,7 +23,7 @@ src/taskforge/
   stage10_proposal/            model.py: the TaskProposal document and its generation regex;
                                source.py: ProposalBatch, SlotFailure, the ProposalSource protocol
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
-                               verdict.py: Verdict, TriageDecision and `accept`
+                               verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
@@ -92,8 +92,8 @@ allowed, the declared solver machine fits the environment, the required sections
 a null proposal carries only its reason. A fatal failure rejects the proposal with each failing
 check as a reason, and so does a null proposal. Anything else is accepted and goes to build.
 Advisory failures are recorded on the verdict and decide nothing. Whether the host can provide the
-declared machine is checked by the build before any model call, and a host that cannot ends the
-workpiece as the host's failure.
+declared machine is checked by the build (`infrastructure.machine_available`) before any model
+call, and a host that cannot ends the workpiece as the host's failure.
 
 A consumer could add a model review to triage in one of two designs:
 

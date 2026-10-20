@@ -8,7 +8,7 @@ as they are and may also call any stage directly::
 
     stage         Protocol     library function
     ------------  -----------  -------------------------------------------
-    triage        Triage       ``stage20_triage.verdict.accept``
+    triage        Triage       ``stage20_triage.preflight.preflight``
     author        Author       ``stage30_author.author.static_author(program)``
     load_program  LoadProgram  ``stage40_build_with_program.program_sdk.load_program``
     build         Build        ``stage40_build_with_program.run.run_build``
@@ -31,7 +31,7 @@ from typing import Protocol
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import TaskProposal
-from taskforge.stage20_triage.verdict import TriageDecision
+from taskforge.stage20_triage.verdict import Verdict
 from taskforge.stage30_author.author import Author
 from taskforge.stage30_author.program import RLEnvBuildProgram
 from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft
@@ -40,7 +40,7 @@ from taskforge.stage60_review.decision import Decision
 
 
 class Triage(Protocol):
-    async def __call__(self, proposal: TaskProposal, /) -> TriageDecision: ...
+    async def __call__(self, proposal: TaskProposal, /) -> Verdict: ...
 
 
 class LoadProgram(Protocol):

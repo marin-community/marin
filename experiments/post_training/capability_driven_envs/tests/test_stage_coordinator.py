@@ -19,7 +19,7 @@ from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.sandbox.factories import MachineHost
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, parse
-from taskforge.stage20_triage.verdict import accept
+from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage30_author.author import static_author
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
@@ -64,10 +64,17 @@ class UnusedModel:
         raise AssertionError("the example program calls no model")
 
 
+SECTION = (
+    "The example program builds this task from its own recipe and calls no model, so this section only "
+    "states that the coordinator carries the proposal through triage, author, build, validation and review "
+    "unchanged, and that the preflight finds every required section with enough content to accept it."
+)
+
+
 def catalog_proposal(idea: CapabilityIdea) -> TaskProposal:
-    """A reasoning proposal for ``idea``, sourced from its catalog record, with the capability's outcome as the task."""
-    sections = {heading: "None." for heading in REQUIRED_HEADINGS}
-    sections["Task"] = str(idea.capability["outcome"])
+    """A shellsim proposal for ``idea``, sourced from its catalog record, with the capability's outcome as the task."""
+    sections = {heading: SECTION for heading in REQUIRED_HEADINGS}
+    sections["Task"] = f"{idea.capability['outcome']} {SECTION}"
     body = "\n\n".join(f"## {heading}\n{text}" for heading, text in sections.items())
     return parse(
         f"""---
@@ -105,7 +112,7 @@ async def review(summary: object) -> Decision:
 async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_workpiece_id(tmp_path):
     proposal = catalog_proposal(load_capability_ideas(example_catalog_path())[CAPABILITY])
     stages = StageFunctions(
-        triage=accept,
+        triage=preflight,
         author=static_author(rl_env_build_program(sink=task)),
         load_program=load_program,
         build=run_build,
