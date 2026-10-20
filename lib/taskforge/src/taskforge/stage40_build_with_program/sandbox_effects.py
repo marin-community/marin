@@ -8,13 +8,12 @@ with ``infrastructure.host_checked_factories`` first, so a host fault raises
 ``BuildInfrastructureFailure`` and a fault of the program's own choices stays an ordinary error or a
 ``BuildFailure``.
 
-``grade_candidate`` grades a candidate through ``RolloutEngine.run``, the path a validation
-control takes. The candidate's workspace files are written by one shell call each and its reply
-ends the conversation (``spec.controls.candidate_turns``). The engine requires token evidence for
-every turn, and grading reads none, so the model serving those turns makes up ids that extend each
-request's prefix by one token. A registered task session would still need such a model: the engine
-builds the task's ``TaskGrader`` inside ``run``, hands it to the session through
-``TaskSessionContext``, and requests at least one model turn before the session grades.
+``grade_candidate`` grades a candidate through ``RolloutEngine.run_task`` under the shell harness, the
+path a validation control takes. The candidate's workspace files are written by one shell call each and
+its reply ends the conversation (``spec.controls.candidate_turns``). The engine grades only a rollout
+with a model turn, and under its default exact-token trace it requires token evidence for every turn,
+which grading reads none of, so the model serving those turns makes up ids that extend each request's
+served tokens (``ModelRequest.continuation``) by one token.
 
 A decision-model grader (``spec.decision``) is graded as validation grades it: the engine runs the candidate
 with the grader swapped to ``NoGrader``, and the host's decision client (``RLEnvBuildServices.decision``)
@@ -22,8 +21,9 @@ grades the final conversation (``decision.run_decision_trial``). ``calibrate_dec
 reference and its equivalent variants that way and sets the grader's bar.
 
 ``build_machine`` prepares a machine through RolloutEngine's own ``_prepare_machine``, so files, setup
-commands, the execution user and the startup deadline behave as in a task attempt. RolloutEngine
-exposes no public form of it.
+commands, the execution user and the startup deadline behave as in a task attempt. RolloutEngine's
+public form of it, ``machines.task_machine``, starts the machine of a whole ``TaskSpec``, which a build
+step that tries fixtures does not have.
 
 A deadline that expires while a machine starts or a candidate is graded is the host's
 (``InfrastructureCause.SANDBOX_DEADLINE``): a grader command past its own timeout comes back as a
@@ -39,10 +39,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.contracts import ModelRequest, ModelTurn, RolloutInterrupted
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.machines import _prepare_machine
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.models import Model, ModelRequest, ModelTurn, RolloutInterrupted, TaskRolloutSpec
 from shellbox.machine import Machine
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -136,13 +135,14 @@ async def build_machine(
 
 @dataclass(frozen=True)
 class _CandidateModel:
-    """Serves a candidate's assistant turns in order, with made-up token ids that extend each prefix."""
+    """Serves a candidate's assistant turns in order, with made-up token ids that extend the served tokens."""
 
     turns: tuple[dict[str, Any], ...]
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         message = self.turns[sum(entry["role"] == "assistant" for entry in request.messages)]
-        prompt = (*request.prefix_token_ids, len(request.prefix_token_ids))
+        served = () if request.continuation is None else request.continuation.served_token_ids
+        prompt = (*served, len(served))
         stop = "tool_calls" if "tool_calls" in message else "stop"
         return ModelTurn(message, prompt, (len(prompt),), None, stop, text=message["content"])
 
@@ -218,15 +218,14 @@ async def grade_candidate(
     turns = candidate_turns(reply, sorted(workspace, key=lambda resource: resource.path))
     factories = host_checked_factories(context.services.factories, context.services.host)
     try:
-        lowered = draft.lower(
+        spec = draft.lower(
             task,
             host=context.services.host,
             task_machine=None if requirements is None else settings,
             verifier_machine=None if grading_environment(task) is None else settings,
-            session=draft.session(
+            limits=draft.rollout_limits(
                 max_turns=len(turns),
                 model_turn_timeout=None,
-                command_timeout=None,
                 tool_turn_timeout=None,
                 total_turn_timeout=None,
                 attempt_timeout=None,
@@ -237,10 +236,11 @@ async def grade_candidate(
         )
     except (ValueError, NotImplementedError) as error:
         raise BuildFailure(f"grade_candidate: {error}") from error
-    engine = RolloutEngine(_CandidateModel(turns), factories)
-    grade = await _graded(engine, lowered, client)
+    engine = draft.rollout_engine(factories, command_timeout=None)
+    model = _CandidateModel(turns)
+    grade = await _graded(engine, spec, model, client)
     if grade.failure is GradingFailure.TIMEOUT:
-        grade = await _graded(engine, lowered, client)
+        grade = await _graded(engine, spec, model, client)
     return grade
 
 
@@ -309,17 +309,22 @@ def _decision_client(context: RLEnvBuildContext) -> DecisionClient:
     return client
 
 
-async def _graded(engine: RolloutEngine, lowered: LoweredTaskSpec, decision: DecisionClient | None) -> GradeResult:
-    """One rollout of ``lowered`` on fresh machines, host-graded for a decision grader; a host failure or a
+async def _graded(
+    engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, decision: DecisionClient | None
+) -> GradeResult:
+    """One rollout of ``spec`` on fresh machines, host-graded for a decision grader; a host failure or a
     sandbox deadline raises as infrastructure."""
     try:
-        rollout = await (engine.run(lowered) if decision is None else run_decision_trial(engine, lowered, decision))
+        if decision is None:
+            result = await engine.run_task(spec, model)
+        else:
+            result = await run_decision_trial(engine, spec, model, decision)
     except RolloutInterrupted as error:
         failure = infrastructure_failure(error) or decision_failure(error) or deadline_failure(error)
         if failure is None:
             raise
         raise failure from error
-    return rollout.grade
+    return result.grade
 
 
 def image_repository(workpiece_id: str) -> str:
