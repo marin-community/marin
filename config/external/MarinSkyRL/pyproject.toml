@@ -9,7 +9,15 @@ package = false
 prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
 # Select the published wheel. SkyRL metrics use Rigging's Prometheus extra.
-override-dependencies = ["marin-rigging[secrets,prometheus]>=0.2.144.dev37540375919"]
+override-dependencies = [
+    "marin-iris==0.2.202.dev39324959133",
+    "marin-finestore==0.2.202.dev39324959133",
+    "marin-rigging[secrets,prometheus]==0.2.202.dev39324959133",
+    "marin-shellbox[daytona,shellsim]==0.2.202.dev39324959133",
+    "marin-taskcompendium @ git+https://github.com/marin-community/marin.git@6e2fe1839ea067be147f1ce06aced63a96670f7a#subdirectory=lib/taskcompendium",
+    "marin-rolloutengine @ git+https://github.com/marin-community/marin.git@6e2fe1839ea067be147f1ce06aced63a96670f7a#subdirectory=lib/rolloutengine",
+    "marin-verifyit @ git+https://github.com/marin-community/marin.git@6e2fe1839ea067be147f1ce06aced63a96670f7a#subdirectory=lib/verifyit",
+]
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "8eab996d9a6a46cb6aba9df8f008ce8a783cf1c1" }
