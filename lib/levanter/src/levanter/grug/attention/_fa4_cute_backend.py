@@ -41,7 +41,7 @@ from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, band_to_tile
 
 
 # Diagnosis switch (temporary): the SM100 forward reads the band tiled (band_to_tiles) or plain.
-SM100_FORWARD_BAND_TILES = True
+SM100_FORWARD_BAND_TILES = False
 
 
 @dataclass(frozen=True)
