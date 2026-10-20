@@ -1154,7 +1154,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         _seed_xla_autotune_cache(config, seed_topology)
         return
     autotune_cache_loaded = (
-        _use_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
+        _use_xla_autotune_cache(config.trainer.xla_autotune_cache_path, require_complete=config.eval is None)
         if config.trainer.xla_autotune_cache_path is not None
         else None
     )
@@ -1814,13 +1814,15 @@ def _autotune_dump_file() -> str:
     return f"/tmp/xla_autotune_results_{os.getpid()}.textproto"
 
 
-def _use_xla_autotune_cache(path: str) -> bool:
+def _use_xla_autotune_cache(path: str, *, require_complete: bool) -> bool:
     """Point XLA at the shared autotune results: load ``path`` when it exists, and dump this process's results.
 
     Multi-process GB200 compiles hang in sharded autotuning's cross-process key-value exchange (every rank waits in
     ``ConfigAssigner::AssignConfigs`` for keys that never arrive), and loading results alone does not skip it. With a
     cache, every rank takes its configs from the same file with sharding off, so nothing is exchanged and all ranks
-    pick identical kernels. Must run before the backend is created; returns whether a cache was loaded."""
+    pick identical kernels. ``require_complete`` makes a fusion missing from the cache a compile error; without it
+    (a run with evals: the seed covers only the train step) each rank autotunes the eval program's fusions itself,
+    still without an exchange. Must run before the backend is created; returns whether a cache was loaded."""
     fs = fsspec.core.url_to_fs(path)[0]
     flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}"]
     loaded = fs.exists(path)
@@ -1829,7 +1831,7 @@ def _use_xla_autotune_cache(path: str) -> bool:
         fs.get(path, local)
         flags += [
             f"--xla_gpu_load_autotune_results_from={local}",
-            "--xla_gpu_require_complete_aot_autotune_results=true",
+            f"--xla_gpu_require_complete_aot_autotune_results={str(require_complete).lower()}",
             "--xla_gpu_shard_autotuning=false",
         ]
     os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
