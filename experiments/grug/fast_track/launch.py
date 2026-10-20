@@ -51,6 +51,7 @@ from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import (
     AttnResLayerBackward,
+    Fp8Recipe,
     GrugModelConfig,
     LocalMixer,
 )
@@ -135,6 +136,15 @@ class XlaAutotune(StrEnum):
     """Load the shared autotune results seeded for this program (``--seed-xla-autotune-cache``)."""
     OFF = "off"
     """No autotuning (``--xla_gpu_autotune_level=0`` in the job's XLA_FLAGS): library heuristics pick the kernels."""
+
+
+class EvalPrecision(StrEnum):
+    """The precision the evals run the trained weights in."""
+
+    TRAIN = "train"
+    """The training config's recipe (an MXFP8 run evaluates its MXFP8 projections)."""
+    BF16 = "bf16"
+    """Full bf16: no MXFP8 anywhere, whatever the run trained with."""
 
 
 class OptimizerKind(StrEnum):
@@ -347,6 +357,27 @@ def _kma_model(model: GrugModelConfig) -> GrugModelConfig:
     )
 
 
+def _eval_model(
+    model: GrugModelConfig, precision: EvalPrecision, dropless_expert_axis_size: int | None
+) -> GrugModelConfig | None:
+    """The config the evals run (None: the training config). ``dropless_expert_axis_size`` (the training dispatch
+    eval) sizes every receiver for all of a batch's assignments: capacity factor = expert-parallel width, one ragged
+    chunk."""
+    if precision is EvalPrecision.TRAIN and dropless_expert_axis_size is None:
+        return None
+    if precision is EvalPrecision.BF16:
+        model = dataclasses.replace(
+            model,
+            fp8_recipe=Fp8Recipe.NONE,
+            mxfp8_expert_wgrad=False,
+            moe_mxfp8_dispatch=False,
+            mxfp8_fused_grad_quant=False,
+        )
+    if dropless_expert_axis_size is not None:
+        model = dataclasses.replace(model, capacity_factor=float(dropless_expert_axis_size), moe_ragged_chunks=1)
+    return model
+
+
 def _keep_policy(entry: str) -> tuple[int, int | None]:
     """``EVERY[:UNTIL]`` -> ``(every, until)``."""
     every, _, until = entry.partition(":")
@@ -459,6 +490,7 @@ def build_h100_ladder_run(
     expert_axis_size: int | None = None,
     device: str | None = None,
     eval_on_train_dispatch: bool = False,
+    eval_precision: EvalPrecision = EvalPrecision.TRAIN,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -473,7 +505,8 @@ def build_h100_ladder_run(
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
     ``eval_on_train_dispatch`` evaluates on the training mesh and MoE dispatch (e.g. the MXFP8 ragged experts) instead of
-    the dropless local backend; raise ``capacity_factor`` so it drops nothing (a drop makes the eval loss NaN).
+    the dropless local backend, at an eval-only capacity that cannot drop (a drop would make the eval loss NaN).
+    ``eval_precision`` picks the evals' recipe (``EvalPrecision``).
     ``device`` moves an H100 rung onto GB200 trays (4 GPUs per node) and ``nodes`` overrides the rung's node count.
     ``expert_axis_size`` (default: every device) shards the experts over
     that many devices and replicates them (data parallel, ``replica_dcn``) over the rest, e.g. 8 for expert
@@ -511,6 +544,8 @@ def build_h100_ladder_run(
     # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
     # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
     # the candidate's FLOPs/token but never the budget it is compared against.
+    eval_model = _eval_model(model, eval_precision, expert_axis_size if eval_on_train_dispatch else None)
+
     if (size, dense) not in _BASELINE_ACTIVE_PARAMS and num_steps is None:
         raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense}); pass --num-steps")
 
@@ -698,6 +733,7 @@ def build_h100_ladder_run(
                     eval_batch_size=rung.global_device_count,
                     compute_bpb=True,
                     dropless_eval=not eval_on_train_dispatch,
+                    model=eval_model,
                     dropless_eval_moe_implementation=dropless_moe_implementation(model),
                 )
             ),
@@ -1035,7 +1071,14 @@ def _layer_skip_rule(
     "--eval-on-train-dispatch",
     is_flag=True,
     help="Evaluate with the training mesh and MoE dispatch (MXFP8 experts included) instead of the dropless local "
-    "backend; pair with a capacity_factor that drops nothing (a drop makes the eval loss NaN).",
+    "backend, at an eval-only capacity that cannot drop.",
+)
+@click.option(
+    "--eval-precision",
+    type=click.Choice([p.value for p in EvalPrecision]),
+    default=EvalPrecision.TRAIN.value,
+    show_default=True,
+    help="Recipe the evals run: the training one, or full bf16 (apples-to-apples across FP8 arms).",
 )
 @click.option(
     "--device",
@@ -1138,6 +1181,7 @@ def main(
     expert_axis_size: int | None,
     device: str | None,
     eval_on_train_dispatch: bool,
+    eval_precision: str,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -1197,6 +1241,7 @@ def main(
         expert_axis_size=expert_axis_size,
         device=device,
         eval_on_train_dispatch=eval_on_train_dispatch,
+        eval_precision=EvalPrecision(eval_precision),
     )
 
 

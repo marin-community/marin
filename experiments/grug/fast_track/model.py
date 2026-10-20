@@ -333,6 +333,16 @@ class Fp8Recipe(StrEnum):
     """``MXFP8_EXPERTS`` and ``MXFP8_DENSE`` together."""
 
 
+class Mxfp8Site(StrEnum):
+    """A group of dense projections a real MXFP8 dense ``fp8_recipe`` can cover (``mxfp8_dense_sites``)."""
+
+    ATTENTION = "attention"
+    """Attention and KDA projections: q/k/v/o, gates, the MLA latents and the attention ``LatentProj``."""
+    MOE = "moe"
+    """MoE-side projections: the fused router-latent-shared projection (router columns excluded), the latent
+    down/up projections and the shared experts."""
+
+
 _DENSE_FP8_SIM = (Fp8Recipe.MXFP8_SIM, Fp8Recipe.MXFP8_SIM_DENSE)
 _DENSE_FP8_REAL = (Fp8Recipe.MXFP8_DENSE, Fp8Recipe.MXFP8)
 
@@ -1019,6 +1029,11 @@ class GrugModelConfig:
     """With MXFP8 experts (``fp8_recipe``), send the dispatched rows as MXFP8 bytes instead of bf16 rows quantized on
     arrival. Off by default: the extra uint8 transport buffer OOMs NCCL's symmetric memory on the GB200 recipe."""
     mxfp8_expert_wgrad: bool = False
+    mxfp8_dense_sites: tuple[Mxfp8Site, ...] = (Mxfp8Site.ATTENTION, Mxfp8Site.MOE)
+    """Under a real MXFP8 dense ``fp8_recipe``, the projection sites that run block-scaled; the rest stay bf16."""
+    mxfp8_dense_wgrad: bool = True
+    """Under a real MXFP8 dense ``fp8_recipe``, run the dense projections' weight-gradient GEMMs block-scaled too;
+    False keeps them bf16 (the forward and input-gradient GEMMs stay MXFP8)."""
     """With MXFP8 experts (``fp8_recipe``), run the routed experts' weight-gradient GEMMs block-scaled too (operands
     quantized along the token axis per expert) instead of bf16 (``ExpertMxfp8.ALL``)."""
     moe_serial_pair: bool = False  # ragged experts: neuron halves in series, y1 + mlp_b(x + y1)
@@ -1277,21 +1292,26 @@ class GrugModelConfig:
         return Transformer.init(cfg, key=key)
 
 
-def _proj(cfg: "GrugModelConfig", x: jax.Array, w: jax.Array, out_sharding: P | None = None) -> jax.Array:
-    """``x[..., k] @ w[k, n]`` under ``cfg.fp8_recipe``."""
+def _proj(
+    cfg: "GrugModelConfig", x: jax.Array, w: jax.Array, out_sharding: P | None = None, *, site: Mxfp8Site
+) -> jax.Array:
+    """``x[..., k] @ w[k, n]`` under ``cfg.fp8_recipe`` (a real MXFP8 recipe covers ``site`` only when listed in
+    ``cfg.mxfp8_dense_sites``)."""
     if cfg.fp8_recipe in _DENSE_FP8_SIM:
         return mx_dense(x, w, out_sharding)
-    if cfg.fp8_recipe in _DENSE_FP8_REAL:
+    if cfg.fp8_recipe in _DENSE_FP8_REAL and site in cfg.mxfp8_dense_sites:
         # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
         from levanter.grug._moe.quack_mxfp8 import mx_linear  # noqa: PLC0415
 
-        return mx_linear(x, w, out_sharding, cfg.mxfp8_fused_grad_quant)
+        return mx_linear(x, w, out_sharding, cfg.mxfp8_fused_grad_quant, cfg.mxfp8_dense_wgrad)
     return jnp.einsum("...k,kn->...n", x, w, out_sharding=out_sharding)
 
 
-def _proj_parts(cfg: "GrugModelConfig", x: jax.Array, weights: tuple[jax.Array, ...]) -> tuple[jax.Array, ...]:
+def _proj_parts(
+    cfg: "GrugModelConfig", x: jax.Array, weights: tuple[jax.Array, ...], *, site: Mxfp8Site
+) -> tuple[jax.Array, ...]:
     """``_proj(cfg, x, w)`` for every ``w`` of ``weights``, as one projection onto their concatenation."""
-    fused = _proj(cfg, x, jnp.concatenate(weights, axis=1))
+    fused = _proj(cfg, x, jnp.concatenate(weights, axis=1), site=site)
     return tuple(jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=-1))
 
 
@@ -1398,11 +1418,11 @@ class LatentProj(eqx.Module):
     def __call__(self, cfg: GrugModelConfig, x: Float[Array, "... I"]) -> Float[Array, "... O"]:
         blocks = self.norm.weight.shape[0]
         x = reshard(x, P(_BATCH_AXES, *([None] * (x.ndim - 1))))
-        latent = rearrange(_proj(cfg, x, self.down), "... (e r) -> ... e r", e=blocks)
+        latent = rearrange(_proj(cfg, x, self.down, site=Mxfp8Site.ATTENTION), "... (e r) -> ... e r", e=blocks)
         latent = self.norm(latent)
         if self.mix_gate is not None:
             latent = latent * mixture_weights(x, self.mix_gate, blocks, self.topk)[..., None].astype(latent.dtype)
-        return _proj(cfg, rearrange(latent, "... e r -> ... (e r)"), self.up)
+        return _proj(cfg, rearrange(latent, "... e r -> ... (e r)"), self.up, site=Mxfp8Site.ATTENTION)
 
 
 class CausalSelfAttention(eqx.Module):
@@ -1544,10 +1564,10 @@ class CausalSelfAttention(eqx.Module):
             assert self.kv_latent_norm is not None
         latent = x if kv_input is None else kv_input
         if not direct:
-            latent = _proj(self.cfg, latent, self.w_dkv)
+            latent = _proj(self.cfg, latent, self.w_dkv, site=Mxfp8Site.ATTENTION)
 
         def project_q(w_q: jax.Array) -> jax.Array:
-            q_flat = _proj(self.cfg, q_in, w_q)
+            q_flat = _proj(self.cfg, q_in, w_q, site=Mxfp8Site.ATTENTION)
             if self.sconv_q is not None:
                 q_flat = self.sconv_q(q_flat, sconv_segment_ids)
             return rearrange(q_flat, "... (n d) -> ... n d", d=head_dim * 1)
@@ -1567,12 +1587,12 @@ class CausalSelfAttention(eqx.Module):
             if direct:
                 return proj_inputs[name]
             assert self.kv_latent_norm is not None and self.w_dkv is not None
-            return self.kv_latent_norm(_proj(self.cfg, proj_inputs[name], self.w_dkv))
+            return self.kv_latent_norm(_proj(self.cfg, proj_inputs[name], self.w_dkv, site=Mxfp8Site.ATTENTION))
 
         k_latent, v_latent = stream_latent("k"), stream_latent("v")
 
         def project_k(w_uk: jax.Array) -> jax.Array:
-            k_flat = _proj(self.cfg, k_latent, w_uk)
+            k_flat = _proj(self.cfg, k_latent, w_uk, site=Mxfp8Site.ATTENTION)
             if self.sconv_k is not None:
                 k_flat = self.sconv_k(k_flat, sconv_segment_ids)
             return rearrange(k_flat, "... (n d) -> ... n d", d=head_dim)
@@ -1581,7 +1601,9 @@ class CausalSelfAttention(eqx.Module):
         if self.w_uv is None:  # mla_shared_kv_tied: the value is the cached key vector itself
             v = k
         else:
-            v = rearrange(_proj(self.cfg, v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
+            v = rearrange(
+                _proj(self.cfg, v_latent, self.w_uv, site=Mxfp8Site.ATTENTION), "... (n d) -> ... n d", d=head_dim
+            )
         if self.value_embed is not None:
             assert self.ve_lambda is not None and token_ids is not None
             table = self.value_embed.astype(x.dtype)
@@ -1608,7 +1630,7 @@ class CausalSelfAttention(eqx.Module):
             if latent is not None:
                 return latent(self.cfg, inp)
             assert w is not None
-            return _proj(self.cfg, inp, w)
+            return _proj(self.cfg, inp, w, site=Mxfp8Site.ATTENTION)
 
         q_flat = _project(x, self.w_q, None)
         k_flat = _project(kv_in, self.w_k, None)
@@ -1797,7 +1819,7 @@ class CausalSelfAttention(eqx.Module):
         )
         assert self.w_o is not None
         # Under an MXFP8 ``fp8_recipe`` the output projection is MXFP8 like q/k/v (as in moe_hero_ep).
-        return _proj(self.cfg, attn_out, self.w_o, out_sharding=batch_spec), stats
+        return _proj(self.cfg, attn_out, self.w_o, out_sharding=batch_spec, site=Mxfp8Site.ATTENTION), stats
 
 
 # FoX key bias channels: a bf16 hi/mid/lo split of -c_j (bf16 alone is off by ~|c| * 2^-9 logits; with three
@@ -2144,11 +2166,11 @@ class KimiDeltaAttention(eqx.Module):
                 "erase": self.w_erase,
             }
             named = {name: w for name, w in named.items() if w is not None}
-            fused = dict(zip(named, _proj_parts(cfg, x, tuple(named.values())), strict=True))
+            fused = dict(zip(named, _proj_parts(cfg, x, tuple(named.values()), site=Mxfp8Site.ATTENTION), strict=True))
 
         def project(w: jax.Array, conv: ShortConv, bias_row: int, name: str) -> jax.Array:
             source = kv_input if kv_input is not None and name in ("k", "v") else proj_inputs.get(name, x)
-            y = fused[name] if fused else _proj(cfg, source, w)
+            y = fused[name] if fused else _proj(cfg, source, w, site=Mxfp8Site.ATTENTION)
             y = jax.nn.silu(conv(y, segment_ids))
             return rearrange(y, "... (n d) -> ... n d", d=head_dim)
 
@@ -2156,7 +2178,9 @@ class KimiDeltaAttention(eqx.Module):
         k = project(self.w_k, self.sconv_k, 1, "k")
         v = project(self.w_v, self.sconv_v, 2, "v")
         if self.w_write is not None:
-            write = fused["write"] if fused else _proj(cfg, proj_inputs.get("v", x), self.w_write)
+            write = (
+                fused["write"] if fused else _proj(cfg, proj_inputs.get("v", x), self.w_write, site=Mxfp8Site.ATTENTION)
+            )
             v = v * rearrange(
                 2.0 * jax.nn.sigmoid(write.astype(jnp.float32)), "... (n d) -> ... n d", d=head_dim
             ).astype(v.dtype)
@@ -2190,7 +2214,7 @@ class KimiDeltaAttention(eqx.Module):
             extras["gate_bias"] = reshard(self.dt_bias.astype(jnp.float32), head_spec)
             extra_specs["gate_p"] = extra_specs["gate_bias"] = head_spec
         if self.w_erase is not None:
-            z = fused["erase"] if fused else _proj(cfg, proj_inputs.get("k", x), self.w_erase)
+            z = fused["erase"] if fused else _proj(cfg, proj_inputs.get("k", x), self.w_erase, site=Mxfp8Site.ATTENTION)
             z = rearrange(z, "... (n d) -> ... n d", d=head_dim)
             erase_logits = z.astype(jnp.float32)
             if cfg.kda_onchip_erase_gate:
@@ -2228,14 +2252,14 @@ class KimiDeltaAttention(eqx.Module):
         o = kernel(*args)
         o = self.o_norm(o.astype(x.dtype))
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
-        gate = jax.nn.sigmoid(fused["g"] if fused else _proj(cfg, x, self.w_g))
+        gate = jax.nn.sigmoid(fused["g"] if fused else _proj(cfg, x, self.w_g, site=Mxfp8Site.ATTENTION))
         gate_heads = rearrange(gate, "... (n d) -> ... n d", d=head_dim)
         head_keep = _head_gate_keep(cfg, jnp.mean(gate_heads.astype(jnp.float32), axis=-1), stats)
         if cfg.attn_head_skip:
             gate_heads = gate_heads * head_keep[..., None].astype(gate.dtype)
             gate = rearrange(gate_heads, "... n d -> ... (n d)")
         o = o * gate
-        out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec())
+        out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec(), site=Mxfp8Site.ATTENTION)
         return out, stats
 
 
@@ -2961,7 +2985,11 @@ class MoEMLP(eqx.Module):
             routed_flat = self.latent_out_norm(routed_flat)
         if self.w_latent_up is not None:
             routed_flat = _proj(
-                self.cfg, routed_flat, self.w_latent_up.astype(routed_flat.dtype), out_sharding=_batch_spec()
+                self.cfg,
+                routed_flat,
+                self.w_latent_up.astype(routed_flat.dtype),
+                out_sharding=_batch_spec(),
+                site=Mxfp8Site.MOE,
             )
         if overlap_out is not None:
             routed_flat = routed_flat + reshard(overlap_out, _batch_spec()).astype(routed_flat.dtype)
@@ -2989,7 +3017,7 @@ def _shared_experts_tail(
     else:
         slope = 0.0
         hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
-    shared_out = _proj(cfg, hidden, w_down, out_sharding=out_sharding)
+    shared_out = _proj(cfg, hidden, w_down, out_sharding=out_sharding, site=Mxfp8Site.MOE)
     if shared_gate is not None:
         gate_logit = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), shared_gate)
         shared_out = shared_out * (2.0 * jax.nn.sigmoid(gate_logit))[:, None].astype(shared_out.dtype)
@@ -3009,7 +3037,7 @@ def _shared_experts_local(
     and the gate."""
     shared_in, x_flat = tokens
     w_gate_up, w_down, shared_gate = params
-    proj = _proj(cfg, shared_in, w_gate_up)
+    proj = _proj(cfg, shared_in, w_gate_up, site=Mxfp8Site.MOE)
     parts = jnp.split(proj, list(itertools.accumulate(widths[:-1])), axis=1)
     num_shared = len(widths) // 2 if gated else len(widths)
     return _shared_experts_tail(cfg, parts, num_shared, gated, w_down, x_flat, shared_gate, None)
@@ -3098,7 +3126,7 @@ def moe_and_shared_fused(
     if not part_inputs and mlp.cfg.fp8_recipe in _DENSE_FP8_SIM + _DENSE_FP8_REAL:
         # The router stays in high precision; the rest of the fused projection takes the low-precision recipe.
         low = weights[1:] if router_in_fused else weights
-        fused = _proj(mlp.cfg, x_flat, jnp.concatenate(low, axis=1), out_sharding=_batch_spec())
+        fused = _proj(mlp.cfg, x_flat, jnp.concatenate(low, axis=1), out_sharding=_batch_spec(), site=Mxfp8Site.MOE)
         parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in low[:-1])), axis=1)
         if router_in_fused:
             router = jnp.einsum("td,de->te", x_flat, weights[0], out_sharding=_batch_spec())
@@ -3173,13 +3201,15 @@ def _moe_and_shared_hero(
     router_weights = mlp.input_projection_weights(x_flat.dtype)[0]
     projected = [jnp.einsum("td,de->te", x_flat, router_weights, out_sharding=_batch_spec())]
     if mlp.w_latent_down is not None:
-        projected.append(_proj(cfg, x_flat, mlp.w_latent_down.astype(x_flat.dtype), out_sharding=_batch_spec()))
+        projected.append(
+            _proj(cfg, x_flat, mlp.w_latent_down.astype(x_flat.dtype), out_sharding=_batch_spec(), site=Mxfp8Site.MOE)
+        )
     routed, stats = mlp(x, projected=projected, **routed_kwargs)
     gated = shared[0].w_gate is not None
     up_weights = [e.w_gate for e in shared if gated] + [e.w_up for e in shared]
     # Token-sharded like ``x_flat``: left to the projection, the output takes the weights' column sharding and
     # the down projection reshards it back with an all-to-all.
-    up = _proj(cfg, x_flat, jnp.concatenate(up_weights, axis=1), out_sharding=_batch_spec())
+    up = _proj(cfg, x_flat, jnp.concatenate(up_weights, axis=1), out_sharding=_batch_spec(), site=Mxfp8Site.MOE)
     parts = jnp.split(up, list(itertools.accumulate(w.shape[1] for w in up_weights[:-1])), axis=-1)
     if not gated:
         stats = {**stats, _SHARED_PRE: jnp.concatenate(parts, axis=-1)}

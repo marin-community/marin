@@ -754,20 +754,26 @@ def _token_spec(x_spec: P, ndim: int) -> P:
     return P(*entries[:-1], None)
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3))
-def mx_linear(x: jax.Array, w: jax.Array, out_sharding: P | None = None, fused_grad_quant: bool = False) -> jax.Array:
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4))
+def mx_linear(
+    x: jax.Array,
+    w: jax.Array,
+    out_sharding: P | None = None,
+    fused_grad_quant: bool = False,
+    mxfp8_wgrad: bool = True,
+) -> jax.Array:
     """``x[..., K] @ w[K, N]`` with MXFP8 operands in all three GEMMs, on QuACK's block-scaled SM100 kernel.
 
     Tokens may be sharded on any leading axes; a sharded feature dim of ``x`` is gathered first. ``w`` is gathered like the
     einsum it replaces would gather it, and its gradient comes back sharded as ``w``. Every GEMM quantizes both of
     its operands along its own contraction axis (the weight gradient along tokens), as ``levanter.grug.mxfp8``
     simulates. ``fused_grad_quant`` quantizes the output gradient along rows and columns in one pass (1.22x faster,
-    but both quantized copies are live at once)."""
-    return _mx_linear_fwd(x, w, out_sharding, fused_grad_quant)[0]
+    but both quantized copies are live at once). ``mxfp8_wgrad=False`` runs the weight gradient as a bf16 GEMM."""
+    return _mx_linear_fwd(x, w, out_sharding, fused_grad_quant, mxfp8_wgrad)[0]
 
 
-def _mx_linear_fwd(x, w, out_sharding, fused_grad_quant):
-    del fused_grad_quant
+def _mx_linear_fwd(x, w, out_sharding, fused_grad_quant, mxfp8_wgrad):
+    del fused_grad_quant, mxfp8_wgrad
     x_spec = _token_spec(jax.typeof(x).sharding.spec, x.ndim)
     k, n = w.shape
 
@@ -784,7 +790,7 @@ def _mx_linear_fwd(x, w, out_sharding, fused_grad_quant):
     return y, (x, w)
 
 
-def _mx_linear_bwd(out_sharding, fused_grad_quant, res, g):
+def _mx_linear_bwd(out_sharding, fused_grad_quant, mxfp8_wgrad, res, g):
     del out_sharding
     x, w = res
     x_orig_spec = jax.typeof(x).sharding.spec
@@ -799,9 +805,14 @@ def _mx_linear_bwd(out_sharding, fused_grad_quant, res, g):
         x2, g2 = xl.reshape(-1, k), gl.reshape(-1, n)
         # The separate passes keep one quantized copy live at a time; the fused pass pushed the GB200 recipe with the
         # bigram table over the NCCL memory edge (lc1-gb200-profrc).
-        g_rows, g_cols = quantize_rows_cols(g2) if fused_grad_quant else (quantize_rows(g2), None)
+        g_rows, g_cols = quantize_rows_cols(g2) if fused_grad_quant and mxfp8_wgrad else (quantize_rows(g2), None)
         dx = mxfp8_matmul_dgrad(g_rows, wv, we).reshape(xl.shape)
-        dw = mxfp8_matmul_wgrad(x2, quantize_cols(g2) if g_cols is None else g_cols)
+        if mxfp8_wgrad:
+            dw = mxfp8_matmul_wgrad(x2, quantize_cols(g2) if g_cols is None else g_cols)
+        else:
+            # bf16 output, as the einsum's own weight gradient is.
+            dw = jax.lax.dot_general(x2, g2, (((0,), (0,)), ((), ())), preferred_element_type=jnp.float32)
+            dw = dw.astype(g2.dtype)
         dw = _reduce_partial_to_spec(dw, dw_spec, batch_axes)
         return dx, dw
 

@@ -377,6 +377,9 @@ class GrugEvalConfig:
     # Local MoE kernel used after collapsing the expert axis. ``sonic`` is the Hopper Triton path;
     # ``sonic_cute`` is the Blackwell QuACK/CUTLASS path.
     dropless_eval_moe_implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
+    # The model config the evals run the trained weights under (e.g. full bf16, or a capacity that drops nothing);
+    # None runs the training config. It must keep the training config's parameter tree.
+    model: GrugModelConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -565,6 +568,7 @@ def build_tagged_evaluator(
     model_transform: Callable[[Transformer], Transformer] | None = None,
     layer_skip: LayerSkipRule | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
+    """``eval_cfg.model`` re-reads the trained weights under that config (its static fields), e.g. full bf16."""
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
     if len(tagged_eval_sets) == 0:
@@ -576,6 +580,12 @@ def build_tagged_evaluator(
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
     eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    eval_treedef = None
+    if eval_cfg.model is not None:
+        eval_model_config = eval_cfg.model
+        eval_treedef = jax.tree.structure(
+            jax.eval_shape(lambda key: Transformer.init(eval_model_config, key=key), jax.random.PRNGKey(0))
+        )
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         # Evaluate at the compute dtype, as the train step does at `mp.cast_to_compute(params)`.
@@ -583,6 +593,8 @@ def build_tagged_evaluator(
         # every eval raises `TypeError: ... supports only bf16/fp16, got float32` on Blackwell. The
         # reference attention path takes float32, which hid this on H100.
         model = _cast_to_compute(mp, model)
+        if eval_treedef is not None:
+            model = jax.tree.unflatten(eval_treedef, jax.tree.leaves(model))
         if model_transform is not None:
             model = model_transform(model)
         if isinstance(batch, LmExample):
