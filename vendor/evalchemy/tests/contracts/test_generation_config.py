@@ -738,6 +738,8 @@ def test_evaluation_driver_streams_lm_eval_samples_without_result_list(tmp_path)
 
 
 
+# Cold lm-eval imports/catalog discovery need headroom; the child must time out before pytest.
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("task", ["AIME24", "MATH500"])
 def test_cli_output_cap_wins_over_math_benchmark_defaults(endpoint, tmp_path, task, math500_jsonl):
     root = Path(__file__).parents[2]
@@ -774,7 +776,7 @@ def test_cli_output_cap_wins_over_math_benchmark_defaults(endpoint, tmp_path, ta
         cwd=root,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=90,
     )
 
     assert result.returncode == 0, result.stderr
