@@ -37,6 +37,8 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import ShellToolConfig
 
+from taskforge.llm import rollout_model
+from taskforge.llm.client import ToolCall
 from taskforge.sandbox.images import DEFAULT_MODE
 from taskforge.spec.draft import SHELL_CAPABILITY
 
@@ -222,22 +224,11 @@ def reply(content: str) -> TextMessage:
 
 
 def wire_message(turn: TextMessage | AssistantToolCalls) -> dict[str, Any]:
-    """A transcript turn as the chat message a GLM rollout model would have produced."""
+    """A transcript turn as the chat message a rollout model replays (``rollout_model.wire_message``)."""
     if isinstance(turn, TextMessage):
-        return {"role": "assistant", "content": turn.content, "reasoning_content": ""}
-    return {
-        "role": "assistant",
-        "content": turn.content or "",
-        "reasoning_content": "",
-        "tool_calls": [
-            {
-                "id": call.call_id,
-                "type": "function",
-                "function": {"name": call.name, "arguments": json.dumps(call.arguments, ensure_ascii=False)},
-            }
-            for call in turn.calls
-        ],
-    }
+        return rollout_model.wire_message(turn.content, "", ())
+    calls = [ToolCall(call.call_id, call.name, json.dumps(call.arguments, ensure_ascii=False)) for call in turn.calls]
+    return rollout_model.wire_message(turn.content or "", "", calls)
 
 
 def workspace_turn(index: int, file: TaskResource) -> AssistantToolCalls:

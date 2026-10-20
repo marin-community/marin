@@ -135,7 +135,8 @@ spec, so a move of either is a single-site change.
   `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
 - `spec.draft.lower(task, *, host, task_machine, verifier_machine, limits, factories)` runs
   each machine on `host_requirements` for `factories`: with the local backend, the grader base image
-  and package machines run there; without it, a package machine runs on the grader base image. It
+  runs there. A package machine always lowers onto the local backend, so on a host without one
+  `lower` refuses it: `RolloutEngine.check` finds no factory for it. It
   picks the host's container backend for an image, the local backend for Linux processes without
   one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment,
   other than a judge, takes a verifier machine; no other grader does. `limits` is a `RolloutLimits`
