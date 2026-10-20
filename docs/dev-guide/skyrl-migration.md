@@ -83,6 +83,7 @@ Keep the previous snapshot directory. The refresh command captures the latest
 upstream commit and active work, reuses its Git objects, and computes the full
 local delta from the previous retained upstream source. It replays that delta
 with Git's three-way merge and rebuilds the stacked PR transplant report.
+Run these commands from the Marin repository root.
 
 ```bash
 uv run --no-project python -m scripts.skyrl_migration refresh \
@@ -118,8 +119,10 @@ can be reproduced from the new snapshot alone. The original local delta is
 saved as `local-changes-before-replay.patch`. PR conflicts remain explicit in
 the transplant report. A clean local replay does not resolve those PR decisions.
 For a lockfile conflict, regenerate the candidate's lock from its resolved
-`pyproject.toml` with `uv lock --project candidate/tree/vendor/skyrl`, then
-stage it. The script stores generated lock deltas in Git's compressed binary
+`pyproject.toml` with
+`uv lock --project /path/to/next-refresh/candidate/tree/vendor/skyrl`, then run
+`git -C /path/to/next-refresh/candidate/tree add vendor/skyrl/uv.lock`.
+The script stores generated lock deltas in Git's compressed binary
 patch format; the installed `vendor/skyrl/uv.lock` remains ordinary text.
 
 For Marin PRs that still edit `config/external/MarinSkyRL`, rebase onto this
@@ -345,6 +348,9 @@ saves a distributed checkpoint, exports HF weights, then submits a fresh
 training job against that checkpoint root with a four-step limit. Its final
 artifact evaluates the resumed HF policy on the existing 128-row GSM8K smoke
 preset in Marin's separate serving environment.
+
+Run from the Marin repository root; use `cd "$marin_root"` if the shell is
+still in the standalone Math500 bundle.
 
 ```bash
 uv run python -m experiments.post_training.skyrl_port_smoke \

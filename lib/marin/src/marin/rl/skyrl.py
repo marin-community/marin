@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin ArtifactStep adapter for the external MarinSkyRL trainer."""
+"""Marin ArtifactStep adapter for the vendored SkyRL executable."""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
 
 @dataclass(frozen=True)
 class SkyRLRuntime:
-    """Content-addressed SkyRL source and independently locked dependency profile."""
+    """Digest of the current SkyRL source, assets, and independent lock."""
 
     source_digest: str = field(init=False, default_factory=skyrl_runtime_digest)
 
@@ -207,7 +207,7 @@ class SkyRLTopology:
         if plan.reference_num_nodes is not None:
             planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
         allocated_gpus = self.num_nodes * self.gpus_per_node
-        # MarinSkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
+        # SkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
         if planned_gpus > allocated_gpus:
             placement = "colocated policy/rollout" if plan.colocate_all else "policy + rollout"
@@ -624,7 +624,7 @@ class SkyRLRunConfig:
 
 
 class SkyRLRun(Artifact):
-    """Terminal result from a MarinSkyRL run."""
+    """Terminal result from a SkyRL run."""
 
     hf_model_uri: str | None
     global_step: int | None
@@ -860,7 +860,7 @@ def skyrl_step(
     *,
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
-    """Build a versioned MarinSkyRL training artifact."""
+    """Build a versioned SkyRL training artifact."""
     step_name = spec.name
     deps = tuple(
         dict.fromkeys(
