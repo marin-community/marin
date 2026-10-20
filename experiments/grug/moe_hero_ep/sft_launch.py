@@ -412,7 +412,12 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                 ).compile()
                 compile_seconds = time.perf_counter() - compile_start
                 report = compiled_gradient_report(compiled_gradient, frozen, config.sft)
-                report["optimizer_frozen_parameter_inputs"] = 0
+                report.update(
+                    optimizer_frozen_parameter_inputs=0,
+                    execution_id=trainer.id,
+                    checkpoint_metadata_digest=config.reference.metadata_digest,
+                    measurement_identity_digest=measurement_identity,
+                )
                 if jax.process_index() == 0:
                     (telemetry_path / "compiled-gradient-report.json").write_text(json.dumps(report, indent=2) + "\n")
                 if not report["avoids_full_base_gradients"]:

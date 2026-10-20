@@ -421,6 +421,9 @@ def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | N
     text = compiled.as_text()
     mesh = get_abstract_mesh()
     shapes: dict[tuple[int, ...], set[str]] = {}
+    declared_shapes = {
+        tuple(int(dim) for dim in match.split(",")) for match in re.findall(r"(?:bf16|f16|f32|f64)\[([0-9,]+)\]", text)
+    }
 
     def add(path, shape):
         # Grouped GEMM output contract fixes expert/batch as the leading axis;
@@ -445,7 +448,12 @@ def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | N
         )
     for path, value in jax.tree_util.tree_flatten_with_path(model.stacked_blocks.stacked)[0]:
         name = jax.tree_util.keystr(path)
-        if not any(part in name for part in (".w_", ".expert_mlp.", ".router")) or "lora_" in name or value.ndim < 3:
+        short_conv = ".sconv_" in name and name.endswith(".weight")
+        if (
+            not (short_conv or any(part in name for part in (".w_", ".expert_mlp.", ".router")))
+            or "lora_" in name
+            or value.ndim < 3
+        ):
             continue
         global_shape = tuple(value.shape[1:])
         spec = tuple(_partition_spec_of(value) or ()) + (None,) * value.ndim
@@ -454,6 +462,13 @@ def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | N
             axes = () if axis is None else (axis,) if isinstance(axis, str) else axis
             local_shape.append(dimension // math.prod(mesh.shape[a] for a in axes))
         candidate_shapes = {global_shape, tuple(local_shape[1:])}
+        if short_conv:
+            # The joint short-conv kernel declares per-sequence-chunk dW
+            # partials [P,W,C], even if only dX is consumed. Channel gathering
+            # also makes its C larger than the stored FSDP shard.
+            candidate_shapes.update(
+                shape for shape in declared_shapes if len(shape) == 3 and shape[1:] in candidate_shapes
+            )
         if ".expert_mlp." in name:
             # Context-gathered banks and expert chunks/waves can expose smaller
             # Wgrad outputs than the stored global bank.
@@ -476,14 +491,7 @@ def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | N
         for candidate in candidate_shapes:
             add(name, candidate)
 
-    audit = audit_gradient_operations(
-        text,
-        shapes,
-        weight_parameter_prefixes=(
-            "frozen.",
-            "m.",
-        ),
-    )
+    audit = audit_gradient_operations(text, shapes)
     memory = compiled.memory_analysis()
     root = Path(__file__).resolve().parents[3]
     sources = (
@@ -495,10 +503,13 @@ def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | N
         "lib/levanter/src/levanter/grug/_moe/topk.py",
         "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
         "lib/levanter/src/levanter/grug/_moe/quack_moe_cute.py",
+        "lib/levanter/src/levanter/kernels/triton/short_conv/api.py",
+        "lib/levanter/src/levanter/kernels/triton/short_conv/triton_gpu.py",
+        "lib/levanter/src/levanter/kernels/triton/short_conv/reference.py",
     )
     source_digests = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources}
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "backend": jax.default_backend(),
         "hlo_digest": digest(text),
         "model_digest": digest(draccus.encode(model.config)),
@@ -507,7 +518,7 @@ def compiled_gradient_report(compiled, model: Transformer, config: SftConfig | N
         "inspected_projection_shapes": {str(shape): sorted(paths) for shape, paths in sorted(shapes.items())},
         "avoids_full_base_gradients": audit.avoids_full_base_gradients,
         "scope": (
-            "declared optimized dot/multiply/scatter/custom-call results and tracked integer casts; "
+            "declared optimized dot/multiply/scatter/custom-call and convert/bitcast-convert results; "
             "opaque kernel internals and other operations require source audit"
         ),
         "compiled_output_bytes": memory.output_size_in_bytes,

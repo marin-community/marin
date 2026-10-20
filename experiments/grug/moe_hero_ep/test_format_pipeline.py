@@ -48,7 +48,7 @@ from experiments.grug.moe_hero_ep.sft_launch import (
     save_pilot_inspection,
     sft_measurement_identity,
 )
-from experiments.grug.moe_hero_ep.test_format_eval import smoke_optimizer_report, smoke_record
+from experiments.grug.moe_hero_ep.test_format_eval import smoke_compiled_report, smoke_optimizer_report, smoke_record
 
 pytest_plugins = ["experiments.grug.moe_hero_ep.test_format_handoff"]
 
@@ -299,6 +299,16 @@ def _pilot_evidence(recipe, evidence, root):
             }
         )
     )
+    compiled_report = root / "smoke-compiled-gradient-report.json"
+    compiled_report.write_text(
+        json.dumps(
+            {
+                **smoke_compiled_report(),
+                "checkpoint_metadata_digest": recipe.reference.metadata_digest,
+                "measurement_identity_digest": identity,
+            }
+        )
+    )
     smoke = smoke_record().model_copy(
         update={
             "checkpoint_metadata_digest": recipe.reference.metadata_digest,
@@ -308,6 +318,8 @@ def _pilot_evidence(recipe, evidence, root):
             "terminal_checkpoint_metadata_digest": digest(metadata),
             "compact_optimizer_report": str(optimizer_report),
             "compact_optimizer_report_sha256": hashlib.sha256(optimizer_report.read_bytes()).hexdigest(),
+            "compiled_gradient_report": str(compiled_report),
+            "compiled_gradient_report_sha256": hashlib.sha256(compiled_report.read_bytes()).hexdigest(),
             "global_batch_executed_tokens": recipe.batch_size * recipe.model.max_seq_len,
             "updates": tuple(
                 update.model_copy(

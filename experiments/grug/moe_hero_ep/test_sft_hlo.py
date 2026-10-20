@@ -14,6 +14,7 @@ from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.sft import (
     SftConfig,
     compact_optimizer_report,
+    compiled_gradient_report,
     initialize_sft,
     make_sft_optimizer_step,
     sft_optimizers,
@@ -24,8 +25,9 @@ from experiments.grug.moe_hero_ep.sft_hlo import audit_gradient_operations
 @pytest.mark.parametrize("opcode", ["fusion", "async"])
 def test_hlo_async_computation_cannot_hide_weight_gradient_behind_entry_dot(opcode):
     # The witness used to make the audit pass although the callee's Wgrad was
-    # never visited. Unsupported call semantics must block qualification even
-    # when another contraction has an unambiguously harmless result shape.
+    # never visited. Static inventory must find it independently of execution
+    # semantics, even when the entry contains an unrelated harmless dot.
+    fusion_kind = ", kind=kLoop" if opcode == "fusion" else ""
     hlo = f"""
 HloModule hidden_gradient
 %hidden_gradient (x: f32[4,2], dy: f32[4,3]) -> f32[2,3] {{
@@ -37,23 +39,90 @@ ENTRY %main (x: f32[4,2], dy: f32[4,3], a: f32[1,1]) -> (f32[2,3], f32[1,1]) {{
   %x = f32[4,2] parameter(0)
   %dy = f32[4,3] parameter(1)
   %a = f32[1,1] parameter(2)
-  %pending = ((f32[4,2], f32[4,3]), f32[2,3], u32[]) {opcode}-start(%x, %dy), calls=%hidden_gradient
+  %pending = ((f32[4,2], f32[4,3]), f32[2,3], u32[]) {opcode}-start(%x, %dy){fusion_kind}, calls=%hidden_gradient
   %hidden = f32[2,3] {opcode}-done(%pending)
   %witness = f32[1,1] dot(%a, %a), lhs_contracting_dims={{1}}, rhs_contracting_dims={{0}}
   ROOT %result = (f32[2,3], f32[1,1]) tuple(%hidden, %witness)
 }}
 """
     report = audit_gradient_operations(hlo, {(2, 3): {"frozen.router"}})
-    assert report.inspected_operations == 1
-    assert not report.parsed_weight_operand_dataflow
+    assert report.inspected_operations == 2
+    assert report.parsed_instruction_inventory
     assert not report.avoids_full_base_gradients
-    # The same witness qualifies when there is no unvisited computation.
-    visible = "\n".join(line for line in hlo.splitlines() if "%pending = " not in line)
-    visible = visible.replace(f"%hidden = f32[2,3] {opcode}-done(%pending)", "%hidden = f32[2,3] constant(0)")
-    assert audit_gradient_operations(visible, {(2, 3): {"frozen.router"}}).avoids_full_base_gradients
+    assert len(report.unverified_weight_shaped_results) == 1
+    # The same async control flow qualifies when the callee has a safe shape.
+    safe = audit_gradient_operations(hlo, {(8, 40): {"frozen.other_projection"}})
+    assert safe.parsed_instruction_inventory and safe.avoids_full_base_gradients
 
 
-def test_hlo_weight_dataflow_keeps_ambiguous_parameter_products_unverified():
+def test_hlo_reducer_body_cannot_hide_full_weight_gradient():
+    # The scalar reducer constructs a one-token matrix Wgrad and sums it. Its
+    # intermediate matrix allocation still matters even though its result is
+    # scalar; inspecting only the entry or reducer output would miss it.
+    hlo = """
+HloModule reducer_gradient
+%sum (a: f32[], b: f32[]) -> f32[] {
+  %a = f32[] parameter(0)
+  %b = f32[] parameter(1)
+  ROOT %sum = f32[] add(%a, %b)
+}
+%reducer (x: f32[], dy: f32[]) -> f32[] {
+  %x = f32[] parameter(0)
+  %dy = f32[] parameter(1)
+  %left = f32[2] broadcast(%x), dimensions={}
+  %right = f32[3] broadcast(%dy), dimensions={}
+  %gradient = f32[2,3] dot(%left, %right), lhs_contracting_dims={}, rhs_contracting_dims={}
+  %zero = f32[] constant(0)
+  ROOT %summed = f32[] reduce(%gradient, %zero), dimensions={0,1}, to_apply=%sum
+}
+ENTRY %main (x: f32[4], q: f32[1,1]) -> (f32[], f32[1,1]) {
+  %x = f32[4] parameter(0)
+  %q = f32[1,1] parameter(1)
+  %zero = f32[] constant(0)
+  %hidden = f32[] reduce(%x, %zero), dimensions={0}, to_apply=%reducer
+  %witness = f32[1,1] dot(%q, %q), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  ROOT %result = (f32[], f32[1,1]) tuple(%hidden, %witness)
+}
+"""
+    report = audit_gradient_operations(hlo, {(2, 3): {"frozen.projection"}})
+    assert report.parsed_instruction_inventory
+    assert report.inspected_operations == 2
+    assert len(report.unverified_weight_shaped_results) == 1
+    assert not report.avoids_full_base_gradients
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "%gradient = f32[2,3] unrecognized-op(%x, %dy)",
+        "%gradient = f32[2,3] dot(%missing, %dy), lhs_contracting_dims={0}, rhs_contracting_dims={0}",
+        "%gradient = f32[2,3] fusion(%x, %dy), calls=%missing",
+        "%gradient = f32[2,3] fusion(%x, %dy)",
+        "%gradient = f32[2,3] dot(%x, %dy), lhs_contracting_dims={0}, rhs_contracting_dims={0",
+        "%gradient = f32[2,3] dot(%x, %dy) hidden syntax",
+        "%gradient = this instruction cannot be parsed",
+    ],
+)
+def test_hlo_unparsed_instruction_cannot_hide_behind_valid_witness(changed):
+    hlo = """
+HloModule malformed_gradient
+ENTRY %main (x: f32[4,2], dy: f32[4,3], q: f32[1,1]) -> (f32[2,3], f32[1,1]) {
+  %x = f32[4,2] parameter(0)
+  %dy = f32[4,3] parameter(1)
+  %q = f32[1,1] parameter(2)
+  %gradient = f32[2,3] dot(%x, %dy), lhs_contracting_dims={0}, rhs_contracting_dims={0}
+  %witness = f32[1,1] dot(%q, %q), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  ROOT %result = (f32[2,3], f32[1,1]) tuple(%gradient, %witness)
+}
+"""
+    target = "%gradient = f32[2,3] dot(%x, %dy), lhs_contracting_dims={0}, rhs_contracting_dims={0}"
+    report = audit_gradient_operations(hlo.replace(target, changed), {(8, 40): {"frozen.other_projection"}})
+    assert not report.parsed_instruction_inventory
+    assert report.instruction_inventory_errors
+    assert not report.avoids_full_base_gradients
+
+
+def test_hlo_inventory_keeps_ambiguous_parameter_products_unverified():
     # Both contractions return a shape matching a frozen projection. There is no
     # autodiff metadata: provenance must cross the while carry and fusion inputs.
     hlo = """
@@ -87,8 +156,8 @@ ENTRY %main (frozen_w: f32[2,40], x: f32[8,2], left: f32[8,3], right: f32[3,40])
   ROOT %result = (f32[8,40], f32[8,40]) tuple(%activation, %gradient)
 }
 """
-    report = audit_gradient_operations(hlo, {(8, 40): {"attention.k"}}, weight_parameter_prefixes=("frozen_",))
-    assert report.parsed_weight_operand_dataflow
+    report = audit_gradient_operations(hlo, {(8, 40): {"attention.k"}})
+    assert report.parsed_instruction_inventory
     assert len(report.unverified_weight_shaped_results) == 2
     assert not report.avoids_full_base_gradients
     forward_only = hlo.replace(
@@ -97,9 +166,7 @@ ENTRY %main (frozen_w: f32[2,40], x: f32[8,2], left: f32[8,3], right: f32[3,40])
     )
     # A known weight operand alone cannot prove that this is an activation:
     # reassociated Wgrad can also contain another projection's weight.
-    assert not audit_gradient_operations(
-        forward_only, {(8, 40): {"attention.k"}}, weight_parameter_prefixes=("frozen_",)
-    ).avoids_full_base_gradients
+    assert not audit_gradient_operations(forward_only, {(8, 40): {"attention.k"}}).avoids_full_base_gradients
 
 
 def test_hlo_generic_grouped_launcher_tuple_weight_output_is_rejected():
@@ -114,7 +181,7 @@ ENTRY %main (frozen_w: f32[1,8,40], x: f32[3,8], dy: f32[3,40]) -> (f32[3,8], f3
   ROOT %grouped = (f32[3,8], f32[1,8,40]) custom-call(%frozen_w, %x, %dy), custom_call_target="launcher"
 }
 """
-    report = audit_gradient_operations(hlo, {(1, 8, 40): {"experts.gate"}}, weight_parameter_prefixes=("frozen_",))
+    report = audit_gradient_operations(hlo, {(1, 8, 40): {"experts.gate"}})
     assert not report.avoids_full_base_gradients
     assert report.unverified_weight_shaped_results[0]["matching_frozen_paths"] == ["experts.gate"]
     opaque = hlo.replace("(f32[3,8], f32[1,8,40]) custom-call", "token[] custom-call")
@@ -163,7 +230,7 @@ ENTRY %main (x: f8e4m3fn[4,2], dy: f8e4m3fn[4,3]) -> f8e4m3fn[2,3] {
 """
     report = audit_gradient_operations(hlo, {(2, 3): {"frozen.router"}})
     assert report.inspected_operations == 1
-    assert not report.parsed_weight_operand_dataflow
+    assert not report.parsed_instruction_inventory
     assert not report.avoids_full_base_gradients
 
 
@@ -180,7 +247,7 @@ ENTRY %main (left: f32[8,3], parameter: f32[3,40]) -> f32[8,40] {{
   ROOT %gradient = f32[8,40] dot(%left, %parameter), lhs_contracting_dims={{1}}, rhs_contracting_dims={{0}}
 }}
 """
-    report = audit_gradient_operations(hlo, {(8, 40): {"frozen.first_layer"}}, weight_parameter_prefixes=(prefix,))
+    report = audit_gradient_operations(hlo, {(8, 40): {"frozen.first_layer"}})
     assert not report.avoids_full_base_gradients
     assert len(report.unverified_weight_shaped_results) == 1
 
@@ -294,6 +361,64 @@ def test_hlo_forged_or_mutated_transport_stays_unverified(changes):
     assert not report.avoids_full_base_gradients
     assert not report.certified_transport_calls
     assert report.unverified_weight_shaped_results
+
+
+@dataclasses.dataclass(frozen=True)
+class CompiledExecutableFixture:
+    """External compiled-executable boundary with literal HLO and no execution."""
+
+    text: str
+    output_size_in_bytes: int = 0
+    temp_size_in_bytes: int = 0
+
+    def as_text(self):
+        return self.text
+
+    def memory_analysis(self):
+        return self
+
+
+def test_compiled_report_inventories_unused_short_conv_weight_gradient_partial():
+    config = GrugModelConfig(
+        vocab_size=32,
+        hidden_dim=8,
+        intermediate_dim=4,
+        shared_expert_intermediate_dim=4,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=4,
+        max_seq_len=8,
+        attention_implementation="reference",
+        sconv=True,
+        sconv_kernel=4,
+    )
+    # Retained GPU .111 ABI, scaled to C=8: the joint bwd call declares dX and
+    # FP32 [P,W,C] dW partials. Only dX is consumed, but dW still exists in the
+    # custom call's declared buffers. The real model must supply its frozen
+    # short-conv shape to the report; no hand-authored forbidden catalog is used.
+    text = """
+HloModule short_conv_backward
+ENTRY %main (x: bf16[1,8,8], ids: s32[1,8], dy: bf16[1,8,8], w: bf16[4,8]) -> bf16[1,8,8] {
+  %x = bf16[1,8,8] parameter(0)
+  %ids = s32[1,8] parameter(1)
+  %dy = bf16[1,8,8] parameter(2)
+  %w = bf16[4,8] parameter(3)
+  %joint = (bf16[1,8,8], f32[1,4,8]) custom-call(%x, %ids, %dy, %w), custom_call_target="triton_kernel_call"
+  ROOT %dx = bf16[1,8,8] get-tuple-element(%joint), index=0
+}
+"""
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        model = Transformer.init(config, key=jax.random.key(0))
+        report = compiled_gradient_report(CompiledExecutableFixture(text), model)
+    assert report["parsed_instruction_inventory"]
+    assert not report["avoids_full_base_gradients"]
+    assert any(
+        item["shape"] == [1, 4, 8] and any(".sconv_mlp.weight" in path for path in item["matching_frozen_paths"])
+        for item in report["unverified_weight_shaped_results"]
+    )
 
 
 def test_compact_adam_tree_audit_accepts_shape_collision_and_rejects_frozen_parameter():

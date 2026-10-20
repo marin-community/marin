@@ -1,17 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Conservative weight-operand provenance through optimized HLO control flow."""
+"""Conservative declared-result inventory across optimized HLO computations."""
 
 import codecs
 import hashlib
 import re
 import zlib
 from dataclasses import dataclass
-
-# Array roles are True (a parameter/layout transform), False (computed activation)
-# or "constant". Tuples preserve roles for while carries and get-tuple-element.
-type Role = bool | str | tuple[Role, ...]
 
 
 @dataclass(frozen=True)
@@ -36,40 +32,213 @@ class ArrayResult:
 def _declared_results(operation: Operation) -> tuple[ArrayResult, ...] | None:
     """Parse the complete declared result, including nested tuples and integer arrays."""
     result = operation.line.split(" = ", 1)[1].split(f" {operation.opcode}(", 1)[0]
-    pattern = r"([a-z][a-z0-9]*)\[([0-9,]*)\](?:\{[^}]*\})?"
-    matches = list(re.finditer(pattern, result))
-    remainder = re.sub(pattern, "", result)
-    if not matches or re.sub(r"[(),\s]", "", remainder):
-        return None
+    result = re.sub(r"/\*index=\d+\*/", "", result)
+    arrays = []
+    position = 0
     types = {"pred", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "bf16", "f16", "f32", "f64"}
-    if any(match[1] not in types for match in matches):
+
+    def shape() -> bool:
+        nonlocal position
+        while position < len(result) and result[position].isspace():
+            position += 1
+        if position < len(result) and result[position] == "(":
+            position += 1
+            if result[position : position + 1] == ")":
+                position += 1
+                return True
+            while shape():
+                while position < len(result) and result[position].isspace():
+                    position += 1
+                if result[position : position + 1] == ")":
+                    position += 1
+                    return True
+                if result[position : position + 1] != ",":
+                    return False
+                position += 1
+            return False
+        match = re.match(r"([a-z][a-z0-9]*)\[((?:\d+(?:,\d+)*)?)\](?:\{[^{}]*\})?", result[position:])
+        if match is None or match[1] not in types:
+            return False
+        arrays.append(ArrayResult(match[1], tuple(int(x) for x in match[2].split(",") if x)))
+        position += match.end()
+        return True
+
+    return tuple(arrays) if shape() and not result[position:].strip() else None
+
+
+# This inventory recognizes syntax, not execution semantics. New opcodes must
+# be reviewed before they can contribute to a complete declared-result audit.
+_HLO_OPCODES = frozenset(
+    """
+abs add all-gather all-gather-start all-gather-done all-reduce all-reduce-start
+all-reduce-done all-to-all and async-start async-update async-done bitcast
+bitcast-convert broadcast call ceil clamp collective-permute compare concatenate
+conditional constant convert copy cosine custom-call divide dot dynamic-slice
+dynamic-update-slice exponential floor fusion fusion-start fusion-done gather
+get-tuple-element iota is-finite log log-plus-one map maximum minimum multiply
+negate not optimization-barrier or pad parameter partition-id power
+ragged-all-to-all reduce reduce-scatter reduce-window replica-id reshape reverse
+round-nearest-afz round-nearest-even rsqrt scatter select shift-left
+shift-right-arithmetic shift-right-logical sign sine slice sort sqrt subtract
+tanh transpose tuple while xor
+""".split()
+)
+
+
+def _unquoted(text: str) -> str:
+    return re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)
+
+
+def _balanced(text: str) -> bool:
+    stack = []
+    pairs = {")": "(", "]": "[", "}": "{"}
+    for char in _unquoted(text):
+        if char in "([{":
+            stack.append(char)
+        elif char in pairs and (not stack or stack.pop() != pairs[char]):
+            return False
+    return not stack and re.fullmatch(r'(?:[^"\\]|"")*', _unquoted(text)) is not None
+
+
+def _attributes(text: str) -> dict[str, str] | None:
+    """Split top-level HLO attributes without interpreting nested metadata/IR."""
+    text = _unquoted(text)
+    fields = {}
+    depth = 0
+    start = 0
+    parts = []
+    for index, char in enumerate(text):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:index])
+            start = index + 1
+    parts.append(text[start:])
+    if parts[0].strip():
         return None
-    return tuple(ArrayResult(match[1], tuple(int(x) for x in match[2].split(",") if x)) for match in matches)
+    for part in parts[1:]:
+        field = re.fullmatch(r"\s*([\w-]+)=(.+)", part)
+        if field is None or field[1] in fields:
+            return None
+        fields[field[1]] = field[2].strip()
+    return fields
 
 
-def _parse_functions(text: str) -> tuple[dict[str, list[Operation]], str | None]:
+def _parse_functions(text: str) -> tuple[dict[str, list[Operation]], list[str]]:
+    """Inventory every instruction, rejecting unaccounted lines and references."""
     functions: dict[str, list[Operation]] = {}
-    entry = None
+    errors = []
     current = None
-    for line in text.splitlines():
-        header = re.match(r"^(ENTRY )?%([^ (]+) .*\{$", line)
+    entry = None
+    module = False
+    debug_section = None
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("HloModule ") and not module and not functions:
+            module = True
+            continue
+        header = re.fullmatch(r"(ENTRY )?%([\w.-]+) (\(.*\)) -> (.+) \{", line)
         if header:
-            current = header.group(2)
+            if current is not None or header[2] in functions or (header[1] and entry is not None):
+                errors.append(f"line {number}: duplicate or nested computation")
+            current = header[2]
             functions[current] = []
-            if header.group(1):
+            if header[1]:
                 entry = current
+            arguments = re.sub(r"[\w.-]+:\s*", "", header[3])
+            for signature in (arguments, header[4]):
+                declared = Operation("signature", "parameter", (), f"%signature = {signature} parameter(0)", current)
+                if _declared_results(declared) is None or not _balanced(signature):
+                    errors.append(f"line {number}: unsupported computation signature")
+            debug_section = None
             continue
-        if current is None or " = " not in line:
+        if current is None:
+            if not functions and line in ("FileNames", "FunctionNames", "FileLocations", "StackFrames"):
+                debug_section = line
+                continue
+            debug_pattern = (
+                r'\d+ "(?:[^"\\]|\\.)*"'
+                if debug_section in ("FileNames", "FunctionNames")
+                else r"\d+ \{(?:[a-z_]+=\d+ ?)+\}"
+            )
+            if debug_section is not None and re.fullmatch(debug_pattern, line):
+                continue
+            errors.append(f"line {number}: unparsed module syntax")
             continue
-        instruction = re.match(r"\s*(?:ROOT )?%([^ ]+) = (.*)", line)
+        if line == "}":
+            if not functions[current] or not functions[current][-1].line.startswith("ROOT "):
+                errors.append(f"line {number}: missing terminal root")
+            current = None
+            continue
+        instruction = re.fullmatch(
+            r"(?:ROOT )?%([\w.-]+) = (.+?) ([a-z][a-z0-9-]*)\(([^)]*)\)(.*)",
+            re.sub(r"/\*index=\d+\*/", "", line),
+        )
         if instruction is None:
+            errors.append(f"line {number}: unparsed instruction")
             continue
-        operation = re.search(r"\b([a-z][a-z0-9-]*)\(([^)]*)\)", instruction.group(2))
-        if operation is None:
-            continue
-        operands = tuple(re.findall(r"%([a-zA-Z_][\w.-]*)", operation.group(2)))
-        functions[current].append(Operation(instruction.group(1), operation.group(1), operands, line.strip(), current))
-    return functions, entry
+        name, _, opcode, arguments, attributes = instruction.groups()
+        operands = tuple(re.findall(r"%([\w.-]+)", arguments))
+        operation = Operation(name, opcode, operands, line, current)
+        previous = {item.name for item in functions[current]}
+        if name in previous or any(item.line.startswith("ROOT ") for item in functions[current]):
+            errors.append(f"line {number}: duplicate instruction or nonterminal root")
+        if opcode not in _HLO_OPCODES or _declared_results(operation) is None or not _balanced(line):
+            errors.append(f"line {number}: unsupported opcode, result type or delimiters")
+        if (opcode == "parameter" and not arguments.isdigit()) or (
+            opcode not in ("parameter", "constant")
+            and re.fullmatch(r"(?:%[\w.-]+(?:,\s*%[\w.-]+)*)?", arguments) is None
+        ):
+            errors.append(f"line {number}: unsupported operand syntax")
+        if any(operand not in previous for operand in operands):
+            errors.append(f"line {number}: missing local operand")
+        if _attributes(attributes) is None:
+            errors.append(f"line {number}: unsupported attribute syntax")
+        functions[current].append(operation)
+    if not module or entry is None or current is not None:
+        errors.append("incomplete module or entry computation")
+    for operations in functions.values():
+        for operation in operations:
+            raw_attributes = operation.line.split(f" {operation.opcode}(", 1)[1].split(")", 1)[1]
+            attributes = _attributes(raw_attributes)
+            if attributes is None:
+                continue
+            controls = attributes.pop("control-predecessors", "")
+            if controls:
+                if re.fullmatch(r"\{%[\w.-]+(?:,\s*%[\w.-]+)*\}", controls) is None or any(
+                    name not in {item.name for item in operations} for name in re.findall(r"%([\w.-]+)", controls)
+                ):
+                    errors.append(f"{operation.function}/{operation.name}: missing control predecessor")
+            references = re.findall(r"%([\w.-]+)", " ".join(attributes.values()))
+            if any(name not in functions for name in references):
+                errors.append(f"{operation.function}/{operation.name}: missing computation reference")
+            required = {
+                "fusion": ("calls",),
+                "fusion-start": ("calls",),
+                "call": ("to_apply",),
+                "async-start": ("calls",),
+                "while": ("condition", "body"),
+                "reduce": ("to_apply",),
+                "reduce-window": ("to_apply",),
+                "map": ("to_apply",),
+                "sort": ("to_apply",),
+                "scatter": ("to_apply",),
+                "all-reduce": ("to_apply",),
+                "all-reduce-start": ("to_apply",),
+                "reduce-scatter": ("to_apply",),
+            }.get(operation.opcode, ())
+            if any(re.fullmatch(r"%[\w.-]+", attributes.get(key, "")) is None for key in required):
+                errors.append(f"{operation.function}/{operation.name}: missing computation attribute")
+            if operation.opcode == "conditional" and not (
+                re.fullmatch(r"\{%[\w.-]+(?:,\s*%[\w.-]+)*\}", attributes.get("branch_computations", ""))
+                or all(re.fullmatch(r"%[\w.-]+", attributes.get(f"{key}_computation", "")) for key in ("true", "false"))
+            ):
+                errors.append(f"{operation.function}/{operation.name}: missing conditional branches")
+    return functions, errors
 
 
 def _protobuf_fields(payload: bytes) -> dict[int, list[int | bytes]]:
@@ -214,175 +383,12 @@ def _no_write_transport(operation: Operation, functions: dict[str, list[Operatio
     }
 
 
-def _intersect(left: Role, right: Role) -> Role:
-    if isinstance(left, tuple) and isinstance(right, tuple) and len(left) == len(right):
-        return tuple(_intersect(a, b) for a, b in zip(left, right, strict=True))
-    return left if left == right else False
-
-
-def weight_operand_operations(
-    text: str, weight_parameter_prefixes: tuple[str, ...]
-) -> tuple[list[tuple[Operation, tuple[Role, ...]]], bool]:
-    """Evaluate parameter/layout provenance, preserving per-call and loop contexts.
-
-    Computed results lose parameter identity even when they depend on weights.
-    A retained parameter operand is diagnostic only: reassociated Wgrad can
-    contain another projection's weight. Unknown constructs remain unverified.
-    """
-    functions, entry = _parse_functions(text)
-    if entry is None:
-        return [], False
-    observations: list[tuple[Operation, tuple[Role, ...]]] = []
-    parsed = True
-    unary_layout = {
-        "bitcast",
-        "bitcast-convert",
-        "reshape",
-        "transpose",
-        "slice",
-        "dynamic-slice",
-        "convert",
-        "copy",
-        "broadcast",
-        "reverse",
-        "all-gather",
-        "all-to-all",
-        "collective-permute",
-        "optimization-barrier",
-    }
-    binary_layout = {"concatenate", "multiply", "divide", "add", "subtract", "pad"}
-
-    def evaluate(function: str, parameters: tuple[Role, ...], depth: int = 0) -> Role:
-        nonlocal parsed
-        if function not in functions or depth > 20:
-            parsed = False
-            return False
-        values: dict[str, Role] = {}
-        definitions = {operation.name: operation for operation in functions[function]}
-        root: Role = False
-        for operation in functions[function]:
-            inputs = tuple(values.get(name, False) for name in operation.operands)
-            opcode = operation.opcode
-            # Only the synchronous call/control-flow forms below propagate
-            # callee contexts. An unvisited reducer, comparator or async body
-            # can contain Wgrad even when an unrelated entry dot was inspected.
-            attributes = operation.line.split(f" {opcode}(", 1)[1].split(")", 1)[1]
-            attributes = re.sub(r'"(?:[^"\\]|\\.)*"', '""', attributes)
-            if ("%" in attributes and opcode not in ("fusion", "call", "conditional", "while")) or opcode.endswith(
-                ("-start", "-update", "-done")
-            ):
-                parsed = False
-            role: Role = False
-            if opcode == "parameter":
-                number = int(re.search(r"parameter\((\d+)\)", operation.line).group(1))
-                if function == entry:
-                    # Certification comes from the compiled training entry's
-                    # explicit parameter boundary, never from floating dtype.
-                    # Unknown floating inputs may be activation cotangents.
-                    metadata = re.search(r'op_name="([^" ]+)"', operation.line)
-                    path = metadata.group(1) if metadata else operation.name
-                    role = (
-                        any(
-                            path.startswith(prefix) or operation.name.startswith(prefix.replace(".", "_"))
-                            for prefix in weight_parameter_prefixes
-                        )
-                        and "lora_" not in path
-                        and not path.startswith("params.")
-                    )
-                elif number < len(parameters):
-                    role = parameters[number]
-            elif opcode in ("constant", "iota"):
-                role = "constant"
-            elif opcode == "compare" and inputs and all(value == "constant" for value in inputs):
-                # Fixed token-ID/vocabulary-column equality maps are the sparse
-                # output-delta selector, not learned projection weights.
-                role = "selector"
-            elif opcode == "tuple":
-                role = inputs
-            elif opcode == "get-tuple-element":
-                index = int(re.search(r"index=(\d+)", operation.line).group(1))
-                if inputs and isinstance(inputs[0], tuple) and index < len(inputs[0]):
-                    role = inputs[0][index]
-            elif opcode in unary_layout and inputs:
-                role = inputs[0]
-                source = _declared_results(definitions[operation.operands[0]])
-                result = _declared_results(operation)
-                if (
-                    opcode in ("convert", "bitcast-convert")
-                    and role is False
-                    and source is not None
-                    and all(not item.floating for item in source)
-                    and result is not None
-                    and any(item.floating for item in result)
-                ):
-                    role = "integer-cast"
-            elif opcode in binary_layout and inputs:
-                if all(value == "constant" for value in inputs):
-                    role = "constant"
-                elif all(value is True or value == "constant" for value in inputs) and True in inputs:
-                    role = True
-                elif "integer-cast" in inputs:
-                    role = "integer-cast"
-            elif opcode == "select" and len(inputs) == 3:
-                role = _intersect(inputs[1], inputs[2])
-            elif opcode in ("fusion", "call"):
-                callee = re.search(r"(?:calls|to_apply)=%([^, }]+)", operation.line)
-                if callee:
-                    role = evaluate(callee.group(1), inputs, depth + 1)
-                else:
-                    parsed = False
-            elif opcode == "conditional":
-                branches = re.search(r"branch_computations=\{([^}]+)\}", operation.line)
-                names = (
-                    re.findall(r"%([^, }]+)", branches.group(1))
-                    if branches
-                    else re.findall(r"(?:true|false)_computation=%([^, }]+)", operation.line)
-                )
-                if len(names) != len(inputs) - 1:
-                    parsed = False
-                else:
-                    results = [
-                        evaluate(name, (value,), depth + 1) for name, value in zip(names, inputs[1:], strict=True)
-                    ]
-                    role = results[0]
-                    for result in results[1:]:
-                        role = _intersect(role, result)
-            elif opcode == "while" and inputs:
-                body = re.search(r"body=%([^, }]+)", operation.line)
-                if body:
-                    role = inputs[0]
-                    condition = re.search(r"condition=%([^, }]+)", operation.line)
-                    if condition:
-                        evaluate(condition.group(1), (role,), depth + 1)
-                    else:
-                        parsed = False
-                    # Frozen parameters remain unchanged in layer/vocab scans.
-                    # Intersect with the body result so modified carries lose certification.
-                    for _ in range(3):
-                        after = evaluate(body.group(1), (role,), depth + 1)
-                        stable = _intersect(role, after)
-                        if stable == role:
-                            break
-                        role = stable
-                    else:
-                        parsed = False
-                else:
-                    parsed = False
-            # A one-token Wgrad can lower to broadcast/multiply with no dot.
-            if opcode in ("dot", "multiply", "custom-call", "scatter") or role == "integer-cast":
-                observations.append((operation, inputs))
-            values[operation.name] = role
-            if operation.line.startswith("ROOT "):
-                root = role
-        return root
-
-    evaluate(entry, ())
-    return list(dict.fromkeys(observations)), parsed
-
-
 @dataclass(frozen=True)
 class GradientAudit:
-    parsed_weight_operand_dataflow: bool
+    parsed_instruction_inventory: bool
+    inventoried_computations: int
+    inventoried_instructions: int
+    instruction_inventory_errors: list[str]
     inspected_operations: int
     unverified_weight_shaped_results: list[dict]
     unknown_custom_call_outputs: list[str]
@@ -392,7 +398,7 @@ class GradientAudit:
     @property
     def avoids_full_base_gradients(self) -> bool:
         return (
-            self.parsed_weight_operand_dataflow
+            self.parsed_instruction_inventory
             and self.inspected_operations > 0
             and not self.unverified_weight_shaped_results
             and not self.unknown_custom_call_outputs
@@ -402,25 +408,30 @@ class GradientAudit:
 def audit_gradient_operations(
     text: str,
     shapes: dict[tuple[int, ...], set[str]],
-    *,
-    weight_parameter_prefixes: tuple[str, ...] = (),
 ) -> GradientAudit:
-    """Check declared dot/multiply/scatter/custom-call results and tracked casts.
+    """Check declared dot/multiply/scatter/custom-call and conversion results.
 
-    Unsupported computation forms fail closed. Other operations and opaque
+    Every computation is inventoried independently of execution/parameter roles.
+    Unknown syntax, types or references fail closed. Other operations and opaque
     kernel allocations require a separate source audit.
     """
     forbidden = []
     unknown_calls = []
     nonfloating_calls = []
     transports = []
-    functions, _ = _parse_functions(text)
-    observations, parsed_dataflow = weight_operand_operations(text, weight_parameter_prefixes)
-    for operation, operands in observations:
+    functions, inventory_errors = _parse_functions(text)
+    parsed_inventory = not inventory_errors
+    observations = [
+        operation
+        for operations in functions.values()
+        for operation in operations
+        if operation.opcode in ("dot", "multiply", "custom-call", "scatter", "convert", "bitcast-convert")
+    ]
+    for operation in observations:
         line = operation.line
         declared = _declared_results(operation)
         if declared is None:
-            parsed_dataflow = False
+            parsed_inventory = False
         results = [item.shape for item in declared or () if item.floating]
         if operation.opcode == "custom-call" and declared is None:
             unknown_calls.append(line)
@@ -434,15 +445,12 @@ def audit_gradient_operations(
             if transport is not None:
                 transports.append({**match, **transport})
             else:
-                if operation.opcode == "dot" and any(role is True or role == "selector" for role in operands):
-                    # Reassociation can expose a parameter operand even in a
-                    # genuine Wgrad: (X.T @ dY) @ W1.T. Constant selectors can
-                    # likewise produce full vocabulary gradients. Neither is a
-                    # proof without axis provenance and compact result flow.
-                    match["unverified_reason"] = "known parameter/selector operand without axis and result-flow proof"
                 forbidden.append(match)
     return GradientAudit(
-        parsed_dataflow,
+        parsed_inventory,
+        len(functions),
+        sum(map(len, functions.values())),
+        inventory_errors,
         len(observations),
         forbidden,
         unknown_calls,

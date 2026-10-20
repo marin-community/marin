@@ -153,8 +153,8 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
                 report = compiled_gradient_report(compiled, base, sft)
                 # Tiny CPU activation shapes collide with frozen projections.
                 # Parameter operands alone do not prove the contraction's axes
-                # or result flow, so schema 3 must leave those cases unverified.
-                assert report["schema_version"] == 3
+                # or result flow, so schema 4 must leave those cases unverified.
+                assert report["schema_version"] == 4
                 assert not report["avoids_full_base_gradients"], report
                 assert report["unverified_weight_shaped_results"], report
                 assert compiled.memory_analysis().output_size_in_bytes < sum(x.nbytes for x in jax.tree.leaves(base))

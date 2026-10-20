@@ -313,12 +313,15 @@ its raw SHA256, execution, base and measurement identity and requires step-zero
 counters and a passing structural report. This does not inspect moment values.
 Matching a frozen tensor's shape does not establish optimizer contamination.
 
-Compiled audit schema 3 keeps ambiguous frozen-shaped results in
+Compiled audit schema 4 inventories instructions in every optimized computation,
+including asynchronous bodies, reducers and comparators, and reports coverage
+counts and parsing errors. It keeps ambiguous frozen-shaped results in
 `unverified_weight_shaped_results`. Parameter operands and routing selectors
 alone cannot certify them. Integer custom-call outputs are parsed separately;
 no-write collective destination buffers require matching decoded TTIR and PTX.
-The audit covers declared dot, multiply, scatter and custom-call results and
-tracked integer casts. This includes one-token broadcast/multiply outer products.
+The audit covers declared dot, multiply, scatter, custom-call and conversion
+results. This includes one-token broadcast/multiply outer products and gathered
+short-convolution weight-gradient partials, including unused tuple outputs.
 Opaque kernel internals and other operations need source review. Unsupported declared types or
 computation bodies and any remaining unverified result fail qualification. Copy the
 telemetry directory locally and assemble its measured record using the actual
@@ -336,6 +339,10 @@ uv run python -m experiments.grug.moe_hero_ep.format_eval \
 Review learning and compilation evidence before selecting a pilot budget. Pin
 [SmokeRecord and PilotBudget](https://github.com/marin-community/marin/blob/main/experiments/grug/moe_hero_ep/format_eval.py)
 in the next launch's `LaunchEvidence.smoke` and `LaunchEvidence.pilot_budget`.
+Smoke qualification requires the current compiled audit schema, complete
+instruction inventory and a passing verdict. It pins the compiler report's raw
+SHA256 and execution/base/measurement identities and rechecks the retained bytes
+alongside the optimizer report before accepting a budget.
 The launcher requires both together, recomputes the budget, and checks the
 recipe's token cap, update count, warmup, learning rates and optimizer lineage.
 Set `PilotBudget.format_panel_id` to the pinned D acceptance panel, including at

@@ -313,6 +313,18 @@ def test_paired_interval_reports_exact_discordant_counts():
     assert measured["confidence_interval_95"][0] < 0 < measured["confidence_interval_95"][1]
 
 
+def smoke_compiled_report() -> dict:
+    return {
+        "schema_version": 4,
+        "execution_id": "real-execution",
+        "checkpoint_metadata_digest": "donor-C",
+        "measurement_identity_digest": "model-data-batch-mesh-resources",
+        "parsed_instruction_inventory": True,
+        "avoids_full_base_gradients": True,
+        "optimizer_frozen_parameter_inputs": 0,
+    }
+
+
 def smoke_optimizer_report() -> dict:
     return {
         "schema_version": 1,
@@ -360,6 +372,7 @@ def smoke_record() -> SmokeRecord:
         compile_seconds=30,
         warmup_updates=1,
         compiled_gradient_report="compiled-report.json",
+        compiled_gradient_report_sha256=hashlib.sha256(json.dumps(smoke_compiled_report()).encode()).hexdigest(),
         compact_optimizer_report="compact-optimizer-report.json",
         compact_optimizer_report_sha256=hashlib.sha256(json.dumps(smoke_optimizer_report()).encode()).hexdigest(),
         avoids_full_base_gradients=True,
@@ -645,7 +658,7 @@ def test_smoke_assembly_requires_persisted_runtime_measurements_and_compiled_pro
         }
         (tmp_path / f"update-{update.update:06d}.json").write_text(json.dumps(raw))
     compiled = tmp_path / "compiled-gradient-report.json"
-    compiled.write_text(json.dumps({"avoids_full_base_gradients": True, "optimizer_frozen_parameter_inputs": 0}))
+    compiled.write_text(json.dumps(smoke_compiled_report()))
     optimizer = tmp_path / "compact-optimizer-report.json"
     optimizer.write_text(json.dumps(smoke_optimizer_report()))
     compact = tmp_path / "compact"
@@ -677,6 +690,18 @@ def test_smoke_assembly_requires_persisted_runtime_measurements_and_compiled_pro
     assert summarize_smoke(assembled)["median_non_padding_tokens_per_second"] == 25000
     assert assembled.preserves_activation_gradients and assembled.avoids_full_base_gradients
     assert assembled.checkpoint_seconds == 2
+    compiled.write_text(json.dumps({**smoke_compiled_report(), "schema_version": 3}))
+    with pytest.raises(ValueError, match="Compiled evidence report bytes changed"):
+        validate_smoke_checkpoint(assembled)
+    with pytest.raises(ValueError, match="current-schema"):
+        assemble_smoke(tmp_path, warmup_updates=1, microbatch_size=1, gradient_accumulation=4, optimizer="Adam-adapters")
+    for field in ("execution_id", "checkpoint_metadata_digest", "measurement_identity_digest"):
+        compiled.write_text(json.dumps({**smoke_compiled_report(), field: "another-smoke"}))
+        with pytest.raises(ValueError, match="current-schema"):
+            assemble_smoke(
+                tmp_path, warmup_updates=1, microbatch_size=1, gradient_accumulation=4, optimizer="Adam-adapters"
+            )
+    compiled.write_text(json.dumps(smoke_compiled_report()))
     # Budget qualification rechecks the pinned structural report, not a copied
     # pass flag or the optimizer byte count alone.
     optimizer.write_text(json.dumps({**smoke_optimizer_report(), "optimizer_step": 1}))

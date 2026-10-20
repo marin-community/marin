@@ -770,6 +770,7 @@ class SmokeRecord(Record):
     warmup_updates: int = Field(ge=0)
     updates: tuple[SmokeUpdate, ...] = Field(min_length=1)
     compiled_gradient_report: str
+    compiled_gradient_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     compact_optimizer_report: str
     compact_optimizer_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     avoids_full_base_gradients: bool
@@ -794,6 +795,20 @@ def validate_smoke_checkpoint(record: SmokeRecord) -> dict:
         }
     ):
         raise ValueError("Measured smoke terminal checkpoint disagrees with its base, schedule, or actual counters")
+    compiled_raw = StoragePath(record.compiled_gradient_report).read_bytes()
+    if hashlib.sha256(compiled_raw).hexdigest() != record.compiled_gradient_report_sha256:
+        raise ValueError("Compiled evidence report bytes changed")
+    compiled = json.loads(compiled_raw)
+    if (
+        compiled.get("schema_version") != 4
+        or compiled.get("parsed_instruction_inventory") is not True
+        or compiled.get("avoids_full_base_gradients") is not True
+        or compiled.get("optimizer_frozen_parameter_inputs") != 0
+        or compiled.get("execution_id") != record.execution_id
+        or compiled.get("checkpoint_metadata_digest") != record.checkpoint_metadata_digest
+        or compiled.get("measurement_identity_digest") != record.measurement_identity_digest
+    ):
+        raise ValueError("Compiled evidence lacks a matching current-schema compact gradient audit")
     optimizer_raw = StoragePath(record.compact_optimizer_report).read_bytes()
     if hashlib.sha256(optimizer_raw).hexdigest() != record.compact_optimizer_report_sha256:
         raise ValueError("Smoke compact optimizer report bytes changed")
@@ -857,7 +872,8 @@ def assemble_smoke(
     if len(panel_digests) != 1:
         raise ValueError("Smoke changed the fixed acquisition diagnostic panel")
     compiled_path = telemetry_directory / "compiled-gradient-report.json"
-    compiled = json.loads(compiled_path.read_text())
+    compiled_raw = compiled_path.read_bytes()
+    compiled = json.loads(compiled_raw)
     if not compiled.get("avoids_full_base_gradients") or compiled.get("optimizer_frozen_parameter_inputs") != 0:
         raise ValueError("Compiled evidence does not show compact gradients and optimizer inputs")
     optimizer_path = telemetry_directory / "compact-optimizer-report.json"
@@ -885,6 +901,7 @@ def assemble_smoke(
         warmup_updates=warmup_updates,
         updates=updates,
         compiled_gradient_report=str(compiled_path),
+        compiled_gradient_report_sha256=hashlib.sha256(compiled_raw).hexdigest(),
         compact_optimizer_report=str(optimizer_path),
         compact_optimizer_report_sha256=optimizer_sha256,
         avoids_full_base_gradients=True,

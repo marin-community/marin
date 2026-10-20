@@ -192,6 +192,51 @@ def test_triton_implementation_fails_fast_when_unsupported():
     np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
 
 
+@pytest.mark.parametrize("dynamic_weight", [True, False], ids=["jit-weight-input", "weight-closure"])
+@pytest.mark.parametrize(
+    ("shape", "dtype", "segments", "packed_bf16"),
+    [
+        ((2, 200, 256), jnp.bfloat16, "packed", True),
+        ((1, 512, 64), jnp.bfloat16, "short_runs", False),
+        ((2, 256, 1536), jnp.float32, "unpacked", False),
+        ((2, 256, 64), jnp.bfloat16, "padded", True),
+    ],
+)
+def test_frozen_weight_vjp_has_only_activation_output_on_gpu(
+    shape, dtype, segments, packed_bf16, dynamic_weight, monkeypatch
+):
+    """The public AD path must eliminate inseparable frozen dW, preserving dX bits."""
+    _requires_gpu()
+    if packed_bf16 and not triton_gpu._packed_bf16_arithmetic():
+        pytest.skip("packed bf16 arithmetic needs SM90 or newer")
+    if not packed_bf16:
+        monkeypatch.setattr(triton_gpu, "_packed_bf16_arithmetic", lambda: False)
+    batch, seq_len, channels = shape
+    weight, x, _, cotangent = _inputs(batch, seq_len, channels, 4, seed=47, dtype=dtype, packed=False)
+    segment_ids = _triton_segment_ids(segments, batch, seq_len, np.random.default_rng(48))
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+
+    def loss(w, xx):
+        return jnp.sum(short_conv(w, xx, segment_ids, implementation="triton_gpu") * cotangent)
+
+    _, reference_vjp = jax.vjp(lambda xx: short_conv_reference(weight, xx, segment_ids), x)
+    want_dx = jax.jit(reference_vjp)(cotangent)[0]
+    with jax.set_mesh(mesh):
+        gradient = jax.grad(loss, argnums=1) if dynamic_weight else jax.grad(lambda xx: loss(weight, xx))
+        args = (weight, x) if dynamic_weight else (x,)
+        compiled = jax.jit(gradient).lower(*args).compile()
+        got_dx = compiled(*args)
+    np.testing.assert_array_equal(_bits(got_dx), _bits(want_dx))
+    # Check the executable ABI, not the kernel name: the old joint kernel
+    # returned (dX, dW) even when XLA dropped the dW tuple extraction.
+    calls = [line for line in compiled.as_text().splitlines() if 'custom_call_target="triton_kernel_call"' in line]
+    assert len(calls) == 1
+    result = calls[0].split(" = ", 1)[1].split(" custom-call(", 1)[0]
+    padded_seq = -(-seq_len // triton_gpu.SEQUENCE_MULTIPLE) * triton_gpu.SEQUENCE_MULTIPLE
+    dimensions = f"{batch},{padded_seq},{channels}"
+    assert re.fullmatch(rf"(?:bf16|f32)\[{dimensions}\](?:\{{[^}}]*\}})?", result)
+
+
 def _requires_gpu():
     if jax.default_backend() != "gpu":
         pytest.skip("requires the JAX GPU backend")
@@ -216,6 +261,7 @@ def test_float32_matches_the_reference_on_gpu():
 
     got, kernel_vjp = jax.vjp(jax.jit(kernel_fn), weight, x)
     got_dw, got_dx = kernel_vjp(cotangent)
+    weight_only = jax.jit(jax.grad(lambda w: jnp.sum(kernel_fn(w, x) * cotangent)))(weight)
     want, reference_vjp = jax.vjp(jax.jit(reference_fn), weight, x)
     _, want_dx = reference_vjp(cotangent)
 
@@ -228,6 +274,8 @@ def test_float32_matches_the_reference_on_gpu():
     bound = gamma * _dw_oracle(jnp.abs(x), segment_ids, jnp.abs(cotangent), 4)
     error = np.abs(np.asarray(jax.device_get(got_dw), np.float64) - oracle)
     assert np.all(error <= bound), f"dw error is up to {np.max(error / bound):.2f}x its bound"
+    weight_only_error = np.abs(np.asarray(jax.device_get(weight_only), np.float64) - oracle)
+    assert np.all(weight_only_error <= bound), "weight-only dW exceeds the FP32 accumulation bound"
 
 
 def test_default_implementation_on_gpu_is_the_kernel():
@@ -534,5 +582,7 @@ def test_context_parallel_kernel_matches_reference_on_gpu():
 
         got = forward(weight, sharded_x)
         got_dw, got_dx = jax.grad(loss, argnums=(0, 1))(weight, sharded_x)
+        frozen_weight_dx = jax.grad(loss, argnums=1)(weight, sharded_x)
     for actual, expected in ((got, want), (got_dw, want_dw), (got_dx, want_dx)):
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(frozen_weight_dx), np.asarray(want_dx), rtol=1e-5, atol=1e-5)
