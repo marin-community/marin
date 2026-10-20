@@ -46,6 +46,7 @@ class _IrisSubmissionRoute:
     target_cluster: str | None
     priority: str
     timeout_hours: int
+    container_profile: str | None
 
 
 def _module_name(module: ModuleType) -> str:
@@ -71,7 +72,11 @@ def _skyrl_executions(handles: list[ArtifactStep]) -> tuple[IrisSkyRLExecution, 
 
 def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmissionRoute:
     routes = {
-        (execution.parent_cluster_config or execution.cluster_config, execution.target_cluster)
+        (
+            execution.parent_cluster_config or execution.cluster_config,
+            execution.target_cluster,
+            execution.container_profile,
+        )
         for execution in executions
     }
     if len(routes) != 1:
@@ -79,12 +84,13 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
     priorities = {execution.priority for execution in executions}
     if len(priorities) != 1:
         raise ValueError(f"one RL main cannot use multiple coordinator priorities: {sorted(priorities)!r}")
-    cluster_config, target_cluster = routes.pop()
+    cluster_config, target_cluster, container_profile = routes.pop()
     return _IrisSubmissionRoute(
         cluster_config=cluster_config,
         target_cluster=target_cluster,
         priority=priorities.pop(),
         timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
+        container_profile=container_profile,
     )
 
 
@@ -111,6 +117,7 @@ def _coordinator_request(
             ram=_COORDINATOR_MEMORY,
             disk=_COORDINATOR_DISK,
             target_cluster=route.target_cluster,
+            container_profile=route.container_profile,
         ),
         environment=create_environment(workspace=str(workspace), env_vars=dict(env_vars), extras=["cpu"]),
         priority=priority_band_value(route.priority),

@@ -397,6 +397,7 @@ class IrisSkyRLExecution:
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
+    container_profile: str | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -801,6 +802,7 @@ def _launch_config_yaml(
             "timeout": execution.job_timeout_seconds,
             "target_cluster": target_cluster,
             "parent_cluster_config": parent_cluster_config,
+            "container_profile": execution.container_profile,
         },
         "ray": {
             "port": 6379,

@@ -35,6 +35,7 @@ from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, trainin
 TOKENIZER_MODEL = "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14"
 TOKENIZER_REVISION = "6783e9743478bd25a9ce03ab3460e84d6a9814b0"
 CLUSTER = "cw-us-east-02a"
+CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 ARTIFACT_NAME = "checkpoints/snowball-inventory-smoke"
 SEED = 20261020
 ROLE_PLAN = replace(SNOWBALL_RECIPE.role_plan, train_batch_size=32, policy_mini_batch_size=32)
@@ -128,7 +129,7 @@ def main(
         user_owned_name("documents/snowball-inventory-runtime-probe"),
         remote(
             verify_pool_runtime,
-            resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB"),
+            resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
         ),
         version=resolve_version(name, None),
         pool_uri=pool,
@@ -170,6 +171,7 @@ def main(
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=12,
             job_timeout_seconds=6 * 60 * 60,
+            container_profile=CONTAINER_PROFILE,
             wandb_entity="marin-community",
         ),
         export_hf=True,

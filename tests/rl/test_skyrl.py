@@ -233,6 +233,21 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
 
 
+@pytest.mark.parametrize("profile", [None, "CONTAINER_PROFILE_PRIVILEGED"])
+def test_skyrl_launch_document_preserves_the_job_container_profile(profile: str | None) -> None:
+    execution = dataclasses.replace(_execution(), container_profile=profile)
+    step = skyrl_step(_spec(), execution)
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://durable/test/run",
+            prefix="s3://durable",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+    assert yaml.safe_load(config.launch_config_yaml)["iris"]["container_profile"] == profile
+
+
 def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
     plan = dataclasses.replace(
         _role_plan(),
