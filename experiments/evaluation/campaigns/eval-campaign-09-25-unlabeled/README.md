@@ -1,4 +1,4 @@
-# Unlabeled evaluation campaign
+# Verified evaluation campaign
 
 This directory contains every version-controlled input for the campaign: model configs, Evalchemy
 configs, Harbor configs, the co-hosted judge config, model-specific Harbor policy values, validation,
@@ -6,12 +6,12 @@ and launch commands. The launcher records the vendored Evalchemy runtime's sourc
 and Harbor's upstream revision and runtime descriptor. It checks the independent Harbor
 lockfile before submission.
 
-The launcher leaves `EvalRunRecord.version` unset. Its checked-in inputs, config digests, and durable
-records support reproduction and review; they do not attest that a run conforms to an accepted eval
-policy. Policy conformance requires the independently trusted evidence and verifier described in
-[issue #9458](https://github.com/marin-community/marin/issues/9458). The preflight and comparison work
-in [PR #9461](https://github.com/marin-community/marin/pull/9461) must consume that trusted decision
-before presenting a run as policy-conformant.
+The launcher defaults to `eval-policy-2026-10-20-verified`. Marin checks each selected benchmark
+against the single checked-in [profile](../../../../lib/marin/src/marin/evaluation/policies/verified.json),
+including its source settings and vendored runtime. Subset runs are allowed. EvalDash uses the same
+checks for this cohort and keeps historical cohorts available without a verified marker.
+These checks establish configuration agreement, not the independent attestation described in
+[issue #9458](https://github.com/marin-community/marin/issues/9458).
 
 SWE-bench uses Harbor's native mini-SWE 2.1.0 adapter.
 Its 32,768-token budget includes the rendered prompt and the requested reply. Before each
@@ -39,9 +39,9 @@ concurrency slot. A transport attempt may use that full window; retrying does no
 K2 is limited to four after its 16-request runs saturated serving and produced mostly timed-out
 generations. Effective concurrency is recorded in each run's Evalchemy provenance.
 
-Pass `--version LABEL` only when a submitter-controlled cohort label is useful. The launcher forwards
-the label to Marin unchanged. It remains provenance metadata and does not alter the conformance
-boundary above.
+Pass `--version LABEL` to use a different cohort for experiments. Retired `eval-policy-*` labels
+cannot be used for new launches. Capped smoke runs require an experimental label, for example
+`--limit 1 --version smoke`.
 
 From a clean checkout of the campaign's pinned Marin commit:
 

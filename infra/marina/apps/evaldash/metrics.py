@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from marin.evaluation.eval_measurements import declared_metric_gap, measurement_from_record, measurements_from_records
-from marin.evaluation.eval_policy import POLICIES, SEPTEMBER_24_VERSION, record_policy_violations
+from marin.evaluation.eval_policy import VERIFIED_VERSION, record_policy_violations
 from marin.evaluation.eval_stats import (
     DEFAULT_EXCLUDE_FLAGS,
     DEFAULT_MIN_COVERAGE,
@@ -481,14 +481,14 @@ def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = f
     return {
         "models": all_models,
         "run_facets": run_facets,
-        "default_cohort": SEPTEMBER_24_VERSION,
-        "verified_cohorts": list(POLICIES),
+        "default_cohort": VERIFIED_VERSION,
+        "verified_cohorts": [VERIFIED_VERSION],
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),
         "families": [{"family": family, "variants": variants} for family, variants in sorted(by_family.items())],
         "users": sorted({r.user for r in records if r.user}),
         "statuses": sorted({display_status(r) for r in records}),
-        "versions": sorted(set(POLICIES) | {r.version for r in records if r.version}),
+        "versions": sorted({VERIFIED_VERSION} | {r.version for r in records if r.version}),
         "facets": facets,
         "archived_models": sorted(archived_models),
     }

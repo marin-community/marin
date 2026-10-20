@@ -29,7 +29,7 @@ from fray.types import JobStatus
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.resources.state import JobState, TaskState
 from iris.rpc import job_pb2
-from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION, source_config_digest
+from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runner import (
@@ -170,34 +170,6 @@ def _install_fake_harbor_preflight(
 
     monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", preflight)
     return received
-
-
-@pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])
-def test_verified_harbor_launch_rejects_vendored_runtime(monkeypatch, version):
-    _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    spec = LaunchSpec(
-        model=ModelConfig(name="test-model", location="org/test-model"),
-        evals=(),
-        evalchemy_definitions=(),
-        harbor_definitions=(
-            HarborDefinition(
-                name="ot-tblite-recovery",
-                config_path=Path("experiments/evaluation/configs/harbor/ot-tblite-recovery.yaml"),
-            ),
-        ),
-        platform=Platform.GPU,
-        accelerator="H100x8",
-        limit=None,
-        records_prefix="memory://records",
-        submission_cluster="marin",
-        federated_cluster=None,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        version=version,
-    )
-
-    with pytest.raises(ValueError, match="evaluator runtime must use commit"):
-        build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
 
 
 def _write_harbor_config(path: Path) -> Path:

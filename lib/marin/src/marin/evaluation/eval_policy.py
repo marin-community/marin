@@ -1,269 +1,193 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Admission rules for the two published Marin evaluation cohorts."""
+"""Admission checks for the current verified evaluation configuration."""
 
 import hashlib
 import json
-from collections.abc import Mapping
-from dataclasses import dataclass
-from enum import StrEnum
+import re
 from pathlib import Path
-from types import MappingProxyType
 
 import yaml
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
+from marin.evaluation.harbor.agent_context import reconciled_model_info, served_model_info
 from marin.evaluation.model_identity import model_config_digest
-from marin.evaluation.records import EvalRef, EvalRunRecord, ModelRef
+from marin.evaluation.records import EvalRef, EvalRunRecord, ModelConfigRef, ModelRef
 
-EVALCHEMY_COMMIT = "c131e5ab84d3014490549ec06d45deb13b5673c2"
-HARBOR_COMMIT = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
-NUPA_SEED = 20222943
-DEFAULT_SEED = 42
-AIME24_REPEATS = 10
-SEPTEMBER_16_IFBENCH_MAX_TOKENS = 1024
+MAX_SERVED_CONTEXT = 131072
+_MODEL_IDENTITY_FIELDS = (
+    "name",
+    "location",
+    "revision",
+    "tokenizer",
+    "tokenizer_revision",
+    "apply_chat_template",
+    "generation",
+    "agent",
+)
+
+
+class HarborVariant(TypedDict):
+    source_digest: str
+    model_info: dict[str, int]
+
+
+class HarborIdentity(TypedDict):
+    dataset: str
+    version: str
+    agent: str
+    env: str
+
+
+class HarborPolicy(TypedDict):
+    identity: HarborIdentity
+    variants: dict[str, HarborVariant]
+
+
+class VerifiedPolicy(TypedDict):
+    version: str
+    runtimes: dict[str, str]
+    harbor_commit: str
+    evalchemy: dict[str, EvalRef]
+    harbor: dict[str, HarborPolicy]
+
+
+VERIFIED_POLICY = TypeAdapter(VerifiedPolicy).validate_json(
+    Path(__file__).with_name("policies").joinpath("verified.json").read_text()
+)
+VERIFIED_VERSION = VERIFIED_POLICY["version"]
 
 
 def source_config_digest(path: Path) -> str:
-    """Identify a policy YAML by its parsed content, independent of comments and key order."""
+    """Hash parsed YAML independently of comments and key order."""
     payload = json.dumps(yaml.safe_load(path.read_text()), sort_keys=True, separators=(",", ":"))
     return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
 
 
-FIXED_MAX_TOKENS: Mapping[str, int] = MappingProxyType(
-    {
-        "mmlu-pro": 32768,
-        "gpqa-diamond": 32768,
-        "cruxeval": 2048,
-        "financebench": 4096,
-        "mrcr": 4096,
-        "nupa": 256,
-        "mmlu": 256,
-        "piqa": 256,
-        "winogrande": 256,
-        "openbookqa": 256,
-        "boolq": 256,
-        "truthfulqa": 256,
-    }
-)
-COMPLETION_TASKS = frozenset({"mmlu", "piqa", "winogrande", "openbookqa", "boolq", "truthfulqa"})
-UNSAFE_CODE_TASKS = frozenset({"humanevalplus", "mbppplus"})
-
-
-class ThinkingMode(StrEnum):
-    ON = "on"
-    OFF = "off"
-    MODEL_DEFAULT = "model_default"
-    NOT_APPLICABLE = "not_applicable"
-
-
-@dataclass(frozen=True)
-class PolicyEval:
-    task: str | None
-    shots: int | None
-    mechanism: str
-    thinking: ThinkingMode = ThinkingMode.MODEL_DEFAULT
-
-
-def _evalchemy(task: str, shots: int, thinking: ThinkingMode = ThinkingMode.MODEL_DEFAULT) -> PolicyEval:
-    return PolicyEval(task, shots, "evalchemy", thinking)
-
-
-def _harbor() -> PolicyEval:
-    return PolicyEval(None, None, "harbor")
-
-
-SEPTEMBER_16: Mapping[str, PolicyEval] = MappingProxyType(
-    {
-        "math500": _evalchemy("MATH500", 0),
-        "aime24": _evalchemy("AIME24", 0),
-        "humanevalplus": _evalchemy("HumanEvalPlus", 0),
-        "mbppplus": _evalchemy("MBPPPlus", 3),
-        "olympiadbench": _evalchemy("OlympiadBench", 0),
-        "mmlu-pro": _evalchemy("MMLUPro", 0),
-        "gpqa-diamond": _evalchemy("GPQADiamond", 0),
-        "cruxeval": _evalchemy("CruxEval", 1),
-        "financebench": _evalchemy("FinanceBench", 0),
-        "ifbench": _evalchemy("IFBench", 0),
-        "mrcr": _evalchemy("MRCR", 0),
-        "gsm8k-0shot": _evalchemy("gsm8k", 0),
-        "mmlu": _evalchemy("mmlu", 5),
-        "piqa": _evalchemy("piqa", 0),
-        "winogrande": _evalchemy("winogrande", 5),
-        "openbookqa": _evalchemy("openbookqa", 0),
-        "boolq": _evalchemy("boolq", 0),
-        "truthfulqa": _evalchemy("truthfulqa_mc2", 0),
-        "triviaqa": _evalchemy("triviaqa", 5),
-        "swebench-recovery": _harbor(),
-        "ot-tblite-recovery": _harbor(),
-        "tb2-recovery": _harbor(),
-        "simpleqa-recovery": _harbor(),
-        "ds-1000-local": _harbor(),
-    }
-)
-
-SEPTEMBER_24: Mapping[str, PolicyEval] = MappingProxyType(
-    {
-        "math500": _evalchemy("MATH500", 0, ThinkingMode.ON),
-        "humanevalplus": _evalchemy("HumanEvalPlus", 0, ThinkingMode.OFF),
-        "mbppplus": _evalchemy("MBPPPlus", 0, ThinkingMode.OFF),
-        "olympiadbench": _evalchemy("OlympiadBench", 0, ThinkingMode.ON),
-        "gsm8k-0shot": _evalchemy("gsm8k", 0, ThinkingMode.OFF),
-        "piqa": _evalchemy("piqa", 0, ThinkingMode.NOT_APPLICABLE),
-        "winogrande": _evalchemy("winogrande", 5, ThinkingMode.NOT_APPLICABLE),
-        "boolq": _evalchemy("boolq", 0, ThinkingMode.NOT_APPLICABLE),
-        "truthfulqa": _evalchemy("truthfulqa_mc2", 0, ThinkingMode.NOT_APPLICABLE),
-        "triviaqa": _evalchemy("triviaqa", 5, ThinkingMode.OFF),
-        "aime24": _evalchemy("AIME24", 0, ThinkingMode.ON),
-        "mmlu-pro": _evalchemy("MMLUPro", 0, ThinkingMode.ON),
-        "gpqa-diamond": _evalchemy("GPQADiamond", 0, ThinkingMode.ON),
-        "cruxeval": _evalchemy("CruxEval", 0, ThinkingMode.OFF),
-        "financebench": _evalchemy("FinanceBench", 0, ThinkingMode.OFF),
-        "ifbench": _evalchemy("IFBench", 0, ThinkingMode.OFF),
-        "mrcr": _evalchemy("MRCR", 0, ThinkingMode.OFF),
-        "nupa": _evalchemy("NUPA", 0),
-        "swebench-recovery": _harbor(),
-        "ot-tblite-recovery": _harbor(),
-        "tb2-recovery": _harbor(),
-        "ds-1000-local": _harbor(),
-        "bfclparity-pi": _harbor(),
-        "bixbench-pi": _harbor(),
-        "tau3-pi": _harbor(),
-        "sotopia-hard": _harbor(),
-    }
-)
-
-POLICIES: Mapping[str, Mapping[str, PolicyEval]] = MappingProxyType(
-    {
-        SEPTEMBER_16_VERSION: SEPTEMBER_16,
-        SEPTEMBER_24_VERSION: SEPTEMBER_24,
-    }
-)
-RUNTIME_COMMITS: Mapping[str, Mapping[str, str]] = MappingProxyType(
-    {
-        SEPTEMBER_16_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
-        SEPTEMBER_24_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
-    }
-)
-
-
-def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef) -> tuple[str, ...]:
-    """Return launch/record violations; unlabelled and non-policy runs are unrestricted."""
-    version_key = version or ""
-    policy = POLICIES.get(version_key)
-    if policy is None:
-        if version is not None and version.startswith("eval-policy-"):
-            return (f"unknown policy version {version!r}",)
-        return ()
-    expected = policy.get(evaluation.name)
-    if expected is None:
-        return (f"{evaluation.name}: not in {version}",)
-    problems = []
-    if evaluation.source_digest != POLICY_SOURCE_DIGESTS[version_key][evaluation.name]:
-        problems.append("source config differs from the approved benchmark policy")
-    source_config = model.source_config or model.config
-    if source_config is None or model.config is None:
-        problems.append("missing normalized model configuration")
-    elif source_config.name != model.name:
-        problems.append("model name differs from saved configuration")
-    elif source_config.location != model.location or model.config.serve.backend != model.backend:
-        problems.append("model location or backend differs from saved configuration")
-    elif model.config_digest is not None and model.config_digest != model_config_digest(source_config):
-        problems.append("model configuration digest does not match the saved configuration")
-    if evaluation.mechanism != expected.mechanism:
-        problems.append(f"mechanism {evaluation.mechanism!r} != {expected.mechanism!r}")
-    if len(evaluation.tasks) != 1:
-        problems.append("exactly one task required")
-    elif expected.task is not None and evaluation.tasks[0].name != expected.task:
-        problems.append(f"task must be {expected.task!r}")
-    elif evaluation.tasks[0].num_fewshot != expected.shots:
-        problems.append(f"num_fewshot must be {expected.shots}")
-    if expected.mechanism == "evalchemy" and len(evaluation.tasks) == 1:
-        task = evaluation.tasks[0]
-        if task.generation != (evaluation.name not in COMPLETION_TASKS):
-            problems.append("task generation/completion route differs from policy")
-        if task.unsafe_code != (evaluation.name in UNSAFE_CODE_TASKS):
-            problems.append("unsafe code setting differs from policy")
-    if expected.mechanism == "evalchemy":
-        config = evaluation.evalchemy
-        if config is None:
-            problems.append("missing Evalchemy configuration")
-        else:
-            if source_config is not None:
-                expected_chat_kwargs = dict(source_config.generation.chat_template_kwargs)
-                if policy is SEPTEMBER_24 and expected.thinking in (ThinkingMode.ON, ThinkingMode.OFF):
-                    expected_chat_kwargs["enable_thinking"] = expected.thinking is ThinkingMode.ON
-                if config.chat_template_kwargs != expected_chat_kwargs:
-                    problems.append("chat template arguments differ from model and policy settings")
-            if config.max_eval_instances is not None:
-                problems.append("capped Evalchemy runs are not canonical")
-            if model.config is not None:
-                fixed_limit = (
-                    SEPTEMBER_16_IFBENCH_MAX_TOKENS
-                    if policy is SEPTEMBER_16 and evaluation.name == "ifbench"
-                    else FIXED_MAX_TOKENS.get(evaluation.name)
-                )
-                model_limit = model.config.generation.max_gen_toks
-                expected_limit = (
-                    min(fixed_limit, model_limit)
-                    if fixed_limit is not None and model_limit is not None
-                    else (fixed_limit if fixed_limit is not None else model_limit)
-                )
-                if config.max_gen_toks != expected_limit:
-                    problems.append(f"max_gen_toks must be {expected_limit}")
-            if evaluation.name == "mmlu-pro" and config.max_length != 65536:
-                problems.append("MMLU-Pro max_length must be 65536")
-            if evaluation.name == "mrcr" and config.max_length not in {32768, 65536, 73728}:
-                problems.append("MRCR max_length must match a published context bin")
-            if evaluation.name != "aime24":
-                expected_seed = NUPA_SEED if policy is SEPTEMBER_24 and evaluation.name == "nupa" else DEFAULT_SEED
-                if config.seed != expected_seed:
-                    problems.append(f"seed must be {expected_seed}")
-            if policy is SEPTEMBER_24:
-                if expected.thinking in (ThinkingMode.ON, ThinkingMode.OFF):
-                    required = expected.thinking is ThinkingMode.ON
-                    if not config.apply_chat_template:
-                        problems.append("thinking mode requires a chat template")
-                    if config.chat_template_kwargs.get("enable_thinking") is not required:
-                        problems.append(f"explicit enable_thinking={required} required")
-                if evaluation.name == "aime24" and config.seed is not None:
-                    problems.append("AIME24 outer seed must be unset")
-            elif evaluation.name == "aime24" and config.seed not in range(DEFAULT_SEED, DEFAULT_SEED + AIME24_REPEATS):
-                problems.append(
-                    f"September 16 AIME24 seed must be in {DEFAULT_SEED}..{DEFAULT_SEED + AIME24_REPEATS - 1}"
-                )
-    elif evaluation.harbor is None:
-        problems.append("missing Harbor configuration")
-    elif evaluation.harbor.task_limit is not None:
-        problems.append("capped Harbor runs are not canonical")
+def _model_violations(model: ModelRef, source: ModelConfigRef) -> tuple[str, ...]:
+    assert model.config is not None
+    actual = model.config.model_dump()
+    original = source.model_dump()
+    problems = [
+        f"effective model {field} differs from its saved source"
+        for field in _MODEL_IDENTITY_FIELDS
+        if actual[field] != original[field]
+    ]
+    if source.name != model.name or source.location != model.location or model.config.serve.backend != model.backend:
+        problems.append("model identity differs from saved configuration")
+    if model.config_digest is not None and model.config_digest != model_config_digest(source):
+        problems.append("model configuration digest does not match saved configuration")
+    if not re.fullmatch(r"[0-9a-f]{40}", source.revision or ""):
+        problems.append("verified evaluations require an immutable model revision")
+    context = model.config.serve.max_model_len
+    if context is None or context > MAX_SERVED_CONTEXT:
+        problems.append(f"verified evaluations require an explicit served context of at most {MAX_SERVED_CONTEXT}")
     return tuple(problems)
 
 
+def _evalchemy_violations(source: ModelConfigRef, evaluation: EvalRef, approved: EvalRef) -> tuple[str, ...]:
+    if evaluation.mechanism != "evalchemy" or evaluation.evalchemy is None:
+        return ("benchmark requires Evalchemy",)
+    assert approved.evalchemy is not None
+    problems = []
+    if evaluation.source_digest != approved.source_digest:
+        problems.append("source config differs from the verified benchmark")
+    if [task.model_dump(exclude={"benchmark"}) for task in evaluation.tasks] != [
+        task.model_dump(exclude={"benchmark"}) for task in approved.tasks
+    ]:
+        problems.append("task settings differ from the verified benchmark")
+    policy = approved.evalchemy
+    chat = {**source.generation.chat_template_kwargs, **policy.chat_template_kwargs}
+    if policy.chat_template_kwargs.get("enable_thinking") is False and source.generation.thinking_off_template_kwargs:
+        chat = {key: value for key, value in chat.items() if key != "enable_thinking"}
+        chat = {**chat, **source.generation.thinking_off_template_kwargs}
+    expected = {
+        **policy.model_dump(),
+        "chat_template_kwargs": chat,
+        "extra_gen_kwargs": {**policy.extra_gen_kwargs, **source.generation.extra_gen_kwargs},
+        "max_gen_toks": min(
+            (limit for limit in (policy.max_gen_toks, source.generation.max_gen_toks) if limit is not None),
+            default=None,
+        ),
+        "num_concurrent": min(
+            policy.num_concurrent,
+            source.evalchemy_num_concurrent if source.evalchemy_num_concurrent is not None else policy.num_concurrent,
+        ),
+    }
+    if not source.apply_chat_template:
+        problems.append("verified Evalchemy benchmarks require a chat-template model")
+    actual = evaluation.evalchemy.model_dump()
+    problems.extend(
+        f"Evalchemy {key} differs from the verified settings"
+        for key, value in expected.items()
+        if actual.get(key) != value
+    )
+    return tuple(problems)
+
+
+def _harbor_violations(model: ModelRef, evaluation: EvalRef, approved: HarborPolicy) -> tuple[str, ...]:
+    assert model.config is not None
+    if evaluation.mechanism != "harbor" or evaluation.harbor is None:
+        return ("benchmark requires Harbor",)
+    variant = approved["variants"].get(model.location, approved["variants"]["default"])
+    problems = []
+    if evaluation.source_digest != variant["source_digest"]:
+        problems.append("source config differs from the verified model-specific Harbor settings")
+    if evaluation.harbor.task_limit is not None:
+        problems.append("capped Harbor runs are not canonical")
+    actual = evaluation.harbor.model_dump()
+    problems.extend(
+        f"Harbor {key} differs from the verified benchmark"
+        for key, value in approved["identity"].items()
+        if actual[key] != value
+    )
+    if len(evaluation.tasks) != 1 or evaluation.tasks[0].name != approved["identity"]["dataset"]:
+        problems.append("Harbor task differs from the verified benchmark")
+    if evaluation.harbor.config_digest is None:
+        problems.append("missing normalized Harbor configuration digest")
+    served = served_model_info(model.config.serve.max_model_len, model.config.generation.max_gen_toks)
+    try:
+        limits = reconciled_model_info(served, variant["model_info"])
+    except ValueError as error:
+        return (*problems, str(error))
+    for key in ("max_input_tokens", "max_output_tokens"):
+        if actual.get(key) != limits[key]:
+            problems.append(f"Harbor {key} differs from the verified settings")
+    return tuple(problems)
+
+
+def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef) -> tuple[str, ...]:
+    """Validate current-profile launches; reject other reserved policy labels."""
+    if version != VERIFIED_VERSION:
+        return (f"unknown policy version {version!r}",) if version and version.startswith("eval-policy-") else ()
+    source = model.source_config or model.config
+    if source is None or model.config is None:
+        return ("missing normalized model configuration",)
+    model_problems = _model_violations(model, source)
+    if approved := VERIFIED_POLICY["evalchemy"].get(evaluation.name):
+        return (*model_problems, *_evalchemy_violations(source, evaluation, approved))
+    if approved_harbor := VERIFIED_POLICY["harbor"].get(evaluation.name):
+        return (*model_problems, *_harbor_violations(model, evaluation, approved_harbor))
+    return (*model_problems, f"{evaluation.name}: not in the verified policy")
+
+
 def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -> tuple[str, ...]:
-    """Keep evaluator versions fixed within a verified cohort."""
-    if version not in POLICIES:
+    """Check the current profile's runtime; leave other labels unrestricted."""
+    if version != VERIFIED_VERSION:
         return ()
-    commits = RUNTIME_COMMITS.get(version)
-    if commits is None:
-        return (f"missing evaluator pins for {version}",)
-    commit = commits.get(evaluation.mechanism)
-    if commit is None:
-        return (f"missing {evaluation.mechanism} evaluator pin for {version}",)
-    if commit not in runtime:
-        return (f"evaluator runtime must use commit {commit}",)
-    if evaluation.harbor is not None:
-        harbor_commit = commits.get("harbor")
-        if harbor_commit is None:
-            return (f"missing harbor evaluator pin for {version}",)
-        if evaluation.harbor.harbor_config_commit != harbor_commit:
-            return (f"Harbor preflight must use commit {harbor_commit}",)
+    expected = VERIFIED_POLICY["runtimes"].get(evaluation.name)
+    if expected is None or runtime != expected:
+        return ("evaluator runtime differs from the verified source and lock",)
+    if evaluation.harbor is not None and evaluation.harbor.harbor_config_commit != VERIFIED_POLICY["harbor_commit"]:
+        return ("Harbor preflight differs from the verified upstream import",)
     return ()
 
 
 def record_policy_violations(record: EvalRunRecord) -> tuple[str, ...]:
-    """Validate verified records; historical labels remain readable without a policy claim."""
-    if record.version not in POLICIES:
+    """Validate current-cohort records while leaving historical labels readable."""
+    if record.version != VERIFIED_VERSION:
         return ()
     return (
         *policy_violations(record.version, record.model, record.evaluation),

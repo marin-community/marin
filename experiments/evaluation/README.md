@@ -87,9 +87,12 @@ Evalchemy and Harbor run from [vendor/evalchemy](../../vendor/evalchemy/README.m
 and [vendor/harbor](../../vendor/harbor/README.md). Each has a separate environment
 and frozen lockfile. Neither is installed in the main workspace environment.
 
-Historical cohorts pinned to external evaluator commits require their recorded
-Marin checkout. The current launcher rejects those configurations with the vendored
-runtimes. Historical records remain readable.
+The current verified cohort is `eval-policy-2026-10-20-verified`. Its benchmark
+settings and vendored runtime descriptors are frozen in
+[`verified.json`](../../lib/marin/src/marin/evaluation/policies/verified.json).
+Pass that label with `--version` to check a launch against the profile. Subsets
+are allowed. Other `eval-policy-*` labels cannot launch new runs. Historical
+records and cohort labels remain readable in EvalDash, without a verified marker.
 
 ### Evalchemy
 

@@ -14,8 +14,8 @@ Options:
   --suite NAME       all, nonagentic, agentic, or terminal-bench. Default: all.
   --evalchemy NAME   Select one Evalchemy config basename; repeatable. Default: all.
   --harbor NAME      Select one Harbor config basename; repeatable. Default: all.
-  --limit COUNT      Cap selected benchmark items for a smoke reproduction.
-  --version LABEL    Attach a submitter-controlled cohort label. Not policy attestation.
+  --limit COUNT      Cap items for smoke testing; requires an experimental --version.
+  --version LABEL    Override the default verified cohort label.
   --submit           Submit jobs. Without this flag every launch is a dry run.
   --wait             Wait for each submitted model before launching the next.
   --help             Show this help.
@@ -27,7 +27,7 @@ EOF
 
 submit=0
 suite=all
-version=
+version=$CAMPAIGN_VERIFIED_VERSION
 limit=
 models=()
 selected_evalchemy_names=()
@@ -84,6 +84,10 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ -n "$limit" ] && [[ "$version" == eval-policy-* ]]; then
+  die "--limit requires an experimental cohort, for example --version smoke"
+fi
 
 case "$suite" in
   all|nonagentic|agentic|terminal-bench) ;;

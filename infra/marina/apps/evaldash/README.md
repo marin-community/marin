@@ -179,7 +179,9 @@ a cell whose metric or kind differs is rejected rather than ranked against unlik
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
 their columns remain populated while benchmarks are rerun.
 
-The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-24-verified`.
+The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-10-20-verified`.
+Only the current policy is marked verified. Its benchmark settings and vendored runtime
+descriptors are frozen in `lib/marin/src/marin/evaluation/policies/verified.json`.
 The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
 and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score

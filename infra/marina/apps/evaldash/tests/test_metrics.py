@@ -9,8 +9,7 @@ from dataclasses import asdict
 import pytest
 from evaldash.app import MemoryRecordStore
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
-from marin.evaluation.eval_policy import EVALCHEMY_COMMIT
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from marin.evaluation.eval_policy import VERIFIED_POLICY, VERIFIED_VERSION
 from marin.evaluation.eval_stats import Completeness, MissingPolicy
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ServeConfig
 from marin.evaluation.model_identity import model_config_digest
@@ -735,12 +734,16 @@ def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
 
 def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
     def policy_run(thinking: bool, config_thinking: bool, created_at: str, name: str = "same-name") -> EvalRunRecord:
-        record = _record(name, "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
+        record = _record(name, "math500", VERIFIED_VERSION, created_at, 0.5)
+        approved = VERIFIED_POLICY["evalchemy"]["math500"]
+        assert approved.evalchemy is not None
         model_config = ModelConfigRef.model_validate(
             asdict(
                 ModelConfig(
                     name=name,
                     location="org/model",
+                    revision="1" * 40,
+                    serve=ServeConfig(max_model_len=73728),
                     generation=GenerationConfig(chat_template_kwargs={"enable_thinking": config_thinking}),
                 )
             )
@@ -748,19 +751,15 @@ def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
         return record.model_copy(
             update={
                 "model": ModelRef(name=name, location="org/model", backend="vllm", config=model_config),
-                "provenance": record.provenance.model_copy(update={"eval_runtime": EVALCHEMY_COMMIT}),
+                "provenance": record.provenance.model_copy(
+                    update={"eval_runtime": VERIFIED_POLICY["runtimes"]["math500"]}
+                ),
                 "evaluation": record.evaluation.model_copy(
                     update={
-                        "source_digest": POLICY_SOURCE_DIGESTS["eval-policy-2026-09-24-verified"]["math500"],
-                        "tasks": (EvalTaskRef(name="MATH500", num_fewshot=0, generation=True),),
-                        "evalchemy": EvalchemyRef(
-                            apply_chat_template=True,
-                            max_gen_toks=None,
-                            max_eval_instances=None,
-                            num_concurrent=16,
-                            batch_size="1",
-                            seed=42,
-                            chat_template_kwargs={"enable_thinking": thinking},
+                        "source_digest": approved.source_digest,
+                        "tasks": approved.tasks,
+                        "evalchemy": approved.evalchemy.model_copy(
+                            update={"chat_template_kwargs": {"enable_thinking": thinking}}
                         ),
                     }
                 ),
@@ -781,7 +780,7 @@ def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
         }
     )
     records = [first, second, invalid, other_invalid, previous_cohort, smoke]
-    request = panel_request(cohort_version="eval-policy-2026-09-24-verified", model_query="same-name")
+    request = panel_request(cohort_version=VERIFIED_VERSION, model_query="same-name")
     panel = build_panel(records, request)
 
     assert len(panel["rows"]) == 1
@@ -870,10 +869,23 @@ def test_compare_complete_panel_ignores_benchmarks_unique_to_unselected_models()
     assert set(comparison["rows"][0]["cells"]) == {"a", "b"}
 
 
-def test_historical_policy_label_keeps_its_scores_for_marked_comparisons():
-    historical = _record("a", "mmlu", "eval-policy-updated", "2026-09-25T01:00:00+00:00", 0.6)
+@pytest.mark.parametrize(
+    "version",
+    [
+        "eval-policy-updated",
+        "eval-policy-2026-09-16-verified",
+        "eval-policy-2026-09-24-verified",
+        "eval-policy-2026-10-19-verified",
+    ],
+)
+def test_historical_policy_label_keeps_its_scores_for_marked_comparisons(version):
+    historical = _record("a", "mmlu", version, "2026-09-25T01:00:00+00:00", 0.6)
 
-    panel = build_panel([historical], panel_request(cohort_version="eval-policy-updated"))
+    panel = build_panel([historical], panel_request(cohort_version=version))
 
     assert panel["rows"][0]["cells"]["mmlu"]["value"] == pytest.approx(0.6)
     assert panel["policy_rejections"] == []
+    assert build_panel([historical], panel_request())["rows"]
+    meta = build_meta([historical])
+    assert version in meta["versions"]
+    assert version not in meta["verified_cohorts"]

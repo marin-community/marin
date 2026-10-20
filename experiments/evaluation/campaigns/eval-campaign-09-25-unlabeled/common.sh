@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for the unlabeled 2026-09-25 evaluation campaign. Source this file.
+# Shared helpers for the verified evaluation campaign. Source this file.
 
 set -euo pipefail
 
@@ -29,14 +29,16 @@ eval "$(cd "$MARIN_DIR" && uv run python - <<'PY'
 import shlex
 
 from marin.evaluation.evalchemy.runtime import evalchemy_runtime_source_hash
+from marin.evaluation.eval_policy import VERIFIED_VERSION
 from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, harbor_runtime_descriptor
 
 print(f"CAMPAIGN_EVALCHEMY_SOURCE_HASH={shlex.quote(evalchemy_runtime_source_hash())}")
+print(f"CAMPAIGN_VERIFIED_VERSION={shlex.quote(VERIFIED_VERSION)}")
 print(f"CAMPAIGN_SHA_HARBOR={shlex.quote(HARBOR_SOURCE.commit)}")
 print(f"CAMPAIGN_HARBOR_RUNTIME={shlex.quote(harbor_runtime_descriptor())}")
 PY
 )"
-export CAMPAIGN_SHA_MARIN CAMPAIGN_SHA_HARBOR CAMPAIGN_EVALCHEMY_SOURCE_HASH CAMPAIGN_HARBOR_RUNTIME
+export CAMPAIGN_SHA_MARIN CAMPAIGN_SHA_HARBOR CAMPAIGN_EVALCHEMY_SOURCE_HASH CAMPAIGN_HARBOR_RUNTIME CAMPAIGN_VERIFIED_VERSION
 
 die() {
   echo "error: $*" >&2
@@ -425,13 +427,10 @@ swebench = yaml.safe_load((harbor / "swebench-verified.yaml").read_text())
 assert swebench["n_attempts"] == 1
 assert swebench["agents"][0]["name"] == "mini-swe-agent"
 assert swebench["agents"][0]["kwargs"]["version"] == "2.1.0"
-assert swebench["datasets"] == [
-    {
-        "name": "swebench-verified",
-        "version": "1.0",
-        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/registry.json",
-    }
-]
+assert len(swebench["datasets"]) == 1
+assert {key: value for key, value in swebench["datasets"][0].items() if key != "registry_url"} == {
+    "name": "swebench-verified", "version": "1.0",
+}
 for name in (
     "swebench-verified",
     "ot-tblite-recovery",
@@ -446,7 +445,7 @@ assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwarg
     "max_output_tokens": 32768,
 }
 
-registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/"
+registry_pattern = r"https://raw\.githubusercontent\.com/marin-community/harbor/[0-9a-f]{40}/registry\.json"
 for path in harbor.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
     for agent in document.get("agents") or []:
@@ -460,7 +459,7 @@ for path in harbor.glob("*.yaml"):
     assert {"AgentSetupTimeoutError", "VerifierTimeoutError"} <= included, path
     for dataset in document.get("datasets") or []:
         registry_url = dataset.get("registry_url")
-        assert not registry_url or registry_url.startswith(registry_prefix), path
+        assert not registry_url or re.fullmatch(registry_pattern, registry_url), path
 PY
   )
 

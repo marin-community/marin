@@ -23,7 +23,7 @@ from iris.cluster.config import load_config
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
+from marin.evaluation.eval_policy import policy_violations, runtime_violations
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.evalchemy.runtime import (
@@ -233,12 +233,6 @@ def _resolve_definitions(
     judge_model: ModelConfig | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
-    runtime_commits = RUNTIME_COMMITS.get(version or "", {})
-    if evalchemy_definitions and (commit := runtime_commits.get("evalchemy")) is not None:
-        raise ValueError(
-            f"{version} requires historical Evalchemy commit {commit}; "
-            "run it from a Marin checkout that predates Evalchemy vendoring"
-        )
     evalchemy_source_hash = evalchemy_runtime_source_hash() if evalchemy_definitions else ""
     evalchemy_evaluator_hash = evalchemy_evaluator_source_hash() if evalchemy_definitions else ""
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)

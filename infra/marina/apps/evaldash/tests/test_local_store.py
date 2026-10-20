@@ -14,6 +14,7 @@ import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
 from marin.evaluation.eval_measurements import measurement_from_record
+from marin.evaluation.eval_policy import VERIFIED_VERSION
 from marin.evaluation.records import EvalRunRecord, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
@@ -77,7 +78,7 @@ def test_metadata_tracks_replaced_snapshots_and_keeps_returned_root_request_owne
 
 
 def test_api_defaults_to_the_current_verified_cohort(client):
-    expected = "eval-policy-2026-09-24-verified"
+    expected = VERIFIED_VERSION
     assert client.get("/panel").json()["request"]["cohort_version"] == expected
     assert client.get("/panel", params={"cohort": ""}).json()["request"]["cohort_version"] == expected
     assert client.get("/panel", params={"cohort": "all"}).json()["request"]["cohort_version"] is None
@@ -214,7 +215,7 @@ def test_api_surface_over_fixtures(client):
     meta = client.get("/meta").json()
     assert meta["store"] == "memory"
     assert "snowball" in meta["models"]
-    assert meta["verified_cohorts"] == ["eval-policy-2026-09-16-verified", "eval-policy-2026-09-24-verified"]
+    assert meta["verified_cohorts"] == [VERIFIED_VERSION]
 
     panel = client.get("/panel", params={"cohort": "all"}).json()
     assert set(panel["benchmarks"]) >= {"mmlu", "arc-challenge", "gsm8k-0shot"}
@@ -264,7 +265,7 @@ def test_run_detail_headline_is_null_for_a_failed_run(client):
 def test_unverified_policy_run_has_no_headline_in_detail_or_group(store, client):
     record = store.get_record("snowball-2026.07.20-mmlu")
     assert record is not None
-    invalid = EvalRunRecord.model_validate(record).model_copy(update={"version": "eval-policy-2026-09-24-verified"})
+    invalid = EvalRunRecord.model_validate(record).model_copy(update={"version": VERIFIED_VERSION})
     store.refresh([invalid])
 
     detail = client.get(f"/runs/{invalid.run_id}").json()
