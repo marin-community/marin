@@ -5,12 +5,12 @@
 
 ``analyze_failed_runs`` is one Zephyr map-reduce pipeline:
 
-1. ``filter`` keeps the rollouts that the policy failed, by their grades.
-2. ``flat_map(yield_ideas)``: one structured model call for each failed rollout names the general skills whose
+1. The source is the rollouts in batches, one shard for each batch. The rollouts of a batch need not be similar.
+2. ``filter`` keeps the rollouts that the policy failed, with no model call.
+3. ``flat_map(yield_ideas)``: one structured model call for each failed rollout names the general skills whose
    absence explains the failure.
-3. ``reshard`` puts the ideas into groups of rollouts. The rollouts of a group need not be similar.
-4. ``reduce``: in each group, one structured call (``merge_ideas``) merges the ideas, and one more call merges the
-   lists of the groups. Each merged idea names the ideas that it holds, and code joins their evidence.
+4. ``reduce``: in each batch, one structured call (``merge_ideas``) merges the ideas, and one more call merges the
+   lists of the batches. Each merged idea names the ideas that it holds, and code joins their evidence.
 5. ``flat_map(to_ideas)`` makes a ``CapabilityIdea`` of each merged idea, the ideas with more rollouts first.
 
 A capability describes the skill and not the failed tasks, so that ``generate_tasks`` writes the details of its
@@ -20,16 +20,16 @@ training tasks. The calls see only what the policy saw and wrote, never a grader
 import asyncio
 import json
 import logging
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from functools import partial
-from itertools import chain, pairwise
+from itertools import batched, chain, pairwise
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from rolloutengine.harness.shell import task_prompt
-from rolloutengine.models import GradedRollout
+from rolloutengine.models import GradedRollout, RolloutOperation
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec, TextMessage
 from taskforge.content_hash import digest
@@ -49,6 +49,9 @@ IDEAS_PER_ROLLOUT = 3
 MERGE_ATTEMPTS = 3
 ROLLOUTS_WITHOUT_IDEAS = "failed_runs.rollouts_without_ideas"
 """The pipeline counter of the failed rollouts whose reply stayed invalid."""
+POLICY_INTERRUPTIONS = frozenset({RolloutOperation.ATTEMPT, RolloutOperation.ADVANCE})
+"""The interruptions that the policy can cause: a slow or looping policy runs past the attempt deadline, and a bad
+tool call can stop the harness after a model turn."""
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +136,8 @@ constraints carefully, do a check of the work before the answer, or reach an ans
 - Write each capability as a catalog entry for the skill itself. Do not put the failed tasks, their domain, \
 their data, or their mistakes in it: a different step writes new tasks that train the skill, and the failed \
 tasks evaluate it.
-- A rollout that stopped at its turn limit shows a gap only if it used its turns on repeated or unneeded steps. \
-The agent does not see the limit unless its messages state it."""
+- A rollout that stopped at its turn limit or its time limit shows a gap only if it used its turns or its time on \
+repeated or unneeded steps. The agent does not see the limits unless its messages state them."""
 
 EXTRACT_PROMPT = f"""\
 You analyze one failed rollout of a language-model agent to decide what the agent must learn next. A rollout is one \
@@ -142,10 +145,10 @@ attempt at a task: the task's messages, the agent's turns and tool calls, and th
 
 Find the general capabilities, at most {IDEAS_PER_ROLLOUT}, whose absence explains the failure. {CAPABILITY_RULES}
 
-The first line of the rollout is a JSON object with its run ID, task, grade, stop reason, and counts of turns and \
-tool calls. The second line is a JSON object with the tools that the task gave. The policy's harness can also give a \
-shell tool and the functions of the tool providers. After it, each message starts a new line with its number, for \
-example [0]."""
+The first line of the rollout is a JSON object with its run ID, task, grade, stop reason, the operation that \
+interrupted it if any, and counts of turns and tool calls. The second line is a JSON object with the tools that the \
+task gave. The policy's harness can also give a shell tool and the functions of the tool providers. After it, each \
+message starts a new line with its number, for example [0]."""
 
 MERGE_PROMPT = f"""\
 Each line is a capability that failed rollouts of a language-model agent lack, with the ID of the line and the \
@@ -155,12 +158,12 @@ merged capability holds. {CAPABILITY_RULES}"""
 
 
 def analyze_failed_runs(
-    rollouts: Dataset[tuple[TaskSpec, GradedRollout]],
+    rollouts: Sequence[tuple[TaskSpec, GradedRollout]],
     make_client: MakeClient,
     *,
     pass_threshold: float,
     max_new_ideas: int,
-    num_shards: int,
+    batch_size: int,
     policy: LLMPolicy,
     merge_policy: LLMPolicy,
     catalog_version: str,
@@ -169,29 +172,32 @@ def analyze_failed_runs(
 
     Each graded rollout comes with the task that it ran, because the record does not keep the tools that the task
     gave. ``policy`` samples the call for each rollout, and ``merge_policy`` samples the merges, whose replies are
-    longer. Each of the ``num_shards`` groups gets one merge call. Choose it so that a group has at most about 1,000
-    failed rollouts, because the merge prompt of a larger group can be too long for the context window. Run the plan
-    outside an event loop, for example ``ctx.execute(plan).results``.
+    longer. Each batch of ``batch_size`` rollouts is one shard: the calls of its rollouts run one after another on one
+    worker, and its failed rollouts get one merge call. Batches run in parallel. Use at most about 1,000 rollouts in
+    a batch, because the merge prompt of a larger batch can be too long for the context window. Run the plan outside
+    an event loop, for example ``ctx.execute(plan).results``.
     """
     merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_policy)
     return (
-        rollouts.filter(lambda pair: policy_failed(pair[1], pass_threshold))
+        Dataset.from_list(list(batched(rollouts, batch_size)))
+        .flat_map(lambda batch: batch)
+        .filter(lambda pair: policy_failed(pair[1], pass_threshold))
         .flat_map(partial(yield_ideas, make_client=make_client, policy=policy))
-        .reshard(num_shards)
         .reduce(merge, partial(merge_idea_lists, merge=merge))
         .flat_map(partial(to_ideas, catalog_version=catalog_version))
     )
 
 
 def policy_failed(graded: GradedRollout, pass_threshold: float) -> bool:
-    """A grade below ``pass_threshold``, or no valid submission.
+    """A grade below ``pass_threshold``, no valid submission, or an interruption in ``POLICY_INTERRUPTIONS``.
 
-    An interrupted attempt, and an infrastructure, task, or grader failure, is not a failure of the policy, so it
-    does not become a training target.
+    A task, grader, or infrastructure failure, and an interruption by the model server or the machine, shows no gap
+    of the policy, so it does not become a training target.
     """
+    failure = graded.rollout.failure
+    if failure is not None:
+        return failure.diagnostics.get("operation") in POLICY_INTERRUPTIONS
     grade = graded.grade
-    if graded.rollout.failure is not None:
-        return False
     if grade.status == Outcome.SUBMISSION_FAILURE:
         return True
     return grade.status == Outcome.GRADED and grade.reward is not None and grade.reward < pass_threshold
@@ -288,7 +294,7 @@ def _complete[T: BaseModel](
 
 
 def _summary(task: TaskSpec, graded: GradedRollout) -> dict[str, Any]:
-    """The rollout's first line: its grade, how it stopped, and its turns and tool calls."""
+    """The rollout's first line: its grade, how it stopped or what interrupted it, and its turns and tool calls."""
     rollout, grade = graded.rollout, graded.grade
     turns = [step.turn.message for conversation in rollout.conversations for step in conversation.steps]
     calls = [_call_text(call) for message in turns for call in message.get("tool_calls") or ()]
@@ -301,6 +307,7 @@ def _summary(task: TaskSpec, graded: GradedRollout) -> dict[str, Any]:
         "outcome": grade.status.value,
         "reward": grade.reward,
         "stop_reason": rollout.stop_reason,
+        "interrupted_during": rollout.failure.diagnostics.get("operation") if rollout.failure else None,
         "turns": len(turns),
         "tool_calls": len(calls),
         "repeated_calls": sum(previous == call for previous, call in pairwise(calls)),
