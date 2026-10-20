@@ -47,7 +47,7 @@ class NativePanelRequest(Record):
     model: dict
     serialization: Serialization
     target_cluster: str
-    expert_axis_size: int = Field(ge=1)
+    expert_axis_size: int = Field(ge=1, le=1)
     replica_axis_size: int = Field(ge=1)
 
 

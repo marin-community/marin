@@ -215,7 +215,9 @@ def test_suite_reads_weights_once_and_persists_real_generations_and_purpose_spec
     assert manifest["pt"]["panel_sha256"] == request.pt_panel_sha256
 
 
-@pytest.mark.parametrize("failure", ("second-panel-identity", "second-panel-context", "pt-bytes", "vocabulary"))
+@pytest.mark.parametrize(
+    "failure", ("second-panel-identity", "second-panel-context", "pt-bytes", "vocabulary", "expert-mesh")
+)
 def test_suite_rejects_all_input_mismatches_before_checkpoint_io(tmp_path, suite_inputs, failure):
     request, tokenizer = suite_inputs
     if failure == "second-panel-identity":
@@ -230,6 +232,10 @@ def test_suite_rejects_all_input_mismatches_before_checkpoint_io(tmp_path, suite
         request = request.model_copy(update={"panels": (request.panels[0], second)})
     elif failure == "pt-bytes":
         Path(request.pt_panel_path).write_text("{}")
+    elif failure == "expert-mesh":
+        # sonic_cute shards experts through FSDP data, not an expert-parallel axis.
+        # Reject the unsupported mesh before touching a full-model checkpoint.
+        request = request.model_copy(update={"expert_axis_size": 8})
     else:
         config = draccus.decode(GrugModelConfig, request.model)
         request = request.model_copy(update={"model": draccus.encode(dataclasses.replace(config, vocab_size=16))})

@@ -211,6 +211,9 @@ uv run python -m experiments.grug.moe_hero_ep.format_suite \
 Set the required `pt_repetitions` to `3` for baseline A and `1` for B/C/D/E
 (supported range: 1–10). The suite measures and saves PT loss/routing before
 generation; its report retains every repeat and the observed loss range.
+The dropless local evaluator requires `expert_axis_size: 1`; on the 64-GPU
+rack use `replica_axis_size: 1`, leaving the mesh data axis at 64. This is
+the existing sampler’s FSDP layout. The SFT training mesh is configured separately.
 
 Use purpose `content` only for fixed-reference accuracy panels. Human freeform
 formatting examples use purpose `format`. The PT/content panel identities stay

@@ -206,7 +206,7 @@ class NativePtRequest(Record):
     tokenizer: str
     tokenizer_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    expert_axis_size: int = Field(ge=1)
+    expert_axis_size: int = Field(ge=1, le=1)
     replica_axis_size: int = Field(ge=1)
 
 

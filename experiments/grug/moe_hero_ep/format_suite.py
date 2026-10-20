@@ -65,7 +65,7 @@ class NativeSuiteRequest(Record):
     tokenizer: str = Field(min_length=1)
     tokenizer_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     target_cluster: str = Field(min_length=1)
-    expert_axis_size: int = Field(ge=1)
+    expert_axis_size: int = Field(ge=1, le=1)
     replica_axis_size: int = Field(ge=1)
     panels: tuple[SuitePanel, ...] = Field(min_length=1)
     pt_repetitions: int = Field(ge=1, le=10)
