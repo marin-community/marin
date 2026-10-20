@@ -29,7 +29,7 @@ def migrate(connection: Connection) -> None:
         connection.execute(text(statement))
 
 
-def current_pool(connection: Connection) -> dict[str, Any]:
+def current_pool(connection: Connection) -> dict[str, str]:
     row = (
         connection.execute(
             text("SELECT l.* FROM pool_current c JOIN pool_loads l USING (load_id) WHERE c.name = 'latest'")

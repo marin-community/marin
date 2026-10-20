@@ -108,13 +108,9 @@ def corpus_chunk_cursor(database: sqlite3.Connection) -> sqlite3.Cursor:
 
 
 def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
-    """Upsert changed github/discord chunks; delete rows gone upstream. Returns (upserted, deleted).
-
-    MarinMirror assigns new SQLite row numbers on every build. Match by canonical
-    source URL and part, and keep a local database id. A separate digest covers all
-    mirrored fields, including metadata and deferred embeddings that the upstream
-    embedding hash does not capture. Rows stream one BATCH at a time.
-    """
+    """Mirror activity changes, preserving chunk IDs. Return (upserted, deleted) counts."""
+    # MarinMirror rebuilds SQLite rowids each time. The canonical URL/part identifies
+    # a chunk across builds, including metadata-only edits and delayed embeddings.
     existing = {
         ChunkIdentity(row.source, row.kind, row.url, row.part): StoredChunk(row.id, row.sync_hash)
         for row in conn.execute(

@@ -1,6 +1,8 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
+const CASE_PAGE_SIZE = 60;
+
 const $ = (id) => document.getElementById(id);
 var state = { runs: [], run: null, requestedRun: null, cases: [], ideas: [], summary: null, overviewSummary: null, selected: null, detail: null, tab: "conversation", page: 0, total: 0, compare: [], busy: false, submittingIdea: false };
 var categories = ["reasoning", "instruction_following", "factuality", "coding", "data_analysis", "tool_use", "planning", "state_tracking", "formatting", "repetition", "calibration"];
@@ -248,9 +250,9 @@ function renderCases() {
     return button;
   });
   $("case-list").replaceChildren(...buttons.length ? buttons : [node("div", "Waiting for matching conversations\u2026", "empty")]);
-  $("page").textContent = `${state.page + 1} / ${Math.max(1, Math.ceil(state.total / 60))}`;
+  $("page").textContent = `${state.page + 1} / ${Math.max(1, Math.ceil(state.total / CASE_PAGE_SIZE))}`;
   $("previous").disabled = state.page === 0;
-  $("next").disabled = (state.page + 1) * 60 >= state.total;
+  $("next").disabled = (state.page + 1) * CASE_PAGE_SIZE >= state.total;
 }
 function duration(value) {
   return value === void 0 ? "" : `${Number(value).toFixed(1)}s`;
@@ -504,7 +506,7 @@ async function refresh() {
       return;
     }
     if (!state.compare.length) state.compare = candidates().slice(0, 2).map((item) => item.key);
-    const params = new URLSearchParams({ run_id: id, limit: 60, offset: state.page * 60 });
+    const params = new URLSearchParams({ run_id: id, limit: CASE_PAGE_SIZE, offset: state.page * CASE_PAGE_SIZE });
     for (const key of ["category", "mode", "state", "breakage", "model"]) if ($(`${key}-filter`).value) params.set(key, $(`${key}-filter`).value);
     if ($("idea-filter").value) params.set("idea_id", $("idea-filter").value);
     const summaryRequest = api(`summary?run_id=${encodeURIComponent(id)}`);

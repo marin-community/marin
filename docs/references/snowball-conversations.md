@@ -21,8 +21,15 @@ revocation therefore take effect on cached reads.
 
 Both conversation frontends use the source and build dependencies under
 `snowball_conversation_lab/web/`. Their manifests record that directory as a
-shared build input. Each package retains its own backend and access policy:
-conversation lab requires login, while the comparison permits public reads.
+shared build input. The shared `content.html` holds the conversation controls,
+summary panels and case browser; each applet keeps its title, header and intro.
+
+Each package retains its own backend and access policy: conversation lab requires
+login, while the comparison permits public reads. Marina loads backend modules
+into independent package namespaces so retained revisions can serve requests
+with their original code. There is no installed shared Snowball backend module;
+the two packages keep separate backend sources.
+
 Browsers poll every four seconds while visible, skip polling while hidden, and
 refresh when shown again. An already running refresh can finish after the page
 becomes hidden.

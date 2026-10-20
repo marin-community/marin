@@ -6,6 +6,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import Barrier, Lock
+from types import ModuleType
 from typing import cast
 from uuid import uuid4
 
@@ -30,6 +31,13 @@ class SnowballServices:
 
     def engine(self) -> Engine:
         return self.database_engine
+
+
+@dataclass
+class ConversationApp:
+    module: ModuleType
+    client: TestClient
+    engine: Engine
 
 
 @pytest.fixture
@@ -68,7 +76,7 @@ def conversation(request, snowball_services):
             )
         )
     with TestClient(module.create_api(snowball_services)) as client:
-        yield module, client, snowball_services.engine()
+        yield ConversationApp(module, client, snowball_services.engine())
 
 
 def summary(client, **parameters):
@@ -79,7 +87,7 @@ def summary(client, **parameters):
 
 
 def test_summary_cache_keeps_runs_and_modes_separate_then_refreshes(conversation, monkeypatch):
-    module, client, engine = conversation
+    module, client, engine = conversation.module, conversation.client, conversation.engine
     clock = [100.0]
     monkeypatch.setattr(module, "monotonic", lambda: clock[0])
     initial = summary(client, run_id="one")
@@ -97,7 +105,7 @@ def test_summary_cache_keeps_runs_and_modes_separate_then_refreshes(conversation
 
 
 def test_concurrent_summary_misses_share_database_aggregations(conversation):
-    _, client, engine = conversation
+    client, engine = conversation.client, conversation.engine
     ready = Barrier(8)
     lock = Lock()
     aggregate_queries = 0
@@ -124,7 +132,7 @@ def test_concurrent_summary_misses_share_database_aggregations(conversation):
 
 
 def test_cached_summary_still_checks_worker_and_session_access(conversation):
-    module, client, engine = conversation
+    module, client, engine = conversation.module, conversation.client, conversation.engine
     assert summary(client, run_id="one")["cases"] == 2
     worker = VerifiedIdentity(user_id="worker@example.iam.gserviceaccount.com", role="user")
     with identity_scope(worker):
@@ -146,7 +154,7 @@ def test_cached_summary_still_checks_worker_and_session_access(conversation):
 
 
 def test_summary_preserves_private_and_public_read_access(conversation):
-    module, client, _ = conversation
+    module, client = conversation.module, conversation.client
     response = client.get("/summary", params={"run_id": "one"})
     assert response.status_code == (401 if module is lab else 200)
 

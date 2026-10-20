@@ -13,7 +13,9 @@ await build({
   bundle: true,
   format: "iife",
 });
-await copyFile(resolve(app, "index.html"), resolve(dist, "index.html"));
+const template = await readFile(resolve(app, "index.html"), "utf8");
+const content = await readFile(resolve(shared, "content.html"), "utf8");
+await writeFile(resolve(dist, "index.html"), template.replace("    <!-- CONVERSATION_CONTENT -->\n", content));
 await copyFile(resolve(shared, "markdown.css"), resolve(dist, "markdown.css"));
 const style = await readFile(resolve(shared, "style.css"), "utf8");
 const extra = await readFile(resolve(app, "style.css"), "utf8");

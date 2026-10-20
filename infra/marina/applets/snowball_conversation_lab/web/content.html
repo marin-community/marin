@@ -1,0 +1,38 @@
+    <div id="error" role="alert" hidden></div>
+    <section id="run-status" class="status-grid" aria-label="Live run statistics"></section>
+    <section id="models" class="models" aria-label="Pinned checkpoints"></section>
+    <section class="idea-panel" aria-label="Queue evaluation ideas">
+      <div class="idea-heading"><div><p class="eyebrow">DIRECT THE EXPLORATION</p><h2>What should GLM try next?</h2><p class="subtle">Queue a topic to riff on or an exact opening prompt. Free slots pick it up before the next random task.</p></div><span id="idea-count" class="chip"></span></div>
+      <form id="idea-form">
+        <label class="idea-label" for="idea-text">Topic or opening prompt</label>
+        <textarea id="idea-text" required maxlength="6000" rows="2" placeholder="Check ability to follow JSON schemas: nested objects, strict types, missing fields, and changes across turns."></textarea>
+        <div class="idea-options">
+          <label>Use as<select id="idea-kind"><option value="topic">Topic · GLM invents chats</option><option value="prompt">Exact opening prompt</option></select></label>
+          <label>Workload<select id="idea-mode"><option value="auto">Mix of chat + agentic</option><option value="chat">Chat</option><option value="agentic">Agentic · ShellSim</option></select></label>
+          <label>Conversations<input id="idea-chats" type="number" min="1" max="100" value="4" required></label>
+          <button id="idea-submit" type="submit" aria-describedby="idea-run-status">Queue for this run ↗</button>
+          <span id="idea-run-status" role="status" class="subtle" hidden>Run stopped</span>
+        </div>
+        <p id="idea-feedback" role="status" class="subtle"></p>
+      </form>
+      <div id="idea-list" class="idea-list"></div>
+    </section>
+    <div class="overview-heading"><div><h2>Where each model bends</h2><p>GLM’s trace-backed judgments on these exploratory tasks. Scores describe this sample, not a benchmark.</p></div><div class="overview-actions"><label class="overview-workload">Workload<select id="overview-mode" aria-label="Summary workload"><option value="">Chat + agentic</option><option value="chat">Chat</option><option value="agentic">Agentic · ShellSim</option></select></label><button id="overview-toggle" class="text-button">Hide overview</button></div></div>
+    <section id="overview" class="overview"></section>
+    <section class="lab">
+      <aside class="case-browser">
+        <div class="browser-heading"><h2>Conversations <span id="case-count"></span></h2><span class="live-dot"></span></div>
+        <div class="filters">
+          <select id="category-filter" aria-label="Task category"><option value="">All task categories</option></select>
+          <select id="mode-filter" aria-label="Task mode"><option value="">Chat + agentic</option><option value="chat">Chat</option><option value="agentic">Agentic · ShellSim</option></select>
+          <select id="state-filter" aria-label="Task status"><option value="">All task statuses</option><option value="complete">Completed</option><option value="generating">Generating</option><option value="reviewing">Reviewing</option><option value="error">Failed</option><option value="review_error">Review failed</option><option value="interrupted">Interrupted</option></select>
+          <select id="breakage-filter" aria-label="Breakage category"><option value="">All outcomes</option></select>
+          <select id="model-filter" aria-label="Model with breakage"><option value="">Breakages · any model</option></select>
+          <select id="idea-filter" aria-label="Queued idea"><option value="">All queued + random tasks</option></select>
+        </div>
+        <div id="case-list" class="case-list"></div>
+        <div class="pagination"><button id="previous">← Previous</button><span id="page"></span><button id="next">Next →</button></div>
+      </aside>
+      <article id="detail" class="detail"><div class="empty"><span class="empty-symbol">↗</span><h2>The next interesting failure is out there.</h2><p>Select a conversation to inspect its paired trace.</p></div></article>
+    </section>
+    <footer><span>WildChat inspires the scenarios; GLM writes the user turns and reviews the outcomes.</span><span>Thinking is shown separately from public answers. ShellSim runs in an isolated virtual filesystem.</span></footer>

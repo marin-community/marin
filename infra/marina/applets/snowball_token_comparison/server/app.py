@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Private, durable trace storage and comparison queries for the conversation lab."""
+"""Durable trace storage and public reads for the Snowball 50M-token comparison."""
 
 import json
 import secrets
