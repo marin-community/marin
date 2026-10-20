@@ -375,6 +375,7 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
 
 
 def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_source_digest = skyrl_runtime_digest()
     step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
@@ -422,7 +423,7 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert launch["iris"]["timeout"] == 1800
     assert launch["schema_version"] == 1
     assert launch["run"]["export_hf"] is True
-    assert launch["runtime"]["source_digest"] == skyrl_runtime_digest()
+    assert launch["runtime"]["source_digest"] == expected_source_digest
     assert launch["iris"]["allocation"] == {
         "num_nodes": 1,
         "gpus_per_node": 4,
@@ -538,11 +539,6 @@ def test_tasktrove_selection_rejects_ambiguous_inputs(selection: Callable[[], Ta
 def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     """A launcher that dies before printing its terminal response must still say why."""
 
-    monkeypatch.setattr(
-        subprocess,
-        "Popen",
-        lambda command, **_kwargs: _FakeLauncherProcess(response="", logs="entrypoint must be a registered name\n"),
-    )
     catalog_rows = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
     step = skyrl_step(_spec(), _execution())
@@ -553,6 +549,12 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
             runtime_args=step.runtime_args,
             deps=step.deps,
         )
+    )
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda command, **_kwargs: _FakeLauncherProcess(response="", logs="entrypoint must be a registered name\n"),
     )
 
     with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):

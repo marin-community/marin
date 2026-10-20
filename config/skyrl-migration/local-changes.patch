@@ -1,8 +1,751 @@
+diff --git a/cloud/iris/iris_backend.py b/cloud/iris/iris_backend.py
+index bcb3a1c9e0fc102893cfc01acd2ee0e5bbe18b78..69c186eb3957ad2ec03a37fd47c02caa2c97f4cc 100644
+--- a/cloud/iris/iris_backend.py
++++ b/cloud/iris/iris_backend.py
+@@ -288,7 +288,7 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
+         rendezvous_dir=ray["rendezvous_dir"],
+         cluster=iris["cluster"],
+         cluster_config=iris["cluster_config"],
+-        runtime_commit=runtime["launcher_commit"],
++        source_digest=runtime["source_digest"],
+         runtime_profile=RuntimeProfile(runtime["profile"]),
+         job_name=iris["job_name"],
+         priority=iris["priority"],
+@@ -324,7 +324,7 @@ class IrisBackend:
+         if config.run.submission == SubmissionMode.PREPARE:
+             raise ValueError("Prepare mode validates a launch without submitting it")
+         with contextlib.redirect_stdout(sys.stderr):
+-            return launch(args, config.runtime.launcher_commit)
++            return launch(args, config.runtime.source_digest)
+ 
+     def export_terminal_policy(self, config_path: Path) -> None:
+         export_terminal_policy(config_path)
+@@ -805,9 +805,9 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
+     return _build_task_shell(args, controller_cmd, pythonpath)
+ 
+ 
+-def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcome:
++def launch(args: SimpleNamespace, expected_source_digest: str) -> LaunchOutcome:
+     """Submit a resolved launch config and, unless detached, wait for its terminal state."""
+-    workspace = build_runtime_bundle(expected_launcher_commit)
++    workspace = build_runtime_bundle(expected_source_digest)
+ 
+     if not args.job_name:
+         args.job_name = f"rl-iris-{time.strftime('%Y%m%d-%H%M%S')}"
+@@ -839,7 +839,7 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+     user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
+     print(f"[rl-iris] Job:        /{user}/{args.job_name}", flush=True)
+     print(f"[rl-iris] Cluster:    {args.cluster}  ({args.cluster_config})", flush=True)
+-    print(f"[rl-iris] Runtime:    {args.runtime_commit} ({args.runtime_profile.value})", flush=True)
++    print(f"[rl-iris] Runtime:    {args.source_digest} ({args.runtime_profile.value})", flush=True)
+     print(
+         f"[rl-iris] Topology:   {args.num_nodes} node(s) x {gpu_spec}  "
+         f"(= {args.num_nodes * args.gpus_per_node} GPUs, exclusive, gang/leafgroup)",
+@@ -1098,7 +1098,7 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+             environment=EnvironmentSpec(
+                 env_vars=env_vars,
+                 extras=["gpu"],
+-                setup_scripts=[task_setup_script(args.runtime_commit, args.runtime_profile)],
++                setup_scripts=[task_setup_script(args.source_digest, args.runtime_profile)],
+             ),
+             constraints=constraints or None,
+             coscheduling=coscheduling,
+diff --git a/cloud/iris/launch.py b/cloud/iris/launch.py
+index 11d36573d6f39da75acbb9177d3b5c2e9d0bf071..d8db13992b94c515e842abeb792832a70fa74aef 100644
+--- a/cloud/iris/launch.py
++++ b/cloud/iris/launch.py
+@@ -19,7 +19,7 @@ from omegaconf import DictConfig, OmegaConf
+ 
+ from cloud.iris.artifacts import terminal_checkpoint_step, write_json
+ from cloud.iris.launch_config import SubmissionMode, load_launch_config
+-from cloud.iris.runtime_bundle import runtime_bundle_inputs
++from cloud.iris.runtime_bundle import resolve_launcher_source, runtime_bundle_inputs
+ from marinskyrl.checkpoint_paths import policy_export_path
+ from marinskyrl.hf_model import validate_portable_hf_model_files
+ from marinskyrl.packed_tasks import select_task_references
+@@ -61,7 +61,7 @@ class LaunchResult:
+     state: LaunchState
+     iris_job_id: str | None
+     iris_job_state: str | None
+-    launcher_commit: str
++    source_digest: str
+     runtime_profile: str
+     model: ExportedPolicy | None
+     failure: str | None
+@@ -135,7 +135,7 @@ def _result(
+         state=state,
+         iris_job_id=outcome.job_id if outcome else None,
+         iris_job_state=outcome.job_state if outcome else None,
+-        launcher_commit=str(config.runtime.launcher_commit),
++        source_digest=str(config.runtime.source_digest),
+         runtime_profile=str(config.runtime.profile),
+         model=model,
+         failure=failure,
+@@ -163,7 +163,7 @@ def _record_failure(
+ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
+     """Execute the lifecycle declared by one resolved launch config."""
+     config = _prepare_config(load_launch_config(config_path))
+-    runtime_bundle_inputs(str(config.runtime.launcher_commit))
++    runtime_bundle_inputs(str(config.runtime.source_digest))
+     terminal_manifest_uri = str(config.artifacts.terminal_manifest_uri)
+     if StoragePath(terminal_manifest_uri).exists():
+         raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_manifest_uri}")
+@@ -222,6 +222,7 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
+ def create_parser() -> argparse.ArgumentParser:
+     parser = argparse.ArgumentParser(description="Launch SkyRL from one resolved Hydra config")
+     commands = parser.add_subparsers(dest="component", required=True)
++    commands.add_parser("source-digest", help="Identify the checked-out runtime, assets, and lock")
+     iris = commands.add_parser("iris")
+     iris_commands = iris.add_subparsers(dest="action", required=True)
+     launch = iris_commands.add_parser("launch")
+@@ -231,6 +232,9 @@ def create_parser() -> argparse.ArgumentParser:
+ 
+ def main(argv: list[str] | None = None) -> int:
+     args = create_parser().parse_args(argv)
++    if args.component == "source-digest":
++        print(resolve_launcher_source().digest)
++        return 0
+     with contextlib.redirect_stdout(sys.stderr):
+         result = execute_launch(args.config)
+     json.dump(asdict(result), sys.stdout, sort_keys=True)
+diff --git a/cloud/iris/launch_config.py b/cloud/iris/launch_config.py
+index ea2cda670db60e0525cd3a4277ed63d297a7d5ba..dfe694284272a1a88aa6117f47a3ed207f061953 100644
+--- a/cloud/iris/launch_config.py
++++ b/cloud/iris/launch_config.py
+@@ -62,7 +62,7 @@ class RunConfig:
+ class RuntimeConfig:
+     """MarinSkyRL runtime provenance."""
+ 
+-    launcher_commit: str = MISSING
++    source_digest: str = MISSING
+     profile: str = MISSING
+     entrypoint: str = ""
+     training_type: str | None = None
+diff --git a/cloud/iris/open_mopd_evaluation.py b/cloud/iris/open_mopd_evaluation.py
+index 0760045c9b0b21962e5556508bb2b32c608d9f57..d2a3e34a4e4d991704ee49e43c68a0012b867611 100644
+--- a/cloud/iris/open_mopd_evaluation.py
++++ b/cloud/iris/open_mopd_evaluation.py
+@@ -94,7 +94,7 @@ class EvaluationLaunchPlan:
+     gate: str
+     job_name: str
+     gpu_slice: str
+-    launcher_commit: str
++    source_digest: str
+     source_commit: str
+     protocol_source_commit: str
+     model_repository: str | None
+@@ -391,8 +391,8 @@ def build_plan(
+         selected_slice,
+         "--task-image",
+         task_image,
+-        "--launcher-commit",
+-        source.commit,
++        "--source-digest",
++        source.digest,
+     )
+     if normalized_checkpoint_uri is not None and checkpoint_step is not None:
+         task_args += ("--checkpoint-uri", normalized_checkpoint_uri, "--checkpoint-step", str(checkpoint_step))
+@@ -442,7 +442,7 @@ def build_plan(
+         gate=gate,
+         job_name=job_name,
+         gpu_slice=selected_slice,
+-        launcher_commit=source.commit,
++        source_digest=source.digest,
+         source_commit=fidelity.source.commit,
+         protocol_source_commit=config.protocol.source_commit,
+         model_repository=(
+diff --git a/cloud/iris/open_mopd_evaluation_task.py b/cloud/iris/open_mopd_evaluation_task.py
+index cb89fd8865481d09c237adc1d4a6eeef118f2855..8ea0905968b77056a74e8334367655f50ac31489 100644
+--- a/cloud/iris/open_mopd_evaluation_task.py
++++ b/cloud/iris/open_mopd_evaluation_task.py
+@@ -451,7 +451,7 @@ def argument_parser() -> argparse.ArgumentParser:
+     parser.add_argument("--output-uri", required=True)
+     parser.add_argument("--gpu-slice", required=True)
+     parser.add_argument("--task-image", required=True)
+-    parser.add_argument("--launcher-commit", required=True)
++    parser.add_argument("--source-digest", required=True)
+     parser.add_argument("--checkpoint-uri")
+     parser.add_argument("--checkpoint-step", type=int)
+     parser.add_argument("--model-export-uri")
+@@ -491,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
+         "planned_completions": planned_completions,
+         "maximum_output_tokens": maximum_output_tokens,
+         "task_image": args.task_image,
+-        "launcher_commit": args.launcher_commit,
++        "source_digest": args.source_digest,
+         "gpu_slice": args.gpu_slice,
+         "vllm_port_seed": vllm_port_seed,
+         "checkpoint_uri": args.checkpoint_uri,
+diff --git a/cloud/iris/open_mopd_fidelity.py b/cloud/iris/open_mopd_fidelity.py
+index 67111a0117ba549679f537ff10738e839c2abcf3..056c5dba9305d6540d9b0ff99c21bbd0754245b8 100644
+--- a/cloud/iris/open_mopd_fidelity.py
++++ b/cloud/iris/open_mopd_fidelity.py
+@@ -135,7 +135,7 @@ class FidelityLaunchPlan:
+     steps: int
+     gpu_slice: str
+     source_commit: str
+-    launcher_commit: str
++    source_digest: str
+     task_image: str
+     output_uri: str
+     evaluation_reference: ModelArtifact
+@@ -372,7 +372,7 @@ def validate_output_uri(output_uri: str, *, option_name: str = "--output-uri") -
+ def _provenance(task_image: str, source: LauncherSource) -> tuple[str, str]:
+     if not re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", task_image):
+         raise ValueError("--task-image must be a digest-addressed image reference")
+-    return source.commit, task_image
++    return source.digest, task_image
+ 
+ 
+ def _deviations(config: FidelityConfig, gpu_slice: str) -> tuple[str, ...]:
+@@ -390,7 +390,7 @@ def _iris_command(
+     cluster_config: Path,
+     output_uri: str,
+     task_image: str,
+-    launcher_commit: str,
++    source_digest: str,
+     launcher_root: Path,
+     gpu_slice: str,
+ ) -> tuple[str, ...]:
+@@ -441,8 +441,8 @@ def _iris_command(
+         gpu_slice,
+         "--task-image",
+         task_image,
+-        "--launcher-commit",
+-        launcher_commit,
++        "--source-digest",
++        source_digest,
+     )
+ 
+ 
+@@ -462,7 +462,7 @@ def build_plan(
+     gpu_slice = gpu_slice or config.hardware.gpu
+     gpu_count(gpu_slice)
+     launcher_source = resolve_launcher_source()
+-    launcher_commit, pinned_image = _provenance(task_image, launcher_source)
++    source_digest, pinned_image = _provenance(task_image, launcher_source)
+     command = _iris_command(
+         config,
+         config_path=config_path,
+@@ -470,7 +470,7 @@ def build_plan(
+         cluster_config=cluster_config,
+         output_uri=output_uri,
+         task_image=pinned_image,
+-        launcher_commit=launcher_commit,
++        source_digest=source_digest,
+         launcher_root=launcher_source.root,
+         gpu_slice=gpu_slice,
+     )
+@@ -479,7 +479,7 @@ def build_plan(
+         steps=GATES[gate],
+         gpu_slice=gpu_slice,
+         source_commit=config.source.commit,
+-        launcher_commit=launcher_commit,
++        source_digest=source_digest,
+         task_image=pinned_image,
+         output_uri=output_uri,
+         evaluation_reference=config.evaluation_reference,
+diff --git a/cloud/iris/open_mopd_fidelity_task.py b/cloud/iris/open_mopd_fidelity_task.py
+index db61c67acb9ded58ee4971499eafa1df9966c9fd..fd0b138f83e36aba811add9c510e3944e007a1ea 100644
+--- a/cloud/iris/open_mopd_fidelity_task.py
++++ b/cloud/iris/open_mopd_fidelity_task.py
+@@ -526,7 +526,7 @@ def argument_parser() -> argparse.ArgumentParser:
+     parser.add_argument("--output-uri", required=True)
+     parser.add_argument("--gpu-slice", required=True)
+     parser.add_argument("--task-image", required=True)
+-    parser.add_argument("--launcher-commit", required=True)
++    parser.add_argument("--source-digest", required=True)
+     parser.add_argument("--work-root", type=Path, default=Path("/tmp/open-mopd-fidelity"))
+     parser.add_argument("--sync-interval", type=int, default=300)
+     return parser
+@@ -543,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
+         "gate": args.gate,
+         "steps": GATES[args.gate],
+         "task_image": args.task_image,
+-        "launcher_commit": args.launcher_commit,
++        "source_digest": args.source_digest,
+         "gpu_slice": args.gpu_slice,
+     }
+     existing_manifest = read_json(join_resource_path(args.output_uri, CONTROL_MANIFEST_NAME))
+diff --git a/cloud/iris/runtime_bundle.py b/cloud/iris/runtime_bundle.py
+index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..76dff3a6817cdbb2ae97b96c85f3bebd13c37388 100644
+--- a/cloud/iris/runtime_bundle.py
++++ b/cloud/iris/runtime_bundle.py
+@@ -3,27 +3,25 @@
+ from __future__ import annotations
+ 
+ import hashlib
+-import importlib.metadata
+ import json
+ import shutil
+-import subprocess
+ import tempfile
+-import tomllib
+ from dataclasses import asdict, dataclass
+-from enum import StrEnum
+ from pathlib import Path
+-from urllib.parse import unquote, urlparse
+ 
+ from cloud.iris.paths import PROJECT_ROOT
+ 
+ BUNDLE_FILE_MANIFEST = Path("cloud/iris/runtime_bundle_files.txt")
+ BUNDLE_IDENTITY_FILE = ".marinskyrl-runtime.json"
+-DISTRIBUTION_NAME = "marinskyrl"
+-
+-
+-class LauncherSourceKind(StrEnum):
+-    CHECKOUT = "checkout"
+-    INSTALLED = "installed"
++PROVENANCE_FILE = Path("marinskyrl/_vendor_provenance.json")
++RUNTIME_SOURCE_PREFIXES = (
++    "cloud/",
++    "marinskyrl/",
++    "chat_templates/",
++    "skyrl-train/skyrl_train/",
++    "skyrl-gym/skyrl_gym/",
++    "open_mopd_versions.py",
++)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -31,8 +29,7 @@ class LauncherSource:
+     """Immutable source selected for launcher runtime files."""
+ 
+     root: Path
+-    commit: str
+-    kind: LauncherSourceKind = LauncherSourceKind.CHECKOUT
++    digest: str
+ 
+ 
+ @dataclass(frozen=True)
+@@ -43,77 +40,17 @@ class RuntimeBundleFile:
+ 
+ @dataclass(frozen=True)
+ class RuntimeBundleIdentity:
+-    launcher_commit: str
++    source_digest: str
+     files: tuple[RuntimeBundleFile, ...]
+ 
+ 
+-def _git_output(root: Path, *args: str) -> str:
+-    return subprocess.run(
+-        ["git", *args],
+-        cwd=root,
+-        check=True,
+-        capture_output=True,
+-        text=True,
+-    ).stdout.strip()
+-
+-
+-def _checkout_root(path: Path) -> Path | None:
+-    """Return the enclosing MarinSkyRL checkout, or None when the path is outside one."""
+-    result = subprocess.run(
+-        ["git", "rev-parse", "--show-toplevel"],
+-        cwd=path,
+-        check=False,
+-        capture_output=True,
+-        text=True,
+-    )
+-    if result.returncode != 0:
+-        return None
+-    root = Path(result.stdout.strip()).resolve()
+-    project_file = root / "pyproject.toml"
+-    if not project_file.is_file() or not (root / BUNDLE_FILE_MANIFEST).is_file():
+-        return None
+-    project = tomllib.loads(project_file.read_text()).get("project", {})
+-    return root if project.get("name") == DISTRIBUTION_NAME else None
+-
+-
+-def _installed_source() -> LauncherSource:
+-    try:
+-        distribution = importlib.metadata.distribution(DISTRIBUTION_NAME)
+-    except importlib.metadata.PackageNotFoundError as error:
+-        raise RuntimeError("Cannot locate an installed marinskyrl distribution outside a checkout") from error
+-    direct_url = distribution.read_text("direct_url.json")
+-    if not direct_url:
+-        raise RuntimeError("Installed marinskyrl distribution has no direct_url.json source identity")
+-
+-    source_identity = json.loads(direct_url)
+-    parsed_url = urlparse(source_identity.get("url", ""))
+-    if parsed_url.scheme == "file":
+-        checkout = Path(unquote(parsed_url.path)).resolve()
+-        if not checkout.is_dir():
+-            raise RuntimeError(f"Installed marinskyrl checkout is missing: {checkout}")
+-        root = _checkout_root(checkout)
+-        if root is None:
+-            raise RuntimeError(f"Installed marinskyrl checkout is missing or invalid: {checkout}")
+-        return LauncherSource(root=root, commit=_git_output(root, "rev-parse", "HEAD"))
+-
+-    vcs_info = source_identity.get("vcs_info")
+-    if not isinstance(vcs_info, dict) or vcs_info.get("vcs") != "git":
+-        raise RuntimeError("Installed marinskyrl distribution does not identify a Git commit")
+-    commit = vcs_info.get("commit_id")
+-    if not isinstance(commit, str) or not commit:
+-        raise RuntimeError("Installed marinskyrl distribution does not identify a Git commit")
+-    root = Path(distribution.locate_file("")).resolve()
+-    if not (root / BUNDLE_FILE_MANIFEST).is_file():
+-        raise RuntimeError(f"Installed marinskyrl distribution is missing {BUNDLE_FILE_MANIFEST}")
+-    return LauncherSource(root=root, commit=commit, kind=LauncherSourceKind.INSTALLED)
+-
+-
+ def resolve_launcher_source() -> LauncherSource:
+-    """Resolve the immutable runtime bytes a launch will ship."""
+-    checkout = _checkout_root(Path.cwd())
+-    if checkout is not None:
+-        return LauncherSource(root=checkout, commit=_git_output(checkout, "rev-parse", "HEAD"))
+-    return _installed_source()
++    """Identify the checked-out runtime source, assets, and independent lock."""
++    files = tuple(
++        RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(PROJECT_ROOT / path))
++        for path in _bundle_paths(PROJECT_ROOT)
++    )
++    return LauncherSource(root=PROJECT_ROOT, digest=_files_digest(files))
+ 
+ 
+ def _bundle_relative_path(value: str) -> Path:
+@@ -131,31 +68,31 @@ def read_manifest_paths(root: Path) -> tuple[str, ...]:
+     )
+ 
+ 
+-def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
+-    manifest = source.root / BUNDLE_FILE_MANIFEST
+-    paths: list[Path] = []
+-    for value in read_manifest_paths(source.root):
+-        path = _bundle_relative_path(value)
+-        if path in paths:
+-            raise ValueError(f"Runtime bundle manifest contains a duplicate path: {value}")
+-        if not (source.root / path).is_file():
+-            raise FileNotFoundError(f"Runtime bundle file does not exist: {value}")
++def _bundle_paths(root: Path) -> tuple[Path, ...]:
++    names = set(read_manifest_paths(root))
++    names.update({BUNDLE_FILE_MANIFEST.as_posix(), PROVENANCE_FILE.as_posix(), "pyproject.toml", "uv.lock"})
++    for prefix in RUNTIME_SOURCE_PREFIXES:
++        source = root / prefix
++        if source.is_dir():
++            names.update(path.relative_to(root).as_posix() for path in source.rglob("*") if path.is_file())
++        elif source.is_file():
++            names.add(prefix)
++    paths = []
++    for name in sorted(names):
++        path = _bundle_relative_path(name)
++        if {"tests", "__pycache__"}.intersection(path.parts) or path.suffix in {".pyc", ".pyo"}:
++            continue
++        original = root / path
++        original.resolve().relative_to(root.resolve())
++        if not original.is_file():
++            raise FileNotFoundError(f"Runtime source file is missing: {name}")
+         paths.append(path)
+-    if not paths:
+-        raise ValueError(f"Runtime bundle manifest is empty: {manifest}")
+     return tuple(paths)
+ 
+ 
+-def _reject_uncommitted_runtime(source: LauncherSource, paths: tuple[Path, ...]) -> None:
+-    if source.kind is LauncherSourceKind.INSTALLED:
+-        return
+-    relative_paths = [BUNDLE_FILE_MANIFEST.as_posix(), *(path.as_posix() for path in paths)]
+-    status = _git_output(source.root, "status", "--porcelain", "--untracked-files=all", "--", *relative_paths)
+-    if status:
+-        raise RuntimeError(
+-            "Runtime bundle inputs contain uncommitted changes, so launcher_commit cannot identify their bytes:\n"
+-            f"{status}"
+-        )
++def _files_digest(files: tuple[RuntimeBundleFile, ...]) -> str:
++    encoded = json.dumps([(entry.path, entry.sha256) for entry in files], separators=(",", ":")).encode()
++    return hashlib.sha256(encoded).hexdigest()
+ 
+ 
+ def _sha256(path: Path) -> str:
+@@ -167,7 +104,7 @@ def _sha256(path: Path) -> str:
+ 
+ 
+ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+-    """Verify the files synced into an Iris task and return their launcher commit."""
++    """Verify the files synced into an Iris task and return their source digest."""
+     root = workspace or PROJECT_ROOT
+     identity_path = root / BUNDLE_IDENTITY_FILE
+     if not identity_path.is_file():
+@@ -175,9 +112,9 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+     value = json.loads(identity_path.read_text())
+     if not isinstance(value, dict):
+         raise RuntimeError(f"Runtime bundle identity is invalid: {identity_path}")
+-    launcher_commit = value.get("launcher_commit")
++    source_digest = value.get("source_digest")
+     file_values = value.get("files")
+-    if not isinstance(launcher_commit, str) or not isinstance(file_values, list):
++    if not isinstance(source_digest, str) or not isinstance(file_values, list):
+         raise RuntimeError(f"Runtime bundle identity is invalid: {identity_path}")
+     files: list[RuntimeBundleFile] = []
+     for entry in file_values:
+@@ -193,24 +130,26 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+         bundled_file = root / relative_path
+         if not bundled_file.is_file() or _sha256(bundled_file) != entry.sha256:
+             raise RuntimeError(f"Runtime bundle file does not match its recorded identity: {entry.path}")
+-    return launcher_commit
++    actual = tuple(RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(root / path)) for path in _bundle_paths(root))
++    if _files_digest(actual) != source_digest or _files_digest(tuple(files)) != source_digest:
++        raise ValueError("Bundled source files do not match the selected runtime identity")
++    return source_digest
+ 
+ 
+-def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource, tuple[Path, ...]]:
++def runtime_bundle_inputs(expected_source_digest: str) -> tuple[LauncherSource, tuple[Path, ...]]:
+     """Validate and return the runtime files identified by a launch request."""
+     source = resolve_launcher_source()
+-    if source.commit != expected_launcher_commit:
++    if source.digest != expected_source_digest:
+         raise ValueError(
+-            f"Selected launcher checkout commit {source.commit} does not match requested {expected_launcher_commit}"
++            f"Selected runtime source identity {source.digest} does not match requested {expected_source_digest}"
+         )
+-    paths = _bundle_paths(source)
+-    _reject_uncommitted_runtime(source, paths)
++    paths = _bundle_paths(source.root)
+     return source, paths
+ 
+ 
+-def build_runtime_bundle(expected_launcher_commit: str) -> Path:
++def build_runtime_bundle(expected_source_digest: str) -> Path:
+     """Copy the selected runtime files into an Iris workspace."""
+-    source, paths = runtime_bundle_inputs(expected_launcher_commit)
++    source, paths = runtime_bundle_inputs(expected_source_digest)
+ 
+     workspace = Path(tempfile.mkdtemp(prefix="marinskyrl-runtime-bundle-"))
+     files: list[RuntimeBundleFile] = []
+@@ -219,6 +158,8 @@ def build_runtime_bundle(expected_launcher_commit: str) -> Path:
+         destination.parent.mkdir(parents=True, exist_ok=True)
+         shutil.copy2(source.root / relative_path, destination)
+         files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
+-    identity = RuntimeBundleIdentity(launcher_commit=source.commit, files=tuple(files))
++    identity = RuntimeBundleIdentity(source_digest=source.digest, files=tuple(files))
++    if _files_digest(identity.files) != expected_source_digest:
++        raise ValueError("Runtime source changed while building its bundle")
+     (workspace / BUNDLE_IDENTITY_FILE).write_text(json.dumps(asdict(identity), indent=2, sort_keys=True) + "\n")
+     return workspace
+diff --git a/cloud/iris/runtime_environment.py b/cloud/iris/runtime_environment.py
+index 040e332390eb5ba18c7b3099b3f3f72609a3a588..2c1d14460ce824862bcbabfc645bd3d8bfeef5da 100644
+--- a/cloud/iris/runtime_environment.py
++++ b/cloud/iris/runtime_environment.py
+@@ -6,8 +6,7 @@ import shlex
+ from enum import StrEnum
+ 
+ 
+-MARINSKYRL_REPOSITORY = "https://github.com/marin-community/MarinSkyRL.git"
+-MARINSKYRL_TASK_ROOT = "/app/marinskyrl"
++MARINSKYRL_TASK_ROOT = "/app"
+ MARINSKYRL_ACTIVATION_FILE = f"{MARINSKYRL_TASK_ROOT}/.iris-runtime-env"
+ MARINSKYRL_BOOTSTRAP_SCRIPT = "cloud/iris/bootstrap_runtime.sh"
+ CHECKPOINT_EXPORT_ENTRYPOINT = "skyrl_train.entrypoints.checkpoint_export"
+@@ -44,18 +43,15 @@ def runtime_profile_for_strategy(
+     raise ValueError(f"Unsupported training strategy: {strategy}")
+ 
+ 
+-def task_setup_script(commit: str, profile: RuntimeProfile) -> str:
+-    """Build the Iris setup script for a frozen SkyRL checkout and dependency profile."""
++def task_setup_script(source_digest: str, profile: RuntimeProfile) -> str:
++    """Verify bundled source and install its independently frozen dependency profile."""
+     checkout = MARINSKYRL_TASK_ROOT
+     activation_file = MARINSKYRL_ACTIVATION_FILE
+     bootstrap_script = f"{checkout}/{MARINSKYRL_BOOTSTRAP_SCRIPT}"
+     return f"""set -euo pipefail
+ checkout={shlex.quote(checkout)}
+-git init -q "$checkout"
+-git -C "$checkout" remote add origin {shlex.quote(MARINSKYRL_REPOSITORY)}
+-git -C "$checkout" fetch --depth=1 origin {shlex.quote(commit)}
+-git -C "$checkout" checkout -q --detach FETCH_HEAD
+-test "$(git -C "$checkout" rev-parse HEAD)" = {shlex.quote(commit)}
++cd "$checkout"
++python3.12 -c {shlex.quote('from cloud.iris.runtime_bundle import validate_bundled_runtime; assert validate_bundled_runtime() == ' + repr(source_digest))}
+ bash {shlex.quote(bootstrap_script)} \
+   "$checkout" \
+   "$IRIS_VENV" \
+diff --git a/cloud/iris/skyrl_entrypoint.py b/cloud/iris/skyrl_entrypoint.py
+index 9fb5a71ffa4317ad024112dbcf508eedaa89b722..d3f6b9513bfc79975a0aa0a6b7a53b659e31679a 100644
+--- a/cloud/iris/skyrl_entrypoint.py
++++ b/cloud/iris/skyrl_entrypoint.py
+@@ -21,7 +21,7 @@ def run_config(config_path: Path) -> None:
+     if config.skyrl.get("trainer", {}).get("mismatch_probe", {}).get("enabled"):
+         with open_dict(config.skyrl):
+             config.skyrl.runtime = {
+-                "launcher_commit": str(config.runtime.launcher_commit),
++                "source_digest": str(config.runtime.source_digest),
+                 "checkpoint_path": str(config.skyrl.trainer.resume_path or config.inputs.model.uri),
+             }
+     run(config.skyrl)
+diff --git a/cloud/iris/tests/test_launch_config.py b/cloud/iris/tests/test_launch_config.py
+index 6dafa824ed392ff311d320bc71b48841afb022d8..b9b756d66aec7ac754061ac6ec0a68153b322283 100644
+--- a/cloud/iris/tests/test_launch_config.py
++++ b/cloud/iris/tests/test_launch_config.py
+@@ -38,7 +38,7 @@ def _raw_config() -> dict[str, Any]:
+             "export_hf": True,
+         },
+         "runtime": {
+-            "launcher_commit": "a" * 40,
++            "source_digest": "a" * 64,
+             "profile": "megatron",
+             "entrypoint": "skyrl_train.entrypoints.main_base",
+         },
+diff --git a/cloud/iris/tests/test_open_mopd_evaluation.py b/cloud/iris/tests/test_open_mopd_evaluation.py
+index 841ae67e8fe703957117561ee592b95cb72fc77e..db5f2254a7cedb7178d9e02b6e7977ad9c138e7b 100644
+--- a/cloud/iris/tests/test_open_mopd_evaluation.py
++++ b/cloud/iris/tests/test_open_mopd_evaluation.py
+@@ -243,7 +243,7 @@ def test_native_model_stage_rejects_incomplete_weight_index(tmp_path: Path) -> N
+ 
+ def test_native_model_evaluation_plan_selects_export_without_reference_model(monkeypatch: pytest.MonkeyPatch) -> None:
+     root = evaluation.DEFAULT_CONFIG.parents[3]
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+     export_uri = "s3://bucket/native/exports/step-2"
+ 
+     plan = evaluation.build_plan(
+@@ -286,7 +286,7 @@ def test_dry_run_exposes_immutable_inputs_without_submitting(
+     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+ ) -> None:
+     root = evaluation.DEFAULT_CONFIG.parents[3]
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("dry run submitted a process"))
+ 
+     assert (
+@@ -316,7 +316,7 @@ def test_submission_requires_omission_acknowledgement(
+     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+ ) -> None:
+     root = evaluation.DEFAULT_CONFIG.parents[3]
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("guard did not stop submission"))
+ 
+     with pytest.raises(SystemExit, match="allow-known-omissions"):
+@@ -336,7 +336,7 @@ def test_submission_requires_omission_acknowledgement(
+ 
+ def test_distinct_output_prefixes_produce_distinct_job_names(monkeypatch: pytest.MonkeyPatch) -> None:
+     root = evaluation.DEFAULT_CONFIG.parents[3]
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+     config = evaluation.load_evaluation_config(evaluation.DEFAULT_CONFIG)
+     common = {
+         "config_path": evaluation.DEFAULT_CONFIG,
+@@ -353,7 +353,7 @@ def test_distinct_output_prefixes_produce_distinct_job_names(monkeypatch: pytest
+ 
+ def test_checkpoint_evaluation_plan_selects_durable_actor_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+     root = evaluation.DEFAULT_CONFIG.parents[3]
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+     checkpoint_uri = "s3://bucket/run/checkpoints/global_step_2/actor"
+ 
+     plan = evaluation.build_plan(
+diff --git a/cloud/iris/tests/test_open_mopd_fidelity.py b/cloud/iris/tests/test_open_mopd_fidelity.py
+index 6657534dd4f715b8d822fc9655fbf223555ce7f7..d6578df8fee2171a0efaad0b9bf67a8c0d650dc8 100644
+--- a/cloud/iris/tests/test_open_mopd_fidelity.py
++++ b/cloud/iris/tests/test_open_mopd_fidelity.py
+@@ -479,7 +479,7 @@ def test_plan_rejects_non_durable_or_root_output_prefix(output_uri: str) -> None
+ 
+ def test_cli_dry_run_does_not_submit(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+     root = fidelity.DEFAULT_CONFIG.parents[3]
+-    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("dry run submitted a process"))
+ 
+     assert (
+@@ -493,7 +493,7 @@ def test_submission_requires_deviation_acknowledgement(
+     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+ ) -> None:
+     root = fidelity.DEFAULT_CONFIG.parents[3]
+-    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("guard did not stop submission"))
+ 
+     with pytest.raises(SystemExit, match="allow-known-deviations"):
+diff --git a/cloud/iris/tests/test_vendored_runtime_bundle.py b/cloud/iris/tests/test_vendored_runtime_bundle.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f9364dedb2fb757f71ca03b43cd2385b868c50ff
+--- /dev/null
++++ b/cloud/iris/tests/test_vendored_runtime_bundle.py
+@@ -0,0 +1,71 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++import json
++import shutil
++from pathlib import Path
++
++import pytest
++
++from cloud.iris import runtime_bundle
++
++
++@pytest.fixture
++def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
++    project = tmp_path / "vendor/skyrl"
++    files = {
++        "cloud/iris/launch.py": "def main(): pass\n",
++        "cloud/iris/runtime_bundle_files.txt": "cloud/iris/launch.py\n",
++        "skyrl-train/skyrl_train/config/ppo_base_config.yaml": "trainer: {max_steps: 2}\n",
++        "skyrl-gym/skyrl_gym/__init__.py": "",
++        "chat_templates/model.jinja2": "{{ messages }}",
++        "pyproject.toml": '[project]\nname = "marinskyrl"\n',
++        "uv.lock": "version = 1\n",
++    }
++    for name, content in files.items():
++        target = project / name
++        target.parent.mkdir(parents=True, exist_ok=True)
++        target.write_text(content)
++    provenance = project / runtime_bundle.PROVENANCE_FILE
++    provenance.parent.mkdir(parents=True)
++    provenance.write_text(json.dumps({"source_sha": "original-upstream-revision"}))
++    monkeypatch.setattr(runtime_bundle, "PROJECT_ROOT", project)
++    source = runtime_bundle.resolve_launcher_source()
++    workspace = runtime_bundle.build_runtime_bundle(source.digest)
++    yield source, workspace
++    shutil.rmtree(workspace)
++
++
++def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bundled_source):
++    source, workspace = bundled_source
++    assert (workspace / "uv.lock").read_bytes() == (source.root / "uv.lock").read_bytes()
++    assert (workspace / "chat_templates/model.jinja2").read_text() == "{{ messages }}"
++    assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
++
++
++def test_changed_bundled_training_config_is_rejected(bundled_source):
++    _, workspace = bundled_source
++    (workspace / "skyrl-train/skyrl_train/config/ppo_base_config.yaml").write_text("trainer: {max_steps: 999}\n")
++    with pytest.raises(RuntimeError, match="does not match its recorded identity"):
++        runtime_bundle.validate_bundled_runtime(workspace)
++
++
++@pytest.mark.parametrize("path", ["cloud/iris/launch.py", "cloud/iris/new_runtime.py"])
++def test_source_edits_get_a_new_identity_and_bundle_without_restaging(bundled_source, path):
++    source, _ = bundled_source
++    (source.root / path).write_text("updated = True\n")
++    changed = runtime_bundle.resolve_launcher_source()
++    assert changed.digest != source.digest
++    workspace = runtime_bundle.build_runtime_bundle(changed.digest)
++    try:
++        assert (workspace / path).read_text() == "updated = True\n"
++        assert runtime_bundle.validate_bundled_runtime(workspace) == changed.digest
++    finally:
++        shutil.rmtree(workspace)
++
++
++def test_unrecorded_file_added_to_a_built_bundle_is_rejected(bundled_source):
++    _, workspace = bundled_source
++    (workspace / "cloud/iris/injected.py").write_text("extra = True\n")
++    with pytest.raises(ValueError, match="do not match the selected runtime identity"):
++        runtime_bundle.validate_bundled_runtime(workspace)
 diff --git a/pyproject.toml b/pyproject.toml
-index da036ece5d6ff243a5d1fa80384cf67154fb8063..45c09e846e1b2d420be1daf512bbdc7ccf32d638 100644
+index da036ece5d6ff243a5d1fa80384cf67154fb8063..5082dd8f673a28e854481e6959e6f83367c7b32a 100644
 --- a/pyproject.toml
 +++ b/pyproject.toml
-@@ -173,7 +173,7 @@ conflicts = [
+@@ -162,6 +162,7 @@ packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_tra
+ 
+ [tool.hatch.build.targets.wheel.force-include]
+ "chat_templates" = "chat_templates"
++"open_mopd_versions.py" = "open_mopd_versions.py"
+ 
+ [tool.uv]
+ package = true
+@@ -173,7 +174,7 @@ conflicts = [
      [{ extra = "cpu" }, { extra = "vllm" }],
  ]
  environments = [
@@ -11,7 +754,7 @@ index da036ece5d6ff243a5d1fa80384cf67154fb8063..45c09e846e1b2d420be1daf512bbdc7c
      "sys_platform == 'linux' and platform_machine == 'x86_64'",
      "sys_platform == 'linux' and platform_machine == 'aarch64'",
  ]
-@@ -196,6 +196,7 @@ override-dependencies = [
+@@ -196,6 +197,7 @@ override-dependencies = [
      "opentelemetry-api ; sys_platform != 'linux'",
  ]
  constraint-dependencies = [
@@ -25,7 +768,7 @@ index 9c15e35fbd9454e9386abfcdd70cc4d3740093e6..6848937295f251e2d7e1888a8680e825
 +++ b/skyrl-gym/skyrl_gym/envs/aime/utils.py
 @@ -15,7 +15,7 @@
  # https://github.com/volcengine/verl/blob/1a62568f801ba35ac1f5387e27232a2df7eac488/verl/utils/reward_score/math_dapo.py
-
+ 
  from math_verify import parse
 -from sympy import Basic, Set
 +from sympy import Basic, MatrixBase, Set, Tuple
@@ -33,7 +776,7 @@ index 9c15e35fbd9454e9386abfcdd70cc4d3740093e6..6848937295f251e2d7e1888a8680e825
  from verifyit.execution.worker import call_bounded
  from verifyit.grade import Reward
 @@ -36,7 +36,9 @@ BOXED_ANSWER_INSTRUCTION = (
-
+ 
  def math_answer_reward(reference: str, candidate: str) -> Reward:
      """Score extracted sets and expressions symbolically, retaining exact scalar matching."""
 -    parsed = parse(f"${reference}$", parsing_timeout=5)
@@ -57,7 +800,7 @@ index 9c15e35fbd9454e9386abfcdd70cc4d3740093e6..6848937295f251e2d7e1888a8680e825
      final_answer = final_answer.split("=")[-1]
 +    # TeX spacing is removable, but a matrix row delimiter followed by a space is not.
 +    final_answer = re.sub(r"(?<!\\)\\ ", "", final_answer)
-
+ 
      # Apply substitutions and removals
      for before, after in SUBSTITUTIONS:
 @@ -178,7 +181,8 @@ def normalize_final_answer(final_answer: str) -> str:
@@ -69,7 +812,7 @@ index 9c15e35fbd9454e9386abfcdd70cc4d3740093e6..6848937295f251e2d7e1888a8680e825
 +    final_answer = re.sub(r"(\\frac\{[^{}]*\})([^{}\\])", r"\1{\2}", final_answer)
      final_answer = re.sub(r"(sqrt)([^{])", "sqrt{\\2}", final_answer)
      final_answer = final_answer.replace("$", "")
-
+ 
 diff --git a/skyrl-gym/tests/test_aime_answer_normalization.py b/skyrl-gym/tests/test_aime_answer_normalization.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..3da544653db86ad9fc799e376e96d355f68cbdfe
@@ -107,6 +850,28 @@ index 0000000000000000000000000000000000000000..3da544653db86ad9fc799e376e96d355
 +    for answer, passed in [(correct, True), (wrong, False), ("", False)]:
 +        result = judge.verify(RolloutEvidence(response=f"Answer: \\boxed{{{answer}}}"))
 +        assert result.passed is passed
+diff --git a/skyrl-train/skyrl_train/mismatch_probe/provenance.py b/skyrl-train/skyrl_train/mismatch_probe/provenance.py
+index d9fa4aa7cbda90cdde397159f4f2359f01e5076b..97554d2eec46c72d01d9dfe4df4d83473767b6e2 100644
+--- a/skyrl-train/skyrl_train/mismatch_probe/provenance.py
++++ b/skyrl-train/skyrl_train/mismatch_probe/provenance.py
+@@ -27,7 +27,7 @@ def software_provenance(probe, trainer) -> dict[str, str | None]:
+     return {
+         "python": platform.python_version(),
+         "torch": str(torch.__version__),
+-        "marinskyrl_commit": probe.cfg.get("runtime", {}).get("launcher_commit"),
++        "marinskyrl_source_digest": probe.cfg.get("runtime", {}).get("source_digest"),
+         "marinskyrl_version": version("marinskyrl"),
+         "marin_finestore_version": version("marin-finestore"),
+         "vllm_version": version("vllm"),
+@@ -47,7 +47,7 @@ def manifest(probe, trainer, *, status: mismatch.ArchiveStatus):
+             or trainer.cfg.trainer.resume_path
+             or trainer.cfg.trainer.policy.model.path
+         ),
+-        runtime_commit=software["marinskyrl_commit"],
++        runtime_commit=software["marinskyrl_source_digest"],
+         source_probe_archive=probe.spec.reuse_probe,
+         tokenizer_fingerprint=probe.tokenizer_fingerprint,
+         starting_global_step=probe.starting_global_step,
 diff --git a/uv.lock b/uv.lock
 index afa99b0449d4c5f3fbc248092b036877ea63c08e..eb6c5115b197dd1f682df8514f7b04a856610fb9 100644
 --- a/uv.lock
@@ -249,7 +1014,7 @@ index afa99b0449d4c5f3fbc248092b036877ea63c08e..eb6c5115b197dd1f682df8514f7b04a8
      { url = "https://files.pythonhosted.org/packages/6a/bd/d91c5e39f490a49df14320f4e8c80161cfcce09f1e2cde1edd16a551abb3/frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:494a5952b1c597ba44e0e78113a7266e656b9794eec897b19ead706bd7074383", size = 242411, upload-time = "2025-10-06T05:36:09.801Z" },
      { url = "https://files.pythonhosted.org/packages/8f/83/f61505a05109ef3293dfb1ff594d13d64a2324ac3482be2cedc2be818256/frozenlist-1.8.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:96f423a119f4777a4a056b66ce11527366a8bb92f54e541ade21f2374433f6d4", size = 243014, upload-time = "2025-10-06T05:36:11.394Z" },
 @@ -1704,7 +1690,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/b3/0d/bf0567477f7281d9a
-
+ 
  [[package]]
  name = "gcsfs"
 -version = "2026.7.0"
@@ -267,7 +1032,7 @@ index afa99b0449d4c5f3fbc248092b036877ea63c08e..eb6c5115b197dd1f682df8514f7b04a8
 -    { url = "https://files.pythonhosted.org/packages/ef/eb/a5c4b39903928e6be7735cc7aa31b6c3bbf3d887419e1e7ac751dba02233/gcsfs-2026.7.0-py3-none-any.whl", hash = "sha256:8ce6c08ea64302d8fd4bc23a615ccd9e7752541cde1a88ec8362109bd79cde78", size = 91131, upload-time = "2026-07-06T15:02:29.208Z" },
 +    { url = "https://files.pythonhosted.org/packages/10/37/3922951a55a3d0f0340e884929087ce08e333cbb16a86002535c095960fc/gcsfs-2026.4.0-py3-none-any.whl", hash = "sha256:d9e838834d8cce6cb623c6a6a5fad66a4d122dc5c609d4b1c1977b55f759dcc5", size = 72190, upload-time = "2026-04-29T21:04:09.997Z" },
  ]
-
+ 
  [[package]]
 @@ -1884,7 +1870,6 @@ source = { registry = "https://pypi.org/simple" }
  sdist = { url = "https://files.pythonhosted.org/packages/03/41/4b9c02f99e4c5fb477122cd5437403b552873f014616ac1d19ac8221a58d/google_crc32c-1.8.0.tar.gz", hash = "sha256:a428e25fb7691024de47fecfbff7ff957214da51eddded0da0ae0e0f03a2cf79", size = 14192, upload-time = "2025-12-16T00:35:25.142Z" }
@@ -369,7 +1134,7 @@ index afa99b0449d4c5f3fbc248092b036877ea63c08e..eb6c5115b197dd1f682df8514f7b04a8
      { url = "https://files.pythonhosted.org/packages/30/f0/5ddfb8ec7677dc62085f267607adff719fe81697c4d488eb7363aa65014b/marin_finelog_server-0.2.54.dev35409391246-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:71cd826638bf27dcf5ecdaa6beeacc3d98a1d8d58f955439c759e80fc980a6f6", size = 41598817, upload-time = "2026-09-19T01:03:53.25Z" },
      { url = "https://files.pythonhosted.org/packages/3f/e7/6581a935256829d5f28fbcbd70bb167a43208be4f8cf726a19a7ec5ac163/marin_finelog_server-0.2.54.dev35409391246-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3f4b91665af442e6d44ae2894ecd5ba9621491ad4a8aecf648705f4f2fdb9a10", size = 44306818, upload-time = "2026-09-19T01:03:56.035Z" },
  ]
-
+ 
 -[[package]]
 -name = "marin-finelog-server"
 -version = "0.2.55.dev35451177481"
@@ -728,7 +1493,7 @@ index afa99b0449d4c5f3fbc248092b036877ea63c08e..eb6c5115b197dd1f682df8514f7b04a8
 -    { url = "https://files.pythonhosted.org/packages/b7/85/dabeaf902892922777492e1d253bb7e1264cadce3cea932f7ff599e53fea/tensorboard_data_server-0.7.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:9fe5d24221b29625dbc7328b0436ca7fc1c23de4acf4d272f1180856e32f9f60", size = 4823598, upload-time = "2023-10-23T21:23:33.714Z" },
      { url = "https://files.pythonhosted.org/packages/73/c6/825dab04195756cf8ff2e12698f22513b3db2f64925bdd41671bfb33aaa5/tensorboard_data_server-0.7.2-py3-none-manylinux_2_31_x86_64.whl", hash = "sha256:ef687163c24185ae9754ed5650eb5bc4d84ff257aabdc33f0cc6f74d8ba54530", size = 6590363, upload-time = "2023-10-23T21:23:35.583Z" },
  ]
-
+ 
 @@ -6708,7 +6622,6 @@ dependencies = [
  ]
  sdist = { url = "https://files.pythonhosted.org/packages/83/18/c8e8b4faffab1a434b6c013d54cf7f5b754a6849429d9dbb718297705796/tensorstore-0.1.84.tar.gz", hash = "sha256:3cb091dfde68600e6d8f03a389ccc92ffa7c0798a0c600d1013c0138d7163e6b", size = 7208048, upload-time = "2026-05-16T06:17:58.448Z" }

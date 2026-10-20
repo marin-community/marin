@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -29,8 +28,7 @@ def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         target.write_text(content)
     provenance = project / runtime_bundle.PROVENANCE_FILE
     provenance.parent.mkdir(parents=True)
-    hashes = {name: hashlib.sha256(content.encode()).hexdigest() for name, content in files.items()}
-    provenance.write_text(json.dumps({"files": hashes}))
+    provenance.write_text(json.dumps({"source_sha": "original-upstream-revision"}))
     monkeypatch.setattr(runtime_bundle, "PROJECT_ROOT", project)
     source = runtime_bundle.resolve_launcher_source()
     workspace = runtime_bundle.build_runtime_bundle(source.digest)
@@ -49,4 +47,25 @@ def test_changed_bundled_training_config_is_rejected(bundled_source):
     _, workspace = bundled_source
     (workspace / "skyrl-train/skyrl_train/config/ppo_base_config.yaml").write_text("trainer: {max_steps: 999}\n")
     with pytest.raises(RuntimeError, match="does not match its recorded identity"):
+        runtime_bundle.validate_bundled_runtime(workspace)
+
+
+@pytest.mark.parametrize("path", ["cloud/iris/launch.py", "cloud/iris/new_runtime.py"])
+def test_source_edits_get_a_new_identity_and_bundle_without_restaging(bundled_source, path):
+    source, _ = bundled_source
+    (source.root / path).write_text("updated = True\n")
+    changed = runtime_bundle.resolve_launcher_source()
+    assert changed.digest != source.digest
+    workspace = runtime_bundle.build_runtime_bundle(changed.digest)
+    try:
+        assert (workspace / path).read_text() == "updated = True\n"
+        assert runtime_bundle.validate_bundled_runtime(workspace) == changed.digest
+    finally:
+        shutil.rmtree(workspace)
+
+
+def test_unrecorded_file_added_to_a_built_bundle_is_rejected(bundled_source):
+    _, workspace = bundled_source
+    (workspace / "cloud/iris/injected.py").write_text("extra = True\n")
+    with pytest.raises(ValueError, match="do not match the selected runtime identity"):
         runtime_bundle.validate_bundled_runtime(workspace)

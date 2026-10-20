@@ -492,7 +492,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "vendor/skyrl/uv.lock"
-      - name: Check independent lock, source provenance, and built wheel
+      - name: Check independent lock, Marin contract, and built wheel
         run: uv run --no-project python -m scripts.skyrl_migration check-vendor
       - name: Exercise the isolated source bundle, OPD launcher, and verifier
         working-directory: vendor/skyrl

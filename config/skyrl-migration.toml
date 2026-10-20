@@ -1,5 +1,5 @@
+patches = ["skyrl-migration/local-changes.patch"]
 # Source roots are separate from Marin's workspace and dependency resolution.
-patches = ["skyrl-migration/runtime-fixes.patch", "skyrl-migration/nested-runtime.patch"]
 roots = [
     "cloud.iris.launch",
     "skyrl_train.entrypoints.main_base",

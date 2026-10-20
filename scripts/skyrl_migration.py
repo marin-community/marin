@@ -48,10 +48,10 @@ DESTINATION_PATTERN = re.compile(r"<!-- " + DESTINATION_MARKER + r": ([0-9a-f]{4
 
 
 def run(
-    *args: str, cwd: Path | None = None, data: bytes | None = None, check: bool = True
+    *args: str, cwd: Path | None = None, data: bytes | None = None, check: bool = True, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[bytes]:
     try:
-        return subprocess.run(args, cwd=cwd, input=data, capture_output=True, check=check)
+        return subprocess.run(args, cwd=cwd, input=data, capture_output=True, check=check, env=env)
     except subprocess.CalledProcessError as error:
         error.add_note((error.stderr or error.stdout).decode(errors="replace"))
         raise
@@ -138,7 +138,7 @@ def extract_source(objects: Path, revision: str, destination: Path) -> None:
                 path.symlink_to(member.linkname)
 
 
-def snapshot(output: Path, ref: str, days: int, now: datetime) -> None:
+def snapshot(output: Path, ref: str, days: int, now: datetime, objects_cache: Path | None = None) -> None:
     """Capture immutable Git objects and paginated open work; never write to GitHub."""
     output.mkdir(parents=True, exist_ok=False)
     cutoff_time = now - timedelta(days=days)
@@ -172,13 +172,16 @@ def snapshot(output: Path, ref: str, days: int, now: datetime) -> None:
         )
     issues = [issue | {"comments": comment} for issue, comment in zip(issues, comments, strict=True)]
     objects = output / "source.git"
-    run("git", "init", "--bare", "--quiet", str(objects))
-    refs = [f"{source_sha}:refs/snapshot/main"]
+    if objects_cache is None:
+        run("git", "init", "--bare", "--quiet", str(objects))
+    else:
+        run("git", "clone", "--mirror", "--local", "--quiet", str(objects_cache.resolve()), str(objects))
+    refs = [f"+{source_sha}:refs/snapshot/main"]
     for pull in pulls:
         number = pull["number"]
         refs += [
-            f"{pull['head']['sha']}:refs/snapshot/pr-{number}-head",
-            f"{pull['merge_base']}:refs/snapshot/pr-{number}-base",
+            f"+{pull['head']['sha']}:refs/snapshot/pr-{number}-head",
+            f"+{pull['merge_base']}:refs/snapshot/pr-{number}-base",
         ]
     git(objects, "fetch", "--quiet", "--no-tags", "--depth=1", f"https://github.com/{SOURCE}.git", *refs)
     source = output / "source"
@@ -442,6 +445,21 @@ def read_stage_report(path: Path) -> StageReport:
     return StageReport(**value)
 
 
+def copy_source_files(source: Path, destination: Path, names: list[str]) -> None:
+    for name in names:
+        original, target = source / relative_path(name), destination / name
+        original.resolve().relative_to(source.resolve())
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink():
+            target.unlink()
+        if original.is_symlink():
+            if target.exists():
+                target.unlink()
+            target.symlink_to(os.readlink(original))
+        else:
+            shutil.copy2(original, target)
+
+
 def stage(snapshot_dir: Path, output: Path) -> None:
     """Copy the candidate and test each complete Git delta on its staged parent."""
     snapshot_dir = snapshot_dir.resolve()
@@ -453,33 +471,23 @@ def stage(snapshot_dir: Path, output: Path) -> None:
     source = snapshot_dir / "source"
     objects = snapshot_dir / "source.git"
     verify_source(source, objects, record["source_sha"], chosen["retained"])
-    for name in chosen["retained"]:
-        original, target = source / relative_path(name), destination / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if original.is_symlink():
-            original.resolve().relative_to(source)
-            target.symlink_to(os.readlink(original))
-        else:
-            shutil.copy2(original, target)
-    hashes = {name: file_digest(source / name) for name in chosen["retained"]}
+    copy_source_files(source, destination, list(chosen["retained"]))
     (destination / PROVENANCE).parent.mkdir(parents=True, exist_ok=True)
-    write_json(destination / PROVENANCE, {"source": SOURCE, "source_sha": record["source_sha"], "files": hashes})
+    write_json(destination / PROVENANCE, {"source": SOURCE, "source_sha": record["source_sha"]})
     run("git", "init", "--quiet", "--initial-branch=main", str(tree))
     git(tree, "add", ".")
     baseline = commit(tree, "Stage selected SkyRL sources")
+    git(tree, "update-ref", "refs/migration/retained", baseline)
+    git(tree, "fetch", "--quiet", "--no-tags", str(objects), "+refs/snapshot/*:refs/source/*")
     for patch in chosen["patches"]:
         path = snapshot_dir / "migration-patches" / patch["path"]
         if file_digest(path) != patch["sha256"]:
             raise ValueError(f"Migration patch changed after capture: {path}")
-        run("git", "-C", str(tree), "apply", "--index", f"--directory={VENDOR}", str(path))
+        run("git", "-C", str(tree), "apply", "--3way", "--index", f"--directory={VENDOR}", str(path))
     if chosen["patches"]:
-        hashes = {name: file_digest(destination / name) for name in hashes}
-        for name in git(tree, "diff", "--cached", "--name-only").splitlines():
-            relative = Path(name).relative_to(VENDOR).as_posix()
-            hashes[relative] = file_digest(destination / relative)
         write_json(
             destination / PROVENANCE,
-            {"source": SOURCE, "source_sha": record["source_sha"], "patches": chosen["patches"], "files": hashes},
+            {"source": SOURCE, "source_sha": record["source_sha"], "patches": chosen["patches"]},
         )
         git(tree, "add", ".")
         baseline = commit(tree, "Apply migration runtime fixes")
@@ -496,6 +504,187 @@ def stage(snapshot_dir: Path, output: Path) -> None:
         missing_imports=chosen["missing_imports"],
     )
     write_report(output, report)
+
+
+class RefreshStatus(StrEnum):
+    READY = "ready"
+    CONFLICT = "conflict"
+    FAILED = "failed"
+
+
+@dataclass
+class RefreshReport:
+    status: RefreshStatus
+    previous_sha: str
+    source_sha: str
+    candidate: str
+    snapshot: str
+    local_files: dict[str, str]
+    manifest_sha256: str
+    conflicts: list[str] = field(default_factory=list)
+    diagnostic: str = ""
+
+
+def read_refresh_report(path: Path) -> RefreshReport:
+    value = read_json(path)
+    return RefreshReport(**(value | {"status": RefreshStatus(value["status"])}))
+
+
+def checkout_source_files(source: Path) -> dict[str, str]:
+    """Inventory tracked and unignored local files, including deletions and modes."""
+    source = source.resolve()
+    root = Path(git(source, "rev-parse", "--show-toplevel"))
+    prefix = source.resolve().relative_to(root)
+    names = run(
+        "git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", str(prefix)
+    ).stdout
+    files = {}
+    for value in names.split(b"\0"):
+        if not value:
+            continue
+        path = root / value.decode()
+        name = path.relative_to(source).as_posix()
+        if name == PROVENANCE or not (path.is_file() or path.is_symlink()):
+            continue
+        mode = "120000" if path.is_symlink() else "100755" if path.stat().st_mode & 0o111 else "100644"
+        files[name] = f"{mode}:{file_digest(path)}"
+    return files
+
+
+def vendor_patch(tree: Path, *revisions: str) -> bytes:
+    return run(
+        "git",
+        "-C",
+        str(tree),
+        "diff",
+        "--binary",
+        "--full-index",
+        f"--relative={VENDOR}/",
+        *revisions,
+        "--",
+        VENDOR,
+        f":!{VENDOR}/{PROVENANCE}",
+    ).stdout
+
+
+def refresh_manifest(contents: str, patches: list[str]) -> str:
+    """Replace migration patch inputs while preserving the retention policy."""
+    contents = re.sub(r"(?m)^patches\s*=\s*\[[^\]]*\]\s*\n", "", contents)
+    return f"patches = {json.dumps(patches)}\n" + contents
+
+
+def refresh_candidate(previous: Path, current: Path, updated: Path, candidate: Path) -> RefreshReport:
+    """Replay the complete local vendor delta onto a fresh upstream snapshot."""
+    previous, current, updated, candidate = (path.resolve() for path in (previous, current, updated, candidate))
+    old = read_json(previous / "snapshot.json")
+    new = read_json(updated / "snapshot.json")
+    if read_json(current / PROVENANCE)["source_sha"] != old["source_sha"]:
+        raise ValueError("Previous snapshot does not match the checked-out SkyRL origin")
+    local_files = checkout_source_files(current)
+    report = RefreshReport(
+        RefreshStatus.READY,
+        old["source_sha"],
+        new["source_sha"],
+        str(candidate),
+        str(updated),
+        local_files,
+        file_digest(updated / "retention.toml"),
+    )
+    overlay = candidate.with_name(candidate.name + "-overlay")
+    retained = read_json(previous / "selection.json")["retained"]
+    verify_source(previous / "source", previous / "source.git", old["source_sha"], retained)
+    copy_source_files(previous / "source", overlay / VENDOR, list(retained))
+    run("git", "init", "--quiet", "--initial-branch=main", str(overlay))
+    git(overlay, "add", ".")
+    commit(overlay, "Capture previous retained upstream sources")
+    git(updated / "source.git", "fetch", "--quiet", str(overlay), "+HEAD:refs/snapshot/local-base")
+    shutil.rmtree(overlay / VENDOR)
+    copy_source_files(current, overlay / VENDOR, list(local_files))
+    git(overlay, "add", "--all")
+    patch_name = "skyrl-migration/local-changes.patch"
+    patch_path = updated / "migration-patches" / patch_name
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    local_patch = vendor_patch(overlay, "--cached")
+    patch_path.write_bytes(local_patch)
+    (candidate.parent / "local-changes-before-replay.patch").write_bytes(local_patch)
+    shutil.rmtree(overlay)
+    chosen = read_json(updated / "selection.json")
+    chosen["patches"] = [{"path": patch_name, "sha256": file_digest(patch_path)}] if patch_path.stat().st_size else []
+    write_json(updated / "selection.json", chosen)
+    policy = updated / "retention.toml"
+    policy.write_text(refresh_manifest(policy.read_text(), [patch["path"] for patch in chosen["patches"]]))
+    try:
+        stage(updated, candidate)
+    except subprocess.CalledProcessError as error:
+        report.conflicts = git(candidate / "tree", "diff", "--name-only", "--diff-filter=U").splitlines()
+        report.status = RefreshStatus.CONFLICT if report.conflicts else RefreshStatus.FAILED
+        report.diagnostic = (error.stderr or error.stdout).decode(errors="replace")
+        write_json(candidate.parent / "refresh.json", asdict(report))
+        return report
+    finish_refresh(report)
+    return report
+
+
+def finish_refresh(report: RefreshReport) -> None:
+    """Normalize a clean or manually resolved replay and rebuild its PR transplant report."""
+    candidate, updated = Path(report.candidate), Path(report.snapshot)
+    if git(candidate / "tree", "diff", "--name-only", "--diff-filter=U"):
+        raise ValueError("Resolve the candidate conflicts and git add the resolved files before finishing")
+    # Store the resolved delta against the new origin before recreating the candidate.
+    # Future plan/stage runs then need only the new snapshot's Git objects.
+    patch_path = updated / "migration-patches/skyrl-migration/local-changes.patch"
+    patch_path.write_bytes(vendor_patch(candidate / "tree", "refs/migration/retained"))
+    chosen = read_json(updated / "selection.json")
+    patch_name = "skyrl-migration/local-changes.patch"
+    chosen["patches"] = [{"path": patch_name, "sha256": file_digest(patch_path)}] if patch_path.stat().st_size else []
+    write_json(updated / "selection.json", chosen)
+    policy = updated / "retention.toml"
+    policy.write_text(refresh_manifest(policy.read_text(), [patch["path"] for patch in chosen["patches"]]))
+    if report.status is RefreshStatus.READY:
+        shutil.rmtree(candidate)
+    else:
+        candidate.rename(candidate.with_name(candidate.name + "-resolution"))
+    stage(updated, candidate)
+    report.status = RefreshStatus.READY
+    report.conflicts = []
+    report.diagnostic = ""
+    write_json(candidate.parent / "refresh.json", asdict(report))
+
+
+def apply_refresh(report: RefreshReport, current: Path, manifest: Path) -> None:
+    """Install a reviewed clean candidate while preserving ignored local environments."""
+    if report.status is not RefreshStatus.READY:
+        raise ValueError("A conflicting or failed refresh cannot be applied")
+    if checkout_source_files(current) != report.local_files:
+        raise ValueError("SkyRL checkout changed during refresh; inspect the candidate before applying")
+    if file_digest(manifest) != report.manifest_sha256:
+        raise ValueError("Retention policy changed during refresh; inspect the candidate before applying")
+    candidate = Path(report.candidate)
+    tree = candidate / "tree"
+    if git(tree, "status", "--porcelain") or git(tree, "rev-parse", "HEAD") != git(tree, "rev-parse", "main"):
+        raise ValueError("Candidate changed after staging; finish its replay before applying")
+    staged = read_stage_report(candidate / "report.json")
+    previous_patches = tomllib.loads(manifest.read_text()).get("patches", [])
+    source = candidate / "tree" / VENDOR
+    names = [
+        name.removeprefix(VENDOR + "/")
+        for name in tree_paths(candidate / "tree", "main")
+        if name.startswith(VENDOR + "/")
+    ]
+    for name in report.local_files.keys() - set(names):
+        (current / relative_path(name)).unlink()
+    copy_source_files(source, current, names)
+    snapshot_dir = Path(staged.snapshot)
+    for patch in staged.patches:
+        target = manifest.parent / relative_path(patch["path"])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(snapshot_dir / "migration-patches" / patch["path"], target)
+    manifest.write_text((snapshot_dir / "retention.toml").read_text())
+    for name in set(previous_patches) - {patch["path"] for patch in staged.patches}:
+        (manifest.parent / relative_path(name)).unlink()
+    report_path = manifest.parent / "skyrl-migration/snapshot-report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(candidate / "report.md", report_path)
 
 
 def transplant_pulls(snapshot_dir: Path, output: Path, baseline: str) -> list[PullOutcome]:
@@ -605,40 +794,38 @@ def write_report(output: Path, report: StageReport) -> None:
     (output / "report.md").write_text("\n".join(rows) + "\n")
 
 
-def audit_wheel(wheel: Path) -> list[str]:
-    """Check that every retained runtime file is packaged with its recorded bytes."""
+def wheel_source_files(source: Path) -> dict[str, Path]:
+    """Map the current package files and assets to their wheel member paths."""
+    roots = {"cloud", "marinskyrl", "skyrl_train", "skyrl_gym", "chat_templates", "open_mopd_versions.py"}
+    files = {}
+    for path in source.rglob("*"):
+        name = path.relative_to(source)
+        if {".git", ".venv", "__pycache__"}.intersection(name.parts) or path.suffix in {".pyc", ".pyo"}:
+            continue
+        member = name.as_posix().removeprefix("skyrl-train/").removeprefix("skyrl-gym/")
+        if member.split("/")[0] in roots and path.is_file():
+            path.resolve().relative_to(source.resolve())
+            files[member] = path
+    return files
+
+
+def audit_wheel(wheel: Path, source: Path) -> list[str]:
+    """Check that the wheel contains the current checked-out source and assets."""
     with zipfile.ZipFile(wheel) as archive:
         members = sorted(archive.namelist())
         if PROVENANCE not in members or BUNDLE_MANIFEST not in members:
             raise ValueError("Wheel is missing runtime provenance or the launcher bundle manifest")
-        provenance = json.loads(archive.read(PROVENANCE))
-        expected = {PROVENANCE}
+        expected = wheel_source_files(source)
         runtime_roots = {"cloud", "marinskyrl", "skyrl_train", "skyrl_gym", "chat_templates", "open_mopd_versions.py"}
-        for name, digest in provenance["files"].items():
-            packaged = name.removeprefix("skyrl-train/").removeprefix("skyrl-gym/")
-            if packaged.split("/")[0] not in runtime_roots:
-                continue
-            if name.endswith(".pyc"):
-                continue
-            expected.add(packaged)
-            if packaged not in members or hashlib.sha256(archive.read(packaged)).hexdigest() != digest:
+        for packaged, path in expected.items():
+            if packaged not in members or hashlib.sha256(archive.read(packaged)).hexdigest() != file_digest(path):
                 raise ValueError(f"Wheel member missing or changed: {packaged}")
         unexpected = {
             name for name in members if name.split("/")[0] in runtime_roots and not name.endswith("/")
-        } - expected
+        } - expected.keys()
         if unexpected:
-            raise ValueError(f"Wheel contains runtime files outside staged provenance: {sorted(unexpected)}")
+            raise ValueError(f"Wheel contains runtime files outside the checked-out source: {sorted(unexpected)}")
     return members
-
-
-def verify_vendor(source: Path) -> None:
-    """Reject source drift before building the candidate."""
-    provenance = read_json(source / PROVENANCE)
-    for name, digest in provenance["files"].items():
-        path = source / relative_path(name)
-        path.resolve().relative_to(source.resolve())
-        if file_digest(path) != digest:
-            raise ValueError(f"Vendored source changed after staging: {name}")
 
 
 @dataclass(frozen=True)
@@ -651,16 +838,32 @@ class BuiltWheel:
 def build_audited_wheel(source: Path, output: Path) -> BuiltWheel:
     run("uv", "build", "--wheel", "--project", str(source), "--out-dir", str(output))
     [wheel] = output.glob("*.whl")
-    return BuiltWheel(wheel, file_digest(wheel), audit_wheel(wheel))
+    return BuiltWheel(wheel, file_digest(wheel), audit_wheel(wheel, source))
 
 
 def check_vendor(source: Path) -> None:
     """Check the independent lock and build the wheel without installing SkyRL."""
-    verify_vendor(source)
-    for patch in read_json(source / PROVENANCE).get("patches", []):
-        if file_digest(ROOT / "config" / relative_path(patch["path"])) != patch["sha256"]:
-            raise ValueError(f"Migration patch differs from the staged candidate: {patch['path']}")
     run("uv", "lock", "--project", str(source), "--check")
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"}
+    }
+    run(
+        "uv",
+        "run",
+        "--isolated",
+        "--project",
+        str(source),
+        "--frozen",
+        "--no-group",
+        "dev",
+        "python",
+        str(ROOT / "infra/ci/check_skyrl_marin.py"),
+        "--source",
+        str(source),
+        env=environment,
+    )
     with tempfile.TemporaryDirectory(prefix="skyrl-wheel-") as temporary:
         wheel = build_audited_wheel(source, Path(temporary))
         print(json.dumps({"wheel_sha256": wheel.sha256, "members": len(wheel.members)}))
@@ -669,11 +872,19 @@ def check_vendor(source: Path) -> None:
 def build_wheel(candidate: Path) -> None:
     """Build and inventory a binary candidate without resolving or installing its dependencies."""
     source = candidate.resolve() / "tree" / VENDOR
-    verify_vendor(source)
     wheels = candidate.resolve() / "wheels"
     wheels.mkdir(exist_ok=False)
     wheel = build_audited_wheel(source, wheels)
-    write_json(candidate / "wheel.json", {"path": str(wheel.path), "sha256": wheel.sha256, "members": wheel.members})
+    inputs = {
+        path.relative_to(source).as_posix(): file_digest(path)
+        for path in (source / "skyrl-train/tests").rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+    inputs.update({name: file_digest(source / name) for name in ("pyproject.toml", "uv.lock")})
+    write_json(
+        candidate / "wheel.json",
+        {"path": str(wheel.path), "sha256": wheel.sha256, "members": wheel.members, "inputs": inputs},
+    )
     runtime_dependencies = candidate / "runtime-dependencies"
     runtime_dependencies.mkdir()
     for name in ("pyproject.toml", "uv.lock"):
@@ -733,9 +944,9 @@ def prepare_math500(candidate: Path, dataset: Path, output: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         provenance = json.loads(archive.read(PROVENANCE))
     for name in ("pyproject.toml", "uv.lock"):
-        if file_digest(candidate / "runtime-dependencies" / name) != provenance["files"][name]:
+        if file_digest(candidate / "runtime-dependencies" / name) != wheel_record["inputs"][name]:
             raise ValueError(f"Runtime dependency manifest changed after staging: {name}")
-    for name, digest in provenance["files"].items():
+    for name, digest in wheel_record["inputs"].items():
         if name.startswith("skyrl-train/tests/") and file_digest(candidate / "tree" / VENDOR / name) != digest:
             raise ValueError(f"Retained acceptance test changed after staging: {name}")
     shutil.copyfile(wheel, output / wheel.name)
@@ -941,6 +1152,25 @@ def main() -> None:
     staging = commands.add_parser("stage", help="Offline candidate copy and stacked patch dry run")
     staging.add_argument("--snapshot", type=Path, required=True)
     staging.add_argument("--output", type=Path, required=True)
+    refresh = commands.add_parser("refresh", help="Refresh upstream and active work while preserving local SkyRL edits")
+    refresh.add_argument("--previous", type=Path, required=True, help="Snapshot matching the current vendor origin")
+    refresh.add_argument(
+        "--output", type=Path, required=True, help="New snapshot, candidate, and conflict report directory"
+    )
+    refresh.add_argument("--source", type=Path, default=ROOT / VENDOR)
+    refresh.add_argument("--ref", default="main")
+    refresh.add_argument("--days", type=int, default=10)
+    refresh.add_argument("--manifest", type=Path, default=MANIFEST)
+    refresh.add_argument("--marin", type=Path, default=ROOT)
+    refresh.add_argument(
+        "--apply", action="store_true", help="Install a clean candidate and its normalized migration patch"
+    )
+    apply = commands.add_parser("apply-refresh", help="Install a previously previewed clean refresh")
+    apply.add_argument("--report", type=Path, required=True)
+    apply.add_argument("--source", type=Path, default=ROOT / VENDOR)
+    apply.add_argument("--manifest", type=Path, default=MANIFEST)
+    finish = commands.add_parser("finish-refresh", help="Finish a manually resolved candidate and rebuild its PR report")
+    finish.add_argument("--report", type=Path, required=True)
     wheel = commands.add_parser("build-wheel", help="Build a binary candidate without installing dependencies")
     wheel.add_argument("--candidate", type=Path, required=True)
     smoke = commands.add_parser("prepare-math500", help="Bundle a wheel-only Math500 smoke for an isolated Iris task")
@@ -960,6 +1190,33 @@ def main() -> None:
         plan(args.output, args.manifest, args.marin)
     elif args.command == "stage":
         stage(args.snapshot, args.output)
+    elif args.command == "refresh":
+        args.output.mkdir(parents=True, exist_ok=False)
+        updated = args.output / "snapshot"
+        snapshot(updated, args.ref, args.days, datetime.now(UTC), objects_cache=args.previous / "source.git")
+        plan(updated, args.manifest, args.marin)
+        report = refresh_candidate(args.previous, args.source, updated, args.output / "candidate")
+        if args.apply and report.status is RefreshStatus.READY:
+            apply_refresh(report, args.source, args.manifest)
+        print(
+            json.dumps(
+                {
+                    "status": report.status,
+                    "previous_sha": report.previous_sha,
+                    "source_sha": report.source_sha,
+                    "candidate": report.candidate,
+                    "conflicts": report.conflicts,
+                    "report": str(args.output / "refresh.json"),
+                    "applied": args.apply and report.status is RefreshStatus.READY,
+                }
+            )
+        )
+        if report.status is not RefreshStatus.READY:
+            raise SystemExit(1)
+    elif args.command == "apply-refresh":
+        apply_refresh(read_refresh_report(args.report), args.source, args.manifest)
+    elif args.command == "finish-refresh":
+        finish_refresh(read_refresh_report(args.report))
     elif args.command == "build-wheel":
         build_wheel(args.candidate)
     elif args.command == "prepare-math500":

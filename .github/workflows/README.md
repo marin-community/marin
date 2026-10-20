@@ -109,8 +109,9 @@ delta is only `Deslop` commits, which closes the review-then-deslop loop.
 ## SkyRL migration checks
 
 `Marin - Unit` selects `skyrl-wheel` for SkyRL source, migration manifest, or
-tooling changes. It checks the nested project's lock, source provenance, and
-built-wheel assets without installing SkyRL in Marin's workspace. GPU smoke
+tooling changes. It checks the nested project's lock, Marin library imports and
+constructor keywords, and built-wheel assets against the current source in an
+isolated environment. GPU smoke
 tests and the production launcher cutover remain separate gates; see
 `docs/dev-guide/skyrl-migration.md`.
 

@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -42,15 +41,13 @@ _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 SKYRL_PROJECT = Path("vendor/skyrl")
-SKYRL_PROVENANCE = Path("marinskyrl/_vendor_provenance.json")
 
 
 def skyrl_runtime_digest() -> str:
-    """Return the SHA-256 digest identifying the vendored SkyRL source and lock."""
-    workspace = find_project_root(Path(__file__))
-    if workspace is None:
-        raise RuntimeError("The SkyRL runtime requires a Marin checkout")
-    return hashlib.sha256((workspace / SKYRL_PROJECT / SKYRL_PROVENANCE).read_bytes()).hexdigest()
+    """Ask the isolated executable to identify its checked-out source and lock."""
+    completed = _run_launcher(_project_command("source-digest"))
+    completed.check_returncode()
+    return completed.stdout.strip()
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -653,7 +650,7 @@ class _SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-def _launcher_command(config_path: str) -> list[str]:
+def _project_command(*arguments: str) -> list[str]:
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
@@ -667,11 +664,12 @@ def _launcher_command(config_path: str) -> list[str]:
         "--no-group",
         "dev",
         "marinskyrl",
-        "iris",
-        "launch",
-        "--config",
-        config_path,
+        *arguments,
     ]
+
+
+def _launcher_command(config_path: str) -> list[str]:
+    return _project_command("iris", "launch", "--config", config_path)
 
 
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:

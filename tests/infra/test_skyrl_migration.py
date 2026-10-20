@@ -4,7 +4,9 @@
 import base64
 import json
 import os
+import shutil
 import subprocess
+import tomllib
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -139,8 +141,9 @@ def prepare(directory: Path, pulls: list[dict]) -> None:
     migration.plan(directory, directory / "manifest.toml", None)
 
 
+@pytest.mark.parametrize("reuse_cache", [False, True])
 def test_snapshot_keeps_exact_git_links_and_recently_active_old_issues(
-    snapshot_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    snapshot_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reuse_cache: bool
 ) -> None:
     source = snapshot_dir / "source"
     sha = migration.git(source, "rev-parse", "HEAD")
@@ -168,7 +171,16 @@ def test_snapshot_keeps_exact_git_links_and_recently_active_old_issues(
     monkeypatch.setattr(migration, "gh", api)
     monkeypatch.setattr(migration, "github_items", paginate)
     output = tmp_path / "capture"
-    migration.snapshot(output, "main", 10, datetime(2026, 10, 19, tzinfo=UTC))
+    cache = tmp_path / "cache.git" if reuse_cache else None
+    cached_sha = sha
+    if cache is not None:
+        migration.run("git", "init", "--bare", "--quiet", str(cache))
+        migration.git(cache, "fetch", "--quiet", str(source), f"{sha}:refs/snapshot/main")
+        write(source, "cloud/iris/launch.py", "from skyrl_train.train import train\n\n")
+        sha = save(source, "Upstream advanced after the previous snapshot")
+    migration.snapshot(output, "main", 10, datetime(2026, 10, 19, tzinfo=UTC), objects_cache=cache)
+    if cache is not None:
+        assert migration.git(cache, "rev-parse", "refs/snapshot/main") == cached_sha
     captured = migration.read_json(output / "snapshot.json")
     assert [issue["number"] for issue in captured["issues"]] == [1]
     assert os.readlink(output / "source/skyrl-train/skyrl-gym") == "../skyrl-gym/"
@@ -189,10 +201,6 @@ def test_stage_preserves_nested_imports_assets_modes_and_symlinks(snapshot_dir: 
     assert (vendor / "skyrl-train/skyrl-gym").resolve() == vendor / "skyrl-gym"
     assert (vendor / "scripts/run.sh").stat().st_mode & 0o111
     assert (vendor / "LICENSE").read_text() == "Apache-2.0\n"
-    provenance = migration.read_json(vendor / migration.PROVENANCE)
-    assert provenance["files"]["skyrl-train/skyrl_train/assets/blob.bin"] == migration.file_digest(
-        vendor / "skyrl-train/skyrl_train/assets/blob.bin"
-    )
 
 
 def stacked_pulls(directory: Path) -> list[dict]:
@@ -280,7 +288,6 @@ def test_migration_fix_is_preserved_when_transplanting_open_work(
         == "helper = 3"
     )
     provenance = migration.read_json(tree / migration.VENDOR / migration.PROVENANCE)
-    assert provenance["files"]["skyrl-train/skyrl_train/relative.py"] == migration.file_digest(tree / runtime_file)
     assert provenance["patches"][0]["sha256"] == migration.file_digest(snapshot_dir / "migration-patches/runtime.patch")
     assert (source / "skyrl-train/skyrl_train/relative.py").read_text() == "value = 1\n"
     github_fake(monkeypatch, migration.read_json(snapshot_dir / "snapshot.json"), "cutover")
@@ -339,47 +346,149 @@ def test_changed_snapshot_cannot_claim_original_source_identity(snapshot_dir: Pa
     assert not (tmp_path / "candidate/tree").exists()
 
 
-def test_vendor_audit_rejects_changed_runtime_assets(snapshot_dir: Path, tmp_path: Path) -> None:
+def advanced_snapshot(previous: Path, output: Path, edits: dict[str, str], manifest: Path) -> Path:
+    output.mkdir()
+    migration.run("git", "clone", "--quiet", str(previous / "source"), str(output / "source"))
+    for name, contents in edits.items():
+        write(output / "source", name, contents)
+    save(output / "source", "Advance upstream")
+    migration.write_json(output / "snapshot.json", migration.read_json(previous / "snapshot.json"))
+    shutil.copyfile(manifest, output / "manifest.toml")
+    for name in tomllib.loads(manifest.read_text()).get("patches", []):
+        target = output / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(manifest.parent / name, target)
+    prepare(output, [])
+    return output
+
+
+def refresh_checkout(snapshot_dir: Path, tmp_path: Path) -> tuple[Path, Path]:
     prepare(snapshot_dir, [])
-    candidate = tmp_path / "candidate"
-    migration.stage(snapshot_dir, candidate)
-    source = candidate / "tree" / migration.VENDOR
-    migration.verify_vendor(source)
-    write_bytes(source, "skyrl-train/skyrl_train/assets/blob.bin", b"changed runtime data")
-    with pytest.raises(ValueError, match="Vendored source changed"):
-        migration.verify_vendor(source)
+    migration.stage(snapshot_dir, tmp_path / "original")
+    source = tmp_path / "original/tree" / migration.VENDOR
+    manifest = tmp_path / "original/tree/config/skyrl-migration.toml"
+    manifest.parent.mkdir()
+    shutil.copyfile(snapshot_dir / "manifest.toml", manifest)
+    return source, manifest
+
+
+def test_refresh_preserves_local_edits_deletions_and_new_files_across_upstream_updates(
+    snapshot_dir: Path, tmp_path: Path
+) -> None:
+    current, manifest = refresh_checkout(snapshot_dir, tmp_path)
+    write(current, "skyrl-train/skyrl_train/relative.py", "value = 7\n")
+    write(current, "cloud/iris/local_extension.py", "local = True\n")
+    write_bytes(current, "skyrl-train/skyrl_train/assets/blob.bin", b"\0local\xff")
+    (current / "skyrl-train/skyrl_train/assets/old.txt").unlink()
+    write(current, ".gitignore", ".venv/\n")
+    write(current, ".venv/keep.txt", "local environment\n")
+    updated = advanced_snapshot(
+        snapshot_dir,
+        tmp_path / "upstream-1",
+        {
+            "cloud/iris/launch.py": "from .upstream import value\nfrom skyrl_train.train import train\n",
+            "cloud/iris/upstream.py": "value = 11\n",
+        },
+        manifest,
+    )
+    result = migration.refresh_candidate(snapshot_dir, current, updated, tmp_path / "refresh-1")
+    assert result.status is migration.RefreshStatus.READY, result.diagnostic
+    migration.apply_refresh(result, current, manifest)
+    assert (current / "cloud/iris/upstream.py").read_text() == "value = 11\n"
+    assert (current / "skyrl-train/skyrl_train/relative.py").read_text() == "value = 7\n"
+    assert (current / "cloud/iris/local_extension.py").read_text() == "local = True\n"
+    assert (current / "skyrl-train/skyrl_train/assets/blob.bin").read_bytes() == b"\0local\xff"
+    assert not (current / "skyrl-train/skyrl_train/assets/old.txt").exists()
+    assert (current / ".venv/keep.txt").read_text() == "local environment\n"
+    following = advanced_snapshot(updated, tmp_path / "upstream-2", {"cloud/iris/upstream.py": "value = 12\n"}, manifest)
+    migration.git(
+        following / "source.git",
+        "fetch",
+        "--quiet",
+        str(updated / "source.git"),
+        "refs/snapshot/local-base:refs/snapshot/local-base",
+    )
+    result = migration.refresh_candidate(updated, current, following, tmp_path / "refresh-2")
+    assert result.status is migration.RefreshStatus.READY, result.diagnostic
+    migration.apply_refresh(result, current, manifest)
+    assert (current / "cloud/iris/upstream.py").read_text() == "value = 12\n"
+    assert (current / "skyrl-train/skyrl_train/relative.py").read_text() == "value = 7\n"
+    assert (current / "cloud/iris/local_extension.py").read_text() == "local = True\n"
+    assert (current / ".venv/keep.txt").read_text() == "local environment\n"
+    assert (snapshot_dir / "source/skyrl-train/skyrl_train/relative.py").read_text() == "value = 1\n"
+
+
+def test_refresh_keeps_a_conflicting_candidate_without_overwriting_local_work(
+    snapshot_dir: Path, tmp_path: Path
+) -> None:
+    current, manifest = refresh_checkout(snapshot_dir, tmp_path)
+    write(current, "skyrl-train/skyrl_train/relative.py", "value = 7\n")
+    updated = advanced_snapshot(
+        snapshot_dir, tmp_path / "upstream", {"skyrl-train/skyrl_train/relative.py": "value = 2\n"}, manifest
+    )
+    result = migration.refresh_candidate(snapshot_dir, current, updated, tmp_path / "refreshed")
+    assert result.status is migration.RefreshStatus.CONFLICT
+    assert result.conflicts == [f"{migration.VENDOR}/skyrl-train/skyrl_train/relative.py"]
+    assert (current / "skyrl-train/skyrl_train/relative.py").read_text() == "value = 7\n"
+    assert migration.git(tmp_path / "refreshed/tree", "diff", "--name-only", "--diff-filter=U")
+    resolved = tmp_path / "refreshed/tree" / migration.VENDOR / "skyrl-train/skyrl_train/relative.py"
+    resolved.write_text("value = 9\n")
+    migration.git(tmp_path / "refreshed/tree", "add", str(resolved))
+    migration.finish_refresh(result)
+    assert result.status is migration.RefreshStatus.READY
+    migration.apply_refresh(result, current, manifest)
+    assert (current / "skyrl-train/skyrl_train/relative.py").read_text() == "value = 9\n"
+    assert (tmp_path / "refreshed-resolution/tree" / migration.VENDOR / "skyrl-train/skyrl_train/relative.py").exists()
+
+
+@pytest.mark.parametrize("edited_tree", ["checkout", "candidate"])
+def test_refresh_refuses_to_overwrite_an_edit_made_after_preview(
+    snapshot_dir: Path, tmp_path: Path, edited_tree: str
+) -> None:
+    current, manifest = refresh_checkout(snapshot_dir, tmp_path)
+    updated = advanced_snapshot(snapshot_dir, tmp_path / "upstream", {"cloud/iris/extra.py": "value = 11\n"}, manifest)
+    result = migration.refresh_candidate(snapshot_dir, current, updated, tmp_path / "refreshed")
+    assert result.status is migration.RefreshStatus.READY, result.diagnostic
+    edited = current if edited_tree == "checkout" else tmp_path / "refreshed/tree" / migration.VENDOR
+    write(edited, "skyrl-train/skyrl_train/relative.py", "value = 8\n")
+    with pytest.raises(ValueError, match="changed"):
+        migration.apply_refresh(result, current, manifest)
+    assert (edited / "skyrl-train/skyrl_train/relative.py").read_text() == "value = 8\n"
+    assert not (current / "cloud/iris/extra.py").exists()
 
 
 @pytest.mark.parametrize("defect", ["missing", "changed", "untracked"])
-def test_wheel_audit_rejects_runtime_contents_outside_provenance(
+def test_wheel_audit_accepts_source_edits_and_rejects_different_packaged_contents(
     snapshot_dir: Path, tmp_path: Path, defect: str
 ) -> None:
     prepare(snapshot_dir, [])
     candidate = tmp_path / "candidate"
     migration.stage(snapshot_dir, candidate)
     source = candidate / "tree" / migration.VENDOR
-    provenance = migration.read_json(source / migration.PROVENANCE)
+    write_bytes(source, "skyrl-train/skyrl_train/assets/blob.bin", b"edited runtime data")
+    write(source, "marinskyrl/normal_edit.py", "value = 7\n")
     wheel = tmp_path / "candidate.whl"
     asset = "skyrl_train/assets/blob.bin"
 
     def package(omit_asset: bool) -> None:
         with zipfile.ZipFile(wheel, "w") as archive:
-            archive.write(source / migration.PROVENANCE, migration.PROVENANCE)
-            for name in provenance["files"]:
-                member = name.removeprefix("skyrl-train/").removeprefix("skyrl-gym/")
+            for member, path in migration.wheel_source_files(source).items():
                 if omit_asset and member == asset and defect != "untracked":
                     if defect == "changed":
                         archive.writestr(member, b"changed runtime data")
                     continue
-                archive.write(source / name, member)
+                archive.write(path, member)
             if omit_asset and defect == "untracked":
                 archive.writestr("marinskyrl/untracked.py", "raise RuntimeError('untracked runtime')")
 
     package(omit_asset=False)
-    assert asset in migration.audit_wheel(wheel)
+    assert asset in migration.audit_wheel(wheel, source)
+    with zipfile.ZipFile(wheel) as archive:
+        assert archive.read(asset) == b"edited runtime data"
+        assert archive.read("marinskyrl/normal_edit.py") == b"value = 7\n"
     package(omit_asset=True)
-    with pytest.raises(ValueError, match=r"Wheel member missing or changed|outside staged provenance"):
-        migration.audit_wheel(wheel)
+    with pytest.raises(ValueError, match=r"Wheel member missing or changed|outside the checked-out source"):
+        migration.audit_wheel(wheel, source)
 
 
 def github_fake(

@@ -106,3 +106,8 @@ GPU workers receive the source, assets, and lock in a hash-verified Iris bundle;
 they do not clone the fork. The external updater does not advance this source.
 The [SkyRL migration guide](../../docs/dev-guide/skyrl-migration.md) describes
 rebuilding the pruned source and reconciling active fork work before archival.
+`uv run config/update-external.py --skyrl-marin-ref <merged-commit>` advances
+its four Marin library pins together. It checks the nested import and constructor
+contract and restores the manifest and lock if the update fails. The guide
+records the current compatibility constraint; a merged commit alone does not
+guarantee compatibility with SkyRL's TaskSession API.

@@ -19,7 +19,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
-from cloud.iris.runtime_bundle import runtime_bundle_inputs
+from cloud.iris.runtime_bundle import resolve_launcher_source, runtime_bundle_inputs
 from marinskyrl.checkpoint_paths import policy_export_path
 from marinskyrl.hf_model import validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
@@ -222,6 +222,7 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Launch SkyRL from one resolved Hydra config")
     commands = parser.add_subparsers(dest="component", required=True)
+    commands.add_parser("source-digest", help="Identify the checked-out runtime, assets, and lock")
     iris = commands.add_parser("iris")
     iris_commands = iris.add_subparsers(dest="action", required=True)
     launch = iris_commands.add_parser("launch")
@@ -231,6 +232,9 @@ def create_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = create_parser().parse_args(argv)
+    if args.component == "source-digest":
+        print(resolve_launcher_source().digest)
+        return 0
     with contextlib.redirect_stdout(sys.stderr):
         result = execute_launch(args.config)
     json.dump(asdict(result), sys.stdout, sort_keys=True)

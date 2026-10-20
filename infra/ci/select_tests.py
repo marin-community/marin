@@ -161,6 +161,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "vendor/skyrl/",
         "config/skyrl-migration",
         "scripts/skyrl_migration.py",
+        "infra/ci/check_skyrl_marin.py",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
     ),

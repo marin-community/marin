@@ -352,9 +352,13 @@ class MegatronWorker:
         """
         if not moe_router_replay_requested(self.cfg, role=role):
             return
+        model_config = get_model_config(self.actor_module[0])
+        recompute_router = model_config.recompute_granularity == "full" or (
+            model_config.recompute_granularity == "selective" and "moe" in model_config.recompute_modules
+        )
         self.model.router_replay = install_megatron_router_replay(
             self.actor_module,
-            recompute_enabled=get_model_config(self.actor_module[0]).recompute_granularity is not None,
+            recompute_enabled=recompute_router,
         )
 
     def save_hf_model(self, export_dir: str, tokenizer):

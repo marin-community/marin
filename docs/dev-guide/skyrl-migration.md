@@ -35,29 +35,96 @@ flowchart LR
     Outputs --> Eval["Marin evaluation artifact"]
 ```
 
-`SkyRLRuntime.source_digest` contains the SHA-256 of the vendored provenance document.
-The document binds the captured fork commit, migration patches, independent
-lock, and source file hashes. Use a fresh artifact version when it changes.
-The nested project currently selects published or Git-pinned Marin
-packages; local editable Marin packages are not wired into its bundle.
+`SkyRLRuntime.source_digest` hashes the current runtime files, assets, and
+independent lock. The nested executable computes it without importing SkyRL
+into Marin. Ordinary edits and new runtime files change the identity without
+restaging the migration. The Iris bundle records and verifies each file's hash.
+Use a fresh artifact version when the digest changes. The provenance document
+records the upstream origin and captured migration patches; it does not prevent
+editing the vendored source.
+
+The nested project selects published or Git-pinned Marin packages; local
+editable Marin packages are not wired into its bundle. Its four Git dependencies
+currently require `b3206ac1c46cee3079441f394b5a6a13bb923d0e` from
+[#10190](https://github.com/marin-community/marin/pull/10190). That revision
+provides the `RolloutEngine(judge_connection=...)` interface. Older merged
+revisions lack it, and current main uses a newer harness API that requires a
+separate SkyRL port. Preserve this compatibility pin until that port or the
+required library changes land. To advance to a compatible merged revision:
+
+```bash
+uv run config/update-external.py --skyrl-marin-ref <merged-commit>
+```
+
+The updater checks ancestry, resolves only the nested lock, and checks imported
+Marin symbols and explicit constructor keywords inside the nested environment.
+A failed check restores both dependency files. This check complements runtime
+acceptance; it does not exercise the full TaskSession contract.
 
 The migration tool rebuilds source candidates and prepares active work. It
 does not edit Marin's integration, publish a wheel, enable migrated nightlies,
 or archive the fork. Those are reviewed changes or final cutover operations.
 
 The checked-in `vendor/skyrl` tree is the script's patched baseline output, including
-its license and per-file source provenance. The generated
+its license and upstream provenance. The generated
 [`snapshot-report.md`](https://github.com/marin-community/marin/blob/main/config/skyrl-migration/snapshot-report.md) records
 open-work transplant decisions; it does not merge those PRs into the baseline.
-The `skyrl-wheel` CI lane checks source and patch hashes, the independent
-lock's freshness, and the built wheel's runtime assets:
+The `skyrl-wheel` CI lane checks the independent lock's freshness, the Marin
+library import contract, and the built wheel against the current source:
 
 ```bash
 uv run --no-project python -m scripts.skyrl_migration check-vendor
 ```
 
-This lane builds without installing SkyRL into Marin. GPU runtime acceptance
+This lane uses an isolated CPU environment. GPU runtime acceptance
 remains a separate operation.
+
+## Refresh while the fork changes
+
+Keep the previous snapshot directory. The refresh command captures the latest
+upstream commit and active work, reuses its Git objects, and computes the full
+local delta from the previous retained upstream source. It replays that delta
+with Git's three-way merge and rebuilds the stacked PR transplant report.
+
+```bash
+uv run --no-project python -m scripts.skyrl_migration refresh \
+  --previous /path/to/previous/snapshot \
+  --output /path/to/next-refresh
+```
+
+Inspect `refresh.json`, `candidate/report.md`, and
+`candidate/tree/vendor/skyrl`. The preview leaves the working checkout unchanged.
+For a clean candidate:
+
+```bash
+uv run --no-project python -m scripts.skyrl_migration apply-refresh \
+  --report /path/to/next-refresh/refresh.json
+```
+
+Apply installs the candidate source, normalized local patch, retention manifest,
+and snapshot report. It refuses to overwrite edits made after the preview and
+preserves ignored local environments. `refresh --apply` combines these steps
+when no manual inspection is needed. Subsequent refreshes use
+`/path/to/next-refresh/snapshot` as `--previous`.
+
+If replay conflicts, resolve the files in `candidate/tree`, then `git add` them
+there. Finish the replay before applying:
+
+```bash
+uv run --no-project python -m scripts.skyrl_migration finish-refresh \
+  --report /path/to/next-refresh/refresh.json
+```
+
+The resolved tree is preserved as `candidate-resolution`; the finished candidate
+can be reproduced from the new snapshot alone. The original local delta is
+saved as `local-changes-before-replay.patch`. PR conflicts remain explicit in
+the transplant report. A clean local replay does not resolve those PR decisions.
+
+For Marin PRs that still edit `config/external/MarinSkyRL`, rebase onto this
+layout: edit runtime code under `vendor/skyrl`, update its own `pyproject.toml`
+and `uv.lock` for dependency changes, and remove edits to the deleted fork pin.
+Use this refresh workflow for commits that first land in the fork. Marin's root
+lock must not acquire SkyRL, Harbor, Torch, or their dependency profiles.
 
 ## Snapshot and dry run
 
@@ -94,8 +161,8 @@ functions inside retained files are not removed.
 
 The manifest also names migration patches under `config/skyrl-migration/`.
 `plan` captures their bytes and hashes. `stage` applies those captured patches
-to the selected source, records them in packaged provenance, and hashes the
-result before trying open PRs. Patch failures stop staging. Runtime fixes are
+to the selected source and records them in packaged provenance before trying
+open PRs. Patch failures stop staging. Runtime fixes are
 therefore reproducible on later snapshots and remain distinct from the source
 commit. Publication requires the merged cutover to contain the same patches.
 

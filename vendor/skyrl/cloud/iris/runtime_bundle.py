@@ -45,8 +45,12 @@ class RuntimeBundleIdentity:
 
 
 def resolve_launcher_source() -> LauncherSource:
-    """Identify the nested source from its captured source and dependency hashes."""
-    return LauncherSource(root=PROJECT_ROOT, digest=_sha256(PROJECT_ROOT / PROVENANCE_FILE))
+    """Identify the checked-out runtime source, assets, and independent lock."""
+    files = tuple(
+        RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(PROJECT_ROOT / path))
+        for path in _bundle_paths(PROJECT_ROOT)
+    )
+    return LauncherSource(root=PROJECT_ROOT, digest=_files_digest(files))
 
 
 def _bundle_relative_path(value: str) -> Path:
@@ -64,24 +68,31 @@ def read_manifest_paths(root: Path) -> tuple[str, ...]:
     )
 
 
-def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
-    provenance = json.loads((source.root / PROVENANCE_FILE).read_text())
-    names = set(read_manifest_paths(source.root))
+def _bundle_paths(root: Path) -> tuple[Path, ...]:
+    names = set(read_manifest_paths(root))
     names.update({BUNDLE_FILE_MANIFEST.as_posix(), PROVENANCE_FILE.as_posix(), "pyproject.toml", "uv.lock"})
-    names.update(name for name in provenance["files"] if name.startswith(RUNTIME_SOURCE_PREFIXES))
+    for prefix in RUNTIME_SOURCE_PREFIXES:
+        source = root / prefix
+        if source.is_dir():
+            names.update(path.relative_to(root).as_posix() for path in source.rglob("*") if path.is_file())
+        elif source.is_file():
+            names.add(prefix)
     paths = []
     for name in sorted(names):
         path = _bundle_relative_path(name)
-        if "tests" in path.parts:
+        if {"tests", "__pycache__"}.intersection(path.parts) or path.suffix in {".pyc", ".pyo"}:
             continue
-        original = source.root / path
-        original.resolve().relative_to(source.root.resolve())
+        original = root / path
+        original.resolve().relative_to(root.resolve())
         if not original.is_file():
             raise FileNotFoundError(f"Runtime source file is missing: {name}")
-        if path != PROVENANCE_FILE and _sha256(original) != provenance["files"][name]:
-            raise ValueError(f"Runtime source differs from staged provenance: {name}")
         paths.append(path)
     return tuple(paths)
+
+
+def _files_digest(files: tuple[RuntimeBundleFile, ...]) -> str:
+    encoded = json.dumps([(entry.path, entry.sha256) for entry in files], separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _sha256(path: Path) -> str:
@@ -119,10 +130,9 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
         bundled_file = root / relative_path
         if not bundled_file.is_file() or _sha256(bundled_file) != entry.sha256:
             raise RuntimeError(f"Runtime bundle file does not match its recorded identity: {entry.path}")
-    source = LauncherSource(root=root, digest=_sha256(root / PROVENANCE_FILE))
-    if source.digest != source_digest:
-        raise ValueError("Bundled source provenance does not match the selected runtime identity")
-    _bundle_paths(source)
+    actual = tuple(RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(root / path)) for path in _bundle_paths(root))
+    if _files_digest(actual) != source_digest or _files_digest(tuple(files)) != source_digest:
+        raise ValueError("Bundled source files do not match the selected runtime identity")
     return source_digest
 
 
@@ -133,7 +143,7 @@ def runtime_bundle_inputs(expected_source_digest: str) -> tuple[LauncherSource, 
         raise ValueError(
             f"Selected runtime source identity {source.digest} does not match requested {expected_source_digest}"
         )
-    paths = _bundle_paths(source)
+    paths = _bundle_paths(source.root)
     return source, paths
 
 
@@ -149,5 +159,7 @@ def build_runtime_bundle(expected_source_digest: str) -> Path:
         shutil.copy2(source.root / relative_path, destination)
         files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
     identity = RuntimeBundleIdentity(source_digest=source.digest, files=tuple(files))
+    if _files_digest(identity.files) != expected_source_digest:
+        raise ValueError("Runtime source changed while building its bundle")
     (workspace / BUNDLE_IDENTITY_FILE).write_text(json.dumps(asdict(identity), indent=2, sort_keys=True) + "\n")
     return workspace
