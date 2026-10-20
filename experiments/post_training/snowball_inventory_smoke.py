@@ -3,16 +3,16 @@
 
 """Ten optimizer updates over the versioned Snowball curriculum inventory."""
 
-import json
 import subprocess
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import click
 import yaml
 from fray.types import ResourceConfig
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
@@ -23,9 +23,11 @@ from marin.rl.skyrl import (
     IrisSkyRLExecution,
     SkyRLRetentionPolicy,
     SkyRLRun,
+    SkyRLRunConfig,
     SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
+    run_skyrl,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
@@ -42,34 +44,46 @@ SEED = 20261020
 ROLE_PLAN = replace(SNOWBALL_RECIPE.role_plan, train_batch_size=32, policy_mini_batch_size=32)
 
 
-def verify_pool_runtime(
-    pool_uri: str, expected_sha256: str, output_uri: str, task_sessions: dict, judge_model: str
-) -> None:
-    subprocess.run(
-        [
-            "uv",
-            "run",
-            "--project",
-            "config/external/MarinSkyRL",
-            "--frozen",
-            "--no-dev",
-            "python",
-            "experiments/post_training/snowball_inventory_probe.py",
-            "--pool-uri",
-            prefix_join(pool_uri, "train.parquet"),
-            "--expected-sha256",
-            expected_sha256,
-            "--output-uri",
-            prefix_join(output_uri, "report.json"),
-            "--task-sessions-json",
-            json.dumps(task_sessions),
-            "--judge-model",
-            judge_model,
-        ],
-        cwd=Path(__file__).resolve().parents[2],
-        check=True,
-        timeout=30 * 60,
-    )
+@dataclass(frozen=True)
+class InventorySmokeConfig:
+    training: SkyRLRunConfig
+    pool_sha256: str
+
+
+def verify_pool_runtime(launch_config_yaml: str, expected_sha256: str, output_uri: str) -> None:
+    with TemporaryDirectory(prefix="snowball-launch-preflight-") as directory:
+        path = Path(directory) / "launch.yaml"
+        path.write_text(launch_config_yaml)
+        subprocess.run(
+            [
+                "uv",
+                "run",
+                "--project",
+                "config/external/MarinSkyRL",
+                "--frozen",
+                "--no-dev",
+                "python",
+                "experiments/post_training/snowball_inventory_probe.py",
+                "--launch-config",
+                str(path),
+                "--expected-sha256",
+                expected_sha256,
+                "--output-uri",
+                output_uri,
+            ],
+            cwd=Path(__file__).resolve().parents[2],
+            check=True,
+            timeout=30 * 60,
+        )
+
+
+def run_inventory_smoke(config: InventorySmokeConfig) -> SkyRLRun:
+    report_uri = prefix_join(config.training.output.terminal_manifest_uri.rsplit("/", 1)[0], "probe/report.json")
+    remote(
+        verify_pool_runtime,
+        resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
+    )(config.training.launch_config_yaml, config.pool_sha256, report_uri)
+    return run_skyrl(config.training)
 
 
 def smoke_recipe(request_window_tokens: int, max_new_tokens: int) -> dict:
@@ -134,19 +148,6 @@ def main(
     )
     pool = ArtifactStep.adopt("documents/snowball-inventory-runtime", pool_version, pool_uri)
     recipe = smoke_recipe(request_window_tokens, max_new_tokens)
-    preflight = apply(
-        user_owned_name("documents/snowball-inventory-runtime-probe"),
-        remote(
-            verify_pool_runtime,
-            resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
-        ),
-        version=resolve_version(name, None),
-        pool_uri=pool,
-        expected_sha256=pool_sha256,
-        task_sessions=recipe["environment"]["task_sessions"],
-        judge_model=recipe["extra_env"]["VERIFYIT_JUDGE_MODEL"],
-        output_uri=OUT,
-    )
     rl = skyrl_step(
         SkyRLSpec(
             name=name,
@@ -187,7 +188,11 @@ def main(
         ),
         export_hf=True,
     )
-    return replace(rl, deps=(*rl.deps, preflight))
+
+    def build_config(ctx: StepContext) -> InventorySmokeConfig:
+        return InventorySmokeConfig(rl.build_config(ctx), pool_sha256)
+
+    return replace(rl, run=run_inventory_smoke, build_config=build_config)
 
 
 if __name__ == "__main__":

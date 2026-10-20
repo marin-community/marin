@@ -18,7 +18,9 @@ from tempfile import TemporaryDirectory
 
 import click
 import pyarrow.parquet as pq
-from rigging.filesystem.storage_path import StoragePath
+from cloud.iris.launch_config import load_launch_config
+from marinskyrl.task_machine_factories import task_machine_factories
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.token_prefix import TokenPrefixHarness
@@ -38,9 +40,6 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from verifyit.modes.grade_judge import JudgeConnection
-
-if sys.platform == "linux":
-    from shellbox.backends.local.machine import LocalMachineFactory
 
 EXPECTED_ROWS = 100_000
 CORE_REVISION = "6e2fe1839ea067be147f1ce06aced63a96670f7a"
@@ -67,6 +66,7 @@ class ProbeReport:
     contract_task_id: str | None = None
     source_counts: dict[str, int] = field(default_factory=dict)
     package_revisions: dict[str, str] = field(default_factory=dict)
+    factory_backends: list[str] = field(default_factory=list)
     checks: list[SourceProbe] = field(default_factory=list)
     error_type: str | None = None
 
@@ -136,13 +136,20 @@ def inventory_representatives(
 
 
 async def probe(
-    pool_uri: str,
+    launch_config: Path,
     expected_sha256: str,
     report: ProbeReport,
-    task_sessions: dict,
-    judge_model: str,
 ) -> None:
     report.package_revisions = package_revisions()
+    report.phase = "launch_configuration"
+    config = load_launch_config(launch_config)
+    task_sessions = config.skyrl.environment.task_sessions
+    if task_sessions.get("local") is None:
+        raise ValueError("The composed training configuration did not enable the local machine backend")
+    if len(config.inputs.train_data) != 1:
+        raise ValueError("The inventory smoke requires one complete training pool")
+    source = config.inputs.train_data[0]
+    pool_uri = prefix_join(source.uri, source.relative_path)
     report.phase = "inventory_validation"
     with TemporaryDirectory(prefix="snowball-inventory-probe-") as directory:
         path = Path(directory) / "train.parquet"
@@ -155,17 +162,15 @@ async def probe(
         report.phase = "local_sandbox_capability"
         if sys.platform != "linux":
             raise RuntimeError("Local sandbox capability requires a Linux host")
-        if task_sessions.get("local") is None:
-            raise ValueError("The inventory requires the configured local machine backend")
-        factory = LocalMachineFactory()
+        factories = task_machine_factories(task_sessions)
+        report.factory_backends = sorted(factories)
+        factory = factories[Backend.LOCAL]
         report.phase = "engine_contract_validation"
-        token_prefix = TokenPrefixHarness(**task_sessions["token_prefix"])
+        token_prefix = TokenPrefixHarness(**dict(task_sessions.token_prefix))
         remote_judge = task_sessions["remote_judge"]
         judge_connection = JudgeConnection(remote_judge["base_url"], os.environ[remote_judge["api_key_env"]])
-        os.environ["VERIFYIT_JUDGE_MODEL"] = judge_model
-        scripts, native = inventory_representatives(
-            path, report, {Backend.LOCAL: factory}, token_prefix, judge_connection
-        )
+        os.environ["VERIFYIT_JUDGE_MODEL"] = config.runtime.task_env["VERIFYIT_JUDGE_MODEL"]
+        scripts, native = inventory_representatives(path, report, factories, token_prefix, judge_connection)
     report.phase = "script_grading"
     for source, spec in sorted(scripts.items()):
         assert isinstance(spec.task.grader, ScriptGrader) and spec.verifier_machine is not None
@@ -196,15 +201,13 @@ def write_report(output_uri: str, report: ProbeReport) -> None:
 
 
 @click.command(help=__doc__)
-@click.option("--pool-uri", required=True, help="Exact URI of the complete compiled train.parquet.")
+@click.option("--launch-config", type=click.Path(exists=True, path_type=Path), required=True)
 @click.option("--expected-sha256", required=True)
 @click.option("--output-uri", required=True, help="Destination JSON report URI.")
-@click.option("--task-sessions-json", required=True, help="Exact configured training task sessions without credentials.")
-@click.option("--judge-model", required=True)
-def main(pool_uri: str, expected_sha256: str, output_uri: str, task_sessions_json: str, judge_model: str) -> None:
+def main(launch_config: Path, expected_sha256: str, output_uri: str) -> None:
     report = ProbeReport()
     try:
-        asyncio.run(probe(pool_uri, expected_sha256, report, json.loads(task_sessions_json), judge_model))
+        asyncio.run(probe(launch_config, expected_sha256, report))
     except Exception as error:
         report.status = "failed"
         report.error_type = type(error).__name__
