@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from experiments.post_training.task_curation.swesmith_staged import stage1_program
+from experiments.post_training.task_curation.swesmith_staged import Stage1Contract, stage1_program
 
 
 @pytest.mark.parametrize("remote", ["https://github.com/swesmith/example", "https://github.com/swesmith/example.git/"])
@@ -28,14 +28,16 @@ def test_readiness_accepts_equivalent_fork_urls_and_rejects_wrong_state(tmp_path
     git("add", module.name)
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Fixture")
     git("remote", "add", "origin", remote)
-    contract = {
-        "workspace": str(repository),
-        "origin": "https://github.com/swesmith/example",
-        "branch": "task-branch",
-        "commit": git("rev-parse", "HEAD"),
-        "tracked_sha256": {module.name: hashlib.sha256(module.read_bytes()).hexdigest()},
-        "import_name": module.stem,
-    }
+    contract = Stage1Contract(
+        workspace=str(repository),
+        origin="https://github.com/swesmith/example",
+        branch="task-branch",
+        commit=git("rev-parse", "HEAD"),
+        tracked_sha256={module.name: hashlib.sha256(module.read_bytes()).hexdigest()},
+        import_name=module.stem,
+        distribution_name="readiness-fixture",
+        symlink_targets={},
+    )
 
     def grade():
         result = subprocess.check_output(
@@ -50,7 +52,7 @@ def test_readiness_accepts_equivalent_fork_urls_and_rejects_wrong_state(tmp_path
     git("remote", "set-url", "origin", "https://github.com/upstream/example.git")
     assert grade()["checks"]["origin"] is False
     git("remote", "set-url", "origin", remote)
-    git("checkout", "--detach", contract["commit"])
+    git("checkout", "--detach", contract.commit)
     result = grade()
     assert result["checks"]["commit"] is True
     assert result["checks"]["branch"] is False

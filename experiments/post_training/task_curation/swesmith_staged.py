@@ -19,7 +19,7 @@ import subprocess
 import tarfile
 import tomllib
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -235,7 +235,19 @@ def git_value(pilot: DockerPilot, container: str, *args: str) -> str:
     return pilot.command(["docker", "exec", "-w", WORKSPACE, container, "/usr/bin/git", *args]).stdout.decode().strip()
 
 
-def stage1_contract(pilot: DockerPilot, container: str, task: SourceTask, import_name: str) -> dict:
+@dataclass(frozen=True)
+class Stage1Contract:
+    origin: str
+    branch: str
+    commit: str
+    workspace: str
+    import_name: str
+    distribution_name: str
+    symlink_targets: dict[str, str]
+    tracked_sha256: dict[str, str]
+
+
+def stage1_contract(pilot: DockerPilot, container: str, task: SourceTask, import_name: str) -> Stage1Contract:
     entries = git_value(pilot, container, "ls-files", "--stage").splitlines()
     links = {
         line.split("\t", 1)[1]: git_value(pilot, container, "show", "HEAD:" + line.split("\t", 1)[1])
@@ -252,19 +264,19 @@ def stage1_contract(pilot: DockerPilot, container: str, task: SourceTask, import
     ]
     if len(distributions) != 1:
         raise ValueError("Cannot identify the checkout's installed distribution for controls")
-    return {
-        "origin": task.origin,
-        "branch": task.branch,
-        "commit": git_value(pilot, container, "rev-parse", "HEAD"),
-        "workspace": WORKSPACE,
-        "import_name": import_name,
-        "distribution_name": distributions[0],
-        "symlink_targets": links,
-        "tracked_sha256": {key: sha256(value) for key, value in files.items()},
-    }
+    return Stage1Contract(
+        origin=task.origin,
+        branch=task.branch,
+        commit=git_value(pilot, container, "rev-parse", "HEAD"),
+        workspace=WORKSPACE,
+        import_name=import_name,
+        distribution_name=distributions[0],
+        symlink_targets=links,
+        tracked_sha256={key: sha256(value) for key, value in files.items()},
+    )
 
 
-def stage1_program(contract: dict) -> str:
+def stage1_program(contract: Stage1Contract) -> str:
     # Do not trust agent-written manifests or completion prose. Supply this program
     # after the actor has stopped, through stdin, with the private contract embedded.
     return """import hashlib, importlib, importlib.metadata, json, os, pathlib, subprocess
@@ -295,11 +307,11 @@ except Exception as exc:
     checks['import_error'] = type(exc).__name__ + ': ' + str(exc)
 print(json.dumps({'passed': all(v is True for v in checks.values()), 'checks': checks}))
 """.replace(
-        "CONTRACT", repr(contract)
+        "CONTRACT", repr(asdict(contract))
     )
 
 
-def stage1_result(pilot: DockerPilot, container: str, contract: dict) -> dict:
+def stage1_result(pilot: DockerPilot, container: str, contract: Stage1Contract) -> dict:
     result = pilot.python(container, stage1_program(contract), check=False)
     if result.returncode:
         return {"passed": False, "inspection_error": result.stderr.decode(errors="replace")}
@@ -404,11 +416,11 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
             if dependency_command:
                 pilot.shell(container, dependency_command)
             contract = stage1_contract(pilot, container, task, import_name)
-            write_json(directory / "private" / "stage1-contract.json", contract)
+            write_json(directory / "private" / "stage1-contract.json", asdict(contract))
             result["controls"]["stage1_ready"] = stage1_result(pilot, container, contract)
             if not result["controls"]["stage1_ready"]["passed"]:
                 raise ValueError("Stage 1 positive control failed")
-            baseline = pilot.files(container, list(contract["tracked_sha256"]))
+            baseline = pilot.files(container, list(contract.tracked_sha256))
             mutated = pilot.snapshot(container, task.parent_id.rsplit("/", 1)[1] + "-mutated")
             fixed_commit = git_value(pilot, container, "rev-parse", "origin/HEAD")
             all_changed = git_value(pilot, container, "diff", "--name-only", "HEAD", fixed_commit).splitlines()
@@ -430,7 +442,7 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
             verifier_image = pilot.snapshot(container, task.parent_id.rsplit("/", 1)[1] + "-verifier")
             result.update(
                 {
-                    "mutation_commit": contract["commit"],
+                    "mutation_commit": contract.commit,
                     "fixed_commit": fixed_commit,
                     "changed_source_paths": changed,
                     "dependency_command": dependency_command,
@@ -456,7 +468,7 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
             "stage1_wrong_origin": "git remote set-url origin https://github.com/example/wrong",
             "stage1_wrong_branch": "git checkout -b wrong-branch",
             "stage1_wrong_workspace": "mv /testbed /wrongbed; mkdir /testbed",
-            "stage1_missing_install": f"python -m pip uninstall -y {shlex.quote(contract['distribution_name'])}",
+            "stage1_missing_install": f"python -m pip uninstall -y {shlex.quote(contract.distribution_name)}",
             "stage1_healthy_default": f"git checkout {shlex.quote(fixed_commit)}",
             "stage1_spoofed_metadata": (
                 f"git checkout {shlex.quote(fixed_commit)} -- " + " ".join(map(shlex.quote, changed))

@@ -129,7 +129,7 @@ for task in TASKS:
                 container,
                 "import json,pathlib\nprint(json.dumps([p for p in "
                 + repr(tracked)
-                + " if not pathlib.Path('/testbed',p).is_symlink()]))",
+                + f" if not pathlib.Path({WORKSPACE!r},p).is_symlink()]))",
             ).stdout
         )
         actor_paths = [p for p in regular if p not in hidden]
@@ -173,7 +173,7 @@ for task in TASKS:
             mutation = {
                 p: (
                     runner.command(
-                        ["docker", "exec", "-w", "/testbed", container, "git", "show", row["commit"] + ":" + p]
+                        ["docker", "exec", "-w", WORKSPACE, container, "git", "show", row["commit"] + ":" + p]
                     ).stdout
                 )
                 for p in gold
@@ -202,10 +202,9 @@ for task in TASKS:
                     "problem": task.problem,
                 },
             )
-        # Delete tracked hidden tests and all bytecode, including compiled hidden tests.
         cleanup = """
 import pathlib,shutil
-root=pathlib.Path('/testbed')
+root=pathlib.Path(WORKSPACE)
 for p in HIDDEN:
     path=root/p
     if path.is_symlink() or path.is_file():path.unlink()
@@ -214,6 +213,8 @@ shutil.rmtree(root/'.git')
 shutil.rmtree(root/'.pytest_cache',ignore_errors=True)
 """.replace(
             "HIDDEN", repr(hidden)
+        ).replace(
+            "WORKSPACE", repr(WORKSPACE)
         )
         with runner.container(verifier_image) as actor:
             runner.python(actor, cleanup)
@@ -251,7 +252,7 @@ def qualify_partial(parent_path: Path, output: Path) -> dict:
         with runner.container(repo["verifier_image"]) as container:
             runner.upload(container, mutation)
             applied = runner.command(
-                ["docker", "exec", "-i", "-w", "/testbed", container, "git", "apply", "--recount", "-"],
+                ["docker", "exec", "-i", "-w", WORKSPACE, container, "git", "apply", "--recount", "-"],
                 stdin=patch.encode(),
                 check=False,
             )
@@ -262,12 +263,12 @@ def qualify_partial(parent_path: Path, output: Path) -> dict:
                 continue
             # Original must-pass nodes provide a bounded witness; no invented tests.
             relevant = {**result["verifier"], "paths": result["verifier"]["must_pass"], "must_not_break": []}
-            runner.python(container, "import pathlib\nfor p in pathlib.Path('/testbed').rglob('*.pyc'):p.unlink()")
+            runner.python(container, f"import pathlib\nfor p in pathlib.Path({WORKSPACE!r}).rglob('*.pyc'):p.unlink()")
             before = pytest_result(runner, container, relevant, "partial-before")
             if not any(outcome == "failed" for outcome in before.get("failed_required", {}).values()):
                 continue
             runner.upload(container, gold)
-            runner.python(container, "import pathlib\nfor p in pathlib.Path('/testbed').rglob('*.pyc'):p.unlink()")
+            runner.python(container, f"import pathlib\nfor p in pathlib.Path({WORKSPACE!r}).rglob('*.pyc'):p.unlink()")
             after = pytest_result(runner, container, relevant, "partial-after")
             if not after["passed"]:
                 result["partial_status"] = "repair_control_failed"
