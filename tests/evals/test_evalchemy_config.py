@@ -11,14 +11,22 @@ serving, the eval itself) is exercised by the cluster smoke.
 """
 
 import base64
+import io
 import json
+import os
+import subprocess
+import sys
+import zipfile
 from types import SimpleNamespace
 
 import pytest
+from iris.cluster.client.bundle import create_workspace_zip
+from marin.evaluation.evalchemy import runtime
 from marin.evaluation.evalchemy.client import build_command, build_model_args
 from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
+    EvalchemyRuntimeConfig,
     _run_config_json,
     _run_evalchemy_child,
 )
@@ -108,6 +116,7 @@ def test_file_config_fields_reach_the_evalchemy_command():
             seed=1234,
             extra_model_args={"timeout": 900},
             max_length=32768,
+            runtime=EvalchemyRuntimeConfig(dataset_cache="s3://eval-data/cache"),
         )
     )
 
@@ -115,11 +124,22 @@ def test_file_config_fields_reach_the_evalchemy_command():
 
     assert command[command.index("--batch_size") + 1] == "1"
     assert command[command.index("--seed") + 1] == "1234"
+    assert command[command.index("--dataset_cache") + 1] == "s3://eval-data/cache"
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
     assert model_args["transport_retry_budget"] == "2700.0"
     assert model_args["transport_attempt_timeout"] == "900.0"
     assert model_args["max_length"] == "32768"
+
+
+def test_dataset_cache_follows_output_region_instead_of_launcher_region(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west1")
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    config = json.loads(_run_config_json(_MODEL, _config(), "gs://marin-us-central2/evals/run"))
+
+    command = build_command(config, config["tasks"][0], "/opt/py", 32768)
+
+    assert command[command.index("--dataset_cache") + 1].startswith("gs://marin-us-central2/")
 
 
 def test_explicit_thinking_mode_is_serialized_for_chat_endpoint():
@@ -242,6 +262,163 @@ def test_evalchemy_child_rejects_a_missing_judge_secret():
 
     with pytest.raises(ValueError, match="requires JUDGE_API_KEY"):
         _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {})
+
+
+def test_evalchemy_child_uses_its_project_environment_instead_of_the_parent(tmp_path, monkeypatch):
+    executable = tmp_path / "bin" / "uv"
+    executable.parent.mkdir()
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['PROBE_OUTPUT']).write_text(json.dumps({\n"
+        "    'environment': os.environ['UV_PROJECT_ENVIRONMENT'],\n"
+        "    'cwd': os.getcwd(),\n"
+        "}))\n"
+    )
+    executable.chmod(0o755)
+    output = tmp_path / "runtime.json"
+
+    def submit(*, entrypoint, environment, **_kwargs):
+        assert not environment.to_proto().setup_scripts
+        subprocess.run(
+            entrypoint.command,
+            env={
+                **os.environ,
+                "IRIS_WORKDIR": str(tmp_path),
+                "UV_PROJECT_ENVIRONMENT": "/parent/.venv",
+                "PROBE_OUTPUT": str(output),
+                "PATH": f"{executable.parent}:{os.environ['PATH']}",
+                **environment.env_vars,
+            },
+            check=True,
+        )
+        return SimpleNamespace(job_id="/eval/isolated", wait=lambda **_kwargs: None)
+
+    client = SimpleNamespace(submit=submit)
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    _run_evalchemy_child(_MODEL, _config(), "gs://bucket/evals/qwen3/core", {})
+
+    assert json.loads(output.read_text()) == {
+        "environment": str(tmp_path / "vendor/evalchemy/.venv"),
+        "cwd": str(tmp_path),
+    }
+
+
+@pytest.fixture
+def evaluator_sources(tmp_path, monkeypatch):
+    for directory in runtime._RUNTIME_DIRECTORIES:
+        source = tmp_path / directory / "source.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("value = 1\n")
+    for filename in runtime._RUNTIME_FILES:
+        source = tmp_path / filename
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("source input\n")
+    monkeypatch.setattr(runtime, "find_project_root", lambda _start: tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def git_evaluator_sources(evaluator_sources):
+    (evaluator_sources / ".gitignore").write_text("ignored.py\nbuild/\ndist/\n")
+    subprocess.run(["git", "init", "--quiet"], cwd=evaluator_sources, check=True)
+    subprocess.run(["git", "add", "."], cwd=evaluator_sources, check=True)
+    return evaluator_sources
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "vendor/evalchemy/eval/source.py",
+        "vendor/evalchemy/uv.lock",
+        "lib/finestore/src/source.py",
+        "lib/rigging/src/source.py",
+        "lib/marin/src/marin/evaluation/evalchemy/client.py",
+    ],
+)
+def test_evalchemy_provenance_changes_when_runtime_inputs_change(evaluator_sources, filename):
+    before = runtime.evalchemy_runtime_source_hash()
+    source = evaluator_sources / filename
+    source.write_text(source.read_text() + "changed input\n")
+    assert runtime.evalchemy_runtime_source_hash() != before
+
+
+def test_evalchemy_provenance_ignores_build_metadata_and_bytecode(evaluator_sources):
+    before = runtime.evalchemy_runtime_source_hash()
+    for filename in (
+        "vendor/evalchemy/eval/__pycache__/source.cpython-312.pyc",
+        "vendor/evalchemy/eval/benchmark.egg-info/PKG-INFO",
+        "vendor/evalchemy/eval/chat_benchmarks/alpaca_eval/build/lib/alpaca_eval/__init__.py",
+        "vendor/evalchemy/eval/chat_benchmarks/MTBench/dist/wheel.whl",
+        "vendor/evalchemy/eval/.pytest_cache/v/cache/nodeids",
+    ):
+        path = evaluator_sources / filename
+        path.parent.mkdir(parents=True)
+        path.write_text("generated output\n")
+    assert runtime.evalchemy_runtime_source_hash() == before
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["vendor/evalchemy/eval/source.py", "vendor/evalchemy/packages/source.py", "vendor/evalchemy/uv.lock"],
+)
+def test_evalchemy_evaluator_identity_changes_with_evaluator_inputs(git_evaluator_sources, filename):
+    before = runtime.evalchemy_evaluator_source_hash()
+    source = git_evaluator_sources / filename
+    source.write_text(source.read_text() + "changed evaluator\n")
+
+    assert runtime.evalchemy_evaluator_source_hash() != before
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "lib/finestore/src/source.py",
+        "lib/rigging/src/source.py",
+        "lib/marin/src/marin/evaluation/evalchemy/client.py",
+    ],
+)
+def test_evalchemy_dependency_changes_affect_provenance_only(git_evaluator_sources, filename):
+    evaluator = runtime.evalchemy_evaluator_source_hash()
+    provenance = runtime.evalchemy_runtime_source_hash()
+    source = git_evaluator_sources / filename
+    source.write_text(source.read_text() + "changed dependency\n")
+
+    assert runtime.evalchemy_evaluator_source_hash() == evaluator
+    assert runtime.evalchemy_runtime_source_hash() != provenance
+
+
+def test_evalchemy_identity_ignores_gitignored_scratch_and_tracks_shipped_new_code(git_evaluator_sources):
+    evaluator = runtime.evalchemy_evaluator_source_hash()
+    provenance = runtime.evalchemy_runtime_source_hash()
+    (git_evaluator_sources / "vendor/evalchemy/eval/ignored.py").write_text("scratch = True\n")
+
+    assert runtime.evalchemy_evaluator_source_hash() == evaluator
+    assert runtime.evalchemy_runtime_source_hash() == provenance
+
+    (git_evaluator_sources / "vendor/evalchemy/eval/new_source.py").write_text("scoring = 2\n")
+
+    assert runtime.evalchemy_evaluator_source_hash() != evaluator
+    assert runtime.evalchemy_runtime_source_hash() != provenance
+
+
+def test_evalchemy_identities_match_extracted_iris_bundle(git_evaluator_sources, tmp_path, monkeypatch):
+    (git_evaluator_sources / "vendor/evalchemy/eval/new_source.py").write_text("scoring = 2\n")
+    (git_evaluator_sources / "vendor/evalchemy/eval/ignored.py").write_text("scratch = True\n")
+    build = git_evaluator_sources / "vendor/evalchemy/eval/build/lib/generated.py"
+    build.parent.mkdir(parents=True)
+    build.write_text("generated = True\n")
+    evaluator = runtime.evalchemy_evaluator_source_hash()
+    provenance = runtime.evalchemy_runtime_source_hash()
+
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(io.BytesIO(create_workspace_zip(git_evaluator_sources))) as bundle:
+        bundle.extractall(extracted)
+    monkeypatch.setattr(runtime, "find_project_root", lambda _start: extracted)
+
+    assert runtime.evalchemy_evaluator_source_hash() == evaluator
+    assert runtime.evalchemy_runtime_source_hash() == provenance
 
 
 def test_task_dirs_distinguish_shot_variants_of_one_task():

@@ -158,6 +158,16 @@ DEFAULT_LEG_TIMEOUT = 15
 # Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "evalchemy-unit": (
+        "vendor/evalchemy/",
+        "lib/finestore/",
+        "lib/rigging/",
+        "lib/marin/src/marin/evaluation/evalchemy/",
+        "experiments/evaluation/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
     "harbor-unit": (
         "vendor/harbor/",
         "lib/finestore/",

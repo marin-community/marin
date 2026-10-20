@@ -62,15 +62,6 @@ CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
 )
 
 
-EVALCHEMY = ExternalDependency(
-    config_name="evalchemy",
-    distribution="evalchemy",
-    repository="https://github.com/marin-community/evalchemy.git",
-    version="0.1.0",
-    commit="09d27c93a8846531e84fb30cfa11dacd2ef404c5",
-    runtime_requirements=(),
-)
-
 MARIN_SKYRL = ExternalDependency(
     config_name="MarinSkyRL",
     distribution="marinskyrl",
@@ -115,7 +106,4 @@ TPU_INFERENCE_FORK_REQUIREMENT = (
     "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@a8fc5c9f6d14ac5a3b1f97d5c296d6015a73cabe"
 )
 
-EXTERNAL_DEPENDENCIES = (
-    EVALCHEMY,
-    MARIN_SKYRL,
-)
+EXTERNAL_DEPENDENCIES = (MARIN_SKYRL,)

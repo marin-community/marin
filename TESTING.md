@@ -46,6 +46,11 @@ When adding a new `lib/<name>/` package, run its unit tests through
 These registrations include the library in pull request, push, and full-suite
 runs.
 
+`vendor/evalchemy` is excluded from the workspace and uses its own `uv.lock`.
+Its dedicated `evalchemy-unit` lane checks that lock and runs the retained tests
+in the independent evaluator environment. Run them locally with
+`uv run --directory vendor/evalchemy --frozen --all-extras --group test pytest`.
+
 Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
 Levanter TPU lane runs for those changes when the resolved dependencies of
 `marin-levanter` with its `tpu` extra and `test` group change, including

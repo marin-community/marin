@@ -33,7 +33,7 @@ from marin.evaluation.evalchemy.runner import (
     _coverage_with_aggregate_counts,
     run_evalchemy,
 )
-from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
+from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor, evalchemy_runtime_source_hash
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
     HARBOR_SOURCE,
@@ -68,7 +68,6 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
-from marin.external_dependencies import EVALCHEMY
 from marin.inference.config import (
     EffectiveServing,
     ResolvedModelLocator,
@@ -1614,7 +1613,9 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
         "tester",
     )
 
-    assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, "math500"))
+    assert batch.evaluations[0].identity.eval_runtime == evalchemy_runtime_descriptor(
+        ("serve-eval", "math500"), evalchemy_runtime_source_hash()
+    )
 
 
 def test_build_evaluation_batch_routes_and_records_financebench_judge(monkeypatch):
@@ -1979,7 +1980,9 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         "aime-policy",
     ]
     ifeval = batch.evaluations[1].identity.eval_ref
-    assert batch.evaluations[1].identity.eval_runtime == EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, "ifeval"))
+    assert batch.evaluations[1].identity.eval_runtime == evalchemy_runtime_descriptor(
+        ("serve-eval", "ifeval"), evalchemy_runtime_source_hash()
+    )
     assert ifeval.model_dump(mode="json", exclude_none=True) == {
         "name": "ifeval",
         "mechanism": "evalchemy",

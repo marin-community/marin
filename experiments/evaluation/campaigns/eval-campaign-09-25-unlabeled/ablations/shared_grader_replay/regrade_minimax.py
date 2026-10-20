@@ -44,6 +44,14 @@ def main() -> None:
     parser.add_argument("--model", action="append", default=[])
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
+    root = Path(__file__).resolve().parents[6]
+    evalchemy_project = root / "config/external/evalchemy/pyproject.toml"
+    if not evalchemy_project.is_file():
+        raise ValueError(
+            "This historical grader replay requires a Marin checkout before Evalchemy vendoring; "
+            "its benchmark evaluate_responses APIs are not part of the vendored runtime"
+        )
+    evalchemy_pin = external_revision(evalchemy_project, "evalchemy")
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     benchmarks = tuple(args.benchmark or ("financebench", "olympiadbench"))
@@ -69,8 +77,6 @@ def main() -> None:
     judge = load_model_config(args.judge_config)
     if judge.serve.max_model_len != 262144 or judge.serve.tensor_parallel_size != 8:
         raise ValueError("replay requires the pinned 262144-token TP8 MiniMax config")
-    root = Path(__file__).resolve().parents[6]
-    evalchemy_pin = external_revision(root / "config/external/evalchemy/pyproject.toml", "evalchemy")
     harbor_pin = HARBOR_SOURCE.commit
     prefix = args.output_prefix
     provenance = {

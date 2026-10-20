@@ -2,8 +2,9 @@
 
 This directory contains every version-controlled input for the campaign: model configs, Evalchemy
 configs, Harbor configs, the co-hosted judge config, model-specific Harbor policy values, validation,
-and launch commands. The launcher reads the Harbor and Evalchemy revisions from Marin's external
-dependency declarations and checks the Harbor lockfile before submission.
+and launch commands. The launcher records the vendored Evalchemy runtime's source hash
+and Harbor's upstream revision and runtime descriptor. It checks the independent Harbor
+lockfile before submission.
 
 The launcher leaves `EvalRunRecord.version` unset. Its checked-in inputs, config digests, and durable
 records support reproduction and review; they do not attest that a run conforms to an accepted eval

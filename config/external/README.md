@@ -3,18 +3,16 @@
 This directory tracks Python tools and artifacts that Marin installs into
 isolated runtime environments.
 
-The Evalchemy and MarinSkyRL uv projects are excluded from the root
-workspace so their dependency graphs do not have to resolve with Marin's
-training and serving dependencies. Each `pyproject.toml` selects an external
-source. Its adjacent `uv.lock` records the exact commit that Marin uses.
+The MarinSkyRL uv project is excluded from the root workspace so its dependency
+graph does not have to resolve with Marin's training and serving dependencies.
+Its `pyproject.toml` selects an external source, and its adjacent `uv.lock`
+records the exact commit that Marin uses. The updater advances this project.
 
-Verified Evalchemy launches select revisions from `RUNTIME_COMMITS` in
-`lib/marin/src/marin/evaluation/eval_policy.py`. The external dependency updater
-advances only the Evalchemy and MarinSkyRL projects. Harbor always runs the
-source under `vendor/harbor` with its own lock. Historical Harbor commit metadata
-validates saved cohort records and does not select executable dependencies.
-Harbor is excluded from workspace membership and default installs, including
-`uv sync --all-packages`.
+Evalchemy and Harbor live in `vendor/evalchemy` and `vendor/harbor`, each with its
+own lock and local FineStore and Rigging sources. Both are excluded from workspace
+membership and default installs, including `uv sync --all-packages`. Evaluator
+changes land with Marin. Historical commit metadata validates saved cohort
+records; reproducing those runs requires their recorded Marin checkout.
 
 `vllm/gpu.toml` records the published CUDA release, Torch backend, and exact
 wheel URL and SHA-256 for each architecture. The
@@ -35,10 +33,10 @@ that module instead of reading repository-relative configuration.
 Advance one project with:
 
 ```bash
-uv run config/update-external.py evalchemy
+uv run config/update-external.py MarinSkyRL
 ```
 
-Omit the project name to advance both Git projects. The command updates
+Omit the project name to advance all registered Git projects. The command updates
 the selected lockfiles and regenerates the packaged requirements.
 
 Update a GPU release from its published manifest with:
@@ -77,8 +75,6 @@ only commits already landed on Marin's default branch.
 
 The external configurations intentionally model only what Marin needs:
 
-- `evalchemy` resolves the endpoint client core. Benchmark extras are selected
-  by each evaluation at runtime.
 - `MarinSkyRL` tracks the repository-root `marinskyrl` distribution. The
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
@@ -93,10 +89,11 @@ The external configurations intentionally model only what Marin needs:
   paired with tpu-inference for TPU (`tpu.toml`). The GPU and TPU wheels have
   independent build and promotion paths. Neither is a workspace dependency.
 
-Evaluation provenance stores the generated commit-pinned Evalchemy requirement.
-Historical Harbor cohorts identify their exact Git revision. Current Harbor
+Evalchemy provenance identifies the vendored source, independent lock, adapter,
+and local FineStore and Rigging sources by content hash. Current Harbor
 provenance includes its imported source revision and a digest of the vendored
-runtime and its dependency lock.
+runtime and its dependency lock. Historical commit metadata validates saved
+cohort records.
 
 `migration.toml` describes how to migrate each fork toward upstream — the base to
 select, the Marin e2e that validates it, and the constraints to respect. It holds

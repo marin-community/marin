@@ -99,10 +99,7 @@ class VllmGpuRelease:
     wheels: tuple[VllmGpuWheel, ...]
 
 
-EXTERNAL_PROJECTS = (
-    ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
-    ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),
-)
+EXTERNAL_PROJECTS = (ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),)
 
 
 def locked_package(lock_path: Path, distribution: str) -> dict:

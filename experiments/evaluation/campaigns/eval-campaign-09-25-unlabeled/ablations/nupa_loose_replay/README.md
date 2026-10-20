@@ -1,5 +1,9 @@
 # NUPA Loose grader replay
 
+Run the commands below from the campaign's pre-vendoring Marin checkout, such as
+`6885cabd456787794551a2e41fbff99188fedd37`, where the historical
+`config/external/evalchemy` project preserves the fork runtime used by this replay.
+
 This replay applies Evalchemy `2baaab1b9c0c9c8caffcd8f6df45355539aef436` to the raw responses in every sealed NUPA tracker cell. The grader accepts a typed numeric suffix after sentence-ending punctuation. It also accepts a final numeric token when that token is exactly the reference answer repeated twice without a separator. The second rule is reference-aware and does not split other repeated-looking numbers. The original completion archive remains the source of each trial, including when the tracker points to an earlier replay.
 
 Upload a tracker snapshot, then run the replay on an Iris CPU task in `cw-rno2a`:
