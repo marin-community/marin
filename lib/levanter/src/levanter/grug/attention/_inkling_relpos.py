@@ -31,6 +31,23 @@ from jaxtyping import Array, Bool, Float, Int
 REL_BIAS_BLOCK = 128
 
 
+# Band columns per contiguous run in the SM100 forward's tiled layout (one 128-bit bf16 load).
+BAND_TILE_COLUMNS = 8
+
+
+def band_to_tiles(band: Float[Array, "B H S W"]) -> Float[Array, "B H T C P V"]:
+    """Tiled physical layout of the band for the native SM100 forward: ``[B, H, S/128, W/8, 128, 8]``.
+
+    For a query block ``t`` and an 8-column run ``c``, the 128 rows' runs are contiguous, so the forward's
+    one-row-per-lane reads of a key tile are coalesced. Pure data movement (reshape + transpose).
+    """
+    b, h, s, w = band.shape
+    if s % REL_BIAS_BLOCK or w % BAND_TILE_COLUMNS:
+        raise ValueError(f"band {band.shape} needs S % {REL_BIAS_BLOCK} == 0 and W % {BAND_TILE_COLUMNS} == 0")
+    tiles = band.reshape(b, h, s // REL_BIAS_BLOCK, REL_BIAS_BLOCK, w // BAND_TILE_COLUMNS, BAND_TILE_COLUMNS)
+    return tiles.transpose(0, 1, 2, 4, 3, 5)
+
+
 def rel_bias_band_width(rel_extent: int) -> int:
     """Width ``W`` of the banded bias layout for a given ``rel_extent``."""
     return rel_extent + REL_BIAS_BLOCK

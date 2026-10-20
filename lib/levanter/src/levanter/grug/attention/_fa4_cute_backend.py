@@ -37,7 +37,7 @@ from levanter.grug.attention._fa4_cute_config import (
     Flash4CuteKernelConfig,
     Flash4CuteSm100BackwardConfig,
 )
-from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, rel_extent_of_band
+from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, band_to_tiles, rel_extent_of_band
 
 
 @dataclass(frozen=True)
@@ -162,12 +162,9 @@ def segmented_flash_attention_forward(
         input_spec = (*input_spec[:-1], metadata_spec, metadata_spec, metadata_spec, metadata_spec)
         bias_args = ()
         if use_rel_bias:
-            # W divisibility lets the kernel read a key tile's band slice with 128-bit loads.
-            input_spec = (
-                *input_spec,
-                modules.cjax.TensorSpec(mode=(2, 3, 1, 0), divisibility=(1, 1, 1, 8), static=True),
-            )
-            bias_args = (rel_bias.astype(q.dtype),)
+            # The kernel reads the band in its tiled layout and views it as [S, W, Hq, B] itself.
+            input_spec = (*input_spec, modules.cjax.TensorSpec(mode=(0, 1, 2, 3, 4, 5), static=True))
+            bias_args = (band_to_tiles(rel_bias.astype(q.dtype)),)
         call = cutlass_call(
             launcher,
             output_shape_dtype=(

@@ -7,10 +7,10 @@
 
 Imported only by the SM100 forward launcher, after the optional CUDA-only modules are available.
 
-``aux_tensors`` is ``(lower_bounds, valid, q_offset, band)`` with the band in kernel layout ``[S, W, Hq, B]``.
-The forward S tile is ``Q @ K.T`` read from TMEM with 32x32b loads, so a thread holds one query row and its
-``tile_n`` consecutive key columns: the in-band slice of that row is one contiguous run of ``tile_n`` band
-entries, read with 128-bit loads.
+``aux_tensors`` is ``(lower_bounds, valid, q_offset, band)`` with the band viewed as ``[S, W, Hq, B]`` over its tiled physical
+layout (``_inkling_relpos.band_to_tiles``). The forward S tile is ``Q @ K.T`` read from TMEM with 32x32b loads,
+so a thread holds one query row and its ``tile_n`` consecutive key columns; in the tiled layout a warp's rows
+of one 8-column run are contiguous, so the band slice is read with coalesced 128-bit loads.
 
 ``softmax_step`` is upstream flash-attn-4 4.0.0b28's with the score-mod call replaced by the band:
 
@@ -30,10 +30,8 @@ from flash_attn.cute.flash_fwd_sm100 import FlashAttentionForwardSm100
 from flash_attn.cute.softmax import SoftmaxSm100
 from flash_attn.cute.utils import AuxData
 
-from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK
+from levanter.grug.attention._inkling_relpos import BAND_TILE_COLUMNS, REL_BIAS_BLOCK
 
-# bf16 elements per 128-bit load.
-_BAND_VECTOR = 8
 _LOG2_E = math.log2(math.e)
 
 
@@ -86,7 +84,7 @@ class InklingFlashAttentionForwardSm100(FlashAttentionForwardSm100):
         # key tile n_block maps to band column tile (n0 - q0 + rel_extent) / tile_n. The launcher checks that
         # tile_m == REL_BIAS_BLOCK and that tile_n divides both REL_BIAS_BLOCK and rel_extent.
         band = aux_data.tensors[3]
-        width = band.shape[1]
+        width = cute.size(band, mode=[1])
         rel_extent = width - REL_BIAS_BLOCK
         band_tile = n_block - m_block * (self.m_block_size // self.n_block_size) + rel_extent // self.n_block_size
         in_band = cute.elem_less(Int32(-1), band_tile) and cute.elem_less(band_tile, width // self.n_block_size)
@@ -164,15 +162,18 @@ class InklingFlashAttentionForwardSm100(FlashAttentionForwardSm100):
         if const_expr(self.LOAD_BAND):
             if in_band:
                 query_idx = cutlass.min(
-                    m_block * self.m_block_size + thr_tmem_load.partition_D(tScS)[0][0], band.shape[0] - 1
+                    m_block * self.m_block_size + thr_tmem_load.partition_D(tScS)[0][0],
+                    cute.size(band, mode=[0]) - 1,
                 )
                 # The band can exceed 2**31 elements: offset its (batch, head) plane in Int64.
-                band_row = band[None, None, cutlass.Int64(head_idx), cutlass.Int64(batch_idx)][query_idx, None]
-                band_cols = cute.local_tile(band_row, (self.n_block_size,), (band_tile,))
-                for c in cutlass.range_constexpr(self.n_block_size // _BAND_VECTOR):
+                band_bh = band[None, None, cutlass.Int64(head_idx), cutlass.Int64(batch_idx)]
+                # Column modes are (8-column run, run index): one run is 16 contiguous bytes, and the 32 lanes'
+                # rows of a run are adjacent (the tiled layout), so each load is one coalesced 512-byte access.
+                runs_per_tile = self.n_block_size // BAND_TILE_COLUMNS
+                for c in cutlass.range_constexpr(runs_per_tile):
                     cute.autovec_copy(
-                        cute.local_tile(band_cols, (_BAND_VECTOR,), (c,)),
-                        cute.local_tile(rBand, (_BAND_VECTOR,), (c,)),
+                        band_bh[query_idx, (None, band_tile * runs_per_tile + c)],
+                        cute.local_tile(rBand, (BAND_TILE_COLUMNS,), (c,)),
                     )
         else:
             rBand.fill(0.0)

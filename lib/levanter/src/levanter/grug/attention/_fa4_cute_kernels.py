@@ -1322,7 +1322,7 @@ def segmented_flash_attention_forward_sm100_launcher(
     else:
         forward_cls = importlib.import_module("flash_attn.cute.flash_fwd_sm100").FlashAttentionForwardSm100
     _patch_jax_array_list_tvm_ffi_converter()
-    _as_gmem_tensor = _native_gmem_tensor_view(modules)
+    _band_tiles_view = _native_band_tiles_view(modules)
     forward = forward_cls(
         head_dim,
         head_dim_v,
@@ -1365,7 +1365,7 @@ def segmented_flash_attention_forward_sm100_launcher(
             q,
             k,
             v,
-            (lower_bounds, valid, q_offset, _as_gmem_tensor(rel_bias)),
+            (lower_bounds, valid, q_offset, _band_tiles_view(rel_bias)),
             (partial_count, partial_index, full_count, full_index),
             out,
             lse,
@@ -1428,6 +1428,29 @@ def segmented_flash_attention_forward_sm100_launcher(
         )
 
     return _launch_with_bias if use_rel_bias else _launch
+
+
+def _native_band_tiles_view(modules: Any) -> Any:
+    """View the tiled band ``[B, H, S/128, W/8, 128, 8]`` (``_inkling_relpos.band_to_tiles``) as ``[S, W, Hq, B]``.
+
+    Query and column coordinates split hierarchically (``q = p + 128 t``, ``x = v + 8 c``), so kernels index
+    ``band[q, x, h, b]`` exactly as in the plain banded layout.
+    """
+    deps = _import_cute_dependencies(modules)
+    cute = deps.cute
+
+    @cute.jit
+    def _band_tiles_view(tiles: cute.Tensor) -> cute.Tensor:
+        batch, heads, blocks, runs, rows, run = tiles.shape
+        tile = rows * run
+        layout = cute.make_layout(
+            ((rows, blocks), (run, runs), heads, batch),
+            stride=((run, runs * tile), (1, tile), blocks * runs * tile, heads * blocks * runs * tile),
+        )
+        ptr = cute.make_ptr(tiles.element_type, tiles.iterator.toint(), cute.AddressSpace.gmem, assumed_align=256)
+        return cute.make_tensor(ptr, layout)
+
+    return _band_tiles_view
 
 
 def _validate_sm100_forward_config(config: Flash4CuteSm100ForwardConfig, *, use_rel_bias: bool) -> None:

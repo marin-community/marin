@@ -18,7 +18,7 @@ import jax
 import jax.numpy as jnp
 from levanter.grug.attention import AttentionMask, attention
 from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds
-from levanter.grug.attention._inkling_relpos import compact_to_band
+from levanter.grug.attention._inkling_relpos import band_to_tiles, compact_to_band
 
 BATCH, SEQ, Q_HEADS, HEAD_DIM, REL_EXTENT = 16, 4096, 48, 128, 512
 ITERATIONS = 20
@@ -96,6 +96,9 @@ def main() -> None:
     _run("MHA 48/48 pallas noband", "gpu_pallas_fa4", Q_HEADS, False)
     pallas_out, pallas_grads = _run("MLA 48/48 pallas band512", "gpu_pallas_fa4", Q_HEADS, True)
     native_out, native_grads = _run("MLA 48/48 sm100 band512", "gpu_fa4_cute_sm100", Q_HEADS, True)
+    band = _inputs(Q_HEADS)[3]
+    tile = jax.jit(band_to_tiles)
+    print(f"TIME band_to_tiles copy: {_milliseconds(tile, band):.2f} ms", flush=True)
     _max_deviation("sm100 vs pallas", (native_out, *native_grads), (pallas_out, *pallas_grads))
 
 
