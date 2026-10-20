@@ -13,7 +13,9 @@ Selectors and external data sources are excluded. Unspecified maxDataPoints uses
 --live-window freezes only the bridge module's wall clock to one second after
 --to-ms, exercising live alignment on settled historical data. Each timeFrom
 override has one millisecond of additional clock skew per panel. Other module
-clocks and all monotonic timers remain real. Each dashboard iteration starts
+clocks and all monotonic timers remain real. Run one replay per process: the
+module clock replacement also supports an unmodified baseline bridge, and is
+restored after the replay. Each dashboard iteration starts
 with empty bridge caches; --warm repeats the page against those same caches.
 SQL, Arrow inputs, responses, and timing summaries are retained under --output.
 Query counts and byte totals cover SQL calls; namespace discovery RPCs are
@@ -39,6 +41,7 @@ from starlette.testclient import TestClient
 from .inference_query_cost import FINELOG_CLUSTER, RecordingSource, replay_bridge_config
 
 _DURATION_UNITS = {"ms": 1, "s": 1_000, "m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
+_QUERY_TIMEOUT_MS = 60_000
 _INTERVAL_STEPS = (
     1,
     10,
@@ -261,13 +264,13 @@ def run_replay(args: argparse.Namespace) -> dict:
         "pages": [],
     }
     try:
-        with closing(LogClient.connect(args.address, timeout_ms=60_000)) as upstream:
+        with closing(LogClient.connect(args.address, timeout_ms=_QUERY_TIMEOUT_MS)) as upstream:
             for iteration in range(args.iterations):
                 for filename, (requests, skipped) in prepared.items():
                     output = args.output / Path(filename).stem / f"iteration-{iteration}"
                     output.mkdir(parents=True)
                     source = RecordingSource(upstream, output)
-                    config = replace(replay_bridge_config(), max_rows=500_000, query_timeout_ms=60_000)
+                    config = replace(replay_bridge_config(), max_rows=500_000, query_timeout_ms=_QUERY_TIMEOUT_MS)
                     app = server.create_app(config, {FINELOG_CLUSTER: source}, {}, None, None, None)
                     with TestClient(app, raise_server_exceptions=False) as client:
                         for phase in (("cold", "warm") if args.warm else ("cold",)):
