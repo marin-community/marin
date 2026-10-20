@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import click
-import pytest
 import yaml
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import StepContext
@@ -35,7 +33,7 @@ def test_baseline_evaluates_the_pool_on_engines_only() -> None:
     assert launch["iris"]["container_profile"] == "CONTAINER_PROFILE_PRIVILEGED"
 
 
-def test_rl_trains_on_three_disaggregated_nodes_and_shares_the_split_directory() -> None:
+def test_rl_trains_on_two_policy_and_four_inference_nodes_sharing_the_split_directory() -> None:
     with build_context(BuildContext(versions=VersionCodex(default="2026.10.20"))):
         step = taskforge_rl.build_run(
             taskforge_rl.Stage.RL, train_uri=f"{SPLIT}/train.parquet", heldout_uri=f"{SPLIT}/heldout.parquet"
@@ -43,12 +41,7 @@ def test_rl_trains_on_three_disaggregated_nodes_and_shares_the_split_directory()
     launch = _launch(step)
 
     assert len(step.deps) == 2  # model mirror and one split directory
-    assert launch["iris"]["allocation"]["num_nodes"] == 3
-    assert launch["skyrl"]["generator"]["num_inference_engines"] == 2
+    assert launch["iris"]["allocation"]["num_nodes"] == 6
+    assert launch["skyrl"]["generator"]["num_inference_engines"] == 16
+    assert launch["skyrl"]["generator"]["eval_n_samples_per_prompt"] == 4
     assert launch["skyrl"]["trainer"]["eval_interval"] == taskforge_rl.EVAL_INTERVAL
-
-
-def test_rl_requires_both_split_files() -> None:
-    with build_context(BuildContext(versions=VersionCodex(default="2026.10.20"))):
-        with pytest.raises(click.UsageError):
-            taskforge_rl.build_run(taskforge_rl.Stage.RL, train_uri=f"{SPLIT}/train.parquet")

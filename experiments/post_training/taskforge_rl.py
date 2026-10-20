@@ -67,13 +67,16 @@ MODEL_MIRROR_VERSION = "2026.10.18"
 DATA_ROOT = "s3://marin-us-east-02a/marin/taskforge/gen1000/rl"
 DATA_VERSION = "2026.10.20"
 DEFAULT_POOL_URI = f"{DATA_ROOT}/pool-v1/pool.parquet"
+# The 2026-10-20 split of the pool: 493 training tasks, and 417 held-out tasks whose source label is
+# heldout_incap or heldout_outcap, so evaluation reports the two held-out kinds separately.
+DEFAULT_TRAIN_URI = f"{DATA_ROOT}/split-v1/train.parquet"
+DEFAULT_HELDOUT_URI = f"{DATA_ROOT}/split-v1/heldout.parquet"
 # TODO(G5): the MarinSkyRL template that opens <think> after the assistant header, like the official
 # Thinking-2507 template, while keeping past reasoning so multi-turn token prefixes stay exact.
 DEFAULT_CHAT_TEMPLATE = "chat_templates/qwen3_thinking_2507_acc.jinja2"
 
 # Policy: Megatron TP4/PP2/EP4 (DP2 over 16 GPUs) with the reference colocated, as in MarinSkyRL's
-# 32GPU_qwen3_coder_30b_a3b_ep4 recipe for the same architecture. Rollout: TP4 vLLM engines, so the
-# model's four KV heads split one per rank.
+# 32GPU_qwen3_coder_30b_a3b_ep4 recipe for the same architecture.
 POLICY_GEOMETRY = {
     "tensor_model_parallel_size": 4,
     "pipeline_model_parallel_size": 2,
@@ -81,35 +84,38 @@ POLICY_GEOMETRY = {
     "expert_model_parallel_size": 4,
     "expert_tensor_parallel_size": 1,
 }
-ENGINE_TENSOR_PARALLEL = 4
-# Evaluation-only engines skip the weight-sync and policy footprint, so they shard the model only in
-# two: four engines per node, each with two KV heads per rank and about 85 GB of KV (900k tokens).
-EVAL_ENGINE_TENSOR_PARALLEL = 2
+POLICY_NODES = 2
+# Rollout: four TP2 engines per node, each with two of the model's four KV heads per rank. The
+# 2026-10-20 baseline measured about 90 rollouts/min per node at this geometry with no queueing.
+ENGINE_TENSOR_PARALLEL = 2
+ENGINES_PER_NODE = GPUS_PER_NODE // ENGINE_TENSOR_PARALLEL
+RL_INFERENCE_NODES = 4
 
-PROMPTS_PER_STEP = 16
+# 32 prompts x 8 samples per step: about 15 steps per epoch over the 493 training tasks.
+PROMPTS_PER_STEP = 32
 SAMPLES_PER_PROMPT = 8
-EVAL_SAMPLES_PER_PROMPT = 8
+BASELINE_EVAL_SAMPLES = 8
+RL_EVAL_SAMPLES = 4
 LEARNING_RATE = 1.0e-6
 RL_MAX_STEPS = 40
 EVAL_INTERVAL = 5
 CHECKPOINT_INTERVAL = 10
 BASELINE_NODES = 1
 BASELINE_EVAL_INTERVAL = 1000
-# A thinking turn on these tasks runs 5-15k tokens and can reach the 32k cap; the window holds a few
-# such turns plus shell output.
-CONTEXT_BUDGET = {"request_window_tokens": 65536, "max_new_tokens_per_turn": 32768, "max_turns": 20}
+# A thinking turn on these tasks runs 5-15k tokens (baseline median 7.6k, p95 17k per rollout) and
+# can reach the 32k cap; the window holds a few such turns plus shell output.
+CONTEXT_BUDGET = {"request_window_tokens": 65536, "max_new_tokens_per_turn": 32768, "max_turns": 16}
 # Qwen's recommended Thinking-2507 decoding. Training samples at temperature one to stay on-policy.
 EVAL_SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
 TRAIN_SAMPLING = {"temperature": 1.0, "top_p": 1.0, "top_k": -1}
-# Concurrent rollouts per TP4 engine. One engine keeps about 210 GB of KV (96 KiB per token), so
-# about 2.2M tokens, which holds this many trajectories at their typical 10-20k-token context.
-ROLLOUTS_PER_ENGINE = 128
-# The baseline starts every rollout of a 73-74-task shard at once (n=8 gives up to 592); vLLM
-# queues what its KV cannot hold. Task and verifier sandboxes are processes on the driver node.
-BASELINE_MAX_CONCURRENT_TASKS = 1024
-BASELINE_ROLLOUTS_PER_ENGINE = 256
-ROLLOUT_WORKERS = 8
-BASELINE_ROLLOUT_WORKERS = 12
+# Every rollout of a step or an evaluation starts at once: 256 per training step, and up to 1,668 for
+# a 417-task held-out evaluation at n=4 (or 592 for a baseline shard at n=8). vLLM queues what its KV
+# cannot hold; a TP2 engine keeps about 780k-900k tokens of KV.
+MAX_CONCURRENT_TASKS = 2048
+ROLLOUTS_PER_ENGINE = 256
+# Task and verifier sandboxes are processes on the driver node. Twelve workers carried 592 concurrent
+# baseline rollouts with idle CPU; the reservation leaves room for the policy actors on that node.
+ROLLOUT_WORKERS = 12
 CPUS_PER_ROLLOUT_WORKER = 8
 VERIFIER_THREADS_PER_WORKER = 64
 
@@ -135,15 +141,15 @@ class StagePlan:
     max_steps: int
 
 
-def disaggregated_role_plan() -> SkyRLRolePlan:
-    """Two policy nodes with the reference colocated, plus one node of TP4 engines."""
+def disaggregated_role_plan(inference_nodes: int) -> SkyRLRolePlan:
+    """Policy nodes with the reference colocated, plus ``inference_nodes`` nodes of TP2 engines."""
     return SkyRLRolePlan(
         colocate_all=False,
         colocate_policy_ref=True,
-        policy_num_nodes=2,
+        policy_num_nodes=POLICY_NODES,
         policy_num_gpus_per_node=GPUS_PER_NODE,
-        reference_num_nodes=2,
-        num_inference_engines=GPUS_PER_NODE // ENGINE_TENSOR_PARALLEL,
+        reference_num_nodes=POLICY_NODES,
+        num_inference_engines=inference_nodes * ENGINES_PER_NODE,
         inference_engine_tensor_parallel_size=ENGINE_TENSOR_PARALLEL,
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=1,
@@ -163,11 +169,11 @@ def evaluation_role_plan(num_nodes: int) -> SkyRLRolePlan:
         policy_num_nodes=num_nodes,
         policy_num_gpus_per_node=GPUS_PER_NODE,
         reference_num_nodes=num_nodes,
-        num_inference_engines=num_nodes * GPUS_PER_NODE // EVAL_ENGINE_TENSOR_PARALLEL,
-        inference_engine_tensor_parallel_size=EVAL_ENGINE_TENSOR_PARALLEL,
+        num_inference_engines=num_nodes * ENGINES_PER_NODE,
+        inference_engine_tensor_parallel_size=ENGINE_TENSOR_PARALLEL,
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=1,
-        inference_engine_expert_parallel_size=EVAL_ENGINE_TENSOR_PARALLEL,
+        inference_engine_expert_parallel_size=ENGINE_TENSOR_PARALLEL,
         train_batch_size=PROMPTS_PER_STEP,
         policy_mini_batch_size=PROMPTS_PER_STEP,
         micro_train_batch_size_per_gpu=1,
@@ -176,16 +182,22 @@ def evaluation_role_plan(num_nodes: int) -> SkyRLRolePlan:
 
 
 def stage_plan(
-    stage: Stage, *, baseline_entrypoint: BaselineEntrypoint, baseline_nodes: int, max_steps: int
+    stage: Stage,
+    *,
+    baseline_entrypoint: BaselineEntrypoint,
+    baseline_nodes: int,
+    inference_nodes: int,
+    max_steps: int,
 ) -> StagePlan:
     if stage is Stage.RL:
-        return StagePlan("taskcompendium", 3, disaggregated_role_plan(), max_steps)
+        plan = disaggregated_role_plan(inference_nodes)
+        return StagePlan("taskcompendium", POLICY_NODES + inference_nodes, plan, max_steps)
     if baseline_entrypoint is BaselineEntrypoint.GENERATE:
         return StagePlan(baseline_entrypoint.value, baseline_nodes, evaluation_role_plan(baseline_nodes), 1)
-    return StagePlan(baseline_entrypoint.value, 3, disaggregated_role_plan(), 1)
+    return StagePlan(baseline_entrypoint.value, POLICY_NODES + 1, disaggregated_role_plan(1), 1)
 
 
-ROLE_SETTINGS = frozenset(_role_plan_config_values(disaggregated_role_plan()))
+ROLE_SETTINGS = frozenset(_role_plan_config_values(disaggregated_role_plan(RL_INFERENCE_NODES)))
 LAUNCHER_SETTINGS = frozenset(
     {
         "entrypoint",
@@ -239,7 +251,6 @@ def recipe(
 ) -> dict:
     """Render the MarinSkyRL source recipe for one stage."""
     training = stage is Stage.RL
-    engines = plan.role_plan.num_inference_engines
     router_replay = not plan.role_plan.colocate_all
     megatron = {**POLICY_GEOMETRY, "moe_router_replay": router_replay}
     engine_kwargs = {
@@ -319,7 +330,7 @@ def recipe(
             "weight_sync_backend": "nccl",
             "enforce_eager": False,
             "gpu_memory_utilization": 0.85 if training else 0.92,
-            "max_num_seqs": ROLLOUTS_PER_ENGINE if training else BASELINE_ROLLOUTS_PER_ENGINE,
+            "max_num_seqs": ROLLOUTS_PER_ENGINE,
             "max_num_batched_tokens": 16384,
             "enable_prefix_caching": True,
             "enable_chunked_prefill": True,
@@ -333,9 +344,9 @@ def recipe(
         },
         "environment": {"task_sessions": {"local": {}, "max_verifier_workers": VERIFIER_THREADS_PER_WORKER}},
         "trajectory_runner": {
-            "max_concurrent_tasks": engines * ROLLOUTS_PER_ENGINE if training else BASELINE_MAX_CONCURRENT_TASKS,
+            "max_concurrent_tasks": MAX_CONCURRENT_TASKS,
             "rollout_workers": {
-                "num_workers": ROLLOUT_WORKERS if training else BASELINE_ROLLOUT_WORKERS,
+                "num_workers": ROLLOUT_WORKERS,
                 "cpus_per_worker": CPUS_PER_ROLLOUT_WORKER,
             },
         },
@@ -409,23 +420,30 @@ def build_run(
     stage: Stage,
     *,
     pool_uri: str = DEFAULT_POOL_URI,
-    train_uri: str | None = None,
-    heldout_uri: str | None = None,
+    train_uri: str = DEFAULT_TRAIN_URI,
+    heldout_uri: str = DEFAULT_HELDOUT_URI,
     baseline_entrypoint: BaselineEntrypoint = BaselineEntrypoint.GENERATE,
     baseline_nodes: int = BASELINE_NODES,
+    inference_nodes: int = RL_INFERENCE_NODES,
     max_steps: int = RL_MAX_STEPS,
     chat_template: str = DEFAULT_CHAT_TEMPLATE,
-    eval_samples: int = EVAL_SAMPLES_PER_PROMPT,
+    eval_samples: int | None = None,
     eval_interval: int = EVAL_INTERVAL,
     checkpoint_interval: int = CHECKPOINT_INTERVAL,
     export: bool = False,
     job_timeout_seconds: int = 0,
     settings: tuple[str, ...] = (),
 ) -> ArtifactStep[SkyRLRun]:
-    plan = stage_plan(stage, baseline_entrypoint=baseline_entrypoint, baseline_nodes=baseline_nodes, max_steps=max_steps)
+    plan = stage_plan(
+        stage,
+        baseline_entrypoint=baseline_entrypoint,
+        baseline_nodes=baseline_nodes,
+        inference_nodes=inference_nodes,
+        max_steps=max_steps,
+    )
+    if eval_samples is None:
+        eval_samples = RL_EVAL_SAMPLES if stage is Stage.RL else BASELINE_EVAL_SAMPLES
     if stage is Stage.RL:
-        if train_uri is None or heldout_uri is None:
-            raise click.UsageError("--stage rl requires --train-uri and --heldout-uri")
         train_data = (adopted_parquet(train_uri),)
         validation_data = (adopted_parquet(heldout_uri),)
     else:
@@ -493,8 +511,10 @@ def build_run(
 @click.command(help=__doc__)
 @click.option("--stage", type=click.Choice([stage.value for stage in Stage]), required=True)
 @click.option("--pool-uri", default=DEFAULT_POOL_URI, show_default=True, help="Baseline task_rollout_spec parquet.")
-@click.option("--train-uri", help="RL training task_rollout_spec parquet.")
-@click.option("--heldout-uri", help="RL held-out task_rollout_spec parquet, evaluated every --eval-interval steps.")
+@click.option("--train-uri", default=DEFAULT_TRAIN_URI, show_default=True, help="RL training parquet.")
+@click.option(
+    "--heldout-uri", default=DEFAULT_HELDOUT_URI, show_default=True, help="RL held-out parquet, evaluated periodically."
+)
 @click.option(
     "--baseline-entrypoint",
     type=click.Choice([entrypoint.value for entrypoint in BaselineEntrypoint]),
@@ -504,7 +524,12 @@ def build_run(
 @click.option("--baseline-nodes", type=click.IntRange(min=1), default=BASELINE_NODES, show_default=True)
 @click.option("--max-steps", type=click.IntRange(min=1), default=RL_MAX_STEPS, show_default=True)
 @click.option("--chat-template", default=DEFAULT_CHAT_TEMPLATE, show_default=True)
-@click.option("--eval-samples", type=click.IntRange(min=1), default=EVAL_SAMPLES_PER_PROMPT, show_default=True)
+@click.option("--inference-nodes", type=click.IntRange(min=1), default=RL_INFERENCE_NODES, show_default=True)
+@click.option(
+    "--eval-samples",
+    type=click.IntRange(min=1),
+    help=f"Samples per evaluated task [default: {RL_EVAL_SAMPLES} for rl, {BASELINE_EVAL_SAMPLES} for baseline]",
+)
 @click.option("--eval-interval", type=click.IntRange(min=1), default=EVAL_INTERVAL, show_default=True)
 @click.option("--checkpoint-interval", type=click.IntRange(min=1), default=CHECKPOINT_INTERVAL, show_default=True)
 @click.option("--export", is_flag=True, help="Export the final policy as a Hugging Face checkpoint.")
@@ -514,13 +539,14 @@ def build_run(
 def main(
     stage: str,
     pool_uri: str,
-    train_uri: str | None,
-    heldout_uri: str | None,
+    train_uri: str,
+    heldout_uri: str,
     baseline_entrypoint: str,
     baseline_nodes: int,
     max_steps: int,
     chat_template: str,
-    eval_samples: int,
+    inference_nodes: int,
+    eval_samples: int | None,
     eval_interval: int,
     checkpoint_interval: int,
     export: bool,
@@ -536,6 +562,7 @@ def main(
         baseline_nodes=baseline_nodes,
         max_steps=max_steps,
         chat_template=chat_template,
+        inference_nodes=inference_nodes,
         eval_samples=eval_samples,
         eval_interval=eval_interval,
         checkpoint_interval=checkpoint_interval,
