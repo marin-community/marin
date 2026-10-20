@@ -9,6 +9,7 @@ import click
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
+from marin.rl.skyrl import ArtifactHfModel
 
 from experiments.datasets.structure_closure import ClosureCohort, structure_closure_dataset
 from experiments.post_training.structure_closure.evaluate import build_evaluation, exported_model, initializer_model
@@ -22,18 +23,22 @@ CHECKPOINTS = MappingProxyType(
 )
 
 
+def candidate_model(name: str) -> ArtifactHfModel:
+    version, identity = CHECKPOINTS[name]
+    return exported_model(
+        checkpoint_uri=f"s3://marin-us-east-02a/marin/users/benfeuer/models/structure-closure/{version}/exports/global_step_2/policy",
+        checkpoint_version=version,
+        manifest_identity=identity,
+    )
+
+
 @click.command(help=__doc__)
 @click.option("--model", type=click.Choice(["base", *CHECKPOINTS]), required=True)
 @rl_build_options
 def main(model: str) -> ArtifactStep:
     selected = initializer_model()
     if model != "base":
-        version, identity = CHECKPOINTS[model]
-        selected = exported_model(
-            checkpoint_uri=f"s3://marin-us-east-02a/marin/users/benfeuer/models/structure-closure/{version}/exports/global_step_2/policy",
-            checkpoint_version=version,
-            manifest_identity=identity,
-        )
+        selected = candidate_model(model)
     return build_evaluation(
         name=user_owned_name(f"evals/structure-closure-native-tools-{model}"),
         data=structure_closure_dataset(ClosureCohort.NATIVE_TOOLS_V6),

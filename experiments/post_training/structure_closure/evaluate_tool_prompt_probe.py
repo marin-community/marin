@@ -9,8 +9,8 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 
 from experiments.datasets.structure_closure import tool_prompt_probe_dataset
-from experiments.post_training.structure_closure.evaluate import build_evaluation, exported_model, initializer_model
-from experiments.post_training.structure_closure.evaluate_native_tools import CHECKPOINTS
+from experiments.post_training.structure_closure.evaluate import build_evaluation, initializer_model
+from experiments.post_training.structure_closure.evaluate_native_tools import candidate_model
 
 
 @click.command(help=__doc__)
@@ -19,12 +19,7 @@ from experiments.post_training.structure_closure.evaluate_native_tools import CH
 def main(model: str) -> ArtifactStep:
     selected = initializer_model()
     if model == "candidate13":
-        version, identity = CHECKPOINTS[model]
-        selected = exported_model(
-            checkpoint_uri=f"s3://marin-us-east-02a/marin/users/benfeuer/models/structure-closure/{version}/exports/global_step_2/policy",
-            checkpoint_version=version,
-            manifest_identity=identity,
-        )
+        selected = candidate_model(model)
     return build_evaluation(
         name=user_owned_name(f"evals/structure-closure-tool-prompt-{model}"),
         data=tool_prompt_probe_dataset(),
