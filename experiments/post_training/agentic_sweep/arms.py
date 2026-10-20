@@ -18,8 +18,9 @@ mean loss over supervised tokens, no in-loop validation, NCCL WARN. A permanent 
 exports after epoch 2 and at the end, and per-epoch supervised and context tokens checked against the manifest
 within 0.1% (epoch-metrics.jsonl). ``--plateau`` turns on plateau dropping (task #226).
 
-    python -m experiments.post_training.agentic_sweep.arms --arm-data <prefix> --manifest-sha256 <sha256> \\
-        --plain-data <plain arm prefix> --parent-uri <parent> --learning-rate 1e-6 --epochs 2 [--only train] [--run]
+    python -m experiments.post_training.agentic_sweep.arms --arm plain --arm-data <prefix> --manifest-sha256 <sha256> \\
+        --plain-data <plain arm prefix> --parent v0.1 --run-date 20261020 \\
+        --learning-rate 1e-6 --epochs 3 [--only train] [--run]
 
 Without --run it prints the plan from the manifest. With --run (inside an Iris CPU job) it verifies the files,
 builds the caches (--only cache) or verifies the caches and submits the 4x8 H100 training job (--only train).
@@ -34,6 +35,7 @@ import json
 import os
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import cast
@@ -72,9 +74,54 @@ from experiments.post_training.agentic_sweep.train import (
 from experiments.sft.launcher import HFModel, SFTSpec
 
 ARMS = ("plain", "rs-multi", "recovery", "relay")
-VERSION = "2026.10.18.1"
 EXPORT_EPOCHS = [2]
 EXEMPLAR = {"input_ids": np.zeros(0, dtype=np.int32), "loss_weights": np.zeros(0, dtype=np.float32)}
+
+
+@dataclass(frozen=True)
+class ParentModel:
+    model: str
+    revision: str
+    uri: str
+
+
+PARENTS = {
+    "v0": ParentModel(
+        MODEL,
+        REVISION,
+        "s3://marin-us-east-02a/marin/weight-merging/campaign3-20261011/dare-linear-02/model",
+    ),
+    "v0.1": ParentModel(
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+        "6783e9743478bd25a9ce03ab3460e84d6a9814b0",
+        "s3://marin-us-east-02a/marin/models/"
+        "open-athena--Snowball-Smartie-RL-2026-10-15-32-step14--6783e9743478bd25a9ce03ab3460e84d6a9814b0/",
+    ),
+}
+
+
+def manifest_parent(manifest: dict, parent_name: str) -> ParentModel:
+    """Reject rows rendered with another tokenizer or labelled for another parent."""
+    parent = PARENTS[parent_name]
+    tokenizer = manifest["tokenizer_source"]
+    if tokenizer["model"] != MODEL or tokenizer["revision"] != REVISION:
+        raise ValueError("The arm tokenizer differs from the pinned v0 tokenizer")
+    expected = {"name": parent_name, "model": parent.model, "revision": parent.revision}
+    if manifest["parent_model"] != expected:
+        raise ValueError("The arm was built for a different parent")
+    if manifest["arm"] == "relay" and manifest["relay_student"] != expected:
+        raise ValueError("The relay student differs from the training parent")
+    return parent
+
+
+def run_identity(arm: str, parent_name: str, run_date: str, plateau: bool) -> str:
+    """Separate artifact identities across parents, data rounds and plateau training."""
+    if len(run_date) != 8:
+        raise ValueError("run-date must be YYYYMMDD")
+    datetime.strptime(run_date, "%Y%m%d")
+    if plateau and arm != "plain":
+        raise ValueError("Plateau training uses the plain arm's rows")
+    return f"{'plateau' if plateau else arm}-{parent_name}-v7-{run_date}"
 
 
 @dataclass(frozen=True)
@@ -270,7 +317,7 @@ def run_training(
     if "HF_TOKEN" in os.environ:
         environment["HF_TOKEN"] = os.environ["HF_TOKEN"]
     request = JobRequest(
-        name="snowball-v0-arm-sft",
+        name=cast(TrainLmConfig, config.train_config).trainer.id.replace(".", "p"),
         entrypoint=Entrypoint.from_callable(run_worker, args=(config,)),
         resources=config.resources,
         environment=create_environment(extras=["gpu"], env_vars=environment),
@@ -286,7 +333,8 @@ def pipeline(
     manifest: dict,
     manifest_sha256: str,
     data_source: str,
-    parent_uri: str,
+    parent_name: str,
+    run_date: str,
     learning_rate: float,
     epochs: list[ArmEpoch],
     plateau: bool,
@@ -294,13 +342,14 @@ def pipeline(
     resume_checkpoint: str | None = None,
     preemption_retries: int = 0,
 ) -> dict[str, ArtifactStep | list[ArtifactStep]]:
-    if manifest["student_revision"] != REVISION or manifest["student_model"] != MODEL:
-        raise ValueError("The arm was built for a different parent")
+    selected_parent = manifest_parent(manifest, parent_name)
     if manifest["max_sequence_tokens"] != CONTEXT:
         raise ValueError("The arm changes the frozen context")
     if learning_rate <= 0:
         raise ValueError("The learning rate must be positive")
     arm = manifest["arm"]
+    identity = run_identity(arm, parent_name, run_date, plateau)
+    version = datetime.strptime(run_date, "%Y%m%d").strftime("%Y.%m.%d")
     ends = list(itertools.accumulate(epoch.updates for epoch in epochs))
     start_step = 0
     if resume_checkpoint is not None:
@@ -309,10 +358,13 @@ def pipeline(
         if start_step not in ends[:-1]:
             raise ValueError("Arms resume only from an epoch-end checkpoint")
     source = ArtifactStep.adopt(
-        f"datasets/karan/arm-{arm}-{manifest_sha256[:12]}", VERSION, data_source, config=manifest
+        f"datasets/karan/{identity}-{manifest_sha256[:12]}", version, data_source, config=manifest
     )
     parent = ArtifactStep.adopt(
-        "checkpoints/karan/v0-arm-parent", VERSION, parent_uri, config={"model": MODEL, "revision": REVISION}
+        f"checkpoints/karan/arm-parent-{parent_name}-{selected_parent.revision}",
+        version,
+        selected_parent.uri,
+        config={"model": selected_parent.model, "revision": selected_parent.revision},
     )
 
     def cache_config(ctx: StepContext, epoch: int) -> TokenizeConfig:
@@ -331,8 +383,8 @@ def pipeline(
 
     caches = [
         ArtifactStep(
-            name=f"tokenized/karan/arm-{arm}-{manifest_sha256[:12]}-epoch-{epoch}",
-            version=VERSION,
+            name=f"tokenized/karan/{identity}-{manifest_sha256[:12]}-epoch-{epoch}",
+            version=version,
             artifact_type=TokenizedCache,
             run=tokenize,
             build_config=partial(cache_config, epoch=epoch),
@@ -340,14 +392,18 @@ def pipeline(
         )
         for epoch in range(len(epochs))
     ]
-    model = HFModel(model_ref=f"{MODEL}@{REVISION}", tokenizer_path=TOKENIZER, model_type="snowball")
+    model = HFModel(
+        model_ref=f"{selected_parent.model}@{selected_parent.revision}",
+        tokenizer_path=TOKENIZER,
+        model_type="snowball",
+    )
     resources = ResourceConfig.with_gpu(
         "H100", count=8, replicas=4, cpu=32, ram="512g", disk="512g", regions=[ANY_REGION], preemptible=False
     )
-    name = f"arm-{arm}-lr{learning_rate:g}-{len(epochs)}ep" + ("-plateau" if plateau else "")
+    name = f"{identity}-lr{learning_rate:g}-{len(epochs)}ep"
     spec = SFTSpec(
         name=f"checkpoints/karan/{name}",
-        version=VERSION,
+        version=version,
         model=model,
         chat_template="",
         datasets=[],
@@ -389,7 +445,7 @@ def pipeline(
             config,
             trainer=replace(
                 config.trainer,
-                id=name + "-20261018" + (f"-from{start_step}" if resume_checkpoint is not None else ""),
+                id=name + (f"-from{start_step}" if resume_checkpoint is not None else ""),
                 seed=42,
                 load_checkpoint=resume_checkpoint is not None,
                 load_checkpoint_path=resume_checkpoint,
@@ -422,9 +478,11 @@ def pipeline(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--arm-data", required=True, help="built arm prefix holding manifest.json")
+    parser.add_argument("--arm", choices=ARMS, required=True)
     parser.add_argument("--manifest-sha256", required=True)
     parser.add_argument("--plain-data", required=True, help="built plain arm prefix, the replay reference")
-    parser.add_argument("--parent-uri", required=True)
+    parser.add_argument("--parent", choices=tuple(PARENTS), required=True)
+    parser.add_argument("--run-date", required=True, help="YYYYMMDD, part of every output identity")
     parser.add_argument("--learning-rate", type=float, required=True)
     parser.add_argument("--epochs", type=int, required=True)
     parser.add_argument("--plateau", action="store_true")
@@ -437,20 +495,39 @@ def main() -> None:
     if hashlib.sha256(manifest_bytes).hexdigest() != args.manifest_sha256:
         raise ValueError("Arm manifest hash mismatch")
     manifest = json.loads(manifest_bytes)
+    if manifest["arm"] != args.arm:
+        raise ValueError("Manifest arm differs from the requested arm")
+    manifest_parent(manifest, args.parent)
     epochs = arm_epochs(manifest, args.epochs)
     if not args.run:
         artifacts = pipeline(
-            manifest, args.manifest_sha256, args.arm_data, args.parent_uri, args.learning_rate, epochs, args.plateau
+            manifest,
+            args.manifest_sha256,
+            args.arm_data,
+            args.parent,
+            args.run_date,
+            args.learning_rate,
+            epochs,
+            args.plateau,
         )
         print(lower(cast(ArtifactStep, artifacts["train"])))
         print(json.dumps({"arm": manifest["arm"], "epochs": [asdict(epoch) for epoch in epochs]}, indent=1))
         return
+    for prefix in (args.arm_data, args.plain_data):
+        root = StoragePath(prefix)
+        if not (root / "_SUCCESS").exists():
+            raise ValueError(f"Production rows require _SUCCESS: {prefix}")
+        source_manifest = json.loads((root / "manifest.json").read_text())
+        if source_manifest["dry_run"] or source_manifest["test_inputs"]:
+            raise ValueError(f"Refusing dry-run or test rows: {prefix}")
+        manifest_parent(source_manifest, args.parent)
     keys = verify_arm(args.arm_data, args.plain_data, manifest, args.epochs)
     artifacts = pipeline(
         manifest,
         args.manifest_sha256,
         args.arm_data,
-        args.parent_uri,
+        args.parent,
+        args.run_date,
         args.learning_rate,
         epochs,
         args.plateau,
