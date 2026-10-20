@@ -12,6 +12,7 @@ from taskforge.stage30_author import load_process
 from taskforge.stage30_author.author import program_manifest
 from taskforge.stage30_author.load_process import LoaderProcessFailed, ProgramManifest, load_program_in_process
 from taskforge.stage30_author.loader import load_program_source
+from taskforge.stage40_build_with_program.program_sdk import sdk_exports
 from taskforge.stage40_build_with_program.template import standard
 
 SPINNING_CLASS = "class Spin:\n    while True:\n        pass\n\n\n"
@@ -25,23 +26,23 @@ def spinning_program() -> str:
 async def test_the_child_returns_the_manifest_the_loader_gives_in_process():
     source = inspect.getsource(standard)
 
-    manifest = await load_program_in_process(source, wall_timeout=60)
+    manifest = await load_program_in_process(source, sdk_exports(), wall_timeout=60)
 
-    assert manifest == ProgramManifest.model_validate(program_manifest(load_program_source(source)))
+    assert manifest == ProgramManifest.model_validate(program_manifest(load_program_source(source, sdk_exports())))
 
 
 async def test_the_loaders_refusal_comes_back_as_the_error():
     source = inspect.getsource(standard).replace("PROGRAM = ", "def helper():\n    return 1\n\n\nPROGRAM = ")
 
     with pytest.raises(ValueError, match="the function `helper` is not allowed at module level"):
-        await load_program_in_process(source, wall_timeout=60)
+        await load_program_in_process(source, sdk_exports(), wall_timeout=60)
 
 
 async def test_a_module_body_that_never_returns_is_cut_off_at_the_wall_timeout():
     started = time.monotonic()
 
     with pytest.raises(ValueError, match="module body ran for more than 2 seconds"):
-        await load_program_in_process(spinning_program(), wall_timeout=2)
+        await load_program_in_process(spinning_program(), sdk_exports(), wall_timeout=2)
 
     assert time.monotonic() - started < 15
 
@@ -51,4 +52,4 @@ async def test_a_child_that_exits_without_a_result_is_a_loader_process_failure(m
     monkeypatch.setattr(load_process, "MODULE", "taskforge.no_such_loader")
 
     with pytest.raises(LoaderProcessFailed, match="the program loader process exited with status 1"):
-        await load_program_in_process(inspect.getsource(standard), wall_timeout=60)
+        await load_program_in_process(inspect.getsource(standard), sdk_exports(), wall_timeout=60)

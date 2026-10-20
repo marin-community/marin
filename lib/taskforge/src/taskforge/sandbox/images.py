@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from rigging.filesystem.path_validation import validate_relative_file_paths
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, TaskResource
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
@@ -38,8 +39,8 @@ DEFAULT_MODE = "644"
 class DockerBuild:
     """A Dockerfile and its build context: the ImageBuilder's input, never part of a TaskSpec.
 
-    ``files`` paths are relative to the context root (``Dockerfile``, ``app/run.sh``); ``dockerfile``
-    names one of them.
+    ``files`` paths are relative to the context root (``Dockerfile``, ``app/run.sh``) and must not
+    collide, as ``a`` and ``a/b`` would when the context is unpacked; ``dockerfile`` names one of them.
     """
 
     files: tuple[TaskResource, ...]
@@ -47,8 +48,7 @@ class DockerBuild:
 
     def __post_init__(self) -> None:
         paths = [resource.path for resource in self.files]
-        if len(set(paths)) != len(paths):
-            raise ValueError(f"build context paths repeat: {sorted(paths)}")
+        validate_relative_file_paths(paths)
         if self.dockerfile not in paths:
             raise ValueError(f"build context has no {self.dockerfile!r}")
 

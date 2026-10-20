@@ -9,7 +9,7 @@ import dataclasses
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rolloutengine.contracts import RolloutInterrupted
+from rolloutengine.models import RolloutInterrupted
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -25,6 +25,7 @@ from taskcompendium.models import AnswerType, PlainText, TaskSpec
 
 from taskforge.ledger.records import EntryKind
 from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
+from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 from taskforge.stage10_proposal.model import SolverMachine
@@ -41,7 +42,7 @@ from taskforge.stage40_build_with_program.sandbox_effects import (
     publish_image,
 )
 from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
-from taskforge.stage50_validate.lowering import VERIFIER_TIMEOUT
+from taskforge.stage50_validate.lowering import TASK_MACHINE, VERIFIER_TIMEOUT
 from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory, shell_grader
 from tests.stage40_build_with_program.conftest import FACTORIES, SAMPLING, WORKPIECE, RecordingImageBuilder, declaring
 
@@ -240,6 +241,33 @@ async def test_a_host_without_an_image_builder_is_infrastructure(context):
     assert failure.value.cause == InfrastructureCause.NO_IMAGE_BUILDER
 
 
+class FailingImageBuilder:
+    def __init__(self, error: Exception):
+        self.error = error
+
+    async def publish(self, build: DockerBuild, repository: str) -> str:
+        raise self.error
+
+
+async def test_an_image_job_the_host_failed_is_infrastructure(context):
+    build = DockerBuild(files=(draft.file("Dockerfile", "FROM busybox\n"),))
+    images = FailingImageBuilder(ImageJobFailed("job /alice/build ended worker_failed: worker lost"))
+
+    with pytest.raises(BuildInfrastructureFailure) as failure:
+        await publish_image(context(images=images), build)
+
+    assert failure.value.cause == InfrastructureCause.IMAGE_JOB_FAILED
+    assert "worker lost" in failure.value.message
+
+
+async def test_an_image_that_fails_to_build_is_the_programs_failure(context):
+    build = DockerBuild(files=(draft.file("Dockerfile", "FROM busybox\nRUN false\n"),))
+    images = FailingImageBuilder(BuildFailed("job /alice/build ended failed: RUN false returned 1"))
+
+    with pytest.raises(BuildFailure, match="RUN false returned 1"):
+        await publish_image(context(images=images), build)
+
+
 @pytest.mark.parametrize(
     ("machine", "cause"),
     [(None, InfrastructureCause.NO_IMAGE_BUILDER), (SolverMachine.PACKAGES, InfrastructureCause.NO_FACTORY)],
@@ -318,17 +346,20 @@ async def test_an_image_or_spec_the_program_chose_stays_the_programs_failure(con
     assert interrupted.value.__cause__ is error
 
 
-def test_verifier_deadlines_outlast_the_sandbox_scheduling_timeout():
-    """A verifier deadline at or under the factory's scheduling timeout cancels the machine wait first.
+def test_machine_and_verifier_deadlines_outlast_the_sandbox_scheduling_timeout():
+    """A verifier or startup deadline at or under the factory's scheduling timeout cancels the machine wait first.
 
     The factory's ``TimeoutError`` is then never raised, the engine reports a bare deadline, and a
     sandbox that never starts spends a program revision instead of failing as infrastructure. Both
-    deadlines leave the factory its whole budget and the grader its own on top.
+    verifier deadlines leave the factory its whole budget and the grader its own on top, and both
+    machine startup deadlines leave a sandbox scheduled late in that budget time to prepare.
     """
     assert GRADE_CANDIDATE_VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
     assert VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
     assert GRADE_CANDIDATE_MACHINE.startup_timeout is not None
     assert GRADE_CANDIDATE_MACHINE.startup_timeout > SANDBOX_SCHEDULING_TIMEOUT
+    assert TASK_MACHINE.startup_timeout is not None
+    assert TASK_MACHINE.startup_timeout > SANDBOX_SCHEDULING_TIMEOUT
 
 
 @pytest.mark.parametrize("stalled", ["run", "upload"], ids=["command", "upload"])

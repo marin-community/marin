@@ -6,8 +6,8 @@
 
 use std::net::SocketAddr;
 
-use arrow::array::{RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use arrow::array::{ListArray, RecordBatch, StringArray};
+use arrow::datatypes::{DataType, Field, Int64Type, Schema as ArrowSchema};
 
 use crate::proto::finelog::logging::{FetchLogsRequest, LogEntry, MatchScope, PushLogsRequest};
 use crate::proto::finelog::stats::{ColumnType, ListRelayStatusRequest};
@@ -770,6 +770,46 @@ fn one_telemetry_sized_read_turn_fits_one_request() {
     assert_eq!(chunks.last().unwrap().1, FORWARD_BATCH_ROWS);
 }
 
+#[test]
+fn chunk_by_bytes_preserves_nullable_and_nested_slices() {
+    let text = "x".repeat(64);
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(StringArray::from(
+            (0..4_000)
+                .map(|row| (row % 3 != 0).then_some(text.as_str()))
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+            (0..4_000).map(|row| Some(vec![Some(row); 16])),
+        )),
+    ];
+    for column in columns {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            column.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![column])
+            .unwrap()
+            .slice(117, 2_000);
+        let seqs = Int64Array::from_iter_values(118..2_118);
+        let chunks = chunk_by_bytes(&batch, &seqs, 16 << 10).unwrap();
+        // Nested slices retain the original child buffers. Counting those buffers
+        // for each slice would turn this into one serial request per row.
+        assert!(chunks.len() <= 32);
+        let mut decoded = Vec::new();
+        let mut count = 0;
+        for (ipc, last_seq) in chunks {
+            assert!(ipc.len() <= 16 << 10);
+            let part = decode_one_record_batch(&ipc).unwrap();
+            count += part.num_rows();
+            assert_eq!(last_seq, seqs.value(count - 1));
+            decoded.push(part);
+        }
+        assert_eq!(concat_batches(&batch.schema(), &decoded).unwrap(), batch);
+    }
+}
+
 // -------------------------------------------------------------------------------------
 // Integration tests: the `log` namespace end to end.
 
@@ -1340,6 +1380,16 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
         fx.zstd_requests() - zstd_before,
         1,
         "the large WriteRows body is zstd encoded while the small registration stays identity"
+    );
+    assert_eq!(
+        hub_column(fx.target_store(), "events", "id").await,
+        (0..FORWARD_BATCH_ROWS)
+            .map(|row| Some(row.to_string()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        fx.target_store().namespace_persisted_seq("events").unwrap(),
+        FORWARD_BATCH_ROWS
     );
 }
 

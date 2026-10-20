@@ -8,8 +8,7 @@ import json
 from dataclasses import replace
 
 from rigging.timing import ExponentialBackoff
-from rolloutengine.contracts import TOTAL_TURN_TIMEOUT_STOP_REASON, RolloutData
-from rolloutengine.spec import TRACE_METRIC, TraceMode
+from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON, TRACE_METRIC, Rollout, TraceMode
 from shellbox.machine import Backend
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import JsonAnswer, PlainText
@@ -88,7 +87,7 @@ async def test_failed_starts_are_retried_and_every_attempt_is_recorded(tmp_path,
     records = sorted((tmp_path / "evidence" / "solver").glob("*/attempt-*.json"))
     assert len(records) == 5
     graded = [json.loads(path.read_bytes()) for path in records if json.loads(path.read_bytes())["outcome"] == "graded"]
-    assert all(record["rollout"]["grade"]["reward"] == 1.0 for record in graded)
+    assert all(record["grade"]["reward"] == 1.0 for record in graded)
 
 
 async def test_a_re_entered_trial_numbers_attempts_after_the_ones_on_disk(tmp_path, file_task, fakes):
@@ -141,10 +140,7 @@ async def test_a_failing_setup_command_is_a_task_defect_and_is_not_retried(tmp_p
 
 async def test_a_task_the_factories_refuse_never_starts_a_machine(tmp_path, file_task, fakes):
     factory = fakes.flaky_factory(failures=0, error=RuntimeError)
-    task_machine = file_task.runtime.task_machine.model_copy(update={"cpus": 2})
-    refused = file_task.model_copy(
-        update={"runtime": file_task.runtime.model_copy(update={"task_machine": task_machine})}
-    )
+    refused = file_task.model_copy(update={"task_machine": file_task.task_machine.model_copy(update={"cpus": 2})})
 
     outcomes = await run_trials(refused, plan(tmp_path), settings(factory), fakes.script_model([]))
 
@@ -167,9 +163,7 @@ async def test_each_trial_of_a_glm_model_records_and_routes_under_its_own_attemp
     tmp_path, math_task, fakes, fake_glm, fast_provider
 ):
     for _ in range(2):
-        fake_glm.stream(
-            content="395", prompt_tokens=3, completion_tokens=2, prompt_token_ids=(1, 2, 3), token_ids=(4, 5)
-        )
+        fake_glm.stream(content="395", prompt_tokens=3, completion_tokens=2)
     trial_plan = plan(tmp_path, k=2, max_retries=0)
 
     async with GlmClient(fake_source(fake_glm), replace(fast_provider, max_attempts=1)) as client:
@@ -190,7 +184,7 @@ async def test_validation_deadlines_replace_the_builders_turn_deadline(tmp_path,
     # The builder allows an hour; validation's total-turn deadline ends the trial after the first shell turn.
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
     deadlines = Deadlines(total_turn_timeout=0.5, attempt_timeout=30)
-    builder = file_task.model_copy(update={"session": file_task.session.model_copy(update={"total_turn_timeout": 3600})})
+    builder = file_task.model_copy(update={"limits": file_task.limits.model_copy(update={"total_turn_timeout": 3600})})
 
     outcomes = await run_trials(
         builder,
@@ -266,7 +260,21 @@ async def test_the_ledger_input_hash_is_the_digest_of_the_lowered_task_with_its_
 
     first, again, other = (entry.input_hash for entry in ledger(tmp_path))
     assert first == again != other
-    assert first == task_digest(settings(factory).apply(DEADLINES.apply(math_task)))
+    engine_settings = settings(factory)
+    assert first == task_digest(engine_settings.apply(DEADLINES.apply(math_task)), engine_settings.command_timeout)
+
+
+async def test_the_ledger_input_hash_covers_the_shell_command_timeout(tmp_path, math_task, fakes):
+    # The command timeout is the shell harness's, not the spec's, and the digest still covers it.
+    model = fakes.script_model([fakes.text("395")])
+    engine_settings = settings(fakes.flaky_factory(0, RuntimeError))
+
+    for command_timeout in (10, 10, 15):
+        trial_settings = replace(engine_settings, command_timeout=command_timeout)
+        await run_trials(math_task, plan(tmp_path, k=1), trial_settings, model)
+
+    first, again, other = (entry.input_hash for entry in ledger(tmp_path))
+    assert first == again != other
 
 
 def attempt_records(tmp_path) -> list[dict]:
@@ -276,7 +284,7 @@ def attempt_records(tmp_path) -> list[dict]:
 
 def test_a_candidate_code_error_is_recorded_on_its_graded_attempt():
     grade = GradeResult(Outcome.GRADED, 0.0, detail={"reason": "collection_error"})
-    outcome = Graded(RolloutData("task", (), (), (), (), None, grade, "stop"), candidate_code_error=True)
+    outcome = Graded(Rollout("run", (), "stop"), grade, candidate_code_error=True)
 
     record = json.loads(outcome_json(outcome))
 
@@ -285,9 +293,9 @@ def test_a_candidate_code_error_is_recorded_on_its_graded_attempt():
 
 def test_captured_output_files_are_recorded_as_base64_on_the_attempt():
     grade = GradeResult(Outcome.GRADED, 1.0)
-    rollout = RolloutData("task", (), (), (), (), None, grade, "stop", outputs={"/workspace/sum.txt": b"60\n\x00"})
+    rollout = Rollout("run", (), "stop", outputs={"/workspace/sum.txt": b"60\n\x00"})
 
-    record = json.loads(outcome_json(Graded(rollout, candidate_code_error=False)))
+    record = json.loads(outcome_json(Graded(rollout, grade, candidate_code_error=False)))
 
     assert record["rollout"]["outputs"] == {"/workspace/sum.txt": "NjAKAA=="}
 
@@ -307,7 +315,7 @@ async def test_engine_settings_replace_the_builders_turn_budget(tmp_path, file_t
     model = fakes.script_model(
         [fakes.shell("true", "c0"), fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")]
     )
-    builder = file_task.model_copy(update={"session": file_task.session.model_copy(update={"max_turns": 1})})
+    builder = file_task.model_copy(update={"limits": file_task.limits.model_copy(update={"max_turns": 1})})
 
     outcomes = await run_trials(builder, plan(tmp_path, k=1), settings(fakes.flaky_factory(0, RuntimeError)), model)
 
@@ -315,21 +323,22 @@ async def test_engine_settings_replace_the_builders_turn_budget(tmp_path, file_t
 
 
 async def test_trials_run_under_the_messages_trace(tmp_path, file_task, fakes):
-    # The messages trace sends no prefix, so ScriptModel reports the same prompt ids on both turns and
+    # The messages trace sends no continuation, so ScriptModel reports the same prompt ids on both turns and
     # the second does not extend the first: the exact-token trace would end the rollout there.
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")])
     engine_settings = settings(fakes.flaky_factory(0, RuntimeError))
 
     outcomes = await run_trials(file_task, plan(tmp_path, k=1), engine_settings, model)
 
-    assert engine_settings.apply(file_task).session.trace is TraceMode.MESSAGES
+    assert engine_settings.apply(file_task).trace is TraceMode.MESSAGES
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
     rollout = outcomes[0].rollout
     assert rollout.metrics[TRACE_METRIC] == TraceMode.MESSAGES.value
-    assert set(rollout.loss_mask) == {0}
-    assert [request.prefix_token_ids for request in model.requests] == [(), ()]
+    assert [set(conversation.loss_mask) for conversation in rollout.conversations] == [{0}]
+    assert [request.continuation for request in model.requests] == [None, None]
     [entry] = ledger(tmp_path)
-    assert (entry.tokens_in, entry.tokens_out) == (4, 2)
+    # Two turns of 30 prompt and 4 completion tokens each, counted from usage, not from the ids.
+    assert (entry.tokens_in, entry.tokens_out) == (60, 8)
 
 
 async def test_the_attempt_file_keeps_the_steps(tmp_path, file_task, fakes):
@@ -337,7 +346,8 @@ async def test_the_attempt_file_keeps_the_steps(tmp_path, file_task, fakes):
 
     outcomes = await run_trials(file_task, plan(tmp_path, k=1), settings(fakes.flaky_factory(0, RuntimeError)), model)
 
-    assert isinstance(outcomes[0], Graded) and len(outcomes[0].rollout.steps) == 2
+    assert isinstance(outcomes[0], Graded) and [len(c.steps) for c in outcomes[0].rollout.conversations] == [2]
     (record,) = attempt_records(tmp_path)
-    steps = record["rollout"]["steps"]
+    [conversation] = record["rollout"]["conversations"]
+    steps = conversation["steps"]
     assert [step["turn"]["message"]["content"] for step in steps] == ["", "Done."]

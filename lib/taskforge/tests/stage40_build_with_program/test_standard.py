@@ -9,8 +9,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 
 import pytest
-from rolloutengine.contracts import ModelRequest, ModelTurn
-from rolloutengine.engine import RolloutEngine
+from rolloutengine.models import ModelRequest, ModelTurn
 from shellbox.machine import Backend, PackageSpec
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
@@ -20,11 +19,11 @@ from verifyit.spec import ExactSpec
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
-from taskforge.spec.draft import VERDICT_REWARD, answer_grader
+from taskforge.spec.draft import VERDICT_REWARD, answer_grader, rollout_engine
 from taskforge.stage10_proposal.model import SolverMachine
-from taskforge.stage30_author.loader import load_program_source
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock
 from taskforge.stage40_build_with_program.outputs import Fixtures, Grader, Sources
+from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build, step_output
 from taskforge.stage40_build_with_program.sdk import (
     ATTEMPTS,
@@ -139,7 +138,7 @@ async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_t
     fake_glm.stream(content=json.dumps({"system": "", "instruction": "Show that 6 * 7 = 42. End with ANSWER = <n>."}))
     fake_glm.stream(content=json.dumps({"system": "", "instruction": "Read question.txt. End with `ANSWER = <n>`."}))
     queries: list[Mapping[str, object]] = []
-    program = load_program_source(inspect.getsource(standard))
+    program = load_program(inspect.getsource(standard))
 
     draft = await build(program, proposal, services, glm_client, tmp_path, queries)
     again = await build(program, proposal, services, glm_client, tmp_path, queries)
@@ -170,10 +169,10 @@ async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_t
     ]
 
     lowered = lower(task, MachineHost.LAPTOP, FACTORIES)
-    assert lowered.runtime.task_machine is not None and lowered.runtime.task_machine.backend == Backend.SHELLSIM
-    assert lowered.runtime.verifier_machine is not None and lowered.runtime.verifier_machine.backend == Backend.DOCKER
-    rollout = await RolloutEngine(answer, FACTORIES).run(lowered)
-    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
+    assert lowered.task_machine is not None and lowered.task_machine.backend == Backend.SHELLSIM
+    assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == Backend.DOCKER
+    result = await rollout_engine(FACTORIES, command_timeout=None).run_task(lowered, answer)
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
 
 
 async def test_a_grader_that_rejects_its_own_reference_answer_fails_the_build(

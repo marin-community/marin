@@ -11,8 +11,8 @@ after the setup commands), then a final reply (``WORKSPACE_REPLY``). The task's 
 machine state. Grading is the engine's, unchanged.
 
 A control replays under the engine's messages trace, as every trial does (``EngineSettings.apply``):
-a scripted turn carries no token ids, the engine skips its prefix, evidence, log-probability and
-credit checks, and the attempt records no token evidence, which a control never needs.
+a scripted turn carries no token ids, the engine skips its prefix, evidence and log-probability
+checks, and the attempt records no token evidence, which a control never needs.
 """
 
 import asyncio
@@ -23,8 +23,7 @@ from pathlib import Path
 from typing import Any, Self
 
 from rigging.timing import ExponentialBackoff
-from rolloutengine.contracts import ModelRequest, ModelTurn
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.models import ModelRequest, ModelTurn, TaskRolloutSpec
 from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
 
 from taskforge.ledger.records import Ledger
@@ -145,18 +144,18 @@ def context_assistant_turns(task: TaskSpec) -> int:
 
 
 async def replay(
-    lowered: LoweredTaskSpec,
+    spec: TaskRolloutSpec,
     controls: Sequence[Control],
     plan: ControlPlan,
     settings: EngineSettings,
 ) -> list[ControlOutcome]:
-    """Replay every control concurrently as a ``CONTROL`` trial of ``lowered``, named by its id.
+    """Replay every control concurrently as a ``CONTROL`` trial of ``spec``, named by its id.
 
     Raises:
         ValueError: ``check_replayable`` refuses ``controls``, or ``plan.first_attempts`` names a control not
             in ``controls``.
     """
-    task = lowered.task
+    task = spec.task
     check_replayable(task, controls, settings.max_turns)
     unknown = sorted(set(plan.first_attempts) - {control.id for control in controls})
     if unknown:
@@ -166,7 +165,7 @@ async def replay(
         runs = [
             group.create_task(
                 run_trial(
-                    lowered,
+                    spec,
                     plan.trial_plan(control.id),
                     settings,
                     ScriptedModel(control_turns(control), context_turns),
