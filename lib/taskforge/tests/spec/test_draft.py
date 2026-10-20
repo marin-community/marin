@@ -7,10 +7,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 import pytest
-from rolloutengine.contracts import ModelRequest, ModelTurn
-from rolloutengine.engine import RolloutEngine
 from rolloutengine.machines import _machine_spec
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.models import ModelRequest, ModelTurn, TaskRolloutSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
@@ -78,8 +76,9 @@ from taskforge.spec.draft import (
     python_grader,
     requirements,
     reward_file,
+    rollout_engine,
+    rollout_limits,
     script_grader,
-    session,
 )
 from taskforge.spec.verdict import GraderCheck, grader_checks, verdict_json
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
@@ -87,10 +86,10 @@ from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFa
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
 PLAIN = PlainText()
 FACTORIES = {"shellsim": PortlessShellSimFactory(), "docker": FixtureImageFactory(Backend.DOCKER)}
-SESSION = session(
+COMMAND_TIMEOUT = 10
+LIMITS = rollout_limits(
     max_turns=4,
     model_turn_timeout=None,
-    command_timeout=10,
     tool_turn_timeout=20,
     total_turn_timeout=None,
     attempt_timeout=None,
@@ -135,7 +134,8 @@ class ReplayModel:
     async def complete(self, request: ModelRequest) -> ModelTurn:
         self.requests.append(request)
         index = len(self.requests) - 1
-        prompt = (*request.prefix_token_ids, 90, 91) if request.prefix_token_ids else (10, 11)
+        continuation = request.continuation
+        prompt = (10, 11) if continuation is None else (*continuation.served_token_ids, 90, 91)
         return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), "stop")
 
 
@@ -160,10 +160,10 @@ def shell_message(call_id: str, command: str) -> dict:
     }
 
 
-async def run(lowered: LoweredTaskSpec, messages: list[dict]):
-    engine = RolloutEngine(ReplayModel(messages).complete, FACTORIES)
-    restored = LoweredTaskSpec.model_validate_json(lowered.model_dump_json())
-    return await engine.run(restored)
+async def run(lowered: TaskRolloutSpec, messages: list[dict]):
+    engine = rollout_engine(FACTORIES, command_timeout=COMMAND_TIMEOUT)
+    restored = TaskRolloutSpec.model_validate_json(lowered.model_dump_json())
+    return await engine.run_task(restored, ReplayModel(messages).complete)
 
 
 def lower_here(
@@ -171,13 +171,13 @@ def lower_here(
     task_machine: MachineSettings | None = None,
     verifier_machine: MachineSettings | None = None,
     host: MachineHost = MachineHost.LAPTOP,
-) -> LoweredTaskSpec:
+) -> TaskRolloutSpec:
     return lower(
         task,
         host=host,
         task_machine=task_machine,
         verifier_machine=verifier_machine,
-        session=SESSION,
+        limits=LIMITS,
         factories=FACTORIES,
     )
 
@@ -264,7 +264,7 @@ async def test_python_grader_grades_the_captured_output_of_a_shellsim_run_on_a_v
     )
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected)
-    assert "config.json" not in json.dumps(result.messages)
+    assert "config.json" not in json.dumps([chat.messages for chat in result.rollout.conversations])
 
 
 @pytest.mark.parametrize("answer,expected", [("twelve", 1.0), ("eleven", 0.0)])
@@ -275,7 +275,7 @@ async def test_python_grader_reads_the_extracted_answer_of_a_task_without_a_mach
     result = await run(lowered, [{"role": "assistant", "content": answer}])
 
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected)
-    assert lowered.runtime.verifier_machine is not None and lowered.runtime.verifier_machine.backend == "docker"
+    assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == "docker"
 
 
 @pytest.mark.parametrize("answer,expected", [("twelve", 1.0), ("eleven", 0.0)])
@@ -340,7 +340,7 @@ async def test_answer_grader_grades_the_final_reply_in_process(spec, right, wron
     rewards = [(await run(lowered, [{"role": "assistant", "content": text}])).grade.reward for text in (right, wrong)]
 
     assert rewards == [1.0, 0.0]
-    assert (lowered.runtime.task_machine, lowered.runtime.verifier_machine) == (None, None)
+    assert (lowered.task_machine, lowered.verifier_machine) == (None, None)
     assert lowered.task.context.events[0].content == "Answer briefly."
     assert lowered.task.answer_format == PLAIN
 
@@ -411,25 +411,24 @@ def test_docker_task_lowers_both_machines_onto_the_hosts_container_backend(host,
         host=host,
         task_machine=task_machine,
         verifier_machine=verifier_machine,
-        session=SESSION,
+        limits=LIMITS,
         factories={backend.value: RecordingFactory(backend)},
     )
 
-    runtime = lowered.runtime
-    assert runtime.task_machine is not None and runtime.verifier_machine is not None
-    assert (runtime.task_machine.backend, runtime.verifier_machine.backend) == (backend.value, backend.value)
-    assert (runtime.task_machine.network, runtime.task_machine.cpus, runtime.task_machine.memory_mb) == (
+    assert lowered.task_machine is not None and lowered.verifier_machine is not None
+    assert (lowered.task_machine.backend, lowered.verifier_machine.backend) == (backend.value, backend.value)
+    assert (lowered.task_machine.network, lowered.task_machine.cpus, lowered.task_machine.memory_mb) == (
         NetworkPolicy.ALLOW,
         4,
         4096,
     )
-    assert (runtime.task_machine.storage_mb, runtime.task_machine.user, runtime.task_machine.cleanup_timeout) == (
+    assert (lowered.task_machine.storage_mb, lowered.task_machine.user, lowered.task_machine.cleanup_timeout) == (
         10240,
         "root",
         20,
     )
-    assert (runtime.verifier_machine.network, runtime.verifier_machine.user) == (NetworkPolicy.DENY, "0")
-    assert LoweredTaskSpec.model_validate_json(lowered.model_dump_json()) == lowered
+    assert (lowered.verifier_machine.network, lowered.verifier_machine.user) == (NetworkPolicy.DENY, "0")
+    assert TaskRolloutSpec.model_validate_json(lowered.model_dump_json()) == lowered
 
 
 def test_script_grader_keeps_its_files_private_and_its_image_on_the_verifier():
@@ -527,7 +526,7 @@ def test_assemble_keeps_a_task_without_a_grader():
     task = answer_task(GraderPackage(NoGrader(reason="the source has no checkable answer")))
 
     assert task.grader == NoGrader(reason="the source has no checkable answer")
-    assert lower_here(task).runtime.verifier_machine is None
+    assert lower_here(task).verifier_machine is None
 
 
 @pytest.mark.parametrize(
@@ -590,28 +589,13 @@ def test_lower_propagates_rolloutengines_rejections():
             host=MachineHost.LAPTOP,
             task_machine=SHELLSIM,
             verifier_machine=VERIFIER,
-            session=SESSION,
+            limits=LIMITS,
             factories={"shellsim": ShellSimMachineFactory()},
         )
-    slow_commands = session(
-        max_turns=4,
-        model_turn_timeout=None,
-        command_timeout=20,
-        tool_turn_timeout=20,
-        total_turn_timeout=None,
-        attempt_timeout=None,
-        verifier_timeout=30,
-        cleanup_timeout=10,
-    )
+    # The command timeout belongs to the engine's shell harness, so the engine that runs a spec rejects it.
+    lowered = lower_here(file_task(), SHELLSIM, VERIFIER)
     with pytest.raises(ValueError, match="command timeout must be less"):
-        lower(
-            file_task(),
-            host=MachineHost.LAPTOP,
-            task_machine=SHELLSIM,
-            verifier_machine=VERIFIER,
-            session=slow_commands,
-            factories=FACTORIES,
-        )
+        rollout_engine(FACTORIES, command_timeout=LIMITS.tool_turn_timeout).check(lowered)
 
 
 def test_lower_puts_a_shellsim_task_on_shellsim_and_its_grader_on_the_hosts_container_backend():
@@ -620,12 +604,12 @@ def test_lower_puts_a_shellsim_task_on_shellsim_and_its_grader_on_the_hosts_cont
         host=MachineHost.IRIS,
         task_machine=SHELLSIM,
         verifier_machine=VERIFIER,
-        session=SESSION,
+        limits=LIMITS,
         factories={"shellsim": ShellSimMachineFactory(), "gvisor": RecordingFactory(Backend.GVISOR)},
     )
 
-    assert lowered.runtime.task_machine is not None and lowered.runtime.verifier_machine is not None
-    assert (lowered.runtime.task_machine.backend, lowered.runtime.verifier_machine.backend) == ("shellsim", "gvisor")
+    assert lowered.task_machine is not None and lowered.verifier_machine is not None
+    assert (lowered.task_machine.backend, lowered.verifier_machine.backend) == ("shellsim", "gvisor")
 
 
 def test_a_shellsim_task_machine_asks_for_the_catalogs_cpython():
@@ -634,14 +618,14 @@ def test_a_shellsim_task_machine_asks_for_the_catalogs_cpython():
         host=MachineHost.LAPTOP,
         task_machine=SHELLSIM,
         verifier_machine=VERIFIER,
-        session=SESSION,
+        limits=LIMITS,
         factories=FACTORIES,
     )
     environment = lowered.task.environment_requirements
-    assert lowered.runtime.task_machine is not None
+    assert lowered.task_machine is not None
 
     # ShellSim installs the catalog's CPython for any set ``pypi_packages``, here none beyond it.
-    assert _machine_spec(environment, lowered.runtime.task_machine).source == PackageSpec(pypi_packages=())
+    assert _machine_spec(environment, lowered.task_machine).source == PackageSpec(pypi_packages=())
     assert requirements(image=IMAGE).package_spec is None
 
 
@@ -658,11 +642,11 @@ def test_a_lock_only_grader_lowers_onto_the_local_backend():
         host=MachineHost.IRIS,
         task_machine=None,
         verifier_machine=VERIFIER,
-        session=SESSION,
+        limits=LIMITS,
         factories={"local": RecordingFactory(Backend.LOCAL)},
     )
 
-    assert lowered.runtime.verifier_machine is not None and lowered.runtime.verifier_machine.backend == "local"
+    assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == "local"
 
 
 def cpython_task(grader: GraderPackage | None = None) -> TaskSpec:
@@ -679,25 +663,25 @@ def cpython_task(grader: GraderPackage | None = None) -> TaskSpec:
     )
 
 
-def lower_on_iris(task: TaskSpec, backends: tuple[Backend, ...]) -> LoweredTaskSpec:
+def lower_on_iris(task: TaskSpec, backends: tuple[Backend, ...]) -> TaskRolloutSpec:
     return lower(
         task,
         host=MachineHost.IRIS,
         task_machine=SHELLSIM,
         verifier_machine=VERIFIER,
-        session=SESSION,
+        limits=LIMITS,
         factories={backend.value: RecordingFactory(backend) for backend in backends},
     )
 
 
-def machine_sources(lowered: LoweredTaskSpec) -> tuple[tuple[str, object], tuple[str, object]]:
+def machine_sources(lowered: TaskRolloutSpec) -> tuple[tuple[str, object], tuple[str, object]]:
     """Each machine's backend and the ``MachineSpec`` source RolloutEngine creates it from."""
-    runtime, task = lowered.runtime, lowered.task
-    assert runtime.task_machine is not None and runtime.verifier_machine is not None
+    task = lowered.task
+    assert lowered.task_machine is not None and lowered.verifier_machine is not None
     assert isinstance(task.grader, ScriptGrader)
     return (
-        (runtime.task_machine.backend, _machine_spec(task.environment_requirements, runtime.task_machine).source),
-        (runtime.verifier_machine.backend, _machine_spec(task.grader.environment, runtime.verifier_machine).source),
+        (lowered.task_machine.backend, _machine_spec(task.environment_requirements, lowered.task_machine).source),
+        (lowered.verifier_machine.backend, _machine_spec(task.grader.environment, lowered.verifier_machine).source),
     )
 
 
@@ -705,7 +689,7 @@ def test_grader_base_machines_run_a_local_cpython_when_the_host_has_the_local_ba
     lowered = lower_on_iris(cpython_task(), (Backend.GVISOR, Backend.LOCAL))
 
     assert machine_sources(lowered) == (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))
-    assert LoweredTaskSpec.model_validate_json(lowered.model_dump_json()) == lowered
+    assert TaskRolloutSpec.model_validate_json(lowered.model_dump_json()) == lowered
 
 
 def test_grader_base_machines_stay_on_the_container_backend_without_the_local_backend():
