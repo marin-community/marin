@@ -114,6 +114,7 @@ def summarize(positions: list[Position]) -> Summary:
 def report_lines(
     groups: dict[str, Summary], cases: dict[str, Summary], gate: Gate, header: str
 ) -> tuple[list[str], bool]:
+    """Return report lines and whether every group passes the parity gates."""
     lines = [
         header,
         "",

@@ -64,7 +64,7 @@ def golden_stage(
         raise ValueError("MLX project changed after graph construction")
     if tomllib.loads(VLLM_GPU_RELEASE.read_text())["release_tag"] != release_tag:
         raise ValueError("vLLM release changed after graph construction")
-    remote_output = f"{remote_prefix.rstrip('/')}/{uuid4().hex}/golden.json"
+    remote_output = str(StoragePath(remote_prefix) / uuid4().hex / "golden.json")
     submit_golden(repo, revision, Path(prompts) / "prompts.json", gpus, remote_output, release_tag)
     configure_coreweave_s3()
     Path(output).mkdir(parents=True, exist_ok=True)

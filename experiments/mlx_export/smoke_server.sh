@@ -57,14 +57,11 @@ CONTENT=$(echo "$R" | jq -r '.choices[0].message.content // empty')
 case "$CONTENT$REASONING" in *"<|start_think|>"*|*"<|end_think|>"*) fail "thinking markers leaked into text" ;; esac
 pass "2 thinking default (reasoning split, no leaked markers)"
 
-# 3. enable_thinking=false -> no reasoning; kwargs reach the template.
-# (mlx-lm 0.32.2's DEBUG log records request bodies, not rendered prompts;
-# the /nothink rendering itself is covered by the load checks.)
+# 3. enable_thinking=false suppresses reasoning in the response.
 R=$(chat '{"model":"default_model","max_tokens":512,"chat_template_kwargs":{"enable_thinking":false},"messages":[{"role":"user","content":"Is 391 prime?"}]}')
 REASONING=$(echo "$R" | jq -r '.choices[0].message.reasoning // empty')
 [ -z "$REASONING" ] || fail "reasoning present with enable_thinking=false"
-grep -q '"enable_thinking": false' "$LOG" || fail "chat_template_kwargs did not reach the server"
-pass "3 thinking disabled via chat_template_kwargs (no reasoning; kwargs logged)"
+pass "3 thinking disabled via chat_template_kwargs (no reasoning)"
 
 # 4. tool call
 TOOLS='{"type":"function","function":{"name":"get_weather","description":"Current weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}'

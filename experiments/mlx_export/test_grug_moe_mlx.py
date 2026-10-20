@@ -10,6 +10,7 @@ learned values.
 """
 
 import importlib.util
+import math
 from pathlib import Path
 
 import pytest
@@ -198,25 +199,22 @@ def test_router_bias_selection_and_renorm():
     """The router selects on biased logits but weights experts by the unbiased ones."""
     model = tiny_model(num_hidden_layers=1)
     moe = model.model.layers[0].mlp
-    k = moe.top_k
-    x = mx.random.normal((1, 4, 64))
-
-    # A huge bias forces expert 7 into every top-k even though its logit is ordinary.
-    moe.router.bias = moe.router.bias.astype(mx.float32).at[7].add(1e4)
-    logits = x.astype(mx.float32) @ moe.router.weight.astype(mx.float32).T
-    idx = mx.argpartition(-(logits + moe.router.bias), kth=k - 1, axis=-1)[..., :k]
-    assert (idx == 7).any(axis=-1).all().item()
-
-    w = mx.sigmoid(mx.take_along_axis(logits, idx, axis=-1))
-    w = w * (2.5 / (mx.sum(w, axis=-1, keepdims=True) + 1e-9))
-    expected = (moe.experts(x, idx).astype(mx.float32) * w[..., None]).sum(-2)
-    assert mx.abs(moe(x) - expected.astype(x.dtype)).max().item() < 1e-4
+    moe.update(tree_map(mx.zeros_like, moe.parameters()))
+    # Equal unbiased logits give equal mixture weights; only bias chooses experts.
+    moe.router.bias = mx.array([0, 0, 0, 0, 0, 0, 10, 20], dtype=mx.float32)
+    for expert, scale in [(6, 4.0), (7, 2.0)]:
+        moe.experts.gate_proj.weight = moe.experts.gate_proj.weight.at[expert, 0, 0].add(1)
+        moe.experts.up_proj.weight = moe.experts.up_proj.weight.at[expert, 0, 0].add(1)
+        moe.experts.down_proj.weight = moe.experts.down_proj.weight.at[expert, 0, 0].add(scale)
+    x = mx.ones((1, 1, 64))
+    expected = mx.zeros_like(x).at[0, 0, 0].add(7.5 / (1 + math.exp(-1)))
+    assert mx.abs(moe(x) - expected).max().item() < 1e-4
 
 
 def test_rotating_cache_decode_past_window_matches_full_forward():
     """Decoding 11 tokens past an 8-token window, after the rotating cache wraps,
     matches the full forward pass."""
-    model = tiny_model(num_hidden_layers=1)
+    model = tiny_model(num_hidden_layers=2)
     n = 20
     ids = mx.random.randint(0, 101, (1, n))
 
@@ -235,9 +233,10 @@ def test_rotating_cache_decode_past_window_matches_full_forward():
 
 
 def test_attention_cache_exact_in_f64():
-    """Attention alone in float64 on CPU: cached decode must equal the full
-    forward to float64 noise (~1e-7). This pins window semantics, RoPE
-    offsets, and KV alignment exactly, independent of f32 kernel noise."""
+    """Compare full and cached attention on CPU with float64 inputs.
+
+    Normalization and gating still use float32, so the comparison allows 1e-6 error.
+    """
     with mx.stream(mx.cpu):
         args = tiny_args()
         x = mx.random.normal((1, 40, 64)).astype(mx.float64)
