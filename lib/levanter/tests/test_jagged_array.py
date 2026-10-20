@@ -29,7 +29,11 @@ def test_cross_region_store_budget_retries_after_rejected_charge(tmp_path, monke
 
     monkeypatch.delenv(cross_region.MARIN_CROSS_REGION_OVERRIDE_ENV, raising=False)
     monkeypatch.setattr(cross_region, "cached_marin_region", lambda: "us-central1")
-    monkeypatch.setattr(cross_region, "_cached_bucket_location", lambda bucket: "us-central2")
+    monkeypatch.setattr(
+        cross_region,
+        "_cached_bucket_location",
+        lambda bucket: "us-central2" if bucket == "marin-us-central2" else None,
+    )
     monkeypatch.setattr(cross_region, "_global_transfer_budget", budget)
     monkeypatch.setattr(jagged_array, "url_to_fs", lambda _: (memory_fs, tmp_path.name))
 
