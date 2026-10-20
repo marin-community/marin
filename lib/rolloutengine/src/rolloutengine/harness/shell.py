@@ -98,9 +98,9 @@ def task_prompt(
     """
     if task.answer_type in CONVERSATION_ANSWERS:
         request = completion_request(task)
-        messages = request.pop("messages")
-        tools = request.pop("tools", [])
-        options = request
+        messages = request["messages"]
+        tools = list(request.get("tools", []))
+        options = {key: value for key, value in request.items() if key not in {"messages", "tools"}}
         if isinstance(task.answer_format, AnswerCall) and task.final_tools:
             options.pop("tool_choice", None)
             options.pop("parallel_tool_calls", None)
