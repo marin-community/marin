@@ -1047,6 +1047,8 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
     )["repository"]["id"]
     state = read_json(state_path) if state_path.exists() else {}
     for issue in record["issues"]:
+        if issue["node_id"] in state:
+            continue
         # GitHub changes node IDs on transfer; the original REST URL redirects to the moved issue.
         current_issue = gh(f"repos/{SOURCE}/issues/{issue['number']}")
         node = graphql(

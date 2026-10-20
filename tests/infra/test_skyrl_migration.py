@@ -640,6 +640,10 @@ def test_issue_transfer_recovers_after_remote_success_and_protects_edits(
     assert f"https://github.com/{migration.SOURCE}/issues/13" in remote["issues"]["body"]
     assert "[upstream #298](https://github.com/NovaSky-AI/SkyRL/pull/298)" in remote["issues"]["body"]
     assert f"Already qualified {migration.SOURCE}#15." in remote["issues"]["body"]
+    remote["issues"]["body"] += "\nHuman clarification after completed transfer."
+    completed_body = remote["issues"]["body"]
+    migration.transfer_issues(snapshot_dir, state, 99)
+    assert remote["issues"]["body"] == completed_body
 
 
 @pytest.mark.parametrize("adapted", [False, True])
