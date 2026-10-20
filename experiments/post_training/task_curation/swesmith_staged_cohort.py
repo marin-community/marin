@@ -13,12 +13,18 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from experiments.post_training.task_curation.swesmith_staged import DockerPilot, sha256, source_tasks, write_json
+from experiments.post_training.task_curation.swesmith_staged import (
+    WORKSPACE,
+    DockerPilot,
+    sha256,
+    source_tasks,
+    write_json,
+)
 
 CONTROL_PROGRAM = r"""
 import hashlib, json, pathlib, subprocess
 tasks = TASKS
-root = pathlib.Path('/testbed')
+root = pathlib.Path(WORKSPACE)
 def git(*args):
     return subprocess.check_output(['/usr/bin/git','-C',str(root),*args],text=True).strip()
 def packaging():
@@ -51,7 +57,8 @@ for task in tasks:
             for cached in root.rglob('*.pyc'):
                 cached.unlink()
             code = ('import importlib,pathlib; m=importlib.import_module(' + repr(task['import_name'])
-                    + '); assert pathlib.Path(m.__file__).resolve().is_relative_to(pathlib.Path("/testbed"))')
+                    + '); assert pathlib.Path(m.__file__).resolve().is_relative_to(pathlib.Path('
+                    + repr(str(root)) + '))')
             checked = subprocess.run(['/usr/local/bin/python','-B','-c',code],
                                      cwd='/tmp',capture_output=True,text=True)
             if untracked() != seed_untracked:
@@ -120,7 +127,9 @@ def qualify(data: Path, output: Path, max_repositories: int | None) -> dict:
             for task in group
         ]
         with runner.container(seed["mutated_image"]) as container:
-            response = runner.python(container, CONTROL_PROGRAM.replace("TASKS", repr(payload)))
+            response = runner.python(
+                container, CONTROL_PROGRAM.replace("WORKSPACE", repr(WORKSPACE)).replace("TASKS", repr(payload))
+            )
         rows = [json.loads(line) for line in response.stdout.decode().splitlines()]
         assert {row["parent_id"] for row in rows} == {task.parent_id for task in group}
         for row in rows:

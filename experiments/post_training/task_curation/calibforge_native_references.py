@@ -10,6 +10,8 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+BUILD_NETWORK = "none"
+
 
 def reference_records(records: list[dict], base: str) -> list[dict]:
     """Select the exact pinned base, not other images in the same repository."""
@@ -23,7 +25,7 @@ def build_reference(record: dict, source: Path, output: Path) -> dict:
         raise ValueError(f"Native source changed: {record['task_id']}")
     try:
         result = subprocess.run(
-            ["docker", "build", "--platform", "linux/amd64", "--network", "none", "-q", str(context)],
+            ["docker", "build", "--platform", "linux/amd64", "--network", BUILD_NETWORK, "-q", str(context)],
             capture_output=True,
             text=True,
             timeout=300,
@@ -65,7 +67,7 @@ def main() -> None:
     records = reference_records(manifest["tasks"], args.base)
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         results = list(executor.map(lambda r: build_reference(r, args.source, args.output), records))
-    evidence = {"build_network": "none", "admission": "not_run", "tasks": results}
+    evidence = {"build_network": BUILD_NETWORK, "admission": "not_run", "tasks": results}
     (args.output / "manifest.json").write_text(json.dumps(evidence, indent=2) + "\n")
     print(json.dumps({"candidates": len(results), "built": sum(r["status"] == "built" for r in results)}))
 

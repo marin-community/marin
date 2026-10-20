@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 
 FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
 SETUP_SCRIPT = "calibforge-initialize.sh"
+COMPILED_PENDING = "compiled_pending_equivalence_and_admission"
 
 
 @dataclass(frozen=True)
@@ -166,7 +167,7 @@ def main() -> None:
         (target / FIXTURE_ARCHIVE).write_bytes(bundle.payload)
         (target / SETUP_SCRIPT).write_text(bundle.setup_script)
         record.update(
-            status="compiled_pending_equivalence_and_admission",
+            status=COMPILED_PENDING,
             base_image=bundle.base_image,
             workdir=bundle.workdir,
             payload_sha256=hashlib.sha256(bundle.payload).hexdigest(),
@@ -176,7 +177,7 @@ def main() -> None:
     result = {
         "inventory_sha256": hashlib.sha256(args.inventory.read_bytes()).hexdigest(),
         "task_count": len(records),
-        "compiled_count": sum(row["status"] == "compiled_pending_equivalence_and_admission" for row in records),
+        "compiled_count": sum(row["status"] == COMPILED_PENDING for row in records),
         "admission": "not_run",
         "tasks": records,
     }

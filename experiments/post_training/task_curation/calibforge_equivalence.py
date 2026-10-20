@@ -12,6 +12,10 @@ from pathlib import Path
 
 from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_SCRIPT
 
+CONTAINER_PLATFORM = "linux/amd64"
+KEEPALIVE = ("sleep", "infinity")
+SETUP_ROOT = "/setup_files"
+
 
 def filesystem_manifest(container: str) -> dict:
     """Hash exported filesystem entries, including ownership, modes and timestamps."""
@@ -56,28 +60,28 @@ def main() -> None:
             continue
         record = records[case["task_id"]]
         reference = subprocess.check_output(
-            ["docker", "create", "--platform", "linux/amd64", case["reference_image"], "sleep", "infinity"], text=True
+            ["docker", "create", "--platform", CONTAINER_PLATFORM, case["reference_image"], *KEEPALIVE], text=True
         ).strip()
         candidate = None
         try:
             candidate = subprocess.check_output(
-                ["docker", "create", "--platform", "linux/amd64", record["base_image"], "sleep", "infinity"], text=True
+                ["docker", "create", "--platform", CONTAINER_PLATFORM, record["base_image"], *KEEPALIVE], text=True
             ).strip()
             subprocess.run(["docker", "start", reference, candidate], check=True, capture_output=True)
-            subprocess.run(["docker", "exec", candidate, "test", "!", "-e", "/setup_files"], check=True)
-            subprocess.run(["docker", "exec", candidate, "mkdir", "-p", "/setup_files"], check=True)
+            subprocess.run(["docker", "exec", candidate, "test", "!", "-e", SETUP_ROOT], check=True)
+            subprocess.run(["docker", "exec", candidate, "mkdir", "-p", SETUP_ROOT], check=True)
             for filename in (FIXTURE_ARCHIVE, SETUP_SCRIPT):
                 subprocess.run(
                     [
                         "docker",
                         "cp",
                         str(args.bundles / "tasks" / case["task_id"] / filename),
-                        candidate + ":/setup_files/",
+                        candidate + ":" + SETUP_ROOT + "/",
                     ],
                     check=True,
                 )
             subprocess.run(
-                ["docker", "exec", candidate, "sh", f"/setup_files/{SETUP_SCRIPT}"],
+                ["docker", "exec", candidate, "sh", f"{SETUP_ROOT}/{SETUP_SCRIPT}"],
                 check=True,
                 capture_output=True,
             )

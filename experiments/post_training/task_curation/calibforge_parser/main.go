@@ -54,7 +54,7 @@ func main() {
 			}
 			commands = append(commands, Instruction{node.Attributes, strings.ToLower(node.Value), node.Original, node.Flags, args, node.StartLine, node.EndLine, node.Heredocs})
 		}
-		if err := encoder.Encode(map[string]interface{}{"id": input.ID, "instructions": commands, "validation_error": ""}); err != nil {
+		if err := encoder.Encode(map[string]interface{}{"id": input.ID, "instructions": commands}); err != nil {
 			panic(err)
 		}
 	}

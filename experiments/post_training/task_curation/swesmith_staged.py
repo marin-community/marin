@@ -34,7 +34,7 @@ BASE_RECIPE = (
     "RUN apt-get update && apt-get install -y --no-install-recommends git build-essential libffi-dev libssl-dev "
     "&& rm -rf /var/lib/apt/lists/*\n"
     "RUN python -m pip install 'pytest<9' pytest-json-report pytest-cov tomli\n"
-    "RUN mkdir /testbed\nWORKDIR /testbed\n"
+    f"RUN mkdir {WORKSPACE}\nWORKDIR {WORKSPACE}\n"
 )
 
 
@@ -77,6 +77,7 @@ class SourceTask:
 
 
 def source_tasks(data: Path) -> tuple[list[SourceTask], dict]:
+    """Return eligible parent tasks and their source/split inventory with exclusions."""
     release = data / SOURCE_RELEASE
     manifest = json.loads((release / "manifest.json").read_text())
     for name, expected in manifest["outputs_sha256"].items():
@@ -372,7 +373,7 @@ def is_test_path(path: str) -> bool:
     )
 
 
-def candidate_integrity(files: dict[str, bytes], baseline: dict[str, bytes], allowed: set[str]) -> list[str]:
+def candidate_integrity_violations(files: dict[str, bytes], baseline: dict[str, bytes], allowed: set[str]) -> list[str]:
     """Reject missing or weakened tests and any tracked changes outside repair source."""
     return sorted(
         path
@@ -473,10 +474,10 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
             del deletion[test_path]
             weakened = {**baseline, test_path: b"def test_ok():\n    assert True\n"}
             result["controls"]["stage3_deleted_test"] = {
-                "passed": not candidate_integrity(deletion, baseline, set(changed))
+                "passed": not candidate_integrity_violations(deletion, baseline, set(changed))
             }
             result["controls"]["stage3_weakened_test"] = {
-                "passed": not candidate_integrity(weakened, baseline, set(changed))
+                "passed": not candidate_integrity_violations(weakened, baseline, set(changed))
             }
         else:
             result["control_limits"] = [
@@ -528,7 +529,10 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
             result["exclusions"].append({"stage": "stage3_partial", "reason": "no_qualified_partial_handoff"})
         result["status"] = "controls_validated"
         result["test_isolation_policy"] = "nested-and-top-level-tests-v2"
-    except (RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        result["status"] = "infrastructure_failed"
+        result["error"] = str(exc)
+    except ValueError as exc:
         result["status"] = "excluded"
         result["error"] = str(exc)
     write_json(directory / "result.json", result)

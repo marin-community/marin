@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Freeze public /app fixtures from qualified native CalibForge generator builds."""
+"""Freeze public /app and /data fixtures from qualified native CalibForge builds."""
 
 import argparse
 import gzip

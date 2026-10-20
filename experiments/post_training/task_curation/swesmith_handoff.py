@@ -6,7 +6,13 @@
 import base64
 from pathlib import Path
 
-from experiments.post_training.task_curation.swesmith_staged import DockerPilot, is_test_path, pytest_result, sha256
+from experiments.post_training.task_curation.swesmith_staged import (
+    WORKSPACE,
+    DockerPilot,
+    is_test_path,
+    pytest_result,
+    sha256,
+)
 
 
 def repair_grade(contract: dict, outputs: dict[str, bytes], logs: Path) -> dict:
@@ -17,13 +23,14 @@ def repair_grade(contract: dict, outputs: dict[str, bytes], logs: Path) -> dict:
     violations = [
         path
         for path, digest in baseline.items()
-        if "/testbed/" + path not in outputs or (path not in allowed and sha256(outputs["/testbed/" + path]) != digest)
+        if WORKSPACE + "/" + path not in outputs
+        or (path not in allowed and sha256(outputs[WORKSPACE + "/" + path]) != digest)
     ]
     if violations:
         return {"passed": False, "integrity_violations": sorted(violations)}
     pilot = DockerPilot(logs)
     with pilot.container(contract["verifier_image"]) as container:
-        pilot.upload(container, {path: outputs["/testbed/" + path] for path in allowed})
+        pilot.upload(container, {path: outputs[WORKSPACE + "/" + path] for path in allowed})
         return pytest_result(pilot, container, contract["verifier"], "candidate")
 
 

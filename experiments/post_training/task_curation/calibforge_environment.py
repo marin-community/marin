@@ -38,7 +38,7 @@ def environment_inventory(source: Path, approved: Path, parser_image: str) -> di
             if not line:
                 raise RuntimeError(f"BuildKit parser stopped at {identity}")
             parsed = json.loads(line)
-            if parsed["id"] != identity or parsed["validation_error"]:
+            if parsed["id"] != identity:
                 raise ValueError(f"Invalid BuildKit response for {identity}")
             instructions = parsed["instructions"]
             commands = [instruction["command"] for instruction in instructions]

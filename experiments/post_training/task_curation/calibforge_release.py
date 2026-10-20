@@ -21,6 +21,8 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 )
 from experiments.post_training.task_curation.tasktrove.harbor_export import archive_bytes
 
+ENVIRONMENT_PREFIX = "environment/"
+
 
 def transformed_task(row: dict, record: dict, bundles: Path, source: Path, timeout: float) -> bytes:
     """Keep private grader bytes unchanged and move only public fixtures to setup files."""
@@ -34,7 +36,7 @@ def transformed_task(row: dict, record: dict, bundles: Path, source: Path, timeo
     if any(name.startswith("setup_files/") for name in files):
         raise ValueError(f"Existing setup files need ordering qualification: {row['path']}")
     for name, content in files.items():
-        if name.startswith("environment/"):
+        if name.startswith(ENVIRONMENT_PREFIX):
             original = source / row["path"] / name
             if original.read_bytes() != content:
                 raise ValueError(f"Source/release mismatch: {row['path']}/{name}")
@@ -53,7 +55,7 @@ def transformed_task(row: dict, record: dict, bundles: Path, source: Path, timeo
         "command": f"sh /setup_files/{SETUP_SCRIPT}",
         "timeout_sec": timeout,
     }
-    output = {name: content for name, content in files.items() if not name.startswith("environment/")}
+    output = {name: content for name, content in files.items() if not name.startswith(ENVIRONMENT_PREFIX)}
     output["task.toml"] = tomlkit.dumps(config).encode()
     output["environment/Dockerfile"] = f"FROM {record['base_image']}\nWORKDIR /app\n".encode()
     for filename, digest_key in (

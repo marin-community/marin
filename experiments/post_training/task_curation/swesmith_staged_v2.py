@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from experiments.post_training.task_curation.swesmith_staged import (
+    WORKSPACE,
     DockerPilot,
     SourceTask,
     git_value,
@@ -82,13 +83,15 @@ def prepare_repository(group: RepositoryGroup, output: Path, per_repository: int
         program = """
 import json,subprocess
 def git(*args):
-    return subprocess.check_output(['git','-C','/testbed',*args],text=True)
+    return subprocess.check_output(['git','-C',WORKSPACE,*args],text=True)
 for task in TASKS:
     commit=git('rev-parse','origin/'+task['branch']).strip()
     paths=git('diff','--name-only',commit,'HEAD').splitlines()
     print(json.dumps(dict(task,commit=commit,paths=paths,
                          patch=git('diff',commit,'HEAD','--',*[p for p in paths if p.endswith('.py')]))))
 """.replace(
+            "WORKSPACE", repr(WORKSPACE)
+        ).replace(
             "TASKS", repr(payload)
         )
         raw = runner.python(container, program)
@@ -141,9 +144,10 @@ for task in TASKS:
                 json.dumps({"paths": verifier["paths"], "args": verifier.get("args", [])}, sort_keys=True).encode()
             )
             if key not in reports:
-                check = pytest_result(runner, container, verifier, "fixed-" + key[:12])
+                report_name = "fixed-" + key[:12]
+                check = pytest_result(runner, container, verifier, report_name)
                 report = json.loads(
-                    runner.command(["docker", "exec", container, "cat", "/tmp/fixed-" + key[:12] + ".json"]).stdout
+                    runner.command(["docker", "exec", container, "cat", f"/tmp/{report_name}.json"]).stdout
                 )
                 reports[key] = {
                     "check": check,

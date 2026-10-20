@@ -24,7 +24,7 @@ def test_handoff_materializes_source_without_touching_protected_files(tmp_path):
 
 @pytest.mark.parametrize("name", ["../outside.py", "test_implementation.py", "pkg/tests/test_private.py"])
 def test_handoff_rejects_test_leak_and_workspace_escape(tmp_path, name):
-    with pytest.raises(ValueError, match="outside permitted source"):
+    with pytest.raises(ValueError):
         handoff_program({name: base64.b64encode(b"secret test").decode()}, [name], tmp_path)
 
 

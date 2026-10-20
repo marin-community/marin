@@ -54,7 +54,7 @@ def test_native_timeout_preserves_evidence_and_other_candidate_results(tmp_path,
     output = tmp_path / "output"
     (output / "logs").mkdir(parents=True)
 
-    def run(command, **kwargs):
+    def run(command, **_kwargs):
         if command[-1].endswith("timeout/environment"):
             raise subprocess.TimeoutExpired(command, 300, output=b"partial build output", stderr=b"download stalled")
         return subprocess.CompletedProcess(command, 0, stdout="sha256:resolved\n", stderr="")
