@@ -95,7 +95,7 @@ class SkyRLRuntime:
 class SkyRLRolePlan:
     """Explicit policy, rollout, and reference settings that bear experiment identity.
 
-    The reference role reuses the policy's GPUs-per-node width: the pinned
+    The reference role reuses the policy's GPUs-per-node width: the vendored
     launcher requires a single GPUs-per-node value across all Iris bundles, so a
     distinct reference width is not representable downstream.
     """

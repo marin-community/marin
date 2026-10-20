@@ -1,8 +1,7 @@
 # Forking Policy
 
 When Marin needs a modified version of an upstream package, we maintain a fork
-under the `marin-community` GitHub organization rather than vendoring code into
-the Marin monorepo. Each fork carries Marin's patches on top of an upstream base,
+under the `marin-community` GitHub organization. Each fork carries Marin's patches on top of an upstream base,
 and an automated weekly process keeps it close to upstream. SkyRL is maintained
 under `vendor/skyrl` with an independent lock and executable boundary; see the
 [migration guide](skyrl-migration.md). This page describes how Marin pins the

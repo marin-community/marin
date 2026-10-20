@@ -637,6 +637,7 @@ def test_megatron_geometry_rejects_incomplete_expert_groups() -> None:
         validate_megatron_geometry(geometry, role="policy", num_gpus=8)
 
 
-def test_megatron_geometry_accepts_complete_expert_groups() -> None:
-    # A separate reference role with DP8 can form the same EP8 groups as the policy.
-    validate_megatron_geometry(MegatronGeometry(1, 2, 1, 8, 1), role="ref", num_gpus=16)
+def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:
+    # Unsupported curriculum strategies must fail before the launcher allocates workers.
+    with pytest.raises(ValueError, match=r"trainer\.strategy=megatron"):
+        dataclasses.replace(_spec(), config_yaml=_config_yaml(strategy="fsdp2"))

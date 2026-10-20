@@ -428,6 +428,12 @@ class PullOutcome:
     diagnostic: str = ""
 
 
+@dataclass(frozen=True)
+class IssueReference:
+    number: int
+    url: str
+
+
 @dataclass
 class StageReport:
     snapshot: str
@@ -436,15 +442,15 @@ class StageReport:
     retained: int
     discarded: int
     pulls: list[PullOutcome]
-    issues: list[dict]
+    issues: list[IssueReference]
     dynamic_imports: list[str]
     missing_imports: list[str]
-    production_ready: bool = False
 
 
 def read_stage_report(path: Path) -> StageReport:
     value = read_json(path)
     value["pulls"] = [PullOutcome(**(item | {"status": PullStatus(item["status"])})) for item in value["pulls"]]
+    value["issues"] = [IssueReference(**item) for item in value["issues"]]
     return StageReport(**value)
 
 
@@ -502,7 +508,7 @@ def stage(snapshot_dir: Path, output: Path) -> None:
         retained=len(chosen["retained"]),
         discarded=len(chosen["discarded"]),
         pulls=pulls,
-        issues=[{"number": issue["number"], "url": issue["html_url"]} for issue in record["issues"]],
+        issues=[IssueReference(issue["number"], issue["html_url"]) for issue in record["issues"]],
         dynamic_imports=chosen["dynamic_imports"],
         missing_imports=chosen["missing_imports"],
     )
@@ -555,6 +561,11 @@ def checkout_source_files(source: Path) -> dict[str, str]:
 
 
 def vendor_patch(tree: Path, *revisions: str) -> bytes:
+    # These task-owned Git repositories need compact deltas for generated locks.
+    # The installed vendor lock remains readable text; Git encodes its replay delta.
+    attributes = tree / git(tree, "rev-parse", "--git-path", "info/attributes")
+    attributes.parent.mkdir(parents=True, exist_ok=True)
+    attributes.write_text(f"{VENDOR}/uv.lock -diff\n")
     return run(
         "git",
         "-C",

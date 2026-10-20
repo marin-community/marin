@@ -32,7 +32,6 @@ print(json.dumps([
     ids=lambda value: value.label,
 )
 def test_curriculum_arms_compose_in_nested_runtime(policy, preset, tmp_path) -> None:
-    # Marin previously accepted FSDP recipes that the real launcher rejected before submission.
     # Validate every sampler arm at the executable boundary without allocating GPUs.
     arms = launch.build_arms(
         specs=tuple(launch.ARMS.values()), scale=preset.label, policy=policy, version="2026.10.19.1"

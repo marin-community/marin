@@ -67,6 +67,7 @@ def snapshot_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     write(source, "scripts/run.sh", "#!/bin/sh\nexit 0\n")
     (source / "scripts/run.sh").chmod(0o755)
     write(source, "LICENSE", "Apache-2.0\n")
+    write(source, "uv.lock", "version = 1\n")
     write(source, "skyrl-tx/unused.py", "discard = True\n")
     baseline = save(source, "Baseline")
     manifest = """roots = ["cloud.iris.launch"]
@@ -80,6 +81,9 @@ import_root = "skyrl-train"
 [[keep]]
 glob = "LICENSE"
 reason = "license"
+[[keep]]
+glob = "uv.lock"
+reason = "independent runtime lock"
 [[keep]]
 glob = "cloud/iris/runtime_bundle_files.txt"
 reason = "bundle"
@@ -378,6 +382,7 @@ def test_refresh_preserves_local_edits_deletions_and_new_files_across_upstream_u
     current, manifest = refresh_checkout(snapshot_dir, tmp_path)
     write(current, "skyrl-train/skyrl_train/relative.py", "value = 7\n")
     write(current, "cloud/iris/local_extension.py", "local = True\n")
+    write(current, "uv.lock", "version = 2\n")
     write_bytes(current, "skyrl-train/skyrl_train/assets/blob.bin", b"\0local\xff")
     (current / "skyrl-train/skyrl_train/assets/old.txt").unlink()
     write(current, ".gitignore", ".venv/\n")
@@ -397,6 +402,7 @@ def test_refresh_preserves_local_edits_deletions_and_new_files_across_upstream_u
     assert (current / "cloud/iris/upstream.py").read_text() == "value = 11\n"
     assert (current / "skyrl-train/skyrl_train/relative.py").read_text() == "value = 7\n"
     assert (current / "cloud/iris/local_extension.py").read_text() == "local = True\n"
+    assert (current / "uv.lock").read_text() == "version = 2\n"
     assert (current / "skyrl-train/skyrl_train/assets/blob.bin").read_bytes() == b"\0local\xff"
     assert not (current / "skyrl-train/skyrl_train/assets/old.txt").exists()
     assert (current / ".venv/keep.txt").read_text() == "local environment\n"
@@ -414,6 +420,7 @@ def test_refresh_preserves_local_edits_deletions_and_new_files_across_upstream_u
     assert (current / "cloud/iris/upstream.py").read_text() == "value = 12\n"
     assert (current / "skyrl-train/skyrl_train/relative.py").read_text() == "value = 7\n"
     assert (current / "cloud/iris/local_extension.py").read_text() == "local = True\n"
+    assert (current / "uv.lock").read_text() == "version = 2\n"
     assert (current / ".venv/keep.txt").read_text() == "local environment\n"
     assert (snapshot_dir / "source/skyrl-train/skyrl_train/relative.py").read_text() == "value = 1\n"
 

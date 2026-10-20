@@ -56,6 +56,8 @@ and explicit constructor keywords in the nested environment. A failed check
 restores the previous lock. Edit the nested `pyproject.toml` first when changing
 an explicit version constraint. Runtime acceptance must also exercise the
 harness; an import check alone cannot validate its execution contract.
+The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
+The pinned Ray release has no Intel macOS wheel.
 
 The migration tool rebuilds source candidates and prepares active work. It
 does not edit Marin's integration, publish a wheel, enable migrated nightlies,
@@ -115,6 +117,10 @@ The resolved tree is preserved as `candidate-resolution`; the finished candidate
 can be reproduced from the new snapshot alone. The original local delta is
 saved as `local-changes-before-replay.patch`. PR conflicts remain explicit in
 the transplant report. A clean local replay does not resolve those PR decisions.
+For a lockfile conflict, regenerate the candidate's lock from its resolved
+`pyproject.toml` with `uv lock --project candidate/tree/vendor/skyrl`, then
+stage it. The script stores generated lock deltas in Git's compressed binary
+patch format; the installed `vendor/skyrl/uv.lock` remains ordinary text.
 
 For Marin PRs that still edit `config/external/MarinSkyRL`, rebase onto this
 layout: edit runtime code under `vendor/skyrl`, update its own `pyproject.toml`
@@ -274,12 +280,11 @@ scoring runtime. It does not validate Marin's launcher or checkpoint handoffs.
 Use the artifact smoke below for that boundary. Keep the existing CatCount,
 OPD, and Grug/Megatron gates as complementary tests.
 
-The captured source has a `gcsfs`/`fsspec` requirement conflict and eleven
-Math500 references that its AIME verifier cannot score. The migration patch
-aligns `gcsfs` with the pinned filesystem stack, preserves matrix row
-separators, fixes shorthand fraction normalization, and routes composite
-answers through the existing symbolic grader. The standalone dependency check
-and all 500 paired verifier controls pass with that patch.
+The dependency manifest aligns `gcsfs` with the pinned filesystem stack. The
+local grading patch preserves matrix row separators, fixes shorthand fraction
+normalization, and routes composite answers through the existing symbolic
+grader. Acceptance includes all 500 paired verifier controls, including the
+eleven references affected by these fixes.
 
 Prepare the repeatable smoke bundle using the full test split exported as a
 JSON array from `HuggingFaceH4/MATH-500` at revision
@@ -356,8 +361,8 @@ quality gate. A coordinator's running state or first loss does not satisfy it.
 
 ## Remaining gates before archival
 
-The generated candidate deliberately reports `production_ready: false`;
-staging alone cannot certify the runtime or reconcile active work. The port
+Staging records source selection and PR application outcomes. Runtime acceptance
+and active-work reconciliation remain separate gates. The port
 includes the nested launcher, hash-verified source bundle, and removal of the
 old external updater pin. Complete these gates before archiving the fork:
 
