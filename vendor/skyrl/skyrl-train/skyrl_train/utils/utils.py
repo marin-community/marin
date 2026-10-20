@@ -23,6 +23,7 @@ from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.config.query_bias import resolve_grug_query_bias_update
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
+from skyrl_train.config.overlap_init import validate_overlap_init
 from skyrl_train.config.behavior_logprobs import configure_behavior_logprob_sampling
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.objective_spec import rollout_logprobs_required, validate_objective
@@ -455,6 +456,7 @@ def validate_cfg(cfg: DictConfig):
     distillation_plan = compile_distillation_plan_from_config(cfg)
     validate_distillation_runtime_support(distillation_plan)
     validate_nemotron_ultra_grading(cfg, distillation_plan)
+    validate_overlap_init(cfg)
     trajectory_selector = trajectory_selector_from_config(cfg)
     if trajectory_selector is not None:
         if cfg.trainer.step_wise_training:
