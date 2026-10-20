@@ -23,17 +23,14 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
 from verifyit.spec import NumericSpec
 
-from taskforge import content_hash
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.llm.store import CallStore
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import assemble, requirements
-from taskforge.stage10_proposal.model import TaskProposal, parse, render
-from taskforge.stage20_triage.program import GlmRubric
-from taskforge.stage20_triage.verdict import RubricAxis, RubricResult, TriageDecision, Verdict, accept
+from taskforge.stage10_proposal.model import Environment, SolverMachine, TaskProposal, parse
+from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
 from taskforge.stage30_author.loader import SdkExports, load_program_source
 from taskforge.stage30_author.program import (
@@ -65,7 +62,6 @@ from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
     DECISION_FILE,
     FAILURES_DIR,
-    REPAIRED_DIR,
     STORE_DIR,
     VALIDATION_FILE,
     StageCoordinator,
@@ -96,27 +92,37 @@ build:
 resources: ["workspace/numbers.txt"]
 ---
 ## Task
-Multiply the two numbers in /workspace/numbers.txt.
+Multiply the two numbers in /workspace/numbers.txt. The file holds two positive integers on one
+line, separated by a space. Read them, multiply them, and reply with the product alone inside the
+answer box, written as a plain integer with no units, no separators and no explanation around it.
 
 ## Realism and workflow
-A clerk checks a product.
+A clerk checks a product before an invoice goes out. The clerk opens the order file, reads the
+quantity and the unit price, multiplies them, and compares the result with the total the system
+printed. The task keeps that one step: read two numbers from a file and report their product.
 
 ## Research plan
-None.
+None. The numbers are written by the build into the task's own file, and the product is computed
+from them, so no external fact, document or dataset is needed. The proposal declares no research
+items, and the body names no lookup in any outside source for the builder or the solver.
 
 ## Build plan
-Write the numbers and the grader.
+Write the numbers and the grader. The build writes workspace/numbers.txt with the two numbers six
+and seven, and a grader that reads the answer box and compares the reply with the product. The
+build checks its own file by recomputing the product before it publishes the task.
 
 ## Grader design and controls
-Full credit only for 42.
+Full credit only for 42. The grader is an exact match on the integer in the answer box after
+stripping surrounding whitespace. A positive control replies 42 and earns full credit; a negative
+control replies 13, the sum of the numbers, and earns nothing; an empty reply earns nothing.
 
 ## Risks and null conditions
-None.
+None. The numbers are small and fixed, so the product cannot overflow and the answer format is
+unambiguous. A solver that guesses cannot reach the product by chance often, and the file holds
+no hint of the answer. No condition makes this task impossible to build in ShellSim.
 """
 )
-BUDGET = WorkpieceBudget(max_triage_repairs=0, max_build_revisions=1, max_validation_retries=1)
-REPAIRING = replace(BUDGET, max_triage_repairs=1)
-"""``BUDGET`` for a consumer using the REPAIR surface: one rewrite, then a REPAIR verdict rejects."""
+BUDGET = WorkpieceBudget(max_build_revisions=1, max_validation_retries=1)
 SAMPLING = LLMPolicy()
 SERVICES = RLEnvBuildServices(
     host=MachineHost.LAPTOP,
@@ -234,8 +240,7 @@ def no_call(*args: object, **kwargs: object) -> NoReturn:
 
 
 STAGES = StageFunctions(
-    triage=accept,
-    repair=no_call,
+    triage=preflight,
     author=static_author(PROGRAM),
     load_program=load_toy_program,
     build=run_build,
@@ -344,10 +349,41 @@ async def test_run_workpiece_records_an_event_per_stage_and_a_relaunch_changes_n
     assert (tmp_path / STORE_DIR / "workpieces" / WORKPIECE / "steps" / "task").is_dir()
 
     before = tree_bytes(tmp_path)
-    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call, no_call)
+    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call)
     relaunch = await run_workpiece(coordinator(tmp_path, untouched), WORKPIECE, PROPOSAL, InMemoryEventLog())
     assert relaunch is Terminal.ACCEPTED
     assert tree_bytes(tmp_path) == before
+
+
+NULL_PROPOSAL = replace(
+    PROPOSAL,
+    header=replace(PROPOSAL.header, build=(), resources=(), null_reason="the capability has no gradable artifact here"),
+)
+ESCAPING_PROPOSAL = replace(PROPOSAL, header=replace(PROPOSAL.header, resources=("../numbers.txt",)))
+MACHINELESS_SHELLSIM = replace(PROPOSAL, header=replace(PROPOSAL.header, solver_machine=SolverMachine.NONE))
+
+
+@pytest.mark.parametrize(
+    ("proposal", "reason"),
+    [
+        (ESCAPING_PROPOSAL, "header_schema_valid: resources must be relative paths inside the build root"),
+        (NULL_PROPOSAL, "null proposal: the capability has no gradable artifact here"),
+        (MACHINELESS_SHELLSIM, "solver_machine_fits: only a reasoning proposal may declare none"),
+    ],
+)
+async def test_the_default_preflight_rejects_a_proposal_with_the_failing_check_before_any_later_stage(
+    tmp_path, proposal, reason
+):
+    assert proposal.header.environment is Environment.SHELLSIM
+    log = InMemoryEventLog()
+    stages = replace(STAGES, author=no_call, load_program=no_call, build=no_call, validate=no_call, review=no_call)
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, proposal, log) is Terminal.REJECTED
+
+    assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
+    triaged, terminal = log.events()[1:]
+    assert triaged.attrs["reason"] == terminal.attrs["reason"]
+    assert terminal.attrs["reason"].startswith("triage rejected the proposal: ")
+    assert reason in terminal.attrs["reason"]
 
 
 async def test_a_retry_after_a_failed_save_of_a_finished_workpiece_writes_its_events(tmp_path):
@@ -357,7 +393,7 @@ async def test_a_retry_after_a_failed_save_of_a_finished_workpiece_writes_its_ev
         await run_workpiece(replace(coordinator(tmp_path), event_store=store), WORKPIECE, PROPOSAL, log)
     assert store.load(WORKPIECE) is None
 
-    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call, no_call)
+    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call)
     retried = replace(coordinator(tmp_path, untouched), event_store=store)
     assert await run_workpiece(retried, WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     assert store.load(WORKPIECE) == log.events()
@@ -725,119 +761,3 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
     assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
-
-
-REPAIRED = replace(
-    PROPOSAL, body=PROPOSAL.body.replace("Full credit only for 42.", "Full credit only for 42, 6 times 7.")
-)
-REPAIR_SAMPLE = RubricResult(
-    tuple((axis, 3 if axis is RubricAxis.SPECIFICITY else 5) for axis in RubricAxis),
-    (),
-    ("the grader design does not say how 42 arises",),
-    ("derive 42 in the grader design",),
-    TriageDecision.REPAIR,
-)
-
-
-class TriageInTurn:
-    """A triage function returning a verdict of each of ``decisions`` in turn, recording each proposal triaged."""
-
-    def __init__(self, *decisions: TriageDecision) -> None:
-        self.decisions = list(decisions)
-        self.proposals: list[TaskProposal] = []
-
-    async def __call__(self, proposal: TaskProposal) -> Verdict:
-        self.proposals.append(proposal)
-        decision = self.decisions.pop(0)
-        rubric = (REPAIR_SAMPLE,) if decision is TriageDecision.REPAIR else ()
-        return Verdict(proposal.header.id, proposal.digest, decision, (), rubric, (f"triage says {decision}",), ())
-
-
-class RepairModel(UnusedModel):
-    """The model of the triage repair: every rewrite it writes is ``REPAIRED``."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    async def complete(
-        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
-    ) -> Completion:
-        self.calls += 1
-        return replace(CUT_REPLY, content=render(REPAIRED), finish_reason=FinishReason.STOP)
-
-
-def repairing_stages(root: Path, triage: TriageInTurn, model: RepairModel, author: RecordingAuthor) -> StageFunctions:
-    """``STAGES`` with ``triage`` and the triage stage's own GLM repair, writing through a call store in ``root``."""
-    rubric = GlmRubric(CallStore(root, model), SAMPLING, samples=1, source_records={PROPOSAL.header.source: {}})
-    return replace(STAGES, triage=triage, repair=rubric.repair, author=author)
-
-
-async def test_a_repair_verdict_triages_the_repaired_proposal_and_the_later_stages_run_it_across_a_relaunch(
-    tmp_path,
-):
-    triage, model = TriageInTurn(TriageDecision.REPAIR, TriageDecision.ACCEPT), RepairModel()
-    stages = repairing_stages(tmp_path / "calls", triage, model, RecordingAuthor(PROGRAM))
-    failing = coordinator(tmp_path, replace(stages, author=unavailable_author), REPAIRING)
-    with pytest.raises(ModelUnavailable):
-        await run_workpiece(failing, WORKPIECE, PROPOSAL, InMemoryEventLog())
-
-    author = RecordingAuthor(PROGRAM)
-    proposals: list[TaskProposal] = []
-
-    async def build(program: RLEnvBuildProgram, proposal: TaskProposal, *args: Any, **kwargs: Any) -> TaskDraft:
-        proposals.append(proposal)
-        return await run_build(program, proposal, *args, **kwargs)
-
-    log = InMemoryEventLog()
-    resumed = replace(stages, triage=no_call, repair=no_call, author=author, build=build)
-    assert await run_workpiece(coordinator(tmp_path, resumed, REPAIRING), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
-
-    assert exits(log) == [
-        *ACCEPTED_EXITS[:1],
-        ("triaged", "repair"),
-        ("triaged", "accept"),
-        ("terminal", "failed"),
-        *ACCEPTED_EXITS[2:],
-    ]
-    repaired, accepted = log.events()[1:3]
-    assert (repaired.digest, repaired.attrs["triaged_digest"]) == (
-        content_hash.digest(REPAIRED),
-        content_hash.digest(PROPOSAL),
-    )
-    assert (repaired.attrs["decision"], repaired.attrs["repairs"]) == ("repair", "1")
-    assert (accepted.digest, accepted.attrs["repairs"]) == (content_hash.digest(REPAIRED), "1")
-    assert (tmp_path / "workpieces" / WORKPIECE / repaired.attrs["proposal_file"]).read_text() == render(REPAIRED)
-    assert repaired.attrs["proposal_file"] == f"{REPAIRED_DIR}/1.md"
-    assert (triage.proposals, model.calls, proposals) == ([PROPOSAL, REPAIRED], 1, [REPAIRED])
-    assert derive_state(log.events()).triage_repairs == 1
-
-
-async def test_a_second_repair_verdict_rejects_the_workpiece_without_a_second_repair(tmp_path):
-    triage, model = TriageInTurn(TriageDecision.REPAIR, TriageDecision.REPAIR), RepairModel()
-    stages = repairing_stages(tmp_path / "calls", triage, model, RecordingAuthor(PROGRAM))
-    log = InMemoryEventLog()
-
-    assert await run_workpiece(coordinator(tmp_path, stages, REPAIRING), WORKPIECE, PROPOSAL, log) is Terminal.REJECTED
-    assert exits(log) == [("opened", None), ("triaged", "repair"), ("triaged", "reject"), ("terminal", "rejected")]
-    rejected, closed = log.events()[2:]
-    assert (rejected.digest, rejected.attrs["decision"], rejected.attrs["repairs"]) == (
-        content_hash.digest(REPAIRED),
-        "repair",
-        "1",
-    )
-    assert closed.attrs == {
-        "terminal": "rejected",
-        "reason": "triage returned REPAIR with 1 of 1 rewrites spent",
-        "kind": RejectKind.TASK,
-    }
-    assert (triage.proposals, model.calls) == ([PROPOSAL, REPAIRED], 1)
-
-
-async def test_under_the_default_budget_a_repair_verdict_rejects_without_a_rewrite(tmp_path):
-    log = InMemoryEventLog()
-    stages = replace(STAGES, triage=TriageInTurn(TriageDecision.REPAIR), repair=no_call)
-
-    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.REJECTED
-    assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
-    assert log.events()[-1].attrs["reason"] == "triage returned REPAIR with 0 of 0 rewrites spent"
-    assert not (tmp_path / "workpieces" / WORKPIECE / REPAIRED_DIR).exists()
