@@ -95,6 +95,7 @@ def test_jitter_depends_only_on_the_prompt_and_earlier_tokens(tokenizer):
 
 
 @pytest.mark.parametrize("extra_tokens", [0, 17])
+@pytest.mark.parametrize("extra_tokens", [0, 17])
 def test_wrong_score_scales_with_the_vocabulary(extra_tokens):
     tokenizer = build_tokenizer()
     tokenizer.add_tokens([f"unused_word_{index}" for index in range(extra_tokens)])
