@@ -11,14 +11,13 @@ STATUS = """As of Oct 20, 2026 🚀:
 """
 
 
-def _paragraph(start: int, text: str, style: str = "NORMAL_TEXT", **extra: object) -> dict:
+def _paragraph(start: int, text: str, style: str = "NORMAL_TEXT") -> dict:
     return {
         "startIndex": start,
         "endIndex": start + len(text),
         "paragraph": {
             "elements": [{"textRun": {"content": text, "textStyle": {}}}],
             "paragraphStyle": {"namedStyleType": style},
-            **extra,
         },
     }
 

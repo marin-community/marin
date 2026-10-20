@@ -26,6 +26,8 @@ GITHUB_API = "https://api.github.com"
 DOCS_API = "https://docs.googleapis.com/v1/documents"
 DOCS_SCOPE = "https://www.googleapis.com/auth/documents"
 STATUS_HEADING = "Status"
+GOAL_FIELD = "Goal"
+STATUS_FIELD = "Status"
 SECTION_HEADING_STYLES = frozenset({"TITLE", "HEADING_1", "HEADING_2"})
 LIST_PRESET = "NUMBERED_DECIMAL_ALPHA_ROMAN"
 MAX_LIST_LEVEL = 2
@@ -280,17 +282,14 @@ def _call(url: str, token: str, method: str = "GET", payload: dict | None = None
         return json.load(response)
 
 
-def _github_get(path: str, token: str) -> list[dict] | dict:
-    """GET a GitHub REST resource, following pagination for list results."""
+def _github_list(path: str, token: str) -> list[dict]:
+    """GET a GitHub REST list, following pagination."""
     url: str | None = f"{GITHUB_API}{path}"
     pages: list[dict] = []
     while url is not None:
         with _open(url, token) as response:
-            data = json.load(response)
+            pages += json.load(response)
             links = response.headers.get("Link", "")
-        if isinstance(data, dict):
-            return data
-        pages += data
         match = re.search(r'<([^>]+)>; rel="next"', links)
         url = match[1] if match else None
     return pages
@@ -302,7 +301,7 @@ def _field_value(item: dict, name: str) -> dict | list | None:
 
 def render_board_item(item: dict) -> str:
     content = item["content"]
-    status = _field_value(item, "Status")
+    status = _field_value(item, STATUS_FIELD)
     status_name = status["name"]["raw"] if isinstance(status, dict) else "No status"
     if item["content_type"] == "DraftIssue":
         return f"- [{status_name}] draft: {content['title']} (updated {content['updated_at'][:10]})"
@@ -327,7 +326,7 @@ def render_board(items: Iterable[dict], goal_options: Iterable[str]) -> str:
     """Render board items as Markdown grouped by the Goal field, in the field's option order."""
     groups: dict[str, list[str]] = defaultdict(list)
     for item in items:
-        goal = _field_value(item, "Goal")
+        goal = _field_value(item, GOAL_FIELD)
         groups[goal["name"]["raw"] if isinstance(goal, dict) else NO_GOAL].append(render_board_item(item))
     sections = []
     for goal in [*goal_options, NO_GOAL]:
@@ -339,16 +338,12 @@ def render_board(items: Iterable[dict], goal_options: Iterable[str]) -> str:
 
 
 def _project_fields(org: str, project: int, token: str) -> list[dict]:
-    fields = _github_get(f"/orgs/{org}/projectsV2/{project}/fields", token)
-    assert isinstance(fields, list)
-    return fields
+    return _github_list(f"/orgs/{org}/projectsV2/{project}/fields", token)
 
 
 def _project_items(org: str, project: int, token: str, fields: list[dict]) -> list[dict]:
     field_ids = ",".join(str(field["id"]) for field in fields)
-    items = _github_get(f"/orgs/{org}/projectsV2/{project}/items?per_page=100&fields={field_ids}", token)
-    assert isinstance(items, list)
-    return items
+    return _github_list(f"/orgs/{org}/projectsV2/{project}/items?per_page=100&fields={field_ids}", token)
 
 
 def _named_field(fields: list[dict], name: str) -> dict:
@@ -360,10 +355,9 @@ def _named_field(fields: list[dict], name: str) -> dict:
 
 def board_markdown(org: str, project: int, token: str) -> str:
     fields = _project_fields(org, project, token)
-    goal_field = _named_field(fields, "Goal")
+    goal_field = _named_field(fields, GOAL_FIELD)
     items = _project_items(org, project, token, fields)
-    project_info = _github_get(f"/orgs/{org}/projectsV2/{project}", token)
-    assert isinstance(project_info, dict)
+    project_info = _call(f"{GITHUB_API}/orgs/{org}/projectsV2/{project}", token)
     url = f"https://github.com/orgs/{org}/projects/{project}"
     header = f"# {project_info['title']} ({len(items)} items)\n\n{url}\n\n"
     return header + render_board(items, [option["name"]["raw"] for option in goal_field["options"]])
@@ -457,7 +451,9 @@ def main() -> None:
         sys.stdout.write(board_markdown(args.org, args.project, token))
         return
     if args.command == "board-set":
-        values = {name: value for name, value in (("Goal", args.goal), ("Status", args.status)) if value is not None}
+        values = {
+            name: value for name, value in ((GOAL_FIELD, args.goal), (STATUS_FIELD, args.status)) if value is not None
+        }
         print(board_set(args.org, args.project, token, args.issue, values))
         return
     token = _docs_token(args.impersonate)
