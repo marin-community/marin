@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from dataclasses import asdict
 
@@ -27,7 +28,16 @@ def test_training_prefix_variant_preserves_validation_and_non_target_rows(tmp_pa
     (source / "train.jsonl").write_text("".join(original))
     validation = b' {"frozen": "validation bytes"}\r\n'
     (source / "validation.jsonl").write_bytes(validation)
-    (source / "manifest.json").write_text("{}")
+    (source / "manifest.json").write_text(
+        json.dumps(
+            {
+                "hashes": {
+                    split: hashlib.sha256((source / f"{split}.jsonl").read_bytes()).hexdigest()
+                    for split in ("train", "validation")
+                }
+            }
+        )
+    )
     output = tmp_path / "variant"
     prepare_training_prefixes(source, output)
     assert (output / "validation.jsonl").read_bytes() == validation
@@ -62,7 +72,16 @@ def test_training_prefix_conversion_reports_all_failures_without_publishing_part
     rows = [asdict(case) | {"prefix": "unrelated"}, asdict(case) | {"split": "validation"}, asdict(case)]
     (source / "train.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
     (source / "validation.jsonl").write_bytes(b"frozen")
-    (source / "manifest.json").write_text("{}")
+    (source / "manifest.json").write_text(
+        json.dumps(
+            {
+                "hashes": {
+                    split: hashlib.sha256((source / f"{split}.jsonl").read_bytes()).hexdigest()
+                    for split in ("train", "validation")
+                }
+            }
+        )
+    )
     output = tmp_path / "variant"
     with pytest.raises(ValueError, match="2 conversion failures"):
         prepare_training_prefixes(source, output)

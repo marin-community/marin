@@ -47,7 +47,7 @@ def task_group(task: TaskSpec, key: str) -> str:
 def evaluation_request(task: TaskSpec, sampling: dict[str, Any]) -> ModelRequest:
     """Use ordinary harness rendering with explicit experiment sampling and thinking settings."""
     prompt = task_prompt(task, None, ())
-    if sampling.keys() & (prompt.options.keys() | {"messages", "model", "extra_body", "tools"}):
+    if sampling.keys() & (prompt.options.keys() | {"messages", "model", "prompt", "stream", "n", "extra_body", "tools"}):
         raise ValueError("Sampling cannot override task conditioning or template controls")
     body = {
         **prompt.options.get("extra_body", {}),
@@ -96,6 +96,8 @@ def audit_rollouts(
                 raise ValueError("The graded conversation differs from the captured request and response")
             if turn.message.get("role") != "assistant" or not isinstance(turn.message.get("content"), str):
                 raise ValueError("The model response is missing assistant text")
+            if turn.message.get("reasoning_content"):
+                raise ValueError("Parsed reasoning cannot establish the raw structural continuation")
             attempt = GradingAttempt(chat_conversation(list(conversation.messages)), stop_reason=rollout.stop_reason)
             rescored = grade_answer(task, attempt)
             scored_outcomes = (Outcome.GRADED, Outcome.SUBMISSION_FAILURE)

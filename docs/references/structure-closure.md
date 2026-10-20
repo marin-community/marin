@@ -62,8 +62,12 @@ Quoted tool delimiter strings remain JSON content during serialization.
 
 `evaluate` runs the entire manifest-verified validation cohort exactly once,
 with bounded concurrency. It does not launch training or provision a model.
-Provide an already running OpenAI-compatible text-prefill endpoint, an API key
-in `OPENAI_API_KEY`, a sampling JSON file and explicit rollout limits.
+Provide an already running OpenAI-compatible `/v1/completions` endpoint, its
+local tokenizer and chat template, an API key in `OPENAI_API_KEY`, a sampling
+JSON file and explicit rollout limits. The evaluator renders messages locally
+and sends prompt text. It retains the endpoint's raw completion, so reasoning
+and tool parsers cannot remove structural delimiters before grading. The server
+tokenizes that text using the serving model's own tokenizer.
 
 For example, `sampling.json` may contain:
 
@@ -88,7 +92,7 @@ For example, `sampling.json` may contain:
 ```
 
 The experiment requests thinking for the reasoning family and disables it for
-the other families using `chat_template_kwargs.enable_thinking`. Prefill flags
+the other families using the template's `enable_thinking` parameter. Prefill flags
 and tool declarations come from the task. These are part of the captured request
 and are checked by the auditor. Verify support for these template controls on
 the chosen backend; CPU tests do not validate a deployed model's rendering.
@@ -96,6 +100,7 @@ the chosen backend; CPU tests do not validate a deployed model's rendering.
 ```bash
 uv run python -m experiments.post_training.structure_closure.evaluate \
   --tasks /path/to/tasks --endpoint "$MODEL_ENDPOINT" --model "$MODEL_NAME" \
+  --initializer /path/to/local/tokenizer \
   --sampling /path/to/sampling.json --limits /path/to/limits.json \
   --concurrency 4 --output /path/to/baseline-rollouts.jsonl
 
@@ -119,6 +124,10 @@ status. Duplicate, missing, interrupted or inconsistent evidence invalidates a
 complete comparison. Family denominators remain the full expected cohort;
 unscored cases are reported explicitly. A valid model failure stays a scored
 failure rather than disappearing from coverage.
+
+API callers can supply their own `Model` to `evaluate_task`. It must expose the
+raw continuation as assistant content. A parsed reasoning-channel response is
+rejected as unscored evidence rather than recorded as a failed model answer.
 
 Evaluation records include public prompts and generated content. Audit reports
 include case identities and results. Keep source tasks and private references
