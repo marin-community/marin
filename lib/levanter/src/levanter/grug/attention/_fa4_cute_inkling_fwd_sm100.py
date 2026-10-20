@@ -37,8 +37,10 @@ _LOG2_E = math.log2(math.e)
 
 class InklingFlashAttentionForwardSm100(FlashAttentionForwardSm100):
     # Diagnosis switches (temporary).
-    PREFETCH_BAND = True
+    PREFETCH_BAND = False
     LOAD_BAND = True
+    # Set by the launcher: the band arrives in band_to_tiles' layout (else the plain [S, W, Hq, B] band).
+    band_tiles = True
 
     @cute.jit
     def softmax_step(
@@ -183,7 +185,12 @@ class InklingFlashAttentionForwardSm100(FlashAttentionForwardSm100):
                 runs_per_tile = self.n_block_size // BAND_TILE_COLUMNS
                 pairs_per_run = BAND_TILE_COLUMNS // 2
                 for c in cutlass.range_constexpr(runs_per_tile):
-                    run = band_bh[query_idx, (None, band_tile * runs_per_tile + c)]
+                    if const_expr(self.band_tiles):
+                        run = band_bh[query_idx, (None, band_tile * runs_per_tile + c)]
+                    else:
+                        run = cute.local_tile(
+                            band_bh[query_idx, None], (BAND_TILE_COLUMNS,), (band_tile * runs_per_tile + c,)
+                        )
                     cute.autovec_copy(
                         cute.make_tensor(
                             cute.recast_ptr(run.iterator, dtype=cutlass.Uint32), cute.make_layout(pairs_per_run)

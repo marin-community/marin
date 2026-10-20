@@ -40,6 +40,10 @@ from levanter.grug.attention._fa4_cute_config import (
 from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK, band_to_tiles, rel_extent_of_band
 
 
+# Diagnosis switch (temporary): the SM100 forward reads the band tiled (band_to_tiles) or plain.
+SM100_FORWARD_BAND_TILES = True
+
+
 @dataclass(frozen=True)
 class _CutlassCuteModules:
     cute: Any
@@ -155,16 +159,23 @@ def segmented_flash_attention_forward(
             qhead_per_kvhead=q.shape[2] // k.shape[2],
             config=config,
             use_rel_bias=use_rel_bias,
+            band_tiles=SM100_FORWARD_BAND_TILES,
         )
         input_spec, output_spec = _cutlass_attention_forward_specs(modules, vector_elems=8)
         metadata_spec = modules.cjax.TensorSpec(static=True)
         # The four block-sparse metadata tensors follow q_offset; the banded bias, when present, comes last.
         input_spec = (*input_spec[:-1], metadata_spec, metadata_spec, metadata_spec, metadata_spec)
         bias_args = ()
-        if use_rel_bias:
+        if use_rel_bias and SM100_FORWARD_BAND_TILES:
             # The kernel reads the band in its tiled layout and views it as [S, W, Hq, B] itself.
             input_spec = (*input_spec, modules.cjax.TensorSpec(mode=(0, 1, 2, 3, 4, 5), static=True))
             bias_args = (band_to_tiles(rel_bias.astype(q.dtype)),)
+        elif use_rel_bias:
+            input_spec = (
+                *input_spec,
+                modules.cjax.TensorSpec(mode=(2, 3, 1, 0), divisibility=(1, 1, 1, 8), static=True),
+            )
+            bias_args = (rel_bias.astype(q.dtype),)
         call = cutlass_call(
             launcher,
             output_shape_dtype=(

@@ -1304,6 +1304,7 @@ def segmented_flash_attention_forward_sm100_launcher(
     qhead_per_kvhead: int,
     config: Flash4CuteSm100ForwardConfig,
     use_rel_bias: bool = False,
+    band_tiles: bool = True,
 ) -> Any:
     """Adapt packed masks and JAX layouts to upstream FA4 SM100 forward.
 
@@ -1323,6 +1324,7 @@ def segmented_flash_attention_forward_sm100_launcher(
         forward_cls = importlib.import_module("flash_attn.cute.flash_fwd_sm100").FlashAttentionForwardSm100
     _patch_jax_array_list_tvm_ffi_converter()
     _band_tiles_view = _native_band_tiles_view(modules)
+    _as_gmem_tensor = _native_gmem_tensor_view(modules)
     forward = forward_cls(
         head_dim,
         head_dim_v,
@@ -1338,6 +1340,8 @@ def segmented_flash_attention_forward_sm100_launcher(
         mask_mod=_native_segment_mask_mod(modules),
         has_aux_tensors=True,
     )
+    if use_rel_bias:
+        forward.band_tiles = band_tiles
 
     _broadcast_heads = _native_broadcast_heads(modules)
 
@@ -1365,7 +1369,7 @@ def segmented_flash_attention_forward_sm100_launcher(
             q,
             k,
             v,
-            (lower_bounds, valid, q_offset, _band_tiles_view(rel_bias)),
+            (lower_bounds, valid, q_offset, _band_tiles_view(rel_bias) if band_tiles else _as_gmem_tensor(rel_bias)),
             (partial_count, partial_index, full_count, full_index),
             out,
             lse,

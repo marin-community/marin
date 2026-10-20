@@ -81,9 +81,10 @@ def _variant(spec: str) -> None:
     # The CUDA-only kernel module imports cutlass at import time.
     K = importlib.import_module("levanter.grug.attention._fa4_cute_inkling_fwd_sm100").InklingFlashAttentionForwardSm100
 
-    prefetch, load = (flag == "1" for flag in spec.split(","))
+    prefetch, load, tiles = (flag == "1" for flag in spec.split(","))
     K.PREFETCH_BAND, K.LOAD_BAND = prefetch, load
-    _run(f"MLA 48/48 sm100 band512 prefetch={prefetch} load={load}", "gpu_fa4_cute_sm100", Q_HEADS, True)
+    importlib.import_module("levanter.grug.attention._fa4_cute_backend").SM100_FORWARD_BAND_TILES = tiles
+    _run(f"MLA 48/48 sm100 band512 prefetch={prefetch} load={load} tiles={tiles}", "gpu_fa4_cute_sm100", Q_HEADS, True)
 
 
 def main() -> None:
