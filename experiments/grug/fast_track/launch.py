@@ -424,6 +424,7 @@ def build_h100_ladder_run(
     resume_from: str | None = None,
     xla_memory_report: bool = False,
     master_param_mode: MasterParamMode | None = None,
+    offload_opt_state: bool | None = None,
     pgle_runs: int = 0,
     pipeline_depth: int = 0,
     loader_buffer_batches: int = TRAIN_LOADER_BUFFER_SIZE,
@@ -469,6 +470,8 @@ def build_h100_ladder_run(
     model = _apply_settings(model, model_settings or {})
     if master_param_mode is None:
         master_param_mode = MasterParamMode.FP32_PINNED_HOST if rung.hero_memory else MasterParamMode.DEVICE
+    if offload_opt_state is None:
+        offload_opt_state = rung.hero_memory
     mp_policy = (
         "params=bfloat16,compute=bfloat16,output=bfloat16"
         if master_param_mode == MasterParamMode.FP32_PINNED_HOST
@@ -537,7 +540,7 @@ def build_h100_ladder_run(
         save_checkpoints=save_checkpoints,
         expert_axis_size=expert_axis_size,
         replica_axis_size=(1),
-        offload_opt_state=rung.hero_memory,
+        offload_opt_state=offload_opt_state,
         master_param_mode=master_param_mode,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
@@ -557,7 +560,7 @@ def build_h100_ladder_run(
     if xla_autotune == XlaAutotune.OFF and "--xla_gpu_autotune_level=0" not in os.environ.get("XLA_FLAGS", ""):
         raise ValueError("--xla-autotune off needs --xla_gpu_autotune_level=0 in the job's XLA_FLAGS")
     use_cache = rung.device == "GB200" and xla_autotune == XlaAutotune.CACHE
-    autotune_cache_path = _xla_autotune_cache_path(model, rung, watch_interval) if use_cache else None
+    autotune_cache_path = _xla_autotune_cache_path(model, rung, watch_interval, offload_opt_state) if use_cache else None
     if autotune_cache_path is not None and not seed_xla_autotune_cache and not _path_exists(autotune_cache_path):
         # Without a cache every rank autotunes and exchanges results, and that multi-process compile hangs ~7 times
         # in 8 on GB200. A one-GPU seed builds it in ~2 minutes.
@@ -763,7 +766,9 @@ def _path_exists(path: str) -> bool:
     return fsspec.core.url_to_fs(path)[0].exists(path)
 
 
-def _xla_autotune_cache_path(model: GrugModelConfig, rung: H100LadderRung, watch_interval: int) -> str:
+def _xla_autotune_cache_path(
+    model: GrugModelConfig, rung: H100LadderRung, watch_interval: int, offload_opt_state: bool
+) -> str:
     """Region-temp path of the shared XLA autotune results for this program: keyed by the full model config, the
     rung's mesh, the job's XLA flags, jaxlib and a non-default watch interval (the inline watch's statistics are
     part of the step), so only runs that compile the same fusions share them. A new key (any config change,
@@ -771,6 +776,8 @@ def _xla_autotune_cache_path(model: GrugModelConfig, rung: H100LadderRung, watch
     parts = (model, rung, os.environ.get("XLA_FLAGS", ""), importlib.metadata.version("jaxlib"))
     if watch_interval != WATCH_INTERVAL:
         parts = (*parts, f"watch_interval={watch_interval}")
+    if offload_opt_state != rung.hero_memory:
+        parts = (*parts, f"offload_opt_state={offload_opt_state}")
     identity = repr(parts)
     key = hashlib.sha256(identity.encode()).hexdigest()[:24]
     return prefix_join(marin_temp_bucket(XLA_AUTOTUNE_CACHE_TTL_DAYS, "xla-autotune-results"), f"{key}.textproto")
@@ -919,6 +926,11 @@ def _layer_skip_rule(
     help="Where the fp32 weights live (default: pinned host on hero-memory rungs, device otherwise).",
 )
 @click.option(
+    "--offload-opt-state/--no-offload-opt-state",
+    default=None,
+    help="Keep the optimizer state on pinned host memory between steps (default: on hero-memory rungs).",
+)
+@click.option(
     "--xla-memory-report",
     is_flag=True,
     help="Dump XLA's train-step buffer assignment and memory-usage report to <output>/xla_memory/ (also on OOM).",
@@ -1059,6 +1071,7 @@ def main(
     resume_from: str | None,
     xla_memory_report: bool,
     master_param_mode: str | None,
+    offload_opt_state: bool | None,
     pgle_runs: int,
     pipeline_depth: int,
     loader_buffer_batches: int,
@@ -1111,6 +1124,7 @@ def main(
         resume_from=resume_from,
         xla_memory_report=xla_memory_report,
         master_param_mode=MasterParamMode(master_param_mode) if master_param_mode else None,
+        offload_opt_state=offload_opt_state,
         pgle_runs=pgle_runs,
         pipeline_depth=pipeline_depth,
         loader_buffer_batches=loader_buffer_batches,
