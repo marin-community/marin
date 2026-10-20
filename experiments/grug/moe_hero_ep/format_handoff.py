@@ -36,6 +36,7 @@ from experiments.grug.moe_hero_ep.format_sample import NATIVE_BACKEND, NativePan
 from experiments.grug.moe_hero_ep.format_suite import NativeSuiteRequest, PanelPurpose
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Checkpoint, Record, SampleResult, digest
+from experiments.grug.moe_hero_ep.serving_parity import JsonPin, ServingIdentity, verify_serving_report
 
 
 class CandidateHandoffRequest(Record):
@@ -51,12 +52,16 @@ class CandidateHandoffRequest(Record):
     content_panel_id: str
     pt_panel_path: str
     pt_panel_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    serving_parity_report: str | None = None
+    serving_parity_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     long_context_panel_id: str | None = None
     context_extension_manifest: str | None = None
     context_extension_manifest_digest: str | None = None
 
     @model_validator(mode="after")
     def candidate_lineage(self) -> Self:
+        if (self.serving_parity_report is None) != (self.serving_parity_sha256 is None):
+            raise ValueError("Serving proof needs both immutable report path and raw SHA256")
         parents = {
             Candidate.A: {None},
             Candidate.B: {Candidate.A},
@@ -340,6 +345,23 @@ def assemble_candidate(request: CandidateHandoffRequest) -> tuple[CandidateEvalu
         request.long_context_panel_id not in reports or reports[request.long_context_panel_id]["context_length"] != 65536
     ):
         raise ValueError("Suite lacks the selected actual65K Marin panel")
+    serving = None
+    if request.serving_parity_report is not None:
+        assert request.serving_parity_sha256 is not None
+        serving = verify_serving_report(
+            JsonPin(path=request.serving_parity_report, sha256=request.serving_parity_sha256)
+        )
+        identity = ServingIdentity.model_validate(serving["identity"])
+        if (
+            identity.candidate != request.candidate
+            or identity.checkpoint != request.checkpoint
+            or identity.model_config_digest != request.model_config_digest
+            or identity.tokenizer != request.tokenizer
+            or identity.tokenizer_revision != request.tokenizer_revision
+            or identity.suite_manifest_digest != request.suite_manifest_digest
+            or identity.context_extension_manifest_digest != request.context_extension_manifest_digest
+        ):
+            raise ValueError("Serving report belongs to another candidate/checkpoint/model/tokenizer/suite/extension")
     candidate = CandidateEvaluation(
         candidate=request.candidate,
         parent=request.parent,
@@ -357,8 +379,8 @@ def assemble_candidate(request: CandidateHandoffRequest) -> tuple[CandidateEvalu
         content={serialization: contents[(request.content_panel_id, serialization)] for serialization in Serialization},
         format_report=reports[request.format_panel_id],
         long_context_report=reports.get(request.long_context_panel_id),
-        serving_parity_report=None,
-        serving_parity_passed=False,
+        serving_parity_report=request.serving_parity_report,
+        serving_parity_passed=serving is not None and serving["measurement"]["passed"],
     )
     provenance = {
         "request": request.model_dump(mode="json"),
@@ -371,7 +393,7 @@ def assemble_candidate(request: CandidateHandoffRequest) -> tuple[CandidateEvalu
             "balance violation is max absolute deviation of that ratio from 1. "
             "Entropy and z-loss are valid-token-weighted batch means."
         ),
-        "serving_parity": "Pending; this CLI accepts no manual boolean or path as serving proof.",
+        "serving_parity": serving or {"status": "pending", "reason": "Pinned recomputable serving report unavailable"},
     }
     provenance["assembly_digest"] = digest(provenance)
     return candidate, provenance

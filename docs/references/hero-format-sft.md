@@ -252,9 +252,13 @@ uv run python -m experiments.grug.moe_hero_ep.format_handoff \
 The output `candidate.json` combines measured loss, routing, content outcomes and
 retained formatting reports; `assembly.json` retains the checked provenance.
 Use `candidate.json` as the comparison input. The assembler validates completed
-suite output hashes and checkpoint ancestry. It leaves serving parity pending;
-no manual boolean or filename establishes parity. Missing measurements leave
-acceptance incomplete.
+suite output hashes and checkpoint ancestry. Serving parity stays pending unless
+the request supplies both `serving_parity_report` and its raw
+`serving_parity_sha256`. Supply the report written by `collect`, with a hash of
+that report's bytes; the `verify` output is a separate inspection artifact.
+The assembler recomputes that report's verdict and
+checks its candidate, checkpoint, forward model, tokenizer and suite identity.
+Missing measurements leave acceptance incomplete.
 
 Use [format_measure](https://github.com/marin-community/marin/blob/main/experiments/grug/moe_hero_ep/format_measure.py) to freeze
 an explicitly selected bounded panel from existing PT validation caches, then
@@ -374,15 +378,49 @@ which IDs appear in the input. The local tiny roundtrip is an implementation
 check; full-model merge parity remains an accelerator measurement and does not
 establish serving parity.
 
-The [serving parity helpers](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/testing/inference/backend_parity.py)
-compare frozen native next-token scores with serving observations and check
-same-rank repeatability. Use the candidate's exported HF weights and declared
-probability tolerance on the same raw token IDs and prediction positions. The
-existing Snowball runner is not a Hero or YaRN parity certificate. The configured
-vLLM fork at `01911be34fac8715347962a8d791ca34a879e01e` ignores Hero YaRN settings
-and computes router projections at different precision from the native BF16
-path. A serving-side fix and actual GPU parity are required before claiming E
-works in serving.
+Use [ServingParityRequest](https://github.com/marin-community/marin/blob/main/experiments/grug/moe_hero_ep/serving_parity.py)
+to select bounded greedy trajectories from a completed native suite and bind
+them to the candidate's completed version-3 HF export. Pin the maximum absolute
+probability error and serving source. Each selected data-parallel rank repeats
+each trajectory in at least two waves. Declare the minimum number of compared
+KV decode positions per trajectory, excluding its first prefill prediction.
+Include short and actual 16K prompts plus an
+EOT-stopping trajectory; E additionally requires an actual prompt of at least
+65,000 tokens. Each prompt and completion must fit the model context.
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.serving_parity \
+  prepare serving-parity-request.json <fresh-preparation.json>
+uv run python -m experiments.grug.moe_hero_ep.serving_parity \
+  collect serving-parity-request.json <fresh-serving-report.json>
+uv run python -m experiments.grug.moe_hero_ep.serving_parity \
+  verify serving-report-pin.json <fresh-verification.json>
+```
+
+The verify input is a `JsonPin` containing the report's `path` and raw `sha256`.
+Preparation reads bounded metadata and retained native scores, without restoring
+weights. Its output is an optional preflight inspection artifact; `collect`
+repeats preparation from the pinned request and does not consume that output.
+Collection requires an `OwnedServer` JSON record, using the schema in the same
+module, supplied as `ServingParityRequest.launch_manifest` (`path` and raw
+`sha256`). Construct it from the owned execution's actual launch records. It
+binds the exact
+ModelSpec, export, released wheel/source/hash, passed GPU qualification and
+actual verified-wheel/topology startup records. Missing runtime evidence leaves
+the report pending and makes no HTTP requests. This workflow does not launch a
+server, publish a wheel or change the serving pin.
+
+Collection retains raw token requests and multi-token responses. Verification
+recomputes top-token probability errors on identical native prefixes, KV decode
+coverage, EOT stopping and exact same-rank repeatability. Divergence that loses
+required decode coverage cannot pass. Prefix caching and speculative decoding
+must be disabled. This report consumes physical runtime qualification; it does
+not establish kernel or layer parity itself.
+
+The configured vLLM fork at `01911be34fac8715347962a8d791ca34a879e01e`
+omits Hero YaRN wiring and uses different router projection precision from the
+native BF16 path. A qualified serving-side fix and actual GPU observations are
+required before E can pass this gate.
 
 ## 65K YaRN candidate
 
