@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The per-check results a Taskforge grader program reports in its verdict file.
+"""The verdict file a Taskforge grader program writes, and the per-check results it reports.
 
-A grader program writes one JSON object to ``spec.draft.GRADER_VERDICT_PATH``::
+A grader program writes one JSON object to ``GRADER_VERDICT_PATH``::
 
     {"reward": 0.5, "detail": {"checks": [{"name": "total", "passed": true, "weight": 1.0}, ...]}}
 
-TaskCompendium's ``FileReward`` reads ``reward`` and makes ``detail`` the ``GradeResult.detail``, so the
-checks travel with every grade.
+RolloutEngine reads it through ``VERDICT_REWARD``: TaskCompendium's ``FileReward`` reads ``reward`` and makes
+``detail`` the ``GradeResult.detail``, so the checks travel with every grade.
 """
 
 import json
@@ -16,8 +16,12 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 
 from taskcompendium.grading_result import GradeResult
+from taskcompendium.models import FileReward, RewardFile, RewardFileFormat
 
+GRADER_VERDICT_PATH = "/logs/verifier/reward.json"
+REWARD_KEY = "reward"
 CHECKS_KEY = "checks"
+VERDICT_REWARD = FileReward(files=(RewardFile(path=GRADER_VERDICT_PATH, format=RewardFileFormat.JSON, key=REWARD_KEY),))
 
 
 @dataclass(frozen=True)
@@ -58,7 +62,7 @@ def grader_checks(grade: GradeResult) -> tuple[GraderCheck, ...] | None:
 
 def verdict_json(reward: float, checks: Sequence[GraderCheck]) -> str:
     """The verdict file text a grader program writes for ``reward`` and ``checks``."""
-    return json.dumps({"reward": reward, "detail": {CHECKS_KEY: [asdict(check) for check in checks]}})
+    return json.dumps({REWARD_KEY: reward, "detail": {CHECKS_KEY: [asdict(check) for check in checks]}})
 
 
 def reward_in_range(grade: GradeResult) -> bool:
