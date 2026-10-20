@@ -7,10 +7,19 @@ ROWS=${3:?production rows prefix}
 SHA=${4:?manifest sha256}
 PLAIN=${5:?production plain prefix for this parent}
 RUN_DATE=${6:?run date YYYYMMDD}
-MODE=${7:-}
+shift 6
+MODE=
+DATA_VARIANT=high
+while (( $# )); do
+  case "$1" in
+    --run) MODE=--run; shift ;;
+    --data-variant) DATA_VARIANT=${2:?data variant: high or low}; shift 2 ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
 case "$PARENT" in v0|v0.1) ;; *) echo "Unknown parent: $PARENT" >&2; exit 1 ;; esac
 case "$ARM" in plain|rs-multi|relay|recovery|plateau) ;; *) echo "Unknown arm: $ARM" >&2; exit 1 ;; esac
-case "$MODE" in ""|--run) ;; *) echo "Seventh argument must be --run or omitted" >&2; exit 1 ;; esac
+case "$DATA_VARIANT" in high|low) ;; *) echo "Unknown data variant: $DATA_VARIANT" >&2; exit 1 ;; esac
 CLUSTER=${CLUSTER:-cw-rno2a}
 case "$CLUSTER" in cw-rno2a|cw-us-east-02a) ;; *) echo "Unsupported cluster: $CLUSTER" >&2; exit 1 ;; esac
 
@@ -19,7 +28,7 @@ unset GOOGLE_APPLICATION_CREDENTIALS
 export MARIN_PREFIX=s3://marin-us-east-02a/marin
 export NCCL_DEBUG=WARN NCCL_DEBUG_SUBSYS=
 COMMAND=(python -m experiments.post_training.agentic_sweep.arms
-  --parent "$PARENT" --run-date "$RUN_DATE"
+  --parent "$PARENT" --run-date "$RUN_DATE" --data-variant "$DATA_VARIANT"
   --arm-data "$ROWS" --manifest-sha256 "$SHA" --plain-data "$PLAIN"
   --learning-rate 1e-6 --epochs 3 --only train
   --preemption-retries "${PREEMPTION_RETRIES:-2}")
@@ -28,7 +37,11 @@ if [[ "$ARM" == plateau ]]; then
 else
   COMMAND+=(--arm "$ARM")
 fi
-NAME="arm-train-$ARM-${PARENT//./p}-v7-$RUN_DATE-$CLUSTER"
+METHOD=$ARM
+if [[ "$DATA_VARIANT" == low ]]; then
+  METHOD="$METHOD-low"
+fi
+NAME="arm-train-$METHOD-${PARENT//./p}-v7-$RUN_DATE-$CLUSTER"
 if [[ -n "${RESUME:-}" ]]; then
   COMMAND+=(--resume-checkpoint "$RESUME")
   NAME="$NAME-from${RESUME##*step-}"

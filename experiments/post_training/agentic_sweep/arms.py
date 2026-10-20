@@ -114,14 +114,18 @@ def manifest_parent(manifest: dict, parent_name: str) -> ParentModel:
     return parent
 
 
-def run_identity(arm: str, parent_name: str, run_date: str, plateau: bool) -> str:
+def run_identity(arm: str, parent_name: str, run_date: str, plateau: bool, data_variant: str) -> str:
     """Separate artifact identities across parents, data rounds and plateau training."""
     if len(run_date) != 8:
         raise ValueError("run-date must be YYYYMMDD")
     datetime.strptime(run_date, "%Y%m%d")
     if plateau and arm != "plain":
         raise ValueError("Plateau training uses the plain arm's rows")
-    return f"{'plateau' if plateau else arm}-{parent_name}-v7-{run_date}"
+    if data_variant not in ("high", "low"):
+        raise ValueError("data-variant must be high or low")
+    method = "plateau" if plateau else arm
+    variant_suffix = "-low" if data_variant == "low" else ""
+    return f"{method}{variant_suffix}-{parent_name}-v7-{run_date}"
 
 
 @dataclass(frozen=True)
@@ -341,6 +345,8 @@ def pipeline(
     keys: list[list[str]] | None = None,
     resume_checkpoint: str | None = None,
     preemption_retries: int = 0,
+    *,
+    data_variant: str = "high",
 ) -> dict[str, ArtifactStep | list[ArtifactStep]]:
     selected_parent = manifest_parent(manifest, parent_name)
     if manifest["max_sequence_tokens"] != CONTEXT:
@@ -348,7 +354,7 @@ def pipeline(
     if learning_rate <= 0:
         raise ValueError("The learning rate must be positive")
     arm = manifest["arm"]
-    identity = run_identity(arm, parent_name, run_date, plateau)
+    identity = run_identity(arm, parent_name, run_date, plateau, data_variant)
     version = datetime.strptime(run_date, "%Y%m%d").strftime("%Y.%m.%d")
     ends = list(itertools.accumulate(epoch.updates for epoch in epochs))
     start_step = 0
@@ -483,6 +489,7 @@ def main() -> None:
     parser.add_argument("--plain-data", required=True, help="built plain arm prefix, the replay reference")
     parser.add_argument("--parent", choices=tuple(PARENTS), required=True)
     parser.add_argument("--run-date", required=True, help="YYYYMMDD, part of every output identity")
+    parser.add_argument("--data-variant", choices=("high", "low"), default="high")
     parser.add_argument("--learning-rate", type=float, required=True)
     parser.add_argument("--epochs", type=int, required=True)
     parser.add_argument("--plateau", action="store_true")
@@ -509,6 +516,7 @@ def main() -> None:
             args.learning_rate,
             epochs,
             args.plateau,
+            data_variant=args.data_variant,
         )
         print(lower(cast(ArtifactStep, artifacts["train"])))
         print(json.dumps({"arm": manifest["arm"], "epochs": [asdict(epoch) for epoch in epochs]}, indent=1))
@@ -534,6 +542,7 @@ def main() -> None:
         keys,
         args.resume_checkpoint,
         args.preemption_retries,
+        data_variant=args.data_variant,
     )
     info = get_job_info()
     assert info is not None and info.controller_address is not None
