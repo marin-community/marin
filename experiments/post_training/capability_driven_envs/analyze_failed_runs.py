@@ -3,89 +3,72 @@
 
 """Find the capabilities that the policy's failed rollouts lack, as catalog ideas for ``generate_tasks``.
 
-``analyze_failed_runs`` gives the failed rollouts to one managed agent as files: a ``RolloutEngine`` attempt whose
-shell harness runs the agent's commands on a ShellSim machine that has the files. The agent answers with the general
-skills whose absence explains the failures, for example an answer format, the use of tools, a stop to loops of
-repeated calls, or a careful reading of the task. A capability describes the skill and not the failed tasks, so that
-``generate_tasks`` writes the details of its training tasks. Each capability becomes a ``CapabilityIdea`` for
-``task_workpieces`` and ``generate_tasks``. The files have only what the policy saw and wrote, never a grader or its
-answer.
+``analyze_failed_runs`` uses two kinds of structured model calls, map and reduce:
+
+1. One call for each failed rollout names the general skills whose absence explains the failure.
+2. One call merges the skills of all the rollouts into at most ``max_capabilities`` capabilities, with the IDs of the
+   skills that each capability holds. The rollouts of those skills are the evidence of the capability.
+
+A capability describes the skill and not the failed tasks, so that ``generate_tasks`` writes the details of its
+training tasks. The calls see only what the policy saw and wrote, never a grader or its answer.
+
+The merge reply lists the ID of each skill, so it grows with the rollouts, and GLM sometimes runs away to the output
+limit in a long structured reply. Thus a merge is sampled again after an invalid reply. When the merge of all the
+skills still fails, the skills merge in two levels: one merge for each chunk of rollouts, then one merge of the lists.
 """
 
+import asyncio
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from itertools import pairwise
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
-from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.shell import ShellHarness, task_prompt
-from rolloutengine.models import (
-    GradedRollout,
-    MachineRuntimeSpec,
-    Model,
-    Rollout,
-    RolloutLimits,
-    TaskRolloutSpec,
-    TraceMode,
-)
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import Backend, NetworkPolicy
-from taskcompendium.chat import chat_conversation
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from rolloutengine.harness.shell import task_prompt
+from rolloutengine.models import GradedRollout
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import (
-    AnswerType,
-    CommandSemantics,
-    ConversationInput,
-    EnvironmentRequirements,
-    GradingAttempt,
-    JsonValueAnswer,
-    NoGrader,
-    ResourceGroups,
-    Source,
-    SubmissionFailure,
-    TaskSpec,
-    TextMessage,
-)
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.models import TaskSpec, TextMessage
 from taskforge.content_hash import digest
+from taskforge.llm.client import ModelClient
+from taskforge.llm.policy import LLMPolicy, Message
+from taskforge.llm.structured import StructuredOutputError
 
 from experiments.post_training.capability_driven_envs.catalog import CAPABILITY_KIND, CapabilityIdea
 from experiments.post_training.capability_driven_envs.generate_tasks import FILE_SAFE_ID
 
 SUBJECT_ID = "failed-runs"
 SUBJECT_NAME = "Capabilities that failed runs lack"
-ANALYSIS_REVISION = "1"
-HARNESS = "failed-run-analyst"
-ANSWER_FORMAT = JsonValueAnswer()
 MAX_TASK_CHARS = 300
-WORKSPACE = "rollouts"
-"""The directory of the rollout files, below the machine's root. It is the agent's working directory."""
-INDEX = "index.jsonl"
-MACHINE = MachineRuntimeSpec(
-    backend=Backend.SHELLSIM,
-    network=NetworkPolicy.DENY,
-    cpus=None,
-    memory_mb=None,
-    storage_mb=None,
-    gpus=0,
-    user=None,
-    startup_timeout=None,
-    cleanup_timeout=None,
-)
+SKILLS_PER_ROLLOUT = 3
+CONCURRENCY = 32
+MAX_FAILED_SHARE = 0.1
+"""The largest share of the failed rollouts whose skill call can fail before the analysis fails."""
+MERGE_ATTEMPTS = 3
+CHUNK_ROLLOUTS = 100
+"""The rollouts whose skills one first-level merge reads, when the merge of all the skills fails."""
+
+logger = logging.getLogger(__name__)
+
+Lines = dict[str, tuple[frozenset[str], dict[str, object]]]
+"""For each line ID of a merge: the run IDs that the line stands for, and the fields that the merge call sees."""
 
 
-class MissingCapability(BaseModel):
-    """A general skill that the failed rollouts lack, with the catalog's capability fields and the evidence."""
+class Skill(BaseModel):
+    """A general skill that failed rollouts lack."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    id: str = Field(description="A file-safe ID, for example failed-runs.tool-use.stop-repeating-calls.")
     name: str = Field(min_length=1, description="The skill in a few words, with no detail of a failed task.")
     outcome: str = Field(min_length=1, description="What an agent with the skill can do, in any domain.")
-    evidence: tuple[str, ...] = Field(min_length=1, description="The run IDs of the failed rollouts that show the gap.")
     includes: tuple[str, ...] = Field(min_length=1, description="The parts of the skill.")
     excludes: tuple[str, ...] = Field(default=(), description="Related skills that the capability does not cover.")
+
+
+class Capability(Skill):
+    """A skill with a catalog ID."""
+
+    id: str = Field(description="A file-safe ID, for example failed-runs.tool-use.stop-repeating-calls.")
 
     @field_validator("id")
     @classmethod
@@ -95,38 +78,71 @@ class MissingCapability(BaseModel):
         return value
 
 
-CAPABILITIES = TypeAdapter(list[MissingCapability])
+class MissingCapability(Capability):
+    """A general skill that the failed rollouts lack, with the catalog's capability fields and the evidence."""
 
-SYSTEM_PROMPT = """\
-You analyze the failed rollouts of a language-model agent to decide what the agent must learn next. A rollout is \
-one attempt at a task: the task's messages, the agent's turns and tool calls, and the tool results.
+    evidence: tuple[str, ...] = Field(min_length=1, description="The run IDs of the failed rollouts that show the gap.")
 
-Find the general capabilities whose absence explains the failures. A capability is a skill that transfers to \
-many tasks and domains, for example: obey the answer format that a task asks for, select tools and their \
-arguments, stop a loop that repeats a call or a mistake, read a task and its constraints carefully, do a check \
-of the work before the answer, or reach an answer without unneeded steps.
 
-- Use the failed rollouts only as evidence. Read them, and give their run IDs as the evidence of each capability.
+class RolloutSkills(BaseModel):
+    """The general skills whose absence explains one failed rollout."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    skills: tuple[Skill, ...] = Field(min_length=1, max_length=SKILLS_PER_ROLLOUT)
+
+
+class Group(Capability):
+    """One merged capability, with the IDs of the lines that it holds."""
+
+    members: tuple[str, ...] = Field(min_length=1, description="The IDs of the lines that the capability holds.")
+
+    @model_validator(mode="after")
+    def includes_behaviors(self) -> "Group":
+        # GLM sometimes copies the member IDs into includes, and then generate_tasks gets no behaviors to practice.
+        if set(self.includes) & set(self.members):
+            raise ValueError("includes must name behaviors that the capability covers, not the IDs of its members")
+        return self
+
+
+class Groups(BaseModel):
+    """The merged capabilities."""
+
+    capabilities: tuple[Group, ...] = Field(min_length=1)
+
+
+CAPABILITY_RULES = """\
+A capability is a skill that transfers to many tasks and domains, for example: obey the answer format that a task \
+asks for, select tools and their arguments, stop a loop that repeats a call or a mistake, read a task and its \
+constraints carefully, do a check of the work before the answer, or reach an answer without unneeded steps.
+
 - Write each capability as a catalog entry for the skill itself. Do not put the failed tasks, their domain, \
 their data, or their mistakes in it: a different step writes new tasks that train the skill, and the failed \
 tasks evaluate it.
-- Prefer a few general capabilities to many narrow ones. Merge failures that come from the same missing skill.
 - A rollout that stopped at its turn limit shows a gap only if it used its turns on repeated or unneeded steps. \
-The agent does not see the limit unless its messages state it.
+The agent does not see the limit unless its messages state it."""
 
-The workspace has the file {index}, with one JSON object for each failed rollout: its run ID, task, grade, \
-stop reason, and counts of turns and tool calls. Each failed rollout also has the file <run_id>.txt. Its first line \
-is a JSON object with the tools that the task gave. The policy's harness can also give a shell tool and the \
-functions of the tool providers. After the first line, each message starts a new line with its number, for example \
-[0]. Files can be long, so read parts of them, for example with grep, jq, head, or sed. When you are done, answer \
-without a tool call. The answer is one JSON array of capabilities that obeys this JSON schema:
+SKILLS_PROMPT = f"""\
+You analyze one failed rollout of a language-model agent to decide what the agent must learn next. A rollout is one \
+attempt at a task: the task's messages, the agent's turns and tool calls, and the tool results.
 
-{schema}
-"""
+Find the general capabilities, at most {SKILLS_PER_ROLLOUT}, whose absence explains the failure. {CAPABILITY_RULES}
 
-USER_PROMPT = """\
-{failed} of {total} rollouts failed. You can make at most {turns} model turns, so answer before the last one.
-"""
+The first line of the rollout is a JSON object with its run ID, task, grade, stop reason, and counts of turns and \
+tool calls. The second line is a JSON object with the tools that the task gave. The policy's harness can also give a \
+shell tool and the functions of the tool providers. After it, each message starts a new line with its number, for \
+example [0]."""
+
+MERGE_SKILLS_PROMPT = f"""\
+Each line is a skill that one failed rollout of a language-model agent lacks, with the ID of the skill. Merge the \
+skills into at most {{count}} capabilities: merge the skills that are about the same capability, and keep the \
+capabilities that explain the most rollouts. Give the IDs of the skills that each capability holds. {CAPABILITY_RULES}"""
+
+MERGE_LISTS_PROMPT = f"""\
+Several analyses each read a part of the failed rollouts of a language-model agent, and each gave capabilities with \
+the number of rollouts that show them. Merge them into at most {{count}} capabilities: merge the capabilities that \
+are about the same skill, and keep the skills that explain the most rollouts. Give the IDs of the capabilities that \
+each merged capability holds. {CAPABILITY_RULES}"""
 
 
 def policy_failures(
@@ -151,78 +167,129 @@ def policy_failures(
 
 async def analyze_failed_runs(
     rollouts: Sequence[tuple[TaskSpec, GradedRollout]],
-    model: Model,
+    client: ModelClient,
     *,
     pass_threshold: float,
-    limits: RolloutLimits,
+    max_capabilities: int,
+    policy: LLMPolicy,
+    merge_policy: LLMPolicy,
     catalog_version: str,
 ) -> list[CapabilityIdea]:
     """The capabilities that the policy's failed rollouts lack, as ideas for ``generate_tasks``.
 
     Each graded rollout comes with the task that it ran, because the record does not keep the tools that the task
-    gave. ``model`` drives the analysis agent under ``limits``, for example a ``rolloutengine.chat.ChatModel``. With
-    no policy failure, no agent runs. A failed analysis raises ``GradedRolloutInterrupted``, and an answer that is not
-    a valid list of capabilities raises ``ValueError``.
+    gave. ``policy`` samples the call for each rollout, and ``merge_policy`` samples the merges, whose replies are
+    longer. The capabilities with more rollouts come first. With no policy failure, no model call occurs.
+
+    A rollout whose reply stays invalid after the client's repairs gives no skills. When more than ``MAX_FAILED_SHARE``
+    of the rollouts give none, the analysis raises ``ValueError``. A two-level merge whose reply stays invalid raises
+    ``StructuredOutputError``.
     """
     failures = policy_failures(rollouts, pass_threshold)
     if not failures:
         return []
-    # NOTE: One agent reads all the failed rollouts. A later version can divide the rollouts into shards with Zephyr,
-    # analyze the shards in parallel, each with its own agent, and then merge their capabilities with one more agent.
-    engine = RolloutEngine({Backend.SHELLSIM: ShellSimMachineFactory()}, {HARNESS: ShellHarness(command_timeout=None)})
-    spec = TaskRolloutSpec(
-        task=_analysis_task(failures, len(rollouts), limits.max_turns, catalog_version),
-        harness=HARNESS,
-        task_machine=MACHINE,
-        verifier_machine=None,
-        limits=limits,
-        trace=TraceMode.MESSAGES,
-    )
-    result = await engine.run_task(spec, model)
-    capabilities = _answer(result.rollout)
-    run_ids = {graded.rollout.run_id for _, graded in failures}
-    unknown = sorted({run_id for capability in capabilities for run_id in capability.evidence} - run_ids)
-    if unknown:
-        raise ValueError(f"The analysis cites rollouts that did not fail: {unknown}")
-    ids = [capability.id for capability in capabilities]
-    if len(set(ids)) != len(ids):
-        raise ValueError(f"The analysis repeats capability IDs: {ids}")
-    return [_idea(capability, catalog_version) for capability in capabilities]
+    skills = await _rollout_skills(client, failures, policy)
+    try:
+        groups = await _merged(client, MERGE_SKILLS_PROMPT, _skill_lines(skills), max_capabilities, merge_policy)
+    except StructuredOutputError as error:
+        logger.warning("The merge of %d skills failed, so they merge in two levels: %s", len(skills), error)
+        groups = await _merged_in_two_levels(client, skills, max_capabilities, merge_policy)
+    ideas, seen = [], set()
+    for group, evidence in sorted(groups, key=lambda pair: -len(pair[1])):
+        if group.id in seen or len(ideas) == max_capabilities:
+            continue
+        seen.add(group.id)
+        record = MissingCapability(**group.model_dump(exclude={"members"}), evidence=tuple(sorted(evidence)))
+        ideas.append(_idea(record, catalog_version))
+    return ideas
 
 
-def _analysis_task(
-    failures: Sequence[tuple[TaskSpec, GradedRollout]], total: int, turns: int, catalog_version: str
-) -> TaskSpec:
-    system = SYSTEM_PROMPT.format(index=INDEX, schema=json.dumps(CAPABILITIES.json_schema()))
-    user = USER_PROMPT.format(failed=len(failures), total=total, turns=turns)
-    index = "".join(f"{json.dumps(_summary(task, graded))}\n" for task, graded in failures)
-    files = (
-        inline_resource(f"{WORKSPACE}/{INDEX}", index.encode()),
+async def _rollout_skills(
+    client: ModelClient, failures: Sequence[tuple[TaskSpec, GradedRollout]], policy: LLMPolicy
+) -> list[tuple[str, Skill]]:
+    """The run ID and each skill that one call names for each failed rollout, in the order of the rollouts."""
+    slots = asyncio.Semaphore(CONCURRENCY)
+
+    async def named(task: TaskSpec, graded: GradedRollout) -> tuple[Skill, ...] | None:
+        rollout = f"{json.dumps(_summary(task, graded))}\n{_rollout_file(task, graded)}"
+        messages: list[Message] = [
+            {"role": "system", "content": SKILLS_PROMPT},
+            {"role": "user", "content": rollout},
+        ]
+        try:
+            async with slots:
+                return (await client.complete_structured(messages, RolloutSkills, policy)).value.skills
+        except StructuredOutputError as error:
+            # One rollout that the model cannot answer for, for example at the output limit, does not stop the others.
+            logger.warning("No skills for rollout %s: %s", graded.rollout.run_id, error)
+            return None
+
+    found = await asyncio.gather(*(named(task, graded) for task, graded in failures))
+    missing = sum(skills is None for skills in found)
+    if missing > MAX_FAILED_SHARE * len(failures):
+        raise ValueError(f"The skill call failed for {missing} of {len(failures)} failed rollouts")
+    return [
+        (graded.rollout.run_id, skill)
+        for (_, graded), skills in zip(failures, found, strict=True)
+        for skill in skills or ()
+    ]
+
+
+def _skill_lines(skills: Sequence[tuple[str, Skill]]) -> Lines:
+    return {
+        f"k{i}": (frozenset({run_id}), {"name": skill.name, "outcome": skill.outcome})
+        for i, (run_id, skill) in enumerate(skills)
+    }
+
+
+async def _merged_in_two_levels(
+    client: ModelClient, skills: Sequence[tuple[str, Skill]], count: int, policy: LLMPolicy
+) -> list[tuple[Group, frozenset[str]]]:
+    run_ids = list(dict.fromkeys(run_id for run_id, _ in skills))
+    chunks = -(-len(run_ids) // CHUNK_ROLLOUTS)
+    chunk_of = {run_id: i % chunks for i, run_id in enumerate(run_ids)}
+    found = await asyncio.gather(
         *(
-            inline_resource(f"{WORKSPACE}/{graded.rollout.run_id}.txt", _rollout_file(task, graded).encode())
-            for task, graded in failures
-        ),
+            _merged(client, MERGE_SKILLS_PROMPT, _skill_lines([s for s in skills if chunk_of[s[0]] == i]), count, policy)
+            for i in range(chunks)
+        )
     )
-    return TaskSpec(
-        id=f"analyze-failed-runs-{catalog_version}",
-        context=ConversationInput(
-            events=(TextMessage(role="system", content=system), TextMessage(role="user", content=user))
-        ),
-        environment_requirements=EnvironmentRequirements(
-            capabilities=("shell", "filesystem"),
-            command_semantics=CommandSemantics.SHELL_SIMULATOR,
-            working_directory=f"/{WORKSPACE}",
-        ),
-        answer_type=AnswerType.JSON,
-        answer_format=ANSWER_FORMAT,
-        grader=NoGrader(reason="An analysis of failed rollouts has no reference answer"),
-        source=Source(dataset=SUBJECT_ID, revision=catalog_version, row="0", importer_revision=ANALYSIS_REVISION),
-        resources=ResourceGroups(worker=files),
-    )
+    lines: Lines = {
+        f"c{i}.{j}": (evidence, {**group.model_dump(exclude={"id", "members"}), "rollouts": len(evidence)})
+        for i, groups in enumerate(found)
+        for j, (group, evidence) in enumerate(groups)
+    }
+    return await _merged(client, MERGE_LISTS_PROMPT, lines, count, policy)
+
+
+async def _merged(
+    client: ModelClient, prompt: str, lines: Lines, count: int, policy: LLMPolicy
+) -> list[tuple[Group, frozenset[str]]]:
+    """Each merged capability, with the run IDs of the lines that it holds."""
+    listing = "\n".join(json.dumps({"id": key, **fields}) for key, (_, fields) in lines.items())
+    messages: list[Message] = [
+        {"role": "system", "content": prompt.format(count=count)},
+        {"role": "user", "content": listing},
+    ]
+    for attempt in range(1, MERGE_ATTEMPTS):
+        try:
+            return _with_evidence((await client.complete_structured(messages, Groups, policy)).value, lines)
+        except StructuredOutputError as error:
+            logger.warning("Merge attempt %d of %d failed: %s", attempt, MERGE_ATTEMPTS, error)
+    return _with_evidence((await client.complete_structured(messages, Groups, policy)).value, lines)
+
+
+def _with_evidence(reply: Groups, lines: Lines) -> list[tuple[Group, frozenset[str]]]:
+    merged = []
+    for group in reply.capabilities:
+        evidence = frozenset().union(*(lines[key][0] for key in group.members if key in lines))
+        if evidence:
+            merged.append((group, evidence))
+    return merged
 
 
 def _summary(task: TaskSpec, graded: GradedRollout) -> dict[str, Any]:
-    """The rollout's line in the index: its grade, how it stopped, and its turns and tool calls."""
+    """The rollout's first line: its grade, how it stopped, and its turns and tool calls."""
     rollout, grade = graded.rollout, graded.grade
     turns = [step.turn.message for conversation in rollout.conversations for step in conversation.steps]
     calls = [_call_text(call) for message in turns for call in message.get("tool_calls") or ()]
@@ -266,19 +333,6 @@ def _render(message: Mapping[str, Any]) -> str:
     calls = [_call_text(call) for call in message.get("tool_calls") or ()]
     text = " ".join([str(message.get("content") or ""), *(f"<tool call> {call}" for call in calls)]).strip()
     return f"{message.get('role')}: {text}"
-
-
-def _answer(rollout: Rollout) -> list[MissingCapability]:
-    messages = rollout.conversations[-1].messages
-    attempt = GradingAttempt(chat_conversation(list(messages)), stop_reason=rollout.stop_reason)
-    try:
-        return CAPABILITIES.validate_python(ANSWER_FORMAT.extract(attempt).value)
-    except (SubmissionFailure, ValidationError) as error:
-        final = str(messages[-1].get("content"))[:500]
-        stop = rollout.stop_reason
-        raise ValueError(
-            f"The analysis answer (stop reason {stop!r}) is not a list of capabilities: {final!r}"
-        ) from error
 
 
 def _idea(capability: MissingCapability, catalog_version: str) -> CapabilityIdea:
