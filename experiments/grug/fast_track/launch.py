@@ -458,6 +458,7 @@ def build_h100_ladder_run(
     nodes: int | None = None,
     expert_axis_size: int | None = None,
     device: str | None = None,
+    eval_on_train_dispatch: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -471,6 +472,8 @@ def build_h100_ladder_run(
     ``collective_overlap_limit`` overrides XLA's concurrent-collective limit (None: the mode default).
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
+    ``eval_on_train_dispatch`` evaluates on the training mesh and MoE dispatch (e.g. the MXFP8 ragged experts) instead of
+    the dropless local backend; raise ``capacity_factor`` so it drops nothing (a drop makes the eval loss NaN).
     ``device`` moves an H100 rung onto GB200 trays (4 GPUs per node) and ``nodes`` overrides the rung's node count.
     ``expert_axis_size`` (default: every device) shards the experts over
     that many devices and replicates them (data parallel, ``replica_dcn``) over the rest, e.g. 8 for expert
@@ -694,7 +697,7 @@ def build_h100_ladder_run(
                     steps_per_eval=steps_per_eval,
                     eval_batch_size=rung.global_device_count,
                     compute_bpb=True,
-                    dropless_eval=True,
+                    dropless_eval=not eval_on_train_dispatch,
                     dropless_eval_moe_implementation=dropless_moe_implementation(model),
                 )
             ),
@@ -1029,6 +1032,12 @@ def _layer_skip_rule(
     help="Nodes for the run (default: the rung's; H100 rungs use one 8-GPU node).",
 )
 @click.option(
+    "--eval-on-train-dispatch",
+    is_flag=True,
+    help="Evaluate with the training mesh and MoE dispatch (MXFP8 experts included) instead of the dropless local "
+    "backend; pair with a capacity_factor that drops nothing (a drop makes the eval loss NaN).",
+)
+@click.option(
     "--device",
     type=click.Choice(["H100", "GB200"]),
     default=None,
@@ -1128,6 +1137,7 @@ def main(
     nodes: int | None,
     expert_axis_size: int | None,
     device: str | None,
+    eval_on_train_dispatch: bool,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -1186,6 +1196,7 @@ def main(
         nodes=nodes,
         expert_axis_size=expert_axis_size,
         device=device,
+        eval_on_train_dispatch=eval_on_train_dispatch,
     )
 
 

@@ -587,14 +587,20 @@ def build_tagged_evaluator(
             model = model_transform(model)
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
-        per_pos_loss = model.next_token_loss(
+        per_pos_loss, metrics = model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
             reduction="none",
             logsumexp_weight=None,
             layer_skip=_layer_skip_mask(layer_skip, batch.tokens, batch.attn_mask),
+            return_router_metrics=True,
         )
+        if "moe/dropped_assignments" in metrics:
+            # An expert-parallel eval (the training dispatch) must be dropless to score the model: any
+            # capacity-dropped assignment turns the batch's losses NaN instead of silently biasing them.
+            dropped = jnp.sum(metrics["moe/dropped_assignments"])
+            per_pos_loss = jnp.where(dropped > 0, jnp.nan, per_pos_loss)
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
         per_pos_token_id = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1)))

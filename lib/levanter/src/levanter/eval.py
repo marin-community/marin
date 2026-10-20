@@ -583,10 +583,12 @@ class TaggedEvaluator(Generic[Ex, M]):
                 bpb = this_loss / jnp.maximum(this_bytes, 1.0) * log2e
                 bpb_per_tag = this_loss_per_tag / jnp.maximum(bytes_per_tag, 1.0) * log2e
 
-                bpb_mean = state.bpb.add(bpb, this_weights)
+                # Byte-weighted means of the per-batch ratios: total loss over total bytes. Token weights would
+                # let a batch holding a few short tag tokens (a document tail) set the tag's BPB.
+                bpb_mean = state.bpb.add(bpb, this_bytes)
                 state = dataclasses.replace(state, bpb=bpb_mean)
                 if len(self.dataset.tag_to_index) > 0:
-                    bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, this_weights_per_tag)
+                    bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, bytes_per_tag)
                     state = dataclasses.replace(state, bpb_per_tag=bpb_per_tag_mean)
 
             return state
@@ -831,8 +833,8 @@ class LabeledEvaluator(Generic[Ex, M]):
 class _EvalRunningMeans(eqx.Module):
     token_avg_loss: RunningMean  # average loss averaged over all tokens
     loss_per_tag: RunningMean  # average loss per tag
-    bpb: RunningMean  # bits per byte averaged over all tokens
-    bpb_per_tag: RunningMean  # bits per byte per tag
+    bpb: RunningMean  # bits per byte, weighted by bytes
+    bpb_per_tag: RunningMean  # bits per byte per tag, weighted by bytes
 
     @staticmethod
     def zeros_like(total: Float[Array, "..."], per_tag: Float[Array, "tag"]) -> "_EvalRunningMeans":
