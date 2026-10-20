@@ -21,27 +21,38 @@ from rolloutengine.models import (
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerCall, TaskSpec
-from taskforge.llm.client import ContextExhausted, StructuredResult
+from taskforge.llm.client import StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 
-from experiments.post_training.capability_driven_envs import analyze_failed_runs as module
 from experiments.post_training.capability_driven_envs.analyze_failed_runs import (
+    Capability,
     Group,
     Groups,
-    RolloutSkills,
-    Skill,
+    MaybeIdea,
+    RolloutIdeas,
     analyze_failed_runs,
-    policy_failures,
+    merge_ideas,
+    yield_ideas,
 )
 from experiments.post_training.capability_driven_envs.generate_tasks import task_workpieces
 from experiments.post_training.capability_driven_envs.tests.test_generate_tasks import COMPLETION
 
 LOOKUP_CALL = {"id": "call", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "six"}'}}
-STOP_LOOPS = Skill(
-    name="Stop repeating a call", outcome="Change the approach after a repeated result.", includes=("Notice it",)
+STOP_LOOPS = Capability(
+    id="failed-runs.tool-use.stop-loops",
+    name="Stop repeating a call",
+    outcome="Change the approach after a repeated result.",
+    includes=("Notice it",),
 )
-CHECK_WORK = Skill(name="Check the work", outcome="Verify an answer before it is final.", includes=("Recompute",))
+CHECK_WORK = Capability(
+    id="failed-runs.verify.check-work",
+    name="Check the work",
+    outcome="Verify an answer before it is final.",
+    includes=("Recompute",),
+)
 CUT_OFF = StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION,))
 
 
@@ -82,16 +93,20 @@ ROLLOUTS = [
 
 class Analyst:
     """Names the loop skill for a rollout with a lookup call and the check skill for the others, and merges the lines
-    with the same name. A rollout that says "cut off" fails as a reply at the output limit does, and a merge of more
-    than ``max_skills`` skills raises ``merge_error``."""
+    with the same name. A rollout that says "cut off", and the first ``failed_merges`` merges, fail as a reply at the
+    output limit does. It keeps the messages of its calls."""
 
     model = "fake"
 
-    def __init__(self, max_skills: int = 100, merge_error: Exception = CUT_OFF):
-        self.max_skills = max_skills
-        self.merge_error = merge_error
-        self.rollouts: list[str] = []
-        self.merges: list[list[dict]] = []
+    def __init__(self, failed_merges: int = 0):
+        self.failed_merges = failed_merges
+        self.requests: list[str] = []
+
+    async def __aenter__(self) -> "Analyst":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
 
     async def complete(self, messages: Sequence[Message], policy: LLMPolicy):
         raise AssertionError("the analysis asks only for structured output")
@@ -100,16 +115,16 @@ class Analyst:
         self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
         text = str(messages[-1]["content"])
-        if output_type is RolloutSkills:
-            self.rollouts.append(text)
+        self.requests.append(text)
+        if output_type is RolloutIdeas:
             if "cut off" in text:
                 raise CUT_OFF
-            value = RolloutSkills(skills=(STOP_LOOPS if "lookup" in text else CHECK_WORK,))
+            value = RolloutIdeas(ideas=(STOP_LOOPS if "lookup" in text else CHECK_WORK,))
         else:
+            if self.failed_merges:
+                self.failed_merges -= 1
+                raise CUT_OFF
             lines = [json.loads(line) for line in text.splitlines()]
-            self.merges.append(lines)
-            if len(lines) > self.max_skills and "rollouts" not in lines[0]:
-                raise self.merge_error
             names = dict.fromkeys(line["name"] for line in lines)
             groups = (
                 Group(
@@ -126,85 +141,83 @@ class Analyst:
         return StructuredResult(value, (COMPLETION,))
 
 
-def analyze(rollouts: Sequence[tuple[TaskSpec, GradedRollout]], analyst: Analyst):
-    return analyze_failed_runs(
-        rollouts,
-        analyst,
+def no_client():
+    raise AssertionError("no model call was expected")
+
+
+@pytest.fixture(scope="module")
+def ctx(tmp_path_factory):
+    with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path_factory.mktemp("zephyr"))) as context:
+        yield context
+
+
+def analyze(ctx: ZephyrContext, rollouts, num_shards: int = 1, make_client=Analyst):
+    plan = analyze_failed_runs(
+        Dataset.from_list(rollouts),
+        make_client,
         pass_threshold=1.0,
-        max_capabilities=8,
+        max_new_ideas=8,
+        num_shards=num_shards,
         policy=LLMPolicy(),
         merge_policy=LLMPolicy(),
         catalog_version="round-1",
     )
+    return ctx.execute(plan).results
 
 
-def test_only_the_rollouts_that_the_policy_failed_are_analyzed():
-    failures = policy_failures(ROLLOUTS, pass_threshold=1.0)
-    assert [graded.rollout.run_id for _, graded in failures] == ["wrong", "loop"]
+def names_and_evidence(ideas) -> list[tuple[str, list[str]]]:
+    return [(idea.capability["name"], idea.capability["evidence"]) for idea in ideas]
 
 
-async def test_each_capability_cites_the_failed_rollouts_of_its_skills_and_becomes_a_catalog_idea():
-    analyst = Analyst()
+def test_each_idea_cites_the_failed_rollouts_of_its_skills_and_becomes_a_catalog_idea(ctx):
+    ideas = analyze(ctx, [*ROLLOUTS, loop("loop-2")])
 
-    ideas = await analyze([*ROLLOUTS, loop("loop-2")], analyst)
-
-    assert [(idea.capability["name"], idea.capability["evidence"]) for idea in ideas] == [
-        (STOP_LOOPS.name, ["loop", "loop-2"]),
-        (CHECK_WORK.name, ["wrong"]),
-    ]
-    assert '[1] assistant: <tool call> lookup({"key": "six"})' in analyst.rollouts[1]
+    assert names_and_evidence(ideas) == [(STOP_LOOPS.name, ["loop", "loop-2"]), (CHECK_WORK.name, ["wrong"])]
     idea = ideas[0]
     assert (idea.catalog_version, idea.capability["kind"]) == ("round-1", "capability")
     assert task_workpieces({idea.capability_id: idea}, 1) == [(f"{idea.capability_id}--00", idea)]
 
 
-async def test_a_rollout_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
+def test_the_ideas_of_several_shards_merge_again(ctx):
+    rollouts = [loop(f"loop-{i}") for i in range(4)] + [wrong(f"wrong-{i}") for i in range(2)]
+
+    ideas = analyze(ctx, rollouts, num_shards=2)
+
+    assert names_and_evidence(ideas) == [
+        (STOP_LOOPS.name, [f"loop-{i}" for i in range(4)]),
+        (CHECK_WORK.name, ["wrong-0", "wrong-1"]),
+    ]
+
+
+def test_a_rollout_whose_reply_stays_invalid_gives_no_ideas(ctx):
+    assert names_and_evidence(analyze(ctx, [loop("loop"), wrong("cut", "cut off")])) == [(STOP_LOOPS.name, ["loop"])]
+
+
+def test_no_failed_rollout_needs_no_model_call(ctx):
+    assert analyze(ctx, ROLLOUTS[:1], make_client=no_client) == []
+
+
+def test_the_rollout_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
     policy = {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function"}]}
     _, graded = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, policy)
     analyst = Analyst()
 
-    await analyze([(arithmetic_task(id="task-malformed", answer_format=AnswerCall()), graded)], analyst)
+    rollout = (arithmetic_task(id="task-malformed", answer_format=AnswerCall()), graded)
+    [maybe] = yield_ideas(rollout, make_client=lambda: analyst, policy=LLMPolicy())
 
-    summary, tools, *messages = analyst.rollouts[0].splitlines()
-    assert json.loads(summary)["run_id"] == "malformed"
+    summary, tools, *messages = analyst.requests[0].splitlines()
+    assert json.loads(summary)["run_id"] == "malformed" and maybe.evidence == {"malformed"}
     assert [tool["function"]["name"] for tool in json.loads(tools)["tools"]] == ["submit_answer"]
     assert messages[-1] == '[1] assistant: <tool call> malformed {"id": "bad", "type": "function"}'
 
 
-async def test_no_failed_rollout_needs_no_model_call():
-    analyst = Analyst()
-    assert await analyze(ROLLOUTS[:1], analyst) == []
-    assert analyst.rollouts == [] and analyst.merges == []
+def test_a_merge_samples_again_after_a_cut_off_reply():
+    analyst = Analyst(failed_merges=2)
+    ideas = [MaybeIdea(STOP_LOOPS, frozenset({"a"})), MaybeIdea(STOP_LOOPS, frozenset({"a", "b"}))]
 
+    [merged] = merge_ideas(ideas, make_client=lambda: analyst, max_new_ideas=8, policy=LLMPolicy())
 
-async def test_a_rollout_whose_skill_call_fails_gives_no_skills_unless_too_many_fail():
-    loops = [loop(f"loop-{i}") for i in range(10)]
-
-    [idea] = await analyze([*loops, wrong("cut", "cut off")], Analyst())
-
-    assert idea.capability["evidence"] == [f"loop-{i}" for i in range(10)]
-    with pytest.raises(ValueError, match="failed for 1 of 2"):
-        await analyze([loops[0], wrong("cut", "cut off")], Analyst())
-
-
-@pytest.mark.parametrize(
-    "merge_error,merges",
-    [(CUT_OFF, [4, 4, 4, 2, 2, 4]), (ContextExhausted("the prompt is too long", ()), [4, 2, 2, 4])],
-    ids=["reply-cut-off", "prompt-too-long"],
-)
-async def test_a_merge_that_fails_merges_in_two_levels(monkeypatch, merge_error, merges):
-    monkeypatch.setattr(module, "CHUNK_ROLLOUTS", 2)
-    analyst = Analyst(max_skills=2, merge_error=merge_error)
-
-    ideas = await analyze([loop("loop-1"), loop("loop-2"), wrong("wrong-1"), wrong("wrong-2")], analyst)
-
-    assert [(idea.capability["name"], idea.capability["evidence"]) for idea in ideas] == [
-        (STOP_LOOPS.name, ["loop-1", "loop-2"]),
-        (CHECK_WORK.name, ["wrong-1", "wrong-2"]),
-    ]
-    # The merge of all four skills (three samples of a cut-off reply, or one rejected prompt), two chunk merges, and
-    # the merge of the four chunk capabilities.
-    assert [len(lines) for lines in analyst.merges] == merges
+    assert (merged.idea.name, merged.num_rollouts, len(analyst.requests)) == (STOP_LOOPS.name, 2, 3)
 
 
 def test_a_merged_capability_cannot_give_its_member_ids_as_behaviors():

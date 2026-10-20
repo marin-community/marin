@@ -219,6 +219,8 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "experiments/post_training/capability_driven_envs/",
         "experiments/post_training/glm.py",
         "lib/rolloutengine/",
+        "lib/zephyr/",
+        "lib/fray/",
         "lib/taskcompendium/",
         "lib/iris/",
         "lib/shellbox/",
