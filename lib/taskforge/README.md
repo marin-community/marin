@@ -149,9 +149,9 @@ spec, so a move of either is a single-site change.
   in the Iris task. Before a trial starts, `task_refusals(spec, factories)` passes each machine of
   a `TaskRolloutSpec` to its factory's `check_environment` and lists a typed refusal, with the factory's
   message, for each machine without a factory or rejected by one. `warm_local_python(factories)`
-  builds the local backend's bare CPython environment in a background thread, so a coordinator that
-  calls it once at start spares its first wave of local machines the five-second build; the build
-  children share the cache.
+  builds the local backend's bare CPython environment in a background thread, so the run's driver
+  (the ladder that runs Taskforge on Iris), which calls it once at start, spares its first wave of
+  local machines the five-second build; the build children share the cache.
 
 Task-specific grading is the task's own code, private in `resources.verifier`, run by a
 `ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from

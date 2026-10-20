@@ -196,10 +196,11 @@ def warm_local_python(factories: Mapping[str, MachineFactory]) -> threading.Thre
     The local factory resolves a ``PackageSpec`` machine's environment once per cache (``uv`` installs the
     interpreter, makes the venv and compiles the lock) and reuses it afterwards; the first wave of
     machines in a fresh process queues on that build, about five seconds for the empty requirements of
-    ``draft.LOCAL_CPYTHON``, while later machines pay nothing. A coordinator calls this once after
-    ``machine_factories`` so the build overlaps its first model calls; the build children it starts share
-    the cache. Returns the thread, or ``None`` when ``factories`` has no local backend. The thread is a
-    daemon: a failure is logged and the first machine resolves the environment itself.
+    ``draft.LOCAL_CPYTHON``, while later machines pay nothing. The run's driver, the ladder that runs
+    Taskforge on Iris, calls this once after ``machine_factories`` so the build overlaps its first model
+    calls; the library's stage coordinator starts no machines. The build children share the cache.
+    Returns the thread, or ``None`` when ``factories`` has no local backend. The thread is a daemon: a
+    failure is logged and the first machine resolves the environment itself.
     """
     factory = factories.get(Backend.LOCAL.value)
     if not isinstance(factory, PythonEnvironmentFactory):
