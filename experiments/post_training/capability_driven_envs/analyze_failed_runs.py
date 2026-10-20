@@ -49,6 +49,8 @@ IDEAS_PER_ROLLOUT = 3
 MERGE_ATTEMPTS = 3
 ROLLOUTS_WITHOUT_IDEAS = "failed_runs.rollouts_without_ideas"
 """The pipeline counter of the failed rollouts whose reply stayed invalid."""
+FAILURE_OPERATION = "operation"
+"""The key of ``RolloutFailure.diagnostics`` that names the interrupted operation, as rolloutengine records it."""
 POLICY_INTERRUPTIONS = frozenset({RolloutOperation.ATTEMPT, RolloutOperation.ADVANCE})
 """The interruptions that the policy can cause: a slow or looping policy runs past the attempt deadline, and a bad
 tool call can stop the harness after a model turn."""
@@ -80,12 +82,6 @@ class Capability(BaseModel):
         if FILE_SAFE_ID.match(value) is None:
             raise ValueError(f"capability id {value!r} is not file-safe")
         return value
-
-
-class MissingCapability(Capability):
-    """A general skill that the failed rollouts lack, with the catalog's capability fields and the evidence."""
-
-    evidence: tuple[str, ...] = Field(min_length=1, description="The run IDs of the failed rollouts that show the gap.")
 
 
 class RolloutIdeas(BaseModel):
@@ -196,7 +192,7 @@ def policy_failed(graded: GradedRollout, pass_threshold: float) -> bool:
     """
     failure = graded.rollout.failure
     if failure is not None:
-        return failure.diagnostics.get("operation") in POLICY_INTERRUPTIONS
+        return failure.diagnostics.get(FAILURE_OPERATION) in POLICY_INTERRUPTIONS
     grade = graded.grade
     if grade.status == Outcome.SUBMISSION_FAILURE:
         return True
@@ -265,17 +261,14 @@ def merge_ideas(
 def merge_idea_lists(
     lists: Iterable[list[MaybeIdea]], *, merge: Callable[[Iterable[MaybeIdea]], list[MaybeIdea]]
 ) -> list[MaybeIdea]:
-    """The global reducer: one more ``merge`` of the lists of the groups. One list needs no second merge."""
+    """The global reducer: one more ``merge`` of the lists of the batches. One list needs no second merge."""
     full = [ideas for ideas in lists if ideas]
     return full[0] if len(full) == 1 else merge(chain.from_iterable(full))
 
 
 def to_ideas(ideas: list[MaybeIdea], *, catalog_version: str) -> list[CapabilityIdea]:
-    records = (
-        MissingCapability(**candidate.idea.model_dump(), evidence=tuple(sorted(candidate.evidence)))
-        for candidate in ideas
-    )
-    return [_idea(record, catalog_version) for record in records]
+    """The catalog idea of each merged idea, with the run IDs of its evidence in the capability record."""
+    return [_idea(candidate, catalog_version) for candidate in ideas]
 
 
 def _complete[T: BaseModel](
@@ -307,7 +300,7 @@ def _summary(task: TaskSpec, graded: GradedRollout) -> dict[str, Any]:
         "outcome": grade.status.value,
         "reward": grade.reward,
         "stop_reason": rollout.stop_reason,
-        "interrupted_during": rollout.failure.diagnostics.get("operation") if rollout.failure else None,
+        "interrupted_during": rollout.failure.diagnostics.get(FAILURE_OPERATION) if rollout.failure else None,
         "turns": len(turns),
         "tool_calls": len(calls),
         "repeated_calls": sum(previous == call for previous, call in pairwise(calls)),
@@ -341,15 +334,16 @@ def _render(message: Mapping[str, Any]) -> str:
     return f"{message.get('role')}: {text}"
 
 
-def _idea(capability: MissingCapability, catalog_version: str) -> CapabilityIdea:
+def _idea(candidate: MaybeIdea, catalog_version: str) -> CapabilityIdea:
     record = {
         "kind": CAPABILITY_KIND,
         "parent_id": SUBJECT_ID,
         "prerequisites": [],
-        **capability.model_dump(mode="json"),
+        **candidate.idea.model_dump(mode="json"),
+        "evidence": sorted(candidate.evidence),
     }
     return CapabilityIdea(
-        capability_id=capability.id,
+        capability_id=candidate.idea.id,
         subject_id=SUBJECT_ID,
         subject_name=SUBJECT_NAME,
         catalog_version=catalog_version,
