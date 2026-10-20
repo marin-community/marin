@@ -3,6 +3,7 @@
 
 """Shared task, model, and runtime helpers for RolloutEngine tests."""
 
+import json
 from dataclasses import dataclass, field
 
 from shellbox.machine import NetworkPolicy
@@ -18,11 +19,20 @@ from taskcompendium.models import (
 )
 from verifyit.spec import NumericSpec
 
-from rolloutengine.contracts import ModelRequest, ModelTurn
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.models import (
+    GradedRollout,
+    MachineRuntimeSpec,
+    Model,
+    ModelRequest,
+    ModelTurn,
+    RolloutLimits,
+    TaskRolloutSpec,
+)
 
 TWELVE = NumericSpec("12", tolerance_abs=0, tolerance_rel=0)
+SHELL = "shell"
 
 
 @dataclass
@@ -33,7 +43,7 @@ class ReplayModel:
     async def complete(self, request: ModelRequest) -> ModelTurn:
         self.requests.append(request)
         index = len(self.requests) - 1
-        prompt = (*request.prefix_token_ids, 90, 91) if request.prefix_token_ids else (10, 11)
+        prompt = (*request.continuation.served_token_ids, 90, 91) if request.continuation is not None else (10, 11)
         return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), "stop")
 
 
@@ -69,27 +79,80 @@ def machine_runtime(**overrides) -> MachineRuntimeSpec:
     )
 
 
-def lowered(task: TaskSpec, *, machine=None, verifier_machine=None, **limits) -> LoweredTaskSpec:
-    return LoweredTaskSpec(
-        task=task,
-        runtime=TaskRuntimeSpec(task_machine=machine, verifier_machine=verifier_machine),
-        session=TaskSessionSpec.model_validate(
-            {
-                "task_session": "shellbox",
-                "max_turns": 3,
-                "model_turn_timeout": None,
-                "command_timeout": None,
-                "tool_turn_timeout": None,
-                "total_turn_timeout": None,
-                "attempt_timeout": None,
-                "verifier_timeout": 5,
-                "cleanup_timeout": 5,
-                "max_total_tokens": None,
-                **limits,
-            }
-        ),
+def rollout_limits(**overrides) -> RolloutLimits:
+    return RolloutLimits.model_validate(
+        {
+            "max_turns": 3,
+            "max_total_tokens": None,
+            "model_turn_timeout": None,
+            "tool_turn_timeout": None,
+            "total_turn_timeout": None,
+            "attempt_timeout": None,
+            "verifier_timeout": 5,
+            "cleanup_timeout": 5,
+            **overrides,
+        }
     )
 
 
-def engine(model, factories=None, *, sessions=None, providers=None) -> RolloutEngine:
-    return RolloutEngine(model.complete, {} if factories is None else factories, sessions=sessions, providers=providers)
+def rollout_spec(
+    task: TaskSpec,
+    *,
+    harness=SHELL,
+    machine=None,
+    verifier_machine=None,
+    trace=None,
+    judge_connection=None,
+    **limits,
+) -> TaskRolloutSpec:
+    return TaskRolloutSpec.model_validate(
+        {
+            "task": task,
+            "harness": harness,
+            "task_machine": machine,
+            "verifier_machine": verifier_machine,
+            "judge_connection": judge_connection,
+            **({} if trace is None else {"trace": trace}),
+            "limits": rollout_limits(**limits),
+        }
+    )
+
+
+@dataclass(frozen=True)
+class ModelEngine:
+    """A rollout engine and the one model that a test runs through it."""
+
+    engine: RolloutEngine
+    model: Model
+
+    def check(self, spec: TaskRolloutSpec) -> None:
+        self.engine.check(spec)
+
+    async def run_task(self, spec: TaskRolloutSpec, run_id: str | None = None) -> GradedRollout:
+        return await self.engine.run_task(spec, self.model, run_id=run_id)
+
+
+def engine(model, machine_factories=None, *, harnesses=None, observer=None) -> ModelEngine:
+    """Run ``model.complete`` with a shell harness under ``SHELL``, unless ``harnesses`` replaces it."""
+    rollout_engine = RolloutEngine(
+        {} if machine_factories is None else machine_factories,
+        {SHELL: ShellHarness(command_timeout=None), **({} if harnesses is None else harnesses)},
+        observer=observer,
+    )
+    return ModelEngine(rollout_engine, model.complete)
+
+
+def shell_call(command: str, *, call_id: str = "write") -> dict:
+    return {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "arguments": json.dumps({"command": command}),
+                },
+            }
+        ],
+    }

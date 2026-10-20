@@ -3,11 +3,10 @@
 
 """One deterministic task: its conversation, environment, grader, and answer format.
 
-A grader is one of four kinds. ``VerifyitGrader`` names a verifyit mode, graded in process
+A grader is one of three kinds. ``VerifyitGrader`` names a verifyit mode, graded in process
 against the extracted answer or, with an environment, by the verifyit command in a fresh
-machine. ``ScriptGrader`` runs a command in a fresh machine and reads its reward. A
-``SessionGrader`` task is graded by the rollout session that runs it. ``NoGrader`` records why a
-task cannot be graded. The answer format says how the final answer is requested from the model
+machine. ``ScriptGrader`` runs a command in a fresh machine and reads its reward. ``NoGrader``
+records why a task cannot be graded. The answer format says how the final answer is requested from the model
 and extracted from its conversation.
 """
 
@@ -33,6 +32,7 @@ from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
     GotestSpec,
+    JudgeSpec,
     JunitSpec,
     PytestSpec,
     ScriptSpec,
@@ -614,14 +614,6 @@ class ScriptGrader(BaseModel):
         return self
 
 
-class SessionGrader(BaseModel):
-    """The rollout session registered for the task grades it."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["session"] = "session"
-
-
 class NoGrader(BaseModel):
     """A task without a runnable grader; ``contract`` keeps the source's grading terms."""
 
@@ -637,12 +629,17 @@ class NoGrader(BaseModel):
         return self
 
 
-Grader = Annotated[VerifyitGrader | ScriptGrader | SessionGrader | NoGrader, Field(discriminator="kind")]
+Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader, Field(discriminator="kind")]
 
 
 def grades_in_process(grader: Grader) -> bool:
     """Whether the grader scores the extracted answer without a grading machine."""
     return isinstance(grader, VerifyitGrader) and grader.environment is None
+
+
+def grades_with_judge(grader: Grader) -> bool:
+    """Whether the grader is a verifyit judge, which grades the answer through a judge service."""
+    return isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec)
 
 
 def grader_workspace(grader: Grader) -> str:

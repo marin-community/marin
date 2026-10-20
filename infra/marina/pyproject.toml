@@ -46,6 +46,13 @@ dependencies = [
 [project.scripts]
 marina = "marina.cli:cli"
 
+[dependency-groups]
+test = [
+    # The zephyr app tests run against an embedded native Finelog server.
+    "marin-iris[controller]",
+]
+dev = [{ include-group = "test" }]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/marina"]
 
