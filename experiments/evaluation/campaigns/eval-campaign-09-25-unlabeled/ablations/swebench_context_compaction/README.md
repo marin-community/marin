@@ -60,5 +60,19 @@ launching. Do not pass a task limit or resume into the
 old result root. For the full-arm score, combine the retained results with
 recovery results by task ID exactly once over the original 500-task cohort.
 The recovery subset's aggregate alone is not a full-arm score.
-The combined aggregation tool is not yet implemented; do not publish these
-subset aggregates as completed ablation results.
+Audit a recovery root with:
+
+```bash
+uv run python "$ablation/combine_recovery.py" \
+  --manifest "$ablation/configs/recovery/qwen36/65k-16k-no-summary/manifest.json" \
+  --recovery-results "$recovery_results" --output combined.json
+```
+
+`recovery_results` is the replacement run's `s3://.../results` URI, containing
+`harbor_jobs/` and `harbor_resume_identity.json`. The audit reads run artifacts
+and writes a local report. It checks the manifest's Harbor revision, launched
+task selection, retained `result.json` checksums, and task uniqueness across
+both inputs. Each task has one trial. The report includes their combined mean,
+missing and unscored counts, and each trial's URI, checksum, and score.
+`all_tasks_scored` becomes true only when all 500 manifest tasks have a score.
+The command does not publish to EvalDash. Verify Iris job completion separately.
