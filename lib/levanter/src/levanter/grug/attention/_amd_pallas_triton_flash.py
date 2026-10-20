@@ -111,7 +111,9 @@ def _key_lower_bounds(mask: AttentionMask, *, batch: int, seq_len: int) -> Int[A
             q_seg = eqx.error_if(
                 q_seg, jnp.any(q_seg != kv_seg), "gpu_pallas_triton_flash needs equal q/kv segment ids"
             )
-        starts = jnp.concatenate([jnp.ones((batch, 1), dtype=jnp.bool_), q_seg[:, 1:] != q_seg[:, :-1]], axis=1)
+        # Build the first column from q_seg so it shares q_seg's sharding; explicit sharding rejects a mixed concat.
+        first = jnp.ones_like(q_seg[:, :1], dtype=jnp.bool_)
+        starts = jnp.concatenate([first, q_seg[:, 1:] != q_seg[:, :-1]], axis=1)
         lower = lax.cummax(jnp.where(starts, positions, 0), axis=1)
     if mask.sliding_window is not None:
         if mask.sliding_window <= 0:
@@ -440,7 +442,9 @@ def pallas_triton_flash_attention(
                 f"gpu_pallas_triton_flash needs {name} sharded like q, got q={partition_spec_of(q)} "
                 f"{name}={partition_spec_of(x)}"
             )
-    if not any(q_dims):
+    # pallas_call rejects operands whose type names any Explicit mesh axis, even one of size 1, and Grug's meshes keep
+    # length-1 axes in every spec, so only skip shard_map when q's spec names no axis at all.
+    if not any(q_dims) and not any(jax.typeof(q).sharding.spec):
         return run(q, k, v, lower)
     q_spec = tuple(partition_spec_of(q))
     q_spec = P(*q_spec, *((None,) * (q.ndim - len(q_spec))))
