@@ -58,7 +58,7 @@ from iris.client.client import iris_ctx
 from iris.cluster.types import JobName
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import ExponentialBackoff
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.models import TaskRolloutSpec
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
@@ -94,12 +94,12 @@ from taskforge.spec.draft import (
     lower,
     machine,
     requirements,
+    rollout_limits,
     script_grader,
-    session,
 )
 from taskforge.stage50_validate.evidence import Complete, Evidence
 from taskforge.stage50_validate.outcome import Graded, Outcome, TrialKind
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, run_trials
+from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, rollout_steps, run_trials
 
 GLM_MODEL = "glm-5.3"
 GLM_TOKEN_ENV = "GLM_HIGH_TOKEN"
@@ -142,11 +142,11 @@ CLEANUP_TIMEOUT = 120
 STARTUP_TIMEOUT = 900
 VERIFIER_TIMEOUT = 300
 DEADLINES = Deadlines(total_turn_timeout=1800, attempt_timeout=2400)
-# The builder's session; EngineSettings and DEADLINES replace all but the verifier deadline.
-SESSION = session(
+# The builder's limits; EngineSettings and DEADLINES replace all but the verifier deadline, and
+# EngineSettings registers COMMAND_TIMEOUT with the shell harness.
+LIMITS = rollout_limits(
     max_turns=MAX_TURNS,
     model_turn_timeout=MODEL_TURN_TIMEOUT,
-    command_timeout=COMMAND_TIMEOUT,
     tool_turn_timeout=TOOL_TURN_TIMEOUT,
     total_turn_timeout=DEADLINES.total_turn_timeout,
     attempt_timeout=DEADLINES.attempt_timeout,
@@ -225,7 +225,7 @@ def source(row: str) -> Source:
     return Source(dataset="taskforge-cluster-rollout-probe", revision="1", row=row, importer_revision="1")
 
 
-def math_task(factories: dict[str, MachineFactory]) -> LoweredTaskSpec:
+def math_task(factories: dict[str, MachineFactory]) -> TaskRolloutSpec:
     task = assemble(
         "cluster-math",
         "What is 17 * 23 + 4? Reply with only the number, nothing else.",
@@ -236,11 +236,11 @@ def math_task(factories: dict[str, MachineFactory]) -> LoweredTaskSpec:
         environment=None,
     )
     return lower(
-        task, host=MachineHost.IRIS, task_machine=None, verifier_machine=None, session=SESSION, factories=factories
+        task, host=MachineHost.IRIS, task_machine=None, verifier_machine=None, limits=LIMITS, factories=factories
     )
 
 
-def docker_task(factories: dict[str, MachineFactory]) -> LoweredTaskSpec:
+def docker_task(factories: dict[str, MachineFactory]) -> TaskRolloutSpec:
     """A file task on ``IMAGE`` whose script grader runs in a verifier machine from the same image."""
     task = assemble(
         "cluster-docker-file",
@@ -271,37 +271,46 @@ def docker_task(factories: dict[str, MachineFactory]) -> LoweredTaskSpec:
         host=MachineHost.IRIS,
         task_machine=settings,
         verifier_machine=settings,
-        session=SESSION,
+        limits=LIMITS,
         factories=factories,
     )
 
 
-def shell_calls(outcome: Outcome) -> list[str]:
+def assistant_messages(outcome: Outcome) -> list[dict[str, Any]]:
+    """The model's messages across the rollout's conversations; none without a rollout."""
     rollout = outcome.rollout
     if rollout is None:
         return []
+    return [step.turn.message for step in rollout_steps(rollout)]
+
+
+def shell_calls(outcome: Outcome) -> list[str]:
     return [
         call["function"]["arguments"]
-        for message in rollout.messages
-        if message["role"] == "assistant"
+        for message in assistant_messages(outcome)
         for call in message.get("tool_calls") or []
     ]
 
 
 def final_message(outcome: Outcome) -> str | None:
+    replies = [message.get("content") for message in assistant_messages(outcome)]
+    return replies[-1] if replies else None
+
+
+def response_tokens(outcome: Outcome) -> int:
+    """The completion tokens the rollout's turns report in their usage; 0 without a rollout."""
     rollout = outcome.rollout
     if rollout is None:
-        return None
-    replies = [message.get("content") for message in rollout.messages if message["role"] == "assistant"]
-    return replies[-1] if replies else None
+        return 0
+    return sum(step.turn.usage.completion_tokens for step in rollout_steps(rollout) if step.turn.usage is not None)
 
 
 def outcome_summary(outcome: Outcome) -> dict[str, Any]:
     rollout = outcome.rollout
     common: dict[str, Any] = {
-        "turns": 0 if rollout is None else len(rollout.steps),
+        "turns": 0 if rollout is None else len(rollout_steps(rollout)),
         "stop_reason": None if rollout is None else rollout.stop_reason,
-        "response_tokens": 0 if rollout is None else sum(len(step.turn.response_token_ids) for step in rollout.steps),
+        "response_tokens": response_tokens(outcome),
         "shell_calls": shell_calls(outcome),
         "final_message": final_message(outcome),
     }
@@ -346,7 +355,7 @@ def evidence_summary(outcomes: list[Outcome]) -> dict[str, Any]:
 
 async def run_phase(
     phase: Phase,
-    lowered: LoweredTaskSpec,
+    spec: TaskRolloutSpec,
     factories: dict[str, MachineFactory],
     client: GlmClient,
     results: Path,
@@ -354,7 +363,7 @@ async def run_phase(
     max_retries: int,
 ) -> dict[str, Any]:
     directory = results / str(phase)
-    task = lowered.task
+    task = spec.task
     ledger = JsonlLedger(directory / "ledger")
     model = GlmRolloutModel(client, POLICY, CallLedger(ledger, task.id, 0, str(TrialKind.SOLVER)))
     timed = {backend: TimedFactory(factory) for backend, factory in factories.items()}
@@ -365,6 +374,7 @@ async def run_phase(
         tool_turn_timeout=TOOL_TURN_TIMEOUT,
         model_turn_timeout=MODEL_TURN_TIMEOUT,
         cleanup_timeout=CLEANUP_TIMEOUT,
+        decision=None,
     )
     plan = TrialPlan(
         workpiece_id=task.id,
@@ -380,7 +390,7 @@ async def run_phase(
     )
     print(f"PHASE_START {phase} task={task.id} k={k} max_retries={max_retries}", flush=True)
     started = time.monotonic()
-    outcomes = await run_trials(lowered, plan, settings, model)
+    outcomes = await run_trials(spec, plan, settings, model)
     wall_time = time.monotonic() - started
     summary = {
         "phase": str(phase),
