@@ -41,7 +41,8 @@ class Stage(eqx.Module):
 
 
 @pytest.mark.parametrize("compute_dtype", ["float32", "bfloat16"])
-def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_weights(compute_dtype):
+@pytest.mark.parametrize("with_reference", [False, True])
+def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_weights(compute_dtype, with_reference):
     rows = 2 * jax.device_count()
     Batch, Response = hax.Axis("batch", rows), hax.Axis("response", 2)
     # TPU may otherwise approximate FP32 contractions differently across CE shapes.
@@ -64,10 +65,19 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
             weights,
             weights,
             jnp.full((rows, 2), -2.0),
-            jnp.full((rows, 2), -2.1),
+            jnp.full((rows, 2), -2.1) if with_reference else None,
         )
-        config = GrpoConfig(0.2, 0.2, 0.001, KlGradient.DETACHED)
+        config = GrpoConfig(0.2, 0.2, 0.001 if with_reference else 0.0, KlGradient.DETACHED)
         policy = jmp.get_policy(f"params=float32,compute={compute_dtype},output=float32")
+        if not with_reference:
+            with pytest.raises(ValueError, match="reference_log_probs are required"):
+                pipeline_loss(
+                    selected,
+                    frozen,
+                    batch,
+                    config=GrpoConfig(0.2, 0.2, 0.001, KlGradient.DIFFERENTIABLE),
+                    mp_policy=policy,
+                )
 
         def actual(params):
             return pipeline_loss(params, frozen, batch, config=config, mp_policy=policy)[0]
@@ -87,7 +97,9 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
             selected_probs = jnp.take_along_axis(logprobs, tokens[:, -2:, None], axis=-1)[..., 0]
             inputs = (selected_probs, batch.old_logprobs, batch.reference_logprobs, advantages, weights, weights)
             return grpo_loss(
-                *(hax.named(value, (Batch, Response)) for value in inputs), config=config, accumulation_steps=1
+                *(None if value is None else hax.named(value, (Batch, Response)) for value in inputs),
+                config=config,
+                accumulation_steps=1,
             )[0]
 
         # Preserve the same BF16 rounding across the shard_map and dense graphs.
