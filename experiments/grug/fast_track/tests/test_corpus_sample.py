@@ -65,17 +65,6 @@ def _write_id_parquet(path, document_ids, *, text="hello world", row_group_size=
     )
 
 
-def _source_with_ids(tmp_path, name, document_ids, *, estimate=10_000, text="hello world"):
-    directory = tmp_path / name
-    directory.mkdir(parents=True)
-    _write_id_parquet(directory / "part-0000.parquet", document_ids, text=text)
-    artifact_path = str(tmp_path / f"{name}-artifact")
-    write_artifact(
-        NormalizedData(main_output_dir=str(directory), dup_output_dir=str(directory), counters={}), artifact_path
-    )
-    return CorpusSource(name, artifact_path, estimate)
-
-
 def _records(pool):
     return [row for path in pool.shards for row in pq.read_table(path).to_pylist()]
 
