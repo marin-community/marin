@@ -1,5 +1,6 @@
 from typing import List, Tuple, Union, Optional, Dict, Any, Sequence
 from collections import defaultdict
+from math import fsum
 from enum import StrEnum
 import numpy as np
 from skyrl_train.group_admission import group_is_fully_excluded_from_training
@@ -85,9 +86,10 @@ def get_metrics_from_trajectory_batch(trajectory_batch: TrajectoryBatch, uids: L
     if isinstance(rewards[0], list):
         # Token-level rewards: rewards is List[List[float]]
         # For each trajectory, sum token rewards before computing the batch mean.
-        mean_reward = float(np.mean([sum(trajectory_rewards) for trajectory_rewards in rewards]))
+        mean_reward = fsum(fsum(trajectory_rewards) for trajectory_rewards in rewards) / len(rewards)
     else:
-        mean_reward = float(np.mean(rewards))
+        # Evaluation batches arrive in completion order, including after checkpoint restore.
+        mean_reward = fsum(rewards) / len(rewards)
 
     uid_to_trajectory_passes = defaultdict(list)
     for uid, passed in zip(uids, trajectory_passes, strict=True):

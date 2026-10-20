@@ -34,4 +34,4 @@ jobs:
           AWS_ENDPOINT_URL: https://cwobject.com
           AWS_REGION: auto
           FSSPEC_S3: '{"endpoint_url": "https://cwobject.com", "config_kwargs": {"s3": {"addressing_style": "virtual"}}}'
-        run: uv run --frozen --extra cpu --extra telemetry --group dev --group harbor-test pytest skyrl-train/tests/cpu/test_cat_count_cpu_canary.py -n 0 -s --durations=10
+        run: uv run --frozen --extra cpu --extra telemetry --group dev --group harbor-test pytest skyrl-train/tests/cpu/test_evaluation_score_order.py skyrl-train/tests/cpu/test_cat_count_cpu_canary.py -n 0 -s --durations=10

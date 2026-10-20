@@ -40,6 +40,7 @@ BUNDLE_MANIFEST = "cloud/iris/runtime_bundle_files.txt"
 PROVENANCE = "marinskyrl/_vendor_provenance.json"
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "config/skyrl-migration.toml"
+SNAPSHOT_FILE = "snapshot.json"
 MATH500_REVISION = "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
 MATH500_CONTENT_SHA256 = "0a7389c2f2827aa8a29e82dd296afb85ce0ac0c3a02541ac975f00c3c57f0f5b"
 AGENT_LABEL = "agent-generated"
@@ -197,7 +198,7 @@ def snapshot(output: Path, ref: str, days: int, now: datetime, objects_cache: Pa
         (output / f"pr-{pull['number']}.patch").write_bytes(patch)
         pull["patch_sha256"] = hashlib.sha256(patch).hexdigest()
     write_json(
-        output / "snapshot.json",
+        output / SNAPSHOT_FILE,
         {
             "schema": 1,
             "source": SOURCE,
@@ -479,7 +480,7 @@ def copy_source_files(source: Path, destination: Path, names: list[str]) -> None
 def stage(snapshot_dir: Path, output: Path) -> None:
     """Copy the candidate and test each complete Git delta on its staged parent."""
     snapshot_dir = snapshot_dir.resolve()
-    record = read_json(snapshot_dir / "snapshot.json")
+    record = read_json(snapshot_dir / SNAPSHOT_FILE)
     chosen = read_json(snapshot_dir / "selection.json")
     output.mkdir(parents=True, exist_ok=False)
     tree = output / "tree"
@@ -611,8 +612,8 @@ def select_local_patch(snapshot_dir: Path, patch_path: Path) -> None:
 def refresh_candidate(previous: Path, current: Path, updated: Path, candidate: Path) -> RefreshReport:
     """Replay the complete local vendor delta onto a fresh upstream snapshot."""
     previous, current, updated, candidate = (path.resolve() for path in (previous, current, updated, candidate))
-    old = read_json(previous / "snapshot.json")
-    new = read_json(updated / "snapshot.json")
+    old = read_json(previous / SNAPSHOT_FILE)
+    new = read_json(updated / SNAPSHOT_FILE)
     if read_json(current / PROVENANCE)["source_sha"] != old["source_sha"]:
         raise ValueError("Previous snapshot does not match the checked-out SkyRL origin")
     local_files = checkout_source_files(current)
@@ -720,7 +721,7 @@ def apply_refresh(report: RefreshReport, current: Path, manifest: Path) -> None:
 
 def transplant_pulls(snapshot_dir: Path, output: Path, baseline: str) -> list[PullOutcome]:
     """Apply each source PR on its staged parent and return publication outcomes."""
-    record = read_json(snapshot_dir / "snapshot.json")
+    record = read_json(snapshot_dir / SNAPSHOT_FILE)
     chosen = read_json(snapshot_dir / "selection.json")
     manifest = tomllib.loads((snapshot_dir / "retention.toml").read_text())
     tree = output / "tree"
@@ -1022,7 +1023,7 @@ def source_references(body: str) -> str:
 
 def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
     """Transfer selected issues, recovering destination identity after an interrupted transfer."""
-    record = read_json(snapshot_dir / "snapshot.json")
+    record = read_json(snapshot_dir / SNAPSHOT_FILE)
     patches = [MigrationPatch(**patch) for patch in read_json(snapshot_dir / "selection.json")["patches"]]
     validate_cutover(cutover, record["source_sha"], patches)
     validate_fresh(record)
@@ -1113,7 +1114,7 @@ def prepare_ports(candidate: Path, ports_path: Path, marin: Path, base: str, out
     """Capture manually adapted full Marin patches and replay every selected stack offline."""
     report = read_stage_report(candidate / "report.json")
     snapshot_dir = Path(report.snapshot)
-    record = read_json(snapshot_dir / "snapshot.json")
+    record = read_json(snapshot_dir / SNAPSHOT_FILE)
     output.mkdir(parents=True, exist_ok=False)
     captured = []
     for item in read_json(ports_path):
@@ -1158,7 +1159,7 @@ def publish_prs(candidate: Path, cutover: int, ports_path: Path | None = None) -
     """Create draft PRs with preserved stack bases, without replacing existing branches."""
     report = read_stage_report(candidate / "report.json")
     snapshot_dir = Path(report.snapshot)
-    record = read_json(snapshot_dir / "snapshot.json")
+    record = read_json(snapshot_dir / SNAPSHOT_FILE)
     cutover_pull = validate_cutover(cutover, record["source_sha"], report.patches)
     validate_fresh(record)
     ports = reviewed_ports(ports_path, record) if ports_path is not None else []
@@ -1383,7 +1384,7 @@ def main() -> None:
     elif not args.execute:
         report = read_json(args.candidate / "report.json")
         if args.command == "publish-prs" and args.ports is not None:
-            record = read_json(Path(report["snapshot"]) / "snapshot.json")
+            record = read_json(Path(report["snapshot"]) / SNAPSHOT_FILE)
             print(json.dumps([asdict(port) for port in reviewed_ports(args.ports, record)], indent=2))
         else:
             print(json.dumps(report["issues"] if args.command == "transfer-issues" else report["pulls"], indent=2))

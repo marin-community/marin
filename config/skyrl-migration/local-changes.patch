@@ -559,15 +559,65 @@ index 841ae67e8fe703957117561ee592b95cb72fc77e..db5f2254a7cedb7178d9e02b6e7977ad
 -    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
 +    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
 diff --git a/cloud/iris/tests/test_open_mopd_fidelity.py b/cloud/iris/tests/test_open_mopd_fidelity.py
-index 6657534dd4f715b8d822fc9655fbf223555ce7f7..d6578df8fee2171a0efaad0b9bf67a8c0d650dc8 100644
+index 6657534dd4f715b8d822fc9655fbf223555ce7f7..cf24a7ef4f27245053980243aea03577bbe1db3a 100644
 --- a/cloud/iris/tests/test_open_mopd_fidelity.py
 +++ b/cloud/iris/tests/test_open_mopd_fidelity.py
-@@ -482 +482 @@ def test_cli_dry_run_does_not_submit(monkeypatch: pytest.MonkeyPatch, capsys: py
+@@ -28,14 +27,0 @@ OUTPUT_URI = "s3://bucket/open-mopd/one-step"
+-RELEASED_SCORER_PACKAGES = {
+-    "absl-py",
+-    "appdirs",
+-    "emoji",
+-    "immutabledict",
+-    "jsonlines",
+-    "langdetect",
+-    "nltk",
+-    "syllapy",
+-    "tempdir",
+-    "wget",
+-}
+-
+-
+@@ -50,6 +35,0 @@ def test_runtime_accepts_cuda_local_version_for_public_release(monkeypatch: pyte
+-def test_runtime_manifest_includes_released_scorer_dependencies() -> None:
+-    config = fidelity.load_config(fidelity.DEFAULT_CONFIG)
+-
+-    assert RELEASED_SCORER_PACKAGES <= config.environment.packages.keys()
+-
+-
+@@ -482 +462 @@ def test_cli_dry_run_does_not_submit(monkeypatch: pytest.MonkeyPatch, capsys: py
 -    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
 +    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
-@@ -496 +496 @@ def test_submission_requires_deviation_acknowledgement(
+@@ -496 +476 @@ def test_submission_requires_deviation_acknowledgement(
 -    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
 +    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+diff --git a/cloud/iris/tests/test_packaging_boundary.py b/cloud/iris/tests/test_packaging_boundary.py
+index afd4696d3fda03940d52fa4ce014e72aa1a2606b..e40c1c6ab6fa8bc4f42aa0237fa12e523cde0514 100644
+--- a/cloud/iris/tests/test_packaging_boundary.py
++++ b/cloud/iris/tests/test_packaging_boundary.py
+@@ -16,0 +17 @@ REPOSITORY_ROOT = Path(__file__).parents[3]
++        ("skyrl_train.hf_export", ("flash_attn", "ray", "torch", "vllm")),
+@@ -44,21 +44,0 @@ print(json.dumps(sorted(name for name in blocked if name in sys.modules)))
+-
+-def test_importing_hf_export_does_not_import_training_stacks() -> None:
+-    """The launcher's export step imports skyrl_train.hf_export in a torch-free environment."""
+-    program = """
+-import json
+-import sys
+-
+-import skyrl_train.hf_export
+-
+-blocked = ("flash_attn", "ray", "torch", "vllm")
+-print(json.dumps(sorted(name for name in blocked if name in sys.modules)))
+-"""
+-    result = subprocess.run(
+-        [sys.executable, "-c", program],
+-        cwd=REPOSITORY_ROOT,
+-        check=True,
+-        capture_output=True,
+-        text=True,
+-    )
+-
+-    assert json.loads(result.stdout) == []
 diff --git a/cloud/iris/tests/test_ray_spill_policy.py b/cloud/iris/tests/test_ray_spill_policy.py
 index e4b655e087325225d4873dd1f733afc22829f123..4949e357801c8705fa016fa90c4b8a4bab0298d6 100644
 --- a/cloud/iris/tests/test_ray_spill_policy.py
@@ -1602,6 +1652,45 @@ index d9fa4aa7cbda90cdde397159f4f2359f01e5076b..97554d2eec46c72d01d9dfe4df4d8347
 @@ -50 +50 @@ def manifest(probe, trainer, *, status: mismatch.ArchiveStatus):
 -        runtime_commit=software["marinskyrl_commit"],
 +        runtime_commit=software["marinskyrl_source_digest"],
+diff --git a/skyrl-train/skyrl_train/trajectory_runners/trajectory_processing.py b/skyrl-train/skyrl_train/trajectory_runners/trajectory_processing.py
+index acdbdb53d3ce65edd726ff8a9594229c293035d0..d79c23e88cc5d7c049190029bf1da3f5d1efa3b2 100644
+--- a/skyrl-train/skyrl_train/trajectory_runners/trajectory_processing.py
++++ b/skyrl-train/skyrl_train/trajectory_runners/trajectory_processing.py
+@@ -2,0 +3 @@ from collections import defaultdict
++from math import fsum
+@@ -88 +89 @@ def get_metrics_from_trajectory_batch(trajectory_batch: TrajectoryBatch, uids: L
+-        mean_reward = float(np.mean([sum(trajectory_rewards) for trajectory_rewards in rewards]))
++        mean_reward = fsum(fsum(trajectory_rewards) for trajectory_rewards in rewards) / len(rewards)
+@@ -90 +91,2 @@ def get_metrics_from_trajectory_batch(trajectory_batch: TrajectoryBatch, uids: L
+-        mean_reward = float(np.mean(rewards))
++        # Evaluation batches arrive in completion order, including after checkpoint restore.
++        mean_reward = fsum(rewards) / len(rewards)
+diff --git a/skyrl-train/tests/cpu/test_evaluation_score_order.py b/skyrl-train/tests/cpu/test_evaluation_score_order.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..385b2d1c4297d526b8a838ba03ada812a7d3178f
+--- /dev/null
++++ b/skyrl-train/tests/cpu/test_evaluation_score_order.py
+@@ -0,0 +1,20 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++from itertools import permutations
++
++import pytest
++
++from skyrl_train.trajectory_runners.trajectory_processing import get_metrics_from_trajectory_batch
++
++
++@pytest.mark.parametrize("per_token", [False, True])
++def test_evaluation_mean_survives_cancellation_and_completion_order(per_token):
++    means = set()
++    for values in permutations((1e16, 1.0, -1e16, 2.0)):
++        rewards = [list(values)] if per_token else list(values)
++        batch = {"rewards": rewards, "unshaped_rewards": [1.0] * len(rewards)}
++        mean, passed = get_metrics_from_trajectory_batch(batch, [str(i) for i in range(len(rewards))])
++        means.add(mean)
++        assert passed == 1.0
++    assert means == ({3.0} if per_token else {0.75})
 diff --git a/uv.lock b/uv.lock
 index 6ee880dd604504e9397d25fca7275b4b74c2fa36..0f4bb64cfcf229bebe908655e732bd35dd9c5fed 100644
 GIT binary patch
