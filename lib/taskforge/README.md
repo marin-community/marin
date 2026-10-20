@@ -13,7 +13,7 @@ src/taskforge/
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
   content_hash.py              canonical JSON and its sha256 digests
-  ledger/                      timed spans to per-workpiece JSONL and, under Iris, Finelog
+  ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
   llm/                         the ModelClient protocol, the GLM client and its token-id route, sampling
                                policy, structured output, call cache, ledger recording, agent loop, web
                                tools, the RolloutEngine model
