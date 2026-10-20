@@ -210,6 +210,16 @@ Services provide `applet_id`, `version`, `name`, `data_url`, and `engine()`. The
 engine assumes the application's role and searches its schema. Read the caller
 through `rigging.server_auth.get_verified_identity()`.
 
+Registry and Python backend engines retain up to two idle connections and allow
+two additional connections while busy. The generic applet SQL endpoint retains up
+to four role/schema pools per worker, each with one idle connection and one overflow
+connection. It resets session settings, temporary objects and advisory locks after
+each SQL request. Eviction and shutdown dispose idle pools; active queries finish
+before their pool and Cloud SQL connector close. Evicted active pools can coexist
+with their replacements. These limits apply per engine
+and worker, so include replicas, retained backend revisions and scheduled jobs
+when budgeting against the database connection limit.
+
 An optional `migrate(connection)` runs on the release transaction's SQLAlchemy
 Connection, before the revision becomes current. It must not commit independently,
 start workers, install extensions, or perform remote scans. Keep schema changes

@@ -8,11 +8,14 @@ import shutil
 import subprocess
 import tarfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
+from typing import cast
 
 import pytest
 from click.testing import CliRunner
-from marina.applets import AppletStore, package_applet, read_applet_package
+from marina.applets import AppletNotFound, AppletStore, applet_role, package_applet, read_applet_package
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import UrlDatabase, grant_read
@@ -22,6 +25,7 @@ from marina.table_load import read_table, table_statements
 from marina.testing import isolated_database
 from requests import Response as RequestsResponse
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from starlette.testclient import TestClient
 
 DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-applet"
@@ -1037,6 +1041,62 @@ def test_query_limits_roll_back_and_timeout(tmp_path: Path, database_url: str, m
     monkeypatch.setattr("marina.applets.QUERY_TIMEOUT_MS", 20)
     timed_out = client.post(endpoint, json={"sql": "SELECT pg_sleep(0.2)", "parameters": {}})
     assert timed_out.status_code == 504
+
+
+def test_query_pool_reuses_connections_without_leaking_request_state(tmp_path: Path, database_url: str) -> None:
+    _client, store = applet_client_and_store(tmp_path, database_url)
+    try:
+        package = read_applet_package(package_applet(DEMO_APPLET))
+        first = store.publish(package, "owner").applet_id
+        second = store.publish(package, "owner").applet_id
+        store.query(first, "INSERT INTO problems VALUES (4, 'first app only', 17)", {})
+        identity_sql = "SELECT pg_backend_pid() AS pid, current_user AS role, count(*) AS count FROM problems"
+        before = cast(list[dict[str, object]], store.query(first, identity_sql, {})["rows"])[0]
+        store.query(first, "CREATE TEMP TABLE problems (id INTEGER)", {})
+        store.query(
+            first,
+            "SELECT set_config('search_path', 'public', false), set_config('role', :role, false)",
+            {"role": APPLET_READER_ROLE},
+        )
+        with pytest.raises(DBAPIError):
+            store.query(first, "SELECT 1 / 0", {})
+        after = cast(list[dict[str, object]], store.query(first, identity_sql, {})["rows"])[0]
+        assert after == before
+        assert after["role"] == applet_role(first)
+        assert after["count"] == 4
+        other = cast(list[dict[str, object]], store.query(second, identity_sql, {})["rows"])[0]
+        assert other["role"] == applet_role(second)
+        assert other["pid"] != after["pid"]
+        assert other["count"] == 3
+        store.archive(first)
+        with pytest.raises(AppletNotFound):
+            store.query(first, identity_sql, {})
+    finally:
+        store.close()
+
+
+def test_concurrent_applet_queries_keep_writes_in_each_schema(tmp_path: Path, database_url: str) -> None:
+    _client, store = applet_client_and_store(tmp_path, database_url)
+    try:
+        package = read_applet_package(package_applet(DEMO_APPLET))
+        applets = [store.publish(package, "owner").applet_id for _ in range(2)]
+        ready = Barrier(6)
+
+        def write(index: int) -> None:
+            ready.wait()
+            store.query(
+                applets[index % 2],
+                "INSERT INTO problems VALUES (:id, :prompt, :answer)",
+                {"id": index + 4, "prompt": f"problem {index}", "answer": index},
+            )
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            list(executor.map(write, range(6)))
+        for index, applet_id in enumerate(applets):
+            rows = store.query(applet_id, "SELECT answer FROM problems WHERE id > 3 ORDER BY id", {})["rows"]
+            assert rows == [{"answer": value} for value in range(index, 6, 2)]
+    finally:
+        store.close()
 
 
 def test_failed_migration_leaves_no_applet_or_schema(tmp_path: Path, database_url: str) -> None:

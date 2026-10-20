@@ -1,0 +1,7 @@
+applet_id = "53af6539-ce9d-48c0-8b98-358a82c8b203"
+title = "Snowball 50M-token comparison"
+description = "Read-only public snapshot of the completed Campaign 3 DARE Linear 02 versus Qwen 3.6 35B A3B conversation run."
+python_entrypoint = "server.app:create_api"
+build_command = "npm --prefix ../snowball_conversation_lab/web ci && node ../snowball_conversation_lab/web/build.mjs"
+
+source_paths = ["infra/marina/applets/snowball_conversation_lab/web"]

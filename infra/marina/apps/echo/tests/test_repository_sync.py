@@ -6,14 +6,19 @@
 import base64
 import io
 import sqlite3
+import struct
 import tarfile
+import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
+import sqlalchemy
+from marina.db import UrlDatabase, engine_for
 
-from echo import repository_files
+from echo import migrate, repository_files, schema
+from echo.migrations import m0001_init, m0002_chunk_identity
 from echo.sync import github_repository as echo_sync
 from echo.sync import main as activity_sync
 
@@ -153,6 +158,127 @@ def test_activity_corpus_reader_accepts_marinmirror_schema(tmp_path):
         "part": 0,
         "n_parts": 1,
     }
+
+
+@pytest.fixture
+def activity_engine(database_url):
+    name = f"echo_sync_{uuid.uuid4().hex[:8]}"
+    engine = engine_for(UrlDatabase(database_url), name)
+    try:
+        with engine.begin() as conn:
+            migrate.apply_migrations(conn)
+        yield engine
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sqlalchemy.text(f'DROP SCHEMA "{name}" CASCADE'))
+        engine.dispose()
+
+
+def write_activity_corpus(path: Path, rows: list[dict]) -> None:
+    columns = activity_sync.MIRRORED_CHUNK_COLUMNS
+    with sqlite3.connect(path) as database:
+        database.execute("DROP TABLE IF EXISTS chunks")
+        database.execute(f"CREATE TABLE chunks ({', '.join(columns)})")
+        placeholders = ", ".join("?" for _ in columns)
+        database.executemany(
+            f"INSERT INTO chunks VALUES ({placeholders})", [tuple(row[name] for name in columns) for row in rows]
+        )
+
+
+def activity_chunk(row_id: int, ref: str, **changes) -> dict:
+    return {
+        "id": row_id,
+        "source": "github",
+        "kind": "comment",
+        "ref": ref,
+        "parent": "12",
+        "title": "Scheduler",
+        "author": "operator",
+        "date": "2026-10-19T00:00:00+00:00",
+        "url": f"https://github.com/marin-community/marin/issues/12#issuecomment-{ref}",
+        "text": "The scheduler is ready.",
+        "hash": "same-embedding-input",
+        "embedding": None,
+        "part": 0,
+        "n_parts": 1,
+        **changes,
+    }
+
+
+def test_activity_sync_preserves_ids_and_skips_writes_when_corpus_rowids_shift(activity_engine, tmp_path):
+    corpus = tmp_path / "corpus.db"
+    first = activity_chunk(1, "first")
+    second = activity_chunk(2, "second")
+    write_activity_corpus(corpus, [first, second])
+    with activity_engine.begin() as conn:
+        assert activity_sync.upsert_chunks(conn, corpus) == (2, 0)
+        before = conn.execute(sqlalchemy.text("SELECT ref, id, xmin::text FROM chunks ORDER BY ref")).all()
+
+    # Inserting an unrelated source upstream changes both imported SQLite rowids.
+    # Identical embedding hashes must also not confuse distinct comments.
+    write_activity_corpus(corpus, [{**second, "id": 3}, {**first, "id": 4}])
+    with activity_engine.begin() as conn:
+        assert activity_sync.upsert_chunks(conn, corpus) == (0, 0)
+        assert conn.execute(sqlalchemy.text("SELECT ref, id, xmin::text FROM chunks ORDER BY ref")).all() == before
+
+
+def test_activity_sync_updates_metadata_and_deferred_vectors_without_changing_identity(activity_engine, tmp_path):
+    corpus = tmp_path / "corpus.db"
+    original = activity_chunk(10, "kept")
+    write_activity_corpus(corpus, [original, activity_chunk(11, "removed")])
+    with activity_engine.begin() as conn:
+        activity_sync.upsert_chunks(conn, corpus)
+        original_id = conn.execute(
+            sqlalchemy.select(schema.chunks.c.id).where(schema.chunks.c.ref == "kept")
+        ).scalar_one()
+
+    embedding = struct.pack(f"<{schema.EMBED_DIM}f", *([0.5] * schema.EMBED_DIM))
+    changed = {
+        **original,
+        "id": 99,
+        "title": "Scheduler deployed",
+        "text": "New display metadata",
+        "embedding": embedding,
+    }
+    write_activity_corpus(corpus, [changed])
+    with activity_engine.begin() as conn:
+        assert activity_sync.upsert_chunks(conn, corpus) == (1, 1)
+        row = conn.execute(sqlalchemy.select(schema.chunks)).mappings().one()
+        assert row["id"] == original_id
+        assert row["title"] == "Scheduler deployed"
+        assert row["text"] == "New display metadata"
+        assert row["hash"] == original["hash"]
+        assert list(row["embedding"]) == [0.5] * schema.EMBED_DIM
+
+    write_activity_corpus(corpus, [activity_chunk(1, "new")])
+    with activity_engine.begin() as conn:
+        assert activity_sync.upsert_chunks(conn, corpus) == (1, 1)
+        assert conn.execute(sqlalchemy.select(schema.chunks.c.id)).scalar_one() > original_id
+
+
+def test_activity_identity_migration_deduplicates_existing_rows_and_preserves_id_allocation(database_url, tmp_path):
+    name = f"echo_legacy_{uuid.uuid4().hex[:8]}"
+    engine = engine_for(UrlDatabase(database_url), name)
+    corpus = tmp_path / "corpus.db"
+    try:
+        with engine.begin() as conn:
+            m0001_init.upgrade(conn)
+            # The old sync could retain two identical comments at different corpus
+            # rowids. Keep the earlier public id and never reuse either old id.
+            for row_id in (41, 42):
+                row = activity_chunk(row_id, "same")
+                conn.execute(schema.chunks.insert().values(**{**row, "date": datetime(2026, 10, 19, tzinfo=UTC)}))
+            m0002_chunk_identity.upgrade(conn)
+        write_activity_corpus(corpus, [activity_chunk(1, "same"), activity_chunk(2, "new")])
+        with engine.begin() as conn:
+            assert activity_sync.upsert_chunks(conn, corpus) == (2, 0)
+            rows = dict(conn.execute(sqlalchemy.select(schema.chunks.c.ref, schema.chunks.c.id)).all())
+            assert rows["same"] == 41
+            assert rows["new"] > 42
+    finally:
+        with engine.begin() as conn:
+            conn.execute(sqlalchemy.text(f'DROP SCHEMA "{name}" CASCADE'))
+        engine.dispose()
 
 
 def test_github_blob_accepts_api_line_wrapped_base64(monkeypatch):

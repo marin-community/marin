@@ -10,11 +10,14 @@ are covered rather than assumed.
 """
 
 import asyncio
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
+import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
-from marin.evaluation.records import write_record
+from marin.evaluation.records import list_records, write_record
 from marina.db import UrlDatabase, engine_for
 from marina.testing import SourceServices
 from starlette.testclient import TestClient
@@ -38,6 +41,150 @@ def records(tmp_path) -> str:
     prefix = tmp_path / "records"
     fixtures.build_fixtures(str(prefix))
     return str(prefix)
+
+
+@pytest.fixture
+def catalog(engine, records):
+    with engine.begin() as conn:
+        evaldash_app.migrate(conn)
+    config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
+    asyncio.run(
+        evaldash_app.PostgresIngestor(
+            engine, config.prefixes, config.ingest_interval, config.revalidate_after
+        ).run_once()
+    )
+    return results_db.fetch_snapshot(engine)
+
+
+def test_snapshot_reads_committed_generation_while_writer_is_uncommitted(engine, catalog):
+    changed = catalog.records[0].model_copy(update={"description": "uncommitted rewrite"})
+
+    def bound_lock_wait(conn):
+        conn.exec_driver_sql("SET LOCAL lock_timeout = '1s'")
+
+    with engine.begin() as writer:
+        writer.execute(results_db.catalog_state.update().values(generation=catalog.generation + 1))
+        writer.execute(
+            results_db.catalog_runs.update()
+            .where(results_db.catalog_runs.c.run_id == changed.run_id)
+            .values(record=changed.model_dump(mode="json", by_alias=True))
+        )
+        sqlalchemy.event.listen(engine, "begin", bound_lock_wait)
+        try:
+            snapshot = results_db.fetch_snapshot(engine)
+        finally:
+            sqlalchemy.event.remove(engine, "begin", bound_lock_wait)
+        assert snapshot == catalog
+
+    committed = results_db.fetch_snapshot(engine)
+    assert committed.generation == catalog.generation + 1
+    assert next(record for record in committed.records if record.run_id == changed.run_id) == changed
+
+
+def test_snapshot_keeps_generation_and_records_consistent_when_writer_commits_between_reads(engine, catalog):
+    changed = catalog.records[0].model_copy(update={"description": "committed between snapshot reads"})
+
+    def commit_after_generation_read(_conn, _cursor, _statement, _parameters, context, _many):
+        if context.compiled is None:
+            return
+        query = context.compiled.statement
+        if not isinstance(query, sqlalchemy.sql.Select):
+            return
+        if not query.selected_columns.contains_column(results_db.catalog_state.c.updated_at):
+            return
+        # The real writer must commit while the reader still holds its transaction open.
+        with engine.begin() as writer:
+            writer.exec_driver_sql("SET LOCAL lock_timeout = '1s'")
+            writer.execute(
+                results_db.catalog_runs.update()
+                .where(results_db.catalog_runs.c.run_id == changed.run_id)
+                .values(record=changed.model_dump(mode="json", by_alias=True))
+            )
+            writer.execute(results_db.catalog_state.update().values(generation=catalog.generation + 1))
+
+    sqlalchemy.event.listen(engine, "after_cursor_execute", commit_after_generation_read)
+    try:
+        snapshot = results_db.fetch_snapshot(engine)
+    finally:
+        sqlalchemy.event.remove(engine, "after_cursor_execute", commit_after_generation_read)
+
+    assert snapshot == catalog
+    committed = results_db.fetch_snapshot(engine)
+    assert committed.generation == catalog.generation + 1
+    assert next(record for record in committed.records if record.run_id == changed.run_id) == changed
+
+
+def test_reconciliation_batches_verification_writes_and_preserves_last_valid_records(engine, records):
+    with engine.begin() as conn:
+        evaldash_app.migrate(conn)
+    record = list_records(records)[0]
+    prefix = "file:///batch-records"
+    results_db.configure_prefixes(engine, (prefix,))
+    now = datetime(2026, 10, 20, tzinfo=UTC)
+    initial = [
+        results_db.RecordObservation(
+            path=f"{prefix}/{index}/record.json",
+            object_version=f"version-{index}",
+            verified_at=now,
+            next_verify_at=now + timedelta(days=1),
+            kind=results_db.ObservationKind.CHANGED,
+            record=record.model_copy(update={"run_id": f"batch-{index}"}),
+        )
+        for index in range(259)
+    ]
+    paths = [observation.path for observation in initial]
+    results_db.reconcile_prefix(engine, prefix, paths, initial, now, 600)
+    generation = results_db.catalog_generation(engine)
+    probe_at = now + timedelta(days=1)
+    observations = [
+        replace(
+            observation,
+            kind=results_db.ObservationKind.UNCHANGED,
+            record=None,
+            verified_at=probe_at,
+            next_verify_at=probe_at + timedelta(days=1),
+        )
+        for observation in initial
+    ]
+    observations[0] = replace(observations[0], kind=results_db.ObservationKind.MISSING, error="not found")
+    observations[1] = replace(
+        observations[1], kind=results_db.ObservationKind.CHANGED, object_version="invalid-version", error="invalid JSON"
+    )
+    invalid_path = f"{prefix}/new-invalid/record.json"
+    observations.append(
+        replace(observations[1], path=invalid_path, run_id="invalid-new", object_version=None, error="new invalid JSON")
+    )
+    updates = []
+
+    def count_source_updates(_conn, _cursor, _statement, parameters, context, many):
+        if context.compiled is None:
+            return
+        query = context.compiled.statement
+        if isinstance(query, sqlalchemy.sql.dml.Update) and query.table.name == results_db.record_sources.name:
+            updates.append(len(parameters) if many else 1)
+
+    sqlalchemy.event.listen(engine, "before_cursor_execute", count_source_updates)
+    try:
+        results_db.reconcile_prefix(engine, prefix, [*paths, invalid_path], observations, probe_at, 600)
+    finally:
+        sqlalchemy.event.remove(engine, "before_cursor_execute", count_source_updates)
+
+    states = results_db.source_states(engine, prefix)
+    for observation in observations:
+        state = states[observation.path]
+        assert state.last_verified_at == probe_at
+        assert state.next_verify_at == probe_at + timedelta(days=1)
+        assert state.object_version == observation.object_version
+        assert state.error == observation.error
+    assert states[initial[0].path].missing_since == probe_at
+    assert states[initial[1].path].missing_since is None
+    assert states[initial[1].path].run_id == "batch-1"
+    snapshot = results_db.fetch_snapshot(engine)
+    assert snapshot.generation == generation
+    assert {row.run_id for row in snapshot.records} == {f"batch-{index}" for index in range(259)}
+    assert next(row for row in snapshot.records if row.run_id == "batch-1") == initial[1].record
+    # Count statements at the database boundary: per-row executemany would exceed 250 writes.
+    assert sum(updates) < 10
 
 
 def test_an_unmigrated_schema_is_named_rather_than_failing_on_the_first_query(engine):
