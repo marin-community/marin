@@ -21,13 +21,14 @@ revision as the next user turn.
 
 import inspect
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from pydantic import BaseModel, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter, field_validator
 from rigging.filesystem.atomic import atomic_rename
 from shellbox.machine import PackageSpec
 from taskcompendium import models as task_models
@@ -336,8 +337,12 @@ class GlmAuthor:
     workpiece_dir: Path
     record: CallLedger
 
-    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(
+        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    ) -> AuthoredProgram:
         """Author the program for ``proposal``, revising the workpiece's ``program.py`` when ``revision`` is given.
+
+        The prompt does not carry ``author_state``.
 
         Raises:
             FileNotFoundError: ``revision`` is given and the workpiece has no ``program.py`` to revise.

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.grader import verifyit_package
@@ -262,14 +262,18 @@ UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
 
 class RecordingAuthor:
-    """Returns ``programs`` in turn, the last one from then on, and records each revision asked for."""
+    """Returns ``programs`` in turn, the last one from then on, and records each revision and author state."""
 
     def __init__(self, *programs: RLEnvBuildProgram):
         self.programs = list(programs)
         self.revisions: list[Revision | None] = []
+        self.states: list[Mapping[str, JsonValue]] = []
 
-    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(
+        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    ) -> AuthoredProgram:
         self.revisions.append(revision)
+        self.states.append(author_state)
         return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
 
 
@@ -280,7 +284,9 @@ class SourceAuthor:
         self.source = source
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(
+        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    ) -> AuthoredProgram:
         self.revisions.append(revision)
         return AuthoredProgram(load_toy_program(self.source), self.source)
 
@@ -604,7 +610,9 @@ class CutAuthor:
         self.cuts = cuts
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(
+        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    ) -> AuthoredProgram:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
             raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
@@ -649,7 +657,9 @@ async def test_author_replies_cut_past_the_budget_reject_the_workpiece_on_its_bu
     ]
 
 
-async def unavailable_author(proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
+async def unavailable_author(
+    proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+) -> AuthoredProgram:
     raise ModelUnavailable("the hold ran out", ())
 
 
@@ -775,16 +785,21 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
 
 
 class TriageInTurn:
-    """A triage function returning a verdict of each of ``decisions`` in turn, recording each proposal triaged."""
+    """A triage function returning a verdict of each of ``decisions`` in turn, recording each proposal triaged.
 
-    def __init__(self, *decisions: TriageDecision) -> None:
+    Each ACCEPT verdict carries ``author_state``.
+    """
+
+    def __init__(self, *decisions: TriageDecision, author_state: Mapping[str, JsonValue] | None = None) -> None:
         self.decisions = list(decisions)
+        self.author_state = author_state or {}
         self.proposals: list[TaskProposal] = []
 
     async def __call__(self, proposal: TaskProposal) -> Verdict:
         self.proposals.append(proposal)
         decision = self.decisions.pop(0)
-        return Verdict(proposal.header.id, proposal.digest, decision, (), (f"triage says {decision}",))
+        state = self.author_state if decision is TriageDecision.ACCEPT else {}
+        return Verdict(proposal.header.id, proposal.digest, decision, (), (f"triage says {decision}",), state)
 
 
 class MachineRepair:
@@ -893,3 +908,45 @@ async def test_under_the_default_budget_a_repair_verdict_rejects_without_a_rewri
     assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
     assert log.events()[-1].attrs["reason"] == "triage returned REPAIR with 0 of 0 rewrites spent"
     assert not (tmp_path / "workpieces" / WORKPIECE / REPAIRED_DIR).exists()
+
+
+AUTHOR_STATE: Mapping[str, JsonValue] = {"obligations": ["derive 42 in the grader design"], "checked": 3}
+"""Author state a consumer's triage could attach on accept; the package's triage attaches none."""
+
+
+async def test_a_verdicts_author_state_reaches_every_author_call_through_the_event_log_across_a_relaunch(tmp_path):
+    triage = TriageInTurn(TriageDecision.ACCEPT, author_state=AUTHOR_STATE)
+    with pytest.raises(ModelUnavailable):
+        await run_workpiece(
+            coordinator(tmp_path, replace(STAGES, triage=triage, author=unavailable_author)),
+            WORKPIECE,
+            PROPOSAL,
+            InMemoryEventLog(),
+        )
+    triaged = (JsonEventStore(tmp_path).load(WORKPIECE) or ())[1]
+    assert triaged.attrs["author_state"] == content_hash.canonical_json(AUTHOR_STATE)
+
+    author = RecordingAuthor(PROGRAM)
+    resumed = replace(STAGES, triage=no_call, author=author, build=FailsOnce(BuildFailure("wrong product", "task")))
+    log = InMemoryEventLog()
+    assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+
+    assert [None if revision is None else revision.kind for revision in author.revisions] == [
+        None,
+        None,
+        RevisionKind.BUILD_FAILURE,
+        RevisionKind.BUILD_FAILURE,
+    ]
+    assert author.states == [AUTHOR_STATE] * 4
+    assert derive_state(log.events()).author_state == AUTHOR_STATE
+
+
+async def test_the_default_triage_records_an_empty_author_state(tmp_path):
+    author = RecordingAuthor(PROGRAM)
+    log = InMemoryEventLog()
+
+    assert await run_workpiece(coordinator(tmp_path, replace(STAGES, author=author)), WORKPIECE, PROPOSAL, log) is (
+        Terminal.ACCEPTED
+    )
+    assert log.events()[1].attrs["author_state"] == "{}"
+    assert (author.states, derive_state(log.events()).author_state) == ([{}, {}], {})

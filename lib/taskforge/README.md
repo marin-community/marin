@@ -101,13 +101,16 @@ A consumer could add a model review to triage in one of two designs:
   accepts, rejects or asks for repair, and one model rewrite of a repair proposal, sent back to
   triage through the stage coordinator's repair edge.
 - A bounded review with obligations: one model review that accepts the proposal and attaches
-  obligations its author must honour, carried to build as state on the accept event.
+  obligations its author must honour, carried to the author as the verdict's `author_state`.
 
 Neither is implemented by default, because experiments found them not to be meaningful predictors
-of downstream quality. The coordinator's repair edge is a surface the preflight or a consumer may
-use within `max_triage_repairs`: a REPAIR verdict has `StageFunctions.repair` rewrite the proposal,
-such as a deterministic rewrite of a fixable proposal header, and triage judges the rewrite (see the
-stage machine).
+of downstream quality. The coordinator keeps both surfaces. Its repair edge is a surface the
+preflight or a consumer may use within `max_triage_repairs`: a REPAIR verdict has
+`StageFunctions.repair` rewrite the proposal, such as a deterministic rewrite of a fixable proposal
+header, and triage judges the rewrite. The edge may later retry a proposal on the findings of the
+preflight; the preflight returns only accept or reject today. A verdict's `author_state` reaches
+every author call of the workpiece; the preflight attaches none, and nothing in the package writes
+one (see the stage machine).
 
 ## Task specs
 
@@ -419,6 +422,12 @@ repair with the rewrite's digest, the triaged proposal's digest, the file and th
 Triage judges the rewrite, and every later stage runs it, read back from its file. A REPAIR verdict
 past the budget exits reject, and so does a rewrite that is not a valid proposal; the workpiece
 closes as rejected with the reason.
+
+An accept records the verdict's `author_state` on its `TRIAGED` event: a JSON mapping, empty
+unless the triage attached state such as findings or obligations for the author. The workpiece
+state folds it from the event, so a relaunch reads the same state, and the coordinator passes it
+to every author call as the `Author`'s third argument. The preflight attaches none, and the
+package's authors ignore it.
 
 A build error costs a revision, except `BuildInfrastructureFailure`, `BuildExpired`,
 `ModelUnavailable` and `OSError`, which fail the workpiece at the build stage. An author call
