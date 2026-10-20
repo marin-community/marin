@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib
+import json
 
 import pytest
+import yaml
 
 recovery = importlib.import_module(
     "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.ablations.swebench_context_compaction.prepare_recovery"
+)
+combined = importlib.import_module(
+    "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.ablations.swebench_context_compaction.combine_recovery"
 )
 
 
@@ -41,3 +46,58 @@ def test_recovery_rejects_duplicate_results_instead_of_double_counting():
     evidence = [{"task_name": "task", "recovery_reason": None}] * 2
     with pytest.raises(ValueError, match="duplicate source task"):
         recovery.partition_tasks({"task"}, evidence)
+
+
+def test_followup_preserves_both_generations_and_valid_timeouts(tmp_path):
+    tasks = ["old", "new", "timeout", "outage", "infra", "missing"]
+    previous = {
+        "task_descriptors": [{"path": f"tasks/{task}"} for task in tasks],
+        "retained_tasks": ["old"],
+        "harbor_commit": "tested-runtime",
+    }
+    rows = [
+        {
+            "task_name": task,
+            "source_uri": f"s3://test/{generation}/{task}",
+            "sha256": task,
+            "scored": scored,
+            "reward": reward,
+            "error_type": error,
+        }
+        for task, generation, scored, reward, error in [
+            ("old", "original", True, 1.0, None),
+            ("new", "first-recovery", True, 1.0, None),
+            ("timeout", "first-recovery", True, 0.0, "AgentTimeoutError"),
+            ("outage", "first-recovery", False, 1.0, None),
+            ("infra", "first-recovery", False, 0.0, "VerifierRuntimeError"),
+        ]
+    ]
+    rows[3]["exclusion_reason"] = "inference_service_outage"
+    manifest = recovery.followup_manifest(previous, {"trials": rows})
+    recovery.write_recovery({"datasets": [{"name": "swebench"}]}, manifest, tmp_path)
+    saved = json.loads((tmp_path / "manifest.json").read_text())
+    config = yaml.safe_load((tmp_path / "harbor.yaml").read_text())
+    assert saved["retained_tasks"] == ["new", "old", "timeout"]
+    assert config["datasets"][0]["task_names"] == ["infra", "missing", "outage"]
+    retained = [row for row in saved["observed_trials"] if row["recovery_reason"] is None]
+    assert {row["source_uri"] for row in retained} == {
+        "s3://test/original/old",
+        "s3://test/first-recovery/new",
+        "s3://test/first-recovery/timeout",
+    }
+    replayed = [{"task_name": task, "scored": True, "reward": 0.0} for task in saved["recovery_tasks"]]
+    report = combined.combine(saved, retained, replayed, [])
+    assert report["all_tasks_scored"]
+    assert report["scored_tasks"] == 6
+    assert report["mean_reward"] == pytest.approx(2 / 6)
+
+
+def test_followup_rejects_a_subset_only_audit_that_loses_retained_results():
+    previous = {
+        "task_descriptors": [{"path": "tasks/old"}, {"path": "tasks/new"}],
+        "retained_tasks": ["old"],
+        "harbor_commit": "tested-runtime",
+    }
+    report = {"trials": [{"task_name": "new", "scored": True}]}
+    with pytest.raises(ValueError, match="missing previously retained evidence"):
+        recovery.followup_manifest(previous, report)

@@ -67,6 +67,81 @@ def registry_tasks(dataset: dict) -> list[dict]:
     return sorted(matches[0]["tasks"], key=lambda task: task["path"])
 
 
+def followup_manifest(previous: dict, report: dict) -> dict:
+    """Preserve scored evidence across generations without retrying valid timeouts."""
+    task_names = {Path(task["path"]).name for task in previous["task_descriptors"]}
+    evidence = [
+        {
+            **row,
+            "recovery_reason": (
+                None
+                if row["scored"]
+                else row.get("exclusion_reason") or f"unscored:{row['error_type'] or 'missing_verifier_result'}"
+            ),
+        }
+        for row in report["trials"]
+    ]
+    retained, recovery = partition_tasks(task_names, evidence)
+    if not set(previous["retained_tasks"]).issubset(row["task_name"] for row in evidence):
+        raise ValueError("combined audit is missing previously retained evidence")
+    return {
+        "created_at": datetime.now(UTC).isoformat(),
+        "source_must_be_terminal_before_final_use": True,
+        "harbor_commit": previous["harbor_commit"],
+        "task_descriptors": previous["task_descriptors"],
+        "retained_tasks": retained,
+        "recovery_tasks": recovery,
+        "observed_trials": sorted(evidence, key=lambda trial: trial["task_name"]),
+    }
+
+
+def write_recovery(config: dict, manifest: dict, destination: Path) -> dict:
+    """Materialize the manifest and its exact task subset without launching."""
+    if not manifest["recovery_tasks"]:
+        raise ValueError("no tasks require recovery; do not emit an empty task filter")
+    config["datasets"][0]["task_names"] = manifest["recovery_tasks"]
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (destination / "harbor.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    return {
+        "retained": len(manifest["retained_tasks"]),
+        "recovery": len(manifest["recovery_tasks"]),
+        "destination": str(destination),
+    }
+
+
+def prepare_followup(audit_path: Path, base_config: Path, destination: Path) -> dict:
+    """Prepare another recovery from a combined audit of terminal source runs."""
+    audit_payload = audit_path.read_bytes()
+    report = json.loads(audit_payload)
+    previous_path = Path(report["manifest"])
+    previous_payload = previous_path.read_bytes()
+    previous = json.loads(previous_payload)
+    config = yaml.safe_load(base_config.read_text())
+    if config["n_attempts"] != 1 or len(config["datasets"]) != 1:
+        raise ValueError("this recovery requires one attempt and one dataset")
+    previous_config = yaml.safe_load(previous_path.with_name("harbor.yaml").read_text())
+    previous_config["datasets"][0].pop("task_names", None)
+    config["datasets"][0].pop("task_names", None)
+    if config != previous_config:
+        raise ValueError("follow-up recovery must preserve benchmark settings apart from task selection")
+    taxonomy = preflight_harbor_configs([(base_config, {})])[0].error_taxonomy
+    if taxonomy.commit != previous["harbor_commit"]:
+        raise ValueError("follow-up recovery must preserve the audited runtime pin")
+    tasks = registry_tasks(config["datasets"][0])
+    if tasks != previous["task_descriptors"] or len(tasks) != EXPECTED_TASKS:
+        raise ValueError("follow-up recovery must preserve the original 500 task descriptors")
+    manifest = followup_manifest(previous, report)
+    manifest.update(
+        source_audit=str(audit_path),
+        source_audit_sha256=hashlib.sha256(audit_payload).hexdigest(),
+        previous_manifest=str(previous_path),
+        previous_manifest_sha256=hashlib.sha256(previous_payload).hexdigest(),
+        base_config_sha256=hashlib.sha256(base_config.read_bytes()).hexdigest(),
+    )
+    return write_recovery(config, manifest, destination)
+
+
 def prepare(source: str, base_config: Path, destination: Path) -> dict:
     """Write a sanitized evidence manifest and canonical recovery config."""
     config = yaml.safe_load(base_config.read_text())
@@ -114,9 +189,6 @@ def prepare(source: str, base_config: Path, destination: Path) -> dict:
             evidence = [row for row in pool.map(inspect, directories) if row is not None]
 
     retained, recovery = partition_tasks(task_names, evidence)
-    if not recovery:
-        raise ValueError("no tasks require recovery; do not emit an empty task filter")
-    config["datasets"][0]["task_names"] = recovery
     manifest = {
         "created_at": datetime.now(UTC).isoformat(),
         "source_results": source,
@@ -128,19 +200,22 @@ def prepare(source: str, base_config: Path, destination: Path) -> dict:
         "recovery_tasks": recovery,
         "observed_trials": sorted(evidence, key=lambda trial: trial["task_name"]),
     }
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    (destination / "harbor.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    return {"retained": len(retained), "recovery": len(recovery), "destination": str(destination)}
+    return write_recovery(config, manifest, destination)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-results", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--source-results")
+    source.add_argument("--combined-audit", type=Path)
     parser.add_argument("--base-config", required=True, type=Path)
     parser.add_argument("--destination", required=True, type=Path)
     args = parser.parse_args()
-    print(json.dumps(prepare(args.source_results, args.base_config, args.destination)))
+    if args.combined_audit:
+        result = prepare_followup(args.combined_audit, args.base_config, args.destination)
+    else:
+        result = prepare(args.source_results, args.base_config, args.destination)
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

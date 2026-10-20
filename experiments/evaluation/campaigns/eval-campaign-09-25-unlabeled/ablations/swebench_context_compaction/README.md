@@ -86,3 +86,25 @@ counts excluded tasks as unscored. An outage with `finished_at: null` remains
 open. Set its end only after inference requests have been verified to succeed
 again, then rerun the audit.
 Use `--service-outages PATH` to audit another recorded outage set.
+
+After a recovery run is terminal, rerun the preceding `combine_recovery.py`
+command with that run's manifest and results URI before preparing another
+subset. `--combined-audit` retains scored results from every source generation,
+including agent timeouts classified as scored by the pinned taxonomy and
+unaffected by recorded outages. It replays missing and unscored tasks without
+applying the `39267af2` runtime's deadline exclusion again:
+
+```bash
+uv run python "$ablation/prepare_recovery.py" \
+  --combined-audit combined.json \
+  --base-config "$ablation/configs/harbor/65k-16k-no-summary.yaml" \
+  --destination "$ablation/configs/recovery-followup/qwen36/65k-16k-no-summary"
+```
+
+Use a fresh destination. The command preserves the initial 500 task descriptors,
+Harbor pin, and benchmark settings, and records hashes of the audit and previous
+manifest named in that audit. It does not verify Iris terminal state or launch
+jobs. Verify every source job represented in the audit is terminal before using
+the output, then dry-run and commit the
+new config before launching. Audit that run with `combine_recovery.py` using
+the newly generated manifest.
