@@ -424,7 +424,7 @@ No end event is emitted when a token-contract error or cancellation propagates.
 | `tool_turn_timeout` | The time from a model turn to the harness's next request or its end, including its tool operations; a cancelled request starts it again |
 | `total_turn_timeout` | The time from the harness's first request to its end, across all turns in one attempt |
 | `attempt_timeout` | Task startup, the harness, and final verification |
-| `verifier_timeout` | Output capture and the full `grade` call, including separate verifier startup and artifact transfer |
+| `verifier_timeout` | Output capture and the full `grade` call, including separate verifier startup and artifact transfer; an expiry before the task author's commands (`collect`, setup, the grader) is `failure=staging`, otherwise `timeout` |
 | `RolloutLimits.cleanup_timeout` | Each cleanup action, outside the attempt deadline |
 | Machine `cleanup_timeout` | Optional override for that machine's cleanup action |
 

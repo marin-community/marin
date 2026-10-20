@@ -151,7 +151,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         raise _StepFailed(
             _infra_error(
                 f"Cannot inspect grading artifact {artifact.source}: timed out",
-                GradingFailure.TIMEOUT,
+                GradingFailure.STAGING,
                 _diagnostics(result),
             )
         )
@@ -165,7 +165,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         raise _StepFailed(
             _infra_error(
                 f"Cannot inspect grading artifact {artifact.source}: exit={result.exit_code}",
-                GradingFailure.EXECUTION,
+                GradingFailure.STAGING,
                 _diagnostics(result),
             )
         )
@@ -180,7 +180,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
     primary_error = None
     try:
         # The agent can write this file, but the root-owned parent prevents pathname replacement.
-        await _run_checked(
+        await _run_staging(
             machine,
             Command(
                 (
@@ -196,7 +196,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
             ),
             "Cannot create protected artifact directory",
         )
-        await _run_checked(
+        await _run_staging(
             machine,
             Command(
                 argv=(
@@ -220,7 +220,7 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
         raise
     finally:
         try:
-            await _run_checked(
+            await _run_staging(
                 machine,
                 Command(("rm", "-rf", remote_directory), timeout=timeout, user=ROOT, env={"PATH": "/usr/bin:/bin"}),
                 "Cannot remove private artifact archive",
@@ -537,6 +537,8 @@ async def _grade_staged(
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
     files = _grading_files(task, attempt, grading, submissions)
     try:
+        # The collect commands are the task author's, like the grader's own command.
+        progress.phase = GradingPhase.GRADER
         for command in grading.collect:
             assert task_machine is not None
             await _run_checked(
@@ -550,6 +552,7 @@ async def _grade_staged(
                 ),
                 "Cannot collect grading inputs",
             )
+        progress.phase = GradingPhase.STAGING
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             root = Path(directory)
             downloaded = []

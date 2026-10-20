@@ -51,6 +51,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
     VerifierArtifact,
+    VerifierCommand,
 )
 from taskcompendium.runtime.output_capture import MAX_OUTPUT_FILES
 from taskcompendium.runtime.resources import inline_resource
@@ -792,17 +793,35 @@ async def test_reasoning_only_response_grades_missing_answer_or_existing_files(s
     assert (submitted.grade.status, submitted.grade.reward) == (Outcome.GRADED, 1.0)
 
 
+ANSWER_ARTIFACT = VerifierArtifact(source="/workspace/answer", target="/workspace/answer", kind=ArtifactKind.FILE)
+
+
 @pytest.mark.parametrize(
-    ("stalled", "output_paths", "failure"),
+    ("stalled", "output_paths", "grader_fields", "failure"),
     [
-        ("download-kind", ("/workspace/answer",), GradingFailure.STAGING),
-        ("-xf", (), GradingFailure.STAGING),
-        ("/tests/grade.sh", ("/workspace/answer",), GradingFailure.TIMEOUT),
+        ("download-kind", ("/workspace/answer",), {}, GradingFailure.STAGING),
+        ("artifact-kind", (), {"artifacts": (ANSWER_ARTIFACT,)}, GradingFailure.STAGING),
+        ("-xf", (), {"artifacts": (ANSWER_ARTIFACT,)}, GradingFailure.STAGING),
+        ("collect-step", (), {"collect": (VerifierCommand(argv=("true", "collect-step")),)}, GradingFailure.TIMEOUT),
+        (
+            "echo setup-step",
+            ("/workspace/answer",),
+            {"environment": GRADER_ENVIRONMENT.model_copy(update={"setup_commands": ("echo setup-step",)})},
+            GradingFailure.TIMEOUT,
+        ),
+        ("/tests/grade.sh", ("/workspace/answer",), {}, GradingFailure.TIMEOUT),
     ],
-    ids=["during-output-capture", "during-staging", "during-the-grader"],
+    ids=[
+        "during-output-capture",
+        "during-artifact-download",
+        "during-staging",
+        "during-collect",
+        "during-setup",
+        "during-the-grader",
+    ],
 )
-async def test_a_verifier_deadline_names_the_phase_it_expired_in(stalled, output_paths, failure):
-    """A deadline that runs out while outputs are captured or the verifier machine is prepared is the host's."""
+async def test_a_verifier_deadline_names_the_phase_it_expired_in(stalled, output_paths, grader_fields, failure):
+    """A deadline that runs out in the runtime's own work is the host's; in the task author's commands, the task's."""
 
     class StallingFactory(DockerMachineFactory):
         backend = Backend.DOCKER
@@ -828,12 +847,8 @@ async def test_a_verifier_deadline_names_the_phase_it_expired_in(stalled, output
             return Stalling()
 
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "12"}])
-    spec = rollout_spec(
-        file_task(output_paths=output_paths),
-        machine=machine_runtime(),
-        verifier_machine=machine_runtime(),
-        verifier_timeout=0.2,
-    )
+    task = file_task(output_paths=output_paths, grader=workspace_grader(argv=("sh", "/tests/grade.sh"), **grader_fields))
+    spec = rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime(), verifier_timeout=0.2)
 
     with pytest.raises(RolloutInterrupted) as caught:
         await engine(model, {"local": StallingFactory()}).run_task(spec)
@@ -2405,7 +2420,7 @@ async def test_artifact_archive_failures_fail_grading_and_close_machines(tmp_pat
     elif failure == "remove":
         result = await runner.run_task(spec)
         rollout, grade = result.rollout, result.grade
-        assert (grade.status, grade.reward, grade.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.EXECUTION)
+        assert (grade.status, grade.reward, grade.failure) == (Outcome.INFRA_ERROR, None, GradingFailure.STAGING)
         # The archive stays on the task machine, so the grader never starts.
         assert len(factory.machines) == 1
     else:
