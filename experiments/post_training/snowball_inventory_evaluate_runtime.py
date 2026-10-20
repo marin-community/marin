@@ -5,17 +5,20 @@
 
 import argparse
 import asyncio
+import copy
 import hashlib
 import json
 import tempfile
+from collections import Counter
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from cloud.iris.artifacts import file_inventory, fs_and_path, terminal_checkpoint_step
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.runtime_bundle import resolve_launcher_source
-from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
+from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest, sha256_file
 from marinskyrl.remote_io import filesystem_and_path
 from marinskyrl.task_machine_factories import task_machine_factories
 from omegaconf import DictConfig, OmegaConf
@@ -31,12 +34,101 @@ from skyrl_train.hf_export_schema import HFExportRequest
 from skyrl_train.tokenizer import create_tokenizer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ScriptGrader
+from taskcompendium.pipeline.fingerprints import semantic_digest
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from transformers import PreTrainedTokenizerBase
 
 from experiments.post_training.snowball_inventory_probe import package_revisions
 
 TRAINING_RUNTIME_COMMIT = "b23bc74e3207e0f25458b341209bd26eb4942d5d"
+REFERENCE_RUNTIME_LIMITS = {"model_turn_timeout": 1800.0, "total_turn_timeout": 2400.0, "attempt_timeout": 3600.0}
+
+
+def prepare_reference_panel(
+    source: Path, destination: Path, *, source_sha256: str, family_counts: dict[str, int]
+) -> dict:
+    """Derive only the outer deadlines of a local panel; retain every task and pairing field."""
+    if destination.exists():
+        raise FileExistsError(destination)
+    if sha256_file(source) != source_sha256:
+        raise ValueError("Reference source panel differs from its frozen hash")
+    parquet = pq.ParquetFile(source)
+    rows = parquet.read().to_pylist()
+    counts = Counter(row["evaluation_family"] for row in rows)
+    if counts != family_counts or len({row["task_id"] for row in rows}) != len(rows):
+        raise ValueError("Reference panel family counts or unique pairing IDs differ")
+    mappings = []
+    derived = []
+    for original in rows:
+        document = json.loads(original["task_rollout_spec"])
+        changed = copy.deepcopy(document)
+        changed["limits"].update(REFERENCE_RUNTIME_LIMITS)
+        spec = TaskRolloutSpec.model_validate(changed)
+        if spec.task.id != original["task_id"]:
+            raise ValueError("Reference pairing ID differs from its task")
+        if (semantic_digest(spec.task, True), semantic_digest(spec.task, False)) != (
+            original["contract_id"],
+            original["public_content_id"],
+        ):
+            raise ValueError("Reference task differs from its frozen semantic identities")
+        row = {**original, "task_rollout_spec": json.dumps(changed, ensure_ascii=False, separators=(",", ":"))}
+        mappings.append(
+            {
+                "task_id": original["task_id"],
+                "evaluation_family": original["evaluation_family"],
+                "contract_id": original["contract_id"],
+                "source_contract_id": original["source_contract_id"],
+                "source_runtime_sha256": hashlib.sha256(original["task_rollout_spec"].encode()).hexdigest(),
+                "runtime_sha256": hashlib.sha256(row["task_rollout_spec"].encode()).hexdigest(),
+            }
+        )
+        derived.append(row)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist(derived, schema=parquet.schema_arrow), destination, compression="zstd")
+    reread = pq.ParquetFile(destination)
+    if reread.schema_arrow != parquet.schema_arrow:
+        raise ValueError("Derived reference panel schema changed")
+    for original, written in zip(rows, reread.read().to_pylist(), strict=True):
+        before = json.loads(original["task_rollout_spec"])
+        after = json.loads(written["task_rollout_spec"])
+        for key, value in REFERENCE_RUNTIME_LIMITS.items():
+            if after["limits"][key] != value:
+                raise ValueError("Derived reference deadline differs")
+            after["limits"][key] = before["limits"][key]
+        restored = {**written, "task_rollout_spec": original["task_rollout_spec"]}
+        if after != before or restored != original:
+            raise ValueError("Derived reference panel changed fields outside the deadline whitelist")
+    if sha256_file(source) != source_sha256:
+        raise ValueError("Frozen reference source changed during preparation")
+    return {
+        "status": "passed",
+        "source_sha256": source_sha256,
+        "sha256": sha256_file(destination),
+        "row_count": len(rows),
+        "family_counts": dict(counts),
+        "runtime_limits": dict(REFERENCE_RUNTIME_LIMITS),
+        "allowed_json_paths": [f"limits.{key}" for key in REFERENCE_RUNTIME_LIMITS],
+        "all_other_fields_preserved": True,
+        "runtime_mappings": mappings,
+    }
+
+
+def require_reference_limits(spec: TaskRolloutSpec) -> None:
+    """Reject an 8k reference panel that still carries the shorter serialized deadlines."""
+    actual = spec.limits.model_dump()
+    if any(actual[key] != value for key, value in REFERENCE_RUNTIME_LIMITS.items()):
+        raise ValueError("An 8192-token evaluation requires a frozen panel with 1800/2400/3600-second deadlines")
+
+
+def evaluation_protocol(config: DictConfig) -> dict:
+    """Read the actual resolved decoding fields used by the TASK evaluator."""
+    generator = config.skyrl.generator
+    return {
+        "max_new_tokens": int(generator.eval_sampling_params.max_generate_length),
+        "request_window_tokens": int(generator.engine_init_kwargs.max_model_len),
+        "temperature": float(generator.eval_sampling_params.temperature),
+        "samples": int(generator.eval_n_samples_per_prompt),
+    }
 
 
 def read_json(uri: str) -> dict:
@@ -110,6 +202,16 @@ def preflight(request: dict) -> dict:
         raise ValueError("Evaluation requires the registered generate entrypoint without model export")
     if config.inputs.train_data or len(config.inputs.validation_data) != 1:
         raise ValueError("Evaluation requires only one frozen validation panel and no training inputs")
+    max_new_tokens = request.get("max_new_tokens", 4096)
+    protocol = evaluation_protocol(config)
+    expected_protocol = {
+        "max_new_tokens": max_new_tokens,
+        "request_window_tokens": 16384 + max_new_tokens,
+        "temperature": 0.0,
+        "samples": 1,
+    }
+    if protocol != expected_protocol:
+        raise ValueError("Evaluation decoding budget differs from the declared protocol")
     # The source composer retains an unused HOME-based train default for empty inputs.
     config.skyrl.data.train_data = []
     revisions = package_revisions()
@@ -135,6 +237,8 @@ def preflight(request: dict) -> dict:
         for batch in pq.ParquetFile(path).iter_batches(batch_size=256):
             for row in batch.to_pylist():
                 spec = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+                if max_new_tokens == 8192:
+                    require_reference_limits(spec)
                 if spec.task.id != row["task_id"]:
                     raise ValueError("Panel pairing task ID differs from the runtime contract")
                 if spec.harness not in engines:
@@ -154,7 +258,7 @@ def preflight(request: dict) -> dict:
                     {
                         "task_id": row["task_id"],
                         "evaluation_family": row["evaluation_family"],
-                        "contract_id": row["contract_id"],
+                        "contract_id": row["source_contract_id"] if max_new_tokens == 8192 else row["contract_id"],
                     }
                 )
                 family = row["evaluation_family"]
@@ -176,6 +280,8 @@ def preflight(request: dict) -> dict:
     checks = asyncio.run(grader_canaries(canaries, factories))
     return {
         "status": "passed",
+        "protocol": protocol,
+        "pairing_contract_field": "source_contract_id" if max_new_tokens == 8192 else "contract_id",
         "launch_config_yaml": OmegaConf.to_yaml(config, resolve=True),
         "panel_sha256": digest,
         "tasks": tasks,

@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import yaml
+from marin.execution.build_context import BuildContext, VersionCodex, build_context
+from marin.execution.lazy import StepContext
 
-from experiments.post_training.snowball_inventory_evaluate import EvaluationOutcome, PanelTask, summarize_panel
+from experiments.post_training.snowball_inventory_evaluate import EvaluationOutcome, PanelTask, main, summarize_panel
 
 
 @pytest.fixture
@@ -51,3 +54,43 @@ def test_pairing_identity_does_not_depend_on_model_scores_or_result_order(panel)
 def test_duplicate_outcomes_cannot_inflate_fixed_panel_score(panel):
     with pytest.raises(ValueError, match="repeated evaluation task"):
         summarize_panel(panel, [EvaluationOutcome("calendar-a", 1.0, "stop")] * 2)
+
+
+@pytest.mark.parametrize("reply_tokens,window_tokens", [(None, 20480), (8192, 24576)])
+def test_reference_launch_matches_requested_budget_and_keeps_complete_panel(reply_tokens, window_tokens):
+    arguments = dict(
+        model_uri="s3://marin-us-east-02a/test/verified-reference-export",
+        model_version="2026.10.20.1",
+        panel_uri="s3://marin-us-east-02a/test/frozen-reference-panel",
+        panel_version="2026.10.20.1",
+        panel_sha256="a" * 64,
+        training_config_uri=None,
+        checkpoint_step=None,
+    )
+    if reply_tokens is not None:
+        arguments["max_new_tokens"] = reply_tokens
+    with build_context(BuildContext(versions=VersionCodex(default="2026.10.20.901"))):
+        step = main.callback.__wrapped__(**arguments)
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://marin-us-east-02a/test/reference-evaluation",
+            prefix="s3://marin-us-east-02a/test",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+    document = yaml.safe_load(config.launch.launch_config_yaml)
+    recipe = document["skyrl"]
+    assert config.max_new_tokens == (reply_tokens or 4096)
+    assert recipe["context_budget"] == {
+        "request_window_tokens": window_tokens,
+        "max_new_tokens_per_turn": reply_tokens or 4096,
+        "max_turns": 1,
+    }
+    assert document["inputs"]["model"]["uri"] == arguments["model_uri"]
+    assert document["inputs"]["validation_data"][0]["uri"] == arguments["panel_uri"]
+    assert document["inputs"]["train_data"] == []
+    assert recipe["trainer"]["eval_num_prompts"] is None
+    assert recipe["trainer"]["evaluation_runner"] == "task"
+    assert recipe["generator"]["eval_n_samples_per_prompt"] == 1
+    assert recipe["trajectory_runner"]["max_concurrent_tasks"] == 16

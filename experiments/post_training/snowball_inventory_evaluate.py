@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate a frozen Snowball panel independently of its training run."""
+"""Evaluate a frozen Snowball panel independently of its training run.
+
+The default uses 4096 reply tokens. An 8192-token evaluation requires a separately
+frozen panel with the approved 1800/2400/3600-second model/turn/attempt limits.
+Prepare it with ``prepare_reference_panel`` in the runtime module; retain the
+original panel and pass the derived artifact's URI and hash to this normal main.
+"""
 
 import hashlib
 import json
@@ -66,6 +72,7 @@ EVAL_ROLE_PLAN = replace(
     n_samples_per_prompt=1,
 )
 WORKER_MODULE = "experiments.post_training.snowball_inventory_evaluate_runtime"
+PROMPT_TOKEN_BUDGET = 16_384
 
 
 @dataclass(frozen=True)
@@ -101,6 +108,7 @@ class EvaluationConfig:
     launch: SkyRLRunConfig
     panel_sha256: str
     output_path: str
+    max_new_tokens: int = 4096
 
 
 @dataclass(frozen=True)
@@ -213,6 +221,7 @@ def preflight_evaluation(config: EvaluationConfig) -> None:
             "launch_config_yaml": config.launch.launch_config_yaml,
             "panel_sha256": config.panel_sha256,
             "family_counts": FAMILY_COUNTS,
+            "max_new_tokens": config.max_new_tokens,
         },
     )
     with StoragePath(prefix_join(config.output_path, "preflight.json")).open("wt") as target:
@@ -243,7 +252,8 @@ def run_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
         panel_sha256=config.panel_sha256,
         launch_config_sha256=hashlib.sha256(prepared.launch_config_yaml.encode()).hexdigest(),
         model_manifest_identity=preflight["model_manifest_identity"],
-        protocol={"max_new_tokens": 4096, "request_window_tokens": 20480, "temperature": 0.0, "samples": 1},
+        protocol=preflight["protocol"],
+        pairing_contract_field=preflight["pairing_contract_field"],
     )
     report_uri = prefix_join(config.output_path, "report.json")
     with StoragePath(report_uri).open("wt") as target:
@@ -295,8 +305,8 @@ def checkpoint_export_step(training_config_uri: str, step: int, version: str) ->
     )
 
 
-def evaluation_recipe() -> dict:
-    recipe = smoke_recipe(20480, 4096, role_plan=EVAL_ROLE_PLAN, max_steps=1)
+def evaluation_recipe(max_new_tokens: int = 4096) -> dict:
+    recipe = smoke_recipe(PROMPT_TOKEN_BUDGET + max_new_tokens, max_new_tokens, role_plan=EVAL_ROLE_PLAN, max_steps=1)
     recipe["entrypoint"] = "generate"
     recipe["trainer"].update(
         eval_interval=1,
@@ -333,6 +343,7 @@ def evaluation_recipe() -> dict:
 @click.option("--panel-sha256", required=True)
 @click.option("--training-config-uri")
 @click.option("--checkpoint-step", type=click.IntRange(min=1))
+@click.option("--max-new-tokens", type=click.Choice([4096, 8192]), default=4096, show_default=True)
 @rl_build_options
 def main(
     model_uri: str,
@@ -342,6 +353,7 @@ def main(
     panel_sha256: str,
     training_config_uri: str | None,
     checkpoint_step: int | None,
+    max_new_tokens: int = 4096,
 ) -> ArtifactStep[InventoryEvaluation]:
     if (training_config_uri is None) != (checkpoint_step is None):
         raise click.BadParameter("training-config-uri and checkpoint-step must be supplied together")
@@ -358,7 +370,7 @@ def main(
         SkyRLSpec(
             name=name,
             version=version,
-            config_yaml=yaml.safe_dump(evaluation_recipe(), sort_keys=False),
+            config_yaml=yaml.safe_dump(evaluation_recipe(max_new_tokens), sort_keys=False),
             runtime=SkyRLRuntime(profile=SNOWBALL_RECIPE.profile),
             model=ArtifactHfModel(model, TOKENIZER_MODEL, TOKENIZER_REVISION, relative_path=relative_path),
             train_data=(),
@@ -377,8 +389,8 @@ def main(
             max_retries=0,
             target_cluster=CLUSTER,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=6,
-            job_timeout_seconds=2 * 60 * 60,
+            coordinator_timeout_hours=8 if max_new_tokens == 8192 else 6,
+            job_timeout_seconds=(4 if max_new_tokens == 8192 else 2) * 60 * 60,
             container_profile=CONTAINER_PROFILE,
             wandb_entity="marin-community",
         ),
@@ -386,7 +398,7 @@ def main(
     )
 
     def build_config(ctx: StepContext) -> EvaluationConfig:
-        return EvaluationConfig(launch.build_config(ctx), panel_sha256, ctx.output_path)
+        return EvaluationConfig(launch.build_config(ctx), panel_sha256, ctx.output_path, max_new_tokens)
 
     return ArtifactStep(
         name=launch.name,
