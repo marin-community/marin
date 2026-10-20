@@ -996,10 +996,6 @@ class GrugModelConfig:
     mxfp8_expert_wgrad: bool = False
     """With MXFP8 experts (``fp8_recipe``), run the routed experts' weight-gradient GEMMs block-scaled too (operands
     quantized along the token axis per expert) instead of bf16 (``ExpertMxfp8.ALL``)."""
-    mxfp8_shared_input_quant: bool = False
-    """Under a real MXFP8 dense ``fp8_recipe``, quantize the attention input once for the q, k and v projections
-    (and MLA's q and KV latent down-projection), each direction, instead of once per projection
-    (``mx_linear_shared_input``; the GEMMs stay separate)."""
     mxfp8_epilogue_tokens: bool = False
     """With ``mxfp8_expert_wgrad`` on ungated ReLU^2 experts, quantize ``post`` and ``d pre`` along the token axis
     in the ReLU^2 backward GEMM's epilogue instead of two passes after it (``ExpertMxfp8.ALL_EPILOGUE_TOKENS``)."""
@@ -1059,8 +1055,6 @@ class GrugModelConfig:
     def __post_init__(self) -> None:
         if self.mxfp8_expert_wgrad and self.fp8_recipe not in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8):
             raise ValueError("mxfp8_expert_wgrad needs MXFP8 experts (fp8_recipe=mxfp8 or mxfp8_experts)")
-        if self.mxfp8_shared_input_quant and self.fp8_recipe not in _DENSE_FP8_REAL:
-            raise ValueError("mxfp8_shared_input_quant needs a real MXFP8 dense fp8_recipe (mxfp8 or mxfp8_dense)")
         if self.mxfp8_epilogue_tokens and not self.mxfp8_expert_wgrad:
             raise ValueError("mxfp8_epilogue_tokens needs mxfp8_expert_wgrad")
         if self.moe_k_layers and (
@@ -1273,13 +1267,6 @@ def _proj(cfg: "GrugModelConfig", x: jax.Array, w: jax.Array, out_sharding: P | 
 
         return mx_linear(x, w, out_sharding, cfg.mxfp8_fused_grad_quant)
     return jnp.einsum("...k,kn->...n", x, w, out_sharding=out_sharding)
-
-
-def _proj_shared_input(cfg: "GrugModelConfig", x: jax.Array, weights: tuple[jax.Array, ...]) -> tuple[jax.Array, ...]:
-    """``_proj(cfg, x, w)`` for every ``w`` of ``weights`` with ``x`` quantized once (``mxfp8_shared_input_quant``)."""
-    from levanter.grug._moe.quack_mxfp8 import mx_linear_shared_input  # noqa: PLC0415
-
-    return mx_linear_shared_input(x, weights, cfg.mxfp8_fused_grad_quant)
 
 
 def _proj_parts(cfg: "GrugModelConfig", x: jax.Array, weights: tuple[jax.Array, ...]) -> tuple[jax.Array, ...]:
@@ -1536,20 +1523,16 @@ class CausalSelfAttention(eqx.Module):
         if not direct:
             assert self.kv_latent_norm is not None
         latent = x if kv_input is None else kv_input
-        assert self.w_q is not None
-        q_projected = None
-        if self.cfg.mxfp8_shared_input_quant and not direct and kv_input is None and "q" not in proj_inputs:
-            assert self.w_dkv is not None
-            q_projected, latent = _proj_shared_input(self.cfg, x, (self.w_q, self.w_dkv))
-        elif not direct:
+        if not direct:
             latent = _proj(self.cfg, latent, self.w_dkv)
 
         def project_q(w_q: jax.Array) -> jax.Array:
-            q_flat = _proj(self.cfg, q_in, w_q) if q_projected is None else q_projected
+            q_flat = _proj(self.cfg, q_in, w_q)
             if self.sconv_q is not None:
                 q_flat = self.sconv_q(q_flat, sconv_segment_ids)
             return rearrange(q_flat, "... (n d) -> ... n d", d=head_dim * 1)
 
+        assert self.w_q is not None
         q = project_q(self.w_q)
         if direct:
             kv_latent = latent
@@ -1607,12 +1590,9 @@ class CausalSelfAttention(eqx.Module):
             assert w is not None
             return _proj(self.cfg, inp, w)
 
-        if self.cfg.mxfp8_shared_input_quant and kv_input is None:
-            q_flat, k_flat, v_flat = _proj_shared_input(self.cfg, x, (self.w_q, self.w_k, self.w_v))
-        else:
-            q_flat = _project(x, self.w_q, None)
-            k_flat = _project(kv_in, self.w_k, None)
-            v_flat = _project(kv_in, self.w_v, None)
+        q_flat = _project(x, self.w_q, None)
+        k_flat = _project(kv_in, self.w_k, None)
+        v_flat = _project(kv_in, self.w_v, None)
         # SConv: depthwise causal conv after the K projection.
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
@@ -2122,10 +2102,7 @@ class KimiDeltaAttention(eqx.Module):
         # Every projection of x as one block-scaled GEMM: x is quantized once and the GEMM is 4-6x wider. Only under
         # the real MXFP8 dense recipes, whose per-projection quantization passes dominate at these widths.
         fused: dict[str, jax.Array] = {}
-        one_quantization = cfg.mxfp8_shared_input_quant or (
-            cfg.kda_fused_projections and cfg.fp8_recipe in _DENSE_FP8_REAL
-        )
-        if one_quantization and not proj_inputs and kv_input is None:
+        if cfg.kda_fused_projections and cfg.fp8_recipe in _DENSE_FP8_REAL and not proj_inputs and kv_input is None:
             named = {
                 "q": self.w_q,
                 "k": self.w_k,
@@ -2135,10 +2112,7 @@ class KimiDeltaAttention(eqx.Module):
                 "erase": self.w_erase,
             }
             named = {name: w for name, w in named.items() if w is not None}
-            # kda_fused_projections: one GEMM over the concatenated weights; mxfp8_shared_input_quant: x quantized
-            # once, one GEMM per projection.
-            project_all = _proj_parts if cfg.kda_fused_projections else _proj_shared_input
-            fused = dict(zip(named, project_all(cfg, x, tuple(named.values())), strict=True))
+            fused = dict(zip(named, _proj_parts(cfg, x, tuple(named.values())), strict=True))
 
         def project(w: jax.Array, conv: ShortConv, bias_row: int, name: str) -> jax.Array:
             source = kv_input if kv_input is not None and name in ("k", "v") else proj_inputs.get(name, x)

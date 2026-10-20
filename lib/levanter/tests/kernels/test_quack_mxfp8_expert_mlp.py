@@ -503,27 +503,3 @@ def test_relu2_epilogue_token_backward_matches_the_fused_backward(dispatch):
         # values, so the gradients differ by rounding, not by more error.
         assert relative <= before * 1.01, f"{name}: relative L2 {relative:.3e} vs separate passes {before:.3e}"
         assert max_error <= 0.05, f"{name}: vs separate passes max normalized {max_error:.2e}"
-
-
-def test_mx_linear_shared_input_matches_one_mx_linear_per_weight():
-    _require_sm100()
-    mx = importlib.import_module("levanter.grug._moe.quack_mxfp8")
-    rng = np.random.default_rng(9)
-    x = jnp.asarray(rng.normal(0, 1.0, (2, 192, 256)), jnp.bfloat16)
-    ws = tuple(jnp.asarray(rng.normal(0, 256**-0.5, (256, n)), jnp.float32) for n in (384, 128, 256))
-    gs = tuple(jnp.asarray(rng.normal(0, 1.0, (2, 192, w.shape[1])), jnp.bfloat16) for w in ws)
-    mesh = jax.make_mesh((1,), ("data",), axis_types=(jax.sharding.AxisType.Explicit,))
-
-    def run(fn):
-        ys, pullback = jax.vjp(fn, x, ws)
-        return ys, pullback(tuple(g.astype(y.dtype) for g, y in zip(gs, ys, strict=True)))
-
-    with jax.set_mesh(mesh):
-        shared_ys, (shared_dx, shared_dws) = jax.jit(lambda: run(lambda a, b: mx.mx_linear_shared_input(a, b)))()
-        ys, (dx, dws) = jax.jit(lambda: run(lambda a, b: tuple(mx.mx_linear(a, w) for w in b)))()
-    # Same quantized operands and GEMMs: outputs and weight gradients are bit-identical.
-    for got, want in zip((*shared_ys, *shared_dws), (*ys, *dws), strict=True):
-        np.testing.assert_array_equal(np.asarray(got, np.float32), np.asarray(want, np.float32))
-    # The input gradient sums the three dgrads in fp32 instead of adding bf16 partial sums.
-    max_error, _ = _normalized_errors(shared_dx, dx)
-    assert max_error < 2**-7, f"dx: max normalized {max_error:.2e}"

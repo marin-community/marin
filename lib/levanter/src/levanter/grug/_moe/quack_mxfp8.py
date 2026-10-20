@@ -295,13 +295,14 @@ def _drelu2_token_quant_epilogue():
         outputs=(
             TileStore("post_t", quant=TokenBlockScaleStore("post_t_sf", output="post_t")),
             TileStore("dpre_q", quant=BlockScaleFactorStore("dpre_sf", output="dpre_q")),
+            TileStore("dpre_t", quant=TokenBlockScaleStore("dpre_t_sf", output="dpre_t")),
         ),
         reduces={"mColVecReduce": ColVecReduce("mColVecReduce", scaled=True)},
-        extra_ops=(Scalar("sfd_norm_const"), TokenBlockScaleStore("dpre_t_sf", output="D")),
+        extra_ops=(Scalar("sfd_norm_const"),),
     )
     def drelu2_token_quant_epi(acc, c):
         dx, out = dact(c, acc)
-        return {"D": dx, "post_t": out, "dpre_q": dx, "mColVecReduce": (out, acc)}
+        return {"D": dx, "post_t": out, "dpre_q": dx, "dpre_t": dx, "mColVecReduce": (out, acc)}
 
     return drelu2_token_quant_epi
 
@@ -312,7 +313,7 @@ def _build_drelu2_token_launcher(*, max_active_clusters, max_swizzle):
 
     @cute.jit
     def launcher(
-        stream, mA, mB, mSFA, mSFB, mCuSeqlens, mC, mDPreT, mPostT, mPostTSF, mDPreQ, mDPreSF, mDPreTSF, mDotPartials
+        stream, mA, mB, mSFA, mSFB, mCuSeqlens, mC, mPostT, mPostTSF, mDPreQ, mDPreSF, mDPreT, mDPreTSF, mDotPartials
     ):
         gemm = _gemm(gemm_type, cutlass.Float8E4M3FN)
         epi_args = gemm_type.EpilogueArguments(
@@ -320,13 +321,16 @@ def _build_drelu2_token_launcher(*, max_active_clusters, max_swizzle):
             post_t_sf=mPostTSF,
             dpre_q=mDPreQ,
             dpre_sf=mDPreSF,
+            dpre_t=mDPreT,
             dpre_t_sf=mDPreTSF,
             sfd_norm_const=Float32(1.0),
             mColVecReduce=mDotPartials,
         )
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
-        gemm(mA, mB, mDPreT, mC, epi_args, scheduler_args, varlen_args, stream, mSFA, mSFB)
+        # No D: a stored fp8 D would set the epilogue subtile from its dtype (64 columns instead of 32), doubling
+        # every output fragment and spilling the 255-register epilogue.
+        gemm(mA, mB, None, mC, epi_args, scheduler_args, varlen_args, stream, mSFA, mSFB)
 
     return launcher
 
@@ -344,7 +348,11 @@ def mxfp8_drelu2_token_grouped_gemm(dy, dy_scales, b, b_scales, pre, cu_seqlens,
     Returns ``(post_tokens, d_pre_rows, d_pre_tokens, row_dot)``: the token operands as (e4m3 ``[M, N]``, blocked
     scales ``token_output_scale_shape``) pairs for ``mxfp8_blocked_token_grouped_gemm``, ``d_pre_rows`` as (e4m3,
     varlen-m scales) for the input-gradient GEMM. Both token operands quantize the fp32 epilogue values, where the
-    separate passes quantize ``post``'s bf16 rounding and ``d pre``'s MXFP8 rows."""
+    separate passes quantize ``post``'s bf16 rounding and ``d pre``'s MXFP8 rows.
+
+    Slower than the separate passes on GB200: the column amaxes (one warp ``redux`` per column) and rescales in the
+    4-warp, 255-register epilogue take the hero chunk's GEMM (301568 x 4608 x 3072) from 2.9 to 15.2 ms, against
+    the 1.9 ms of the two passes it replaces (``bench_mxfp8_expert_wgrad.py``)."""
     rows, cols = dy.shape[0], b.shape[1]
     if pre.shape != (rows, cols):
         raise ValueError(f"pre must be {(rows, cols)}, got {pre.shape}")
@@ -359,18 +367,18 @@ def mxfp8_drelu2_token_grouped_gemm(dy, dy_scales, b, b_scales, pre, cu_seqlens,
         launcher,
         output_shape_dtype=(
             values,
-            values,
             token_scales,
             values,
             jax.ShapeDtypeStruct(varlen_output_scale_shape(rows, cols, num_groups), jnp.float8_e8m0fnu),
+            values,
             token_scales,
             jax.ShapeDtypeStruct((rows, n_tiles), jnp.float32),
         ),
         input_spec=(_ROWS_SPEC, _WEIGHT_SPECS["k"], _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC, _OUT_SPEC),
-        output_spec=(_ROWS_SPEC, _ROWS_SPEC, _SCALE_SPEC, _ROWS_SPEC, _SCALE_SPEC, _SCALE_SPEC, _TS(static=False)),
+        output_spec=(_ROWS_SPEC, _SCALE_SPEC, _ROWS_SPEC, _SCALE_SPEC, _ROWS_SPEC, _SCALE_SPEC, _TS(static=False)),
         use_static_tensors=False,
     )
-    d_pre_t, post_t, post_t_sf, d_pre_q, d_pre_sf, d_pre_t_sf, dot_partials = call(
+    post_t, post_t_sf, d_pre_q, d_pre_sf, d_pre_t, d_pre_t_sf, dot_partials = call(
         dy, b, dy_scales, b_scales, cu_seqlens.astype(jnp.int32), pre
     )
     return (post_t, post_t_sf), (d_pre_q, d_pre_sf), (d_pre_t, d_pre_t_sf), jnp.sum(dot_partials, axis=-1)
@@ -806,15 +814,10 @@ def _quantize_rows(x: jax.Array) -> tuple[jax.Array, jax.Array]:
 def mxfp8_matmul(x: jax.Array, w_values: jax.Array, w_exponents: jax.Array) -> jax.Array:
     """Local ``x[T, K] @ w[K, N]`` with both operands MXFP8 along ``K``; ``w`` comes quantized along ``K`` in its
     stored layout (``mx_quantize_cols``: e4m3 ``[K, N]``, exponents ``[K / 32, N]``)."""
-    return _mxfp8_matmul_quantized(_quantize_rows(x), w_values, w_exponents)
-
-
-def _mxfp8_matmul_quantized(x_rows, w_values: jax.Array, w_exponents: jax.Array) -> jax.Array:
-    """``mxfp8_matmul`` with ``x`` already quantized along ``K`` (``_quantize_rows``: blocked scales)."""
-    qx, sx = x_rows
+    qx, sx = _quantize_rows(x)
     sw = blocked_scales(w_exponents.T[None])
     return _dense_gemm(
-        qx, sx, w_values, sw, a_spec=_K_MAJOR, b_spec=_MN_MAJOR, rows=qx.shape[0], cols=w_values.shape[1]
+        qx, sx, w_values, sw, a_spec=_K_MAJOR, b_spec=_MN_MAJOR, rows=x.shape[0], cols=w_values.shape[1]
     )
 
 
@@ -830,13 +833,9 @@ def mxfp8_matmul_dgrad(g_rows: tuple[jax.Array, jax.Array], w_values: jax.Array,
 
 def mxfp8_matmul_wgrad(x: jax.Array, g_cols: tuple[jax.Array, jax.Array]) -> jax.Array:
     """Local ``x[T, K]^T @ g[T, N]`` with both operands MXFP8 along ``T``; ``g_cols`` is ``quantize_cols(g)``."""
-    return _mxfp8_matmul_wgrad_quantized(_quantize_cols(x), g_cols)
-
-
-def _mxfp8_matmul_wgrad_quantized(x_cols, g_cols) -> jax.Array:
-    """``mxfp8_matmul_wgrad`` with ``x`` already quantized along ``T`` (``_quantize_cols``: blocked scales)."""
-    (qx, sx), qg, sg = x_cols, g_cols[0], blocked_scales(g_cols[1].T[None])
-    return _dense_gemm(qx, sx, qg, sg, a_spec=_MN_MAJOR, b_spec=_MN_MAJOR, rows=qx.shape[1], cols=qg.shape[1])
+    qx, sx = _quantize_cols(x)
+    qg, sg = g_cols[0], blocked_scales(g_cols[1].T[None])
+    return _dense_gemm(qx, sx, qg, sg, a_spec=_MN_MAJOR, b_spec=_MN_MAJOR, rows=x.shape[1], cols=qg.shape[1])
 
 
 def _axes(entry) -> tuple[str, ...]:
@@ -959,76 +958,3 @@ def _mx_linear_bwd(out_sharding, fused_grad_quant, res, g):
 
 
 mx_linear.defvjp(_mx_linear_fwd, _mx_linear_bwd)
-
-
-@functools.partial(jax.custom_vjp, nondiff_argnums=(2,))
-def mx_linear_shared_input(
-    x: jax.Array, ws: tuple[jax.Array, ...], fused_grad_quant: bool = False
-) -> tuple[jax.Array, ...]:
-    """``tuple(mx_linear(x, w) for w in ws)`` with ``x`` quantized once per direction: along ``K`` for the forward
-    GEMMs and along tokens for the weight gradients (``mx_linear`` quantizes ``x`` in both per projection). The
-    GEMMs stay separate, so no output is split from a concatenation; the input gradient sums the projections'
-    dgrads in fp32."""
-    return _mx_linear_shared_input_fwd(x, ws, fused_grad_quant)[0]
-
-
-def _mx_linear_shared_input_fwd(x, ws, fused_grad_quant):
-    del fused_grad_quant
-    x_spec = _token_spec(jax.typeof(x).sharding.spec, x.ndim)
-    k = x.shape[-1]
-
-    def local(xl, *weights):
-        x_rows = _quantize_rows(xl.reshape(-1, k))
-        return tuple(
-            _mxfp8_matmul_quantized(x_rows, wv, we).reshape(*xl.shape[:-1], wv.shape[1])
-            for wv, we in zip(weights[::2], weights[1::2], strict=True)
-        )
-
-    replicated = P(None, None)
-    gathered = [part for w in ws for part in _gathered_mx_weight(w, "k")]
-    ys = jax.shard_map(
-        local,
-        in_specs=(x_spec, *([replicated] * len(gathered))),
-        out_specs=tuple(x_spec for _ in ws),
-        check_vma=False,
-    )(reshard(x, x_spec), *gathered)
-    return ys, (x, ws)
-
-
-def _mx_linear_shared_input_bwd(fused_grad_quant, res, gs):
-    x, ws = res
-    x_orig_spec = jax.typeof(x).sharding.spec
-    x_spec = _token_spec(x_orig_spec, x.ndim)
-    batch_axes = tuple(axis for entry in x_spec for axis in _axes(entry))
-    w_specs = [jax.typeof(w).sharding.spec for w in ws]
-    dw_specs = [_token_axes_only(spec, batch_axes) for spec in w_specs]
-    k = x.shape[-1]
-
-    def local(xl, *rest):
-        grads, weights = rest[: len(ws)], rest[len(ws) :]
-        x2 = xl.reshape(-1, k)
-        x_cols = _quantize_cols(x2)
-        dx = jnp.zeros(x2.shape, jnp.float32)
-        dws = []
-        for gl, wv, we, dw_spec in zip(grads, weights[::2], weights[1::2], dw_specs, strict=True):
-            g2 = gl.reshape(-1, gl.shape[-1])
-            g_rows, g_cols = quantize_rows_cols(g2) if fused_grad_quant else (quantize_rows(g2), None)
-            dx = dx + mxfp8_matmul_dgrad(g_rows, wv, we).astype(jnp.float32)
-            dw = _mxfp8_matmul_wgrad_quantized(x_cols, quantize_cols(g2) if g_cols is None else g_cols)
-            dws.append(_reduce_partial_to_spec(dw, dw_spec, batch_axes))
-        return dx.astype(xl.dtype).reshape(xl.shape), *dws
-
-    replicated = P(None, None)
-    gathered = [part for w in ws for part in _gathered_mx_weight(w, "n")]
-    outs = jax.shard_map(
-        local,
-        in_specs=(x_spec, *([x_spec] * len(ws)), *([replicated] * len(gathered))),
-        out_specs=(x_spec, *dw_specs),
-        check_vma=False,
-    )(reshard(x, x_spec), *(reshard(g, x_spec) for g in gs), *gathered)
-    dx, dws = outs[0], outs[1:]
-    dws = tuple(reshard(dw, spec).astype(w.dtype) for dw, spec, w in zip(dws, w_specs, ws, strict=True))
-    return reshard(dx, x_orig_spec).astype(x.dtype), dws
-
-
-mx_linear_shared_input.defvjp(_mx_linear_shared_input_fwd, _mx_linear_shared_input_bwd)

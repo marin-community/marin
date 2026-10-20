@@ -26,7 +26,6 @@ from cutlass._mlir.dialects import llvm
 from cutlass.cutlass_dsl import T, dsl_user_op
 from quack.epilogue.ops import EpiOp, _get_lane_warp_layouts
 from quack.epilogue.quantize_out import BlockScaleFactorStore
-from quack.reduce import warp_reduce
 
 TOKEN_BLOCK = 32
 _SCALE_ATOM_ROWS = 128
@@ -141,19 +140,28 @@ def _token_quantize_subtile(tDgSFD_cur, tDcSFD_cur, limit_m, limit_n, valid_m, f
     to [1, 254], 127 for an all-zero block: ``mx_quantize_row_blocks``'s rounding, bit for bit."""
     tDg_u8 = cute.recast_tensor(tDgSFD_cur, cutlass.Uint8)
     lane = cute.arch.lane_idx()
-    m_ok = limit_m > 0
     # Lane == row: every element of this thread's fragment is in the same row.
     row_ok = tDcSFD_cur[0][0] < valid_m
-    for i in cutlass.range(cute.size(frag), unroll_full=True):
-        magnitude = Int32(cutlass.select_(row_ok, _f32_bits(frag[i]) & 0x7FFFFFFF, Int32(0)))
-        amax_bits = warp_reduce(magnitude, max, threads_in_group=TOKEN_BLOCK)
+    size = cute.size(frag)
+    assert size % TOKEN_BLOCK == 0, f"a subtile fragment of {size} elements does not split into lane groups"
+    # Every lane computes every column's exponent (the redux broadcasts the amax) and keeps the one column of
+    # each group of 32 that it stores: one byte store per 32 columns instead of one predicated store per column.
+    kept = [Int32(0)] * (size // TOKEN_BLOCK)
+    for i in cutlass.range_constexpr(size):
+        value = Float32(cutlass.select_(row_ok, frag[i], Float32(0.0)))
+        magnitude = _f32_bits(value) & 0x7FFFFFFF
+        amax_bits = cute.arch.warp_redux_sync(magnitude, "max", 0xFFFFFFFF)
         above = Int32(cutlass.select_((amax_bits & 0x7FFFFF) > 0x600000, Int32(1), Int32(0)))
         exponent = ((amax_bits >> 23) & 0xFF) - 8 + above
         exponent = Int32(cutlass.select_(exponent < 1, Int32(1), exponent))
         exponent = Int32(cutlass.select_(exponent > 254, Int32(254), exponent))
         exponent = Int32(cutlass.select_(amax_bits == 0, Int32(127), exponent))
-        if m_ok and (lane % TOKEN_BLOCK) == (i % TOKEN_BLOCK) and tDcSFD_cur[i][1] < limit_n:
-            tDg_u8[i] = cutlass.Uint8(exponent)
+        group = i // TOKEN_BLOCK
+        kept[group] = Int32(cutlass.select_(lane == i % TOKEN_BLOCK, exponent, kept[group]))
         # The exact reciprocal of 2^(e - 127) has the biased exponent 254 - e.
-        value = Float32(cutlass.select_(row_ok, frag[i], Float32(0.0)))
         frag[i] = value * _bits_f32((254 - exponent) << 23)
+    if limit_m > 0:
+        for group in cutlass.range_constexpr(size // TOKEN_BLOCK):
+            index = group * TOKEN_BLOCK + lane
+            if tDcSFD_cur[index][1] < limit_n:
+                tDg_u8[index] = cutlass.Uint8(kept[group])

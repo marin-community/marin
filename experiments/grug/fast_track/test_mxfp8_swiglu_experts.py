@@ -42,12 +42,11 @@ _CASES = {
     "ungated_relu2_mxfp8_wgrad": dict(
         fp8_recipe=Fp8Recipe.MXFP8, moe_mxfp8_dispatch=True, mxfp8_expert_wgrad=True, **_UNGATED
     ),
-    "ungated_relu2_mxfp8_wgrad_one_quantization": dict(
+    "ungated_relu2_mxfp8_wgrad_epilogue_tokens": dict(
         fp8_recipe=Fp8Recipe.MXFP8,
         moe_mxfp8_dispatch=True,
         mxfp8_expert_wgrad=True,
         mxfp8_epilogue_tokens=True,
-        mxfp8_shared_input_quant=True,
         **_UNGATED,
     ),
 }
@@ -156,13 +155,13 @@ def test_swiglu_mxfp8_loss_and_grads_track_bf16(case, tmp_path):
 
 
 @pytest.mark.timeout(600)
-def test_epilogue_tokens_and_shared_input_quantization_track_the_separate_passes(tmp_path):
-    """``mxfp8_epilogue_tokens`` + ``mxfp8_shared_input_quant`` round the same values as the separate quantization
-    passes they replace (post and d pre from fp32 instead of bf16 / MXFP8 rows; q/k/v dgrads summed in fp32): the
-    step's loss is the same function and the gradients differ by rounding."""
+def test_epilogue_tokens_track_the_separate_passes(tmp_path):
+    """``mxfp8_epilogue_tokens`` rounds the same values as the separate quantization passes it replaces (post and
+    d pre from fp32 instead of bf16 / MXFP8 rows): the step's loss is the same function and the gradients differ
+    by rounding."""
     _require_gpus()
     loss, grads, _ = _case("ungated_relu2_mxfp8_wgrad", tmp_path)
-    fused_loss, fused_grads, _ = _case("ungated_relu2_mxfp8_wgrad_one_quantization", tmp_path)
+    fused_loss, fused_grads, _ = _case("ungated_relu2_mxfp8_wgrad_epilogue_tokens", tmp_path)
     bf16_loss, bf16_grads, _ = _case("ungated_relu2_bf16", tmp_path)
     errors = [
         float(np.linalg.norm(f - g) / max(np.linalg.norm(g), 1e-30)) for f, g in zip(fused_grads, grads, strict=True)
@@ -175,7 +174,7 @@ def test_epilogue_tokens_and_shared_input_quantization_track_the_separate_passes
         float(np.linalg.norm(f - g) / max(np.linalg.norm(g), 1e-30)) for f, g in zip(grads, bf16_grads, strict=True)
     ]
     print(
-        f"one quantization: loss {fused_loss:.7f} vs separate passes {loss:.7f} (bf16 {bf16_loss:.7f}); grad rel L2 "
+        f"epilogue tokens: loss {fused_loss:.7f} vs separate passes {loss:.7f} (bf16 {bf16_loss:.7f}); grad rel L2 "
         f"vs separate passes max {max(errors):.3e} mean {np.mean(errors):.3e}; vs bf16 mean {np.mean(bf16_errors):.3e} "
         f"(separate passes {np.mean(base_errors):.3e})"
     )

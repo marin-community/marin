@@ -10,7 +10,7 @@ both operands per expert, block-scaled varlen-k GEMM). Reported: the weight grad
 and the two wgrad GEMMs on pre-quantized operands per tile/cluster configuration.
 
 The defaults are one EP64 chunk of the d6144 LatentMoE hero (latent 3072, three local experts, 262144 routed rows in
-a 301466-row receiver buffer); SwiGLU experts are 3072 wide and ungated ReLU^2 experts 4608::
+a 301568-row receiver buffer); SwiGLU experts are 3072 wide and ungated ReLU^2 experts 4608::
 
     python lib/levanter/scripts/bench/bench_mxfp8_expert_wgrad.py --activation swiglu --intermediate 3072
     python lib/levanter/scripts/bench/bench_mxfp8_expert_wgrad.py --activation relu2 --intermediate 4608
