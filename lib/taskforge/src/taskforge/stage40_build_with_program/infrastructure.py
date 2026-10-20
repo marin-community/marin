@@ -12,7 +12,7 @@ handing the program's author a traceback, because no revision of the program can
 Only errors the program cannot have caused are infrastructure:
 
 * ``NO_FACTORY``: the build needs a machine backend this host has no factory for (a laptop without
-  Docker). Lowering raises it, since RolloutEngine checks each machine's environment with its
+  Docker). Lowering raises it, since ``RolloutEngine.check`` checks each machine's environment with its
   factory before it acquires one. It is deterministic on the host (``HOST_REJECTIONS``): no retry here changes it, so the
   loop abandons the workpiece at once without retrying the build.
 * ``NO_IMAGE_BUILDER``: the build publishes a task image and this host has no ``ImageBuilder``.
@@ -64,7 +64,7 @@ from pathlib import Path
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rolloutengine.contracts import RolloutInterrupted, RolloutOperation
+from rolloutengine.models import RolloutInterrupted, RolloutOperation
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineFactory, MachineSpec, Result
 
 from taskforge.sandbox.factories import MachineHost, container_backend

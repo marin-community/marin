@@ -9,7 +9,7 @@ import dataclasses
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rolloutengine.contracts import RolloutInterrupted
+from rolloutengine.models import RolloutInterrupted
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
