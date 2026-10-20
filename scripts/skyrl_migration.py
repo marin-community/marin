@@ -491,7 +491,7 @@ def stage(snapshot_dir: Path, output: Path) -> None:
     (destination / PROVENANCE).parent.mkdir(parents=True, exist_ok=True)
     write_json(destination / PROVENANCE, {"source": SOURCE, "source_sha": record["source_sha"]})
     run("git", "init", "--quiet", "--initial-branch=main", str(tree))
-    git(tree, "add", ".")
+    git(tree, "add", "--force", ".")
     baseline = commit(tree, "Stage selected SkyRL sources")
     git(tree, "update-ref", "refs/migration/retained", baseline)
     git(tree, "fetch", "--quiet", "--no-tags", str(objects), "+refs/snapshot/*:refs/source/*")
@@ -505,7 +505,7 @@ def stage(snapshot_dir: Path, output: Path) -> None:
             destination / PROVENANCE,
             {"source": SOURCE, "source_sha": record["source_sha"], "patches": chosen["patches"]},
         )
-        git(tree, "add", ".")
+        git(tree, "add", "--force", ".")
         baseline = commit(tree, "Apply migration runtime fixes")
     pulls = transplant_pulls(snapshot_dir, output, baseline)
     report = StageReport(
@@ -630,7 +630,7 @@ def refresh_candidate(previous: Path, current: Path, updated: Path, candidate: P
     verify_source(previous / "source", previous / "source.git", old["source_sha"], retained)
     copy_source_files(previous / "source", overlay / VENDOR, list(retained))
     run("git", "init", "--quiet", "--initial-branch=main", str(overlay))
-    git(overlay, "add", ".")
+    git(overlay, "add", "--force", ".")
     commit(overlay, "Capture previous retained upstream sources")
     git(updated / "source.git", "fetch", "--quiet", str(overlay), "+HEAD:refs/snapshot/local-base")
     shutil.rmtree(overlay / VENDOR)
@@ -638,7 +638,9 @@ def refresh_candidate(previous: Path, current: Path, updated: Path, candidate: P
     # copy2 preserves timestamps. Rebuild the disposable index so same-sized
     # edits cannot disappear when Git trusts the copied files' stat metadata.
     git(overlay, "read-tree", "--empty")
-    git(overlay, "add", "--all")
+    # The copied inventory already excludes ignored local environments. Force
+    # staging so newly added ignore rules cannot drop previously tracked source.
+    git(overlay, "add", "--force", "--all")
     patch_name = LOCAL_CHANGES_PATCH
     patch_path = updated / "migration-patches" / patch_name
     patch_path.parent.mkdir(parents=True, exist_ok=True)

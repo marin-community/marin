@@ -396,7 +396,7 @@ def test_refresh_preserves_local_edits_deletions_and_new_files_across_upstream_u
     write(current, "uv.lock", "version = 2\n")
     write_bytes(current, "skyrl-train/skyrl_train/assets/blob.bin", b"\0local\xff")
     (current / "skyrl-train/skyrl_train/assets/old.txt").unlink()
-    write(current, ".gitignore", ".venv/\n")
+    write(current, ".gitignore", ".venv/\nrelative.py\n")
     write(current, ".venv/keep.txt", "local environment\n")
     updated = advanced_snapshot(
         snapshot_dir,
