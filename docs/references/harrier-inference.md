@@ -8,7 +8,7 @@ prefix rewrite does not copy tensor data; this checkpoint has a tied output
 head, so inference only uses the base model.
 
 ```python
-from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_REPO, HARRIER_REVISION
+from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_MAX_TOKENS, HARRIER_REPO, HARRIER_REVISION
 from marin.processing.embeddings.harrier_jax import HarrierJaxConfig, load_harrier_jax
 
 config = HarrierJaxConfig(
@@ -16,7 +16,7 @@ config = HarrierJaxConfig(
     revision=HARRIER_REVISION,
     tokenizer_revision=HARRIER_REVISION,
     dimensions=HARRIER_DIM,
-    max_tokens=8_192,
+    max_tokens=HARRIER_MAX_TOKENS,
     compute_dtype="bfloat16",
     platform="tpu",  # Use "gpu" on a JAX GPU worker.
 )
@@ -61,6 +61,7 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_MAX_TOKENS, HARRIER_REPO, HARRIER_REVISION
 from marin.processing.embeddings.harrier_jax import HarrierJaxConfig, load_harrier_jax
+from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.input_file import InputFileSpec
@@ -68,7 +69,7 @@ from zephyr.readers import load_file
 from zephyr.runners import InlineRunner
 
 
-def embed_batches(batches, shard, *, config):
+def embed_batches(batches, _shard, *, config):
     embedder = load_harrier_jax(config)
     for batch in batches:
         vectors = embedder.embed([record["text"] for record in batch])
@@ -102,10 +103,11 @@ worker_resources = (
     else ResourceConfig.with_tpu("v6e-4", cpu=8, ram="32g", disk="64g")
 )
 schema = pa.schema([("id", pa.string()), ("embedding", pa.list_(pa.float32(), HARRIER_DIM))])
+output_path = str(StoragePath(output_prefix) / "part-{shard:05d}.parquet")
 pipeline = (
     documents.window(128)
     .map_shard(partial(embed_batches, config=config))
-    .write_parquet(f"{output_prefix.rstrip('/')}/part-{{shard:05d}}.parquet", schema=schema)
+    .write_parquet(output_path, schema=schema)
 )
 context = ZephyrContext(
     resources=worker_resources,

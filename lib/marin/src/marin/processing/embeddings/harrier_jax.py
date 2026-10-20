@@ -23,6 +23,7 @@ from transformers.models.qwen3 import Qwen3Config as HfQwen3Config
 
 BATCH_AXIS_NAME = "batch"
 DATA_AXIS_NAME = "data"
+POSITION_AXIS_NAME = "position"
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ class HarrierJaxConfig:
 
 def _embed_batch(model: Qwen3LMHeadModel, input_ids: NamedArray, lengths: NamedArray) -> NamedArray:
     batch = input_ids.resolve_axis(BATCH_AXIS_NAME)
-    position = input_ids.resolve_axis("position")
+    position = input_ids.resolve_axis(POSITION_AXIS_NAME)
     hidden = model.activations(input_ids, attn_mask=AttentionMask.causal())
     pooled = hax.take(hidden, position, lengths - 1).rearrange((batch, model.config.Embed))
     vectors = pooled.array.astype(jnp.float32)
@@ -126,7 +127,7 @@ class HarrierJaxEmbedder:
                 )
                 batch_size = per_device * device_count
                 batch = Axis(BATCH_AXIS_NAME, batch_size)
-                position = Axis("position", sequence_size)
+                position = Axis(POSITION_AXIS_NAME, sequence_size)
                 for start in range(0, len(indices), batch_size):
                     selected = indices[start : start + batch_size]
                     padded_ids = np.full((batch_size, sequence_size), pad_token_id, dtype=np.int32)
