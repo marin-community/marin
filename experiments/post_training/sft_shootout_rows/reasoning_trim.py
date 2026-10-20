@@ -38,7 +38,13 @@ import numpy as np
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.sft_shootout_rows.build import EPOCHS, v0_tokenizer
-from experiments.post_training.sweep_data.prepare_agentic import CONTEXT, PAD_TOKEN, output_hashes, read_component
+from experiments.post_training.sweep_data.prepare_agentic import (
+    CONTEXT,
+    PAD_TOKEN,
+    open_prebuilt,
+    output_hashes,
+    read_component,
+)
 from experiments.post_training.sweep_data.render import training_row
 
 START_THINK, END_THINK = 128002, 128003
@@ -125,7 +131,7 @@ def main() -> None:
             lines = gzip.decompress(files[name]).decode().splitlines()
             entries = [item for item in index if item["epoch"] == epoch]
             with contextlib.ExitStack() as stack:
-                streams = {v: stack.enter_context(gzip.open(outs[v] / name, "wt", compresslevel=6)) for v in variants}
+                streams = {v: stack.enter_context(open_prebuilt(outs[v] / name)) for v in variants}
                 digests = {v: hashlib.sha256() for v in variants}
                 totals = {v: ({}, {}) for v in variants}
                 for number, line in enumerate(lines):

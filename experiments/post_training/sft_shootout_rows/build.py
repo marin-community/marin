@@ -180,6 +180,7 @@ CHANGELOG = (
     "STYLEFROMERROR recovery labels each TMax failure's style by the parser error it draws (rows unchanged)",
     "EXCLUDETRIALS --exclude-trials drops listed attempts (trial_name, retry) before selection; manifest "
     "excluded_trials; arms built on --plain must use the same list",
+    "GZIPFIXED prebuilt .gz files are written with header mtime 0 and no file name, so output_hashes repeat",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
