@@ -305,6 +305,12 @@ qwen3_14b_base = download_model(
     )
 )
 
+QWEN3_30B_A3B_THINKING_2507 = ModelConfig(
+    hf_repo_id="Qwen/Qwen3-30B-A3B-Thinking-2507",
+    hf_revision="144afc2f379b542fdd4e85a1fcd5e1f79112d95d",
+)
+qwen3_30b_a3b_thinking_2507 = download_model(QWEN3_30B_A3B_THINKING_2507)
+
 qwen3_32b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-32B",

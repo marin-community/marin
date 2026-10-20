@@ -19,6 +19,7 @@ from typing import Literal, cast
 import fsspec
 import yaml
 from iris.cluster.client.job_info import get_job_info
+from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
@@ -397,10 +398,17 @@ class IrisSkyRLExecution:
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
+    container_profile: str | None = None
+    """Iris container profile name for the coordinator and the GPU gang, for example
+    ``CONTAINER_PROFILE_PRIVILEGED`` when rollout workers run bubblewrap sandboxes in-pod.
+    The coordinator carries the same profile because Iris lets a task pass an elevated
+    profile only to children of a job that already holds it."""
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
             raise ValueError("SkyRL coordinator_timeout_hours must be positive")
+        if self.container_profile is not None:
+            job_pb2.ContainerProfile.Value(self.container_profile)
         if self.job_timeout_seconds < 0:
             raise ValueError("SkyRL job_timeout_seconds cannot be negative")
         if (self.target_cluster is None) != (self.parent_cluster_config is None):
@@ -766,6 +774,28 @@ def _launch_config_yaml(
     submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
     target_cluster = None if submit_through_ambient_controller else execution.target_cluster
     parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
+    iris_config: dict[str, object] = {
+        "cluster": execution.cluster,
+        "cluster_config": execution.cluster_config,
+        "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
+        "wandb_entity": execution.wandb_entity,
+        "allocation": {
+            "num_nodes": spec.topology.num_nodes,
+            "gpus_per_node": spec.topology.gpus_per_node,
+            "gpu_variant": spec.topology.gpu_variant,
+            "cpu": execution.cpu,
+            "memory": execution.memory,
+            "disk": execution.disk,
+        },
+        "priority": execution.priority,
+        "max_retries": execution.max_retries,
+        "timeout": execution.job_timeout_seconds,
+        "target_cluster": target_cluster,
+        "parent_cluster_config": parent_cluster_config,
+    }
+    # MarinSkyRL's launch schema is strict, so only a launch that asks for a profile names the key.
+    if execution.container_profile is not None:
+        iris_config["container_profile"] = execution.container_profile
     launch = {
         "schema_version": 1,
         "run": {
@@ -783,25 +813,7 @@ def _launch_config_yaml(
             "experiments_dir": "/app/experiments",
             "task_env": task_env,
         },
-        "iris": {
-            "cluster": execution.cluster,
-            "cluster_config": execution.cluster_config,
-            "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
-            "wandb_entity": execution.wandb_entity,
-            "allocation": {
-                "num_nodes": spec.topology.num_nodes,
-                "gpus_per_node": spec.topology.gpus_per_node,
-                "gpu_variant": spec.topology.gpu_variant,
-                "cpu": execution.cpu,
-                "memory": execution.memory,
-                "disk": execution.disk,
-            },
-            "priority": execution.priority,
-            "max_retries": execution.max_retries,
-            "timeout": execution.job_timeout_seconds,
-            "target_cluster": target_cluster,
-            "parent_cluster_config": parent_cluster_config,
-        },
+        "iris": iris_config,
         "ray": {
             "port": 6379,
             "spill_backend": "local",

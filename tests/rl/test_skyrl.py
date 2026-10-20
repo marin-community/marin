@@ -673,3 +673,21 @@ def test_a_config_that_does_not_contradict_the_profile_is_accepted(config_yaml: 
         config_yaml=config_yaml,
         runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
     )
+
+
+def test_skyrl_launch_names_a_container_profile_only_when_requested() -> None:
+    def launch_iris(execution: IrisSkyRLExecution) -> dict:
+        step = skyrl_step(_spec(), execution)
+        config = step.build_config(
+            StepContext.for_run(
+                output_path="s3://durable/run",
+                prefix="s3://durable",
+                runtime_args=step.runtime_args,
+                deps=step.deps,
+            )
+        )
+        return yaml.safe_load(config.launch_config_yaml)["iris"]
+
+    assert "container_profile" not in launch_iris(_execution())
+    privileged = dataclasses.replace(_execution(), container_profile="CONTAINER_PROFILE_PRIVILEGED")
+    assert launch_iris(privileged)["container_profile"] == "CONTAINER_PROFILE_PRIVILEGED"

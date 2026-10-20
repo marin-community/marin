@@ -111,3 +111,18 @@ def test_execution_requires_a_complete_federated_route() -> None:
             _execution(),
             parent_cluster_config=None,
         )
+
+
+def test_coordinator_holds_the_gang_container_profile() -> None:
+    execution = dataclasses.replace(_execution(), container_profile="CONTAINER_PROFILE_PRIVILEGED")
+
+    _cluster_config, request = _coordinator_request(
+        [_step(execution)], "experiments.test_rl", ("--run",), 1, Path("/workspace/marin"), {}
+    )
+
+    assert request.resources.container_profile == "CONTAINER_PROFILE_PRIVILEGED"
+
+
+def test_execution_rejects_an_unknown_container_profile() -> None:
+    with pytest.raises(ValueError):
+        dataclasses.replace(_execution(), container_profile="CONTAINER_PROFILE_ROOT")
