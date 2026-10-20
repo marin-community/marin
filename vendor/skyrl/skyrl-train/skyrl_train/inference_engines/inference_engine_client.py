@@ -1291,7 +1291,7 @@ class AccumulatedResponse:
     policy_steps: List[int] = field(default_factory=list)
     completion_tokens: int = 0
     routed_experts: np.ndarray | None = None
-    route_prompt_ids: List[int] | None = None
+    prompt_token_ids: List[int] | None = None
 
 
 def _prepare_retry_request(
@@ -1319,8 +1319,8 @@ def _prepare_retry_request(
     ]
     cur_request_json["continue_final_message"] = True
     cur_request_json["add_generation_prompt"] = False
-    if accum.route_prompt_ids is not None:
-        cur_request_json[EXACT_PROMPT_TOKEN_IDS_KEY] = accum.route_prompt_ids + accum.token_ids
+    if accum.prompt_token_ids is not None:
+        cur_request_json[EXACT_PROMPT_TOKEN_IDS_KEY] = accum.prompt_token_ids + accum.token_ids
     elif EXACT_PROMPT_TOKEN_IDS_KEY in original_request_json:
         if len(accum.token_ids) != accum.completion_tokens:
             raise ValueError("Exact chat continuation requires token IDs for every sampled token")
@@ -1391,13 +1391,24 @@ def _parse_partial_response_and_inplace_update_accum(
     # If aborted without generating tokens, ignore this partial response.
     aborted_without_generating = finish_reason == ABORT_FINISH_REASON and new_completion_tokens == 0
     if not aborted_without_generating:
+        prompt_ids = partial_response.get("prompt_token_ids")
+        response_ids = choice.get("token_ids")
+        if prompt_ids is not None or accum.prompt_token_ids is not None:
+            if not isinstance(prompt_ids, list) or not isinstance(response_ids, list):
+                raise ValueError("Exact prompt and response token IDs must be present on every chat retry")
+            if len(response_ids) != new_completion_tokens:
+                raise ValueError("Chat completion token IDs must align with completion usage")
+            if accum.prompt_token_ids is None:
+                if accum.completion_tokens:
+                    raise ValueError("Exact prompt IDs are missing from an earlier chat response")
+                accum.prompt_token_ids = prompt_ids
+            elif prompt_ids != accum.prompt_token_ids + accum.token_ids:
+                raise ValueError("Chat retry prompt does not match accumulated token IDs")
         provider_fields = choice.get("provider_specific_fields") or {}
         routes = choice.get("routed_experts") or provider_fields.get("routed_experts")
         if routes is not None or accum.routed_experts is not None:
             if not isinstance(routes, str):
                 raise ValueError("routed_experts capture is incomplete across chat retries")
-            prompt_ids = partial_response.get("prompt_token_ids")
-            response_ids = choice.get("token_ids")
             if not isinstance(prompt_ids, list) or not isinstance(response_ids, list):
                 raise ValueError("routed_experts requires exact prompt and response token IDs on every retry")
             rows = decode_routed_experts(routes, len(prompt_ids) + len(response_ids) - 1)
@@ -1405,10 +1416,7 @@ def _parse_partial_response_and_inplace_update_accum(
                 if accum.completion_tokens:
                     raise ValueError("routed_experts capture is incomplete across chat retries")
                 accum.routed_experts = rows
-                accum.route_prompt_ids = prompt_ids
             else:
-                if prompt_ids != accum.route_prompt_ids + accum.token_ids:
-                    raise ValueError("routed_experts retry prompt does not match accumulated token IDs")
                 if rows.shape[1:] != accum.routed_experts.shape[1:]:
                     raise ValueError("routed_experts shape changed across chat retries")
                 accum.routed_experts = np.concatenate((accum.routed_experts, rows[len(prompt_ids) - 1 :]))
