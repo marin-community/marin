@@ -731,6 +731,26 @@ deployment's registrations, so a schema this binary can no longer merge shows
 up in `/health` as `degraded: <namespace>: registration failed: ...` with the
 per-namespace detail under `/api/server`.
 
+The dashboard benchmark extracts inline SQL from Grafana dashboard JSON.
+For bridge dataset endpoints, export the `SourceQuery` SQL from the matching
+builder in `infra/grafana/src/` as a JSON array of `{"name": "...", "sql": "..."}`
+objects. Pass that file with `--query-file`; its SQL runs verbatim, so freeze
+its time bounds before comparing servers. `--address` measures an existing
+server, including a loopback SSH tunnel, instead of starting a shadow process:
+
+```bash
+uv run python -m finelog.benchmarks.grafana_dashboard_bench \
+  --query-file queries.json --address http://127.0.0.1:19001 \
+  --warmup 1 --iterations 5 --output timings.json
+```
+
+Results include result digests, plain `EXPLAIN` wall time and plan, and
+`EXPLAIN ANALYZE` wall time and scan counters under `workloads`. Each workload
+records its rendered dashboard `window`; literal query files record `window: null`
+because their bounds come from their SQL. RPC wall time includes queueing;
+it does not isolate planner CPU. Keep the original Parquet files for the
+baseline and compare result digests before interpreting a sampled speedup.
+
 ## Diagnosing Kubernetes mirror readiness
 
 Use the kubeconfig and context from `config/<cluster>.yaml`; do not rely on the
