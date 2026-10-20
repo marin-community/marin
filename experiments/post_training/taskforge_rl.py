@@ -82,7 +82,9 @@ POLICY_GEOMETRY = {
     "expert_tensor_parallel_size": 1,
 }
 ENGINE_TENSOR_PARALLEL = 4
-ENGINES_PER_NODE = GPUS_PER_NODE // ENGINE_TENSOR_PARALLEL
+# Evaluation-only engines skip the weight-sync and policy footprint, so they shard the model only in
+# two: four engines per node, each with two KV heads per rank and about 85 GB of KV (900k tokens).
+EVAL_ENGINE_TENSOR_PARALLEL = 2
 
 PROMPTS_PER_STEP = 16
 SAMPLES_PER_PROMPT = 8
@@ -91,7 +93,7 @@ LEARNING_RATE = 1.0e-6
 RL_MAX_STEPS = 40
 EVAL_INTERVAL = 5
 CHECKPOINT_INTERVAL = 10
-BASELINE_NODES = 2
+BASELINE_NODES = 1
 BASELINE_EVAL_INTERVAL = 1000
 # A thinking turn on these tasks runs 5-15k tokens and can reach the 32k cap; the window holds a few
 # such turns plus shell output.
@@ -102,7 +104,12 @@ TRAIN_SAMPLING = {"temperature": 1.0, "top_p": 1.0, "top_k": -1}
 # Concurrent rollouts per TP4 engine. One engine keeps about 210 GB of KV (96 KiB per token), so
 # about 2.2M tokens, which holds this many trajectories at their typical 10-20k-token context.
 ROLLOUTS_PER_ENGINE = 128
+# The baseline starts every rollout of a 73-74-task shard at once (n=8 gives up to 592); vLLM
+# queues what its KV cannot hold. Task and verifier sandboxes are processes on the driver node.
+BASELINE_MAX_CONCURRENT_TASKS = 1024
+BASELINE_ROLLOUTS_PER_ENGINE = 256
 ROLLOUT_WORKERS = 8
+BASELINE_ROLLOUT_WORKERS = 12
 CPUS_PER_ROLLOUT_WORKER = 8
 VERIFIER_THREADS_PER_WORKER = 64
 
@@ -136,7 +143,7 @@ def disaggregated_role_plan() -> SkyRLRolePlan:
         policy_num_nodes=2,
         policy_num_gpus_per_node=GPUS_PER_NODE,
         reference_num_nodes=2,
-        num_inference_engines=ENGINES_PER_NODE,
+        num_inference_engines=GPUS_PER_NODE // ENGINE_TENSOR_PARALLEL,
         inference_engine_tensor_parallel_size=ENGINE_TENSOR_PARALLEL,
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=1,
@@ -156,11 +163,11 @@ def evaluation_role_plan(num_nodes: int) -> SkyRLRolePlan:
         policy_num_nodes=num_nodes,
         policy_num_gpus_per_node=GPUS_PER_NODE,
         reference_num_nodes=num_nodes,
-        num_inference_engines=num_nodes * ENGINES_PER_NODE,
-        inference_engine_tensor_parallel_size=ENGINE_TENSOR_PARALLEL,
+        num_inference_engines=num_nodes * GPUS_PER_NODE // EVAL_ENGINE_TENSOR_PARALLEL,
+        inference_engine_tensor_parallel_size=EVAL_ENGINE_TENSOR_PARALLEL,
         inference_engine_pipeline_parallel_size=1,
         inference_engine_data_parallel_size=1,
-        inference_engine_expert_parallel_size=ENGINE_TENSOR_PARALLEL,
+        inference_engine_expert_parallel_size=EVAL_ENGINE_TENSOR_PARALLEL,
         train_batch_size=PROMPTS_PER_STEP,
         policy_mini_batch_size=PROMPTS_PER_STEP,
         micro_train_batch_size_per_gpu=1,
@@ -311,8 +318,8 @@ def recipe(
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
             "enforce_eager": False,
-            "gpu_memory_utilization": 0.85,
-            "max_num_seqs": ROLLOUTS_PER_ENGINE,
+            "gpu_memory_utilization": 0.85 if training else 0.92,
+            "max_num_seqs": ROLLOUTS_PER_ENGINE if training else BASELINE_ROLLOUTS_PER_ENGINE,
             "max_num_batched_tokens": 16384,
             "enable_prefix_caching": True,
             "enable_chunked_prefill": True,
@@ -326,8 +333,11 @@ def recipe(
         },
         "environment": {"task_sessions": {"local": {}, "max_verifier_workers": VERIFIER_THREADS_PER_WORKER}},
         "trajectory_runner": {
-            "max_concurrent_tasks": engines * ROLLOUTS_PER_ENGINE,
-            "rollout_workers": {"num_workers": ROLLOUT_WORKERS, "cpus_per_worker": CPUS_PER_ROLLOUT_WORKER},
+            "max_concurrent_tasks": engines * ROLLOUTS_PER_ENGINE if training else BASELINE_MAX_CONCURRENT_TASKS,
+            "rollout_workers": {
+                "num_workers": ROLLOUT_WORKERS if training else BASELINE_ROLLOUT_WORKERS,
+                "cpus_per_worker": CPUS_PER_ROLLOUT_WORKER,
+            },
         },
         "data": {"kind": "parquet", "shuffle": training, "train_data": [], "val_data": []},
         "extra_env": {
@@ -436,12 +446,13 @@ def build_run(
         canonical_json(
             {
                 "config": config,
-                "train": [source.step.adopt_source for source in train_data],
-                "validation": [source.step.adopt_source for source in validation_data],
+                "train": [f"{source.step.adopt_source}/{source.relative_path}" for source in train_data],
+                "validation": [f"{source.step.adopt_source}/{source.relative_path}" for source in validation_data],
             }
         )
     )
-    name = user_owned_name(f"checkpoints/{EXPERIMENT_NAME}/{stage.value}-{identity}")
+    label = PurePosixPath(validation_data[0].relative_path).stem
+    name = user_owned_name(f"checkpoints/{EXPERIMENT_NAME}/{stage.value}-{label}-{identity}")
     return skyrl_step(
         SkyRLSpec(
             name=name,
