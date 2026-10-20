@@ -113,9 +113,9 @@ def create_api(services: Services) -> RegisteredApi:
     return registered_api(api)
 
 
-def migrate(engine: sqlalchemy.Engine) -> None:
-    """Bring Echo's schema up to date; ``marina migrate`` runs this before a deploy serves."""
-    apply_migrations(engine)
+def migrate(connection: sqlalchemy.Connection) -> None:
+    """Apply Echo's schema changes within the package release transaction."""
+    apply_migrations(connection)
 
 
 def caller() -> str:

@@ -108,7 +108,7 @@ def model_completion(
     return result
 
 
-NATIVE_MODULE_PREFIXES = ("skyrl_gym.", "skyrl_train.trajectory_runners.", "harbor.verifier.", "tasktrove_verify.")
+NATIVE_MODULE_PREFIXES = ("skyrl_gym.", "skyrl_train.trajectory_runners.", "harbor.verifier.", "verifyit.")
 
 
 @contextmanager

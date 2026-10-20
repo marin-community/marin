@@ -44,7 +44,7 @@ CONTROLLER_CLUSTER = "marin"
     type=click.Choice([mode.value for mode in SubmissionMode]),
     default=SubmissionMode.NEXT.value,
     show_default=True,
-    help="Submit the next request or all unfinished checkpoints in the current discovery set.",
+    help="Keep two jobs active, or submit all unfinished checkpoints in the current discovery set.",
 )
 @click.option(
     "--priority",

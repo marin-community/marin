@@ -27,17 +27,20 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
-from iris.cluster.runtime.docker import DockerContainerHandle
+from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerContainerHandle
 from iris.cluster.runtime.env import (
     IRIS_ATTEMPT_UID_ENV,
+    IRIS_TASK_TOKEN_ENV,
     IRIS_WORKER_REGION_ENV,
-    STANDARD_MOUNTS,
     TASK_OUTPUT_FINALIZING_STATUS,
     UV_LINK_MODE_ENV,
     build_common_iris_env,
 )
 from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt
+from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
 from iris.cluster.runtime.types import (
+    NETWORK_MODE_HOST,
+    NETWORK_MODE_NONE,
     ContainerConfig,
     ContainerErrorKind,
     ContainerHandle,
@@ -144,10 +147,32 @@ class _TaskOutcome:
     exit_code: int | None = None
 
 
+def docker_network_mode(network: TaskNetwork) -> str:
+    """The Docker network mode for a task's network.
+
+    INTERNET runs on the bridge network whose host filter worker bootstrap
+    installs. A bridge container without that filter reaches the VPC and the
+    metadata server through the VM's routes, so the worker refuses INTERNET
+    unless bootstrap has written ``EGRESS_RESOLV_CONF``, which it does only
+    after the filter is in place.
+    """
+    if network is TaskNetwork.CLUSTER:
+        return NETWORK_MODE_HOST
+    if network is TaskNetwork.NONE:
+        return NETWORK_MODE_NONE
+    if not Path(EGRESS_RESOLV_CONF).exists():
+        raise ValueError(
+            f"Egress policy internet needs the worker's host egress filter, and {EGRESS_RESOLV_CONF} is "
+            "missing: worker bootstrap has not installed the filter since this VM booted"
+        )
+    return EGRESS_NETWORK
+
+
 def build_iris_env(
     task: "TaskAttempt",
     worker_id: str | None,
     controller_address: str | None,
+    task_token: str | None,
 ) -> dict[str, str]:
     """Build Iris system environment variables for the task container.
 
@@ -163,6 +188,7 @@ def build_iris_env(
         num_tasks=task.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,
+        task_token=task_token,
         environment=req.environment,
         constraints=req.constraints,
         ports=req.ports,
@@ -734,23 +760,27 @@ class TaskAttempt:
         Prepares the container configuration including environment variables,
         mounts, and workdir setup. The actual container is not started yet.
         """
+        isolation = task_isolation(self.request.container_profile, self.request.egress_policy)
         iris_env = build_iris_env(
             self,
             self._worker_id,
-            self._controller_address,
+            self._controller_address if isolation.include_controller_address else None,
+            self.request.task_token if isolation.include_task_token else None,
         )
         env = dict(iris_env)
 
-        env.update(self._task_env)
+        if isolation.include_cluster_env:
+            env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
         # CPU tasks on TPU hosts also need to share the cache's package files.
         if self._worker_metadata.device.HasField("tpu"):
             env[UV_LINK_MODE_ENV] = "symlink"
-        # The controller owns the process-incarnation identity. User and cluster
-        # env cannot replace it with a value shared by two attempts.
-        env.pop(IRIS_ATTEMPT_UID_ENV, None)
-        if attempt_uid := iris_env.get(IRIS_ATTEMPT_UID_ENV):
-            env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
+        # The controller owns the process-incarnation identity and the task's
+        # credential. User and cluster env cannot replace either.
+        for controller_owned in (IRIS_ATTEMPT_UID_ENV, IRIS_TASK_TOKEN_ENV):
+            env.pop(controller_owned, None)
+            if value := iris_env.get(controller_owned):
+                env[controller_owned] = value
 
         # The worker's physical location is authoritative over task-provided env.
         region = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
@@ -775,7 +805,8 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
-            mounts=list(STANDARD_MOUNTS),
+            mounts=list(isolation.mounts),
+            network_mode=docker_network_mode(isolation.network),
             workdir_host_path=self.workdir,
             output_host_path=self.output_dir,
             task_id=self.task_id.to_wire(),

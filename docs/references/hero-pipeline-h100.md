@@ -32,8 +32,9 @@ git checkout 0da04acccf7b0842319a8668d71ccc697a7b10ec
 git rev-parse HEAD
 ```
 
-The model and kernel base is main `89ac0d7705`. Main alone does not contain this
-runner and runtime overlay. Record the executable pin separately from later
+The model and kernel base is main `89ac0d7705`. The synthetic pipeline foundation is on main via
+[PR #9279](https://github.com/marin-community/marin/pull/9279). The real-data
+extension and tracked runtime overlay are supplied by PR #9662. Record the executable pin separately from later
 documentation-only commits.
 
 `--main-hero-recipe` uses `HERO_MODEL_CONFIG` and `MoeHeuristic` from

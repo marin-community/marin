@@ -1,0 +1,14 @@
+# @package trainer.algorithm
+# Sampled single-token reverse KL: MOPD section 3.2.1, equations (2)-(3).
+# https://arxiv.org/abs/2606.30406
+advantage_estimator: uniform
+policy_loss_type: importance_sampling
+loss_reduction: token_mean
+advantage_batch_normalize: false
+use_kl_in_reward: false
+use_kl_loss: false
+dynamic_sampling:
+  type: null
+distillation:
+  objective: sampled_reverse_kl
+  reward_mode: replace

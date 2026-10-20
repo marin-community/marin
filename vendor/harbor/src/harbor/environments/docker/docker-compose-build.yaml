@@ -1,0 +1,6 @@
+services:
+  main:
+    build:
+      context: ${CONTEXT_DIR}
+    pull_policy: build
+    command: [ "sh", "-c", "sleep infinity" ]

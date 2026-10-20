@@ -1,0 +1,25 @@
+# The SFT checkpoint retains its Antidoom initializer's tokenizer, chat template, and serving settings.
+name: marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465
+location: marianna13/Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465
+revision: b45586996e0ab3935432fae3ab9656603e0a318a
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

@@ -19,7 +19,7 @@ config:
   marin-loom:pruneDeployment: "true"
   marin-loom:settings:
     auth.github_organizations: "Open-Athena:188075292"
-    browser.allowed_origins: https://marina.oa.dev
+    browser.allowed_origins: https://marina.oa.dev,https://applets.marina.oa.dev
     github.profile: github
     github.trigger_allowed_user_ids: "306337490"
     slack.effort: agent-default
@@ -44,7 +44,34 @@ config:
         audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
       enabled: true
   marin-loom:profiles:
-    default:
+    scheduled-message:
+      agent: codex
+      description: Deliver prompt-defined scheduled messages to declared Slack channels
+      model: gpt-6-sol
+      effort: low
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      maxConcurrent: 2
+      turnBudget: 1
+      idleArchiveSeconds: 60
+      prelude: weaver
+      instructionsFile: profiles/scheduled-message/AGENTS.md
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools:
+        - loom/messaging/post@v1
+        - loom/watches/state@v1
+      mcpAccess:
+        mode: groups
+        groups:
+          - messaging
+          - watch
+    default: &interactiveProfile
       agent: codex
       description: Interactive Marin work with repository-owned workflow instructions
       model: &codexModel gpt-6-sol
@@ -71,6 +98,11 @@ config:
           - messaging
           - permissions
           - session
+          - watch
+    codex-6-1:
+      <<: *interactiveProfile
+      description: Interactive Marin work with GPT-6.1 Sol
+      model: gpt-6.1-sol
     marina:
       agent: codex
       description: Interactive questions over read-only Marina application APIs
@@ -129,9 +161,9 @@ config:
       allowedTools: []
       mcpAccess: *builtinMcpAccess
     pr-review:
-      agent: codex
+      agent: claude
       description: Review trusted Marin pull requests from immutable head commits
-      model: *codexModel
+      model: claude-opus-5-5
       effort: xhigh
       protocol: acp
       mode: auto
@@ -140,10 +172,32 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 60
-      maxConcurrent: 16
+      maxConcurrent: 8
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-review/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    pr-holistic-review:
+      agent: claude
+      description: Review large or agent-authored Marin pull requests as whole changes from immutable head commits
+      model: claude-opus-5-5
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 60
+      maxConcurrent: 8
+      turnBudget: 200
+      prelude: weaver
+      instructionsFile: profiles/pr-holistic-review/AGENTS.md
       env: *loomIrisUser
       restricted: false
       githubRepositories:
@@ -266,6 +320,31 @@ config:
         - marin-community/marin
       allowedTools: []
       mcpAccess: *builtinMcpAccess
+    pm:
+      agent: claude
+      description: Keep goal documents in sync with their GitHub project boards
+      model: claude-opus-5-5
+      effort: high
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 60
+      maxConcurrent: 1
+      turnBudget: 300
+      prelude: weaver
+      instructionsFile: profiles/pm/AGENTS.md
+      env:
+        BOARD_GITHUB_TOKEN:
+          secretRef: projects/hai-gcp-models/secrets/LOOM_PM_BOARD_TOKEN/versions/latest
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+        - marin-community/MarinSkyRL
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
     slack:
       agent: codex
       description: Slack-triggered Marin conversations and repository work
@@ -371,11 +450,38 @@ config:
       serviceTag: pr-review
       event: pull_request_target
       ref: refs/heads/main
+    - name: pr-holistic-review
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main
+      profile: pr-holistic-review
+      serviceTag: pr-holistic-review
+      event: pull_request_target
+      ref: refs/heads/main
     - name: codehealth-refinement
       repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-codehealth-refinement.yaml@refs/heads/main
       profile: codehealth-refinement
       serviceTag: codehealth-refinement
       ref: refs/heads/main
+  marin-loom:watches:
+    goals:
+      enabled: true
+      cron: "0 */3 * * *"
+      timezone: America/Los_Angeles
+      runTimeoutSeconds: 3600
+      profile: pm
+      repo: marin-community/marin
+      promptFile: watches/goals.md
+      slackChannels: []
+    # Disabled until an operator selects the jobs and notification destination.
+    weekday-job-check:
+      enabled: false
+      cron: "0 9 * * 1-5"
+      timezone: America/Los_Angeles
+      profile: ops
+      repo: marin-community/marin
+      promptFile: watches/weekday-job-check.md
+      slackChannels: []
+
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=

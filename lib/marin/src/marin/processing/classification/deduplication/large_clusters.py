@@ -158,14 +158,13 @@ def plan_large_clusters(
     )
     logger.info("Map stage wrote %d count files in %.0fs", len(outcome.results), time.monotonic() - started)
 
-    merged = pa.Table.from_pylist([], schema=_COUNT_SCHEMA)
-    sampled_rows = 0
+    tables = [pa.Table.from_pylist([], schema=_COUNT_SCHEMA)]
     for result in outcome.results:
         with StoragePath(result.path).open("rb") as handle:
-            table = pq.ParquetFile(handle).read(columns=["dup_cluster_id", "n"])
-        sampled_rows += table.num_rows
-        merged = pa.concat_tables([merged, table]).group_by("dup_cluster_id").aggregate([("n", "sum")])
-        merged = merged.rename_columns(["dup_cluster_id", "n"])
+            tables.append(pq.ParquetFile(handle).read(columns=["dup_cluster_id", "n"]))
+    sampled_rows = sum(table.num_rows for table in tables)
+    merged = pa.concat_tables(tables).group_by("dup_cluster_id").aggregate([("n", "sum")])
+    merged = merged.rename_columns(["dup_cluster_id", "n"])
     logger.info("Aggregated %d sampled count rows", sampled_rows)
     sizes = pc.multiply(merged.column("n"), pa.scalar(params.stride, type=pa.int64()))
     keep = pc.greater_equal(sizes, pa.scalar(params.minimum_size, type=pa.int64()))
@@ -207,10 +206,12 @@ def large_clusters_step(
     max_workers: int = 48,
     worker_resources: ResourceConfig | None = None,
     task_resources: ResourceConfig | None = None,
+    output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Create a cluster-size plan with candidate lineage and sample identity."""
     return StepSpec(
         name=name,
+        output_path_prefix=output_path_prefix,
         deps=[candidates],
         hash_attrs={"version": 1, "params": params.model_dump(mode="json")},
         fn=lambda output_path: plan_large_clusters(

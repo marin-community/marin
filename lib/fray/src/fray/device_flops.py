@@ -209,6 +209,16 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp8": 4.614e15,
         "int8": 4.614e15,
     },
+    # MI355X is the MI350X die (gfx950) at a higher clock and power limit; fp8 is the OCP-FP8 figure.
+    # source: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/product-briefs/amd-instinct-mi355x-gpu-brochure.pdf
+    "mi355x": {
+        "fp64": 78.6e12,
+        "fp32": 157.3e12,
+        "fp16": 2.5166e15,
+        "bf16": 2.5166e15,
+        "fp8": 5.0332e15,
+        "int8": 5.0332e15,
+    },
     # "auto" uses H100 flops for when user doesn't care about specific GPU type
     "auto": {
         "fp64": 67e12,
@@ -357,6 +367,8 @@ def jax_device_kind_to_fray_device_type(kind: str) -> str:
         return "mi325x"
     if "mi350x" in kind:
         return "mi350x"
+    if "mi355x" in kind:
+        return "mi355x"
 
     return kind
 

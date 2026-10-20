@@ -4,3 +4,5 @@ config:
   # The oa.dev Cloudflare zone: marina, applets, echo and evaldash CNAMEs are created there
   # and mapped to the service. Unset to serve only the run.app URL.
   marin-marina:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
+  marin-marina:applet_domains:
+    - filer.marina.oa.dev

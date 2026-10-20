@@ -61,7 +61,7 @@ def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, 
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", run)
-    cache = ImageCache(tmp_path / "cache", skopeo=Path("skopeo"))
+    cache = ImageCache(tmp_path / "cache")
     first = cache.prepare(DockerfileSource(contexts[0], contexts[0] / "Dockerfile"))
     shutil.rmtree(contexts[0])
     second = cache.prepare(DockerfileSource(contexts[1], contexts[1] / "Dockerfile"))

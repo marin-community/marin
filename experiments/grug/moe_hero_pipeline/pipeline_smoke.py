@@ -375,6 +375,7 @@ def main() -> None:
         "mp_policy": mp_policy,
         "optimizer": optimizer_contract,
         "training_steps": args.steps,
+        "qb_bias_mode": args.qb_bias_mode,
         "data": HARRIER_MIX_2026_08_18_STORE.adopt_source if args.real_data else "synthetic",
         "data_seed": args.seed,
     }
