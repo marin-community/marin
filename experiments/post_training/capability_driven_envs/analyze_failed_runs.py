@@ -6,15 +6,15 @@
 import asyncio
 import json
 import logging
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from functools import partial
-from itertools import chain, pairwise
+from itertools import batched, chain, pairwise
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from rolloutengine.models import GradedRollout
+from rolloutengine.models import GradedRollout, RolloutOperation
 from taskcompendium.grading_result import Outcome
 from taskforge.content_hash import digest
 from taskforge.llm.client import ModelClient
@@ -33,6 +33,11 @@ IDEAS_PER_ROLLOUT = 3
 MERGE_ATTEMPTS = 3
 ROLLOUTS_WITHOUT_IDEAS = "failed_runs.rollouts_without_ideas"
 """The pipeline counter of the failed rollouts whose reply stayed invalid."""
+FAILURE_OPERATION = "operation"
+"""The key of ``RolloutFailure.diagnostics`` that names the interrupted operation, as rolloutengine records it."""
+POLICY_INTERRUPTIONS = frozenset({RolloutOperation.ATTEMPT, RolloutOperation.ADVANCE})
+"""The interruptions that the policy can cause: a slow or looping policy runs past the attempt deadline, and a bad
+tool call can stop the harness after a model turn."""
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +62,6 @@ class Capability(BaseModel):
         if FILE_SAFE_ID.match(value) is None:
             raise ValueError(f"capability id {value!r} is not file-safe")
         return value
-
-
-class MissingCapability(Capability):
-    """A general skill that the failed rollouts lack, with the catalog's capability fields and the evidence."""
-
-    evidence: tuple[str, ...] = Field(min_length=1, description="The run IDs of the failed rollouts that show the gap.")
 
 
 class RolloutIdeas(BaseModel):
@@ -113,8 +112,8 @@ constraints carefully, do a check of the work before the answer, or reach an ans
 - Write each capability as a catalog entry for the skill itself. Do not put the failed tasks, their domain, \
 their data, or their mistakes in it: a different step writes new tasks that train the skill, and the failed \
 tasks evaluate it.
-- A rollout that stopped at its turn limit shows a gap only if it used its turns on repeated or unneeded steps. \
-The agent does not see the limit unless its messages state it."""
+- A rollout that stopped at its turn limit or its time limit shows a gap only if it used its turns or its time on \
+repeated or unneeded steps. The agent does not see the limits unless its messages state them."""
 
 EXTRACT_PROMPT = f"""\
 You analyze one failed rollout of a language-model agent to decide what the agent must learn next. A rollout is one \
@@ -122,9 +121,10 @@ attempt at a task: the task's messages, the agent's turns and tool calls, and th
 
 Find the general capabilities, at most {IDEAS_PER_ROLLOUT}, whose absence explains the failure. {CAPABILITY_RULES}
 
-The first line of the rollout is a JSON object with its run ID, task messages, grade, stop reason, and counts of \
-turns and tool calls. Each conversation starts with a JSON line containing its model options, including the tools \
-it saw and its tool choice. Its messages follow, each starting with a number such as [0]."""
+The first line of the rollout is a JSON object with its run ID, task messages, grade, stop reason, the operation that \
+interrupted it if any, and counts of turns and tool calls. Each conversation starts with a JSON line containing its \
+model options, including the tools it saw and its tool choice. Its messages follow, each starting with a number \
+such as [0]."""
 
 MERGE_PROMPT = f"""\
 Each line is a capability that failed rollouts of a language-model agent lack, with the ID of the line and the \
@@ -134,12 +134,12 @@ merged capability holds. {CAPABILITY_RULES}"""
 
 
 def analyze_failed_runs(
-    rollouts: Dataset[GradedRollout],
+    rollouts: Sequence[GradedRollout],
     make_client: MakeClient,
     *,
     pass_threshold: float,
     max_new_ideas: int,
-    num_shards: int,
+    batch_size: int,
     policy: LLMPolicy,
     merge_policy: LLMPolicy,
     catalog_version: str,
@@ -147,30 +147,32 @@ def analyze_failed_runs(
     """The plan of a pipeline whose results are the capability ideas that the policy's failed rollouts lack.
 
     Each conversation record contains the model options and messages that the policy saw. ``policy`` samples the
-    call for each rollout, and ``merge_policy`` samples the merges, whose replies are longer. Each of the
-    ``num_shards`` groups gets one merge call. Choose it so that a group has at most about 1,000
-    failed rollouts, because the merge prompt of a larger group can be too long for the context window. Run the plan
-    outside an event loop, for example ``ctx.execute(plan).results``.
+    call for each rollout, and ``merge_policy`` samples the longer merges. Each batch of ``batch_size`` rollouts is
+    one shard. Its rollout calls run serially on one worker, and its failed rollouts get one merge call. Batches run
+    in parallel. Use at most about 1,000 rollouts in a batch, because a larger merge prompt can exceed the context
+    window. Run the plan outside an event loop, for example ``ctx.execute(plan).results``.
     """
     merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_policy)
     return (
-        rollouts.filter(lambda graded: policy_failed(graded, pass_threshold))
+        Dataset.from_list(list(batched(rollouts, batch_size)))
+        .flat_map(lambda batch: batch)
+        .filter(lambda graded: policy_failed(graded, pass_threshold))
         .flat_map(partial(yield_ideas, make_client=make_client, policy=policy))
-        .reshard(num_shards)
         .reduce(merge, partial(merge_idea_lists, merge=merge))
         .flat_map(partial(to_ideas, catalog_version=catalog_version))
     )
 
 
 def policy_failed(graded: GradedRollout, pass_threshold: float) -> bool:
-    """A grade below ``pass_threshold``, or no valid submission.
+    """A grade below ``pass_threshold``, no valid submission, or an interruption in ``POLICY_INTERRUPTIONS``.
 
-    An interrupted attempt, and an infrastructure, task, or grader failure, is not a failure of the policy, so it
-    does not become a training target.
+    A task, grader, or infrastructure failure, and an interruption by the model server or the machine, shows no gap
+    of the policy, so it does not become a training target.
     """
+    failure = graded.rollout.failure
+    if failure is not None:
+        return failure.diagnostics.get(FAILURE_OPERATION) in POLICY_INTERRUPTIONS
     grade = graded.grade
-    if graded.rollout.failure is not None:
-        return False
     if grade.status == Outcome.SUBMISSION_FAILURE:
         return True
     return grade.status == Outcome.GRADED and grade.reward is not None and grade.reward < pass_threshold
@@ -240,11 +242,8 @@ def merge_idea_lists(
 
 
 def to_ideas(ideas: list[MaybeIdea], *, catalog_version: str) -> list[CapabilityIdea]:
-    records = (
-        MissingCapability(**candidate.idea.model_dump(), evidence=tuple(sorted(candidate.evidence)))
-        for candidate in ideas
-    )
-    return [_idea(record, catalog_version) for record in records]
+    """The catalog idea of each merged idea, with the run IDs of its evidence in the capability record."""
+    return [_idea(candidate, catalog_version) for candidate in ideas]
 
 
 def _complete[T: BaseModel](
@@ -263,7 +262,7 @@ def _complete[T: BaseModel](
 
 
 def _summary(graded: GradedRollout) -> dict[str, Any]:
-    """The rollout's first line: its grade, how it stopped, and its turns and tool calls."""
+    """The rollout's first line: its grade, how it stopped or what interrupted it, and its turns and tool calls."""
     rollout, grade = graded.rollout, graded.grade
     turns = [step.turn.message for conversation in rollout.conversations for step in conversation.steps]
     calls = [_call_text(call) for message in turns for call in message.get("tool_calls") or ()]
@@ -278,6 +277,7 @@ def _summary(graded: GradedRollout) -> dict[str, Any]:
         "outcome": grade.status.value,
         "reward": grade.reward,
         "stop_reason": rollout.stop_reason,
+        "interrupted_during": rollout.failure.diagnostics.get(FAILURE_OPERATION) if rollout.failure else None,
         "turns": len(turns),
         "tool_calls": len(calls),
         "repeated_calls": sum(previous == call for previous, call in pairwise(calls)),
@@ -312,15 +312,16 @@ def _render(message: Mapping[str, Any]) -> str:
     return f"{message.get('role')}: {text}"
 
 
-def _idea(capability: MissingCapability, catalog_version: str) -> CapabilityIdea:
+def _idea(candidate: MaybeIdea, catalog_version: str) -> CapabilityIdea:
     record = {
         "kind": CAPABILITY_KIND,
         "parent_id": SUBJECT_ID,
         "prerequisites": [],
-        **capability.model_dump(mode="json"),
+        **candidate.idea.model_dump(mode="json"),
+        "evidence": sorted(candidate.evidence),
     }
     return CapabilityIdea(
-        capability_id=capability.id,
+        capability_id=candidate.idea.id,
         subject_id=SUBJECT_ID,
         subject_name=SUBJECT_NAME,
         catalog_version=catalog_version,

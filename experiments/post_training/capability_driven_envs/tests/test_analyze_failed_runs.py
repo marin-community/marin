@@ -25,9 +25,9 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 from zephyr.context import ZephyrContext
 from zephyr.coordinator import ZephyrExecutionResult
-from zephyr.dataset import Dataset
 
 from experiments.post_training.capability_driven_envs.analyze_failed_runs import (
+    FAILURE_OPERATION,
     ROLLOUTS_WITHOUT_IDEAS,
     Capability,
     Group,
@@ -84,11 +84,18 @@ def sample_rollouts() -> list[GradedRollout]:
         loop("loop"),
         evaluated("infra", Outcome.INFRA_ERROR, None, {"role": "assistant", "content": "12"}),
         evaluated(
-            "interrupted",
+            "model-error",
             Outcome.GRADED,
             0.0,
             {"role": "assistant", "content": "1"},
-            failure=RolloutFailure("ConnectionError", {"operation": "model"}),
+            failure=RolloutFailure("ConnectionError", {FAILURE_OPERATION: "model"}),
+        ),
+        evaluated(
+            "deadline",
+            Outcome.UNAVAILABLE,
+            None,
+            {"role": "assistant", "content": "Let me count: one, two, three"},
+            failure=RolloutFailure("TimeoutError", {FAILURE_OPERATION: "attempt"}),
         ),
     ]
 
@@ -155,13 +162,13 @@ def ctx(tmp_path_factory):
         yield context
 
 
-def analyze(ctx: ZephyrContext, rollouts, num_shards: int = 1, make_client=Analyst) -> ZephyrExecutionResult:
+def analyze(ctx: ZephyrContext, rollouts, batch_size: int = 100, make_client=Analyst) -> ZephyrExecutionResult:
     plan = analyze_failed_runs(
-        Dataset.from_list(rollouts),
+        rollouts,
         make_client,
         pass_threshold=1.0,
         max_new_ideas=8,
-        num_shards=num_shards,
+        batch_size=batch_size,
         policy=LLMPolicy(),
         merge_policy=LLMPolicy(),
         catalog_version="round-1",
@@ -174,18 +181,21 @@ def names_and_evidence(ideas) -> list[tuple[str, list[str]]]:
 
 
 def test_each_idea_cites_the_failed_rollouts_of_its_skills_and_becomes_a_catalog_idea(ctx):
-    ideas = analyze(ctx, [*sample_rollouts(), loop("loop-2")]).results
+    ideas = analyze(ctx, [*sample_rollouts(), loop("loop-2"), loop("loop-3")]).results
 
-    assert names_and_evidence(ideas) == [(STOP_LOOPS.name, ["loop", "loop-2"]), (CHECK_WORK.name, ["wrong"])]
+    assert names_and_evidence(ideas) == [
+        (STOP_LOOPS.name, ["loop", "loop-2", "loop-3"]),
+        (CHECK_WORK.name, ["deadline", "wrong"]),
+    ]
     idea = ideas[0]
     assert (idea.catalog_version, idea.capability["kind"]) == ("round-1", "capability")
     assert task_workpieces({idea.capability_id: idea}, 1) == [(f"{idea.capability_id}--00", idea)]
 
 
-def test_the_ideas_of_several_shards_merge_again(ctx):
+def test_the_ideas_of_several_batches_merge_again(ctx):
     rollouts = [loop(f"loop-{i}") for i in range(4)] + [wrong(f"wrong-{i}") for i in range(2)]
 
-    ideas = analyze(ctx, rollouts, num_shards=2).results
+    ideas = analyze(ctx, rollouts, batch_size=3).results
 
     assert names_and_evidence(ideas) == [
         (STOP_LOOPS.name, [f"loop-{i}" for i in range(4)]),
