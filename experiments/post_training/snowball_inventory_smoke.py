@@ -128,7 +128,7 @@ def main(
         user_owned_name("documents/snowball-inventory-runtime-probe"),
         remote(
             verify_pool_runtime,
-            resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", target_cluster=CLUSTER),
+            resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB"),
         ),
         version=resolve_version(name, None),
         pool_uri=pool,
