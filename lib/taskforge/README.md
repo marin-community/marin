@@ -246,7 +246,7 @@ with its key digest and cache status, and its model and tool calls carry its nam
 build without a ledger records nothing.
 
 A step uses the host through `sandbox_effects`: `build_machine` prepares a machine as a task attempt
-would, `grade_candidate` grades a candidate reply and workspace through `RolloutEngine.run`, and
+would, `grade_candidate` grades a candidate reply and workspace through `RolloutEngine.run_task`, and
 `publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
 first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
 cause chain, even one the program wrapped, so the caller retries or abandons the workpiece instead of
