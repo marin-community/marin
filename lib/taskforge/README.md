@@ -13,10 +13,10 @@ src/taskforge/
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
   content_hash.py              canonical JSON and its sha256 digests
-  ledger/                      timed spans to per-workpiece JSONL and, under Iris, Finelog
-  llm/                         the ModelClient protocol, the GLM client and its token-id route, sampling
-                               policy, structured output, call cache, ledger recording, agent loop, web
-                               tools, the RolloutEngine model
+  ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
+  llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
+                               output, call cache, ledger recording, agent loop, web tools, the
+                               RolloutEngine model
   sandbox/                     MachineFactory selection per host, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
@@ -106,13 +106,11 @@ run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
                     (record: CallLedger)
                       |              |
                       v              v
-          GlmClient.complete      span(LLM_CALL) -> Ledger.record(LedgerEntry)
-          or .generate,                              |-> JsonlLedger   <root>/<workpiece_id>.jsonl
-          retries and holds                          '-> FinelogLedger taskforge.ledger (under Iris)
-                      |
+          GlmClient.complete,     span(LLM_CALL) -> Ledger.record(LedgerEntry)
+          retries and holds                          |-> JsonlLedger   <root>/<workpiece_id>.jsonl
+                      |                              '-> FinelogLedger taskforge.ledger (under Iris)
                       v
           GLM-5.3 router: POST /v1/chat/completions (streamed)
-                          or POST /inference/v1/generate (token ids)
 ```
 
 `llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
@@ -124,10 +122,10 @@ own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each a
 `max_tokens`.
 
 `llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
-the messages trace. Each turn is one streamed chat-completions call with `return_token_ids`, and
-the turn reports the ids and logprobs the server sent in its chunks, and the call's usage; under
-`TraceMode.MESSAGES` the engine records them without checking them, and a stream without them gives
-a turn with empty ids. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
+the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
+and the call's usage with empty token ids; the rollout model requests neither token ids nor logprobs.
+Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage against the session's
+token budget. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
 

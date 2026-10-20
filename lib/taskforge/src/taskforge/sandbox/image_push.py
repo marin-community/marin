@@ -8,7 +8,7 @@ The builder ships this file alone to the job's working directory and runs ``pyth
 Nothing the build produced runs here. The job downloads the build job's Iris output archive from
 the cluster object store, checks it against the sha256 Iris recorded, extracts ``image.tar``,
 fetches and sha256-checks ``crane``, and pushes. The registry credential arrives as a base64
-docker config in ``REGISTRY_AUTH``, which Iris redacts from job descriptions; it is written to a
+docker config in ``REGISTRY_AUTH_ENV``, which Iris redacts from job descriptions; it is written to a
 private config directory that only ``crane`` reads, and removed afterwards.
 
 Standard library only. Python 3.14 is required for zstd (Iris archives are ``.tar.zst``).
@@ -34,6 +34,14 @@ UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
 SIGNED_HEADERS = "host;x-amz-content-sha256;x-amz-date"
 # The variables crane may see; everything else in the task env (object-store keys) stays out.
 CRANE_ENV = ("PATH", "HOME")
+# The variables ``image_builder`` sets for this job.
+CRANE_URL_ENV = "CRANE_URL"
+CRANE_SHA256_ENV = "CRANE_SHA256"
+ARCHIVE_URI_ENV = "ARCHIVE_URI"
+ARCHIVE_SHA256_ENV = "ARCHIVE_SHA256"
+DESTINATION_ENV = "DESTINATION"
+# rigging.redaction treats "auth" as a sensitive key word, so Iris redacts this variable's value.
+REGISTRY_AUTH_ENV = "REGISTRY_AUTH"
 
 
 def _hmac(key: bytes, message: str) -> bytes:
@@ -77,7 +85,7 @@ def s3_get_request(uri: str, endpoint: str, region: str, key_id: str, secret: st
     )
 
 
-def download(request: urllib.request.Request | str, target: Path) -> str:
+def download(request: urllib.request.Request, target: Path) -> str:
     """Stream ``request`` to ``target`` and return the sha256 hex of the bytes."""
     digest = hashlib.sha256()
     with urllib.request.urlopen(request, timeout=300) as response, target.open("wb") as out:
@@ -106,24 +114,24 @@ def extract_member(archive: Path, name: str, target: Path, mode: Literal["r|gz",
 def main() -> None:
     work = Path(tempfile.mkdtemp(prefix="push-"))
     crane_archive = work / "crane.tgz"
-    crane_sha256 = download(os.environ["CRANE_URL"], crane_archive)
-    if crane_sha256 != os.environ["CRANE_SHA256"]:
-        raise ValueError(f"crane archive sha256 {crane_sha256} != {os.environ['CRANE_SHA256']}")
+    crane_sha256 = download(urllib.request.Request(os.environ[CRANE_URL_ENV]), crane_archive)
+    if crane_sha256 != os.environ[CRANE_SHA256_ENV]:
+        raise ValueError(f"crane archive sha256 {crane_sha256} != {os.environ[CRANE_SHA256_ENV]}")
     crane = work / "crane"
     extract_member(crane_archive, "crane", crane, "r|gz")
     crane.chmod(0o700)
 
     archive = work / "outputs.tar.zst"
     request = s3_get_request(
-        os.environ["ARCHIVE_URI"],
+        os.environ[ARCHIVE_URI_ENV],
         os.environ["AWS_ENDPOINT_URL"],
         os.environ["AWS_REGION"],
         os.environ["AWS_ACCESS_KEY_ID"],
         os.environ["AWS_SECRET_ACCESS_KEY"],
     )
     archive_sha256 = download(request, archive)
-    if archive_sha256 != os.environ["ARCHIVE_SHA256"]:
-        raise ValueError(f"build archive sha256 {archive_sha256} != the {os.environ['ARCHIVE_SHA256']} Iris recorded")
+    if archive_sha256 != os.environ[ARCHIVE_SHA256_ENV]:
+        raise ValueError(f"build archive sha256 {archive_sha256} != the {os.environ[ARCHIVE_SHA256_ENV]} Iris recorded")
     image = work / IMAGE_MEMBER
     extract_member(archive, IMAGE_MEMBER, image, "r|zst")
     archive.unlink()
@@ -133,10 +141,10 @@ def main() -> None:
     config_dir.mkdir(mode=0o700)
     config = config_dir / "config.json"
     config.touch(mode=0o600)
-    config.write_bytes(base64.b64decode(os.environ.pop("REGISTRY_AUTH")))
+    config.write_bytes(base64.b64decode(os.environ.pop(REGISTRY_AUTH_ENV)))
     try:
         env = {name: os.environ[name] for name in CRANE_ENV if name in os.environ} | {"DOCKER_CONFIG": str(config_dir)}
-        subprocess.run((str(crane), "push", str(image), os.environ["DESTINATION"]), env=env, check=True)
+        subprocess.run((str(crane), "push", str(image), os.environ[DESTINATION_ENV]), env=env, check=True)
     finally:
         config.unlink()
     print("pushed", flush=True)
