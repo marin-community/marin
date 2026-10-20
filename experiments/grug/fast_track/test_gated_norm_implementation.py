@@ -57,8 +57,18 @@ _CASES = {
     for stack, kw in _STACKS.items()
     for impl in ("reference", "fused")
 }
-# GPU accuracy anchor: the stack's reference implementation in float32 without MXFP8.
-_CASES.update({f"{stack}_anchor": {k: v for k, v in kw.items() if k not in _MXFP8} for stack, kw in _STACKS.items()})
+# GPU accuracy anchor: the stack's function in float32 (reference GatedNorm, no MXFP8, and the reference attention
+# and XLA expert MLP, since FA4 and the ungated expert kernel are bf16-only).
+_CASES.update(
+    {
+        f"{stack}_anchor": {
+            **{k: v for k, v in kw.items() if k not in _MXFP8},
+            "gpu_attention": "reference",
+            "moe_ungated_kernel": False,
+        }
+        for stack, kw in _STACKS.items()
+    }
+)
 
 
 def _on_gpu() -> bool:
