@@ -32,6 +32,7 @@ from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from pydantic import Field, model_validator
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -230,10 +231,11 @@ class PtRoutingBatch(Record):
 
 def read_pt_panel(request: NativePtRequest) -> PtPanel:
     """Validate exact panel bytes before any checkpoint arrays are opened."""
-    path = Path(request.panel_path)
-    if path.stat().st_size > MAX_PANEL_BYTES:
+    fs, path = filesystem_for(request.panel_path)
+    with fs.open(path, "rb") as stream:
+        raw = stream.read(MAX_PANEL_BYTES + 1)
+    if len(raw) > MAX_PANEL_BYTES:
         raise ValueError("PT panel JSON exceeds the bounded byte budget")
-    raw = path.read_bytes()
     if hashlib.sha256(raw).hexdigest() != request.panel_sha256:
         raise ValueError("PT panel bytes changed")
     panel = PtPanel.model_validate_json(raw)

@@ -2,17 +2,76 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import hashlib
 import textwrap
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.text.formats import PrebuiltLmDatasetFormat, preprocessor_for_format
 from levanter.store.cache import write_levanter_cache
 from levanter.testing.cpu_devices import run_on_cpu_devices
+from rigging.filesystem.buckets import filesystem_for
 
-from experiments.grug.moe_hero_ep.format_measure import PtMaterializeRequest, materialize_pt_panel
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+from experiments.grug.moe_hero_ep.format_measure import (
+    NativePtRequest,
+    PtMaterializeRequest,
+    PtPanel,
+    PtRow,
+    materialize_pt_panel,
+    read_pt_panel,
+    token_bytes_digest,
+)
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Checkpoint, digest
+
+
+@pytest.mark.parametrize("remote", [False, True])
+def test_pt_panel_local_and_remote_bytes_are_validated(tmp_path, remote):
+    tokens, weights, segments = (2, 3, 4, 5), (1.0, 1.0, 1.0, 0.0), (0, 0, 0, 0)
+    panel = PtPanel(
+        source_data_config={},
+        source_data_config_digest=digest({}),
+        component="pt",
+        tags=("heldout",),
+        tokenizer="pinned-tokenizer",
+        tokenizer_revision="a" * 40,
+        sequence_length=4,
+        rows=(
+            PtRow(
+                row_index=0,
+                tokens=tokens,
+                loss_weight=weights,
+                segment_ids=segments,
+                arrays_sha256=token_bytes_digest(tokens, weights, segments),
+            ),
+        ),
+    )
+    url = f"memory://{tmp_path.name}/panel.json" if remote else str(tmp_path / "panel.json")
+    fs, path = filesystem_for(url)
+    raw = panel.model_dump_json().encode()
+    fs.pipe_file(path, raw)
+    request = NativePtRequest(
+        panel_path=url,
+        panel_sha256=hashlib.sha256(raw).hexdigest(),
+        checkpoint=Checkpoint(
+            uri=str(tmp_path / "absent-weights"),
+            run_id="tiny",
+            step=0,
+            timestamp="2026-10-20T00:00:00Z",
+            metadata_digest="unread",
+        ),
+        model={},
+        tokenizer=panel.tokenizer,
+        tokenizer_revision=panel.tokenizer_revision,
+        source_revision="b" * 40,
+        expert_axis_size=1,
+        replica_axis_size=1,
+    )
+    assert read_pt_panel(request) == panel
+    fs.pipe_file(path, raw + b"\n")
+    with pytest.raises(ValueError, match="PT panel bytes changed"):
+        read_pt_panel(request)
 
 
 def test_pt_materializer_selects_existing_validation_cache_without_loading_training_sources(tmp_path):
