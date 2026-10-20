@@ -5,15 +5,15 @@
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from openai import AsyncOpenAI
-from rolloutengine.chat import ChatModel
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.tools import ToolHarness
 from rolloutengine.models import (
@@ -24,9 +24,11 @@ from rolloutengine.models import (
     ModelTurn,
     RolloutLimits,
     TaskRolloutSpec,
+    TokenUsage,
     TraceMode,
 )
 from taskcompendium.models import TaskSpec
+from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.structure_closure.rollout_audit import (
     EVALUATION_RECORD,
@@ -34,6 +36,43 @@ from experiments.post_training.structure_closure.rollout_audit import (
     evaluation_request,
 )
 from experiments.post_training.structure_closure.task_data import load_validation, task_digest
+
+
+def completion_model(client: AsyncOpenAI, *, model: str, tokenizer: PreTrainedTokenizerFast) -> Model:
+    """Render public messages locally and retain unparsed completions, including delimiters."""
+
+    async def complete(request: ModelRequest) -> ModelTurn:
+        if request.prompt_token_ids is not None or request.continuation is not None:
+            raise ValueError("Text completion evaluation requires public message conditioning")
+        options = dict(request.options)
+        template = dict(options.pop("extra_body"))
+        template.update(template.pop("chat_template_kwargs"))
+        rendered = cast(
+            str,
+            tokenizer.apply_chat_template(
+                list(request.messages), tools=options.pop("tools", None), tokenize=False, **template
+            ),
+        )
+        response = await client.completions.create(model=model, prompt=rendered, stream=False, n=1, **options)
+        usage = response.usage
+        if usage is None:
+            raise ValueError("The completion endpoint reported no token usage")
+        choice = response.choices[0]
+        return ModelTurn(
+            {"role": "assistant", "content": choice.text},
+            prompt_token_ids=(),
+            response_token_ids=(),
+            logprobs=None,
+            stop_reason=choice.finish_reason,
+            text=choice.text,
+            metadata={
+                "response_id": response.id,
+                "rendered_prompt_sha256": hashlib.sha256(rendered.encode()).hexdigest(),
+            },
+            usage=TokenUsage(usage.prompt_tokens, usage.completion_tokens),
+        )
+
+    return complete
 
 
 async def evaluate_task(
@@ -50,7 +89,10 @@ async def evaluate_task(
         if actual.messages != expected.messages:
             raise ValueError("Harness conditioning differs from the frozen task")
         request = replace(actual, options=expected.options)
-        return await model(request)
+        turn = await model(request)
+        if turn.message.get("reasoning_content"):
+            raise ValueError("Closure evaluation requires raw text, before reasoning-parser transformations")
+        return turn
 
     engine = RolloutEngine({}, {"closure": ToolHarness(command_timeout=None)})
     spec = TaskRolloutSpec(
@@ -84,6 +126,7 @@ async def main() -> None:
     parser.add_argument("--tasks", type=Path, required=True)
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--initializer", type=Path, required=True)
     parser.add_argument("--limits", type=Path, required=True)
     parser.add_argument("--sampling", type=Path, required=True)
     parser.add_argument("--concurrency", type=int, required=True)
@@ -92,9 +135,10 @@ async def main() -> None:
     tasks = load_validation(args.tasks)
     limits = RolloutLimits.model_validate_json(args.limits.read_text())
     sampling = json.loads(args.sampling.read_text())
+    tokenizer = PreTrainedTokenizerFast.from_pretrained(args.initializer, local_files_only=True)
     with args.output.open("x") as output:
         async with AsyncOpenAI(base_url=args.endpoint, api_key=os.environ["OPENAI_API_KEY"], max_retries=0) as client:
-            model = ChatModel(client, args.model, max_tokens=sampling["max_tokens"])
+            model = completion_model(client, model=args.model, tokenizer=tokenizer)
             records = await evaluate_cohort(tasks, model, limits=limits, concurrency=args.concurrency, sampling=sampling)
         for record in records:
             output.write(EVALUATION_RECORD.dump_json(record).decode() + "\n")
