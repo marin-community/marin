@@ -466,7 +466,7 @@ config:
   marin-loom:watches:
     goals:
       enabled: true
-      cron: "0 8-16/2 * * *"
+      cron: "0 */3 * * *"
       timezone: America/Los_Angeles
       runTimeoutSeconds: 3600
       profile: pm
