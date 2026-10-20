@@ -541,10 +541,10 @@ def run_variant(variant: Variant, args) -> Result:
         # Bitwise comparison of the forward against the current production path.
         base_fwd, _ = _build_fns(VARIANTS_BY_NAME["baseline"], labels)
         base_loss, _ = jax.block_until_ready(base_fwd(x, w))
-        base_np = np.asarray(base_loss, dtype=np.float64)
-        # grad_in_fwd returns the mean loss, so its gate compares means.
+        # grad_in_fwd returns the mean loss, so its gate compares it with the float32 JAX mean, as
+        # production would reduce the per-token baseline.
         per_token = loss_np.ndim == 1
-        base_np = base_np if per_token else base_np.mean()
+        base_np = np.asarray(base_loss if per_token else jnp.mean(base_loss), dtype=np.float64)
         res.loss_bitwise_equal_vs_baseline = bool(np.array_equal(loss_np, base_np))
         res.loss_max_abs_diff_vs_baseline = float(np.abs(loss_np - base_np).max())
         del base_fwd, base_loss
