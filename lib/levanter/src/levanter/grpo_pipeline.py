@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 PIPELINE_SCHEDULE = "std_1f1b"
 _SCORING_WINDOW_SIZE = 8
+_NO_ROUTING_DROP_LAYER = -1
 BATCH_AXES = ("replica_dcn", "data", "expert")
 ROUTING_METRIC_NAMES = (
     "routing_assignments",
@@ -325,14 +326,15 @@ def _score_stages(
     report_routing=False,
     compute_weight_boundary: Callable = lambda value: value,
 ):
-    # TODO: Replay rollout router decisions during pipeline scoring and training.
+    # TODO: Before training MoE policies from rollouts, replay their router decisions
+    # during pipeline scoring and training.
     hidden = None
     last = None
     routing = {
         # Integer auxiliary outputs generate float0 cotangents that JaxPP cannot
         # transfer. Cast exact per-microbatch counts back to int32 after AD.
         name: jnp.asarray(
-            -1 if name == "routing_drop_layer" else 0,
+            _NO_ROUTING_DROP_LAYER if name == "routing_drop_layer" else 0,
             dtype=jnp.float32,
         )
         for name in ROUTING_METRIC_NAMES
@@ -626,8 +628,17 @@ def _scorer_repeatability_details(first_logprobs, repeated_logprobs, policy_weig
     }
 
 
-def _compile_pipeline_scorer(scorer, state, sample, mpmd_mesh):
-    api = _require_jaxpp()
+@dataclass(frozen=True)
+class _PreparedPipelineScorer:
+    execute: Callable
+    batch_specs: Any
+    trainable: tuple[Any, ...]
+    frozen: tuple[Any, ...]
+    report_routing: bool
+    output_sharding: Any
+
+
+def _compile_pipeline_scorer(scorer, state, sample, mpmd_mesh) -> _PreparedPipelineScorer:
     with jax.set_mesh(None):
         compiled = scorer.compile(state.trainable, state.frozen, sample)
     specs, kwargs = compiled.in_shardings
@@ -642,36 +653,34 @@ def _compile_pipeline_scorer(scorer, state, sample, mpmd_mesh):
         if report_routing
         else sharding
     )
-    return api, compiled, specs, trainable, frozen, report_routing, output_sharding
+    return _PreparedPipelineScorer(compiled, specs[2], trainable, frozen, report_routing, output_sharding)
 
 
-def _score_first_pipeline_microbatch(
-    api, compiled, trainable, frozen, sample, specs, mpmd_mesh, output_sharding, report_routing
-):
-    placed = api.spmd_to_mpmd_reshard(mpmd_mesh, sample, specs[2], threshold=0)
-    placed = _place_existing(placed, specs[2], mpmd_mesh)
+def _score_first_pipeline_microbatch(api, scorer: _PreparedPipelineScorer, sample, mpmd_mesh):
+    placed = api.spmd_to_mpmd_reshard(mpmd_mesh, sample, scorer.batch_specs, threshold=0)
+    placed = _place_existing(placed, scorer.batch_specs, mpmd_mesh)
     with jax.set_mesh(None):
-        score = compiled(trainable, frozen, placed)
-        score = api.mpmd_to_spmd_reshard(mpmd_mesh, score, output_sharding, threshold=0)
+        score = scorer.execute(scorer.trainable, scorer.frozen, placed)
+        score = api.mpmd_to_spmd_reshard(mpmd_mesh, score, scorer.output_sharding, threshold=0)
     jax.block_until_ready(score)
     barrier_sync()
     with jax.set_mesh(None):
-        repeated = compiled(trainable, frozen, placed)
-        repeated = api.mpmd_to_spmd_reshard(mpmd_mesh, repeated, output_sharding, threshold=0)
+        repeated = scorer.execute(scorer.trainable, scorer.frozen, placed)
+        repeated = api.mpmd_to_spmd_reshard(mpmd_mesh, repeated, scorer.output_sharding, threshold=0)
     jax.block_until_ready(repeated)
     barrier_sync()
     if all(
         bool(jnp.array_equal(a, b)) for a, b in zip(jax.tree.leaves(score), jax.tree.leaves(repeated), strict=True)
     ):
         return score
-    first_logprobs = score[0] if report_routing else score
-    repeated_logprobs = repeated[0] if report_routing else repeated
+    first_logprobs = score[0] if scorer.report_routing else score
+    repeated_logprobs = repeated[0] if scorer.report_routing else repeated
     details = _scorer_repeatability_details(
         first_logprobs,
         repeated_logprobs,
         sample.policy_weights,
-        score[1] if report_routing else {},
-        repeated[1] if report_routing else {},
+        score[1] if scorer.report_routing else {},
+        repeated[1] if scorer.report_routing else {},
     )
     raise FloatingPointError(f"Compiled GRPO scorer is not repeatable: {details}")
 
@@ -685,14 +694,15 @@ def score_pipeline_batch(
     routing_drop_policy: RoutingDropPolicy = RoutingDropPolicy.REJECT,
 ) -> PipelineBatch:
     """Freeze raw old scores and verify exact first-microbatch scorer repeatability."""
+    api = _require_jaxpp()
     sample = jax.tree.map(lambda x: x[0], batches)
-    api, compiled, specs, scoring_trainable, scoring_frozen, report_routing, output_sharding = (
-        _compile_pipeline_scorer(scorer, state, sample, mpmd_mesh)
-    )
-    routing_totals = {name: -1 if name == "routing_drop_layer" else 0 for name in ROUTING_METRIC_NAMES}
+    prepared = _compile_pipeline_scorer(scorer, state, sample, mpmd_mesh)
+    routing_totals = {
+        name: _NO_ROUTING_DROP_LAYER if name == "routing_drop_layer" else 0 for name in ROUTING_METRIC_NAMES
+    }
 
     def checked_score(result, index):
-        if not report_routing:
+        if not prepared.report_routing:
             return result
         logprobs, routing = result
         values = {name: int(value) for name, value in routing.items()}
@@ -706,24 +716,14 @@ def score_pipeline_batch(
     stacked_sharding = NamedSharding(mpmd_mesh.jax_mesh, P(None, BATCH_AXES, None))
     # Preserve the original first-microbatch repeatability check before allowing
     # independent microbatches to overlap across stages.
-    score = _score_first_pipeline_microbatch(
-        api,
-        compiled,
-        scoring_trainable,
-        scoring_frozen,
-        sample,
-        specs,
-        mpmd_mesh,
-        output_sharding,
-        report_routing,
-    )
+    score = _score_first_pipeline_microbatch(api, prepared, sample, mpmd_mesh)
     logger.info("Verified exact compiled scorer repeatability on the first microbatch")
     score = checked_score(score, 0)
     scores = [jax.lax.reshape(score, (1, *score.shape), out_sharding=stacked_sharding)]
     for start in range(1, batches.tokens.shape[0], _SCORING_WINDOW_SIZE):
         stop = min(start + _SCORING_WINDOW_SIZE, batches.tokens.shape[0])
         window = tuple(jax.tree.map(lambda value, index=index: value[index], batches) for index in range(start, stop))
-        window_specs = (specs[2],) * len(window)
+        window_specs = (prepared.batch_specs,) * len(window)
         # An explicit positive threshold batches the tree into one resharding
         # group. Zero would split every leaf; None queries memory across hosts.
         input_bytes = sum(value.size * value.dtype.itemsize for value in jax.tree.leaves(window))
@@ -732,16 +732,21 @@ def score_pipeline_batch(
         )
         placed_window = _place_existing(placed_window, window_specs, mpmd_mesh)
         with jax.set_mesh(None):
-            pending = tuple(compiled(scoring_trainable, scoring_frozen, microbatch) for microbatch in placed_window)
+            pending = tuple(
+                prepared.execute(prepared.trainable, prepared.frozen, microbatch) for microbatch in placed_window
+            )
             output_bytes = sum(
                 int(np.prod(value.shape)) * np.dtype(value.dtype).itemsize for value in jax.tree.leaves(pending)
             )
             completed = api.mpmd_to_spmd_reshard(
-                mpmd_mesh, pending, (output_sharding,) * len(pending), threshold=output_bytes * mpmd_mesh.mpmd_dim
+                mpmd_mesh,
+                pending,
+                (prepared.output_sharding,) * len(pending),
+                threshold=output_bytes * mpmd_mesh.mpmd_dim,
             )
         for index, result in enumerate(completed, start=start):
             value = checked_score(result, index)
             scores.append(jax.lax.reshape(value, (1, *value.shape), out_sharding=stacked_sharding))
-    if report_routing:
+    if prepared.report_routing:
         logger.info("GRPO scorer routing totals (padding included): %s", routing_totals)
     return dataclasses.replace(batches, old_logprobs=jnp.concatenate(scores, axis=0))
