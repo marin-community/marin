@@ -553,6 +553,11 @@ def github_fake(
         raise AssertionError((endpoint, method))
 
     def paginate(endpoint: str):
+        if endpoint == f"repos/{migration.TARGET}/issues/100/comments?per_page=100":
+            return [
+                comment | {"html_url": f"https://github.com/{migration.TARGET}/issues/100#issuecomment-200"}
+                for comment in record["issues"][0]["comments"]
+            ]
         if endpoint.startswith(f"repos/{migration.SOURCE}/pulls?"):
             return record["pulls"]
         if endpoint.startswith(f"repos/{migration.TARGET}/labels?"):
@@ -570,6 +575,10 @@ def github_fake(
                 "url": f"https://github.com/{migration.TARGET}/issues/100",
                 "number": 100,
             }
+            remote["issues"]["body"] = remote["issues"]["body"].replace(
+                f"https://github.com/{migration.SOURCE}/issues/3#issuecomment-10",
+                f"https://github.com/{migration.TARGET}/issues/100#issuecomment-200",
+            )
             if remote["rewrite_references"]:
                 remote["issues"]["body"] = (
                     remote["issues"]["body"]
@@ -604,7 +613,17 @@ def test_issue_transfer_recovers_after_remote_success_and_protects_edits(
             "Related to #12 and GH-13. Literal `#14`. "
             f"Already qualified {migration.SOURCE}#15. "
             "See [upstream #298](https://github.com/NovaSky-AI/SkyRL/pull/298)."
+            f" See [discussion](https://github.com/{migration.SOURCE}/issues/3#issuecomment-10)."
         ),
+        "comments": [
+            {
+                "id": 10,
+                "html_url": f"https://github.com/{migration.SOURCE}/issues/3#issuecomment-10",
+                "created_at": "2026-10-18T00:00:00Z",
+                "updated_at": "2026-10-18T00:00:00Z",
+                "user": {"id": 123},
+            }
+        ],
     }
     record["issues"] = [issue]
     migration.write_json(snapshot_dir / "snapshot.json", record)
@@ -640,6 +659,7 @@ def test_issue_transfer_recovers_after_remote_success_and_protects_edits(
     assert f"https://github.com/{migration.SOURCE}/issues/13" in remote["issues"]["body"]
     assert "[upstream #298](https://github.com/NovaSky-AI/SkyRL/pull/298)" in remote["issues"]["body"]
     assert f"Already qualified {migration.SOURCE}#15." in remote["issues"]["body"]
+    assert f"[discussion](https://github.com/{migration.TARGET}/issues/100#issuecomment-200)" in remote["issues"]["body"]
     remote["issues"]["body"] += "\nHuman clarification after completed transfer."
     completed_body = remote["issues"]["body"]
     migration.transfer_issues(snapshot_dir, state, 99)

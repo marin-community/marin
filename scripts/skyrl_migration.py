@@ -1056,8 +1056,6 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
             id=current_issue["node_id"],
         )["node"]
         origin = issue["html_url"]
-        body = source_references(issue["body"] or "")
-        body += f"\n\nTransferred from {origin}.\n<!-- skyrl-migration: issue={issue['node_id']} -->\n"
         if node["repository"]["nameWithOwner"] == SOURCE:
             if node["updatedAt"] != issue["updated_at"] or node["state"] != "OPEN":
                 raise ValueError(f"Issue changed since snapshot: {origin}")
@@ -1069,8 +1067,25 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
             )["transferIssue"]["issue"]
         if node["repository"]["nameWithOwner"] != TARGET:
             raise ValueError(f"Issue moved to an unexpected repository: {origin}")
+        original_body = issue["body"] or ""
+        linked_comments = [comment for comment in issue["comments"] if comment["html_url"] in original_body]
+        if linked_comments:
+            transferred_comments = github_items(f"repos/{TARGET}/issues/{node['number']}/comments?per_page=100")
+            for original_comment in linked_comments:
+                matches = [
+                    comment
+                    for comment in transferred_comments
+                    if comment["user"]["id"] == original_comment["user"]["id"]
+                    and comment["created_at"] == original_comment["created_at"]
+                    and comment["updated_at"] == original_comment["updated_at"]
+                ]
+                if len(matches) != 1:
+                    raise ValueError(f"Transferred discussion changed; reconcile manually: {node['url']}")
+                original_body = original_body.replace(original_comment["html_url"], matches[0]["html_url"])
+        body = source_references(original_body)
+        body += f"\n\nTransferred from {origin}.\n<!-- skyrl-migration: issue={issue['node_id']} -->\n"
         if node["body"] != body:
-            if not transferred_issue_body_matches(issue["body"] or "", node["body"] or ""):
+            if not transferred_issue_body_matches(original_body, node["body"] or ""):
                 raise ValueError(f"Transferred issue body changed; reconcile manually: {node['url']}")
             gh(f"repos/{TARGET}/issues/{node['number']}", method="PATCH", payload={"body": body})
         state[issue["node_id"]] = {"source": origin, "destination": node["url"]}
