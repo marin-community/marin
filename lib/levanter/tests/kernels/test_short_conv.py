@@ -121,6 +121,16 @@ def _triton_programs(fn, *args) -> list[bytes]:
     return programs
 
 
+@pytest.fixture
+def isolated_triton_rounding_cache():
+    # Capability monkeypatches must retrace the staged kernel boundary in each
+    # case; production capability is fixed, but this suite simulates both paths.
+    api._triton_local_call.clear_cache()
+    yield
+    api._triton_local_call.clear_cache()
+
+
+@pytest.mark.usefixtures("isolated_triton_rounding_cache")
 @pytest.mark.parametrize("packed_bf16", [True, False], ids=["packed-bf16", "fp32-then-bf16"])
 @pytest.mark.parametrize("segments", ["unpacked", "packed", "short_runs", "padded"])
 @pytest.mark.parametrize(
@@ -192,6 +202,7 @@ def test_triton_implementation_fails_fast_when_unsupported():
     np.testing.assert_array_equal(_bits(got), _bits(short_conv_reference(weight, x, segment_ids)))
 
 
+@pytest.mark.usefixtures("isolated_triton_rounding_cache")
 @pytest.mark.parametrize("dynamic_weight", [True, False], ids=["jit-weight-input", "weight-closure"])
 @pytest.mark.parametrize(
     ("shape", "dtype", "segments", "packed_bf16"),
