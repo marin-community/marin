@@ -39,7 +39,7 @@ from marin.evaluation.lm_eval_samples import (
     sample_from_lm_eval,
     samples_from_lm_eval,
     summarize_native_eval_samples,
-    task_coverage_and_metrics,
+    task_coverage,
 )
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
@@ -1073,7 +1073,7 @@ def test_rebuild_reads_sandbox_pass_rates_for_declared_pass_at_one(tmp_path, met
 
     assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 2
     samples = [sample_from_archive_row(row) for row in ReadView(str(results)).scan("samples").to_pylist()]
-    coverage, _ = task_coverage_and_metrics(samples, n_benchmark=2, n_attempted=2)
+    coverage = task_coverage(samples, n_benchmark=2, n_attempted=2)
     assert coverage == TaskCoverage(n_benchmark=2, n_attempted=2, n_scored=2, n_correct=1, n_unanswered=0)
     assert [sample.correct for sample in samples] == [True, False]
     assert all(sample.grading.metric == "pass_rate" for sample in samples)

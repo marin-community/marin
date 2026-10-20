@@ -238,6 +238,8 @@ def completed_result(root: str, source_prefix: str) -> bool:
         row.get("source_prefix") == source_prefix and row.get("scored") is True
         for row in table.to_pylist(maps_as_pydicts="strict")
     )
+
+
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     tasks = config["tasks"]

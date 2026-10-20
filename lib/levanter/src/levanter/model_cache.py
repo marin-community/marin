@@ -38,8 +38,8 @@ from rigging.filesystem.factory import url_to_fs
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COMPLETE_MARKER = ".marin-complete.json"
-"""Sibling metadata written last after a full upload; its presence is the cache-hit signal."""
+DEFAULT_COMPLETE_MARKER = ".cache_metadata.json"
+"""Metadata written last after a full upload; its presence is the cache-hit signal."""
 
 
 @dataclass(frozen=True)
@@ -70,7 +70,7 @@ def cache_to_prefix(
 ) -> str:
     """Populate *cache_path* once under a distributed lock and return it.
 
-    Fast path: if the sibling completion marker already exists, return ``cache_path``
+    Fast path: if the completion marker already exists, return ``cache_path``
     immediately. Otherwise acquire a distributed lock keyed on ``cache_path``:
 
     - The **winner** runs ``populate`` (which streams files straight into the
@@ -88,9 +88,8 @@ def cache_to_prefix(
             into ``cache_path`` on filesystem ``fs``. Use :func:`cache_hf_model`
             for the common HF-repo case instead of writing one by hand.
         metadata: Metadata written into the completion marker.
-        complete_marker: Suffix for a JSON marker beside ``cache_path``, written last to mark
-            the cache complete. Keeping it outside the mirrored tree prevents a source file
-            with the same name from making a partial snapshot look complete.
+        complete_marker: JSON filename (relative to ``cache_path``) written last to mark
+            the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
 
     Returns:
@@ -98,7 +97,7 @@ def cache_to_prefix(
     """
     cache_path = cache_path.rstrip("/")
     fs, _ = url_to_fs(cache_path)
-    marker = f"{cache_path}{complete_marker}"
+    marker = f"{cache_path}/{complete_marker}"
 
     if fs.exists(marker):
         logger.info("model cache hit: %s", cache_path)

@@ -32,7 +32,6 @@ from marin.evaluation.lm_eval_samples import (
     rebuild_lm_eval_samples,
     summarize_native_eval_samples,
 )
-from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, declared_metric
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalTaskRef,
