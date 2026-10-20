@@ -591,12 +591,13 @@ index 6657534dd4f715b8d822fc9655fbf223555ce7f7..cf24a7ef4f27245053980243aea03577
 -    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
 +    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
 diff --git a/cloud/iris/tests/test_packaging_boundary.py b/cloud/iris/tests/test_packaging_boundary.py
-index afd4696d3fda03940d52fa4ce014e72aa1a2606b..e40c1c6ab6fa8bc4f42aa0237fa12e523cde0514 100644
+index afd4696d3fda03940d52fa4ce014e72aa1a2606b..a82129d476308022364370c35d941d18370199a7 100644
 --- a/cloud/iris/tests/test_packaging_boundary.py
 +++ b/cloud/iris/tests/test_packaging_boundary.py
 @@ -16,0 +17 @@ REPOSITORY_ROOT = Path(__file__).parents[3]
 +        ("skyrl_train.hf_export", ("flash_attn", "ray", "torch", "vllm")),
-@@ -44,21 +44,0 @@ print(json.dumps(sorted(name for name in blocked if name in sys.modules)))
+@@ -43,22 +43,0 @@ print(json.dumps(sorted(name for name in blocked if name in sys.modules)))
+-
 -
 -def test_importing_hf_export_does_not_import_training_stacks() -> None:
 -    """The launcher's export step imports skyrl_train.hf_export in a torch-free environment."""
