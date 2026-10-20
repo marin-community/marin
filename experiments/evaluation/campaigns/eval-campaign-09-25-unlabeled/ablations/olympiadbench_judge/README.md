@@ -1,5 +1,9 @@
 # OlympiadBench judge ablation
 
+This historical replay calls the fork's benchmark `evaluate_responses` API. Use
+the campaign's pre-vendoring Marin checkout, such as
+`6885cabd456787794551a2e41fbff99188fedd37`, with the pinned ablation project below.
+
 Run `regrade.py` with the pinned Evalchemy project from the Marin checkout. It reads the sealed samples in `sources.yaml`, starts the local 131,072-token MiniMax judge on one H100x8 worker, and writes per-model results beneath a new object-store prefix. CoreWeave object-store credentials must be available in the environment.
 
 ```bash

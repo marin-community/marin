@@ -1,5 +1,11 @@
 # Fixed-grader replay of sealed campaign answers
 
+These historical replays require the campaign's pre-vendoring Marin checkout,
+such as `6885cabd456787794551a2e41fbff99188fedd37`. They call the fork's benchmark
+`evaluate_responses` APIs, which the vendored evaluator replaced with shared
+graders. The commands below use the isolated project retained in that historical
+checkout; run them there to preserve the recorded grader revision.
+
 The Evalchemy revision in `config/external/evalchemy/pyproject.toml` rejects empty math answers before an LLM judge and rejects vacuous symbolic matches between equations without free symbols. These replays hold the original model responses and extracted answers fixed. `sources.yaml` freezes the original 21-model cohort. `sources_current_20261015.yaml` freezes the 34-model FinanceBench and OlympiadBench cohort.
 
 MATH500 (500 trials per model) and AIME24 (30 problems × 10 trials) call their native deterministic benchmark graders. OlympiadBench (30 × 10) calls its native deterministic grader and the 131,072-token MiniMax equivalence judge for unresolved answers. An exact cached MiniMax verdict is reused only when the question, reference answers, and candidate answer are unchanged from the earlier judge ablation. Newly unresolved answers go to the live judge. Failed judge requests abort a model result. Every per-model result contains all paired trial verdicts, and writes fail if the destination object already exists.

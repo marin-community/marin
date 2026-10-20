@@ -1,6 +1,10 @@
 # Verified evaluation cohorts
 
-The launcher applies the [September 16](https://github.com/marin-community/marin/issues/9193) or [September 24](https://github.com/marin-community/marin/issues/9409) policy under `eval-policy-2026-09-16-verified` or `eval-policy-2026-09-24-verified`. Each benchmark gets its own H100 serving group, sized by the model YAML's `resource_hint.gpu.H100` value. Harbor always executes the vendored source, so new Harbor runs fail admission under these historical labels. Reproduce historical Harbor runs from their recorded Marin checkout.
+The [September 16](https://github.com/marin-community/marin/issues/9193) and [September 24](https://github.com/marin-community/marin/issues/9409) policies use the labels `eval-policy-2026-09-16-verified` and `eval-policy-2026-09-24-verified`. Their benchmarks require the original external evaluator commits and must run from a Marin checkout that predates Evalchemy and Harbor vendoring. The current launcher rejects those historical launches; historical records remain readable.
+
+Use a separate checkout at [Marin revision `205558e1a7fc`](https://github.com/marin-community/marin/commit/205558e1a7fc3dd705b1132691798b09dc1f254c) for those historical launches; it supports both cohorts and their original evaluator pins.
+
+The launcher gives each benchmark its own H100 serving group, sized by the model YAML's `resource_hint.gpu.H100` value. The following commands apply to that historical checkout.
 
 Run from the repository root:
 
@@ -11,7 +15,7 @@ uv run python -m eval_policy.launch eval-policy-2026-09-24-verified \
   --federated-cluster cw-rno2a
 ```
 
-Use `--evals` to select Evalchemy benchmarks on the current checkout. `--dry-run` validates and prints the launches without submitting them. Submissions do not wait for results; if one fails, earlier jobs remain active. AIME24 launches ten repeats per policy.
+Use `--evals` to select Evalchemy benchmarks on that historical checkout. `--dry-run` validates and prints the launches without submitting them. Submissions do not wait for results; if one fails, earlier jobs remain active. AIME24 launches ten repeats per policy.
 
 September 24 `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `ifbench`, `mrcr`, and `nupa` require `--artifact-dir` pointing to a checkout of the [campaign artifact](https://huggingface.co/datasets/open-athena/marin-eval-policy-2026-09-24/tree/0ba77c019caa88de9583bb0a9d55f66e50aa0f01) at revision `0ba77c019caa88de9583bb0a9d55f66e50aa0f01`. The example above needs no artifact checkout. Historical full-policy launches also require that artifact for Harbor configs and a prepared SOTOPIA-hard dataset inside the Marin workspace; the launcher does not prepare it.
 

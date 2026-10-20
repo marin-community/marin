@@ -246,17 +246,36 @@ shorter general-purpose selection. The policies were validated on H100. GPQA Dia
 not compatible with the TPU vLLM backend.
 
 Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
-The evaluation child then invokes the `evalchemy` console script from the pinned external runtime.
-A dry run checks the YAML shape and the resolved Marin launch plan; task availability is checked when
-the Evalchemy process starts. [evalchemy#67](https://github.com/marin-community/evalchemy/issues/67)
-tracks a CLI validation mode that can move task-catalog errors back before Iris submission.
+The evaluation child invokes the `evalchemy` console script from `vendor/evalchemy`,
+using its own frozen `uv.lock` and virtual environment. The project is excluded from
+Marin's workspace and uses local FineStore and Rigging sources.
 
-For a `--version eval-policy-...-verified` launch, the launcher selects the Evalchemy revision
-in `RUNTIME_COMMITS` from `lib/marin/src/marin/evaluation/eval_policy.py`. Other Evalchemy launches
-use the current pin in `config/external/`. Harbor preflight and workers always use the vendored
-project and its lock. The published September cohort labels require their original Harbor runtime,
-so current Harbor launches cannot claim those labels. Historical commit metadata remains available
-to validate saved records; reproduce those runs from their recorded Marin checkout.
+Immutable Evalchemy caches track the vendored code, runtime data, portable config
+package, manifest, lock and selected benchmark extras. Records also capture local
+FineStore, Rigging and Marin adapter sources as broader provenance; changes to
+those sources preserve completed steps and partial archives. If such changes alter
+evaluation behavior, explicitly change the evaluation version or `cache_key`.
+
+A Marin dry run checks the YAML shape and the resolved launch plan. To check the
+installed Evalchemy and lm-eval task catalogs before submission, run:
+
+```bash
+uv run --project vendor/evalchemy --frozen --no-default-groups evalchemy validate-config \
+  experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml
+```
+
+This command validates the portable config and task names without constructing a
+model or task. The Marin launcher does not invoke it automatically, so an
+unchecked task name can still fail when the evaluator starts.
+
+Historical `eval-policy-...-verified` Evalchemy launches require their original
+external commits and must run from a Marin checkout that predates vendoring.
+Both the shared launcher and `eval_policy.launch` reject selections containing
+those benchmarks before creating configs or starting jobs.
+Harbor preflight and workers always use `vendor/harbor` and its lock. The published
+September cohort labels require their original Harbor runtime, so current Harbor
+launches also fail admission under those labels. Historical records remain
+readable; reproduce those runs from their recorded Marin checkout.
 
 `tasks` selects one or more evaluator task names. Use `task_options.<task>` for `num_fewshot`,
 `task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include
@@ -266,7 +285,7 @@ packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog 
 explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
 launcher `--limit` overrides the file limit while `--seed` overrides the file seed. `record.json` stores the resulting task
 options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
-record provenance stores the exact Evalchemy requirement, including runtime extras. FinanceBench
+record provenance stores the Evalchemy content descriptor and runtime extras. FinanceBench
 also requires a `judge` block with a dedicated endpoint, model, and secret reference. Marin forwards
 those values as `JUDGE_*` variables while preserving the local candidate endpoint credentials. The
 record stores the judge endpoint and model, but omits its credential reference and resolved value.

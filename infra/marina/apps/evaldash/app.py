@@ -447,6 +447,8 @@ class RecordStore:
         user: str | None = None,
         status: str | None = None,
         group: str | None = None,
+        version: str | None = None,
+        accelerator: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
         records, _by_id = self._snapshot()
@@ -459,6 +461,8 @@ class RecordStore:
             and (user is None or row["user_name"] == user)
             and (status is None or row["status"] == status)
             and (group is None or row["group_id"] == group)
+            and (version is None or row["version"] == version)
+            and (accelerator is None or row["accelerator"] == accelerator)
         ]
         rows.sort(key=lambda row: row["created_at"] or "", reverse=True)
         return rows[:limit]
@@ -492,7 +496,15 @@ class RecordStore:
         return build_meta(records, frozenset(self.archived_models()))
 
     def groups(
-        self, *, model: str | None = None, user: str | None = None, limit: int = DEFAULT_RUNS_LIMIT
+        self,
+        *,
+        model: str | None = None,
+        user: str | None = None,
+        eval_name: str | None = None,
+        status: str | None = None,
+        version: str | None = None,
+        accelerator: str | None = None,
+        limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
         """Runs collapsed into launches (one per ``group_id``), newest first.
 
@@ -526,6 +538,14 @@ class RecordStore:
                     "evals": [_group_member(record) for record in ordered],
                 }
             )
+        groups = [
+            group
+            for group in groups
+            if (eval_name is None or any(member["eval_name"] == eval_name for member in group["evals"]))
+            and (status is None or group["status"] == status)
+            and (version is None or group["version"] == version)
+            and (accelerator is None or group["accelerator"] == accelerator)
+        ]
         groups.sort(key=lambda group: group["created_at"] or "", reverse=True)
         return groups[:limit]
 
@@ -1111,6 +1131,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             user=params.get("user") or None,
             status=params.get("status") or None,
             group=params.get("group") or None,
+            version=params.get("version") or None,
+            accelerator=params.get("accelerator") or None,
             limit=_parse_limit(params.get("limit")),
         )
         return JSONResponse(rows)
@@ -1261,6 +1283,10 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
             store.groups,
             model=params.get("model") or None,
             user=params.get("user") or None,
+            eval_name=params.get("eval") or None,
+            status=params.get("status") or None,
+            version=params.get("version") or None,
+            accelerator=params.get("accelerator") or None,
             limit=_parse_limit(params.get("limit")),
         )
         return JSONResponse(groups)

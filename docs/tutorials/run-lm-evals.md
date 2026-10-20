@@ -81,11 +81,12 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 Each config file is one evaluation with its own `record.json`. Marin decodes the launch YAML without
-importing Evalchemy, then the evaluation child invokes the `evalchemy` console script from the pinned
-external runtime. A dry run checks the YAML shape and launch plan; unavailable task names fail when
+importing Evalchemy, then the evaluation child invokes the `evalchemy` console script from
+`vendor/evalchemy` in an independent, frozen uv environment. A dry run checks the YAML shape and launch plan; unavailable task names fail when
 the Evalchemy process starts. The record keeps the normalized launch-time task routing, few-shot
 counts, generation arguments, concurrency, context limit, and instance limit under `eval.tasks` and
-`eval.evalchemy`. Its provenance stores the exact Evalchemy requirement and optional runtime extras.
+`eval.evalchemy`. Its provenance stores a content hash of the evaluator, independent lock,
+adapter, local FineStore and Rigging sources, and selected runtime extras.
 
 ### Command recipes
 

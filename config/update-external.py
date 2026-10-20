@@ -99,7 +99,7 @@ class VllmGpuRelease:
     wheels: tuple[VllmGpuWheel, ...]
 
 
-EXTERNAL_PROJECTS = (ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),)
+EXTERNAL_PROJECTS: tuple[ExternalProject, ...] = ()
 
 
 def locked_package(lock_path: Path, distribution: str) -> dict:
@@ -329,7 +329,9 @@ def render_pins(
         f")"
         for dependency in dependencies
     )
-    constants = "\n".join(f"    {dependency.project.constant_name}," for dependency in dependencies)
+    entries = f"{entries}\n\n" if entries else ""
+    constants = ", ".join(dependency.project.constant_name for dependency in dependencies)
+    constants = f"({constants},)" if len(dependencies) == 1 else f"({constants})"
     toolchain_entries = "\n".join(
         f'        "{backend}": "{version}",' for backend, version in CUDA_TOOLCHAIN_VERSION_BY_BACKEND.items()
     )
@@ -405,9 +407,7 @@ CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
 )
 
 
-{entries}
-
-VLLM_GPU_RELEASE = VllmGpuRelease(
+{entries}VLLM_GPU_RELEASE = VllmGpuRelease(
     release_tag="{vllm_gpu_release.release_tag}",
     source_commit="{vllm_gpu_release.source_commit}",
     version="{vllm_gpu_release.version}",
@@ -423,9 +423,7 @@ TPU_INFERENCE_FORK_REQUIREMENT = (
     "{tpu_inference_fork_requirement}"
 )
 
-EXTERNAL_DEPENDENCIES = (
-{constants}
-)
+EXTERNAL_DEPENDENCIES = {constants}
 '''
 
 

@@ -81,11 +81,3 @@ nuances = [
     "This GPU pin refreshes on its own (no shared group). It is the only refresh that rebases marin-community/vllm main. The [vllm] TPU source selector reuses an exact commit on that same lineage and builds a separate wheel pair.",
     "A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration. The wheel verifier and the fork release gate both name the extension (vllm._C_stable_libtorch on CUDA 13); audit them when the base moves across such a boundary.",
 ]
-
-[evalchemy]
-upstream = "https://github.com/mlfoundations/evalchemy.git"
-pin = "isolated_project"
-branch = "main"
-base_select = "upstream_main"
-e2e = "experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml"
-blocker_assignee = "yonromai"

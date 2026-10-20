@@ -166,6 +166,16 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
     ),
+    "evalchemy-unit": (
+        "vendor/evalchemy/",
+        "lib/finestore/",
+        "lib/rigging/",
+        "lib/marin/src/marin/evaluation/evalchemy/",
+        "experiments/evaluation/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
     "harbor-unit": (
         "vendor/harbor/",
         "lib/finestore/",
