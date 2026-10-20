@@ -45,8 +45,9 @@ from taskforge.llm.structured import CutReplyError, StructuredOutputError
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.decision import REJECTED_REWARD_MAX, DecisionGrader
-from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT, GRADER_VERDICT_PATH, VERDICT_REWARD
+from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT
 from taskforge.spec.rubric import Rubric
+from taskforge.spec.verdict import GRADER_VERDICT_PATH, VERDICT_REWARD
 from taskforge.stage10_proposal.model import ProposalHeader, SolverMachine, TaskProposal, render
 from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext, call_ledger
 from taskforge.stage40_build_with_program.outputs import Fixtures, GradedCandidate, Grader, ResearchFinding, WebCall

@@ -10,7 +10,7 @@ from taskcompendium.models import ArtifactKind, VerifierArtifact
 from verifyit.spec import ExactSpec
 
 from taskforge.spec import draft
-from taskforge.spec.draft import VERDICT_REWARD
+from taskforge.spec.verdict import VERDICT_REWARD
 from taskforge.stage40_build_with_program.context import BuildFailure
 from taskforge.stage40_build_with_program.outputs import WebCall
 from taskforge.stage40_build_with_program.sdk import (
