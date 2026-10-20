@@ -44,18 +44,3 @@ or direct Hub loading. The existing task-curation driver still selects
 the Torch CPU embedder; callers of `curation_embedding_pipeline` can
 pass `partial(load_harrier_jax, config)` as its `embedder_factory` on GPU or
 TPU workers.
-
-## Measured throughput
-
-The benchmark in `experiments/datakit/embeddings/harrier/benchmark_jax.py`
-warms one batch, then times a second batch of identical 513-token documents.
-These are worker-local inference rates, excluding checkpoint load and pipeline
-I/O. On 2026-10-20, the pinned model with bfloat16 compute reached:
-
-| Worker | Documents | Documents/s | Tokens/s |
-| --- | ---: | ---: | ---: |
-| 1 GB200 GPU | 64 | 390.8 | 200,497 |
-| 4 v6e TPU chips | 128 | 621.1 | 318,647 |
-
-The benchmark rejects nonfinite or non-unit vectors. The rates measure a
-synthetic fixed-length batch, so mixed-length corpus throughput may differ.
