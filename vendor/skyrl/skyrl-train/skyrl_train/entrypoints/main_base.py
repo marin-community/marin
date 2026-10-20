@@ -5,7 +5,9 @@ Main entrypoint for training.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future, wait
+from threading import Thread
 
 from skyrl_gym.task_factories import EpisodeFactory
 from skyrl_gym.rollout_specs import SHELLBOX_HARNESS
@@ -58,6 +60,19 @@ mp.set_start_method("spawn", force=True)
 
 config_dir = str(Path(__file__).parent.parent / "config")
 __all__ = ["BasePPOExp", "config_dir"]
+
+
+def _start_in_daemon_thread(fn: Callable[[], InferenceEngineClient], name: str) -> Future[InferenceEngineClient]:
+    future: Future[InferenceEngineClient] = Future()
+
+    def _run():
+        try:
+            future.set_result(fn())
+        except BaseException as error:
+            future.set_exception(error)
+
+    Thread(target=_run, name=name, daemon=True).start()
+    return future
 
 
 def resolve_entrypoint_node_id(node_ip: str) -> str:
@@ -559,7 +574,7 @@ class BasePPOExp:
         eval_dataset,
         inference_engine_client,
         trajectory_runner: TrajectoryRunner,
-        colocate_pg,
+        models,
     ):
         """Initializes the trainer, with the trajectory runner as its rollout workers.
 
@@ -589,7 +604,7 @@ class BasePPOExp:
                 if EvaluationRunner(cfg.trainer.evaluation_runner) is not EvaluationRunner.TRAINING
                 else trajectory_runner
             ),
-            colocate_pg=colocate_pg,
+            models=models,
         )
 
     def get_worker_classes(self):
@@ -616,8 +631,10 @@ class BasePPOExp:
         )
 
     def _setup_trainer(self, tracker):
-        """Construct the trainer and models with the experiment's active tracker."""
+        """Build models and engines, then construct one trainer with complete workers."""
         from skyrl_train.utils.utils import Timer  # noqa: PLC0415
+        from skyrl_train.trainer import build_models  # noqa: PLC0415
+        from skyrl_train.utils.utils import configure_ray_worker_logging  # noqa: PLC0415
 
         logger.info(self.get_cfg_as_str(self.cfg))
         os.makedirs(self.cfg.trainer.export_path, exist_ok=True)
@@ -630,11 +647,34 @@ class BasePPOExp:
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
-        with Timer("engines/create", self.startup_timings):
-            inference_engine_client = self.create_inference_engine_client()
 
+        def create_client():
+            with Timer("engines/create", self.startup_timings):
+                return self.create_inference_engine_client()
+
+        future: Future[InferenceEngineClient] = Future()
+        if self.cfg.trainer.placement.overlap_init:
+            configure_ray_worker_logging()
+            future = _start_in_daemon_thread(create_client, "engine-startup")
+        else:
+            future.set_result(create_client())
+        # Pass the policy placement group reserved before inference startup.
+        logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
+        with Timer("policy/build_models", self.startup_timings):
+            models = build_models(
+                self.cfg,
+                tokenizer,
+                self.train_dataset,
+                PolicyWorker,
+                CriticWorker,
+                RefWorker,
+                colocate_pg=self.colocate_pg,
+                policy_pg=self.policy_pg,
+            )
+        while not future.done():
+            wait([future], timeout=1)
+        inference_engine_client = future.result()
         trajectory_runner: TrajectoryRunner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
-
         trainer = self.get_trainer(
             cfg=self.cfg,
             tracker=tracker,
@@ -643,14 +683,9 @@ class BasePPOExp:
             eval_dataset=self.eval_dataset,
             inference_engine_client=inference_engine_client,
             trajectory_runner=trajectory_runner,
-            colocate_pg=self.colocate_pg,
+            models=models,
         )
-
-        # Pass the policy placement group reserved before inference startup.
-        logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
-            with Timer("policy/build_models", self.startup_timings):
-                trainer.build_models(PolicyWorker, CriticWorker, RefWorker, policy_pg=self.policy_pg)
             self.startup_timings.update(
                 {f"policy/{name}": duration for name, duration in trainer.policy_model.startup_timings.items()}
             )

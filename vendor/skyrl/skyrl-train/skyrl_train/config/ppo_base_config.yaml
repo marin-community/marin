@@ -92,6 +92,7 @@ trainer:
     # PLACEMENT-SENSITIVE: this changes reservation order and whether policy GPUs are kept on nodes disjoint from
     # rollout engines. The pre-submit topology may be numerically sufficient but impossible to realize if wrong.
     policy_strict_spread_pg: false
+    overlap_init: false
     # PLACEMENT-SENSITIVE: this changes policy placement-group bundle shape from whole-node to per-GPU bundles.
     # Wrappers must preserve the compiled pool size and the assumptions of policy_strict_spread_pg.
     policy_per_gpu_bundles: false
