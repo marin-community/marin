@@ -3,7 +3,7 @@
 
 """The triage verdict on one proposal: decision, structural results, rubric samples, and reasons.
 
-``accept`` is a triage function admitting every proposal with an ACCEPT verdict.
+``accept`` is a triage function admitting every proposal.
 """
 
 from dataclasses import dataclass
@@ -12,7 +12,6 @@ from enum import StrEnum
 from pydantic import TypeAdapter
 
 from taskforge.llm.client import FinishReason, Usage
-from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage20_triage.checks import CheckResult
 
 
@@ -71,7 +70,7 @@ class Verdict:
 
     ``rubric`` holds the independent rubric samples whose majority set ``decision``. It is empty,
     and so is ``calls``, when a fatal structural failure or a null proposal decided the verdict
-    without a model call, or when ``accept`` admitted the proposal.
+    without a model call.
     """
 
     proposal_id: str
@@ -93,6 +92,6 @@ class Verdict:
 _VERDICT = TypeAdapter(Verdict)
 
 
-async def accept(proposal: TaskProposal) -> Verdict:
+async def accept(proposal: object) -> TriageDecision:
     """Accept ``proposal`` without checking it."""
-    return Verdict(proposal.header.id, proposal.digest, TriageDecision.ACCEPT, (), (), (), ())
+    return TriageDecision.ACCEPT
