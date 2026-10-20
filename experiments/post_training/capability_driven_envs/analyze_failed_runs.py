@@ -211,7 +211,7 @@ async def _rollout_skills(
     slots = asyncio.Semaphore(CONCURRENCY)
 
     async def named(task: TaskSpec, graded: GradedRollout) -> tuple[Skill, ...] | None:
-        rollout = f"{json.dumps(_summary(task, graded))}\n{_rollout_file(task, graded)}"
+        rollout = f"{json.dumps(_summary(task, graded))}\n{_rollout_text(task, graded)}"
         messages: list[Message] = [
             {"role": "system", "content": SKILLS_PROMPT},
             {"role": "user", "content": rollout},
@@ -309,7 +309,7 @@ def _summary(task: TaskSpec, graded: GradedRollout) -> dict[str, Any]:
     }
 
 
-def _rollout_file(task: TaskSpec, graded: GradedRollout) -> str:
+def _rollout_text(task: TaskSpec, graded: GradedRollout) -> str:
     """A line with the tools that the task gave, then each message from a new line that starts with its number."""
     requirements = task.environment_requirements
     tools = {
