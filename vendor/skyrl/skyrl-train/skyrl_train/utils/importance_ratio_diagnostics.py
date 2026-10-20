@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, fields
-from typing import Literal
+from typing import Literal, Protocol
 import math
 
 import torch
@@ -45,6 +45,16 @@ LOG_RATIO_BASE_METRIC_KEYS = (
 )
 
 
+class MetricReduction(Protocol):
+    """Reduce diagnostic tensors at one local or distributed ownership scope."""
+
+    def mean(self, values: torch.Tensor) -> float: ...
+    def std(self, values: torch.Tensor) -> float: ...
+    def sum(self, values: torch.Tensor) -> torch.Tensor: ...
+    def combine(self, values: torch.Tensor, operation: Literal["sum", "max"]) -> torch.Tensor: ...
+    def ratios(self, delta: torch.Tensor, *, eps_clip_low: float, eps_clip_high: float) -> dict[str, float]: ...
+
+
 class LocalReduction:
     """Preserve local tensor arithmetic for driver diagnostics."""
 
@@ -62,6 +72,39 @@ class LocalReduction:
 
     def ratios(self, delta: torch.Tensor, *, eps_clip_low: float, eps_clip_high: float) -> dict[str, float]:
         return ratio_statistics(delta, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
+
+
+class WorldReduction:
+    """Count one contribution per ordinary DP slice in world-wide diagnostics."""
+
+    def __init__(self, all_reduce: Callable, contributes: bool):
+        self.all_reduce = all_reduce
+        self.contributes = contributes
+
+    def combine(self, values: torch.Tensor, operation: Literal["sum", "max"]) -> torch.Tensor:
+        values = values.clone()
+        if not self.contributes:
+            minimum = -math.inf if values.is_floating_point() else torch.iinfo(values.dtype).min
+            values.fill_(0 if operation == "sum" else minimum)
+        return self.all_reduce(values, operation)
+
+    def sum(self, values: torch.Tensor) -> torch.Tensor:
+        return self.combine(values.double().sum(), "sum")
+
+    def mean(self, values: torch.Tensor) -> float:
+        totals = torch.stack([values.new_tensor(values.numel(), dtype=torch.float64), values.double().sum()])
+        count, total = self.combine(totals, "sum").tolist()
+        return total / count if count else math.nan
+
+    def std(self, values: torch.Tensor) -> float:
+        values = values.double()
+        moments = torch.stack([values.new_tensor(values.numel()), values.sum(), values.square().sum()])
+        count, total, squared = self.combine(moments, "sum").tolist()
+        variance = (squared - total * total / count) / (count - 1) if count > 1 else math.nan
+        return math.sqrt(max(variance, 0.0))
+
+    def ratios(self, delta: torch.Tensor, *, eps_clip_low: float, eps_clip_high: float) -> dict[str, float]:
+        return histogram_ratio_statistics(delta, reduction=self, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
 
 
 def linear_quantiles(values: torch.Tensor, probabilities: tuple[float, ...]) -> list[float]:
@@ -123,6 +166,96 @@ def ratio_statistics(delta: torch.Tensor, *, eps_clip_low: float = 0.2, eps_clip
     return result
 
 
+def histogram_ratio_statistics(
+    delta: torch.Tensor,
+    *,
+    reduction: MetricReduction,
+    eps_clip_low: float = 0.2,
+    eps_clip_high: float = 0.2,
+) -> dict[str, float]:
+    """Compute globally reduced ratio moments and a bounded-histogram p99."""
+    delta = delta.detach().double().reshape(-1)
+    selected = delta.numel()
+    finite = torch.isfinite(delta)
+    if not finite.all():
+        delta = delta[finite]
+    count = delta.numel()
+    absolute = delta.abs()
+    maxima = reduction.combine(
+        torch.stack([absolute.max(), delta.max()]) if count else torch.full((2,), -math.inf, dtype=torch.float64),
+        "max",
+    )
+    weights = (delta - maxima[1]).exp()
+    clipped_ratio = delta.clamp(-LOG_PROB_DELTA_CLIP, LOG_PROB_DELTA_CLIP).exp()
+    lower_bound = math.log1p(-eps_clip_low) if eps_clip_low < 1 else -math.inf
+    totals = reduction.combine(
+        torch.tensor(
+            [
+                selected,
+                count,
+                delta.sum(),
+                absolute.sum(),
+                (delta < lower_bound).sum(),
+                (delta > math.log1p(eps_clip_high)).sum(),
+                (absolute > LOG_RATIO_DOUBLING).sum(),
+                (delta < LOG_RATIO_COLLAPSE).sum(),
+                weights.sum(),
+                weights.square().sum(),
+                clipped_ratio.sum(),
+                clipped_ratio.square().sum(),
+                delta.square().sum(),
+            ],
+            dtype=torch.float64,
+        ),
+        "sum",
+    ).tolist()
+    (
+        selected,
+        count,
+        summed,
+        absolute_sum,
+        below,
+        above,
+        outside,
+        collapsed,
+        weight_sum,
+        weight_square,
+        ratio_sum,
+        ratio_square,
+        squared,
+    ) = totals
+    result = {"selected_tokens": selected, "finite_tokens": count}
+    if selected:
+        result["finite_fraction"] = count / selected
+    if not count:
+        return result
+    bins = (absolute / MISMATCH_RATIO_HISTOGRAM_LOG_WIDTH).clamp(max=MISMATCH_RATIO_HISTOGRAM_BINS).long()
+    histogram = reduction.combine(torch.bincount(bins, minlength=MISMATCH_RATIO_HISTOGRAM_BINS + 1), "sum")
+    position = 0.99 * (count - 1)
+    orders = torch.tensor([math.floor(position) + 1, math.ceil(position) + 1], dtype=torch.int64)
+    percentile_bins = torch.searchsorted(histogram.cumsum(0), orders, right=False)
+    bounds = torch.minimum(maxima[0], (percentile_bins.double() + 1) * MISMATCH_RATIO_HISTOGRAM_LOG_WIDTH)
+    bounds[percentile_bins == MISMATCH_RATIO_HISTOGRAM_BINS] = maxima[0]
+    p99 = float(bounds[0] + (bounds[1] - bounds[0]) * (position - math.floor(position)))
+    mean = summed / count
+    result.update(
+        log_ratio_mean=mean,
+        log_ratio_abs_mean=absolute_sum / count,
+        log_ratio_abs_p99=p99,
+        log_ratio_abs_max=float(maxima[0]),
+        lower_clip_pressure=below / count,
+        upper_clip_pressure=above / count,
+        frac_outside_0_5_2=outside / count,
+        frac_below_1e_5=collapsed / count,
+        ess_fraction=weight_sum * weight_sum / (count * weight_square),
+        kl_k1=-mean,
+        kl_k3=ratio_sum / count - mean - 1,
+        chi2=ratio_square / count - 1,
+        log_ratio_mean_squared=squared / count,
+    )
+    return result
+
+
 def _grouped_moments(values: torch.Tensor, groups: torch.Tensor, n_groups: int) -> dict[str, torch.Tensor]:
     """Per-group token counts and finite-token sums of delta, |delta| and the 2x indicator."""
 
@@ -163,7 +296,7 @@ def mismatch_ratio_metrics(
     *,
     eps_clip_low: float = 0.2,
     eps_clip_high: float = 0.2,
-    reduction: LocalReduction = LocalReduction(),
+    reduction: MetricReduction = LocalReduction(),
 ) -> dict[str, float]:
     """Trainer-minus-vLLM log-ratio statistics by per-token staleness bucket and response position."""
     mask = loss_mask.detach().cpu() > 0

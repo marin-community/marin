@@ -12,6 +12,8 @@ from skyrl_train.dataset.preprocess import collate_response_token_channel, conve
 from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
 from skyrl_train.distillation import validate_distillation_attachment
 from skyrl_train.rollouts.buffer import RowFacts
+from skyrl_train.group_admission import GroupAdvantageInvariant
+from skyrl_train.utils.advantage_estimators import OUTCOME_ADVANTAGE_ESTIMATORS, outcome_advantages
 from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.trajectory_runners.types import BatchFields, TrajectoryBatch
 from skyrl_train.batch_metrics import consumed_stop_metrics
@@ -30,6 +32,7 @@ class BatchPlan:
     fields: BatchFields
     rollout_staleness: tuple[int, ...] | None
     num_experts: int | None
+    advantages: np.ndarray | None = None
 
     @property
     def max_prompt_len(self) -> int:
@@ -54,6 +57,34 @@ class BatchPlan:
                 indices.append(index)
             offset = end
         return tuple(indices)
+
+
+def plan_batch(
+    *,
+    batch_id: int,
+    global_step: int,
+    uids: tuple[str, ...],
+    facts: tuple[RowFacts, ...],
+    fields: BatchFields,
+    rollout_staleness: tuple[int, ...],
+    num_experts: int | None,
+    algorithm: DictConfig,
+) -> BatchPlan:
+    """Fix the global layout and calculate outcome credit before rank slicing."""
+    advantages = None
+    if algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS:
+        advantages = (
+            outcome_advantages(
+                torch.from_numpy(np.concatenate([group.score for group in facts])),
+                uids,
+                algorithm,
+                exclude_from_baseline=np.concatenate([group.exclude_from_baseline for group in facts]),
+                invariant=GroupAdvantageInvariant.from_config(algorithm.resolved_group_advantage),
+            )
+            .numpy()
+            .copy()
+        )
+    return BatchPlan(batch_id, global_step, uids, facts, fields, rollout_staleness, num_experts, advantages)
 
 
 def fields_from_facts(facts: Sequence[RowFacts]) -> BatchFields:

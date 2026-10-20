@@ -142,6 +142,9 @@ class _CountingPayloads:
         self.fetched.append(list(payloads))
         return await self.store.fetch(payloads)
 
+    async def shared_refs(self, payloads):
+        return await self.store.shared_refs(payloads)
+
     async def checkpoint(self, payloads):
         return await self.store.checkpoint(payloads)
 

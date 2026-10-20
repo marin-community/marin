@@ -14,7 +14,7 @@ from skyrl_train.metric_names import (
     CORRECTION_TRUNCATED_FRACTION_METRIC,
     CORRECTION_MASKED_FRACTION_METRIC,
 )
-from skyrl_train.utils.importance_ratio_diagnostics import LocalReduction
+from skyrl_train.utils.importance_ratio_diagnostics import LocalReduction, MetricReduction
 from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
 
 
@@ -31,7 +31,7 @@ def compute_correction(
     loss_mask: torch.Tensor,
     correction: OffPolicyCorrection,
     *,
-    reduction: LocalReduction = LocalReduction(),
+    reduction: MetricReduction = LocalReduction(),
 ) -> CorrectionResult:
     """Return detached policy numerator weights and token-weighted correction statistics."""
     assert old_log_probs.shape == rollout_log_probs.shape == loss_mask.shape

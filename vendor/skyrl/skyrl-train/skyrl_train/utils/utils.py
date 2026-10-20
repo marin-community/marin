@@ -1,3 +1,4 @@
+from marinskyrl.runtime_options import parse_batch_builder
 import importlib
 import ipaddress
 import os
@@ -447,6 +448,7 @@ def _iter_config_kwargs(node):
 
 
 def validate_cfg(cfg: DictConfig):
+    parse_batch_builder(cfg.trainer.batch_builder)
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
