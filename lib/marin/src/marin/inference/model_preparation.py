@@ -11,9 +11,8 @@ from levanter.model_cache import resolve_cached_model_path
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoConfig, PreTrainedTokenizerBase
 
+from marin.inference.model_cache import MODEL_CACHE_PREFIX
 from marin.inference.vllm_server import _is_object_store_path
-
-_MODEL_CACHE_PREFIX = "quick-serve-models"
 
 
 def _tool_template_probe() -> list[dict[str, object]]:
@@ -99,13 +98,13 @@ def resolve_model_path(model: str, cache_ttl_days: int, revision: str | None = N
     """Resolve and optionally mirror an HF model to the region-local cache."""
 
     if revision is None or _is_object_store_path(model):
-        resolved = resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=_MODEL_CACHE_PREFIX)
+        resolved = resolve_cached_model_path(model, cache_ttl_days=cache_ttl_days, cache_prefix=MODEL_CACHE_PREFIX)
         return _vllm_model_path(resolved)
     pinned_model = f"{model}@{revision}"
     resolved = resolve_cached_model_path(
         pinned_model,
         cache_ttl_days=cache_ttl_days,
-        cache_prefix=_MODEL_CACHE_PREFIX,
+        cache_prefix=MODEL_CACHE_PREFIX,
     )
     # With caching disabled, vLLM receives the bare model plus its separate revision argument.
     return model if resolved == pinned_model else _vllm_model_path(resolved)

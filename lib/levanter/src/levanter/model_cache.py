@@ -49,6 +49,15 @@ class CacheMetadata:
     source_revision: str | None = None
 
 
+@dataclass(frozen=True)
+class HfModelCacheEntry:
+    """Resolved Hugging Face revision and its region-local cache path."""
+
+    repo: str
+    revision: str
+    path: str
+
+
 _LOCK_SUFFIX = ".lock"
 _HF_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 # How often losers re-check the completion marker while the winner populates.
@@ -192,13 +201,22 @@ def resolve_cached_model_path(
     Returns:
         A path the caller can load *model* from.
     """
+    entry = hf_model_cache_entry(model, cache_ttl_days=cache_ttl_days, cache_prefix=cache_prefix)
+    if entry is None:
+        return model
+
+    return cache_hf_model(entry.path, entry.repo, revision=entry.revision, complete_marker=complete_marker)
+
+
+def hf_model_cache_entry(model: str, *, cache_ttl_days: int, cache_prefix: str) -> HfModelCacheEntry | None:
+    """Resolve a Hugging Face ref to its cache entry without populating it."""
     # Deferred so importing levanter (which eagerly imports this module) does not pull
     # transformers via hf_checkpoints onto CPU-only workers (see levanter/__init__.py).
     from levanter.compat.hf_checkpoints import _is_hf_model_id  # noqa: PLC0415  # optional dep: transformers
 
     repo, _, revision = model.partition("@")
     if cache_ttl_days <= 0 or not _is_hf_model_id(repo):
-        return model
+        return None
 
     requested_revision = revision or None
     if requested_revision is not None and _HF_COMMIT_PATTERN.fullmatch(requested_revision):
@@ -210,7 +228,7 @@ def resolve_cached_model_path(
 
     resolved_model = f"{repo}@{resolved_revision}"
     cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(resolved_model)}")
-    return cache_hf_model(cache_path, repo, revision=resolved_revision, complete_marker=complete_marker)
+    return HfModelCacheEntry(repo=repo, revision=resolved_revision, path=cache_path)
 
 
 def _cache_slug(model: str) -> str:

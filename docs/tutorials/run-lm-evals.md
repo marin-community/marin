@@ -318,8 +318,11 @@ Requests wait asynchronously for inference, so the proxy's configured outstandin
 does not depend on the web server's thread-pool size.
 
 Each selected evaluation runs as its own step against shared inference. An evaluation failure gets
-a record for that eval; other steps continue. A server startup failure marks every pending eval as
-an infrastructure failure. To relaunch after a cancellation or failure, repeat the command above
+a record for that eval; other steps continue. For a Hugging Face model with caching enabled, the
+CPU orchestrator prepares an uncached checkpoint in the serving region before reserving GPUs or
+TPUs. The prepare job can run for up to four hours and receives `HF_TOKEN` if the launch environment
+provides it. A preparation or server startup failure marks every pending eval as an infrastructure
+failure. To relaunch after a cancellation or failure, repeat the command above
 with the same `--run-id`. The launcher derives the same eval identities, skips completed steps,
 and keeps unfinished evals in their existing FineStore archives. Evalchemy restores completed
 requests from those archives even when the inference URL or request concurrency changes.

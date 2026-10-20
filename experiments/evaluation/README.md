@@ -14,12 +14,21 @@ Each eval has its own `StepSpec` status and lock under `{records_prefix}/{run_id
 
 `marin.evaluation.runner` opens one candidate `remote_inference` session per launch and optionally
 one shared hosted-judge session. A group StepSpec locks ownership before either server starts.
+For Hugging Face checkpoints with model caching enabled, the colocated CPU orchestrator pins the
+resolved commit and checks the region cache's completion marker. A cache miss starts a CPU prepare
+child with 4 CPUs, 16 GB RAM, 80 GB scratch disk, and a four-hour execution deadline; the
+orchestrator waits up to eight hours including placement. The candidate and hosted judge, if any,
+finish preparation before either inference session reserves accelerators. The prepare child receives
+`HF_TOKEN` when it is set in the launch environment. A failed prepare child writes an
+`infra_failed` record with its job path and log tail. Object-store checkpoints and models with
+caching disabled skip this step.
 Evalchemy resolves the serving endpoint's direct address
 on its Iris cluster. Harbor keeps the minted capability URLs because its sandboxes reach the
 candidate and hosted judge from outside Iris. The orchestrator scrapes vLLM metrics through the
 direct address when evaluations run sequentially. Concurrent evaluations omit server-wide metrics
 because those cannot be attributed to one evaluator. Each step records its own evaluation failure;
-other steps continue. A server startup failure marks every pending evaluation as an infrastructure failure.
+other steps continue. A preparation or server startup failure marks every pending evaluation as an
+infrastructure failure.
 This directory holds the model and suite catalogs, Marin fleet policy, and CLI choices.
 
 The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
@@ -155,8 +164,8 @@ selector for the others.
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). It contains
 the evaluator's result: normalized model configuration, hardware, status (`succeeded` / `failed` /
 `artifact_failed` / `infra_failed`), the per-task metrics, provenance, normalized evaluator configuration,
-the `group_id` shared by every eval in the launch, and the Iris job paths of every job behind the run (`jobs`:
-orchestrator, inference child, this eval's child). The orchestrator writes it on success
+the `group_id` shared by every eval in the launch, and Iris job paths (`jobs`: orchestrator,
+inference child, this eval's child, or a failed prepare child). The orchestrator writes it on success
 and on failure, so a failed run is still accounted for -- and a failure carries the failed child's
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.

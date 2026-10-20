@@ -11,11 +11,16 @@ from enum import StrEnum
 from functools import partial
 from typing import NoReturn, Protocol
 
-from fray.client import JobHandle
+from fray.client import JobHandle, wait_all
+from fray.current_client import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.client.client import Job, iris_ctx
+from iris.cluster.setup_scripts import default_setup_script
+from levanter.model_cache import DEFAULT_COMPLETE_MARKER, cache_hf_model
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec
+from rigging.timing import Duration
 
 from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
@@ -46,7 +51,9 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_runner import StepRunner, check_cache
 from marin.execution.step_spec import StepSpec
 from marin.inference.backend import OPENAI_API_SUFFIX
+from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
+from marin.inference.model_cache import model_cache_entry
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
 logger = logging.getLogger(__name__)
@@ -54,8 +61,12 @@ logger = logging.getLogger(__name__)
 _INFERENCE_ROLE = "inference"
 _ORCHESTRATOR_ROLE = "orchestrator"
 _JUDGE_ROLE = "judge"
+_PREPARE_ROLE = "prepare"
 _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
+_MODEL_PREPARE_TIMEOUT_HOURS = 4
+_MODEL_PREPARE_WAIT_TIMEOUT_SECONDS = 8 * 3600
+_MODEL_PREPARE_DISK = "80g"
 
 
 @dataclass(frozen=True)
@@ -456,8 +467,82 @@ def _record_startup_failure(
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id, **(existing_jobs or {}), **failed_jobs}
     error = f"{type(exc).__name__}: {exc}"
     _record(batch, evaluation.identity, RunStatus.INFRA_FAILED, error, {}, jobs, tails)
-    subject = "judge inference" if role == _JUDGE_ROLE else "inference"
+    subject = {
+        _PREPARE_ROLE: "model preparation",
+        _JUDGE_ROLE: "judge inference",
+        _INFERENCE_ROLE: "inference",
+    }[role]
     raise RuntimeError(f"{evaluation.identity.eval_ref.name} {subject} failed: {exc}") from exc
+
+
+def _prepare_inference_models(
+    candidate: RemoteInferenceConfig,
+    judge: RemoteInferenceConfig | None,
+    run_id: str,
+    env_vars: Mapping[str, str],
+) -> tuple[RemoteInferenceConfig, RemoteInferenceConfig | None]:
+    """Return candidate and judge configs after preparing any Hugging Face cache entries."""
+    configs = [(candidate, run_id)]
+    if judge is not None:
+        configs.append((judge, f"judge-{run_id}"))
+    prepared: list[RemoteInferenceConfig] = []
+    pending: list[tuple[JobHandle, StoragePath]] = []
+    try:
+        for config, name in configs:
+            model = config.model
+            entry = model_cache_entry(model.weights, config.iris.cache_ttl_days, model.revision)
+            if entry is None:
+                prepared.append(config)
+                continue
+
+            pinned_model = replace(model, weights=entry.repo, revision=entry.revision, api_model=model.model_id)
+            prepared.append(replace(config, model=pinned_model))
+            marker = StoragePath(entry.path) / DEFAULT_COMPLETE_MARKER
+            if marker.exists():
+                logger.info("model cache hit: %s", entry.path)
+                continue
+
+            worker_resources = config.iris.worker_resources
+            job = current_client().submit(
+                JobRequest(
+                    name=f"prepare-{name}",
+                    entrypoint=Entrypoint.from_callable(
+                        cache_hf_model,
+                        args=(entry.path, entry.repo),
+                        kwargs={"revision": entry.revision},
+                    ),
+                    resources=ResourceConfig.with_cpu(
+                        cpu=4,
+                        ram="16g",
+                        disk=_MODEL_PREPARE_DISK,
+                        preemptible=False,
+                        regions=worker_resources.regions,
+                        target_cluster=worker_resources.target_cluster,
+                    ),
+                    environment=create_environment(
+                        setup_scripts=[default_setup_script(packages=["marin-core"])],
+                        env_vars=dict(env_vars),
+                    ),
+                    priority=config.iris.priority,
+                    timeout=Duration.from_hours(_MODEL_PREPARE_TIMEOUT_HOURS),
+                )
+            )
+            pending.append((job, marker))
+
+        wait_all([job for job, _ in pending], timeout=_MODEL_PREPARE_WAIT_TIMEOUT_SECONDS)
+        for job, marker in pending:
+            if not marker.exists():
+                raise RuntimeError(f"prepare job {job.job_id} did not write completion marker at {marker}")
+    except Exception as exc:
+        for job, _ in pending:
+            try:
+                job.terminate()
+            except Exception:
+                logger.warning("could not terminate model preparation job %s", job.job_id, exc_info=True)
+        raise RemoteInferenceStartupError(
+            f"Model cache preparation failed: {exc}", jobs=tuple(job for job, _ in pending)
+        ) from exc
+    return prepared[0], prepared[1] if judge is not None else None
 
 
 def run_evaluation_step(
@@ -519,9 +604,32 @@ def run_evaluation_steps(
             default=EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
         ),
     )
+    judge_inference = None
+    if batch.judge is not None:
+        judge_inference = inference_config_for_model(
+            batch.judge.model,
+            batch.judge.accelerator,
+            env_vars=runtime_env,
+            capability_origin=batch.capability_origin,
+            api_model=batch.judge.api_model,
+            priority=batch.priority_band,
+        )
     with ExitStack() as stack:
         try:
-            session = stack.enter_context(remote_inference(inference))
+            prepared, prepared_judge = _prepare_inference_models(inference, judge_inference, batch.group_id, runtime_env)
+        except RemoteInferenceStartupError as exc:
+            run(
+                partial(
+                    _record_startup_failure,
+                    batch=batch,
+                    orchestrator_job_id=orchestrator_job_id,
+                    exc=exc,
+                    role=_PREPARE_ROLE,
+                )
+            )
+            return
+        try:
+            session = stack.enter_context(remote_inference(prepared))
         except RemoteInferenceStartupError as exc:
             run(
                 partial(
@@ -534,17 +642,9 @@ def run_evaluation_steps(
             )
             return
         judge = None
-        if batch.judge is not None:
-            judge_inference = inference_config_for_model(
-                batch.judge.model,
-                batch.judge.accelerator,
-                env_vars=runtime_env,
-                capability_origin=batch.capability_origin,
-                api_model=batch.judge.api_model,
-                priority=batch.priority_band,
-            )
+        if prepared_judge is not None:
             try:
-                judge = stack.enter_context(remote_inference(judge_inference))
+                judge = stack.enter_context(remote_inference(prepared_judge))
             except RemoteInferenceStartupError as exc:
                 run(
                     partial(
