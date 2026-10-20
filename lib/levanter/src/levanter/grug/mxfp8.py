@@ -33,6 +33,9 @@ class ExpertMxfp8(StrEnum):
     """The activation-path GEMMs (forward and input gradients); the weight gradients stay bf16."""
     ALL = "all"
     """The activation-path GEMMs and the weight gradients, quantized along the token axis per expert."""
+    ALL_EPILOGUE_TOKENS = "all_epilogue_tokens"
+    """``ALL`` with the ReLU^2 backward GEMM's epilogue quantizing ``post`` and ``d pre`` along the token axis for
+    the weight gradients (ungated ReLU^2 experts only)."""
 
 
 def mx_quantize_dequantize(x: jax.Array, axis: int) -> jax.Array:

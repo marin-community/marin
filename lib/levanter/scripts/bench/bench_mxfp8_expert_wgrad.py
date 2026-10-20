@@ -26,11 +26,19 @@ import numpy as np
 
 from levanter.grug._moe.common import _interleave_gate_up
 from levanter.grug._moe.quack_mxfp8 import (
+    expert_mlp_mxfp8_blocked_token_wgrads,
+    expert_mlp_mxfp8_token_wgrads,
     expert_mlp_mxfp8_wgrads,
+    mx_weights,
+    mxfp8_drelu2_grouped_gemm,
+    mxfp8_drelu2_token_grouped_gemm,
     mxfp8_token_grouped_gemm,
+    padded_scale_rows,
     quantize_token_blocks,
     relu2_expert_mlp_mxfp8_backward,
     relu2_expert_mlp_mxfp8_backward_input,
+    relu2_expert_mlp_mxfp8_backward_parts,
+    relu2_expert_mlp_mxfp8_epilogue_tokens_backward_parts,
     relu2_expert_mlp_mxfp8_fwd,
     relu2_expert_mlp_mxfp8_wgrad_fwd,
     swiglu_expert_mlp_mxfp8_backward,
@@ -76,7 +84,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--activation", choices=["swiglu", "relu2"], default="swiglu")
     parser.add_argument("--rows", type=int, default=262_144, help="routed rows (active)")
-    parser.add_argument("--capacity", type=int, default=301_466, help="receiver buffer rows")
+    parser.add_argument("--capacity", type=int, default=301_568, help="receiver buffer rows")
     parser.add_argument("--experts", type=int, default=3)
     parser.add_argument("--hidden", type=int, default=3_072, help="expert input width")
     parser.add_argument("--intermediate", type=int, default=3_072, help="expert width")
@@ -144,6 +152,55 @@ def main() -> None:
         ("token_quantizers", None, quantizers, operands, None),
         ("forward+backward", bf16_train, mxfp8_train, (x, w_up, w_down, dy), None),
     ]
+    if not gated:
+        # ReLU^2: post and d pre token-quantized by two passes after the dReLU^2 GEMM (the "bf16" column) vs in its
+        # epilogue. The residuals come from the MXFP8-wgrad forward.
+        _, wgrad_residuals = jax.block_until_ready(jax.jit(lambda *a: mxfp8_wgrad_fwd(*a, cu))(x, w_up, w_down))
+
+        def separate_backward(residuals, dy):
+            dx, dot, grad_args = relu2_expert_mlp_mxfp8_backward_parts(residuals, dy)
+            return dx, dot, *expert_mlp_mxfp8_token_wgrads(*grad_args, out_dtype=dy.dtype)
+
+        def epilogue_backward(residuals, dy):
+            dx, dot, grad_args = relu2_expert_mlp_mxfp8_epilogue_tokens_backward_parts(residuals, dy)
+            return dx, dot, *expert_mlp_mxfp8_blocked_token_wgrads(*grad_args, out_dtype=dy.dtype)
+
+        def separate_parts(residuals, dy):
+            return relu2_expert_mlp_mxfp8_backward_parts(residuals, dy)
+
+        def epilogue_parts(residuals, dy):
+            return relu2_expert_mlp_mxfp8_epilogue_tokens_backward_parts(residuals, dy)
+
+        def drelu2_args(residuals, dy):
+            dy_values, dy_exponents = quantize_rows(dy)
+            pre = residuals[3]
+            return (dy_values, padded_scale_rows(dy_exponents, cu), *mx_weights(residuals[2], "k"), pre, cu)
+
+        gemm_args = jax.block_until_ready(jax.jit(drelu2_args)(wgrad_residuals, dy))
+
+        cases += [
+            (
+                "dReLU^2 GEMM (old epilogue = bf16 col, token epilogue = mxfp8 col)",
+                mxfp8_drelu2_grouped_gemm,
+                mxfp8_drelu2_token_grouped_gemm,
+                gemm_args,
+                None,
+            ),
+            (
+                "backward parts (separate = bf16 col, epilogue tokens = mxfp8 col)",
+                separate_parts,
+                epilogue_parts,
+                (wgrad_residuals, dy),
+                None,
+            ),
+            (
+                "backward incl wgrads (separate = bf16 col, epilogue tokens = mxfp8 col)",
+                separate_backward,
+                epilogue_backward,
+                (wgrad_residuals, dy),
+                None,
+            ),
+        ]
     for config in [((256, 256), (2, 1, 1)), ((256, 256), (2, 2, 1)), ((256, 128), (2, 1, 1)), ((256, 128), (2, 2, 1))]:
         cases.append((f"gemms tile {config[0]} cluster {config[1]}", None, gemms(config), quantized, wgrad_flops))
     for name, bf16_fn, mx_fn, inputs, flops in cases:

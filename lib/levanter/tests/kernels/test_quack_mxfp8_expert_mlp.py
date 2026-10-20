@@ -14,6 +14,7 @@ import pytest
 from levanter.grug.mxfp8 import (
     _ragged_wgrad,
     mx_dequantize_rows,
+    mx_quantize_dequantize,
     mx_pack_rows,
     mx_quantize_dequantize_groups,
     mx_quantize_row_blocks,
@@ -354,3 +355,175 @@ def test_mxfp8_expert_backward_wgrads_stay_within_mxfp8_error_of_the_exact_mlp(g
         # path requantizes from its MXFP8 rows and the unfused one from their bf16 dequantization: equal values.
         max_error, _ = _normalized_errors(unfused_wgrads[index - 1], got)
         assert max_error <= 1e-2, f"{name}: fused vs unfused max normalized {max_error:.2e}"
+
+
+def _unblocked_token_exponents(blocked, num_blocks: int, cols: int) -> np.ndarray:
+    """The ``[J, N]`` uint8 exponents of a blocked token-scale tensor: the inverse of ``blocked_scales(e.T[None])``."""
+    atoms = np.asarray(jax.lax.bitcast_convert_type(blocked, jnp.uint8))
+    num, rn, rk = atoms.shape[:3]
+    flat = atoms.transpose(0, 1, 2, 4, 3, 5).reshape(num, rn, rk, 128, 4).transpose(0, 1, 3, 2, 4)
+    return flat.reshape(rn * 128, rk * 4)[:cols, :num_blocks].T
+
+
+def _token_blocks(cu, rows):
+    mx = importlib.import_module("levanter.grug._moe.quack_mxfp8")
+    starts, counts = mx.token_scale_blocks(cu, rows)
+    return np.asarray(starts), np.asarray(counts)
+
+
+def _dequantized_tokens(values, exponents: np.ndarray, starts, counts) -> np.ndarray:
+    """Token-quantized ``values`` rescaled by their blocks' exponents; rows in no block stay zero."""
+    values = np.asarray(values, np.float32)
+    out = np.zeros_like(values)
+    for j, (start, count) in enumerate(zip(starts, counts, strict=True)):
+        if count:
+            out[start : start + count] = values[start : start + count] * np.exp2(exponents[j].astype(np.float32) - 127)
+    return out
+
+
+@pytest.mark.parametrize("tail_rows", [0, 133])
+def test_drelu2_epilogue_token_quantization_matches_the_row_block_quantizer(tail_rows):
+    """The dReLU^2 GEMM's epilogue token quantization against the separate passes it replaces, on the same GEMM."""
+    _require_sm100()
+    mx = importlib.import_module("levanter.grug._moe.quack_mxfp8")
+    x, w13_il, w_down, dy = _inputs(tail_rows)
+    w_up = w13_il[..., :_WIDTH]
+    rows = _NUM_TOKENS + tail_rows
+    cu = jnp.asarray(np.concatenate([[0], np.cumsum(_GROUP_SIZES)]), jnp.int32)
+    if tail_rows:
+        # Unused capacity must not reach any block scale.
+        dy = dy.at[_NUM_TOKENS:].set(jnp.nan)
+        x = x.at[_NUM_TOKENS:].set(jnp.nan)
+
+    def run(x, dy):
+        _, residuals = mx.relu2_expert_mlp_mxfp8_wgrad_fwd(x, w_up, w_down, cu)
+        pre = residuals[3]
+        dy_values, dy_exponents = mx_quantize_rows(dy)
+        args = (dy_values, mx.padded_scale_rows(dy_exponents, cu), *mx.mx_weights(w_down, "k"), pre, cu)
+        return pre, mx.mxfp8_drelu2_grouped_gemm(*args), mx.mxfp8_drelu2_token_grouped_gemm(*args)
+
+    pre, (post, d_pre_q, d_pre_sf, dot), (post_t, d_pre_rows, d_pre_t, fused_dot) = jax.jit(run)(x, dy)
+    active = slice(0, _NUM_TOKENS)
+    sf_k = _WIDTH // 32
+    # Same GEMM, same row quantization of d pre and the same <post, d post>.
+    np.testing.assert_array_equal(
+        np.asarray(d_pre_rows[0][active], np.float32), np.asarray(d_pre_q[active], np.float32)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(mx.unpadded_scale_rows(d_pre_rows[1], cu, rows, sf_k))[active],
+        np.asarray(mx.unpadded_scale_rows(d_pre_sf, cu, rows, sf_k))[active],
+    )
+    np.testing.assert_array_equal(np.asarray(fused_dot[active]), np.asarray(dot[active]))
+    starts, counts = _token_blocks(cu, rows)
+    num_blocks = starts.shape[0]
+    used = counts > 0
+    # post: the epilogue quantizes relu(pre)^2 in fp32, which the row-block quantizer reproduces bit for bit.
+    post_f32 = jnp.square(jax.nn.relu(pre.astype(jnp.float32)))
+    want_values, want_exponents = mx_quantize_row_blocks(post_f32, jnp.asarray(starts), jnp.asarray(counts))
+    got_exponents = _unblocked_token_exponents(post_t[1], num_blocks, _WIDTH)
+    want_exponents = np.asarray(want_exponents)
+    np.testing.assert_array_equal(got_exponents[used], want_exponents[used])
+    np.testing.assert_array_equal(
+        np.asarray(post_t[0][active], np.float32), np.asarray(want_values[active], np.float32)
+    )
+    # The bf16 post the separate pass quantized is the same function.
+    np.testing.assert_allclose(np.asarray(post[active], np.float32), np.asarray(post_f32[active]), rtol=2**-8, atol=0)
+    # d pre: against the token quantization of fp32 d pre recomputed from the same MXFP8 operands. The GEMM
+    # accumulates in another order, so the odd value or block scale lands on the other side of a rounding boundary.
+    group_sizes = jnp.asarray(_GROUP_SIZES, jnp.int32)
+    dy_dequantized = mx_quantize_dequantize(dy[active].astype(jnp.float32), -1)
+    w_dequantized = mx_quantize_dequantize(w_down.astype(jnp.float32), -1)
+    d_post = jax.lax.ragged_dot(
+        dy_dequantized, jnp.swapaxes(w_dequantized, 1, 2), group_sizes, precision=jax.lax.Precision.HIGHEST
+    )
+    d_pre_f32 = 2.0 * jax.nn.relu(pre[active].astype(jnp.float32)) * d_post
+    padded = jnp.zeros((rows, _WIDTH), jnp.float32).at[active].set(d_pre_f32)
+    want_values, want_exponents = mx_quantize_row_blocks(padded, jnp.asarray(starts), jnp.asarray(counts))
+    want_values, want_exponents = want_values[active], np.asarray(want_exponents)[used]
+    got_exponents = _unblocked_token_exponents(d_pre_t[1], num_blocks, _WIDTH)[used]
+    exponent_match = float(np.mean(got_exponents == want_exponents))
+    value_match = float(np.mean(np.asarray(d_pre_t[0][active], np.float32) == np.asarray(want_values, np.float32)))
+    tokens = _dequantized_tokens(
+        d_pre_t[0], _unblocked_token_exponents(d_pre_t[1], num_blocks, _WIDTH), starts, counts
+    )
+    relative = _relative_l2(tokens[active], d_pre_f32)
+    rows_relative = _relative_l2(
+        mx_dequantize_rows(d_pre_rows[0], mx.unpadded_scale_rows(d_pre_rows[1], cu, rows, sf_k), jnp.float32)[active],
+        d_pre_f32,
+    )
+    print(
+        f"d pre tokens: exponent match {exponent_match:.4f}, value match {value_match:.4f}, relative L2 to fp32 "
+        f"{relative:.3e} (row quantization {rows_relative:.3e})"
+    )
+    assert exponent_match > 0.99 and value_match > 0.99, f"exponents {exponent_match:.4f} values {value_match:.4f}"
+    assert relative < 0.05, f"d pre tokens: relative L2 {relative:.3e}"
+
+
+@pytest.mark.parametrize("dispatch", ["bf16", "mxfp8_bytes"])
+def test_relu2_epilogue_token_backward_matches_the_fused_backward(dispatch):
+    _require_sm100()
+    mx = importlib.import_module("levanter.grug._moe.quack_mxfp8")
+    tail_rows = 133
+    x, w13_il, w_down, dy = _inputs(tail_rows)
+    w_up = w13_il[..., :_WIDTH]
+    cu = jnp.asarray(np.concatenate([[0], np.cumsum(_GROUP_SIZES)]), jnp.int32)
+    rows = mx_pack_rows(x) if dispatch == "mxfp8_bytes" else x
+    nan_tail = jnp.zeros((_NUM_TOKENS + tail_rows, 1), jnp.bfloat16).at[_NUM_TOKENS:].set(jnp.nan)
+    dy = dy + nan_tail
+    if dispatch == "bf16":
+        rows = rows + nan_tail
+
+    def run(x, w_up, w_down, dy):
+        _, residuals = mx.relu2_expert_mlp_mxfp8_wgrad_fwd(x, w_up, w_down, cu)
+        dx, row_dot, wgrad_args = mx.relu2_expert_mlp_mxfp8_backward_parts(residuals, dy)
+        fused_dx, fused_dot, fused_args = mx.relu2_expert_mlp_mxfp8_epilogue_tokens_backward_parts(residuals, dy)
+        return (
+            (dx, row_dot, mx.expert_mlp_mxfp8_token_wgrads(*wgrad_args, out_dtype=dy.dtype)),
+            (fused_dx, fused_dot, mx.expert_mlp_mxfp8_blocked_token_wgrads(*fused_args, out_dtype=dy.dtype)),
+        )
+
+    (dx, row_dot, wgrads), (fused_dx, fused_dot, fused_wgrads) = jax.jit(run)(rows, w_up, w_down, dy)
+    active = slice(0, _NUM_TOKENS)
+    np.testing.assert_array_equal(np.asarray(fused_dx[active], np.float32), np.asarray(dx[active], np.float32))
+    np.testing.assert_array_equal(np.asarray(fused_dot[active]), np.asarray(row_dot[active]))
+    _, _, exact_dw_up, exact_dw_down = jax.jit(lambda *a: _reference_run(_exact_relu2_experts, *a))(
+        x[active], w_up, w_down, dy[active]
+    )
+    for index, name, want in ((0, "dw_up", exact_dw_up), (1, "dw_down", exact_dw_down)):
+        got = fused_wgrads[index]
+        relative, before = _relative_l2(got, want), _relative_l2(wgrads[index], want)
+        max_error, _ = _normalized_errors(got, wgrads[index])
+        print(
+            f"relu2 {dispatch} {name}: epilogue-token wgrad relative L2 {relative:.3e} (separate passes {before:.3e}),"
+            f" max normalized vs separate passes {max_error:.3e}"
+        )
+        assert 0 < relative < 0.1, f"{name}: relative L2 error {relative:.3e}"
+        assert not np.any(np.asarray(got[1], np.float32)), f"{name}: the empty expert must get a zero gradient"
+        # The separate passes quantize post's bf16 rounding and d pre's MXFP8 rows; the epilogue quantizes their fp32
+        # values, so the gradients differ by rounding, not by more error.
+        assert relative <= before * 1.01, f"{name}: relative L2 {relative:.3e} vs separate passes {before:.3e}"
+        assert max_error <= 0.05, f"{name}: vs separate passes max normalized {max_error:.2e}"
+
+
+def test_mx_linear_shared_input_matches_one_mx_linear_per_weight():
+    _require_sm100()
+    mx = importlib.import_module("levanter.grug._moe.quack_mxfp8")
+    rng = np.random.default_rng(9)
+    x = jnp.asarray(rng.normal(0, 1.0, (2, 192, 256)), jnp.bfloat16)
+    ws = tuple(jnp.asarray(rng.normal(0, 256**-0.5, (256, n)), jnp.float32) for n in (384, 128, 256))
+    gs = tuple(jnp.asarray(rng.normal(0, 1.0, (2, 192, w.shape[1])), jnp.bfloat16) for w in ws)
+    mesh = jax.make_mesh((1,), ("data",), axis_types=(jax.sharding.AxisType.Explicit,))
+
+    def run(fn):
+        ys, pullback = jax.vjp(fn, x, ws)
+        return ys, pullback(tuple(g.astype(y.dtype) for g, y in zip(gs, ys, strict=True)))
+
+    with jax.set_mesh(mesh):
+        shared_ys, (shared_dx, shared_dws) = jax.jit(lambda: run(lambda a, b: mx.mx_linear_shared_input(a, b)))()
+        ys, (dx, dws) = jax.jit(lambda: run(lambda a, b: tuple(mx.mx_linear(a, w) for w in b)))()
+    # Same quantized operands and GEMMs: outputs and weight gradients are bit-identical.
+    for got, want in zip((*shared_ys, *shared_dws), (*ys, *dws), strict=True):
+        np.testing.assert_array_equal(np.asarray(got, np.float32), np.asarray(want, np.float32))
+    # The input gradient sums the three dgrads in fp32 instead of adding bf16 partial sums.
+    max_error, _ = _normalized_errors(shared_dx, dx)
+    assert max_error < 2**-7, f"dx: max normalized {max_error:.2e}"

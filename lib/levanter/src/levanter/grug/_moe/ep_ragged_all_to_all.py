@@ -414,6 +414,23 @@ class _CuteRelu2Mxfp8WgradExpertMlp:
 
 
 @dataclasses.dataclass(frozen=True)
+class _CuteRelu2Mxfp8EpilogueTokensExpertMlp(_CuteRelu2Mxfp8WgradExpertMlp):
+    """``_CuteRelu2Mxfp8WgradExpertMlp`` whose ReLU^2 backward GEMM quantizes ``post`` and ``d pre`` along the
+    token axis in its epilogue (``ExpertMxfp8.ALL_EPILOGUE_TOKENS``), replacing two quantization passes per chunk
+    and the bf16 ``post``."""
+
+    def backward_parts(self, residuals, cotangent):
+        from levanter.grug._moe.quack_mxfp8 import (  # noqa: PLC0415
+            expert_mlp_mxfp8_blocked_token_wgrads,
+            relu2_expert_mlp_mxfp8_epilogue_tokens_backward_parts,
+        )
+
+        dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_epilogue_tokens_backward_parts(residuals, cotangent)
+        wgrad = functools.partial(expert_mlp_mxfp8_blocked_token_wgrads, out_dtype=cotangent.dtype)
+        return dx, output_dot, wgrad_args, wgrad
+
+
+@dataclasses.dataclass(frozen=True)
 class _CuteSwigluMxfp8WgradExpertMlp:
     """``_CuteSwigluMxfp8ExpertMlp`` with block-scaled weight gradients too (``ExpertMxfp8.ALL``), as
     ``_CuteRelu2Mxfp8WgradExpertMlp``."""
@@ -499,6 +516,10 @@ def _mxfp8_expert_mlp(expert_mlp: _ExpertMlp, mxfp8: ExpertMxfp8) -> _ExpertMlp:
     Anything else (the portable ``ragged_dot`` fallback, another activation, serial pairs) has no MXFP8 kernel and
     raises."""
     wgrads = mxfp8 == ExpertMxfp8.ALL
+    if mxfp8 == ExpertMxfp8.ALL_EPILOGUE_TOKENS:
+        if type(expert_mlp) is not _CuteRelu2ExpertMlp:
+            raise ValueError(f"ExpertMxfp8.ALL_EPILOGUE_TOKENS needs ungated ReLU^2 QuACK experts, got {expert_mlp}")
+        return _CuteRelu2Mxfp8EpilogueTokensExpertMlp()
     if type(expert_mlp) is _CuteRelu2ExpertMlp:
         return _CuteRelu2Mxfp8WgradExpertMlp() if wgrads else _CuteRelu2Mxfp8ExpertMlp()
     if type(expert_mlp) is _CuteExpertMlp:
