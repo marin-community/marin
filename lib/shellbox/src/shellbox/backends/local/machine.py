@@ -32,6 +32,7 @@ from bubblewrap_bin import bwrap_path
 from shellbox.backends.local import launch
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.machine import (
+    DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     LINUX_PROCESS_CAPABILITIES,
     Backend,
     Command,
@@ -78,12 +79,13 @@ SYSTEM_DIRECTORIES = (
 OVERLAID_DIRECTORIES = ("/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/opt", "/sbin", "/usr")
 """The system directories that a copy-on-write machine can write; ``/sys`` and the resolver's stay read-only."""
 MOUNTINFO = Path("/proc/self/mountinfo")
-# Transfers under an overlaid directory pass through the sandbox as a tar stream, so they see the machine's layer.
+# Transfers that reach an overlaid directory pass through the sandbox as a tar stream, so they see the machine's
+# layer. A file that is a symlink is archived as the file it leads to inside the sandbox, not as the link.
 EXTRACT_SCRIPT = 'mkdir -p -- "$1" && exec tar -xof - -C "$1"'
 ARCHIVE_SCRIPT = (
     '[ -e "$1" ] || { echo "No such file or directory: $1" >&2; exit 2; }; '
     'if [ -d "$1" ]; then exec tar -cf - -C "$1" .; fi; '
-    'exec tar -cf - -C "$(dirname -- "$1")" -- "$(basename -- "$1")"'
+    'exec tar -chf - -C "$(dirname -- "$1")" -- "$(basename -- "$1")"'
 )
 ARCHIVE_LIMIT_BYTES = 1 << 30
 """The largest download from an overlaid directory, as a tar stream."""
@@ -91,6 +93,8 @@ SHARED_MEMORY = "/dev/shm"
 """Python's multiprocessing creates its semaphores here."""
 SCRATCH = PurePosixPath("/tmp")
 HOME = PurePosixPath("/home/shellbox")
+CONTROL_ENVIRONMENT = {"PATH": "/usr/bin:/bin", "HOME": str(HOME), "LANG": "C.UTF-8"}
+"""The environment of the backend's own commands, such as transfers; ``MachineSpec.env`` does not reach them."""
 ROOT_MODE = 0o755
 """Lets a command that runs as another user traverse the machine's root directory."""
 STICKY_WORLD_WRITABLE = 0o1777
@@ -231,8 +235,8 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     return (bwrap_path(), *(() if system is None else (Path(system),)))
 
 
-def _sandbox_error(bwrap: Path, system_directories: SystemDirectories) -> str | None:
-    """Why ``bwrap`` cannot build a command sandbox here, or None when it can."""
+def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:
+    """Build a sandbox with ``bwrap`` and run a command in it; why it cannot, or None when it can."""
     root = Path(tempfile.mkdtemp(prefix="shellbox-bwrap-probe-"))
     layers = None
     try:
@@ -257,7 +261,7 @@ def _sandbox_error(bwrap: Path, system_directories: SystemDirectories) -> str | 
 def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirectories) -> Path:
     errors = []
     for candidate in candidates:
-        error = _sandbox_error(candidate, system_directories)
+        error = _prepare_sandbox(candidate, system_directories)
         if error is None:
             return candidate
         errors.append(f"{candidate}: {error}")
@@ -335,18 +339,38 @@ def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
 
 
 def _archive(source: Path, name: str) -> bytes:
-    """A tar stream of ``source`` under ``name``; ``name`` "." takes a directory's contents."""
+    """A tar stream of ``source`` under ``name``; ``name`` "." takes a directory's contents.
+
+    As ``_copy`` does, a ``source`` that is a symlink contributes what it leads to, and symlinks inside a
+    directory stay symlinks.
+    """
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w") as archive:
-        archive.add(source, arcname=name)
+        archive.add(os.path.realpath(source), arcname=name)
     return stream.getvalue()
 
 
+def _guest_member(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo:
+    """Extract a member of a stream that a machine wrote, keeping its symlinks but nothing that reads the host.
+
+    A hard link must lead to a file of the stream, and a device would let a copy read the host's disk.
+    """
+    if member.islnk() or member.isdev():
+        return tarfile.data_filter(member, path)
+    return tarfile.tar_filter(member, path)
+
+
 def _unpack(stream: bytes, target: Path) -> None:
-    """Write a stream from ``ARCHIVE_SCRIPT`` to ``target``: a directory's contents or a single file."""
+    """Write a stream from ``ARCHIVE_SCRIPT`` to ``target``: a directory's contents or a single file.
+
+    The machine may write any stream, so a first member that would lead the copy out of the staging
+    directory, such as a symlink to a host path, is refused; symlinks inside a directory are copied as links.
+    """
     with tempfile.TemporaryDirectory() as staging, tarfile.open(fileobj=io.BytesIO(stream)) as archive:
         members = archive.getmembers()
-        archive.extractall(staging, filter="tar")
+        if not members or not (members[0].isdir() if members[0].name == "." else members[0].isfile()):
+            raise RuntimeError("The machine's archive does not start with a regular file or directory")
+        archive.extractall(staging, filter=_guest_member)
         _copy(Path(staging) if members[0].name == "." else Path(staging, members[0].name), target)
 
 
@@ -384,7 +408,11 @@ class LocalMachine:
         return next((mount for mount in self.mounts if path.is_relative_to(mount.guest)), None)
 
     def _overlaid(self, path: PurePosixPath) -> bool:
-        return self.layers is not None and _within(path, OVERLAID_DIRECTORIES)
+        """Whether ``path`` lies in or contains a directory that this machine overlays."""
+        return self.layers is not None and any(
+            path.is_relative_to(directory) or PurePosixPath(directory).is_relative_to(path)
+            for directory in OVERLAID_DIRECTORIES
+        )
 
     def _host_path(self, path: PurePosixPath) -> Path:
         """Where the host keeps the file that commands see at ``path``.
@@ -402,6 +430,26 @@ class LocalMachine:
         return host
 
     async def run(self, command: Command) -> Result:
+        return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
+
+    async def _control(
+        self,
+        script: str,
+        path: PurePosixPath,
+        *,
+        stdin: bytes = b"",
+        output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+    ) -> Result:
+        """Run one of the backend's own scripts on ``path``, in ``CONTROL_ENVIRONMENT``."""
+        command = Command(
+            ("/bin/sh", "-c", script, "sh", str(path)),
+            cwd="/",
+            stdin=stdin,
+            output_limit_bytes=output_limit_bytes,
+        )
+        return await self._execute(command, CONTROL_ENVIRONMENT)
+
+    async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
         self._check_open()
         if not command.argv:
             raise ValueError("Command argv is empty")
@@ -429,7 +477,7 @@ class LocalMachine:
             "shellbox-local",
             command.cwd or self.spec.workdir or "/",
             *command.argv,
-            env={**self._environment, **self.spec.env, **command.env},
+            env=environment,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -464,11 +512,12 @@ class LocalMachine:
         self._check_open()
         path = _absolute_path(target)
         if self._overlaid(path):
-            # Unpacking inside the sandbox writes through the overlay, as a command's own write would.
+            # Unpacking inside the sandbox writes through the overlay, as a command's own write would. A
+            # directory uploaded to / may hold files for /opt, so it takes this path too.
             name = "." if source.is_dir() else path.name
             stream = await asyncio.to_thread(_archive, source, name)
             directory = path if source.is_dir() else path.parent
-            result = await self.run(Command(("sh", "-c", EXTRACT_SCRIPT, "sh", str(directory)), cwd="/", stdin=stream))
+            result = await self._control(EXTRACT_SCRIPT, directory, stdin=stream)
             if result.exit_code != 0:
                 raise RuntimeError(f"Cannot upload to {target}: {result.stderr.decode(errors='replace').strip()}")
             return
@@ -479,10 +528,13 @@ class LocalMachine:
     async def download(self, source: str, target: Path) -> None:
         self._check_open()
         guest = _absolute_path(source)
-        if self._overlaid(guest):
-            result = await self.run(
-                Command(("sh", "-c", ARCHIVE_SCRIPT, "sh", str(guest)), cwd="/", output_limit_bytes=ARCHIVE_LIMIT_BYTES)
+        if self._overlaid(guest) and not _within(guest, OVERLAID_DIRECTORIES):
+            # Through the sandbox, / holds the host's whole system as well as /proc and /dev.
+            raise UnsupportedMachineSpec(
+                f"A copy-on-write machine cannot download {source}, which contains its system directories"
             )
+        if self._overlaid(guest):
+            result = await self._control(ARCHIVE_SCRIPT, guest, output_limit_bytes=ARCHIVE_LIMIT_BYTES)
             if result.exit_code != 0:
                 raise RuntimeError(result.stderr.decode(errors="replace").strip())
             if result.stdout_truncated:
@@ -659,7 +711,7 @@ def _machine_directories(workdir: PurePosixPath | None, *, copy_on_write: bool) 
 async def _start(machine: LocalMachine, overlaid_workdir: PurePosixPath | None, tools: tuple[str, ...]) -> None:
     """Make a workdir that lies in the machine's layer, then check that each requested tool runs."""
     if overlaid_workdir is not None:
-        made = await machine.run(Command(("mkdir", "-p", "--", str(overlaid_workdir)), cwd="/"))
+        made = await machine._control('exec mkdir -p -- "$1"', overlaid_workdir)
         if made.exit_code != 0:
             raise RuntimeError(f"Cannot create workdir {overlaid_workdir}: {made.stderr.decode(errors='replace')}")
     if not tools:
