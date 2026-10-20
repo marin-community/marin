@@ -87,14 +87,17 @@ def _short_conv_triton_local_fwd(weight, x, segment_ids, exact_reference_roundin
     out = short_conv_triton_fwd_local(
         weight.value, x.value, segment_ids.value, exact_reference_rounding=exact_reference_rounding
     )
-    return out, (weight.value, x.value if weight.perturbed else None, segment_ids.value)
+    # Scan's transpose requires the same residual leaf count across frozen and
+    # trainable calls. An empty array retains no activation elements.
+    activation = x.value if weight.perturbed else jnp.zeros((0,), dtype=x.value.dtype)
+    return out, (weight.value, activation, segment_ids.value)
 
 
 def _short_conv_triton_local_bwd(exact_reference_rounding, residuals, dy):
     if isinstance(dy, jax.custom_derivatives.SymbolicZero):
         return None, None, None
     weight, x, segment_ids = residuals
-    if x is None:
+    if x.shape == (0,):
         dx = short_conv_triton_dx_local(weight, segment_ids, dy, exact_reference_rounding=exact_reference_rounding)
         return None, dx, None
     dx, dw_partials = short_conv_triton_bwd_local(

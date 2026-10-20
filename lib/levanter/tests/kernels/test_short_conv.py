@@ -639,6 +639,30 @@ with jax.set_mesh(mesh):
         np.testing.assert_allclose(dx, want_dx, rtol=1e-5, atol=1e-5)
         weight_only = transform(jax.grad(loss, argnums=0))(weight, sharded_x)
         np.testing.assert_allclose(weight_only, want_dw, rtol=1e-5, atol=1e-5)
+
+    # One scan body uses the same staged signature with both frozen and trainable
+    # weights. Its residual structure must survive scan's transpose in both modes.
+    stacked_weights = jnp.stack((weight * 0.1, weight * 0.05))
+    frozen_weight = weight * 0.075
+    for rematerialize in (lambda f: f, jax.checkpoint):
+        def scanned_loss(weights, activation, call):
+            def body(value, w):
+                value = call(frozen_weight, value)
+                return call(w, value), None
+
+            result, _ = jax.lax.scan(rematerialize(body), activation, weights)
+            return jnp.sum(result * dy)
+
+        def actual_loss(weights, activation):
+            return scanned_loss(weights, activation, forward)
+
+        def reference_loss(weights, activation):
+            return scanned_loss(weights, activation, lambda w, value: short_conv_reference(w, value, segment_ids))
+
+        got_loss, got_dw = jax.jit(jax.value_and_grad(actual_loss))(stacked_weights, sharded_x)
+        want_loss, want_dw = jax.jit(jax.value_and_grad(reference_loss))(stacked_weights, x)
+        np.testing.assert_allclose(got_loss, want_loss, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(got_dw, want_dw, rtol=1e-5, atol=1e-5)
 """
 
 
