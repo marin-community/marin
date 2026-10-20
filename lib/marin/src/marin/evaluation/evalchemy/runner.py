@@ -20,7 +20,7 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from marin.evaluation.eval_measurements import task_item_count
 from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
-from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, ChatTokenizerBackend, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_PYTHON_VERSION,
@@ -28,7 +28,11 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_RUNTIME_PROJECT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
+from marin.evaluation.lm_eval_samples import (
+    preserved_sample_sources,
+    rebuild_lm_eval_samples,
+    summarize_native_eval_samples,
+)
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalTaskRef,
@@ -106,6 +110,7 @@ class EvalchemyRunConfig:
     name: str
     tasks: tuple[EvalTaskConfig, ...]
     apply_chat_template: bool = False
+    chat_tokenizer_backend: ChatTokenizerBackend = ChatTokenizerBackend.SERVER
     debug: bool = False
     # None passes no generation cap to Evalchemy, which then sizes each benchmark's responses from the
     # served context window minus its stored longest prompt (evalchemy#132).
@@ -115,8 +120,8 @@ class EvalchemyRunConfig:
     batch_size: str | None = None
     seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
-    chat_template_kwargs: dict[str, bool | None] = field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | str] = field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeConfig | None = None
     runtime: EvalchemyRuntimeConfig = field(default_factory=EvalchemyRuntimeConfig)
@@ -191,6 +196,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             ],
             "out_path": output_dir,
             "apply_chat_template": config.apply_chat_template,
+            "chat_tokenizer_backend": config.chat_tokenizer_backend,
             "debug": config.debug,
             "max_gen_toks": config.max_gen_toks,
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
@@ -238,7 +244,7 @@ def _run_evalchemy_child(
         try:
             judge_api_key = env_vars["JUDGE_API_KEY"]
         except KeyError as exc:
-            raise ValueError("FinanceBench judge configuration requires JUDGE_API_KEY") from exc
+            raise ValueError("External judge configuration requires JUDGE_API_KEY") from exc
         judge_env = {
             "JUDGE_API_KEY": judge_api_key,
             "JUDGE_BASE_URL": config.judge.base_url,
@@ -318,6 +324,12 @@ def read_evalchemy_outcome(config: EvalchemyRunConfig, output_dir: str, eval_job
             output_dir,
             tasks=config.tasks,
         )
+        if preserved_sample_sources(output_dir):
+            rebuild_lm_eval_samples(
+                output_dir,
+                tasks=summary.tasks,
+                writer_id=f"marin-evalchemy-samples-{uuid.uuid4().hex}",
+            )
         normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
     except Exception as exc:
         raise EvalPipelineError(

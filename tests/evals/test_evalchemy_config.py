@@ -23,7 +23,7 @@ import pytest
 from iris.cluster.client.bundle import create_workspace_zip
 from marin.evaluation.evalchemy import runtime
 from marin.evaluation.evalchemy.client import build_command, build_model_args
-from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     EvalchemyRuntimeConfig,
@@ -55,6 +55,28 @@ def _config(**overrides) -> EvalchemyRunConfig:
 
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
     return json.loads(_run_config_json(_MODEL, config or _config(), "gs://bucket/evals/qwen3/core"))
+
+
+def test_chat_route_can_load_the_served_tokenizer_for_context_preflight():
+    config = _payload(_config(chat_tokenizer_backend=ChatTokenizerBackend.HUGGING_FACE))
+
+    model_args = dict(
+        pair.split("=", 1) for pair in build_model_args(config, use_chat=True, max_length=73728).split(",")
+    )
+
+    assert model_args["tokenizer_backend"] == "huggingface"
+    assert model_args["tokenizer"] == _MODEL.tokenizer
+    assert model_args["trust_remote_code"] == "True"
+
+
+def test_completion_route_omits_chat_template_kwargs():
+    config = _payload(_config(chat_template_kwargs={"enable_thinking": False}))
+
+    model_args = dict(
+        pair.split("=", 1) for pair in build_model_args(config, use_chat=False, max_length=None).split(",")
+    )
+
+    assert "chat_template_kwargs" not in model_args
 
 
 def test_client_config_json_carries_endpoint_and_per_task_dirs():
@@ -105,6 +127,8 @@ def test_file_config_fields_reach_the_evalchemy_command():
     assert command[command.index("--dataset_cache") + 1] == "s3://eval-data/cache"
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
+    assert model_args["transport_retry_budget"] == "2700.0"
+    assert model_args["transport_attempt_timeout"] == "900.0"
     assert model_args["max_length"] == "32768"
 
 
@@ -143,9 +167,10 @@ def test_parent_rejects_endpoint_model_arg_overrides():
         _payload(_config(extra_model_args={"model": "other"}))
 
 
-def test_financebench_requires_an_explicit_external_judge():
+@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench"])
+def test_judged_task_requires_an_explicit_external_judge(task):
     with pytest.raises(ValueError, match="requires an explicit judge"):
-        EvalchemyConfig(tasks=("FinanceBench",))
+        EvalchemyConfig(tasks=(task,))
 
     judge = EvalchemyJudgeConfig(
         base_url="https://judge.example/v1",
@@ -153,7 +178,7 @@ def test_financebench_requires_an_explicit_external_judge():
         api_key=("env:JUDGE_KEY",),
     )
     with pytest.raises(ValueError, match="only for a single FinanceBench"):
-        EvalchemyConfig(tasks=("FinanceBench", "gsm8k"), judge=judge)
+        EvalchemyConfig(tasks=(task, "gsm8k"), judge=judge)
     with pytest.raises(ValueError, match="only for a single FinanceBench"):
         EvalchemyConfig(tasks=("gsm8k",), judge=judge)
 
@@ -183,7 +208,8 @@ def test_financebench_rejects_inline_judge_credentials(judge):
         EvalchemyConfig(tasks=("FinanceBench",), judge=judge)
 
 
-def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypatch):
+@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench"])
+def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypatch, task):
     submitted = []
 
     class FakeJob:
@@ -194,14 +220,18 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
 
     client = SimpleNamespace(submit=lambda **kwargs: submitted.append(kwargs) or FakeJob())
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
-    config = _config(
-        name="financebench",
-        tasks=(EvalTaskConfig("FinanceBench", 0, generation=True),),
+    source = EvalchemyConfig(
+        tasks=(task,),
         judge=EvalchemyJudgeConfig(
             base_url="https://judge.example/v1",
             model="judge-model",
             api_key=("env:TOGETHER_API_KEY",),
         ),
+    )
+    config = _config(
+        name=task.lower(),
+        tasks=(EvalTaskConfig(task, 0, generation=True),),
+        judge=source.judge,
     )
 
     _run_evalchemy_child(
@@ -413,6 +443,8 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert cmd[:3] == ["/opt/evalchemy", "--model", "local-completions"]
     assert "--apply_chat_template" not in cmd
     assert cmd[cmd.index("--tasks") + 1] == "gsm8k"
+    assert "--output_path" not in cmd
+    assert "--log_samples" not in cmd
     assert cmd[cmd.index("--finestore_output_path") + 1] == config["out_path"]
     assert cmd[cmd.index("--finestore_output_prefix") + 1] == "gsm8k_cot"
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
