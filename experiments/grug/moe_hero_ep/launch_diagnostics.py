@@ -49,7 +49,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.model import Fp8Recipe
+from experiments.grug.moe_hero_ep.model import Fp8Recipe, GatedNormImplementation
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -147,6 +147,7 @@ def build_diagnostic_run(
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
     moe_implementation: str | None = None,
+    gated_norm_implementation: GatedNormImplementation | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -214,6 +215,7 @@ def build_diagnostic_run(
             ("qk_mult", qk_mult),
             ("qk_mult_long_scale", qk_mult_long_scale),
             ("moe_implementation", moe_implementation),
+            ("gated_norm_implementation", gated_norm_implementation),
         )
         if value is not None
     }
@@ -510,6 +512,12 @@ def build_diagnostic_run(
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
 )
 @click.option(
+    "--gated-norm-implementation",
+    type=click.Choice([implementation.value for implementation in GatedNormImplementation]),
+    default=None,
+    help="How each RMSNorm -> GatedNorm pair runs. Defaults to the hero spec.",
+)
+@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=HERO_MASTER_PARAM_MODE.value,
@@ -660,6 +668,7 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
+    gated_norm_implementation: str | None,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
@@ -704,6 +713,9 @@ def main(
         qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,
         moe_implementation=moe_implementation,
+        gated_norm_implementation=(
+            None if gated_norm_implementation is None else GatedNormImplementation(gated_norm_implementation)
+        ),
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
