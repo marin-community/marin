@@ -174,37 +174,24 @@ def test_sliding_window_is_real():
 
 
 def test_xsa_removes_value_projection():
+    """Each head's attention output is orthogonal to the current token's value."""
     model = tiny_model(num_hidden_layers=1)
-    layer = model.model.layers[0]
-    attn = layer.self_attn
-    n = 12
-    x = mx.random.normal((1, n, 64))
+    attn = model.model.layers[0].self_attn
+    B, L = 1, 12
+    x = mx.random.normal((B, L, 64))
+    # Identity o_proj and a zero gate logit (gate = 2 * sigmoid(0) = 1) expose the
+    # per-head output of Attention.__call__.
+    attn.o_proj.weight = mx.eye(attn.n_heads * attn.head_dim)
+    attn.attn_gate.weight = mx.zeros_like(attn.attn_gate.weight)
 
-    B, L = 1, n
-    q = mod._unit_rms(attn.q_proj(x).reshape(B, L, attn.n_heads, attn.head_dim))
-    k = mod._unit_rms(attn.k_proj(x).reshape(B, L, attn.n_kv, attn.head_dim))
-    v = attn.v_proj(x).reshape(B, L, attn.n_kv, attn.head_dim)
-    q, k, v = (t.transpose(0, 2, 1, 3) for t in (q, k, v))
-    if attn.rope is not None:
-        q = attn.rope(q)
-        k = attn.rope(k)
-    y = mod.scaled_dot_product_attention(q, k, v, cache=None, scale=attn.scale, mask="causal")
-
-    # XSA in float32, exactly as the module does.
-    yf = y.astype(mx.float32)
+    y = attn(x, "causal", None).reshape(B, L, attn.n_heads, attn.head_dim).transpose(0, 2, 1, 3)
+    v = attn.v_proj(x).reshape(B, L, attn.n_kv, attn.head_dim).transpose(0, 2, 1, 3)
     vf = mx.repeat(v, attn.n_rep, axis=1).astype(mx.float32)
-    yf = yf - (mx.sum(yf * vf, axis=-1, keepdims=True) / (mx.sum(vf * vf, axis=-1, keepdims=True) + mod._XSA_EPS)) * vf
+    yf = y.astype(mx.float32)
 
-    dots = mx.sum(yf * vf, axis=-1)  # [1, H, L]
-    ynorm = mx.sqrt(mx.sum(y.astype(mx.float32) ** 2, axis=-1))
-    vnorm = mx.sqrt(mx.sum(vf * vf, axis=-1))
-    # After XSA each head's output is orthogonal to its aligned value up to
-    # the eps slack (eps/||v||^2) and f32 noise, relative to |y| |v|.
-    assert (mx.abs(dots) / (ynorm * vnorm)).max().item() < 1e-4
-
-    # Sanity: before XSA the projection is not zero.
-    dots_before = mx.sum(y.astype(mx.float32) * vf, axis=-1)
-    assert mx.abs(dots_before).max().item() > 1e-3
+    # Without XSA the coefficient of v in y is O(1) (it is 1 at position 0, where y = v).
+    coefficient = mx.sum(yf * vf, axis=-1) / mx.sum(vf * vf, axis=-1)
+    assert mx.abs(coefficient).max().item() < 1e-3
 
 
 def test_router_bias_selection_and_renorm():
@@ -226,9 +213,9 @@ def test_router_bias_selection_and_renorm():
     assert mx.abs(moe(x) - expected.astype(x.dtype)).max().item() < 1e-4
 
 
-def test_rotating_cache_mask_matches_bruteforce():
-    """The rotating cache sees exactly the last `window` tokens, including the
-    current one, per query position (brute force over a small case)."""
+def test_rotating_cache_decode_past_window_matches_full_forward():
+    """Decoding 11 tokens past an 8-token window, after the rotating cache wraps,
+    matches the full forward pass."""
     model = tiny_model(num_hidden_layers=1)
     n = 20
     ids = mx.random.randint(0, 101, (1, n))
@@ -279,5 +266,9 @@ def test_attention_cache_exact_in_f64():
             assert diff < 1e-6, f"f64 attention ({'full' if is_long else 'sliding'}): {diff}"
 
 
-def test_think_markers_patch_installed():
-    assert getattr(mod.tokenizer_utils._infer_thinking, "_grug_patch", False) is True
+def test_think_markers_inferred_from_vocab():
+    class Tokenizer:
+        def get_vocab(self):
+            return {"<|start_think|>": 11, "<|end_think|>": 12, "hello": 3}
+
+    assert mod.tokenizer_utils._infer_thinking(Tokenizer()) == ("<|start_think|>", "<|end_think|>", (11,), (12,))

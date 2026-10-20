@@ -25,7 +25,6 @@ import tomllib
 from pathlib import Path
 
 import requests
-import s3fs
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
@@ -36,6 +35,8 @@ from marin.inference.backend import ModelSpec
 from marin.inference.config import VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.iris_vllm import iris_vllm_launch
 from marin.inference.vllm_backend import VllmBackend
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,6 @@ LOGPROBS_K = 25
 CONTINUATION_TOKENS = 64
 HUB_CLUSTER = "marin"
 GPU_CLUSTER = "cw-us-east-02a"
-DEFAULT_S3_ENDPOINT = "https://s3.us-east-2a.coreweave.com"
 
 
 def _token_id(key) -> int:
@@ -60,14 +60,6 @@ def _logprob_map(raw: dict) -> dict[int, float]:
     objects serialized to dicts.
     """
     return {_token_id(key): float(value["logprob"] if isinstance(value, dict) else value) for key, value in raw.items()}
-
-
-def _coreweave_fs() -> s3fs.S3FileSystem:
-    return s3fs.S3FileSystem(
-        key=os.environ["CW_KEY_ID"],
-        secret=os.environ["CW_KEY_SECRET"],
-        client_kwargs={"endpoint_url": os.environ.get("CW_S3_ENDPOINT", DEFAULT_S3_ENDPOINT)},
-    )
 
 
 def golden_for_case(url: str, api_model: str, case: dict, release_tag: str, revision: str) -> dict:
@@ -147,8 +139,8 @@ def run_golden_job(repo: str, revision: str, cases: list, gpus: int, release_tag
             url = f"{env.server_url}/completions"
             goldens = [golden_for_case(url, spec.api_model, case, release_tag, revision) for case in cases]
 
-    with _coreweave_fs().open(output, "w") as f:
-        f.write(json.dumps(goldens))
+    configure_coreweave_s3()
+    StoragePath(output).write_text(json.dumps(goldens))
     logger.info("wrote %d goldens to %s", len(goldens), output)
 
 
@@ -180,8 +172,8 @@ def submit(args: argparse.Namespace) -> None:
 
 
 def download(args: argparse.Namespace) -> None:
-    with _coreweave_fs().open(args.output, "rb") as f:
-        args.dest.write_bytes(f.read())
+    configure_coreweave_s3()
+    args.dest.write_bytes(StoragePath(args.output).read_bytes())
     print(f"wrote {args.dest}")
 
 

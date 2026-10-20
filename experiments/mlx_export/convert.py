@@ -45,7 +45,7 @@ EXPERT_BITS = {Recipe.EIGHT_BIT: 8, Recipe.MIXED_4BIT: 4}
 
 
 def quant_params(path: str, _module) -> bool | dict:
-    """Per-module quantization: experts take the recipe's default bits, the rest 8 bits."""
+    """Per-module quantization: experts take the recipe's bits, other linears 8 bits, gates none."""
     if "gated_norm" in path or path.endswith("attn_gate"):
         return False
     if ".mlp.experts." in path:

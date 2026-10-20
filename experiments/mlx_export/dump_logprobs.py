@@ -23,7 +23,8 @@ from mlx_lm import load
 FREE_GREEDY_TOKENS = 64
 
 
-def _token_id(key) -> int:
+def token_id(key) -> int:
+    """Token id from a logprob map key: a JSON string or vLLM's ``token_id:N``."""
     return int(str(key).removeprefix("token_id:"))
 
 
@@ -79,12 +80,12 @@ def main() -> None:
         # vLLM's prompt entry j scores prompt token j (logits at j - 1); its
         # continuation entry k scores generated token k (logits at P - 1 + k).
         wanted = {
-            position - 1: {_token_id(k) for k in lp_map}
+            position - 1: {token_id(k) for k in lp_map}
             for position, lp_map in enumerate(golden["prompt_top_logprobs"])
             if lp_map is not None
         }
         for offset, lp_map in enumerate(golden["continuation_top_logprobs"]):
-            wanted[len(prompt_ids) - 1 + offset] = {_token_id(k) for k in lp_map}
+            wanted[len(prompt_ids) - 1 + offset] = {token_id(k) for k in lp_map}
 
         scores, argmaxes = logprobs_for_positions(model, prompt_ids + golden["continuation_token_ids"], wanted)
         free = free_greedy(model, tokenizer, prompt_ids)

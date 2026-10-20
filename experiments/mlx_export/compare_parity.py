@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from convert import Recipe
+from dump_logprobs import token_id
 
 DECISIVE_MARGIN = 0.2
 
@@ -61,7 +62,7 @@ class Summary:
 
 
 def _int_keys(lp_map: dict) -> dict[int, float]:
-    return {int(str(k).removeprefix("token_id:")): lp for k, lp in lp_map.items()}
+    return {token_id(k): lp for k, lp in lp_map.items()}
 
 
 def percentile(values: list[float], q: float) -> float:
