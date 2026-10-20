@@ -105,8 +105,13 @@ def rl_overview_dataset(
     clusters_sql = sql_values(clusters)
     run_sql = sql_string(run)
     core_names = _CORE_NAMES
+    core_filter = ""
     if view in ("critical_path", "straggler"):
         core_names = ("phase_duration_seconds",)
+        core_filter = (
+            "\n      AND json_get(attributes_json, 'clock_domain') = 'critical_path'"
+            "\n      AND json_get(attributes_json, 'phase') IN ('rollout_or_inference_wait', 'train_step')"
+        )
     elif view in ("ray_object_store", "ray_spill"):
         core_names = tuple(name for name in _CORE_NAMES if name != "phase_duration_seconds")
     core_sql = f"""
@@ -126,7 +131,7 @@ WITH selected AS (
     WHERE run_id = {run_sql}
       AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
       AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
-      AND name IN ({sql_values(core_names)})
+      AND name IN ({sql_values(core_names)}){core_filter}
 ), aggregates AS (
     SELECT 'aggregate' AS statistic,
        bucket_t AS t, name, execution_uid, phase, outcome, clock_domain,

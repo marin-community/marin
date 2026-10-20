@@ -31,12 +31,16 @@ def accelerator_database():
             ("cw-a", "old-node", "GPU-0", 0, "gpu_power_watts", 100),
             ("cw-a", "node-a", "GPU-0", 1_000, "gpu_power_watts", 300),
             ("cw-a", "node-a", "GPU-1", 0, "gpu_power_watts", 400),
-            ("cw-b", "node-b", "GPU-2", 900_000, "gpu_power_watts", 500),
+            ("cw-b", "node-b", "GPU-0", 900_000, "gpu_power_watts", 500),
             ("cw-a", "node-a", "GPU-0", 0, "gpu_utilization_percent", 20),
             ("cw-a", "node-a", "GPU-0", 1_000, "gpu_utilization_percent", 40),
-            ("cw-a", "node-a", "GPU-1", 0, "gpu_utilization_percent", 90),
-            ("cw-a", "node-a", "GPU-0", 0, "gpu_tensor_active_ratio", 0.5),
-            ("cw-a", "node-a", "GPU-1", 0, "gpu_memory_used_bytes", 1_000),
+            ("cw-a", "node-a", "GPU-1", 60_000, "gpu_utilization_percent", 90),
+            ("cw-a", "node-a", "GPU-0", 0, "gpu_tensor_active_ratio", 0.2),
+            ("cw-a", "node-a", "GPU-0", 1_000, "gpu_tensor_active_ratio", 0.4),
+            ("cw-a", "node-a", "GPU-1", 60_000, "gpu_tensor_active_ratio", 0.9),
+            ("cw-a", "node-a", "GPU-0", 0, "gpu_memory_used_bytes", 10),
+            ("cw-a", "node-a", "GPU-0", 1_000, "gpu_memory_used_bytes", 30),
+            ("cw-a", "node-a", "GPU-1", 0, "gpu_memory_used_bytes", 80),
             ("cw-a", "node-a", "GPU-0", 0, "gpu_temperature_celsius", 60),
             ("cw-a", "node-a", "GPU-0", 1_000, "gpu_temperature_celsius", 70),
             ("cw-a", "node-a", "GPU-1", 0, "gpu_temperature_celsius", 80),
@@ -44,6 +48,7 @@ def accelerator_database():
             ("cw-a", "node-a", "GPU-0", 0, "gpu_xid_error_code", 10),
             ("cw-a", "node-a", "GPU-0", 1_000, "gpu_xid_error_code", 0),
             ("cw-a", "node-a", "GPU-1", 0, "gpu_row_remap_failures", 2),
+            ("cw-b", "node-b", "GPU-0", 0, "gpu_xid_error_code", 11),
             ("cw-a", "node-a", "GPU-0", 900_000, "hardware_inventory", 1),
             ("cw-a", "node-a", "GPU-1", 900_000, "hardware_inventory", 1),
         ]:
@@ -104,3 +109,26 @@ def test_accelerator_panel_sources_preserve_combined_results(accelerator_databas
         assert actual == [{"section": "power", "value": 0.7}]
     if view == "freshness":
         assert actual == [{"section": "freshness", "cluster": "cw-a", "gpus": 2, "nodes": 1, "lag_seconds": 1199.0}]
+
+
+def test_accelerator_fleet_charts_preserve_device_means_and_cluster_fault_identity(accelerator_database):
+    dataset = accelerator_overview_dataset(("cw-a", "cw-b"), 0, 1_200_000, 30_000, "hbm")
+
+    rows = projected_rows(accelerator_database, dataset)
+
+    assert [row for row in rows if row["section"] == "hbm"] == [
+        {"section": "hbm", "t": 0, "series": "cw-a", "value": 100.0}
+    ]
+    assert [row for row in rows if row["section"] == "fault_count" and row["series"] == "XID error"] == [
+        {"section": "fault_count", "t": 0, "series": "XID error", "value": 2.0}
+    ]
+
+
+@pytest.mark.parametrize("view", ["mean_utilization", "tensor", "freshness"])
+def test_accelerator_panel_sources_preserve_empty_window_results(accelerator_database, view):
+    accelerator_database.execute('DELETE FROM "telemetry_v1.node_agent"')
+    dataset = accelerator_overview_dataset(("cw-a",), 0, 1_200_000, 30_000, view)
+
+    actual = [row for row in projected_rows(accelerator_database, dataset) if row["section"] == view]
+
+    assert actual == ([{"section": view, "value": None}] if view == "mean_utilization" else [])

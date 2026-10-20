@@ -119,6 +119,85 @@ LIMIT {ACCELERATOR_MAX_FLEET_ROWS + 1}
             },
             max_result_rows=ACCELERATOR_MAX_FLEET_ROWS,
         )
+    if view in ("mean_utilization", "mean_tensor", "hottest"):
+        # Exact metric predicates select the existing covering projections.
+        sql = f"""
+SELECT utilization.value AS mean_utilization, tensor.value AS mean_tensor, temperature.value AS hottest
+FROM (
+    SELECT AVG(value) AS value FROM "telemetry_v1.node_agent"
+    WHERE {common_filter} AND name = 'gpu_utilization_percent'
+) AS utilization
+CROSS JOIN (
+    SELECT AVG(value) AS value FROM "telemetry_v1.node_agent"
+    WHERE {common_filter} AND name = 'gpu_tensor_active_ratio'
+) AS tensor
+CROSS JOIN (
+    SELECT MAX(value) AS value FROM "telemetry_v1.node_agent"
+    WHERE {common_filter} AND name = 'gpu_temperature_celsius'
+) AS temperature
+""".strip()
+        return DashboardDataset(
+            name="Accelerator activity stats",
+            cache_key=(clusters, start_ms, end_ms),
+            sources=(SourceQuery("activity", sql, 1),),
+            setup_sql=(),
+            views={
+                name: f"SELECT {name} AS value FROM activity" for name in ("mean_utilization", "mean_tensor", "hottest")
+            },
+            max_result_rows=3,
+        )
+    if view in ("tensor", "hbm", "temperature_series", "fault_count"):
+        # Keep each branch within one physical metric projection. Power and
+        # utilization histories are already provided by their shared source.
+        sql = f"""
+WITH memory_per_device AS (
+    SELECT {bucket} AS t, COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           node_name, json_get(attributes_json, 'gpu_uuid') AS gpu_uuid, AVG(value) AS value
+    FROM "telemetry_v1.node_agent"
+    WHERE {common_filter} AND name = 'gpu_memory_used_bytes'
+    GROUP BY 1, 2, 3, 4
+), faults_per_cluster AS (
+    SELECT {bucket} AS t, COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster, name,
+           COUNT(DISTINCT CASE WHEN value > 0 THEN json_get(attributes_json, 'gpu_uuid') END) AS value
+    FROM "telemetry_v1.node_agent"
+    WHERE {common_filter}
+      AND name IN ('gpu_xid_error_code', 'gpu_row_remap_failures', 'gpu_pcie_replay_errors')
+    GROUP BY 1, 2, 3
+)
+SELECT t, origin_cluster AS series, SUM(value) AS value, 'hbm' AS metric
+FROM memory_per_device GROUP BY 1, 2
+UNION ALL
+SELECT {bucket} AS t, COALESCE(NULLIF(cluster, ''), 'marin') AS series,
+       AVG(value) AS value, 'tensor' AS metric
+FROM "telemetry_v1.node_agent"
+WHERE {common_filter} AND name = 'gpu_tensor_active_ratio'
+GROUP BY 1, 2
+UNION ALL
+SELECT {bucket} AS t, COALESCE(NULLIF(cluster, ''), 'marin') AS series,
+       MAX(value) AS value, 'temperature_series' AS metric
+FROM "telemetry_v1.node_agent"
+WHERE {common_filter} AND name = 'gpu_temperature_celsius'
+GROUP BY 1, 2
+UNION ALL
+SELECT t, CASE name WHEN 'gpu_xid_error_code' THEN 'XID error'
+                   WHEN 'gpu_row_remap_failures' THEN 'row remap failure'
+                   ELSE 'PCIe replay' END AS series,
+       SUM(value) AS value, 'fault_count' AS metric
+FROM faults_per_cluster GROUP BY 1, 2
+ORDER BY t, metric, series
+LIMIT {ACCELERATOR_MAX_FLEET_ROWS + 1}
+""".strip()
+        return DashboardDataset(
+            name="Accelerator fleet charts",
+            cache_key=(clusters, start_ms, end_ms, bucket_ms),
+            sources=(SourceQuery("fleet_charts", sql, ACCELERATOR_MAX_FLEET_ROWS),),
+            setup_sql=(),
+            views={
+                name: f"SELECT t, series, value FROM fleet_charts WHERE metric = '{name}' ORDER BY t, series"
+                for name in ("tensor", "hbm", "temperature_series", "fault_count")
+            },
+            max_result_rows=ACCELERATOR_MAX_FLEET_ROWS,
+        )
     fleet_sql = f"""
 WITH raw AS (
     SELECT {bucket} AS t,
@@ -162,8 +241,7 @@ LIMIT {ACCELERATOR_MAX_FLEET_ROWS + 1}
     # Fault tables have a separate panel window. Only the combined dataset needs
     # their rows alongside device histories and freshness.
     fault_union = "UNION ALL SELECT * FROM faults" if view is None else ""
-    device_sql = f"""
-WITH latest AS (
+    latest_sql = f"""
     SELECT 'latest' AS kind,
            CAST(NULL AS BIGINT) AS t,
            COALESCE(NULLIF(cluster, ''), 'marin') AS "cluster",
@@ -179,11 +257,28 @@ WITH latest AS (
                ORDER BY timestamp_ms DESC
            ) AS rn
     FROM "telemetry_v1.node_agent"
-    WHERE service = 'iris-node-agent'
-      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({cluster_values})
-      AND timestamp_ms >= {start_ms}
-      AND timestamp_ms < {end_ms}
+    WHERE {common_filter}
       AND name IN ('gpu_power_watts', 'hardware_inventory')
+""".strip()
+    if view is not None:
+        # Freshness only consumes latest power rows. Ordered aggregates avoid
+        # sorting each device's history and select its latest node after moves.
+        latest_sql = f"""
+    SELECT 'latest' AS kind, CAST(NULL AS BIGINT) AS t,
+           COALESCE(NULLIF(cluster, ''), 'marin') AS "cluster",
+           FIRST_VALUE(node_name ORDER BY timestamp_ms DESC) AS node,
+           FIRST_VALUE(json_get(attributes_json, 'gpu_index') ORDER BY timestamp_ms DESC) AS gpu,
+           json_get(attributes_json, 'gpu_uuid') AS gpu_uuid, name,
+           FIRST_VALUE(value ORDER BY timestamp_ms DESC) AS value,
+           FIRST_VALUE(json_get(attributes_json, 'gpu_model') ORDER BY timestamp_ms DESC) AS series,
+           MAX(timestamp_ms) AS last_ms, 1 AS rn
+    FROM "telemetry_v1.node_agent"
+    WHERE {common_filter} AND name = 'gpu_power_watts'
+    GROUP BY cluster, json_get(attributes_json, 'gpu_uuid'), name
+""".strip()
+    device_sql = f"""
+WITH latest AS (
+{latest_sql}
 ), faults AS (
     SELECT 'fault' AS kind,
            CAST(NULL AS BIGINT) AS t,
