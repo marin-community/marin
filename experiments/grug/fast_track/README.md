@@ -396,7 +396,7 @@ When the selected set does not change, the run gives no new treatment. Use the m
 ## Compare data-track runs
 
 Do not gate a selection on one held-out loss: a selection moves the domain mix, and Paloma rewards web text and long context.
-In the [validation study](https://claude.ai/artifact/46KvN5W9qp7rMnMPCdcNc9), Paloma macro ordered selection pairs like the downstream target on 20–41% of pairs, and no single held-out loss passed at every rung.
+In the [validation study](https://claude.ai/artifact/46KvN5W9qp7rMnMPCdcNc9), Paloma macro ordered selection pairs like the downstream target on 11–40% of pairs, and no single held-out loss passed at every rung.
 
 Train the candidate and the random control with `--dense --save-checkpoints` and three matched seeds each.
 Score each checkpoint on one H100, then judge:
@@ -416,13 +416,16 @@ The judge gives the gain against random for English knowledge (ARC, MMLU, SciQ, 
 and long context (fixed-target loss at 3968 tokens). Quality classifiers trade commonsense for knowledge, so the two English groups are separate.
 It accepts a candidate when the mean of English, code, and math is above zero at the 95% lower bound and no group loses more than its limit
 (1% for each English group, 2% for the others).
+The gold answers do not contain format tokens: MBPP code has `\n` line ends and no spaces at line ends, and GSM8K has no calculator annotations.
+With the original `\r\n` line ends, `\r` tokens carried 25–56% of the MBPP bits of web-only models, and at d1280 they made the DCLM selection below look 22% worse on code.
 A rung that passes goes to the next rung with the same gate.
 Confirm a quality head on a second raw pool (`corpus_sample_cli --seed`), because repeated selection on one pool can overfit it.
 
 The judge accepts a known good classifier. `probe_scorers:dclm_fasttext_web` ranks the raw web documents by the public
 [DCLM fastText classifier](https://huggingface.co/mlfoundations/fasttext-oh-eli5) and takes 60% of the web tokens.
 Against a random 60% of the web tokens (`probe_scorers:web_only`, three seeds each), the judge gave `better` at d768:
-G +3.5% [+2.9%, +4.0%], and each group went up. On the same pair, Paloma macro loss became 0.2% worse and c4_en loss 1.2% worse,
+G +4.0% [+3.1%, +4.7%], and each group went up. On the same pair, Paloma macro loss became 0.2% worse and c4_en loss 1.2% worse,
 so a Paloma gate rejects this classifier. G is gold-answer BPB. The English accuracy macro went up by only 0.2 points.
+At d1280, G was +4.1% [+3.0%, +5.1%], but the English intervals were wider than their harm limits, so the judge gave `inconclusive`.
 In the full pool, web is 17% of the tokens. There, the same classifier on the web sources gave G +0.4%, which the judge cannot resolve at d768.
 To improve a scorer for some sources, compare it against random on those sources only. Then confirm it on the full pool at a larger rung.

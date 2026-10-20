@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from datasets import load_dataset
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-DOWNSTREAM_TASKS_VERSION = "downstream-cloze-v2"
+DOWNSTREAM_TASKS_VERSION = "downstream-cloze-v3"
 # Large tasks are capped so one checkpoint scores in minutes. The cap is a fixed prefix
 # of the dataset order, so every checkpoint sees the same examples.
 MAX_EXAMPLES_PER_TASK = 2000
@@ -217,9 +217,11 @@ def _lambada() -> Iterator[TaskExample]:
 
 
 def _gsm8k() -> Iterator[TaskExample]:
-    # Gold-answer scoring: one choice, the reference reasoning and final answer.
+    # Gold-answer scoring: one choice, the reference reasoning and final answer. The calculator
+    # annotations (`<<48/2=24>>`) are 14% of the answer characters and reward GSM8K-format data.
     for index, row in enumerate(load_dataset("openai/gsm8k", "main", split="test")):
-        yield _same_context("gsm8k", str(index), f"Question: {row['question']}\nAnswer:", [" " + row["answer"]], 0)
+        answer = re.sub(r"<<[^>]*>>", "", row["answer"])
+        yield _same_context("gsm8k", str(index), f"Question: {row['question']}\nAnswer:", [" " + answer], 0)
 
 
 def _humaneval() -> Iterator[TaskExample]:
@@ -230,7 +232,10 @@ def _humaneval() -> Iterator[TaskExample]:
 def _mbpp() -> Iterator[TaskExample]:
     for row in load_dataset("google-research-datasets/mbpp", "full", split="test"):
         context = f'"""{row["text"]}\n{row["test_list"][0]}\n"""\n'
-        yield _same_context("mbpp", str(row["task_id"]), context, [row["code"]], 0)
+        # The gold code has `\r\n` line ends and spaces at line ends. They carry 25-56% of the bits
+        # of a web-only model, so score the code with `\n` line ends, which keeps the same AST.
+        code = re.sub(r"[ \t]+\n", "\n", row["code"].replace("\r\n", "\n")).rstrip()
+        yield _same_context("mbpp", str(row["task_id"]), context, [code], 0)
 
 
 def _math500() -> Iterator[TaskExample]:
