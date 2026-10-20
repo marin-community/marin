@@ -805,6 +805,12 @@ def _serialize_arrays(
             for shard in array.addressable_shards
             if (region := _shard_write_region(shard, plan)) is not None
         ]
+        if "expert_mlp" in tspec["kvstore"]["path"]:
+            logger.warning(
+                "CKDEBUG %s shape %s sharding %s plan %s addressable %d writes %s",
+                tspec["kvstore"]["path"], array.shape, array.sharding, plan, len(array.addressable_shards),
+                [(str(r.index), float(np.abs(np.asarray(sh.data)).max())) for sh, r in shard_writes],
+            )
         if not shard_writes:
             return
         store_future.force()
