@@ -14,11 +14,46 @@ indirection and verify that the coordinator and trial workers receive it.
 Validation that needs declarative image builds uses the Daytona **eval** account,
 not the RL account. Keep the two credentials separately named and select the
 eval credential only in the validation subprocess. For inline Harbor validation,
-set the callback's `daytona_api_key_env` to the eval credential variable and
+set the callback's `daytona_api_key_env: DAYTONA_EVAL_API_KEY` and
 forward it through both the coordinator and task launcher. Do not globally
 replace the RL credential: training containers remain in the RL account.
 `DaytonaValidationError: declarative builds are not allowed` is an account/build
 permission failure, not a model failure or a zero reward.
+
+The keys live in Google Secret Manager in project `hai-gcp-models`:
+`DAYTONA_RL_API_KEY` for training and `DAYTONA_EVAL_API_KEY` for validation.
+Load them into the correspondingly named environment variables before submission.
+Do not enable shell tracing or print the environment:
+
+```bash
+set +x
+export DAYTONA_RL_API_KEY="$(gcloud secrets versions access latest \
+  --project=hai-gcp-models --secret=DAYTONA_RL_API_KEY)"
+export DAYTONA_EVAL_API_KEY="$(gcloud secrets versions access latest \
+  --project=hai-gcp-models --secret=DAYTONA_EVAL_API_KEY)"
+: "${DAYTONA_RL_API_KEY:?RL secret resolution failed}"
+: "${DAYTONA_EVAL_API_KEY:?Eval secret resolution failed}"
+```
+
+The Marin RL coordinator allowlist forwards both names. Configure the SkyRL
+task launcher's `terminal_bench_config.harbor` with
+`daytona_api_key_env: DAYTONA_RL_API_KEY` and
+`eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY`; its Daytona credential
+forwarding reads those fields and rejects missing values. In the
+`trainer.callbacks` entry with `type: harbor_evaluation`, set
+`daytona_api_key_env: DAYTONA_EVAL_API_KEY`. These paths are relative to the
+SkyRL training config (`skyrl` in the generated launch config).
+
+With [the explicit coordinator-secret declaration](https://github.com/marin-community/marin/pull/10333),
+also set `IrisSkyRLExecution.required_env_vars` to
+`("DAYTONA_RL_API_KEY", "DAYTONA_EVAL_API_KEY")` to reject missing credentials
+before coordinator submission. A field
+ending in `_env` takes the variable name, not the Secret Manager URI or key value.
+At each process boundary, check only `bool(os.environ.get(name))` for these two
+names; do not log their values. Account access still requires a successful
+provider preflight.
+The standalone evaluation launcher has a separate credential-resolution path;
+see [evaluation credentials](../../experiments/evaluation/README.md).
 
 For launchers that consume only `DAYTONA_API_KEY`, map the RL key immediately
 before invoking the launcher:
