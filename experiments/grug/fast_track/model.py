@@ -923,10 +923,15 @@ class GrugModelConfig:
     """Tanh soft-cap on the lm_head logits, ``c * tanh(z / c)`` (Gemma 2); None: off."""
     lm_head_grad_probe: bool = False
     """Log each token's gradient norm w.r.t. the lm_head input (the final normed hidden state) every step
-    (``lm_head_grad_probe``; train-step stats under ``train/lm_head_grad/``). Training math is unchanged."""
+    (``lm_head_grad_probe``; train-step stats under ``train/lm_head_grad/``). Without ``lm_head_grad_clip`` the
+    training math is unchanged."""
     lm_head_grad_dump_every: int = 0
     """With ``lm_head_grad_probe``: also write the whole batch's per-token norms and token ids every this many steps
     (and densely early on, see ``train.lm_head_grad_dump_due``); 0: no dumps."""
+    lm_head_grad_clip: float | None = None
+    """With ``lm_head_grad_probe``: clip each training token's gradient w.r.t. the lm_head input to this norm, in
+    the probe's per-token units (the gradient of the token's own loss term), ``g * min(1, c / ||g||)``. The probe
+    still reports the pre-clip norms. None: no clipping."""
     init_std_mult_gates: float = 1.0
     """Init-std multiplier of the MuonH-trained sigmoid gate matrices (KDA ``w_g`` / ``w_beta``, MoE gates)."""
     kda_write_gate: bool = False
@@ -1019,6 +1024,8 @@ class GrugModelConfig:
     def __post_init__(self) -> None:
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
             raise ValueError("lm_head_grad_dump_every needs lm_head_grad_probe")
+        if self.lm_head_grad_clip is not None and (not self.lm_head_grad_probe or self.lm_head_grad_clip <= 0):
+            raise ValueError("lm_head_grad_clip needs lm_head_grad_probe and a positive threshold")
         if self.moe_k_layers and (
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
@@ -6355,7 +6362,8 @@ class Transformer(eqx.Module):
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss, the mid head); evals leave it off
         so they score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the main lm_head
-        cross-entropy's input through ``lm_head_grad_probe``: its gradient is each token's input-gradient norm."""
+        cross-entropy's input through ``lm_head_grad_probe``: its gradient is each token's input-gradient norm, and
+        ``lm_head_grad_clip`` clips that gradient per token."""
         hidden, router_metrics = self(
             token_ids,
             mask=mask,
@@ -6394,7 +6402,13 @@ class Transformer(eqx.Module):
             )
             return ce(weight=loss_weight, reduction=reduction)
 
-        cross_entropy_loss = lm_loss(hidden if head_grad_probe is None else lm_head_grad_probe(hidden, head_grad_probe))
+        head_in = hidden
+        if head_grad_probe is not None:
+            clip = self.config.lm_head_grad_clip
+            # The loss is a mean over loss tokens, so the raw per-token gradient is the per-token one / N.
+            raw_clip = jnp.inf if clip is None else clip / jnp.maximum(jnp.sum(loss_weight.astype(jnp.float32)), 1.0)
+            head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(raw_clip, jnp.float32))
+        cross_entropy_loss = lm_loss(head_in)
         replay_loss = None
         if head_replay is not None:
             # Replay a stored (final hidden, label) batch through the lm_head only: the head's gradient is
@@ -6549,22 +6563,26 @@ FINAL_HIDDEN_KEY = "_final_hidden"
 
 
 @jax.custom_vjp
-def lm_head_grad_probe(h: Float[Array, "B S D"], probe: Float[Array, "B S"]) -> Float[Array, "B S D"]:
-    """Identity on ``h``. Backward passes ``h``'s cotangent through unchanged and returns each token's cotangent L2
-    norm (float32, over the hidden dim) as ``probe``'s cotangent, so differentiating w.r.t. a zeros ``probe``
-    reads the per-token gradient norms entering the lm_head with no host callback. A clipping variant would
-    rescale the cotangent here."""
-    del probe
+def lm_head_grad_probe(
+    h: Float[Array, "B S D"], probe: Float[Array, "B S"], raw_clip: Float[Array, ""]
+) -> Float[Array, "B S D"]:
+    """Identity on ``h``. Backward returns each token's cotangent L2 norm (float32, over the hidden dim, before
+    clipping) as ``probe``'s cotangent, so differentiating w.r.t. a zeros ``probe`` reads the per-token gradient
+    norms entering the lm_head with no host callback, and passes ``h``'s cotangent on clipped per token to norm
+    ``raw_clip`` (``g * min(1, raw_clip / ||g||)``; inf: unchanged)."""
+    del probe, raw_clip
     return h
 
 
-def _lm_head_grad_probe_fwd(h, probe):
+def _lm_head_grad_probe_fwd(h, probe, raw_clip):
     del probe
-    return h, None
+    return h, raw_clip
 
 
-def _lm_head_grad_probe_bwd(_, g):
-    return g, jnp.sqrt(jnp.sum(jnp.square(g.astype(jnp.float32)), axis=-1))
+def _lm_head_grad_probe_bwd(raw_clip, g):
+    norm = jnp.sqrt(jnp.sum(jnp.square(g.astype(jnp.float32)), axis=-1))
+    scale = jnp.minimum(1.0, raw_clip / norm)  # inf / 0 and c / 0 are inf: zero-gradient tokens keep scale 1
+    return (g * scale[..., None]).astype(g.dtype), norm, jnp.zeros_like(raw_clip)
 
 
 lm_head_grad_probe.defvjp(_lm_head_grad_probe_fwd, _lm_head_grad_probe_bwd)
