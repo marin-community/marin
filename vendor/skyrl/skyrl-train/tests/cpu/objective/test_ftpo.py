@@ -17,6 +17,7 @@ from transformers import PreTrainedTokenizerFast, Qwen2Config, Qwen2ForCausalLM
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.tests.test_launch_config import _raw_config
 
+from skyrl_train.batch_source import DriverBatchSource
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.group_admission import GroupAdvantageInvariant
 from skyrl_train.training_batch import TrainingBatchIterator
@@ -601,13 +602,13 @@ async def test_ftpo_empty_rollout_batch_skips_training(config):
     trainer.cfg = config
     trainer.all_timings = {}
     trainer.all_metrics = {}
+    trainer.context = None
     # No actors exist: an empty batch must not dispatch a forward or optimizer step.
-    status = await trainer._run_training(
-        {
-            "ftpo_chosen_mask": torch.zeros((2, 3, 2), dtype=torch.bool),
-            "loss_mask": torch.zeros((2, 3)),
-        }
+    source = DriverBatchSource(trainer, trainer.context)
+    source.prepare_from_batch(
+        {"ftpo_chosen_mask": torch.zeros((2, 3, 2), dtype=torch.bool), "loss_mask": torch.zeros((2, 3))}
     )
+    status = await trainer._run_training(source)
     assert status["policy_update_steps"] == 0
     assert trainer.all_metrics["ftpo/empty_batch"] == 1
 
