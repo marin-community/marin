@@ -82,8 +82,13 @@ is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. A gate step reads the pull
 request's size and file patches through the API: the review runs when the
 change has at least 250 changed lines or adds a class, dataclass, or
 `Protocol` under `lib/*/src/` or `experiments/`. The session runs the
-`review-pr-holistic` skill with the `pr-holistic-review` profile (Claude
-Fable) and posts one packet ending in `<!-- marin-holistic-review:<sha> -->`.
+`review-pr-holistic` skill with the `pr-holistic-review` profile and maintains
+one compact overview ending in
+`<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
+overview by comment ID, preserving finding numbers and updating their status.
+A separate new top-level comment may announce only new or materially changed
+actionable findings; it links to the overview and uses
+`<!-- marin-holistic-followup:<sha> -->` so it cannot become the overview.
 Unlike the correctness review, the workflow also launches on `synchronize`;
 runs for an earlier head are cancelled, and the session posts nothing when the
 delta since the last reviewed head is under 100 changed lines, touches only
@@ -95,34 +100,41 @@ session when a holistic packet is posted on a pull request carrying
 `agent-generated`, or when a maintainer review contains `deslop`. The session
 applies only the packet's mechanical items and the `noslop` skill, pushes one
 `Deslop` commit after the narrow checks pass, and replies with
-`<!-- marin-deslop:<sha> -->`. Pull requests without `agent-generated` receive
+`<!-- marin-deslop:<sha> -->`. The launcher's per-PR idempotency key permits
+one automatic deslop session; follow-up findings are advisory.
+Pull requests without `agent-generated` receive
 committable suggestions and no push. The holistic session ignores a head whose
 delta is only `Deslop` commits, which closes the review-then-deslop loop.
 
+## SkyRL migration checks
+
+`Marin - Unit` selects `skyrl-wheel` for SkyRL source, migration manifest, or
+tooling changes. It checks the nested project's lock, Marin library imports and
+constructor keywords, and built-wheel assets against the current source in an
+isolated environment. GPU smoke
+tests and the production launcher cutover remain separate gates; see
+`docs/dev-guide/skyrl-migration.md`.
+
+`Marin - SkyRL Nightly` runs OPD, Grug/Megatron and asynchronous GPU CatCount
+at 09:00 UTC. The Grug CUTLASS case runs weekly or by manual selection.
+`Marin - SkyRL CPU Nightly` runs CatCount learning and checkpoint/resume gates
+at 06:00 UTC. Both use the checked-out nested runtime and its independent lock.
+The GPU failure reporter retains the source tracking issue's title prefix so
+transferred failure history continues in the same issue.
+
 ## External dependency updates
 
-`ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
-MarinSkyRL projects at 00:17, 06:17, 12:17, and 18:17 UTC. It runs
-`uv run config/update-external.py` without a project selector, records each
-resolved version and commit in the job summary, and includes every upstream
-commit subject between the old and new revisions. It opens or refreshes one
-`automation/external-dependencies` pull request when generated state changes
-using the dedicated `marin-external-runtime-updater` GitHub App. The workflow
-checks the app author, branch, title, exact head SHA, and changed-file allowlist,
-then waits up to one hour for the four required main checks before squash
-merging. A failure or timeout leaves the pull request open and makes the
-scheduled workflow red.
+Harbor is maintained under `vendor/harbor`. The `harbor-unit` lane and local
+affected-test runner use `infra/ci/run_harbor_tests.py` to check its standalone
+lock before running offline runtime tests. Changes to its local Rigging and
+FineStore dependencies also select this lane.
 
-The app key is an environment secret released only to `main`; a pull-request
-workflow cannot receive it. The GitHub Pulumi stack gives the app a
-pull-request-only review bypass in both the current ruleset and the repository's
-imported classic protection, but no required-CI bypass. Organization admins
-retain their emergency bypass on both rulesets. Required checks are bound to
-the GitHub Actions integration, so the app cannot merge a failing update or
-supply the required contexts itself. An upstream commit is discovered within
-six hours under normal Actions scheduling; a green update lands in that run,
-while a blocked update raises a visible failure within the workflow's
-90-minute deadline.
+Evalchemy is maintained under `vendor/evalchemy` with its own lock and dedicated
+`evalchemy-unit` lane. Both vendored evaluators use local Rigging and FineStore.
+
+`ops-external-dependencies.yaml` is manual: it regenerates packaged external
+requirements and opens an update only when generated state changes. Vendored
+SkyRL, Evalchemy and Harbor source updates land directly in Marin.
 
 `ops-native-package-dependencies.yaml` applies the same policy to Marin's
 published native wheels. A successful non-PR `Marin - Release Packages` run

@@ -8,6 +8,8 @@ Campaign 2 adds exports that preserve at least 75% of the original Base scalar w
 
 Constrained exports keep a temporary `.merge-incomplete` marker until their change cap passes and the external audit is written and read back. Marin's checkpoint reader rejects marked directories. Successful finalization removes the marker, leaving exactly Base's original file inventory. Failed exports retain the marker and must not be served.
 
+Campaign 4 raises the measured changed-weight limit to 30% while retaining the routed-expert-only and byte-identical metadata rules. Its [reproduction guide](campaign4/README.md) documents the pinned parents, merge entry points, audit gate, and five fixed-policy evaluations.
+
 ## Static merge
 
 Download each parent checkpoint at the revision recorded in the recipe, preserving its sharded safetensors index. Replace the archived object-storage paths with your local paths and choose an empty output directory. `revision` records provenance; the reader does not resolve or verify a remote revision. Verify the downloaded revision before starting.

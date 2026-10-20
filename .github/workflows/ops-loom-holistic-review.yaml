@@ -103,7 +103,9 @@ jobs:
             ${{ github.event.pull_request.head.sha }} as a whole change. If the
             session worktree is at a different commit, fetch this exact SHA from
             origin and check it out detached before reviewing. Remain
-            read-only except for one GitHub comment. Run review-pr-holistic with
-            --comment and publish a typed result.
+            read-only except for creating or replacing the original holistic
+            overview comment and optionally creating one new top-level
+            comment with new or materially changed actionable findings. Run
+            review-pr-holistic with --comment and publish a typed result.
           base: ${{ github.event.pull_request.head.sha }}
           github-issue: ${{ github.event.pull_request.number }}

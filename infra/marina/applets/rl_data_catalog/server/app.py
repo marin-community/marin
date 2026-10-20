@@ -12,6 +12,7 @@ from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .curriculum import register_curriculum_routes, source_coverage
 from .schema import SCHEMA_SQL
 
 
@@ -106,11 +107,13 @@ def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) ->
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
+    register_curriculum_routes(api, engine)
 
     @api.get("/sources")
     def sources() -> dict[str, Any]:
         with engine.connect() as connection:
             metadata = loaded_catalog(connection)
+            coverage = source_coverage(connection)
             rows = connection.execute(
                 text(
                     """
@@ -137,6 +140,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         **row["declaration"],
                         "task_count": row["task_count"],
                         "curation": row["curation"],
+                        "coverage": coverage.get(row["id"]),
                         "assessment": {
                             "status": "complete" if row["assessment_key"] else row["latest_attempt_status"],
                             "pipeline_key": row["assessment_key"],

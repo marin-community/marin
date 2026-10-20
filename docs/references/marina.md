@@ -1,132 +1,145 @@
 # Building Marina apps
 
-Marina hosts small Marin web apps with authentication, an app directory,
-Postgres schemas, static assets, Python APIs, and browser journeys. Checked-in
-apps can also expose MCP tools and the Loom page-agent panel. Applets publish
-without rebuilding the Marina image.
+Marina hosts independently released application packages behind authentication.
+Frontends, Python backends and current revisions live in Postgres. Every application
+uses `marina release`; restarting or deploying Marina updates the base runtime and
+preserves application selections. Merging source does not release it or load its data.
 
-## Choose the app type
+## Choose the application shape
 
-| | Checked-in app | Dynamic applet |
-| --- | --- | --- |
-| Source | `infra/marina/apps/<name>/` | A directory containing `applet.toml` and `dist/` |
-| Delivery | PR and Marina image deployment | `marina publish`; retained, numbered revisions |
-| URL | `/<name>/` on Marina | `/a/<uuid>/` on an isolated applet origin |
-| Backend factory | `create_api(services)` returns `registered_api(api)` | `create_api(services)` returns an ASGI app |
-| Migration | `migrate(engine)` at deploy | `migrate(connection)` inside the publish transaction |
-| Refresh work | Manifest-declared scheduled jobs | Explicit loader or bounded request-driven refresh; no background workers |
+Use a static package for a report, a Python backend for validated APIs, and a named
+application when it needs stable named routes, scheduled jobs or the Loom panel for
+asking an agent to work on the application. These
+are capabilities of the same release mechanism. Maintained source under
+`infra/marina/apps/` and `infra/marina/applets/` follows the same workflow.
 
-Use a checked-in app for apps you expect to update regularly or that peers will
-maintain. This keeps the source, review history, and deployment path in the
-repository. Also choose a checked-in app when it needs scheduled ingestion, new
-server dependencies, or Marina's MCP and page-agent integrations. Use an applet
-for a small report, explorer, or tool that needs independent publishing. Applet
-backends use packages already installed in Marina and run as trusted plugins,
-not sandboxes.
+Ordinary applets have stable `/a/<uuid>/` URLs on an isolated origin. Named apps such
+as Echo and EvalDash retain `/echo/` and `/evaldash/` on Marina. Initial named registration
+requires an operator. External storage URLs and job credentials need explicit base-runtime
+configuration; uploaded packages cannot allocate infrastructure or grant themselves
+new credentials.
 
-## Build and try it
+Python backends are trusted plugins sharing Marina's dependencies, process,
+resources and service identity. Applications needing separate dependencies,
+credentials or failure isolation need their own service project under the
+[infrastructure conventions](https://github.com/marin-community/marin/blob/main/infra/pulumi.md).
 
-For an applet, start with the
-[Vue starter](https://github.com/marin-community/marin/tree/main/infra/marina/examples/vue-applet)
-or the [Postgres backend example](https://github.com/marin-community/marin/tree/main/infra/marina/examples/problem-set-applet).
-Give `applet.toml` a readable title and one or two sentences describing its use.
-Use plain HTML/JavaScript for a single view, or Vue/Vite for substantial UI state.
-Keep Vite's base at `"./"`, use hash routing, and use relative asset and API URLs.
-Bundle scripts locally; executable inline scripts and third-party CDNs are blocked.
-Commit `package-lock.json` when the build uses `npm ci`.
+## Build and release
+
+Start with `infra/marina/examples/problem-set-applet/` for Python/Postgres or
+`infra/marina/examples/vue-applet/` for Vue. A package contains `applet.toml`,
+`dist/index.html`, browser assets, and optional Python modules. Maintained source
+declares its stable `applet_id` UUID and optional repository-relative
+`source_paths` for shared build inputs in the same `applet.toml`.
 
 ```bash
-uv run marina validate my-applet
-uv run marina publish my-applet --local  # disposable Postgres and loopback server
+uv run marina validate my-app
+uv run marina release my-app --dry-run --json
+uv run marina release my-app --local --json
 ```
 
-Exercise the page, API, and a database read/write while the local process runs.
-Ctrl-C stops it and removes its database. `validate` alone checks packaging and
-backend imports; it does not run migrations, the factory, or browser interactions.
-When ready to publish to Marina:
+Preview opens a disposable Postgres-backed local stack. Exercise the UI and API at
+the printed revision URL, then stop the stack with Ctrl-C. Production releases from
+maintained source default to a clean checkout at the current remote main:
 
 ```bash
-uv run marina publish my-applet --json
-uv run marina publish my-applet --update <uuid> --base-version <current>
+uv run marina release-status my-app --json
+uv run marina applets versions UUID --json
+uv run marina release my-app --base-version CURRENT_VERSION --json
 ```
 
-For a checked-in app, add `app.toml`, `web/`, and optional `app.py`. Follow the
-[adding-an-app reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md#adding-an-app)
-for bundler aliases, registered APIs, and job declarations. Set
-`MARINA_DATABASE_URL` to local Postgres when the app uses a database, then run:
+Add `--allow-dirty` to release branch or uncommitted source to the selected
+server. This bypasses the Git checks and omits verified source metadata, so
+`release-status` reports `unrecorded` from a clean checkout. Use `--local` for a disposable preview.
 
-```bash
-uv run marina build --only <name>
-uv run marina migrate
-uv run marina dev
-uv run marina journey <name>
-```
+The first release uses `--base-version 0`. Each later release requires the inspected
+current revision. Release builds from empty output, validates Python imports, runs
+the application's migration and atomically selects the new package. Old frontend
+assets and backend revisions remain available within the retention window. Failed
+migrations roll back their database changes and leave the prior revision selected.
+The stable UUID and existing access mode are preserved.
 
-Use the [shared frontend kit](https://github.com/marin-community/marin/blob/main/infra/marina/web/README.md):
-`Shell` supplies the title, searchable app drawer, navigation slot, and optional
-agent panel for checked-in apps. `AppBar` supplies navigation without kernel
-fetches for isolated Vue applets. Pass its `home` URL explicitly; do not expose
-the private directory API to public applets.
+Ad hoc directories without a Git repository use the same command. Their first
+`release --base-version 0` returns a UUID; later releases supply `--id UUID` and
+`--base-version CURRENT_VERSION`. Declare `applet_id` in `applet.toml` when maintaining the source.
+
+`release-status` compares recorded source trees, distinguishes local edits, and
+reports `unrecorded` for packages without provenance. Declared shared build inputs
+are included in the comparison; installed runtime dependencies also affect behavior. Source checks are operator
+safeguards; server authentication and version checks remain authoritative. Any
+internal Marina user can update, change the access mode, roll back or archive an
+existing application. Publisher identity records attribution without restricting
+access. Initial named registration and host bindings still require an operator.
+
+For source layouts, manifests, auth, runtime configuration and the first production
+handover, see the [Marina reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md).
+
+## Frontend and API
+
+Use relative asset/API URLs in UUID applets. Vue/Vite packages use `base: "./"` and
+hash routing so stable and versioned URLs both work. Bundle dependencies into
+`dist/`; executable inline scripts and third-party script CDNs are blocked.
+
+Named applications keep their existing router and API prefixes. They can consume
+[shared browser components](https://github.com/marin-community/marin/blob/main/infra/marina/web/README.md) at build time, including
+navigation and the agent panel. Updating those components requires releasing the
+consuming app; the base runtime does not ship frontend code.
+
+A Python factory returns an ASGI application, or `marina.apps.registered_api(api)`
+for explicitly annotated MCP operations. The factory's `services` argument supplies the selected applet UUID,
+revision, name, data URL and a role-scoped `engine()`. Read authenticated identity
+through `rigging.server_auth.get_verified_identity()`.
+
+An optional `migrate(connection)` receives the release transaction's SQLAlchemy
+Connection. It must not commit independently. Keep migrations compatible with
+retained revisions and running old requests/jobs. Shared extensions belong to base
+provisioning. A Marina runtime restart never reruns application migrations.
 
 ## Load and cache data
 
-Use `services.engine()` to create one SQLAlchemy engine in the backend factory
-for the app's existing Postgres schema. Use that engine in request handlers and
-transactions; do not provision a separate database.
+Choose the serving data path before building the backend:
 
-| Data | Storage and serving approach |
-| --- | --- |
-| User edits, votes, annotations, plans | Postgres is authoritative. Read and write it through the API. |
-| Catalogs, filterable metadata, summaries reused across instances | Load into Postgres once per source revision. Serve indexed queries or a bounded in-memory snapshot read from Postgres. |
-| Expensive object listings or remote API results | Cache on demand in Postgres when reuse justifies it. Record source version, fetch time, expiry, and refresh status. |
-| Small immutable report or evidence snapshot | Bundle with the applet; no second database copy needed. |
-| Large archives, media, Parquet payloads | Keep in object storage; index metadata in Postgres and fetch bounded previews or selected rows. |
-| Live telemetry | Query its source or use a short TTL with visible age. A startup snapshot becomes stale. |
+- Keep mutable state, reusable catalogs, filter indexes and summaries in the
+  application's Postgres schema. A process cache disappears on restart.
+- Load remote datasets separately from serving. Read a bounded committed snapshot
+  when useful; never scan buckets or rebuild a catalog in a backend factory.
+- Run refreshes in an explicit loader or a released scheduled-job module. Base
+  configuration controls runner capacity, schedule and allowed credentials.
+- Key caches by source version and query, record freshness, and serialize
+  competing refreshes in Postgres. Preserve the last complete snapshot on failure.
+- Keep large payloads in object storage, small immutable reports in the package,
+  and live telemetry fresh through source queries or short TTLs.
 
-For small scalar tables, load a local JSON array, JSONL, CSV, or Parquet file:
+For small scalar datasets:
 
 ```bash
-uv run marina applets table load <uuid> observations rows.parquet --url <origin>
-uv run marina applets sql <uuid> 'SELECT * FROM observations LIMIT 20' --url <origin>
+uv run marina applets table load UUID observations rows.parquet --url ORIGIN
+uv run marina applets sql UUID 'SELECT * FROM observations LIMIT 20' --url ORIGIN
 ```
 
-Use the printed local origin and UUID while `publish --local` runs, or
-`https://marina.oa.dev` for production. Omitting `--url` targets production.
+Omitting `--url` targets production. Use the printed origin/UUID while a local
+preview runs. Loading without `--replace` appends. `--replace` drops the table before
+separate inserts; a live catalog needs staged loading and an atomic selection.
+See [Atlas](rl-data-atlas.md) for a code release plus explicit catalog-load workflow.
 
-Repeated loads append rows. `--replace` drops and recreates the table, then
-inserts batches in separate requests; it is not an atomic live-catalog refresh.
-Use it for disposable or offline tables. For a live catalog, stage a new load,
-validate it, and select it with a current-version pointer in one transaction.
-See the [Atlas loader](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/load.py).
-Retained applet revisions share the same mutable schema, so migrations and
-refreshes must remain compatible with them.
+## Operate
 
-Keep ingestion separate from serving:
+MCP discovery, named routes, directory entries and agent configuration follow the
+selected Postgres revision without a restart. Jobs snapshot and materialize their
+released packages before execution; an in-flight job keeps its snapshot while the
+next execution selects newly released code.
 
-- Run remote scans and parsing in an explicit loader or a checked-in app's
-  scheduled job. Use migrations for schema changes and small seeds.
-- At startup, connect to Postgres and read a bounded committed snapshot if useful.
-  Do not scan buckets or rebuild a catalog in `create_api`; checked-in factories
-  affect the whole service's startup, and applet factories run on first use.
-- Key cached data by source identity/version and query parameters. Invalidate
-  process-local snapshots using a database generation or bounded TTL.
-- Serialize competing refreshes in Postgres. Keep the last complete snapshot
-  available on refresh failure and expose its age and error. Do not report an
-  unavailable source as a successful empty refresh.
+```bash
+uv run marina applets versions UUID --json
+uv run marina applets rollback UUID RETAINED_REVISION
+uv run marina applets archive UUID
+```
 
-[EvalDash](https://github.com/marin-community/marin/blob/main/infra/marina/apps/evaldash/README.md)
-shows scheduled ingestion, atomic catalog generations, and serving-instance
-refreshes. In-memory caches are per worker and disappear on restart; applets
-cannot rely on lifespan events, background workers, or local disk persistence.
+Rollback explicitly selects a retained package; database migrations are not reversed.
+The registry retains the current revision and four other recent revisions. A runtime
+rollback must still support the active package APIs and dependency requirements.
 
-## Access and limits
-
-Applets are private by default. Public mode exposes frontend files and GET/HEAD
-backend routes without login; it does not expose browser SQL. Serve public data
-through a read-only backend. Private browser SQL supports one parameterized
-statement, bounded to 10,000 rows, 5 MiB, and 10 seconds. Prefer a backend for
-authorization, validation, or multi-statement transactions.
-
-Applet packages are limited to 25 MiB total, 8 MiB per file, and 2,000 files.
-See the [Marina reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md)
-for authentication, deployment, publishing, rollback, and schema ownership.
+Applets default to private. Public mode exposes GET/HEAD only on the public applet
+origin and must contain only data and trusted handlers intended for unrestricted
+access. Named apps stay private. See the [reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md)
+for mode changes, query limits, deployment gates and recovery.

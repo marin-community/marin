@@ -98,6 +98,9 @@ storage:
 # iris-controller-env Secret, which task pods do not mount. Rotate with
 # `iris cluster init-keys --rotate`.
 auth:
+  principal_directory:
+    - env:IRIS_PRINCIPAL_DIRECTORY
+    - gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
   signing_key:
     - env:IRIS_SIGNING_KEY
     - gcp-secret://projects/748532799086/secrets/iris-cw-us-east-02a-signing-key/versions/1
@@ -112,6 +115,7 @@ auth:
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
   allowed_submitters:
+    - principal:human-080
     - "*@openathena.ai"
     - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
@@ -121,7 +125,7 @@ kubernetes_provider:
   namespace: iris
   node_health:
     storage:
-      scratch: s3://marin-us-east-02a/tmp/ttl=1d/iris-node-health/cw-us-east-02a
+      scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-02a
       minimum_healthy_nodes: 2
     max_cordoned_nodes: 1
   host_network: true                # Required for NCCL/IB multi-host traffic
@@ -152,10 +156,7 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
-    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
-    # data under s3://marin-na/ is not reachable from jobs unless they override
-    # AWS_ENDPOINT_URL and credentials themselves.
+    # Durable outputs remain in 02A; shared scratch uses the separate 08A bucket.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
@@ -232,6 +233,7 @@ user_budgets:
       - benjaminfeuer
       - david.hall@openathena.ai
       - dlwh
+      - david.lundgren@openathena.ai
       - mark.muchane@openathena.ai
       - muchanem
       - matt.wittmann@openathena.ai

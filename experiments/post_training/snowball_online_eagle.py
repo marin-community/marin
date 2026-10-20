@@ -33,7 +33,6 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRun,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -144,7 +143,7 @@ def online_eagle_step(preset: _OnlineEaglePreset) -> ArtifactStep[SkyRLRun]:
             name=name,
             version=version,
             config_yaml=plan.config_yaml,
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=TARGET_MODEL,
                 tokenizer_uri=TARGET_TOKENIZER,

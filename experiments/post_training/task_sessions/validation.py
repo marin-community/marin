@@ -23,7 +23,6 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRun,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -164,7 +163,7 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
             name=user_owned_name(f"{RUN_NAME}/{mode}/{recipe_fingerprint}"),
             version=version,
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=adopted_model,
                 relative_path="",
