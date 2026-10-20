@@ -18,7 +18,7 @@ from cloud.iris.runtime_bundle import resolve_launcher_source
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
 from marinskyrl.remote_io import filesystem_and_path
 from marinskyrl.task_machine_factories import task_machine_factories
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.token_prefix import TokenPrefixHarness
@@ -28,10 +28,11 @@ from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from skyrl_gym.verification import VerificationResult, VerificationStatus, normalized_verifier_score
 from skyrl_train.dataset.tasks import TaskDataset
 from skyrl_train.hf_export_schema import HFExportRequest
-from skyrl_train.tokenizer import tokenizer_from_config
+from skyrl_train.tokenizer import create_tokenizer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ScriptGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
+from transformers import PreTrainedTokenizerBase
 
 from experiments.post_training.snowball_inventory_probe import package_revisions
 
@@ -94,6 +95,15 @@ async def grader_canaries(specs: dict[str, TaskRolloutSpec], factories: dict) ->
     return checks
 
 
+def preflight_tokenizer(config: DictConfig) -> PreTrainedTokenizerBase:
+    """Load pinned tokenizer metadata before the GPU task stages the model directory."""
+    return create_tokenizer(
+        model_path=str(config.inputs.model.tokenizer_uri),
+        revision=str(config.inputs.model.tokenizer_revision),
+        disable_fast_tokenizer=bool(config.skyrl.trainer.disable_fast_tokenizer),
+    )
+
+
 def preflight(request: dict) -> dict:
     config = load_document(request["launch_config_yaml"])
     if config.runtime.entrypoint != "skyrl_train.entrypoints.main_generate" or config.run.export_hf:
@@ -104,7 +114,7 @@ def preflight(request: dict) -> dict:
     config.skyrl.data.train_data = []
     revisions = package_revisions()
     model = verify_model(str(config.inputs.model.uri))
-    tokenizer = tokenizer_from_config(config.skyrl)
+    tokenizer = preflight_tokenizer(config)
     sessions = config.skyrl.environment.task_sessions
     factories = task_machine_factories(sessions)
     token_prefix = TokenPrefixHarness(**dict(sessions.token_prefix))

@@ -5,16 +5,22 @@
 
 import json
 
+import pytest
 from rolloutengine.harness.shell import task_prompt
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
-from skyrl_gym.rollout_specs import shell_harness
 from taskcompendium.models import ConversationInput, EnvironmentRequirements, ScriptGrader, Source, TaskSpec, TextMessage
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.snowball_inventory_validation import GRADER_IMAGE, restored_script_rollout
 
-
+@pytest.mark.manual
 def test_restored_source_preserves_grader_machine_limits_and_model_request():
+    from skyrl_gym.rollout_specs import shell_harness  # noqa: PLC0415 - optional frozen runtime dependency
+
+    from experiments.post_training.snowball_inventory_validation import (  # noqa: PLC0415
+        GRADER_IMAGE,
+        restored_script_rollout,
+    )
+
     config = {"contract": {"dataset": "ultra_sft_step3200_calendar_v2", "exp_cal_state": {"private": "reference"}}}
     task = TaskSpec(
         id="heldout-calendar",
