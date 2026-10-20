@@ -1303,15 +1303,27 @@ def segmented_flash_attention_forward_sm100_launcher(
     head_dim_v: int,
     qhead_per_kvhead: int,
     config: Flash4CuteSm100ForwardConfig,
+    use_rel_bias: bool = False,
 ) -> Any:
-    """Adapt packed masks and JAX layouts to upstream FA4 SM100 forward."""
+    """Adapt packed masks and JAX layouts to upstream FA4 SM100 forward.
+
+    With ``use_rel_bias`` the launcher takes the banded Inkling bias (kernel layout ``[S, W, Hq, B]``) after the
+    block-sparse metadata and adds it to the in-band score tiles.
+    """
+    _validate_sm100_forward_config(config, use_rel_bias=use_rel_bias)
     deps = _import_cute_dependencies(modules)
     cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
-    native = importlib.import_module("flash_attn.cute.flash_fwd_sm100")
     sparsity = importlib.import_module("flash_attn.cute.block_sparsity")
     utils = importlib.import_module("flash_attn.cute.utils")
+    if use_rel_bias:
+        forward_cls = importlib.import_module(
+            "levanter.grug.attention._fa4_cute_inkling_fwd_sm100"
+        ).InklingFlashAttentionForwardSm100
+    else:
+        forward_cls = importlib.import_module("flash_attn.cute.flash_fwd_sm100").FlashAttentionForwardSm100
     _patch_jax_array_list_tvm_ffi_converter()
-    forward = native.FlashAttentionForwardSm100(
+    _as_gmem_tensor = _native_gmem_tensor_view(modules)
+    forward = forward_cls(
         head_dim,
         head_dim_v,
         qhead_per_kvhead=qhead_per_kvhead,
@@ -1323,11 +1335,44 @@ def segmented_flash_attention_forward_sm100_launcher(
         q_stage=config.q_stage,
         # Keep the schedule measured in the hero comparison; persistent scheduling is unmeasured here.
         is_static_persistent=False,
+        # A non-None sentinel selects the score-mod path the Inkling subclass overrides.
+        score_mod="inkling_inline" if use_rel_bias else None,
         mask_mod=_native_segment_mask_mod(modules),
         has_aux_tensors=True,
     )
 
     _broadcast_heads = _native_broadcast_heads(modules)
+
+    @cute.jit
+    def _launch_with_bias(
+        stream: cuda.CUstream,
+        q: cute.Tensor,
+        k: cute.Tensor,
+        v: cute.Tensor,
+        lower_bounds: cute.Tensor,
+        valid: cute.Tensor,
+        q_offset: cute.Tensor,
+        partial_count: cute.Tensor,
+        partial_index: cute.Tensor,
+        full_count: cute.Tensor,
+        full_index: cute.Tensor,
+        rel_bias: cute.Tensor,
+        out: cute.Tensor,
+        lse: cute.Tensor,
+        *,
+        softmax_scale: cutlass.Float32,
+    ):
+        _run(
+            stream,
+            q,
+            k,
+            v,
+            (lower_bounds, valid, q_offset, _as_gmem_tensor(rel_bias)),
+            (partial_count, partial_index, full_count, full_index),
+            out,
+            lse,
+            softmax_scale,
+        )
 
     @cute.jit
     def _launch(
@@ -1347,6 +1392,21 @@ def segmented_flash_attention_forward_sm100_launcher(
         *,
         softmax_scale: cutlass.Float32,
     ):
+        _run(
+            stream,
+            q,
+            k,
+            v,
+            (lower_bounds, valid, q_offset),
+            (partial_count, partial_index, full_count, full_index),
+            out,
+            lse,
+            softmax_scale,
+        )
+
+    # Traced inline by both launchers.
+    def _run(stream, q, k, v, aux_tensors, sparse_metadata, out, lse, softmax_scale):
+        partial_count, partial_index, full_count, full_index = sparse_metadata
         q_bshd = cute.make_tensor(q.iterator, cute.select(q.layout, mode=(3, 0, 2, 1)))
         k_bshd = cute.make_tensor(k.iterator, cute.select(k.layout, mode=(3, 0, 2, 1)))
         v_bshd = cute.make_tensor(v.iterator, cute.select(v.layout, mode=(3, 0, 2, 1)))
@@ -1364,12 +1424,22 @@ def segmented_flash_attention_forward_sm100_launcher(
             out_bshd,
             lse,
             softmax_scale,
-            aux_data=utils.AuxData(tensors=(lower_bounds, valid, q_offset)),
+            aux_data=utils.AuxData(tensors=aux_tensors),
             blocksparse_tensors=sparse,
             stream=stream,
         )
 
-    return _launch
+    return _launch_with_bias if use_rel_bias else _launch
+
+
+def _validate_sm100_forward_config(config: Flash4CuteSm100ForwardConfig, *, use_rel_bias: bool) -> None:
+    if not use_rel_bias:
+        return
+    tile_m, tile_n = config.tile
+    if tile_m != REL_BIAS_BLOCK or REL_BIAS_BLOCK % tile_n != 0:
+        raise ValueError(
+            f"the banded bias needs the SM100 forward tile to be ({REL_BIAS_BLOCK}, a divisor of it), got {config.tile}"
+        )
 
 
 def _native_broadcast_heads(modules: Any) -> Any:

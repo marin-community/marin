@@ -4,11 +4,11 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-# Query heads per KV head validated for the native SM100 forward and backward kernels.
-SM100_GQA_RATIOS = (4, 6, 8)
-# The native SM100 backward is also validated for MHA (MLA decompressed to full heads) and for MLA sharing one
-# KV head across 12 or 72 query heads, with or without the banded Inkling bias.
-SM100_BACKWARD_GQA_RATIOS = (1, *SM100_GQA_RATIOS, 12, 72)
+# Query heads per KV head validated for the native SM100 forward and backward kernels (1: MHA, the MLA layout).
+SM100_GQA_RATIOS = (1, 4, 6, 8)
+# The native SM100 backward is also validated for MLA sharing one KV head across 12 or 72 query heads, with or
+# without the banded Inkling bias.
+SM100_BACKWARD_GQA_RATIOS = (*SM100_GQA_RATIOS, 12, 72)
 # Q/K and V head dimension supported by the native SM100 kernels.
 SM100_HEAD_DIM = 128
 
