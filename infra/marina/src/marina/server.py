@@ -76,6 +76,7 @@ from marina.runtime import RuntimeConfig, load_runtime_config
 
 INDEX_FILE = "index.html"
 DIRECTORY_PAGE_SIZE = 50
+DIRECTORY_CACHE_CONTROL = "private, no-store"
 # A file committed as `x.gz` is served at `x` with a Content-Encoding header, so a large
 # static asset can live in the repository compressed.
 PRECOMPRESSED_SUFFIX = ".gz"
@@ -796,7 +797,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                     *applet_directory(applet_store, config.applet_origin, config.public_applet_origin),
                 ]
             },
-            headers={"Cache-Control": "private, no-store"},
+            headers={"Cache-Control": DIRECTORY_CACHE_CONTROL},
         )
 
     @api.get("/api/marina/applets")
@@ -804,7 +805,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     def list_applets() -> JSONResponse:
         return JSONResponse(
             {"applets": applet_directory(applet_store, config.applet_origin, config.public_applet_origin)},
-            headers={"Cache-Control": "private, no-store"},
+            headers={"Cache-Control": DIRECTORY_CACHE_CONTROL},
         )
 
     @api.get("/api/marina/me")
@@ -884,7 +885,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             landing_page(
                 applet_directory(applet_store, config.applet_origin, config.public_applet_origin), sort, order, page
             ),
-            headers={"Cache-Control": "private, no-store"},
+            headers={"Cache-Control": DIRECTORY_CACHE_CONTROL},
         )
 
     @api.post("/api/marina/applets")
