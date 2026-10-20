@@ -73,6 +73,8 @@ def _prep_cfg(**kw) -> PrepConfig:
         tail_block_d=32,
         tail_num_warps=4,
         interpret=False,
+        chunks=1,
+        chunk_stages=1,
     )
     base.update(kw)
     return PrepConfig(**base)
@@ -123,6 +125,9 @@ def _kernel_benches(sweep: bool):
     _report("seg_decay_fwd", jax.jit(lambda a, p, b: prep_mod._seg_decay_fwd_call(a, (p, b), starts, pcfg)), a, *gate)
     _report("prep_fwd (primal, w4)", prep_fwd(pcfg, False), q, k, v, gseg, beta)
     _report("prep_fwd (save_t, w4)", prep_fwd(pcfg, True), q, k, v, gseg, beta)
+    for cpb, st in ((2, 2), (4, 2), (4, 3), (8, 2), (8, 3)):
+        cfg = _prep_cfg(chunks=cpb, chunk_stages=st)
+        _report(f"prep_fwd (save_t, w4, c{cpb} s{st})", prep_fwd(cfg, True), q, k, v, gseg, beta)
 
     *outs, t = prep_fwd(pcfg, True)(q, k, v, gseg, beta)
     prep = ChunkPrep(*outs)
@@ -178,6 +183,9 @@ def _kernel_benches(sweep: bool):
         )
 
     _report("prep_bwd (wy + tail + seg, w4/w4 tail b32)", prep_bwd(pcfg), q, k, v, a, beta, *gate, t, cts)
+    for cpb, st in ((2, 2), (4, 2), (4, 3), (8, 2), (8, 3)):
+        cfg = _prep_cfg(chunks=cpb, chunk_stages=st)
+        _report(f"prep_bwd (c{cpb} s{st})", prep_bwd(cfg), q, k, v, a, beta, *gate, t, cts)
     if sweep:
         for tb, tw in ((64, 4), (128, 4), (64, 8), (16, 4)):
             cfg = _prep_cfg(tail_block_d=tb, tail_num_warps=tw)
@@ -198,14 +206,15 @@ def _layer_benches():
         state_grads=StateGrads.PALLAS,
         state_block_v=64,
     )
+    lean = dict(state_primal_block_v=64, state_num_stages=3)
+    bf16 = dict(state_saved_dtype=jnp.bfloat16, state_grads_chunks=8, state_grads_num_stages=2)
     variants = {
         "current": {},
-        "lean primal bv64": dict(state_primal_block_v=64),
-        "lean + grads c4 s2": dict(state_primal_block_v=64, state_grads_chunks=4, state_grads_num_stages=2),
-        "lean + grads c8 s3": dict(state_primal_block_v=64, state_grads_chunks=8, state_grads_num_stages=3),
-        "lean + grads c4 s2 + bf16 saved": dict(
-            state_primal_block_v=64, state_grads_chunks=4, state_grads_num_stages=2, state_saved_dtype=jnp.bfloat16
-        ),
+        "lean s3": lean,
+        "lean s3 + prep c4 s2": dict(lean, prep_chunks=4, prep_chunk_stages=2),
+        "lean s3 + prep c8 s2": dict(lean, prep_chunks=8, prep_chunk_stages=2),
+        "lean s3 + bf16 saved grads c8 s2": dict(lean, **bf16),
+        "lean s3 + bf16 saved + prep c4 s2": dict(lean, **bf16, prep_chunks=4, prep_chunk_stages=2),
     }
     for name, extra in variants.items():
         kw = dict(base, **extra)
@@ -254,7 +263,8 @@ def _parity():
     names = ("dq", "dk", "dv", "da", "dbeta", "drate", "dbias")
     for vname, extra in (
         ("lean primal", dict(state_primal_block_v=64)),
-        ("grads c4 s2", dict(state_grads_chunks=4, state_grads_num_stages=2)),
+        ("lean s3", dict(state_primal_block_v=64, state_num_stages=3)),
+        ("prep c4 s2", dict(prep_chunks=4, prep_chunk_stages=2)),
         ("bf16 saved", dict(state_saved_dtype=jnp.bfloat16)),
     ):
         primal, out, grads = run(dict(base, **extra))

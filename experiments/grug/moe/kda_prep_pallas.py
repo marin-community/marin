@@ -72,6 +72,8 @@ class PrepConfig(NamedTuple):
     tail_block_d: int
     tail_num_warps: int
     interpret: bool
+    chunks: int  # chunks per program: a loop the compiler software-pipelines when > 1 (``_chunked_call``)
+    chunk_stages: int  # pipeline stages of that loop
 
 
 def _iota2_rows(n: int, m: int) -> jax.Array:
@@ -674,6 +676,96 @@ def _seg_decay_bwd_kernel(g_ref, *refs, gated):
     dg_ref[...] = da.astype(dg_ref.dtype)
 
 
+class _ChunkView:
+    """One chunk of a multi-chunk block, indexed like the single-chunk ref a kernel expects.
+
+    ``rows``: the chunk is rows ``j*c .. j*c + c`` of the block's first dim (model-layout and per-row
+    tensors); otherwise it is index ``j`` of a leading chunk dim (the internal ``(G, n, ...)`` tensors)."""
+
+    def __init__(self, ref, j, c: int, rows: bool):
+        self.ref, self.j, self.c, self.rows = ref, j, c, rows
+        self.dtype = ref.dtype
+        self.shape = (c, *ref.shape[1:]) if rows else tuple(ref.shape[1:])
+
+    def _index(self, idx):
+        idx = idx if isinstance(idx, tuple) else (idx,)
+        if Ellipsis in idx:
+            at = idx.index(Ellipsis)
+            idx = (*idx[:at], *(slice(None),) * (len(self.shape) - len(idx) + 1), *idx[at + 1 :])
+        idx = (*idx, *(slice(None),) * (len(self.shape) - len(idx)))
+        if not self.rows:
+            return (self.j, *idx)
+        base = pl.multiple_of(self.j * self.c, self.c)
+        first = idx[0]
+        if isinstance(first, slice):
+            if first != slice(None):
+                raise NotImplementedError(f"python slice {first} on a chunk view")
+            first = pl.ds(base, self.c)
+        elif hasattr(first, "size"):  # pl.ds
+            first = pl.ds(base + first.start, first.size)
+        else:
+            first = base + first
+        return (first, *idx[1:])
+
+    def __getitem__(self, idx):
+        return self.ref[self._index(idx)]
+
+    def __setitem__(self, idx, value):
+        self.ref[self._index(idx)] = value
+
+
+def _chunked_call(kernel, cfg: PrepConfig, *, grid, in_specs, out_specs, num_warps: int, **kw):
+    """``pl.pallas_call`` of a one-chunk kernel over a ``(G, n)`` grid, with ``cfg.chunks`` consecutive chunks
+    per program: every block spec that walks the chunk grid axis is widened ``cfg.chunks``-fold and the kernel
+    runs once per chunk on ``_ChunkView`` s inside a ``fori_loop`` (``cfg.chunk_stages`` pipeline stages). Same
+    math; only the program blocking changes."""
+    cpb, c = cfg.chunks, cfg.chunk_size
+    if cpb == 1:
+        return pl.pallas_call(
+            kernel,
+            grid=grid,
+            in_specs=in_specs,
+            out_specs=out_specs,
+            compiler_params=plt.CompilerParams(num_warps=num_warps, num_stages=1),
+            **kw,
+        )
+    gb, n = grid
+    if n % cpb:
+        raise ValueError(f"{n} chunks do not split into programs of {cpb}")
+    single = not isinstance(out_specs, (list, tuple))
+    kinds = []
+
+    def widen(spec):
+        probe = spec.index_map(0, 1)
+        axis = next((i for i, x in enumerate(probe) if not isinstance(x, int) or x != 0), None)
+        if axis is None:  # e.g. per-head parameter rows: shared by every chunk
+            kinds.append(None)
+            return spec
+        shape = list(spec.block_shape)
+        kinds.append(shape[axis] is not None)
+        shape[axis] = cpb if shape[axis] is None else cpb * shape[axis]
+        return pl.BlockSpec(tuple(shape), spec.index_map)
+
+    in_specs = [widen(x) for x in in_specs]
+    out_specs = [widen(x) for x in ([out_specs] if single else out_specs)]
+
+    def body(*refs):
+        def one(j, carry):
+            kernel(*(r if k is None else _ChunkView(r, j, c, k) for r, k in zip(refs, kinds, strict=True)))
+            return carry
+
+        lax.fori_loop(0, cpb, one, 0)
+
+    return pl.pallas_call(
+        body,
+        grid=(gb, n // cpb),
+        in_specs=in_specs,
+        out_specs=out_specs[0] if single else out_specs,
+        compiler_params=plt.CompilerParams(num_warps=num_warps, num_stages=cfg.chunk_stages),
+        **kw,
+    )
+
+
 def _specs(c: int, *dims: int):
     """Blocks of the internal per-chunk tensors, laid out ``(G, n, ...)``."""
     return [pl.BlockSpec((None, None, c, d), lambda gi, ni: (gi, ni, 0, 0)) for d in dims]
@@ -789,7 +881,7 @@ def _prep_fwd_call(q, k, v, g, beta, gate, starts, erase, cfg: PrepConfig, save_
         kernel = functools.partial(_prep_fwd_sub_kernel, sub=cfg.sub_chunk)
     else:
         kernel = _prep_fwd_kernel
-    return pl.pallas_call(
+    return _chunked_call(
         functools.partial(
             kernel,
             mm_dtype=mmd,
@@ -799,7 +891,9 @@ def _prep_fwd_call(q, k, v, g, beta, gate, starts, erase, cfg: PrepConfig, save_
             segmented=segmented,
             erased=erased,
         ),
+        cfg,
         grid=(gb, n),
+        num_warps=cfg.num_warps,
         in_specs=[
             *_seq_specs(c, heads, dk),
             *_seq_specs(c, heads, dk, dv, group=group),
@@ -811,7 +905,6 @@ def _prep_fwd_call(q, k, v, g, beta, gate, starts, erase, cfg: PrepConfig, save_
         ],
         out_specs=out_specs,
         out_shape=out_shape,
-        compiler_params=plt.CompilerParams(num_warps=cfg.num_warps, num_stages=1),
         interpret=cfg.interpret,
         name="kda_prep_fwd",
     )(q, k, v, g, beta, *(gate or ()), *(() if starts is None else (starts,)), *(() if erase is None else (erase,)))
@@ -855,14 +948,16 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
         wy_kernel = functools.partial(_wy_bwd_sub_kernel, sub=cfg.sub_chunk)
     else:
         wy_kernel = _wy_bwd_kernel
-    dv, dkbe, dkd, dqi, dbeta_v = pl.pallas_call(
+    dv, dkbe, dkd, dqi, dbeta_v = _chunked_call(
         functools.partial(
             wy_kernel,
             mm_dtype=mmd,
             l2norm=cfg.l2norm,
             **flags,
         ),
+        cfg,
         grid=(gb, n),
+        num_warps=cfg.bwd_num_warps,
         in_specs=[
             *_seq_specs(c, heads, dk),
             *_seq_specs(c, heads, dk, dv_dim, group=group),
@@ -879,11 +974,10 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
             internal(c, dk),
             internal(c),
         ],
-        compiler_params=plt.CompilerParams(num_warps=cfg.bwd_num_warps, num_stages=1),
         interpret=cfg.interpret,
         name="kda_prep_bwd_wy",
     )(q, k, v, g, beta, *extra, t, cts.k_cumdecay, cts.v_pseudo, cts.q_inflate, cts.attn)
-    dq, dk_, dg, dbeta, *derase = pl.pallas_call(
+    dq, dk_, dg, dbeta, *derase = _chunked_call(
         functools.partial(
             _tail_bwd_kernel,
             l2norm=cfg.l2norm,
@@ -891,7 +985,9 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
             raw_frame=raw_frame,
             **flags,
         ),
+        cfg,
         grid=(gb, n),
+        num_warps=cfg.tail_num_warps,
         in_specs=[
             *_seq_specs(c, heads, dk),
             *_seq_specs(c, heads, dk, group=group),
@@ -915,7 +1011,6 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
             jax.ShapeDtypeStruct(beta.shape, beta.dtype),
             *([jax.ShapeDtypeStruct(erase.shape, erase.dtype)] if erased else []),
         ],
-        compiler_params=plt.CompilerParams(num_warps=cfg.tail_num_warps, num_stages=1),
         interpret=cfg.interpret,
         name="kda_prep_bwd_tail",
     )(q, k, g, beta, *extra, dqi, cts.kw, cts.decay, dkbe, dkd, dbeta_v)
@@ -973,6 +1068,8 @@ def fused_chunk_prep(
     bwd_num_warps: int = 8,
     tail_block_d: int = 32,
     tail_num_warps: int = 8,
+    chunks_per_program: int = 1,
+    chunk_stages: int = 1,
     interpret: bool = False,
 ) -> ChunkPrep:
     """Fused KDA intra-chunk prep (differentiable).
@@ -1008,6 +1105,8 @@ def fused_chunk_prep(
         num_warps, bwd_num_warps: Triton warps per program (forward / backward kernels).
         tail_block_d, tail_num_warps: d_k column block / warps of the backward's
             elementwise tail kernel.
+        chunks_per_program, chunk_stages: consecutive chunks each prep program handles, as a loop with that
+            many software-pipeline stages (same math).
         interpret: run in the Pallas interpreter (CPU tests).
 
     Returns:
@@ -1038,5 +1137,7 @@ def fused_chunk_prep(
         tail_block_d,
         tail_num_warps,
         interpret,
+        chunks_per_program,
+        chunk_stages,
     )
     return _prep(q, k, v, g, beta, gate, doc_starts, erase, cfg)

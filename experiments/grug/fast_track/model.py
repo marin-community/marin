@@ -812,6 +812,10 @@ class GrugModelConfig:
     kda_state_primal_block_v: int = 0
     """> 0: the primal (scan-forward) KDA state pass runs a kernel with this d_v tile that skips the per-chunk
     states only the backward reads; 0 keeps the saving kernel (same math)."""
+    kda_state_num_stages: int = 2
+    """Software-pipeline depth of the fused KDA sequential state kernels (3: lean primal 2.89 vs 3.24 ms on GB200)."""
+    kda_prep_chunks: int = 1
+    """Consecutive chunks per program of the fused KDA prep kernels, as a pipelined loop (same math)."""
     kda_state_saved_bf16: bool = False
     """Store the fused KDA state backward's per-chunk v_new and dS in bf16 (as h already is) instead of fp32."""
     kda_state_grads_chunks: int = 1
@@ -1951,6 +1955,8 @@ class KdaKernelOptions(NamedTuple):
     state_grads: StateGrads
     state_block_v: int
     state_primal_block_v: int
+    state_num_stages: int
+    prep_chunks: int
     state_saved_bf16: bool
     state_grads_chunks: int
 
@@ -1991,6 +1997,9 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaK
             state_grads=options.state_grads,
             state_block_v=options.state_block_v,
             state_primal_block_v=options.state_primal_block_v,
+            state_num_stages=options.state_num_stages,
+            prep_chunks=options.prep_chunks,
+            prep_chunk_stages=2 if options.prep_chunks > 1 else 1,
             state_saved_dtype=jnp.bfloat16 if options.state_saved_bf16 else jnp.float32,
             state_grads_chunks=options.state_grads_chunks,
             state_grads_num_stages=2 if options.state_grads_chunks > 1 else 1,
@@ -2192,6 +2201,8 @@ class KimiDeltaAttention(eqx.Module):
             cfg.kda_state_grads,
             cfg.kda_state_block_v,
             cfg.kda_state_primal_block_v,
+            cfg.kda_state_num_stages,
+            cfg.kda_prep_chunks,
             cfg.kda_state_saved_bf16,
             cfg.kda_state_grads_chunks,
         )

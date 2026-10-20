@@ -332,12 +332,12 @@ def test_kda_fused_gate_and_grouped_kv_match_unfused(packed, sub_chunk_size):
 @pytest.mark.parametrize("packed", [False, True])
 @pytest.mark.parametrize("save_states", [False, True])
 @pytest.mark.parametrize(
-    ("primal_block_v", "grads_chunks"),
-    [(32, 1), (0, 3), (32, 3)],
+    ("primal_block_v", "grads_chunks", "prep_chunks"),
+    [(32, 1, 1), (0, 3, 1), (0, 1, 3), (32, 3, 3)],
 )
-def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_block_v, grads_chunks):
-    """The lean primal state pass and the multi-chunk cotangent kernel reproduce the default kernels' values and
-    gradients (the GB200 configuration: 32-token chunks in one decay tile, the on-chip sigmoid gate with its
+def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_block_v, grads_chunks, prep_chunks):
+    """The lean primal state pass and the multi-chunk cotangent and prep kernels reproduce the default kernels' values
+    and gradients (the GB200 configuration: 32-token chunks in one decay tile, the on-chip sigmoid gate with its
     -5 floor, packed documents), with the per-chunk states recomputed or saved for the backward."""
     rng = np.random.RandomState(31)
     b, length, heads, d = 2, 96, 3, 32
@@ -359,7 +359,14 @@ def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_blo
         state_block_v=16,
         save_chunk_states=save_states,
     )
-    variant = dict(base, state_primal_block_v=primal_block_v, state_grads_chunks=grads_chunks, state_grads_num_stages=2)
+    variant = dict(
+        base,
+        state_primal_block_v=primal_block_v,
+        state_grads_chunks=grads_chunks,
+        state_grads_num_stages=2,
+        prep_chunks=prep_chunks,
+        prep_chunk_stages=2,
+    )
 
     def loss(kw, q, k, v, a, beta, rate, bias):
         return jnp.sum(w * kda_fused(q, k, v, a, beta, gate=(rate, bias), **kw))

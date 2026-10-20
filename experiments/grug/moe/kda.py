@@ -509,6 +509,8 @@ def _fused_prep(
     sub_chunk_size: int | None = None,
     gate_fn: GateFn = GateFn(GateKind.SOFTPLUS),
     erase_input: EraseInput = EraseInput.GATE,
+    chunks_per_program: int = 1,
+    chunk_stages: int = 1,
 ) -> ChunkPrep:
     """Fused Pallas prep on model-layout ``(B, L, H, d)`` inputs; per-chunk outputs ``(G, n, ...)``."""
     return fused_chunk_prep(
@@ -527,6 +529,8 @@ def _fused_prep(
         erase=erase,
         use_qk_l2norm=use_qk_l2norm,
         interpret=interpret,
+        chunks_per_program=chunks_per_program,
+        chunk_stages=chunk_stages,
         **(_SUB_TILED_WARPS if sub_chunk_size else {}),
     )
 
@@ -644,9 +648,12 @@ def kda_fused(
     state_grads: StateGrads = StateGrads.XLA,
     state_block_v: int = 32,
     state_primal_block_v: int = 0,
+    state_num_stages: int = 2,
     state_saved_dtype: jnp.dtype = jnp.float32,
     state_grads_chunks: int = 1,
     state_grads_num_stages: int = 1,
+    prep_chunks: int = 1,
+    prep_chunk_stages: int = 1,
 ) -> Float[Array, "B L H Dv"]:
     """Fused-kernel KDA in the model's ``(batch, seq, heads, head_dim)`` layout (GPU).
 
@@ -676,10 +683,12 @@ def kda_fused(
     ``state_grads`` picks where the state pass's backward forms its d_v-contracting cotangents.
     ``state_block_v`` is the state pass's d_v tile (64 is fastest on GB200, 32 on H100).
     ``state_primal_block_v`` (> 0) runs the primal (non-differentiated) state pass on a kernel with that d_v
-    tile that skips the per-chunk stores only the backward reads (same math). ``state_saved_dtype`` is the
+    tile that skips the per-chunk stores only the backward reads (same math); ``state_num_stages`` is the
+    software-pipeline depth of the sequential state kernels. ``state_saved_dtype`` is the
     storage dtype of the state backward's per-chunk v_new and dS (bfloat16 rounds those stored copies, as
     ``h`` already is). ``state_grads_chunks`` / ``state_grads_num_stages`` block the ``StateGrads.PALLAS``
-    cotangent kernel over several chunks per program as a pipelined loop (same math).
+    cotangent kernel over several chunks per program as a pipelined loop, and ``prep_chunks`` /
+    ``prep_chunk_stages`` the prep kernels (same math).
     """
     b, length, heads, _ = q.shape
     pad = (-length) % chunk_size
@@ -708,6 +717,8 @@ def kda_fused(
         sub_chunk_size=sub_chunk_size,
         gate_fn=gate_fn,
         erase_input=erase_input,
+        chunks_per_program=prep_chunks,
+        chunk_stages=prep_chunk_stages,
     )
     state = jnp.zeros((b * heads, q.shape[-1], v.shape[-1]), jnp.float32)
     out, _ = chunk_state_pass(
@@ -725,6 +736,7 @@ def kda_fused(
         save_states=save_chunk_states,
         grads=state_grads,
         primal_block_v=state_primal_block_v,
+        num_stages=state_num_stages,
         saved_dtype=state_saved_dtype,
         grads_chunks=state_grads_chunks,
         grads_num_stages=state_grads_num_stages,
