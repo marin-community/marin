@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Extreme document scorers that check the quality-track selection end to end.
+"""Document scorers that check the quality-track selection and judge end to end.
 
-Each scorer moves the selected data far from a random selection in a known direction.
+Most scorers move the selected data far from a random selection in a known direction.
+``dclm_fasttext_web`` is a known good classifier, the positive control for the judge.
 """
 
 import hashlib
