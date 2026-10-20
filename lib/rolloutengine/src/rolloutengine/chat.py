@@ -61,6 +61,8 @@ class ChatModel:
         if served.get("reasoning_content"):
             message["reasoning_content"] = served["reasoning_content"]
         metadata: dict[str, Any] = {"response_id": response.id}
+        if served.get("reasoning"):
+            metadata["reasoning"] = served["reasoning"]
         if served.get("refusal"):
             metadata["refusal"] = served["refusal"]
         return ModelTurn(
