@@ -288,15 +288,18 @@ def test_direct_inference_session_reports_backend_state(
 
 
 @pytest.mark.parametrize(
-    ("task_state", "placed"),
+    ("task_state", "display_worker", "attempt_worker", "node_name", "placed"),
     [
-        (TaskState.PENDING, False),
-        (TaskState.ASSIGNED, True),
-        (TaskState.RUNNING, True),
+        (TaskState.PENDING, "peer-label", "", "node-1", False),
+        (TaskState.BUILDING, "", "", "", False),
+        (TaskState.BUILDING, "peer-label", "", "", False),
+        (TaskState.BUILDING, "peer-label", "", "node-1", True),
+        (TaskState.ASSIGNED, "worker-1", "worker-1", "", True),
+        (TaskState.RUNNING, "", "", "", True),
     ],
 )
 def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
-    task_state: TaskState, placed: bool, monkeypatch
+    task_state: TaskState, display_worker: str, attempt_worker: str, node_name: str, placed: bool, monkeypatch
 ) -> None:
     class FixedDeadline:
         def __init__(self, seconds: float) -> None:
@@ -322,7 +325,14 @@ def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
         lambda: SimpleNamespace(
             client=SimpleNamespace(
                 list_endpoint_instances=list_endpoint_instances,
-                job_status=lambda _job_id: SimpleNamespace(task_state_counts={task_state: 1}),
+                list_tasks=lambda _job_id: [
+                    SimpleNamespace(
+                        state=task_state,
+                        worker_id=display_worker,
+                        current_attempt_number=0,
+                        attempts=(SimpleNamespace(attempt_number=0, worker_id=attempt_worker, node_name=node_name),),
+                    ),
+                ],
             )
         ),
     )
@@ -336,6 +346,101 @@ def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
             "https://inference.example",
             {},
         )
+
+
+def test_inference_endpoint_wait_preserves_startup_budget_across_gate_and_requeue(monkeypatch) -> None:
+    now = 0.0
+    delays = iter((6, 1, 3, 7, 1, 4))
+
+    def sleep(_seconds: float) -> None:
+        nonlocal now
+        now += next(delays)
+
+    def task(state: TaskState, current_attempt: int, *nodes: str):
+        return SimpleNamespace(
+            state=state,
+            worker_id="",
+            current_attempt_number=current_attempt,
+            attempts=tuple(
+                SimpleNamespace(attempt_number=i, worker_id="", node_name=node) for i, node in enumerate(nodes)
+            ),
+        )
+
+    snapshots = iter(
+        (
+            task(TaskState.BUILDING, 0, ""),
+            task(TaskState.BUILDING, 0, ""),
+            task(TaskState.BUILDING, 0, "node-a"),
+            task(TaskState.PENDING, 0, "node-a"),
+            task(TaskState.BUILDING, 1, "node-a", ""),
+            task(TaskState.BUILDING, 1, "node-a", "node-b"),
+        )
+    )
+    probes = 0
+
+    def list_endpoint_instances(_endpoint_name: str):
+        nonlocal probes
+        probes += 1
+        if probes == 7:
+            return [SimpleNamespace(address="https://inference.example", metadata={})]
+        return []
+
+    monkeypatch.setattr(iris_module.time, "monotonic", lambda: now)
+    monkeypatch.setattr(iris_module.time, "sleep", sleep)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                list_endpoint_instances=list_endpoint_instances,
+                list_tasks=lambda _job_id: [next(snapshots)],
+            )
+        ),
+    )
+    job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
+
+    assert iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=5) == (
+        "https://inference.example",
+        {},
+    )
+
+
+def test_inference_endpoint_wait_requeue_preserves_placement_deadline(monkeypatch) -> None:
+    now = 0.0
+    snapshots = iter(
+        (
+            SimpleNamespace(state=TaskState.BUILDING, worker_id="", current_attempt_number=0, attempts=()),
+            SimpleNamespace(
+                state=TaskState.BUILDING,
+                worker_id="",
+                current_attempt_number=0,
+                attempts=(SimpleNamespace(attempt_number=0, worker_id="", node_name="node-a"),),
+            ),
+            SimpleNamespace(state=TaskState.PENDING, worker_id="", current_attempt_number=0, attempts=()),
+        )
+    )
+
+    def sleep(_seconds: float) -> None:
+        nonlocal now
+        now += 6
+
+    monkeypatch.setattr(iris_module, "_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS", 10.0)
+    monkeypatch.setattr(iris_module.time, "monotonic", lambda: now)
+    monkeypatch.setattr(iris_module.time, "sleep", sleep)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                list_endpoint_instances=lambda _endpoint_name: [],
+                list_tasks=lambda _job_id: [next(snapshots)],
+            )
+        ),
+    )
+    job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
+
+    with pytest.raises(TimeoutError, match="to be placed"):
+        iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=5)
 
 
 def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:
@@ -658,6 +763,8 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     ) as session:
         assert session.model.endpoint.model == "public-model"
         assert session.model.endpoint.base_url.startswith("https://iris.example/proxy/t/broker-token/")
+        assert session.effective_serving is not None
+        assert session.effective_serving.task_count == 2
 
     assert proxy_models == ["public-model"]
     _, register_args, register_kwargs = events[0]
@@ -665,6 +772,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert endpoint_name == minted[0]
     assert address == "http://127.0.0.1:1"
     assert metadata["model"] == "public-model"
+    assert metadata["task_count"] == "2"
     assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
     assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2
@@ -690,6 +798,25 @@ def test_inference_proxy_routes_models_readiness_to_running_model(mock_cluster: 
     assert response.status_code == 200
     assert response.json()["data"][0]["id"] == mock_cluster.model
     assert len(mock_cluster.upstream.requests_for("/v1/models")) == 1
+    assert mock_cluster.broker.pending() == []
+    assert mock_cluster.broker.size() == 0
+
+
+def test_inference_proxy_forwards_server_root_tokenize_route(mock_cluster: MockInferenceCluster) -> None:
+    server_root = mock_cluster.proxy.endpoint.base_url.removesuffix("/v1")
+    response = httpx.post(
+        f"{server_root}/tokenize",
+        json={
+            "model": mock_cluster.model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "add_generation_prompt": True,
+        },
+        timeout=5,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"count": 3, "max_model_len": 32768, "tokens": [1, 2, 3]}
+    assert len(mock_cluster.upstream.requests_for("/tokenize")) == 1
     assert mock_cluster.broker.pending() == []
     assert mock_cluster.broker.size() == 0
 

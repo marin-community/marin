@@ -36,11 +36,13 @@ from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
     LevanterEngineConfig,
+    ObjectStoreLoadMode,
     ResolvedModelLocator,
     ServedModelConfig,
     ServingGeometry,
     SpeculativeMethod,
     SpeculativeServingConfig,
+    VllmCompilationCacheMode,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -52,7 +54,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, run_iris_service
+from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, _staged_model, run_iris_service
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -82,10 +84,13 @@ from marin.inference.vllm_server import (
     VllmType,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
+
+from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 @pytest.mark.parametrize(
@@ -291,6 +296,35 @@ def test_vllm_backend_direct_start_uses_tokenizer_chat_template(monkeypatch):
     assert observed_templates == ["{{ messages }}"]
 
 
+def test_vllm_backend_propagates_startup_timeout_to_engine_processes(tmp_path, monkeypatch):
+    observed = tmp_path / "engine-timeout.json"
+    monkeypatch.setenv("VLLM_ENGINE_READY_TIMEOUT_S", "17")
+    monkeypatch.setattr(
+        "marin.inference.vllm_backend.vllm_launcher",
+        lambda _config: FakeVllmLauncher("record-engine-timeout", str(observed)),
+    )
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: None)
+    spec = ModelSpec(
+        weights="org/model",
+        api_model="public-model",
+        num_chips=None,
+        tensor_parallel_size=None,
+        dtype="auto",
+        max_model_len=1024,
+        chat_template_content=None,
+        tokenizer="org/tokenizer",
+        tokenizer_revision="tokenizer-sha",
+    )
+
+    config = VllmEngineConfig(
+        startup_timeout_seconds=1800,
+        compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED,
+    )
+    with VllmBackend(config).start(spec) as environment:
+        environment.wait_until_ready(poll_interval_seconds=0.05)
+        assert json.loads(observed.read_text())["engine_ready_timeout"] == "1800"
+
+
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
     """Resolving weights to a cache path must not change the served id.
 
@@ -310,6 +344,43 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
 
     assert resolved.weights == "gs://cache/quick-serve/qwen3-0.6b"
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
+
+
+def test_staged_model_downloads_remote_weights_to_temporary_directory(monkeypatch):
+    observed: dict[str, object] = {}
+
+    def download_to(self, local_path, *, recursive=False, callback=None, batch_size=None):
+        observed.update(source=str(self), local_path=local_path, recursive=recursive, batch_size=batch_size)
+        destination = Path(local_path)
+        destination.mkdir()
+        (destination / "config.json").write_text("{}")
+
+    monkeypatch.setattr(StoragePath, "download_to", download_to)
+    model = ServedModelConfig(
+        weights="s3://models/large",
+        object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
+    )
+
+    with _staged_model(model) as staged:
+        assert staged.weights != model.weights
+        assert Path(staged.weights, "config.json").is_file()
+        staged_path = Path(staged.weights)
+
+    assert observed["source"] == "s3://models/large"
+    assert observed["recursive"] is True
+    assert observed["batch_size"] == 16
+    assert not staged_path.exists()
+
+
+def test_staged_model_leaves_local_weights_unchanged(tmp_path):
+    model = ServedModelConfig(
+        weights=str(tmp_path),
+        object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
+    )
+
+    with _staged_model(model) as staged:
+        assert staged.weights == str(tmp_path)
+        assert Path(staged.weights).samefile(tmp_path)
 
 
 def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
@@ -517,8 +588,8 @@ def test_validate_levanter_dtype_rejects_vllm_aliases():
 @pytest.mark.parametrize(
     ("num_chips", "tensor_parallel_size", "expected"),
     [
-        (8, 8, {"replica": 1, "data": 1, "model": 8}),  # the slice divides the head count: shard across it
-        (8, 2, {"replica": 1, "data": 4, "model": 2}),  # it does not: the leftover chips replicate
+        (8, 8, {"replica": 1, "data": 1, "model": 8, "expert": 1, "context": 1}),
+        (8, 2, {"replica": 1, "data": 4, "model": 2, "expert": 1, "context": 1}),
     ],
 )
 def test_inference_mesh_covers_every_chip(num_chips, tensor_parallel_size, expected):
@@ -653,7 +724,7 @@ def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
     assert plan.tpu_types == ("v6e-4", "v5litepod-4", "v5p-8", "v4-8")
 
 
-def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatch):
+def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatch, dashboard_ports):
     registered_metadata: dict[str, str] = {}
     model_id = "Qwen/Qwen3-0.6B"
 
@@ -712,7 +783,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
 @pytest.mark.parametrize("fail", [False, True])
 @pytest.mark.parametrize("tensor_parallel_size,data_parallel_size", [(8, 1), (1, 8)])
 def test_pipeline_service_endpoint_and_shutdown_lifecycle(
-    monkeypatch, task_index, fail, tensor_parallel_size, data_parallel_size
+    monkeypatch, dashboard_ports, task_index, fail, tensor_parallel_size, data_parallel_size
 ):
     events = []
     endpoints = []
@@ -1069,7 +1140,12 @@ def test_dashboard_html_is_self_contained():
     assert 'src="http' not in DASHBOARD_HTML
 
 
-def test_dashboard_serves_ui_and_reverse_proxies_streaming():
+@pytest.fixture
+def dashboard_ports(monkeypatch):
+    monkeypatch.setattr("marin.inference.dashboard_server.prepare_tool_runtime", lambda catalog: None)
+
+
+def test_dashboard_serves_ui_and_reverse_proxies_streaming(dashboard_ports):
     upstream_sock = bind_serving_socket("127.0.0.1", 0)
     upstream_port = upstream_sock.getsockname()[1]
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
@@ -1118,7 +1194,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
 
 
 @pytest.mark.parametrize("topology", ["direct", "brokered"])
-def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
+def test_dashboard_tokenization_preserves_backend_payload_and_errors(dashboard_ports, topology):
     upstream_sock = bind_serving_socket("127.0.0.1", 0)
     upstream_port = upstream_sock.getsockname()[1]
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
@@ -1173,7 +1249,9 @@ def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
         assert rejected.json() == {"error": {"type": "NotFoundError"}}
 
 
-def test_dashboard_health_reports_loading_when_upstream_down():
+def test_dashboard_health_reports_loading_when_upstream_down(
+    dashboard_ports,
+):
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
     dashboard_port = dashboard_sock.getsockname()[1]
     info = ServingInfo(

@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.rpc import job_pb2
@@ -245,3 +245,16 @@ def test_sandbox_child_receives_only_its_own_env(capturing_client, parent_contex
 
     assert stub.captured_env == {"TASK_VAR": "1"}
     assert stub.captured_setup_scripts == []
+
+
+def test_task_client_presents_the_task_token_from_its_env(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0:0")
+    monkeypatch.setenv("IRIS_TASK_TOKEN", "task-token")
+
+    set_job_info(None)
+    try:
+        info = get_job_info()
+        assert info is not None and info.credentials is not None
+        assert info.credentials.headers() == {"authorization": "Bearer task-token"}
+    finally:
+        set_job_info(None)

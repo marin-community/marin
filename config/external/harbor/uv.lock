@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -803,7 +803,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?branch=main#9f7b8b404711445b6022f72ff7e5715eb0d1a316" }
+source = { git = "https://github.com/marin-community/harbor.git?rev=9d099696a567f489a111dc7e3c61183c98f007f0#9d099696a567f489a111dc7e3c61183c98f007f0" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -811,6 +811,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "jinja2" },
     { name = "litellm" },
+    { name = "orjson" },
     { name = "packaging" },
     { name = "pathspec" },
     { name = "pydantic" },
@@ -830,6 +831,17 @@ dependencies = [
 [package.optional-dependencies]
 archive = [
     { name = "marin-finestore" },
+]
+tau3 = [
+    { name = "harbor-tau3-bench-adapter" },
+]
+
+[[package]]
+name = "harbor-tau3-bench-adapter"
+version = "0.1.0"
+source = { git = "https://github.com/marin-community/harbor.git?subdirectory=adapters%2Ftau3-bench&rev=9d099696a567f489a111dc7e3c61183c98f007f0#9d099696a567f489a111dc7e3c61183c98f007f0" }
+dependencies = [
+    { name = "harbor" },
 ]
 
 [[package]]
@@ -1031,7 +1043,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.95.0.dev3"
+version = "1.92.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1047,11 +1059,10 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/57/4e/adab8891b352044c0fe0a9301f16b751dfc72446e3c46507d05f70dd31ad/litellm-1.95.0.dev3.tar.gz", hash = "sha256:c02657f3304e83861e951ea4f188d4202733879f19a32aa19f30c7bf7707c586", size = 17359350, upload-time = "2026-07-24T18:26:36.363Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/46/ea/5522be7e0dbcaa7c3fddfd2834f387c6e8eab47c0cc65f2a74657c815af7/litellm-1.92.0.tar.gz", hash = "sha256:773adf5503ee1793289689c899394a83df8122993760d9acd782e32aa798db9d", size = 15098143, upload-time = "2026-07-12T01:15:59.828Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/92/85/9a982cbb22220bb19f1ec7ca576f7642de05c55cde92091ec66f94e39d96/litellm-1.95.0.dev3-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:82d413fa1e7cb770e81eb558e1b903ca34d9220f7c93d84c12c558d3d71dd615", size = 26314978, upload-time = "2026-07-24T18:26:13.069Z" },
-    { url = "https://files.pythonhosted.org/packages/13/24/b6e3317ecbd37ab306a0fc0ff28ced649fb2dd6ba14ff2c321b15d11a292/litellm-1.95.0.dev3-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:1d19a913698b58634a021c3fe4b61c5c0a4890695e0e513e0ab6d39a5fe0bc62", size = 26193681, upload-time = "2026-07-24T18:26:15.598Z" },
-    { url = "https://files.pythonhosted.org/packages/75/87/4c869d71c63d6cbeadc500ab074534021bbf0a1b34accf7cf66c40c8034f/litellm-1.95.0.dev3-cp312-cp312-win_amd64.whl", hash = "sha256:8c9b1a963979335c0b4d6f43f836e7dd14c68f562b245c7d79ce509f89177954", size = 24813006, upload-time = "2026-07-24T18:26:18.244Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/26/8061907b67aa04b7cdf2a41cbc4f8aebfbc722c909a7e4b2aea25def7053/litellm-1.92.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:9c7b2849591a35f7039dc7386a81a8e68fccb5ac2fecaa5122192c1172556b29", size = 19291180, upload-time = "2026-07-12T01:15:48.728Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/6c/dc9b0b580ee8af9117abd729d1de25d74fae487a0029ca77049a09f3ad33/litellm-1.92.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:f17499155366afd1eaaeb6fd0c7b55cbd2239dcd72f2fe1f8071a969cc402fae", size = 19289559, upload-time = "2026-07-12T01:15:51.376Z" },
 ]
 
 [[package]]
@@ -1061,7 +1072,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "daytona" },
     { name = "gcsfs" },
-    { name = "harbor", extra = ["archive"] },
+    { name = "harbor", extra = ["archive", "tau3"] },
     { name = "marin-rigging" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
@@ -1071,7 +1082,7 @@ dependencies = [
 requires-dist = [
     { name = "daytona", specifier = "==0.200.2" },
     { name = "gcsfs" },
-    { name = "harbor", extras = ["archive"], git = "https://github.com/marin-community/harbor.git?branch=main" },
+    { name = "harbor", extras = ["archive", "tau3"], git = "https://github.com/marin-community/harbor.git?rev=9d099696a567f489a111dc7e3c61183c98f007f0" },
     { name = "marin-rigging", specifier = ">=0.2.0" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
@@ -1355,6 +1366,24 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/32/a9/d7525a59fdd240e69b5af4a6338e78fafa1b4203394122cbd6701fb5f84a/opentelemetry_util_http-0.65b0.tar.gz", hash = "sha256:84f82d826978bba416ab453460ff6a7391cdc3534c93a786595e4068680016b7", size = 11243, upload-time = "2026-07-16T15:26:27.898Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/23/3f/ab8d29df207ce5f470a07fa96ebb48af4e95b7fab7e7635311b9a32f2fab/opentelemetry_util_http-0.65b0-py3-none-any.whl", hash = "sha256:7553b606f963097cb190536dc30556cce85090692e471a422fff30ca29b04348", size = 8245, upload-time = "2026-07-16T15:25:46.482Z" },
+]
+
+[[package]]
+name = "orjson"
+version = "3.13.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f2/72/380b97dc45bd162d23afe5194721ef678d9eac7cfaa549fe2873f7f0a518/orjson-3.13.0.tar.gz", hash = "sha256:d1de5eb04485110c5da4c657e49168995d55e076b1ce60f1a042e254f4186c4f", size = 2732604, upload-time = "2026-10-07T14:09:25.719Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/17/ed65f84ed5ed6a1e06eb628611b4172e7480fc4ad92594856751a6363cac/orjson-3.13.0-cp312-cp312-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:fb8644dc6d705e1269ed2842bf4dbe2b4e50d670de503bf79d5cef3a5148a4c7", size = 223063, upload-time = "2026-10-07T14:08:21.979Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/4d/9332eb96d2e379384be0f211f543835eebc81f460c9403b84abe1294c431/orjson-3.13.0-cp312-cp312-macosx_15_0_arm64.whl", hash = "sha256:6ff2a2c67f35202f7d823753d38ad371a9b7fc297567cdfff4420e763cb9f6f8", size = 123364, upload-time = "2026-10-07T14:08:24.026Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/06/558456b7da27e974a8c9ea09117b07119f6fa131cd62b8b9ecad9eea94e1/orjson-3.13.0-cp312-cp312-manylinux2014_armv7l.manylinux_2_17_armv7l.whl", hash = "sha256:65c4e0e106ccc7265b488385659117a6805c37d042f737558ecd68aa0c67ad8f", size = 113199, upload-time = "2026-10-07T14:08:25.476Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/f2/1187a9c09965620348262ec0f406868f6d7c234b2e9b5ee51020bdde5748/orjson-3.13.0-cp312-cp312-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:fbbad6b9b1da43f25c1f5b20cd5a268e028a2fc95d5a8d1ade6059973bc71584", size = 130329, upload-time = "2026-10-07T14:08:26.877Z" },
+    { url = "https://files.pythonhosted.org/packages/46/07/5d1a151bc11600434fe799e73abfc6a4d463d02e149a20e47c59d3a985ae/orjson-3.13.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ae1d895cf7bbfd50ef34bb63bb727b14514f259f3e3f8dd010783bd38e864c6e", size = 129072, upload-time = "2026-10-07T14:08:28.355Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/8c/bb07c368abbf4021c4cd01c12edb526e00090f7f750ff1b88da6e6b6c7a6/orjson-3.13.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:bceadfd314bd238f584fc229a4bbaf0e573597e7a026dec5429fbf29fd66c641", size = 130612, upload-time = "2026-10-07T14:08:30.041Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/8d/4b66d19619ed344ac000ffea7c006477d0061d580646e736ef0e203759e8/orjson-3.13.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:b74c30e56346aad067937d766846ee74c231d1d18aad3f324e9b9261de3b2d5e", size = 134632, upload-time = "2026-10-07T14:08:31.474Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/88/f8221f6593e37eb26ec4706e185b9ac6f38ff0c8f7bad5459844031ffd2d/orjson-3.13.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:4329c19b8a25693f60a77b867c9d2a3ab637b20e36f5b7bea7f5acb492b44b15", size = 126807, upload-time = "2026-10-07T14:08:32.914Z" },
+    { url = "https://files.pythonhosted.org/packages/58/9d/a1ca7321eeafd7d72e174cdc388cc96301f41516d863e7b1f64f0a1735be/orjson-3.13.0-cp312-cp312-win_amd64.whl", hash = "sha256:b571236d8393edcd3236e07423f762bfcf571f852aad667a3bce9e7b755e0790", size = 121538, upload-time = "2026-10-07T14:08:34.325Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/a0/1f19b4779c910104370932fceb9ed436b47ac077f297db74008062525c04/orjson-3.13.0-cp312-cp312-win_arm64.whl", hash = "sha256:8594956a75223f657e1e68c568c0eeb3dd145f02cd6b78a47fd9a8095dbc4eae", size = 126259, upload-time = "2026-10-07T14:08:35.765Z" },
 ]
 
 [[package]]

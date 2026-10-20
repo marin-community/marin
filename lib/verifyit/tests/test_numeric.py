@@ -5,11 +5,10 @@ import json
 from pathlib import Path
 
 import pytest
-from verifyit.candidate import grade_text_candidate
-from verifyit.grade import InvalidTask, Status, negative_candidate
+from verifyit.candidate import grade_candidate
+from verifyit.grade import Status, negative_candidate
 from verifyit.grade import grade as dispatch
 from verifyit.modes import grade_math
-from verifyit.numeric import NumericCandidateError
 from verifyit.spec import NumericSpec, parse_spec, render_spec
 
 
@@ -47,7 +46,7 @@ def _answer(workspace: Path, text: str) -> None:
 def test_numeric_file_and_candidate_paths_grade_the_same_exact_value(tmp_path, expected, text, reward):
     spec = parse_spec(render_spec(NumericSpec(expected, tolerance_abs=0.0, tolerance_rel=0.0)))
     _answer(tmp_path, text)
-    direct = grade_text_candidate(spec, text)
+    direct = grade_candidate(spec, text, {})
     file_result = grade_math.grade(spec, tmp_path, tmp_path)
     assert (direct.status, direct.reward) == (Status.SCORED, reward)
     assert file_result == direct
@@ -73,8 +72,9 @@ def test_numeric_file_and_candidate_paths_grade_the_same_exact_value(tmp_path, e
 def test_numeric_explicit_tolerances_bound_exact_differences(tmp_path, spec, text, reward):
     _answer(tmp_path, text)
     assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
-    assert grade_text_candidate(spec, text).reward == reward
-    json.dumps(grade_text_candidate(spec, text).detail, allow_nan=False)
+    direct = grade_candidate(spec, text, {})
+    assert direct.reward == reward
+    json.dumps(direct.detail, allow_nan=False)
 
 
 @pytest.mark.parametrize(
@@ -103,10 +103,9 @@ def test_numeric_explicit_tolerances_bound_exact_differences(tmp_path, spec, tex
 def test_malformed_numeric_submission_cannot_expose_a_partial_value(tmp_path, text):
     spec = NumericSpec("42", tolerance_abs=0.0, tolerance_rel=0.0)
     _answer(tmp_path, text)
-    result = grade_math.grade(spec, tmp_path, tmp_path)
-    assert (result.status, result.reward) == (Status.SCORED, 0)
-    with pytest.raises(NumericCandidateError):
-        grade_text_candidate(spec, text)
+    for result in (grade_math.grade(spec, tmp_path, tmp_path), grade_candidate(spec, text, {})):
+        assert (result.status, result.reward) == (Status.SCORED, 0)
+        assert "extracted" not in result.detail
 
 
 def test_numeric_negative_candidate_exceeds_the_configured_tolerance(tmp_path):
@@ -124,8 +123,7 @@ def test_invalid_private_numeric_contract_is_checked_before_malformed_candidate(
     spec = NumericSpec(expected, tolerance_abs=absolute, tolerance_rel=relative)
     _answer(tmp_path, "not a number")
     assert dispatch(spec, tmp_path, tmp_path).status == Status.INVALID_TASK
-    with pytest.raises(InvalidTask):
-        grade_text_candidate(spec, "not a number")
+    assert grade_candidate(spec, "not a number", {}).status == Status.INVALID_TASK
 
 
 @pytest.mark.parametrize(

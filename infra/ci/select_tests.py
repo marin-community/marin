@@ -63,6 +63,7 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
+    SourceRoot("infra/shellsim", "."),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
@@ -92,7 +93,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
-    "verifyit": "verifyit",
+    "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
 }
@@ -123,10 +124,10 @@ TEST_DIRS: dict[str, tuple[str, ...]] = {
     "marin": ("tests", "experiments"),
 }
 
-# Levanter's suite is the only unit leg that runs long enough to be worth spreading over
-# extra runners; every other scope finishes well under the workflow's per-leg budget. A
-# sharded scope splits its selected files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4}
+# The Levanter and Marin suites run long enough to be worth spreading over extra runners;
+# every other scope finishes in a few minutes on one. A sharded scope splits its selected
+# files across this many parallel matrix legs.
+SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 3}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
@@ -152,13 +153,45 @@ SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
 # Suites outside the import-selected Python matrix.
-# TaskCompendium tests its optional pinned Harbor dependency; Iris smoke
-# drives a browser. Levanter's accelerator lanes use its selected files below.
+# TaskCompendium, Shellbox, RolloutEngine and Taskforge use the root lock. Iris
+# smoke drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
+    "shellbox-unit": (
+        "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
     "taskcompendium-unit": (
         "lib/taskcompendium/",
+        "lib/shellbox/",
+        "lib/rigging/",
+        "lib/verifyit/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "rolloutengine-unit": (
+        "lib/rolloutengine/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
+        "lib/rigging/",
+        "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "taskforge-unit": (
+        "lib/taskforge/",
+        "experiments/post_training/capability_driven_envs/",
+        "experiments/post_training/glm.py",
+        "lib/taskcompendium/",
+        "lib/iris/",
+        "lib/shellbox/",
+        "lib/verifyit/",
+        "lib/rigging/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,

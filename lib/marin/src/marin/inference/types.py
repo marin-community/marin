@@ -31,6 +31,11 @@ class OpenAIEndpoint:
         """Return an endpoint URL under the API root."""
         return f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
 
+    def server_url(self, path: str) -> str:
+        """Return an endpoint URL relative to the inference server root."""
+        server_root = self.base_url.rstrip("/").removesuffix("/v1")
+        return f"{server_root}/{path.lstrip('/')}"
+
 
 @dataclass(frozen=True)
 class RunningModel:
@@ -76,6 +81,21 @@ class InferenceWorkerMetadata:
     backend_name: str
 
 
+@dataclass(frozen=True)
+class BrokerStatus:
+    queued_requests: int
+    leased_requests: int
+    buffered_responses: int
+    submitted_requests: int
+    dispatched_requests: int
+    completed_requests: int
+    failed_responses: int
+    dropped_responses: int
+    mean_queue_wait_seconds: float
+    max_queue_wait_seconds: float
+    workers: dict[str, InferenceWorkerMetadata]
+
+
 # Brokers route payloads only; callers own broker and worker lifecycle.
 class InferenceRequestProvider(Protocol):
     def fetch_requests(self, *, max_items: int) -> list[LeasedInferenceRequest]: ...
@@ -91,3 +111,5 @@ class InferenceResponseProvider(Protocol):
     def submit_request(self, request: InferenceRequest) -> None: ...
 
     def fetch_responses(self, *, max_items: int) -> list[InferenceResponse]: ...
+
+    def status(self) -> BrokerStatus: ...

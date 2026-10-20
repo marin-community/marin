@@ -1,67 +1,80 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed submissions and private grading without an execution provider."""
+"""Typed submissions and in-process grading without an execution provider."""
 
 import json
 
 import pytest
-from pydantic import PrivateAttr
 from verifyit.json_comparison import NumericTypePolicy
-from verifyit.spec import Mode
+from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.spec import (
+    RUBRIC_LABELS,
+    EmptyOutputPolicy,
+    ExactSpec,
+    JudgeSpec,
+    McqSpec,
+    NumericSpec,
+    ScriptSpec,
+    Spec,
+    StructuredExactSpec,
+)
 
-from taskcompendium.grading import Outcome, exact_answer, grade_answer, numeric_answer, structured_exact
-from taskcompendium.grading_contract import GradingAttempt, StateSubmission, SubmissionFailure, TextSubmission
+from taskcompendium.grader import verifyit_package
+from taskcompendium.grading import grade_answer, grade_remote_judge_answer
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
-    SCHEMA_VERSION,
     AnswerType,
+    AssistantToolCalls,
+    CommandSemantics,
     ConversationInput,
+    ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
-    Source,
-    TaskSpec,
-    TextMessage,
-    VerifierSpec,
-)
-from taskcompendium.runtime.models import RuntimeEvidence
-from taskcompendium.runtime.task_grading import grade_task
-from taskcompendium.submission import (
+    FinalAction,
+    FunctionDefinition,
+    Grader,
+    GradingAttempt,
     JsonAnswer,
     JsonValueAnswer,
+    NoGrader,
     PlainText,
-    SubmissionConvention,
+    Source,
+    StateSubmission,
+    TaskSpec,
+    TextMessage,
 )
-from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
+from taskcompendium.runtime.models import RuntimeEvidence, grading_attempt
+from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.submission import submission_compatibility
+
+GRADING_ENVIRONMENT = EnvironmentRequirements(
+    docker_image="private/grader@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
+)
 
 
-def _task(verifier, answer_type=AnswerType.TEXT):
+def _task(grader: Grader, answer_type=AnswerType.TEXT, answer_format=PlainText()) -> TaskSpec:
     return TaskSpec(
         id="submission-grading",
         context=ConversationInput(events=(TextMessage(role="user", content="Complete the task."),)),
         environment_requirements=EnvironmentRequirements(),
         answer_type=answer_type,
-        verifier=verifier,
+        answer_format=answer_format,
+        grader=grader,
         source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
     )
 
 
+def _grader(spec: Spec) -> Grader:
+    return verifyit_package(spec).grader
+
+
+def _conversation(task: TaskSpec, content: str) -> ConversationTrace:
+    return ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=content)))
+
+
 def _attempt(task, content, state=None):
-    return GradingAttempt(
-        conversation=ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=content))),
-        state=state,
-    )
-
-
-class StateAnswer(SubmissionConvention):
-    submission_types = (StateSubmission,)
-
-    def supports(self, answer_type: AnswerType) -> bool:
-        return answer_type == AnswerType.STATE
-
-    def extract(self, attempt: GradingAttempt) -> StateSubmission:
-        if attempt.state is None:
-            raise SubmissionFailure("Missing captured state")
-        return attempt.state
+    return GradingAttempt(conversation=_conversation(task, content), state=state)
 
 
 @pytest.mark.parametrize(
@@ -74,8 +87,12 @@ class StateAnswer(SubmissionConvention):
     ],
 )
 def test_structured_exact_compares_json_types_and_order(actual, reward):
-    task = _task(structured_exact({"nested": {"left": None, "right": [1, True, "x"]}}), AnswerType.STATE)
-    result = grade_answer(task, StateAnswer(id="state"), _attempt(task, "Done.", StateSubmission(actual)))
+    task = _task(
+        _grader(StructuredExactSpec(expected={"nested": {"left": None, "right": [1, True, "x"]}})),
+        AnswerType.JSON,
+        JsonValueAnswer(),
+    )
+    result = grade_answer(task, _attempt(task, json.dumps(actual)))
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
@@ -87,14 +104,12 @@ def test_structured_exact_compares_json_types_and_order(actual, reward):
         ({"value": 16.0}, NumericTypePolicy.STRICT, 0.0),
     ],
 )
-def test_json_answer_and_acquired_state_share_structured_grading(actual, policy, reward):
-    verifier = structured_exact({"value": 16}, numeric_types=policy)
-    chat_task = TaskSpec.model_validate_json(_task(verifier, AnswerType.JSON).model_dump_json())
-    state_task = TaskSpec.model_validate_json(_task(verifier, AnswerType.STATE).model_dump_json())
-    chat_result = grade_answer(chat_task, JsonValueAnswer(id="json-value"), _attempt(chat_task, json.dumps(actual)))
-    state_result = grade_answer(
-        state_task, StateAnswer(id="state"), _attempt(state_task, "Done.", StateSubmission(actual))
-    )
+def test_json_answer_and_captured_state_share_structured_grading(actual, policy, reward):
+    grader = _grader(StructuredExactSpec(expected={"value": 16}, numeric_types=policy))
+    chat_task = TaskSpec.model_validate_json(_task(grader, AnswerType.JSON, JsonValueAnswer()).model_dump_json())
+    state_task = TaskSpec.model_validate_json(_task(grader, AnswerType.STATE).model_dump_json())
+    chat_result = grade_answer(chat_task, _attempt(chat_task, json.dumps(actual)))
+    state_result = grade_answer(state_task, _attempt(state_task, "Done.", StateSubmission(actual)))
     assert (chat_result.status, chat_result.reward) == (Outcome.GRADED, reward)
     assert state_result == chat_result
 
@@ -103,151 +118,249 @@ def test_json_answer_and_acquired_state_share_structured_grading(actual, policy,
     "actual,status,reward",
     [("yes", Outcome.GRADED, 1.0), ("no", Outcome.GRADED, 0.0), (12, Outcome.SUBMISSION_FAILURE, 0.0)],
 )
-def test_exact_verifier_accepts_string_json_and_acquired_state(actual, status, reward):
-    verifier = exact_answer("yes")
-    chat_task = _task(verifier, AnswerType.JSON)
-    state_task = _task(verifier, AnswerType.STATE)
-    chat_result = grade_answer(chat_task, JsonValueAnswer(id="json-value"), _attempt(chat_task, json.dumps(actual)))
-    state_result = grade_answer(
-        state_task, StateAnswer(id="state"), _attempt(state_task, "Done.", StateSubmission(actual))
-    )
+def test_exact_grader_accepts_string_json_and_captured_state(actual, status, reward):
+    grader = _grader(ExactSpec(expected=("yes",)))
+    chat_task = _task(grader, AnswerType.JSON, JsonValueAnswer())
+    state_task = _task(grader, AnswerType.STATE)
+    chat_result = grade_answer(chat_task, _attempt(chat_task, json.dumps(actual)))
+    state_result = grade_answer(state_task, _attempt(state_task, "Done.", StateSubmission(actual)))
     assert (chat_result.status, chat_result.reward) == (status, reward)
     assert state_result == chat_result
 
 
-class ChangingText(PlainText):
-    _submitted: bool = PrivateAttr(default=False)
-
-    def extract(self, _attempt: GradingAttempt) -> TextSubmission:
-        value = "different" if self._submitted else "first"
-        self._submitted = True
-        return TextSubmission(value)
-
-
-def test_verifier_grades_the_single_extracted_submission():
-    task = _task(exact_answer("first"))
-    result = grade_answer(task, ChangingText(id="changing"), _attempt(task, "Done."))
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
-
-
-def test_serialized_json_convention_extracts_answer_and_scores_invalid_submission():
-    task = _task(exact_answer("yes"))
-    convention = JsonAnswer.model_validate_json(JsonAnswer(id="json").model_dump_json())
-    valid = grade_answer(task, convention, _attempt(task, '{"answer":"yes"}'))
-    invalid = grade_answer(task, convention, _attempt(task, '{"answer":'))
-    assert (valid.status, valid.reward) == (Outcome.GRADED, 1.0)
-    assert (invalid.status, invalid.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
-
-
-def test_invalid_private_verifier_is_not_scored_as_agent_failure():
-    task = _task(VerifierSpec(kind=Mode.EXACT, parameters_json="{}"))
-    with pytest.raises(ValueError):
-        grade_answer(task, JsonAnswer(id="json"), _attempt(task, '{"answer":'))
-
-
 @pytest.mark.parametrize(
-    "wire_kind,verifier,answer_type,correct,wrong",
+    "mode,spec,answer_type,correct,wrong",
     [
-        ("exact", exact_answer("yes"), AnswerType.TEXT, "yes", "no"),
-        ("numeric", numeric_answer("12.0", tolerance_abs=0.0, tolerance_rel=0.0), AnswerType.NUMBER, "12", "13"),
-        ("mcq", multiple_choice_answer("B", 3), AnswerType.TEXT, "B", "A"),
+        ("exact", ExactSpec(expected=("yes",)), AnswerType.TEXT, "yes", "no"),
+        ("numeric", NumericSpec("12.0", tolerance_abs=0.0, tolerance_rel=0.0), AnswerType.NUMBER, "12", "13"),
+        ("mcq", McqSpec(expected="B", options=3), AnswerType.TEXT, "B", "A"),
     ],
 )
-def test_canonical_verifier_kinds_serialize_load_and_grade(wire_kind, verifier, answer_type, correct, wrong):
-    serialized = json.loads(_task(verifier, answer_type).model_dump_json())
-    assert serialized["verifier"]["kind"] == wire_kind
-    assert serialized["schema_version"] == SCHEMA_VERSION
+def test_verifyit_modes_serialize_load_and_grade(mode, spec, answer_type, correct, wrong):
+    serialized = json.loads(_task(_grader(spec), answer_type).model_dump_json())
+    assert (serialized["grader"]["kind"], serialized["grader"]["mode"]) == ("verifyit", mode)
     loaded = TaskSpec.model_validate_json(json.dumps(serialized))
-    convention = PlainText(id="plain")
-    correct_result = grade_answer(loaded, convention, _attempt(loaded, correct))
-    wrong_result = grade_answer(loaded, convention, _attempt(loaded, wrong))
+    correct_result = grade_answer(loaded, _attempt(loaded, correct))
+    wrong_result = grade_answer(loaded, _attempt(loaded, wrong))
     assert (correct_result.status, correct_result.reward) == (Outcome.GRADED, 1.0)
     assert (wrong_result.status, wrong_result.reward) == (Outcome.GRADED, 0.0)
 
 
-@pytest.mark.parametrize("number", [float("nan"), float("inf"), float("-inf")])
-def test_structured_exact_rejects_nonfinite_gold_before_serialization_but_preserves_null(number):
-    with pytest.raises(ValueError):
-        structured_exact({"nested": [number]})
-    task = _task(structured_exact(None), AnswerType.STATE)
-    result = grade_answer(task, StateAnswer(id="state"), _attempt(task, "Done.", StateSubmission(None)))
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
-
-
 @pytest.mark.parametrize("content", ['{"answer":"yes","answer":"no"}', '{"answer":"yes","meta":{"x":1,"x":2}}'])
 def test_duplicate_json_answer_is_submission_failure(content):
-    task = _task(exact_answer("yes"))
-    result = grade_answer(task, JsonAnswer(id="json"), _attempt(task, content))
+    task = _task(_grader(ExactSpec(expected=("yes",))), answer_format=JsonAnswer())
+    result = grade_answer(task, _attempt(task, content))
     assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
 
 
-def test_invalid_private_reference_precedes_one_time_submission_acquisition():
-    task = _task(
-        VerifierSpec(kind="numeric", parameters_json='{"expected":"bad","tolerance_abs":"0","tolerance_rel":"0"}')
-    )
-    convention = ChangingText(id="changing")
-    with pytest.raises(ValueError):
-        grade_answer(task, convention, _attempt(task, "first"))
-    valid_task = _task(exact_answer("first"))
-    result = grade_answer(valid_task, convention, _attempt(valid_task, "unused"))
+def test_plain_text_passes_blank_candidates_to_a_verifier_that_grades_them():
+    task = _task(_grader(ExactSpec(expected=("",), empty_output=EmptyOutputPolicy.GRADE)))
+    result = grade_answer(task, _attempt(task, " \n"))
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
 
 
-@pytest.mark.parametrize("parameters", ['{"expected":"yes","expected":"no"}', '{"expected":{"key":1,"\\u006bey":2}}'])
-def test_ambiguous_private_verifier_json_rejects_duplicate_keys(parameters):
-    with pytest.raises(ValueError):
-        VerifierSpec(kind="exact", parameters_json=parameters)
-
-
 def test_captured_null_state_is_a_submission_but_missing_state_is_not():
-    task = _task(structured_exact(None), AnswerType.STATE)
-    convention = StateAnswer(id="state")
-    missing = grade_answer(task, convention, _attempt(task, "Done."))
-    captured = grade_answer(task, convention, _attempt(task, "Done.", StateSubmission(None)))
+    task = _task(_grader(StructuredExactSpec(expected=None)), AnswerType.STATE)
+    missing = grade_answer(task, _attempt(task, "Done."))
+    captured = grade_answer(task, _attempt(task, "Done.", StateSubmission(None)))
     assert (missing.status, missing.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
     assert (captured.status, captured.reward) == (Outcome.GRADED, 1.0)
 
 
-class FileAnswer(PlainText):
-    path: str
+def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoint(judge_server):
+    response = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="transport-id", name="lookup", arguments={"query": "weather"}),)
+    )
+    package = verifyit_package(
+        JudgeSpec(
+            references=("Public conversation and tool schema",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the proposed action.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            model="fixture-judge",
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = TaskSpec(
+        id="judged-native-action",
+        context=ConversationInput(events=(TextMessage(role="user", content="Look up the weather."),)),
+        environment_requirements=EnvironmentRequirements(),
+        final_tools=(
+            FunctionDefinition(
+                name="lookup",
+                parameters={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            ),
+        ),
+        answer_type=AnswerType.NATIVE_ACTION,
+        answer_format=FinalAction(require_call=True, max_calls=1),
+        grader=package.grader,
+        source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+    )
+    attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, response)))
 
-    def extract(self, attempt: GradingAttempt) -> TextSubmission:
-        if self.path not in attempt.files:
-            raise SubmissionFailure("Missing captured answer file")
-        return TextSubmission(attempt.files[self.path].decode())
-
-
-@pytest.mark.parametrize("files,reward", [({"/app/answer.txt": b"yes"}, 1.0), ({"/app/answer.txt": b"no"}, 0.0)])
-def test_runtime_passes_captured_files_to_candidate_convention(files, reward):
-    task = _task(exact_answer("yes"))
     result = grade_task(
         task,
-        FileAnswer(id="file", path="/app/answer.txt"),
-        _attempt(task, "unused").conversation,
-        RuntimeEvidence(files, "null"),
+        attempt,
+        judge_connection=JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
     )
-    assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert result.detail["verdict"] == "PASS"
+    assert len(judge_server.requests) == 1
+    prompt = judge_server.requests[0]["messages"][-1]["content"]
+    assert json.loads(prompt.split("\nCandidate: ", 1)[1]) == {
+        "type": "function_call",
+        "name": "lookup",
+        "arguments": {"query": "weather"},
+    }
+
+
+def test_runtime_requires_an_explicit_connection_for_judge_grading():
+    task = _task(verifyit_package(JudgeSpec(references=("answer",)), environment=GRADING_ENVIRONMENT).grader)
+    result = grade_task(task, _attempt(task, "candidate"))
+    assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
+
+
+def test_remote_judge_rejects_an_empty_candidate_without_calling_the_endpoint():
+    package = verifyit_package(
+        JudgeSpec(
+            references=("Complete the task.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = TaskSpec(
+        id="empty-judged-native-action",
+        context=ConversationInput(events=(TextMessage(role="user", content="Look up the weather."),)),
+        environment_requirements=EnvironmentRequirements(),
+        final_tools=(
+            FunctionDefinition(
+                name="lookup",
+                parameters={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            ),
+        ),
+        answer_type=AnswerType.NATIVE_ACTION,
+        answer_format=FinalAction(max_calls=1),
+        grader=package.grader,
+        source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+    )
+
+    result = grade_remote_judge_answer(
+        task,
+        _attempt(task, " \n"),
+        JudgeConnection("http://unused.invalid/v1", "secret"),
+    )
+
+    assert (result.status, result.reward, result.detail) == (
+        Outcome.GRADED,
+        0.0,
+        {"reason": "empty_candidate"},
+    )
+
+
+def test_remote_judge_grades_blank_plain_text_when_its_policy_requires_it(judge_server):
+    judge_server.reply = "C"
+    package = verifyit_package(
+        JudgeSpec(
+            references=("A reference answer.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"A": 1.0, "B": 0.0, "C": 0.5},
+            empty_output=EmptyOutputPolicy.GRADE,
+            model="fixture-judge",
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = _task(package.grader)
+
+    result = grade_remote_judge_answer(
+        task,
+        _attempt(task, " \n"),
+        JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+    )
+
+    assert (result.status, result.reward) == (Outcome.GRADED, 0.5)
+    assert len(judge_server.requests) == 1
+
+
+def test_remote_judge_provider_error_is_retryable_infrastructure_failure(judge_server):
+    judge_server.status_code = 400
+    package = verifyit_package(
+        JudgeSpec(
+            references=("A reference answer.",),
+            rubric=RUBRIC_LABELS,
+            system_prompt="Grade the response.",
+            prompt_template="Reference: {reference}\nCandidate: {candidate}",
+            label_scores={"PASS": 1.0, "FAIL": 0.0},
+            model="fixture-judge",
+        ),
+        environment=GRADING_ENVIRONMENT,
+    )
+    task = _task(package.grader)
+
+    result = grade_remote_judge_answer(
+        task,
+        _attempt(task, "candidate"),
+        JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "secret"),
+    )
+
+    assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
+    assert len(judge_server.requests) == 1
 
 
 @pytest.mark.parametrize("state,reward", [("null", 1.0), ('{"value": 1}', 0.0)])
-def test_runtime_passes_captured_state_to_candidate_convention(state, reward):
-    task = _task(structured_exact(None), AnswerType.STATE)
-    result = grade_task(
-        task,
-        StateAnswer(id="state"),
-        _attempt(task, "unused").conversation,
-        RuntimeEvidence({}, state),
-    )
+def test_runtime_passes_captured_state_to_in_process_grader(state, reward):
+    task = _task(_grader(StructuredExactSpec(expected=None)), AnswerType.STATE)
+    attempt = grading_attempt(_conversation(task, "unused"), RuntimeEvidence({}, state))
+    result = grade_task(task, attempt)
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
 @pytest.mark.parametrize("state", ['{"x":1,"x":2}', "NaN", "1e1000", "{"])
-def test_invalid_captured_state_remains_an_infrastructure_error(state):
-    task = _task(structured_exact(None), AnswerType.STATE)
-    result = grade_task(
-        task,
-        StateAnswer(id="state"),
-        _attempt(task, "unused").conversation,
-        RuntimeEvidence({}, state),
-    )
+def test_invalid_captured_state_never_becomes_a_submission(state):
+    task = _task(_grader(StructuredExactSpec(expected=None)), AnswerType.STATE)
+    with pytest.raises(ValueError):
+        grading_attempt(_conversation(task, "unused"), RuntimeEvidence({}, state))
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ExactSpec(expected=("done",)),
+        NumericSpec("12", tolerance_abs=0.0, tolerance_rel=0.0),
+        ScriptSpec(path="grade.py"),
+    ],
+)
+def test_sandbox_grader_never_awards_in_process_credit(spec):
+    task = _task(verifyit_package(spec, environment=GRADING_ENVIRONMENT).grader)
+    task = TaskSpec.model_validate_json(task.model_dump_json())
+    attempt = _attempt(task, "done")
+    # The answer format can carry the answer, but only the grading environment may score it.
+    assert submission_compatibility(task).compatible
+    with pytest.raises(TypeError):
+        grade_answer(task, attempt)
+    result = grade_task(task, attempt)
     assert (result.status, result.reward) == (Outcome.INFRA_ERROR, None)
+
+
+def test_task_without_a_grader_is_unavailable_with_its_reason():
+    task = _task(NoGrader(reason="Source evaluator is unavailable", contract={"evaluator": "llm_judge"}))
+    task = TaskSpec.model_validate_json(task.model_dump_json())
+    attempt = _attempt(task, "done")
+    with pytest.raises(TypeError):
+        grade_answer(task, attempt)
+    result = grade_task(task, attempt)
+    assert (result.status, result.reward, result.error) == (Outcome.UNAVAILABLE, None, "Source evaluator is unavailable")

@@ -11,6 +11,7 @@
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -27,6 +28,7 @@ GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
+MARINSKYRL_CONFIG_NAME = "MarinSkyRL"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
@@ -105,7 +107,7 @@ EXTERNAL_PROJECTS = (
         "HARBOR",
         runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
     ),
-    ExternalProject("MarinSkyRL", "marinskyrl", "MARIN_SKYRL"),
+    ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),
 )
 
 
@@ -130,6 +132,31 @@ def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
         raise ValueError(f"{lock_path}: expected a root Git source, found {source!r}")
     repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
     return LockedGitSource(repository=repository, commit=commit)
+
+
+def project_git_distributions(project: ExternalProject) -> tuple[str, ...]:
+    """Return every locked distribution sourced from the project's repository."""
+    lock_path = project.directory / "uv.lock"
+    repository = locked_git_source(lock_path, project.distribution).repository
+    lock = tomllib.loads(lock_path.read_text())
+    distributions = []
+    for package in lock["package"]:
+        git_source = package.get("source", {}).get("git")
+        if git_source is None:
+            continue
+        parsed = urlsplit(git_source)
+        package_repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+        if package_repository == repository:
+            distributions.append(package["name"])
+    return tuple(distributions)
+
+
+def upgrade_project_lock(project: ExternalProject) -> None:
+    """Advance all distributions that share an external project's Git repository."""
+    command = ["uv", "lock", "--project", str(project.directory)]
+    for distribution in project_git_distributions(project):
+        command.extend(("--upgrade-package", distribution))
+    subprocess.run(command, check=True)
 
 
 def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
@@ -535,35 +562,47 @@ def project_by_name(name: str) -> ExternalProject:
     return next(project for project in EXTERNAL_PROJECTS if project.config_name == name)
 
 
+def validate_marinskyrl_environment(project: ExternalProject) -> None:
+    """Check installed metadata that uv's rigging override replaces during resolution."""
+    with tempfile.TemporaryDirectory(prefix="marinskyrl-lock-") as temporary_directory:
+        directory = Path(temporary_directory)
+        for name in ("pyproject.toml", "uv.lock"):
+            shutil.copyfile(project.directory / name, directory / name)
+        subprocess.run(["uv", "sync", "--project", str(directory), "--frozen", "--no-dev", "--quiet"], check=True)
+        subprocess.run(["uv", "pip", "check", "--python", str(directory / ".venv" / "bin" / "python")], check=True)
+
+
 def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, check: bool) -> bool:
     """Render external_dependencies.py from the locks, TPU fork pins, and promoted GPU release.
 
     Returns whether the generated file already matched (the drift signal `--check` reports on).
     """
-    vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
-    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
-    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
     return synchronize_file(
         GENERATED_PINS,
-        render_pins(
-            dependencies,
-            vllm_gpu_release=vllm_gpu_release,
-            vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
-            tpu_inference_fork_requirement=(
-                f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
-            ),
-        ),
+        render_generated_pins(dependencies, load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)),
         check=check,
     )
 
 
-def promote_gpu_release(manifest_path: Path) -> None:
-    """Re-pin gpu.toml from a promoted manifest and regenerate external_dependencies.py.
+def render_generated_pins(dependencies: tuple[LockedDependency, ...], vllm_gpu_release: VllmGpuRelease) -> str:
+    """Render packaged dependency pins."""
+    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
+    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
+    return render_pins(
+        dependencies,
+        vllm_gpu_release=vllm_gpu_release,
+        vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
+        tpu_inference_fork_requirement=(
+            f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
+        ),
+    )
 
-    ``manifest_path`` is a ``marin-vllm-gpu-manifest.json`` downloaded from the fork release;
-    the fork's release pipeline is the only writer of that artifact. The rendered pin is
-    validated on a staging file before it atomically replaces the canonical one, so a manifest
-    that renders but violates a loader invariant leaves the existing pin in place.
+
+def promote_gpu_release(manifest_path: Path) -> None:
+    """Update the GPU descriptor and packaged pins from a published release manifest.
+
+    Validate and render both outputs before replacing the descriptor. A validation or
+    rendering failure leaves the existing pins in place.
     """
     manifest = json.loads(manifest_path.read_text())
     rendered = render_gpu_release_toml(manifest)
@@ -572,12 +611,13 @@ def promote_gpu_release(manifest_path: Path) -> None:
         handle.write(rendered)
         staging = Path(handle.name)
     try:
-        load_vllm_gpu_release(staging)
+        release = load_vllm_gpu_release(staging)
+        dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
+        generated = render_generated_pins(dependencies, release)
         staging.replace(VLLM_GPU_RELEASE_CONFIG)
+        synchronize_file(GENERATED_PINS, generated, check=False)
     finally:
         staging.unlink(missing_ok=True)
-    dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
-    regenerate_generated_pins(dependencies, check=False)
     print(f"re-pinned vllm GPU release {manifest['release']['tag']} from {manifest_path}")
 
 
@@ -627,17 +667,9 @@ def main() -> None:
     previous_dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     if not args.check:
         for project in selected:
-            subprocess.run(
-                [
-                    "uv",
-                    "lock",
-                    "--project",
-                    str(project.directory),
-                    "--upgrade-package",
-                    project.distribution,
-                ],
-                check=True,
-            )
+            upgrade_project_lock(project)
+            if project.config_name == MARINSKYRL_CONFIG_NAME:
+                validate_marinskyrl_environment(project)
 
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)

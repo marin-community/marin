@@ -15,8 +15,8 @@ import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
 from marin.evaluation.records import write_record
-from marina.apps import Services
 from marina.db import UrlDatabase, engine_for
+from marina.testing import SourceServices
 from starlette.testclient import TestClient
 
 APP = "evaldash"
@@ -46,7 +46,8 @@ def test_an_unmigrated_schema_is_named_rather_than_failing_on_the_first_query(en
 
 
 def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, database_url, monkeypatch):
-    evaldash_app.migrate(engine)
+    with engine.begin() as migration_connection:
+        evaldash_app.migrate(migration_connection)
     monkeypatch.setenv("RECORDS_PREFIXES", records)
     monkeypatch.delenv("EVALDASH_STORE", raising=False)
     monkeypatch.setenv("EVALDASH_INGEST_JOB", "projects/hai-gcp-models/locations/us-central1/jobs/marina-evaldash")
@@ -56,7 +57,7 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
         "trigger_cloud_run_job",
         lambda job: triggered.append(job) or "operations/evaldash-ingest",
     )
-    services = Services(name=APP, data_url="memory://evaldash", database=UrlDatabase(url=database_url))
+    services = SourceServices(name=APP, data_url="memory://evaldash", database=UrlDatabase(url=database_url))
 
     api = evaldash_app.create_api(services)
     with TestClient(api.app) as client:
@@ -83,7 +84,8 @@ def test_the_mounted_api_serves_what_the_reconciler_committed(engine, records, d
 
 
 def test_a_second_instance_serves_the_generation_the_first_committed(engine, records):
-    evaldash_app.migrate(engine)
+    with engine.begin() as migration_connection:
+        evaldash_app.migrate(migration_connection)
     config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
     writer = evaldash_app.PgRecordStore(engine)
     now = [0.0]
@@ -110,7 +112,8 @@ def test_a_second_instance_serves_the_generation_the_first_committed(engine, rec
 
 
 def test_catalog_check_failure_serves_cached_snapshot_until_retry(engine, records, monkeypatch):
-    evaldash_app.migrate(engine)
+    with engine.begin() as migration_connection:
+        evaldash_app.migrate(migration_connection)
     config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
     asyncio.run(
         evaldash_app.PostgresIngestor(

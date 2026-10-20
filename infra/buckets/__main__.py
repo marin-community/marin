@@ -13,6 +13,8 @@ from rigging.filesystem.cluster_config import StoreType, load_cluster_config_fro
 
 GCP_PROJECT = "hai-gcp-models"
 GCP_LOG_BUCKET = "marin-usage-logs"
+CLOUDFLARE_ACCOUNT_ID = "74981a43be0de7712369306c7b19133d"
+R2_BUCKET_NAME = "marin-na"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIRS = (REPO_ROOT / "config",)
 
@@ -36,6 +38,8 @@ def main() -> None:
         gcp_provider=gcp_provider,
         coreweave_provider=coreweave_provider,
         cloudflare_provider=cloudflare_provider,
+        r2_account_id=CLOUDFLARE_ACCOUNT_ID,
+        r2_bucket_name=R2_BUCKET_NAME,
     )
 
 

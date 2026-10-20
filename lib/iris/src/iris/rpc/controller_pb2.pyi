@@ -410,6 +410,14 @@ class Controller(_message.Message):
         lease_duration: _time_pb2.Duration
         access: Controller.EndpointAccess
         def __init__(self, name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., attempt_id: _Optional[int] = ..., endpoint_id: _Optional[str] = ..., lease_duration: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ...) -> None: ...
+    class RenewWorkerTokenRequest(_message.Message):
+        __slots__ = ()
+        def __init__(self) -> None: ...
+    class RenewWorkerTokenResponse(_message.Message):
+        __slots__ = ("token",)
+        TOKEN_FIELD_NUMBER: _ClassVar[int]
+        token: str
+        def __init__(self, token: _Optional[str] = ...) -> None: ...
     class MintEndpointTokenRequest(_message.Message):
         __slots__ = ("endpoint_name", "ttl")
         ENDPOINT_NAME_FIELD_NUMBER: _ClassVar[int]

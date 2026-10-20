@@ -104,7 +104,6 @@ if __name__ == "__main__":
     parser.add_argument("--network-policy", choices=("require-offline-task", "deny"), default="require-offline-task")
     parser.add_argument("--acceleration", choices=("auto", "kvm", "tcg"), default="auto")
     parser.add_argument("--image-cache", type=Path)
-    parser.add_argument("--skopeo", type=Path)
     parser.add_argument("--qemu-assets-json", type=Path)
     args = parser.parse_args()
     if args.command_file is not None and args.commands_json is not None:
@@ -120,11 +119,10 @@ if __name__ == "__main__":
         environment_kwargs = {"network_policy": args.network_policy}
     elif args.bundle_or_source == "task-image":
         environment_import_path = "shellbox.backends.qemu.environment:QemuEnvironment"
-        if args.image_cache is None or args.skopeo is None or args.qemu_assets_json is None:
-            parser.error("task-image requires --image-cache, --skopeo, and --qemu-assets-json")
+        if args.image_cache is None or args.qemu_assets_json is None:
+            parser.error("task-image requires --image-cache and --qemu-assets-json")
         environment_kwargs = {
             "image_cache": str(args.image_cache),
-            "skopeo": str(args.skopeo),
             "qemu_assets": json.loads(args.qemu_assets_json.read_text()),
             "network_policy": args.network_policy,
             "acceleration": args.acceleration,

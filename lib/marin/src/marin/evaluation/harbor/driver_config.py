@@ -36,6 +36,7 @@ _DRIVER_SYSTEM_ENV_KEYS = (
     "HOME",
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "IRIS_ATTEMPT_UID",
     "IRIS_UV_EXECUTABLE",
     "IRIS_WORKDIR",
     "NO_PROXY",
@@ -93,7 +94,7 @@ def harbor_runtime_descriptor(commit: str, runtime_project: str = HARBOR_RUNTIME
         requirements = tuple(
             f"{name}=={by_name[name]['version']}" for entry in direct_dependencies if (name := entry["name"]) != "harbor"
         )
-    return "; ".join((dependency.requirement(("archive",)), *requirements))
+    return "; ".join((dependency.requirement(("archive", "tau3")), *requirements))
 
 
 HARBOR_RUNTIME = harbor_runtime_descriptor(HARBOR.commit)
@@ -190,7 +191,8 @@ class HarborRuntimeOverlay:
     archive_dataset: str
 
 
-def _driver_command(runtime_project: str, command: str, *paths: Path) -> list[str]:
+def harbor_runtime_command(runtime_project: str, script: Path, *arguments: str) -> list[str]:
+    """Build a Python command for the pinned Harbor runtime."""
     return [
         "uv",
         "run",
@@ -199,10 +201,13 @@ def _driver_command(runtime_project: str, command: str, *paths: Path) -> list[st
         str(_harbor_env_dir(runtime_project)),
         "--frozen",
         "python",
-        str(_TRIAL_DRIVER),
-        command,
-        *(str(path) for path in paths),
+        str(script),
+        *arguments,
     ]
+
+
+def _driver_command(runtime_project: str, command: str, *paths: Path) -> list[str]:
+    return harbor_runtime_command(runtime_project, _TRIAL_DRIVER, command, *(str(path) for path in paths))
 
 
 def _driver_environment(driver_env: Mapping[str, str] | None = None) -> dict[str, str]:

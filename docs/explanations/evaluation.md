@@ -39,8 +39,9 @@ mechanisms such as `run_evalchemy`, `run_lm_eval`, and `run_harbor_driver` own o
 result contracts. This keeps the lifecycle common without hiding mechanism-specific configuration
 or outcomes behind a universal `do_eval` interface.
 
-Evalchemy and Harbor write their results directly into FineStore. Each evaluator preserves its native
-files as source objects and writes the normalized `samples` and `steps` tables consumed by Evaldash.
+Evalchemy and Harbor write their results directly into FineStore. Evalchemy owns the
+`evalchemy_results` and `samples` tables. Harbor preserves its native files as source objects and
+writes the normalized `samples` and `steps` tables consumed by Evaldash.
 After the evaluator seals those tables, Marin derives the shared `rollouts_v1` table from `samples` and
 `steps`, then records provenance and aggregate results.
 
@@ -64,9 +65,8 @@ The remaining columns have the same meaning for both evaluators:
 
 Evalchemy prompt messages and model responses become `completion` or `chat` rows. Multiple grading
 filters for one Evalchemy response share one rollout. Harbor's normalized `steps` rows supply the
-`agentic` messages, reasoning, tool calls, and observations. The evaluator-native JSON/JSONL and
-complete Harbor trajectory remain source objects and blobs, so normalization does not replace the
-raw record.
+`agentic` messages, reasoning, tool calls, and observations. Harbor's native files and complete
+trajectories remain source objects and blobs. Evalchemy retains its result documents and normalized samples.
 
 ### Speculative serving
 

@@ -13,6 +13,7 @@ from collections.abc import Iterator
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
+from marin.evaluation.eval_measurements import measurement_from_record
 from marin.evaluation.records import EvalRunRecord, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
@@ -57,6 +58,26 @@ def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
     # qwen3-8b has a 2026.07.19 and a 2026.07.21 launch; mmlu comes from the newer one.
     assert qwen["cells"]["mmlu"]["version"] == "2026.07.21"
     assert qwen["cells"]["mmlu"]["value"] == pytest.approx(0.719)
+
+
+def test_running_step_does_not_publish_its_recorded_score(store, tmp_path):
+    records = list_records(str(tmp_path))
+    newest = max(
+        (record for record in records if record.model.name == "qwen3-8b" and record.evaluation.name == "mmlu"),
+        key=lambda record: record.created_at,
+    )
+    running = newest.model_copy(update={"step_status": "RUNNING"})
+    assert measurement_from_record(running) is not None
+    store.refresh([running if record.run_id == newest.run_id else record for record in records])
+
+    qwen = next(row for row in _panel(store)["rows"] if row["model"] == "qwen3-8b")
+    assert qwen["cells"]["mmlu"]["run_id"] != newest.run_id
+    assert all(point["run_id"] != newest.run_id for point in store.history("qwen3-8b", "mmlu"))
+    detail = store.model_detail("qwen3-8b")
+    assert detail is not None
+    assert all(point["run_id"] != newest.run_id for point in detail["history"]["mmlu"])
+    run = next(row for row in store.fetch_runs() if row["run_id"] == newest.run_id)
+    assert run["status"] == "running"
 
 
 def test_panel_reports_coverage_of_the_selected_benchmarks(store):

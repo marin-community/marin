@@ -9,10 +9,13 @@ Pushover monitor applies.
 |---|---|---|
 | `TrainingTelemetryGone` | `notification=hero-run`: Slack, a Loom triage session, email | `telemetry_gone`, `run_down` |
 | `TrainingOptimizerUnstable` | `notification=hero-run` | `loss_jump`, `grad_norm_high`, `steps_skipped` |
-| `TrainingRunHealthDegraded` | `notification=slack`: one Slack message, no triage session | `token_drops`, `router_entropy`, `router_bias`, `throughput_low`, `mfu_low`, `eval_regressed`, `iris_state_stale`, `task_retried` |
+| `TrainingRunHealthDegraded` | `notification=slack`: Slack, no triage session | `token_drops`, `router_entropy`, `router_bias`, `throughput_low`, `mfu_low`, `eval_regressed`, `iris_state_stale`, `task_retried` |
 
 Each rule evaluates once a minute and stays pending for five. Each firing check is its own alert
 instance labeled with its `reason`; the hero-run route groups them by logical run.
+The `notification=slack` route groups `TrainingRunHealthDegraded` by alert name and
+cluster, so one Slack notification may contain checks from several runs. Open each
+firing alert instance to identify its run and reason.
 Every `notification=hero-run` group, including `TrainingProgressStalled` and
 `TrainingLossSpike`, carries `operator_behavior=hero`. The bridge resolves that
 trusted behavior to the `operator:hero` channel on Loom's shared `ops` profile,
@@ -104,8 +107,10 @@ stale rather than one that never existed: the GCE controllers publish no `iris.t
 all, and a broken rollup leaves its last row readable for an hour. A longer outage stops being
 visible, which is the limit of this check.
 
-Quiet runs emit zero-valued `healthy` rows and an empty fleet emits one `fleet` row, so
-`noDataState: Alerting` stays reserved for a malformed or unavailable response.
+Quiet runs emit zero-valued `healthy` rows and an empty fleet emits one `fleet` row.
+A retryable Finelog query failure also returns a non-firing row; `FinelogFleetUnhealthy`
+reports the shared query-path failure. Grafana's `noDataState: Alerting` and
+`execErrState: Alerting` cover empty and invalid bridge responses.
 
 ## When one fires
 
@@ -125,7 +130,11 @@ Quiet runs emit zero-valued `healthy` rows and an empty fleet emits one `fleet` 
 6. `iris_state_stale`: the hero alerting path is degraded — `TrainingProgressStalled` and
    `TrainingLossSpike` no longer enroll this run. Check the controller and its state telemetry.
 7. `task_retried` is information, not a fault. It explains a W&B gap while the new attempt redoes
-   steps below the high-water mark.
+   steps below the high-water mark. This check requires a fresh training-phase heartbeat and an
+   Iris retry or gang-requeue event from the last 15 minutes. A failed attempt can therefore go
+   unreported while its replacement initializes; the critical stall rule also gives the new
+   attempt a fresh 45-minute initialization window. Inspect Iris attempt events during a restart;
+   [critical coverage during retries](https://github.com/marin-community/marin/issues/10048) is still open.
 
 Verify what a rule saw with a bounded Finelog query:
 

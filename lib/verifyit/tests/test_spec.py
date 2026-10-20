@@ -56,6 +56,13 @@ def test_single_string_becomes_tuple_and_none_is_omitted():
     assert "special_judge" not in render_spec(StdioSpec(command="./a.out"))
 
 
+def test_large_repository_test_id_lists_round_trip():
+    # SWE-smith repositories can carry thousands of parametrized PASS_TO_PASS IDs.
+    ids = tuple(f'tests/test_schema.py::test_schema[case-{i}-"quoted"-\\-\n-λ]' for i in range(10_000))
+    spec = PytestSpec(must_pass=ids[:2], must_not_break=ids)
+    assert parse_spec(render_spec(spec)) == spec
+
+
 @pytest.mark.parametrize(
     "text, message",
     [
