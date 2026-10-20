@@ -3,13 +3,12 @@
 
 """The decision grader type, its TaskSpec form, and the host-side grade of a trial run without it."""
 
-from dataclasses import dataclass
+from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
-from rolloutengine.contracts import RolloutInterrupted, RolloutOperation
-from rolloutengine.test_support import ReplayModel, engine, lowered, machine_runtime
-from shellbox.machine import MachineSpec
+from rolloutengine.models import GradedRolloutInterrupted, RolloutFailure, RolloutOperation, TaskRolloutSpec
+from rolloutengine.test_support import ReplayModel, rollout_spec
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -21,6 +20,7 @@ from taskcompendium.models import (
     TaskSpec,
     VerifyitGrader,
 )
+from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import ExactSpec
 
 from taskforge.spec import decision, draft
@@ -63,6 +63,8 @@ RUBRIC = Rubric(
 # A fixed transcript: one assistant turn whose reasoning the decision model must not see.
 SOLVER_TURN = {"role": "assistant", "content": REPLY, "reasoning_content": "Sum the approved rows first."}
 TRANSCRIPT = [{"role": "user", "content": INSTRUCTION}, SOLVER_TURN]
+ENGINE = draft.rollout_engine({}, command_timeout=None)
+UNUSED_JUDGE = JudgeConnection("http://judge.invalid/v1", "unused")
 
 
 def task(grader) -> TaskSpec:
@@ -72,6 +74,11 @@ def task(grader) -> TaskSpec:
 async def graded(grader: DecisionGrader, messages: list[dict], client: FakeDecisionClient):
     """The host's grade of ``messages`` on the ledger task carrying ``grader``."""
     return await grade_decision_answer(task(grader), GradingAttempt(chat_conversation(messages)), client, timeout=30)
+
+
+def trial_spec(built: TaskSpec, **limits) -> TaskRolloutSpec:
+    """``built`` without machines under Taskforge's shell harness."""
+    return rollout_spec(built, harness=draft.SHELL_HARNESS, **limits)
 
 
 def uncalibrated() -> DecisionGrader:
@@ -167,25 +174,12 @@ async def test_the_trial_runs_without_the_grader_and_the_host_grades_its_final_c
     client = FakeDecisionClient({REPLY: 3.6})
     model = ReplayModel([dict(SOLVER_TURN)])
 
-    rollout = await run_decision_trial(engine(model), lowered(built), client)
+    result = await run_decision_trial(ENGINE, trial_spec(built), model.complete, client)
 
-    assert (rollout.grade.status, rollout.grade.reward, rollout.grade.passed) == (Outcome.GRADED, 1.0, True)
+    assert (result.grade.status, result.grade.reward, result.grade.passed) == (Outcome.GRADED, 1.0, True)
     assert client.requests[0][0]["z_candidate_answer"] == REPLY
     # Nothing of the grader reached the solver: its prompt is the task's public conversation alone.
     assert REFERENCE not in str(model.requests[0].messages)
-
-
-@dataclass(frozen=True)
-class NoVerifierMachines:
-    """A factory whose machines never start, so a verifier-machine grade fails after the conversation ended."""
-
-    backend: str = "local"
-
-    def check_environment(self, requirements, spec: MachineSpec) -> None:
-        pass
-
-    async def create(self, spec: MachineSpec):
-        raise RuntimeError("no verifier machine in this test")
 
 
 async def test_the_no_grader_trial_has_the_same_conversation_as_the_judge_spec_rollout():
@@ -193,22 +187,24 @@ async def test_the_no_grader_trial_has_the_same_conversation_as_the_judge_spec_r
     decision_task = task(uncalibrated())
     judge_task = task(draft.judge_grader(RUBRIC, REFERENCE))
     assert isinstance(judge_task.grader, VerifyitGrader)
+    # The judge grades on the host and never calls its service here: without its rubric context it ends at once.
+    unjudgeable = judge_task.model_copy(update={"resources": judge_task.resources.model_copy(update={"verifier": ()})})
     trial = await run_decision_trial(
-        engine(ReplayModel([dict(SOLVER_TURN)])),
-        lowered(decision_task),
+        ENGINE,
+        trial_spec(decision_task),
+        ReplayModel([dict(SOLVER_TURN)]).complete,
         FakeDecisionClient({REPLY: 3.0}),
     )
 
-    with pytest.raises(RolloutInterrupted) as interrupted:
-        await engine(ReplayModel([dict(SOLVER_TURN)]), {"local": NoVerifierMachines()}).run(
-            lowered(judge_task, verifier_machine=machine_runtime())
-        )
+    judged = await ENGINE.run_task(
+        trial_spec(unjudgeable, judge_connection=UNUSED_JUDGE), ReplayModel([dict(SOLVER_TURN)]).complete
+    )
 
-    assert interrupted.value.operation is RolloutOperation.GRADE
-    judged = interrupted.value.rollout
-    assert trial.messages == judged.messages
-    assert trial.messages[-1]["content"] == REPLY
-    assert [step.messages for step in trial.steps] == [step.messages for step in judged.steps]
+    assert judged.grade.status is Outcome.INVALID_TASK
+    (trial_chat,), (judged_chat,) = trial.rollout.conversations, judged.rollout.conversations
+    assert trial_chat.messages == judged_chat.messages
+    assert trial_chat.messages[-1]["content"] == REPLY
+    assert [step.messages for step in trial_chat.steps] == [step.messages for step in judged_chat.steps]
 
 
 @pytest.fixture
@@ -219,50 +215,55 @@ def no_backoff(monkeypatch):
 async def trial_rollout():
     """A finished NoGrader trial of the ledger task, before the host grades it, and the model that served it."""
     model = ReplayModel([dict(SOLVER_TURN)])
-    rollout = await engine(model).run(decision.trial_form(lowered(task(uncalibrated()))))
-    return rollout, model
+    result = await ENGINE.run_task(decision.trial_form(trial_spec(task(uncalibrated()))), model.complete)
+    return result, model
 
 
 async def test_a_transient_failure_re_reads_the_kept_conversation_once(no_backoff):
-    rollout, model = await trial_rollout()
+    result, model = await trial_rollout()
     client = FakeDecisionClient({REPLY: 3.2}, failures=[DecisionUnavailable("503 clef_unavailable")])
 
-    graded = await host_graded(rollout, task(uncalibrated()), client, deadline=30)
+    graded = await host_graded(result, task(uncalibrated()), client, deadline=30)
 
     assert (graded.grade.status, graded.grade.reward) == (Outcome.GRADED, 1.0)
     assert (len(client.requests), len(model.requests)) == (2, 1)
-    assert graded.messages == rollout.messages
+    assert graded.rollout == result.rollout
 
 
 async def test_a_second_transient_failure_ends_the_grade_as_decision_unavailable(no_backoff):
-    rollout, _ = await trial_rollout()
+    result, _ = await trial_rollout()
     client = FakeDecisionClient({REPLY: 3.2}, failures=[DecisionUnavailable("first"), DecisionUnavailable("second")])
 
-    with pytest.raises(RolloutInterrupted) as interrupted:
-        await host_graded(rollout, task(uncalibrated()), client, deadline=30)
+    with pytest.raises(GradedRolloutInterrupted) as interrupted:
+        await host_graded(result, task(uncalibrated()), client, deadline=30)
 
-    assert interrupted.value.operation is RolloutOperation.GRADE and interrupted.value.rollout == rollout
-    assert isinstance(interrupted.value.__cause__, DecisionUnavailable) and str(interrupted.value.__cause__) == "second"
+    error = interrupted.value
+    assert (error.operation, error.grade) == (RolloutOperation.GRADE, result.grade)
+    # The rollout is kept, and its failure names the read's error as the engine names its own.
+    assert error.rollout == replace(
+        result.rollout, failure=RolloutFailure("DecisionUnavailable", {"operation": "grade", "error": "second"})
+    )
+    assert isinstance(error.__cause__, DecisionUnavailable) and str(error.__cause__) == "second"
     assert len(client.requests) == 2
 
 
 async def test_a_permanent_failure_is_a_grader_failure_without_a_retry(no_backoff):
-    rollout, _ = await trial_rollout()
+    result, _ = await trial_rollout()
     client = FakeDecisionClient({REPLY: 3.2}, failures=[ValueError("answers ['x'] != questions")])
 
-    with pytest.raises(RolloutInterrupted) as interrupted:
-        await host_graded(rollout, task(uncalibrated()), client, deadline=30)
+    with pytest.raises(GradedRolloutInterrupted) as interrupted:
+        await host_graded(result, task(uncalibrated()), client, deadline=30)
 
     assert isinstance(interrupted.value.__cause__, ValueError)
     assert len(client.requests) == 1
 
 
 async def test_a_read_past_the_verifier_deadline_is_transient_and_bounded(no_backoff):
-    rollout, _ = await trial_rollout()
+    result, _ = await trial_rollout()
     client = FakeDecisionClient({REPLY: 3.2}, delay=5.0)
 
-    with pytest.raises(RolloutInterrupted) as interrupted:
-        await host_graded(rollout, task(uncalibrated()), client, deadline=0.05)
+    with pytest.raises(GradedRolloutInterrupted) as interrupted:
+        await host_graded(result, task(uncalibrated()), client, deadline=0.05)
 
     assert isinstance(interrupted.value.__cause__, DecisionUnavailable)
     assert client.timeouts == [0.05, 0.05]
@@ -272,9 +273,7 @@ async def test_the_trial_passes_its_verifier_deadline_to_the_decision_client():
     client = FakeDecisionClient({REPLY: 3.2})
 
     await run_decision_trial(
-        engine(ReplayModel([dict(SOLVER_TURN)])),
-        lowered(task(uncalibrated()), verifier_timeout=7),
-        client,
+        ENGINE, trial_spec(task(uncalibrated()), verifier_timeout=7), ReplayModel([dict(SOLVER_TURN)]).complete, client
     )
 
     assert client.timeouts == [7]
