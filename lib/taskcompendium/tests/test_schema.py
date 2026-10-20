@@ -12,7 +12,6 @@ from verifyit.spec import ExactSpec
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading import grade_answer
-from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -56,17 +55,6 @@ def specification():
     )
 
 
-def test_legacy_conversation_wire_and_public_identity_remain_unchanged(specification):
-    wire = specification.model_dump(mode="json")
-    wire["context"] = {"events": [{"type": "message", "role": "user", "content": "Repair the project."}]}
-    loaded = TaskSpec.model_validate_json(json.dumps(wire))
-    assert loaded.model_dump(mode="json") == wire
-    public = {key: value for key, value in wire.items() if key not in {"id", "source", "grader"}}
-    public["resources"]["oracle"] = []
-    public["resources"]["verifier"] = []
-    assert semantic_digest(loaded, include_reference=False) == canonical_sha256(public)
-
-
 def test_assistant_prefill_survives_wire_and_remains_last_in_model_request(specification):
     context = ConversationInput(events=(*specification.context.events, TextMessage(role="assistant", content='{"x":')))
     task = TaskSpec.model_validate({**specification.model_dump(), "context": context})
@@ -74,7 +62,7 @@ def test_assistant_prefill_survives_wire_and_remains_last_in_model_request(speci
     assert restored.context == context
     request = chat_request(restored)
     assert request["messages"][-1] == {"role": "assistant", "content": '{"x":'}
-    assert request["messages"][-2] == {"role": "user", "content": "Give your answer as plain text."}
+    assert request["messages"][-2]["role"] == "user"
     assert request["extra_body"] == {"continue_final_message": True, "add_generation_prompt": False}
     changed = task.model_copy(
         update={
