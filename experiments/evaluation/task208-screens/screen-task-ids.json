@@ -1,0 +1,1426 @@
+{
+  "seed": 20261016,
+  "policy_commit": "75a5690b0ff2e1510d73e576649e3e059f06da9a",
+  "registry_url": "https://raw.githubusercontent.com/marin-community/harbor/016dd78b301b621ee4089f2da5776ebe80236820/registry.json",
+  "registry_sha256": "3c7f4f7ef802bc22e9aeefd47cf70db8ed42aaca334ecd737e08856f1b2f6da1",
+  "screens": {
+    "swebench-verified": {
+      "version": "1.0",
+      "task_ids": [
+        "astropy__astropy-13236",
+        "astropy__astropy-14369",
+        "astropy__astropy-14508",
+        "astropy__astropy-14598",
+        "astropy__astropy-14995",
+        "astropy__astropy-8872",
+        "django__django-10097",
+        "django__django-11138",
+        "django__django-11141",
+        "django__django-11206",
+        "django__django-11276",
+        "django__django-11333",
+        "django__django-11433",
+        "django__django-11477",
+        "django__django-11490",
+        "django__django-11728",
+        "django__django-11820",
+        "django__django-12050",
+        "django__django-12276",
+        "django__django-12308",
+        "django__django-12406",
+        "django__django-13109",
+        "django__django-13128",
+        "django__django-13315",
+        "django__django-13346",
+        "django__django-13363",
+        "django__django-13401",
+        "django__django-13410",
+        "django__django-13449",
+        "django__django-13516",
+        "django__django-13670",
+        "django__django-13925",
+        "django__django-13933",
+        "django__django-14017",
+        "django__django-14053",
+        "django__django-14238",
+        "django__django-14315",
+        "django__django-14855",
+        "django__django-14999",
+        "django__django-15037",
+        "django__django-15128",
+        "django__django-15252",
+        "django__django-15277",
+        "django__django-15278",
+        "django__django-15368",
+        "django__django-15467",
+        "django__django-15499",
+        "django__django-15987",
+        "django__django-16082",
+        "django__django-16485",
+        "django__django-16527",
+        "django__django-16595",
+        "matplotlib__matplotlib-20826",
+        "matplotlib__matplotlib-24870",
+        "matplotlib__matplotlib-25332",
+        "matplotlib__matplotlib-25960",
+        "matplotlib__matplotlib-26466",
+        "psf__requests-2317",
+        "pydata__xarray-3151",
+        "pydata__xarray-3305",
+        "pydata__xarray-4629",
+        "pydata__xarray-4687",
+        "pydata__xarray-6938",
+        "pylint-dev__pylint-4551",
+        "pylint-dev__pylint-6386",
+        "pylint-dev__pylint-6903",
+        "pytest-dev__pytest-10051",
+        "pytest-dev__pytest-10081",
+        "pytest-dev__pytest-5840",
+        "pytest-dev__pytest-7324",
+        "pytest-dev__pytest-7521",
+        "pytest-dev__pytest-8399",
+        "scikit-learn__scikit-learn-12973",
+        "scikit-learn__scikit-learn-13135",
+        "scikit-learn__scikit-learn-13142",
+        "scikit-learn__scikit-learn-14087",
+        "scikit-learn__scikit-learn-15100",
+        "scikit-learn__scikit-learn-25931",
+        "scikit-learn__scikit-learn-26194",
+        "sphinx-doc__sphinx-11445",
+        "sphinx-doc__sphinx-7440",
+        "sphinx-doc__sphinx-7757",
+        "sphinx-doc__sphinx-8721",
+        "sphinx-doc__sphinx-9229",
+        "sphinx-doc__sphinx-9230",
+        "sphinx-doc__sphinx-9698",
+        "sympy__sympy-13372",
+        "sympy__sympy-13480",
+        "sympy__sympy-14531",
+        "sympy__sympy-15017",
+        "sympy__sympy-16450",
+        "sympy__sympy-16597",
+        "sympy__sympy-18199",
+        "sympy__sympy-19495",
+        "sympy__sympy-20801",
+        "sympy__sympy-21379",
+        "sympy__sympy-21847",
+        "sympy__sympy-22456",
+        "sympy__sympy-23413",
+        "sympy__sympy-24443"
+      ],
+      "selection": "existing HF random-100 IDs mapped to canonical policy tasks",
+      "source_revision": "0c553bd6d05d451907afb8db31dba84759ccc993",
+      "tasks": [
+        {
+          "name": "sympy__sympy-24443",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-24443"
+        },
+        {
+          "name": "pytest-dev__pytest-5840",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pytest-dev__pytest-5840"
+        },
+        {
+          "name": "django__django-13925",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13925"
+        },
+        {
+          "name": "matplotlib__matplotlib-25960",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/matplotlib__matplotlib-25960"
+        },
+        {
+          "name": "sympy__sympy-14531",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-14531"
+        },
+        {
+          "name": "django__django-15467",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-15467"
+        },
+        {
+          "name": "django__django-11206",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11206"
+        },
+        {
+          "name": "django__django-15277",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-15277"
+        },
+        {
+          "name": "django__django-14999",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-14999"
+        },
+        {
+          "name": "matplotlib__matplotlib-20826",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/matplotlib__matplotlib-20826"
+        },
+        {
+          "name": "django__django-14238",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-14238"
+        },
+        {
+          "name": "django__django-13128",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13128"
+        },
+        {
+          "name": "scikit-learn__scikit-learn-15100",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/scikit-learn__scikit-learn-15100"
+        },
+        {
+          "name": "django__django-11141",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11141"
+        },
+        {
+          "name": "pytest-dev__pytest-7521",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pytest-dev__pytest-7521"
+        },
+        {
+          "name": "django__django-15278",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-15278"
+        },
+        {
+          "name": "sphinx-doc__sphinx-7757",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sphinx-doc__sphinx-7757"
+        },
+        {
+          "name": "django__django-13516",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13516"
+        },
+        {
+          "name": "django__django-13410",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13410"
+        },
+        {
+          "name": "sympy__sympy-21379",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-21379"
+        },
+        {
+          "name": "scikit-learn__scikit-learn-14087",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/scikit-learn__scikit-learn-14087"
+        },
+        {
+          "name": "django__django-13449",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13449"
+        },
+        {
+          "name": "django__django-15252",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-15252"
+        },
+        {
+          "name": "psf__requests-2317",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/psf__requests-2317"
+        },
+        {
+          "name": "sphinx-doc__sphinx-7440",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sphinx-doc__sphinx-7440"
+        },
+        {
+          "name": "sympy__sympy-19495",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-19495"
+        },
+        {
+          "name": "matplotlib__matplotlib-24870",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/matplotlib__matplotlib-24870"
+        },
+        {
+          "name": "django__django-12050",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-12050"
+        },
+        {
+          "name": "scikit-learn__scikit-learn-13142",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/scikit-learn__scikit-learn-13142"
+        },
+        {
+          "name": "astropy__astropy-8872",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/astropy__astropy-8872"
+        },
+        {
+          "name": "django__django-14855",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-14855"
+        },
+        {
+          "name": "scikit-learn__scikit-learn-13135",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/scikit-learn__scikit-learn-13135"
+        },
+        {
+          "name": "matplotlib__matplotlib-26466",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/matplotlib__matplotlib-26466"
+        },
+        {
+          "name": "django__django-13401",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13401"
+        },
+        {
+          "name": "django__django-13346",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13346"
+        },
+        {
+          "name": "sphinx-doc__sphinx-11445",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sphinx-doc__sphinx-11445"
+        },
+        {
+          "name": "django__django-16082",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-16082"
+        },
+        {
+          "name": "django__django-12406",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-12406"
+        },
+        {
+          "name": "pydata__xarray-3151",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pydata__xarray-3151"
+        },
+        {
+          "name": "django__django-10097",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-10097"
+        },
+        {
+          "name": "sympy__sympy-13372",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-13372"
+        },
+        {
+          "name": "django__django-13109",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13109"
+        },
+        {
+          "name": "django__django-13363",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13363"
+        },
+        {
+          "name": "sympy__sympy-21847",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-21847"
+        },
+        {
+          "name": "pydata__xarray-4687",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pydata__xarray-4687"
+        },
+        {
+          "name": "scikit-learn__scikit-learn-25931",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/scikit-learn__scikit-learn-25931"
+        },
+        {
+          "name": "django__django-16595",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-16595"
+        },
+        {
+          "name": "pytest-dev__pytest-8399",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pytest-dev__pytest-8399"
+        },
+        {
+          "name": "pydata__xarray-3305",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pydata__xarray-3305"
+        },
+        {
+          "name": "pylint-dev__pylint-6386",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pylint-dev__pylint-6386"
+        },
+        {
+          "name": "django__django-14315",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-14315"
+        },
+        {
+          "name": "pytest-dev__pytest-7324",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pytest-dev__pytest-7324"
+        },
+        {
+          "name": "sphinx-doc__sphinx-9229",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sphinx-doc__sphinx-9229"
+        },
+        {
+          "name": "sphinx-doc__sphinx-9230",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sphinx-doc__sphinx-9230"
+        },
+        {
+          "name": "pytest-dev__pytest-10081",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pytest-dev__pytest-10081"
+        },
+        {
+          "name": "django__django-11333",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11333"
+        },
+        {
+          "name": "django__django-15037",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-15037"
+        },
+        {
+          "name": "django__django-11477",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11477"
+        },
+        {
+          "name": "django__django-14017",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-14017"
+        },
+        {
+          "name": "sympy__sympy-16597",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-16597"
+        },
+        {
+          "name": "django__django-11728",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11728"
+        },
+        {
+          "name": "pydata__xarray-4629",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pydata__xarray-4629"
+        },
+        {
+          "name": "scikit-learn__scikit-learn-26194",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/scikit-learn__scikit-learn-26194"
+        },
+        {
+          "name": "sympy__sympy-23413",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-23413"
+        },
+        {
+          "name": "django__django-15987",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-15987"
+        },
+        {
+          "name": "django__django-11820",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11820"
+        },
+        {
+          "name": "pylint-dev__pylint-6903",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pylint-dev__pylint-6903"
+        },
+        {
+          "name": "django__django-11490",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11490"
+        },
+        {
+          "name": "django__django-12308",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-12308"
+        },
+        {
+          "name": "sphinx-doc__sphinx-9698",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sphinx-doc__sphinx-9698"
+        },
+        {
+          "name": "django__django-11276",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11276"
+        },
+        {
+          "name": "astropy__astropy-14369",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/astropy__astropy-14369"
+        },
+        {
+          "name": "django__django-15128",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-15128"
+        },
+        {
+          "name": "django__django-11433",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11433"
+        },
+        {
+          "name": "astropy__astropy-14598",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/astropy__astropy-14598"
+        },
+        {
+          "name": "django__django-14053",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-14053"
+        },
+        {
+          "name": "pydata__xarray-6938",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pydata__xarray-6938"
+        },
+        {
+          "name": "django__django-11138",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-11138"
+        },
+        {
+          "name": "sympy__sympy-22456",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-22456"
+        },
+        {
+          "name": "scikit-learn__scikit-learn-12973",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/scikit-learn__scikit-learn-12973"
+        },
+        {
+          "name": "django__django-16485",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-16485"
+        },
+        {
+          "name": "astropy__astropy-14995",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/astropy__astropy-14995"
+        },
+        {
+          "name": "sympy__sympy-16450",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-16450"
+        },
+        {
+          "name": "astropy__astropy-13236",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/astropy__astropy-13236"
+        },
+        {
+          "name": "django__django-16527",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-16527"
+        },
+        {
+          "name": "sympy__sympy-20801",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-20801"
+        },
+        {
+          "name": "django__django-15368",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-15368"
+        },
+        {
+          "name": "sympy__sympy-13480",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-13480"
+        },
+        {
+          "name": "django__django-13670",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13670"
+        },
+        {
+          "name": "pytest-dev__pytest-10051",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pytest-dev__pytest-10051"
+        },
+        {
+          "name": "pylint-dev__pylint-4551",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/pylint-dev__pylint-4551"
+        },
+        {
+          "name": "sympy__sympy-18199",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-18199"
+        },
+        {
+          "name": "sphinx-doc__sphinx-8721",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sphinx-doc__sphinx-8721"
+        },
+        {
+          "name": "django__django-13315",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13315"
+        },
+        {
+          "name": "django__django-12276",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-12276"
+        },
+        {
+          "name": "astropy__astropy-14508",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/astropy__astropy-14508"
+        },
+        {
+          "name": "django__django-13933",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-13933"
+        },
+        {
+          "name": "sympy__sympy-15017",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/sympy__sympy-15017"
+        },
+        {
+          "name": "matplotlib__matplotlib-25332",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/matplotlib__matplotlib-25332"
+        },
+        {
+          "name": "django__django-15499",
+          "git_url": "https://github.com/laude-institute/harbor-datasets.git",
+          "git_commit_id": "86723674f04e4209ac479d0fb75d9d9f44b4377e",
+          "path": "datasets/swebench-verified/django__django-15499"
+        }
+      ]
+    },
+    "openthoughts-tblite": {
+      "version": "2.0",
+      "task_ids": [
+        "acl-permissions-inheritance",
+        "amuse-install",
+        "anomaly-detection-ranking",
+        "api-endpoint-permission-canonicalizer",
+        "application-debug",
+        "auth_token_race_condition",
+        "bandit-delayed-feedback",
+        "bash-log-processor-fix",
+        "basic-message-queue",
+        "battery-charging-optimization",
+        "bloom-filter-cache-penetration-prevention",
+        "book-portfolio-analysis",
+        "bracket-sequence-restoration",
+        "breast-cancer-mlflow",
+        "broken-python",
+        "build-merkle-tree-cli-sha512",
+        "build-system-task-ordering",
+        "california-housing-api",
+        "chained-forensic-extraction_20260101_011957",
+        "competitive-programming-solver",
+        "container-registry-optimization",
+        "convolutional-layers",
+        "corrupted-filesystem-recovery",
+        "cosign-keyless-signing",
+        "cpp-daemon-sighup-segfault",
+        "cryptographic-protocol-verifier",
+        "csv-json-jsonl-merger",
+        "db-migration-local-storage",
+        "distributed-test-execution-scheduler",
+        "ekf-localization",
+        "etl_checkpoint_resume_bug",
+        "fix-js-network-controller",
+        "fix_async_worker_queue",
+        "floor-plan-geometry",
+        "game-of-stones",
+        "git-repo-forensics",
+        "grid-pathfinding",
+        "grpc-plant-position-server",
+        "html-index-analysis",
+        "hydra-debug-slurm-mode",
+        "image-tile-identification",
+        "industrial-kiln-controller",
+        "iot-device-registration-server",
+        "iris-dataset-classification",
+        "jq-data-processing",
+        "jsonl-aggregator",
+        "legal-summary-extraction",
+        "log-summary",
+        "malicious-package-forensics",
+        "maven-slf4j-conflict",
+        "mech-system",
+        "mlflow-register",
+        "monorepo-changelog-cli",
+        "mtls-cert-rotation",
+        "multi-labeller",
+        "multi-server-configuration",
+        "network-log-normalization",
+        "neural-architecture-search-final",
+        "neutron-submission",
+        "okhttp-trailers-crash",
+        "pandas-etl",
+        "pandas-numpy-data-analysis",
+        "parking-lot-pathfinding",
+        "pdf-table-parsing",
+        "permutation-construction-100k",
+        "pgn-chess-repair-puzzles",
+        "playing-card-recognition",
+        "prediction-model-evaluation",
+        "protein-sequence",
+        "publisher-market-analysis",
+        "publisher-market-analysis-v2",
+        "python-api-rate-limit",
+        "raft-log-repair-concurrent-access",
+        "react-typescript-debugg",
+        "reproducibility-and-envsetup",
+        "reverse-engineer-stack-vm",
+        "rsa-jwt-token-api-redis-blacklist",
+        "sakila-sqlite-queries",
+        "sales-data-csv-analysis",
+        "scan-linux-persistence-artifacts",
+        "schedule-vacation",
+        "security-breach-incident-response",
+        "security-incident-log-analysis",
+        "server-log-analysis",
+        "service-deployment-wave-planner",
+        "sign-vector-game",
+        "simple-database-query-tool",
+        "smiles-data-lab",
+        "sql-injection-forensics",
+        "submission_a63937a5_20251224_152124",
+        "supply-chain-fulfillment",
+        "symlink-chain-traversal",
+        "sympy-bug-fix",
+        "systemd-log-monitoring",
+        "task-xxe-exploit",
+        "todos-api",
+        "token-auth-websocket",
+        "tsl-test-case-generation",
+        "vimscript-vim-quine",
+        "word-derangement-mapping"
+      ],
+      "selection": "all 100 canonical tasks; seed unused",
+      "source_revision": null,
+      "tasks": [
+        {
+          "name": "acl-permissions-inheritance",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "acl-permissions-inheritance"
+        },
+        {
+          "name": "amuse-install",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "amuse-install"
+        },
+        {
+          "name": "anomaly-detection-ranking",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "anomaly-detection-ranking"
+        },
+        {
+          "name": "api-endpoint-permission-canonicalizer",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "api-endpoint-permission-canonicalizer"
+        },
+        {
+          "name": "application-debug",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "application-debug"
+        },
+        {
+          "name": "auth_token_race_condition",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "auth_token_race_condition"
+        },
+        {
+          "name": "bandit-delayed-feedback",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "bandit-delayed-feedback"
+        },
+        {
+          "name": "bash-log-processor-fix",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "bash-log-processor-fix"
+        },
+        {
+          "name": "basic-message-queue",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "basic-message-queue"
+        },
+        {
+          "name": "battery-charging-optimization",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "battery-charging-optimization"
+        },
+        {
+          "name": "bloom-filter-cache-penetration-prevention",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "bloom-filter-cache-penetration-prevention"
+        },
+        {
+          "name": "book-portfolio-analysis",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "book-portfolio-analysis"
+        },
+        {
+          "name": "bracket-sequence-restoration",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "bracket-sequence-restoration"
+        },
+        {
+          "name": "breast-cancer-mlflow",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "breast-cancer-mlflow"
+        },
+        {
+          "name": "broken-python",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "broken-python"
+        },
+        {
+          "name": "build-merkle-tree-cli-sha512",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "build-merkle-tree-cli-sha512"
+        },
+        {
+          "name": "build-system-task-ordering",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "build-system-task-ordering"
+        },
+        {
+          "name": "california-housing-api",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "california-housing-api"
+        },
+        {
+          "name": "chained-forensic-extraction_20260101_011957",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "chained-forensic-extraction_20260101_011957"
+        },
+        {
+          "name": "competitive-programming-solver",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "competitive-programming-solver"
+        },
+        {
+          "name": "container-registry-optimization",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "container-registry-optimization"
+        },
+        {
+          "name": "convolutional-layers",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "convolutional-layers"
+        },
+        {
+          "name": "corrupted-filesystem-recovery",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "corrupted-filesystem-recovery"
+        },
+        {
+          "name": "cosign-keyless-signing",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "cosign-keyless-signing"
+        },
+        {
+          "name": "cpp-daemon-sighup-segfault",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "cpp-daemon-sighup-segfault"
+        },
+        {
+          "name": "cryptographic-protocol-verifier",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "cryptographic-protocol-verifier"
+        },
+        {
+          "name": "csv-json-jsonl-merger",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "csv-json-jsonl-merger"
+        },
+        {
+          "name": "db-migration-local-storage",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "db-migration-local-storage"
+        },
+        {
+          "name": "distributed-test-execution-scheduler",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "distributed-test-execution-scheduler"
+        },
+        {
+          "name": "ekf-localization",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "ekf-localization"
+        },
+        {
+          "name": "etl_checkpoint_resume_bug",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "etl_checkpoint_resume_bug"
+        },
+        {
+          "name": "fix-js-network-controller",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "fix-js-network-controller"
+        },
+        {
+          "name": "fix_async_worker_queue",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "fix_async_worker_queue"
+        },
+        {
+          "name": "floor-plan-geometry",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "floor-plan-geometry"
+        },
+        {
+          "name": "game-of-stones",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "game-of-stones"
+        },
+        {
+          "name": "git-repo-forensics",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "git-repo-forensics"
+        },
+        {
+          "name": "grid-pathfinding",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "grid-pathfinding"
+        },
+        {
+          "name": "grpc-plant-position-server",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "grpc-plant-position-server"
+        },
+        {
+          "name": "html-index-analysis",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "html-index-analysis"
+        },
+        {
+          "name": "hydra-debug-slurm-mode",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "hydra-debug-slurm-mode"
+        },
+        {
+          "name": "image-tile-identification",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "image-tile-identification"
+        },
+        {
+          "name": "industrial-kiln-controller",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "industrial-kiln-controller"
+        },
+        {
+          "name": "iot-device-registration-server",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "iot-device-registration-server"
+        },
+        {
+          "name": "iris-dataset-classification",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "iris-dataset-classification"
+        },
+        {
+          "name": "jq-data-processing",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "jq-data-processing"
+        },
+        {
+          "name": "jsonl-aggregator",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "jsonl-aggregator"
+        },
+        {
+          "name": "legal-summary-extraction",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "legal-summary-extraction"
+        },
+        {
+          "name": "log-summary",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "log-summary"
+        },
+        {
+          "name": "malicious-package-forensics",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "malicious-package-forensics"
+        },
+        {
+          "name": "maven-slf4j-conflict",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "maven-slf4j-conflict"
+        },
+        {
+          "name": "mech-system",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "mech-system"
+        },
+        {
+          "name": "mlflow-register",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "mlflow-register"
+        },
+        {
+          "name": "monorepo-changelog-cli",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "monorepo-changelog-cli"
+        },
+        {
+          "name": "mtls-cert-rotation",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "mtls-cert-rotation"
+        },
+        {
+          "name": "multi-labeller",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "multi-labeller"
+        },
+        {
+          "name": "multi-server-configuration",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "multi-server-configuration"
+        },
+        {
+          "name": "network-log-normalization",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "network-log-normalization"
+        },
+        {
+          "name": "neural-architecture-search-final",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "neural-architecture-search-final"
+        },
+        {
+          "name": "neutron-submission",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "neutron-submission"
+        },
+        {
+          "name": "okhttp-trailers-crash",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "okhttp-trailers-crash"
+        },
+        {
+          "name": "pandas-etl",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "pandas-etl"
+        },
+        {
+          "name": "pandas-numpy-data-analysis",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "pandas-numpy-data-analysis"
+        },
+        {
+          "name": "parking-lot-pathfinding",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "parking-lot-pathfinding"
+        },
+        {
+          "name": "pdf-table-parsing",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "pdf-table-parsing"
+        },
+        {
+          "name": "permutation-construction-100k",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "permutation-construction-100k"
+        },
+        {
+          "name": "pgn-chess-repair-puzzles",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "pgn-chess-repair-puzzles"
+        },
+        {
+          "name": "playing-card-recognition",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "playing-card-recognition"
+        },
+        {
+          "name": "prediction-model-evaluation",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "prediction-model-evaluation"
+        },
+        {
+          "name": "protein-sequence",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "protein-sequence"
+        },
+        {
+          "name": "publisher-market-analysis",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "publisher-market-analysis"
+        },
+        {
+          "name": "publisher-market-analysis-v2",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "publisher-market-analysis-v2"
+        },
+        {
+          "name": "python-api-rate-limit",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "python-api-rate-limit"
+        },
+        {
+          "name": "raft-log-repair-concurrent-access",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "raft-log-repair-concurrent-access"
+        },
+        {
+          "name": "react-typescript-debugg",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "react-typescript-debugg"
+        },
+        {
+          "name": "reproducibility-and-envsetup",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "reproducibility-and-envsetup"
+        },
+        {
+          "name": "reverse-engineer-stack-vm",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "reverse-engineer-stack-vm"
+        },
+        {
+          "name": "rsa-jwt-token-api-redis-blacklist",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "rsa-jwt-token-api-redis-blacklist"
+        },
+        {
+          "name": "sakila-sqlite-queries",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "sakila-sqlite-queries"
+        },
+        {
+          "name": "sales-data-csv-analysis",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "sales-data-csv-analysis"
+        },
+        {
+          "name": "scan-linux-persistence-artifacts",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "scan-linux-persistence-artifacts"
+        },
+        {
+          "name": "schedule-vacation",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "schedule-vacation"
+        },
+        {
+          "name": "security-breach-incident-response",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "security-breach-incident-response"
+        },
+        {
+          "name": "security-incident-log-analysis",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "security-incident-log-analysis"
+        },
+        {
+          "name": "server-log-analysis",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "server-log-analysis"
+        },
+        {
+          "name": "service-deployment-wave-planner",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "service-deployment-wave-planner"
+        },
+        {
+          "name": "sign-vector-game",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "sign-vector-game"
+        },
+        {
+          "name": "simple-database-query-tool",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "simple-database-query-tool"
+        },
+        {
+          "name": "smiles-data-lab",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "smiles-data-lab"
+        },
+        {
+          "name": "sql-injection-forensics",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "sql-injection-forensics"
+        },
+        {
+          "name": "submission_a63937a5_20251224_152124",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "submission_a63937a5_20251224_152124"
+        },
+        {
+          "name": "supply-chain-fulfillment",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "supply-chain-fulfillment"
+        },
+        {
+          "name": "symlink-chain-traversal",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "symlink-chain-traversal"
+        },
+        {
+          "name": "sympy-bug-fix",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "sympy-bug-fix"
+        },
+        {
+          "name": "systemd-log-monitoring",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "systemd-log-monitoring"
+        },
+        {
+          "name": "task-xxe-exploit",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "task-xxe-exploit"
+        },
+        {
+          "name": "todos-api",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "todos-api"
+        },
+        {
+          "name": "token-auth-websocket",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "token-auth-websocket"
+        },
+        {
+          "name": "tsl-test-case-generation",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "tsl-test-case-generation"
+        },
+        {
+          "name": "vimscript-vim-quine",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "vimscript-vim-quine"
+        },
+        {
+          "name": "word-derangement-mapping",
+          "git_url": "https://github.com/open-thoughts/OpenThoughts-TBLite.git",
+          "git_commit_id": "f075e463472c7790b85793b392dff1fff20cc0e3",
+          "path": "word-derangement-mapping"
+        }
+      ]
+    }
+  }
+}
