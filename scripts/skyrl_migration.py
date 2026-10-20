@@ -1047,9 +1047,11 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
     )["repository"]["id"]
     state = read_json(state_path) if state_path.exists() else {}
     for issue in record["issues"]:
+        # GitHub changes node IDs on transfer; the original REST URL redirects to the moved issue.
+        current_issue = gh(f"repos/{SOURCE}/issues/{issue['number']}")
         node = graphql(
             "query($id:ID!){node(id:$id){... on Issue{id number url body updatedAt state repository{nameWithOwner}}}}",
-            id=issue["node_id"],
+            id=current_issue["node_id"],
         )["node"]
         origin = issue["html_url"]
         body = source_references(issue["body"] or "")

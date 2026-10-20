@@ -524,6 +524,8 @@ def github_fake(
             return {"sha": record["source_sha"]}
         if endpoint == f"repos/{migration.TARGET}":
             return {"default_branch": "main"}
+        if endpoint.startswith(f"repos/{migration.SOURCE}/issues/") and method == "GET":
+            return {"node_id": remote["issues"]["id"]}
         if endpoint == f"repos/{migration.TARGET}/pulls" and method == "POST":
             assert destination is not None and payload is not None
             number = len(remote["pulls"]) + 100
@@ -563,6 +565,7 @@ def github_fake(
     def graph(query: str, **variables: str):
         if "transferIssue" in query:
             remote["issues"] |= {
+                "id": "transferred-issue-node",
                 "repository": {"nameWithOwner": migration.TARGET},
                 "url": f"https://github.com/{migration.TARGET}/issues/100",
                 "number": 100,
@@ -576,6 +579,7 @@ def github_fake(
             remote["transfers"] += 1
             return {"transferIssue": {"issue": dict(remote["issues"])}}
         if "node(id:" in query:
+            assert variables["id"] == remote["issues"]["id"]
             return {"node": dict(remote["issues"])}
         return {"repository": {"id": "target-id"}}
 
@@ -607,6 +611,7 @@ def test_issue_transfer_recovers_after_remote_success_and_protects_edits(
     migration.plan(snapshot_dir, snapshot_dir / "manifest.toml", None)
     remote = github_fake(monkeypatch, record, "cutover")
     remote["issues"] = {
+        "id": issue["node_id"],
         "body": issue["body"],
         "number": 3,
         "url": issue["html_url"],
