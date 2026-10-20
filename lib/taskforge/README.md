@@ -22,8 +22,8 @@ src/taskforge/
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/            model.py: the TaskProposal document and its generation regex;
                                source.py: ProposalBatch, SlotFailure, the ProposalSource protocol
-  stage20_triage/              checks.py: structural checks; program.py: the GLM rubric and the decision;
-                               verdict.py: Verdict, TriageDecision and `accept`
+  stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
+                               verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
@@ -84,7 +84,7 @@ non-null body cites every item, and only listed items, as `research[i]`. `solver
 solver's machine: `null` for a container proposal, which runs in the image its build publishes, and
 `none`, `shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one, where
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
-The proposer or triage writes it, and the build keeps it.
+The proposer writes it, and the build keeps it.
 `document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
 field that constrains a completion to the canonical layout for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
@@ -94,17 +94,31 @@ built from `DOCUMENT_REPAIR_PROMPT`.
 source for catalog capabilities, which takes its model, sampling policy and host environments at
 construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a solver
 machine and a research decision, then writes each document under the regex with GLM thinking first.
-`propose_tasks` in the same package proposes and reviews the catalog's capabilities from the
-command line.
+`propose_tasks` in the same package proposes the catalog's capabilities from the command line and
+triages each proposal with `preflight`.
 
 ## Triage
 
-`stage20_triage.program.evaluate(proposal, checks, rubric, ctx) -> Verdict` runs the structural
-checks first, and a fatal failure or a null proposal rejects without a model call. The rubric
-scores independent samples, each a structured call through `CallStore`, and the decision is ACCEPT
-or REJECT by strict majority, otherwise REPAIR. A sample whose structured output stays invalid is
-drawn once more and then dropped. `GlmRubric.repair` rewrites a REPAIR proposal under the document
-regex with continuations off and re-asks once if the rewrite fails `parse`.
+The default triage is `stage20_triage.preflight.preflight(proposal) -> Verdict`, a deterministic
+preflight that makes no model call. It runs the checks in `stage20_triage.checks.CHECKS`: the
+canonical rendering parses back to the same header, the environment and verification pair is
+allowed, the declared solver machine fits the environment, the required sections have content, and
+a null proposal carries only its reason. A fatal failure rejects the proposal with each failing
+check as a reason, and so does a null proposal. Anything else is accepted and goes to build.
+Advisory failures are recorded on the verdict and decide nothing. Whether the host can provide the
+declared machine is checked by the build (`infrastructure.machine_available`) before any model
+call, and a host that cannot ends the workpiece as the host's failure.
+
+A consumer could add a model review to triage in one of two designs:
+
+- A panel with repair: several independent model reviews of the proposal, a majority vote that
+  accepts, rejects or asks for repair, one model rewrite of a repair proposal within a budget, and
+  a repair exit on the stage coordinator that sends the rewrite back to triage.
+- A bounded review with obligations: one model review that accepts the proposal and attaches
+  obligations its author must honour, carried to build as state on the accept event.
+
+Neither is implemented by default, because experiments found them not to be meaningful predictors
+of downstream quality.
 
 ## Task specs
 
@@ -201,9 +215,6 @@ Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage 
 token budget, which Taskforge leaves unset. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
-
-`llm.store.CallStore` caches `complete` and `complete_structured` calls on disk by the digest of
-the request and does not record to the ledger.
 
 ## The build DAG
 

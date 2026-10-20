@@ -10,7 +10,7 @@ workpiece to its next stage::
     stage     event          exit       next      bookkeeping
     --------  -------------  ---------  --------  ------------------------------------------------
     TRIAGE    TRIAGED        accept     AUTHOR
-    TRIAGE    TRIAGED        reject     DONE      closing rejected (task)
+    TRIAGE    TRIAGED        reject     DONE      closing rejected (task), with the event's reason
     AUTHOR    AUTHORED       authored   BUILD     program_digest
     AUTHOR    AUTHOR_FAILED  revise     AUTHOR    build_revisions + 1; revision author_failure
     AUTHOR    AUTHOR_FAILED  reject     DONE      build_revisions + 1; closing rejected (budget)
@@ -68,7 +68,7 @@ class EventKind(StrEnum):
     OPENED = "opened"
     """digest: the proposal's. attrs: budget_digest, model_digest (the coordinator's, part of every step key)."""
     TRIAGED = "triaged"
-    """digest: the proposal's. attrs: exit."""
+    """digest: the proposal's. attrs: exit; reason for reject (the verdict's reasons, truncated)."""
     AUTHORED = "authored"
     """digest: the program's. attrs: exit, revision (the ``RevisionKind`` the program answers)."""
     AUTHOR_FAILED = "author_failed"
@@ -267,7 +267,7 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
         case (EventKind.TRIAGED, Exit.ACCEPT) | (EventKind.VALIDATED, Exit.VALIDATED):
             return state
         case (EventKind.TRIAGED, Exit.REJECT):
-            return replace(state, closing=Closing(Terminal.REJECTED, TRIAGE_REJECTED, RejectKind.TASK))
+            return replace(state, closing=Closing(Terminal.REJECTED, attrs[REASON_ATTR], RejectKind.TASK))
         case (EventKind.AUTHORED, Exit.AUTHORED):
             return replace(state, program_digest=event.digest)
         case (EventKind.BUILT, Exit.BUILT):

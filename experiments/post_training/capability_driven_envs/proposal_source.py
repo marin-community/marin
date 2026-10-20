@@ -22,8 +22,7 @@ list, GLM gets one repair request under the same regex. The repair request keeps
 the assistant turn and quotes the parse error. A slot the plan marks null becomes a proposal with
 ``null_reason`` set and costs no model call.
 
-Both prompts quote ``catalog.capability_idea_record(idea)``. ``propose_tasks`` gives the
-``stage20_triage`` rubric the same record for each proposal from this source.
+Both prompts quote ``catalog.capability_idea_record(idea)``.
 """
 
 import asyncio

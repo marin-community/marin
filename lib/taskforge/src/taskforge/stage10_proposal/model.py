@@ -431,23 +431,35 @@ def _header(raw: object) -> ProposalHeader:
     )
 
 
-def _solver_machine(value: object, environment: Environment) -> SolverMachine | None:
+def solver_machine_violation(environment: Environment, machine: SolverMachine | None) -> str | None:
+    """Why ``machine`` cannot be the solver machine of an ``environment`` proposal, or ``None`` when it can.
+
+    A container proposal declares no machine (``None``), any other declares one, and only a reasoning
+    proposal may declare ``SolverMachine.NONE``.
+    """
     if environment is Environment.CONTAINER:
-        if value is not None:
-            raise ProposalFormatError(
-                f"solver_machine: a container proposal runs in its own image and declares null, got {value!r}"
-            )
+        if machine is not None:
+            return f"a container proposal runs in its own image and declares null, got {str(machine)!r}"
         return None
-    if value is None:
-        raise ProposalFormatError(
-            f"solver_machine: a {environment} proposal declares one of {[str(m) for m in SolverMachine]}, got null"
-        )
-    machine = _enum(SolverMachine, value, "solver_machine")
+    if machine is None:
+        return f"a {environment} proposal declares one of {[str(m) for m in SolverMachine]}, got null"
     if machine is SolverMachine.NONE and environment is not Environment.REASONING:
-        raise ProposalFormatError(
-            f"solver_machine: only a reasoning proposal may declare {SolverMachine.NONE}; a {environment} "
+        return (
+            f"only a reasoning proposal may declare {SolverMachine.NONE}; a {environment} "
             f"proposal declares one of {[str(m) for m in SolverMachine if m is not SolverMachine.NONE]}"
         )
+    return None
+
+
+def _solver_machine(value: object, environment: Environment) -> SolverMachine | None:
+    if environment is Environment.CONTAINER and value is not None:
+        raise ProposalFormatError(
+            f"solver_machine: a container proposal runs in its own image and declares null, got {value!r}"
+        )
+    machine = None if value is None else _enum(SolverMachine, value, "solver_machine")
+    violation = solver_machine_violation(environment, machine)
+    if violation is not None:
+        raise ProposalFormatError(f"solver_machine: {violation}")
     return machine
 
 

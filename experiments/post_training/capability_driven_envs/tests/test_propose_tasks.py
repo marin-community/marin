@@ -12,9 +12,9 @@ from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, Environment, parse
 from taskforge.stage20_triage.verdict import TriageDecision, Verdict
 
-from experiments.post_training.capability_driven_envs.catalog import capability_idea_record, example_catalog_path
+from experiments.post_training.capability_driven_envs.catalog import example_catalog_path
 from experiments.post_training.capability_driven_envs.generate_tasks import SUMMARY_FILE, selected_ideas
-from experiments.post_training.capability_driven_envs.propose_tasks import CALLS_DIR, propose_tasks, write_outputs
+from experiments.post_training.capability_driven_envs.propose_tasks import propose_tasks, write_outputs
 from experiments.post_training.capability_driven_envs.tests.scripted_model import ScriptedModel
 
 CAPABILITY_ID = "d43.culinary.scaling"
@@ -33,19 +33,6 @@ SLOT = {
     "reason": None,
 }
 PLAN = {"coverage_rationale": "one slot", "excluded_combinations": [], "slots": [SLOT], "research_priorities": []}
-REVIEW = {
-    "realism": 2,
-    "alignment": 2,
-    "specificity": 2,
-    "reward_validity": 2,
-    "environment_fit": 2,
-    "diversity": 2,
-    "source_honesty": 2,
-    "critical_failures": ["the task does not scale a recipe"],
-    "issues": [],
-    "required_changes": [],
-    "recommendation": "reject",
-}
 REASONING_ONLY = frozenset({Environment.REASONING})
 
 
@@ -70,27 +57,23 @@ resources: ["grader/check.py"]
 {body}"""
 
 
-def test_a_capability_is_proposed_and_reviewed_against_its_catalog_record(tmp_path: Path):
+def test_a_capability_is_proposed_and_each_proposal_triaged_by_the_preflight_without_a_model_call(tmp_path: Path):
     ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
     model = ScriptedModel()
     model.reply(json.dumps(PLAN))
     model.reply(proposal_document(ideas[CAPABILITY_ID].capability_hash))
-    model.reply(json.dumps(REVIEW))
     output = tmp_path / "run"
     output.mkdir()
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, 1, output / CALLS_DIR, LLMPolicy()))
+    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy()))
     write_outputs(output, proposed)
 
-    assert json.loads((output / SUMMARY_FILE).read_text()) == {CAPABILITY_ID: {"1": TriageDecision.REJECT}}
-    review = model.requests[2].messages[1]["content"]
-    assert isinstance(review, str)
-    record = review.split("SOURCE RECORD:\n")[1].split("\n\nSTRUCTURAL CHECKS:")[0]
-    assert json.loads(record) == capability_idea_record(ideas[CAPABILITY_ID])
+    assert json.loads((output / SUMMARY_FILE).read_text()) == {CAPABILITY_ID: {"1": TriageDecision.ACCEPT}}
+    assert len(model.requests) == 2
     directory = output / CAPABILITY_ID
     assert parse((directory / "slot-01.md").read_text()).header.id == f"{CAPABILITY_ID}/1"
     verdict = Verdict.from_json((directory / "slot-01.verdict.json").read_text())
-    assert verdict.decision is TriageDecision.REJECT
+    assert (verdict.decision, verdict.reasons) == (TriageDecision.ACCEPT, ())
     assert len(json.loads((directory / "plan.completions.json").read_text())) == 1
 
 
@@ -103,7 +86,7 @@ def test_a_plan_invalid_after_its_repair_fails_only_its_capability(tmp_path: Pat
     output = tmp_path / "run"
     output.mkdir()
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, 1, output / CALLS_DIR, LLMPolicy()))
+    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy()))
     write_outputs(output, proposed)
 
     summary = json.loads((output / SUMMARY_FILE).read_text())
@@ -119,30 +102,11 @@ def test_a_slot_whose_model_runs_out_of_retries_fails_only_its_capability(tmp_pa
     output = tmp_path / "run"
     output.mkdir()
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, 1, output / CALLS_DIR, LLMPolicy()))
+    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy()))
     write_outputs(output, proposed)
 
     assert "503 on every retry" in json.loads((output / SUMMARY_FILE).read_text())[CAPABILITY_ID]
     assert list((output / CAPABILITY_ID).iterdir()) == []
-
-
-def test_a_review_whose_model_runs_out_of_retries_keeps_the_proposals(tmp_path: Path):
-    ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
-    model = ScriptedModel()
-    model.reply(json.dumps(PLAN))
-    model.reply(proposal_document(ideas[CAPABILITY_ID].capability_hash))
-    model.fail(ModelUnavailable("the router answered 503 on every retry", ()))
-    output = tmp_path / "run"
-    output.mkdir()
-
-    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, 1, output / CALLS_DIR, LLMPolicy()))
-    write_outputs(output, proposed)
-
-    assert json.loads((output / SUMMARY_FILE).read_text())[CAPABILITY_ID].startswith("review: ")
-    directory = output / CAPABILITY_ID
-    assert parse((directory / "slot-01.md").read_text()).header.id == f"{CAPABILITY_ID}/1"
-    assert (directory / "slot-01.completions.json").exists()
-    assert not (directory / "slot-01.verdict.json").exists()
 
 
 def test_an_unknown_capability_is_refused_before_the_run_starts():

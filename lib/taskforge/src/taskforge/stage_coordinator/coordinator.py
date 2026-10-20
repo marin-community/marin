@@ -17,7 +17,9 @@ event store, and the model with its sampling policy. ``run_workpiece`` runs a wo
 5. It saves the log to the event store, after every other file of the workpiece.
 
 Each stage runs through an adapter in this module. The adapter calls the caller's function, writes
-the round's files, and returns the stage's event. The coordinator spends a build revision on:
+the round's files, and returns the stage's event. The triage stage exits accept or reject on the
+verdict's decision, and a reject records the verdict's reasons. The coordinator spends a build
+revision on:
 
 * a build raising ``BuildFailure`` or any other error, recorded as ``BUILD_FAILED``, unless the
   error is a ``BuildInfrastructureFailure``, a ``BuildExpired``, ``ModelUnavailable``, or an
@@ -92,6 +94,7 @@ from taskforge.stage_coordinator.workpiece_machine import (
     FINAL,
     REASON_ATTR,
     TERMINAL_ATTR,
+    TRIAGE_REJECTED,
     EventKind,
     Exit,
     Stage,
@@ -276,8 +279,11 @@ def _write(path: Path, content: bytes) -> None:
 
 
 async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
-    way = TRIAGE_EXITS[await workpiece.coordinator.stages.triage(workpiece.proposal)]
-    return WorkpieceEvent(EventKind.TRIAGED, state.round, state.proposal_digest, {EXIT: way})
+    verdict = await workpiece.coordinator.stages.triage(workpiece.proposal)
+    attrs: dict[str, str] = {EXIT: TRIAGE_EXITS[verdict.decision]}
+    if verdict.decision is TriageDecision.REJECT:
+        attrs[REASON_ATTR] = f"{TRIAGE_REJECTED}: {'; '.join(verdict.reasons)}"[:ATTR_CHARS]
+    return WorkpieceEvent(EventKind.TRIAGED, state.round, state.proposal_digest, attrs)
 
 
 def _revision(workpiece: _Workpiece, state: WorkpieceState) -> Revision | None:
