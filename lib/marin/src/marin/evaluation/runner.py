@@ -186,7 +186,7 @@ class EvalExecutor(Protocol):
 
 
 class EndpointRoute(StrEnum):
-    """DIRECT resolves the worker address; CAPABILITY preserves the session endpoint."""
+    """DIRECT resolves the registered serving address; CAPABILITY preserves the session endpoint."""
 
     DIRECT = "direct"
     CAPABILITY = "capability"
