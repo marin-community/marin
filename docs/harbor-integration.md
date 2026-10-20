@@ -77,6 +77,13 @@ uv run python -m experiments.evaluation.cli launch \
 Harbor policies pass pinned-schema and placeholder effective-job validation before the launcher
 opens an Iris client.
 
+To resume one Harbor evaluation, pass its object-store results root with `--resume-results-path`
+and the original model, policy, runtime, task limit, and hosted judge settings. Marin rejects the
+resume unless the root's saved model-bound identity matches those inputs. Wait for the original
+Iris group and any earlier retry to end first: two live Harbor drivers must never share a results
+root. Add `--retry-unscored-harbor-trials` to retry known unscored trials while preserving scored
+outcomes and unknown errors.
+
 ## Credentials
 
 Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.
@@ -180,6 +187,19 @@ model serving 65536. A policy limit above the served one fails preflight, before
 both values named. A limit neither the model nor the policy states falls back to Harbor's own
 default, 32768 input and 8192 output tokens. `--dry-run` prints the resolved pair per Harbor eval
 and `record.json` keeps it under `eval.harbor`.
+
+Installed harnesses must enforce these limits themselves. Harbor's native Mini-SWE
+adapter consumes `model_info` for the Mini-SWE 2.1.0 harness with hosted vLLM. The input limit
+denotes the total context, including the reply. It requires the serving endpoint's
+`/tokenize` route, counts the rendered prompt with tools and the generation prefix,
+and caps the reply to the remaining context and the configured output limit.
+Context exhaustion uses Mini-SWE's native limit handler so Harbor can verify the
+existing patch. No Marin agent subclass is required.
+
+Sotopia uses `harbor.agents.installed.sotopia:SotopiaAgent`, packaged with its
+episode runner in Harbor. Judge API failures and exhausted missing-grade retries
+become `VerifierRuntimeError`. Sotopia's native generation still does not enforce
+`model_info` context limits.
 
 ## Results
 

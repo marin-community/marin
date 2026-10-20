@@ -59,6 +59,10 @@ class AgentHarness:
             completions.end()
         if agent.done():
             completions.reported = True
+            # The engine cancels the agent only in the cleanup, after this. Thus an agent that ended cancelled, for
+            # example from a cancelled child task or from its own cancel, failed.
+            if agent.cancelled():
+                raise RuntimeError("The agent ended with a CancelledError before the engine stopped it")
             agent.result()
 
 

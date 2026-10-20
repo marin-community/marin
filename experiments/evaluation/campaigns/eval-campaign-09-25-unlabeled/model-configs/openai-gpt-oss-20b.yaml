@@ -1,0 +1,23 @@
+# gpt-oss-20b: 32-expert MoE shipped as MXFP4 (13 GB), harmony chat format, reasoning always on at
+# the template's default effort. The openai_gptoss reasoning parser keeps the analysis channel out
+# of the scored content; the openai tool parser decodes harmony tool calls for Harbor.
+name: openai-gpt-oss-20b
+location: openai/gpt-oss-20b
+revision: 6cee5e81ee83917806bbde320786a8fb61efebee
+apply_chat_template: true
+generation:
+  thinking_off_template_kwargs:
+    reasoning_effort: low
+resource_hint:
+  gpu:
+    H100: 1
+serve:
+  tensor_parallel_size: 1
+  max_model_len: 73728
+  tool_call_parser: openai
+  reasoning_parser: openai_gptoss
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

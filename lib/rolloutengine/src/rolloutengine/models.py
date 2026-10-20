@@ -193,6 +193,10 @@ class RolloutInterrupted(RuntimeError):
         self.operation = operation
         super().__init__(f"Rollout interrupted during {operation}")
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        # The cause is not serialized; ``rollout.failure`` retains its message.
+        return type(self), (self.rollout, self.operation)
+
 
 class GradedRolloutInterrupted(RolloutInterrupted):
     """An interrupted task attempt, with its grade.
@@ -204,6 +208,9 @@ class GradedRolloutInterrupted(RolloutInterrupted):
     def __init__(self, rollout: Rollout, operation: RolloutOperation, grade: GradeResult):
         super().__init__(rollout, operation)
         self.grade = grade
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return type(self), (self.rollout, self.operation, self.grade)
 
 
 class RolloutEnded(Exception):
