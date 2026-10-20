@@ -719,14 +719,16 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
 def _poll_until_ready(
     server_url: str,
     *,
+    expected_model: str,
     timeout_seconds: float,
     poll_interval_seconds: float = 5,
     check_alive: Callable[[], None] | None = None,
 ) -> None:
-    """Block until ``GET {server_url}/models`` returns 200.
+    """Wait for the configured model; reject an unrelated server on the same port.
 
     Args:
         server_url: The vLLM ``/v1`` base URL (e.g. ``http://127.0.0.1:8000/v1``).
+        expected_model: Model identifier that this process must serve.
         timeout_seconds: Maximum seconds to wait before raising ``TimeoutError``.
         poll_interval_seconds: Seconds between consecutive polls.
         check_alive: Optional callable invoked each iteration *before* the HTTP
@@ -743,6 +745,9 @@ def _poll_until_ready(
         try:
             response = requests.get(models_url, timeout=5)
             if response.status_code == 200:
+                models = [entry["id"] for entry in response.json()["data"]]
+                if expected_model not in models:
+                    raise RuntimeError(f"vLLM serves {models!r}, expected {expected_model!r}")
                 return
         except (requests.ConnectionError, requests.Timeout):
             pass  # Server not ready yet.
@@ -776,6 +781,7 @@ class VllmEnvironment:
         self,
         model: InferenceModelConfig,
         *,
+        expected_model: str | None = None,
         host: str = "127.0.0.1",
         port: int | None = None,
         timeout_seconds: int = 3600,
@@ -787,6 +793,7 @@ class VllmEnvironment:
     ) -> None:
         validate_vllm_mode_env()
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
+        self.expected_model = expected_model or self.model_name_or_path
         self.host = host
         self.port = port if port is not None else _DEFAULT_VLLM_PORT
         self.timeout_seconds = timeout_seconds
@@ -848,6 +855,7 @@ class VllmEnvironment:
         try:
             _wait_for_vllm_server(
                 handle,
+                expected_model=self.expected_model,
                 command=command,
                 timeout_seconds=self.timeout_seconds,
                 poll_interval_seconds=poll_interval_seconds,
@@ -1058,6 +1066,7 @@ def _launch_vllm_process(
 def _wait_for_vllm_server(
     handle: VllmServerHandle,
     *,
+    expected_model: str,
     command: list[str],
     timeout_seconds: float,
     poll_interval_seconds: float = 5,
@@ -1095,6 +1104,7 @@ def _wait_for_vllm_server(
 
     _poll_until_ready(
         handle.server_url,
+        expected_model=expected_model,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
         check_alive=_check_process_alive,

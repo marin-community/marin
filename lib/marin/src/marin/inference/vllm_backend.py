@@ -138,6 +138,7 @@ class VllmBackend:
         with _chat_template_argument(chat_template_content) as chat_template_args:
             with VllmEnvironment(
                 model=model,
+                expected_model=spec.api_model,
                 host=self.host,
                 port=resolved_port,
                 timeout_seconds=self.config.startup_timeout_seconds,

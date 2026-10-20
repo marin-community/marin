@@ -173,6 +173,12 @@ class RemoteInferenceSession:
                     ),
                 )
                 if response.status_code == 200:
+                    models = [entry["id"] for entry in response.json()["data"]]
+                    if self.model.endpoint.model not in models:
+                        raise RuntimeError(
+                            f"Inference endpoint {self.endpoint_name!r} serves {models!r}, "
+                            f"expected {self.model.endpoint.model!r}"
+                        )
                     return
             except requests.RequestException:
                 pass

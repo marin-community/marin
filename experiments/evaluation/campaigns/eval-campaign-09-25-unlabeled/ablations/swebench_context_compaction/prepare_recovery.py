@@ -10,6 +10,7 @@ is terminal before using its manifest for the final combined aggregate.
 import argparse
 import concurrent.futures
 import hashlib
+import importlib
 import json
 import tempfile
 from datetime import UTC, datetime
@@ -23,6 +24,10 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 EXPECTED_TASKS = 500
+combined = importlib.import_module(
+    "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.ablations."
+    "swebench_context_compaction.combine_recovery"
+)
 
 
 def recovery_reason(result: dict, scored: bool, agent_deadline: float) -> str | None:
@@ -110,6 +115,18 @@ def write_recovery(config: dict, manifest: dict, destination: Path) -> dict:
     }
 
 
+def native_recovery_manifest(tasks: list[dict], evidence: list[dict], outages: list[dict], harbor_commit: str) -> dict:
+    """Retain current-runtime scores except outcomes overlapping recorded outages."""
+    initial = {
+        "task_descriptors": tasks,
+        "retained_tasks": [],
+        "recovery_tasks": sorted(Path(task["path"]).name for task in tasks),
+        "harbor_commit": harbor_commit,
+    }
+    report = combined.combine(initial, [], evidence, outages)
+    return followup_manifest(initial, report)
+
+
 def prepare_followup(audit_path: Path, base_config: Path, destination: Path) -> dict:
     """Prepare another recovery from a combined audit of terminal source runs."""
     audit_payload = audit_path.read_bytes()
@@ -142,13 +159,17 @@ def prepare_followup(audit_path: Path, base_config: Path, destination: Path) -> 
     return write_recovery(config, manifest, destination)
 
 
-def prepare(source: str, base_config: Path, destination: Path) -> dict:
+def prepare(source: str, base_config: Path, destination: Path, service_outages: Path | None = None) -> dict:
     """Write a sanitized evidence manifest and canonical recovery config."""
     config = yaml.safe_load(base_config.read_text())
     if config["n_attempts"] != 1 or len(config["datasets"]) != 1:
         raise ValueError("this recovery requires one attempt and one dataset")
     taxonomy = preflight_harbor_configs([(base_config, {})])[0].error_taxonomy
     filesystem, root = filesystem_for(source.rstrip("/"))
+    if service_outages is not None:
+        identity = json.loads(filesystem.cat(root + "/harbor_resume_identity.json"))
+        if taxonomy.commit not in identity["runtime"]:
+            raise ValueError("current-runtime recovery requires the same Harbor runtime")
     jobs = filesystem.ls(root + "/harbor_jobs", detail=False)
     if len(jobs) != 1:
         raise ValueError("expected one source Harbor job")
@@ -182,11 +203,24 @@ def prepare(source: str, base_config: Path, destination: Path) -> dict:
                 "source_uri": "s3://" + key,
                 "sha256": digest,
                 "reward": trial.reward,
+                "scored": trial.scored,
+                "error_type": trial.error["type"] if trial.error else None,
+                "agent_execution": result.get("agent_execution"),
                 "recovery_reason": recovery_reason(result, trial.scored, deadline),
             }
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
             evidence = [row for row in pool.map(inspect, directories) if row is not None]
+
+    if service_outages is not None:
+        outage_payload = service_outages.read_bytes()
+        native = native_recovery_manifest(new_tasks, evidence, json.loads(outage_payload), taxonomy.commit)
+        native.update(
+            source_results=source,
+            base_config_sha256=hashlib.sha256(base_config.read_bytes()).hexdigest(),
+            service_outages_sha256=hashlib.sha256(outage_payload).hexdigest(),
+        )
+        return write_recovery(config, native, destination)
 
     retained, recovery = partition_tasks(task_names, evidence)
     manifest = {
@@ -207,12 +241,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--source-results")
+    source.add_argument("--current-runtime-source")
     source.add_argument("--combined-audit", type=Path)
     parser.add_argument("--base-config", required=True, type=Path)
     parser.add_argument("--destination", required=True, type=Path)
+    parser.add_argument("--service-outages", type=Path, default=Path(__file__).with_name("service_outages.json"))
     args = parser.parse_args()
     if args.combined_audit:
         result = prepare_followup(args.combined_audit, args.base_config, args.destination)
+    elif args.current_runtime_source:
+        result = prepare(args.current_runtime_source, args.base_config, args.destination, args.service_outages)
     else:
         result = prepare(args.source_results, args.base_config, args.destination)
     print(json.dumps(result))

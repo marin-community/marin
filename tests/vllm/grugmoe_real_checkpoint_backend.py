@@ -561,7 +561,11 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     started = time.time()
     launcher = vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU))
     with VllmEnvironment(
-        model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args, launcher=launcher
+        model=model,
+        expected_model=SERVED_MODEL_NAME,
+        timeout_seconds=SERVER_TIMEOUT_SECONDS,
+        extra_args=extra_args,
+        launcher=launcher,
     ) as env:
         print("vllm_server_initialized=True", flush=True)
         print("vllm_server_url=" + env.server_url, flush=True)

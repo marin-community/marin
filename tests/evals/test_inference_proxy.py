@@ -7,7 +7,7 @@ import socket
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from typing import cast
@@ -471,7 +471,7 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
         del timeout
         status_code = 502 if not probe_statuses else 200
         probe_statuses.append(status_code)
-        return SimpleNamespace(status_code=status_code)
+        return SimpleNamespace(status_code=status_code, json=lambda: {"data": [{"id": "model"}]})
 
     monkeypatch.setattr(
         iris_module,
@@ -490,6 +490,18 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
     session.wait_until_ready()
 
     assert probe_statuses == [502, 200]
+
+
+def test_inference_recovery_rejects_another_models_healthy_endpoint(monkeypatch) -> None:
+    session = replace(_remote_session(), jobs=())
+    monkeypatch.setattr(
+        iris_module.requests,
+        "get",
+        lambda *_args, **_kwargs: SimpleNamespace(status_code=200, json=lambda: {"data": [{"id": "other-model"}]}),
+    )
+
+    with pytest.raises(RuntimeError, match="expected 'model'"):
+        session.wait_until_ready()
 
 
 def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monkeypatch) -> None:

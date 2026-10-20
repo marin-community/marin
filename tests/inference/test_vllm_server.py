@@ -479,6 +479,23 @@ def test_vllm_config_file_rejected_before_spawn(monkeypatch, args):
             pass
 
 
+def test_environment_rejects_wrong_model_and_stops_its_process():
+    environment = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="expected-model", path=None, engine_kwargs={}),
+        port=_free_port(),
+        launcher=FakeVllmLauncher("serve"),
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+        wait_for_ready=False,
+    )
+    with environment:
+        handle = environment.vllm_server
+        assert handle is not None
+        with pytest.raises(RuntimeError, match="expected 'expected-model'"):
+            _wait_until_ready(environment)
+        assert handle.process.poll() is not None
+        assert environment.model_id is None
+
+
 def test_environment_starts_without_waiting_for_http_readiness(tmp_path):
     counter = tmp_path / "starts"
     environment = VllmEnvironment(

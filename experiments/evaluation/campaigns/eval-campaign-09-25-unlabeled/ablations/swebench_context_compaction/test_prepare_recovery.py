@@ -101,3 +101,32 @@ def test_followup_rejects_a_subset_only_audit_that_loses_retained_results():
     report = {"trials": [{"task_name": "new", "scored": True}]}
     with pytest.raises(ValueError, match="missing previously retained evidence"):
         recovery.followup_manifest(previous, report)
+
+
+def test_native_recovery_retains_valid_timeouts_and_excludes_outage_wins_and_losses(tmp_path):
+    tasks = ["timeout", "outage-win", "outage-loss", "missing"]
+    evidence = [
+        {
+            "task_name": task,
+            "source_uri": f"s3://test/run/{task}/result.json",
+            "sha256": task,
+            "scored": True,
+            "reward": reward,
+            "error_type": "AgentTimeoutError" if task == "timeout" else None,
+            "agent_execution": {"started_at": start, "finished_at": finish},
+        }
+        for task, reward, start, finish in [
+            ("timeout", 0.0, "2026-10-20T00:00:00Z", "2026-10-20T00:30:01Z"),
+            ("outage-win", 1.0, "2026-10-20T00:31:00Z", "2026-10-20T00:40:00Z"),
+            ("outage-loss", 0.0, "2026-10-20T00:32:00Z", "2026-10-20T00:40:00Z"),
+        ]
+    ]
+    outages = [{"results_root": "s3://test/run", "started_at": "2026-10-20T00:31:00Z", "finished_at": None}]
+    manifest = recovery.native_recovery_manifest(
+        [{"path": f"tasks/{task}"} for task in tasks], evidence, outages, "fixed-runtime"
+    )
+    recovery.write_recovery({"datasets": [{"name": "swebench"}]}, manifest, tmp_path)
+    saved = json.loads((tmp_path / "manifest.json").read_text())
+    assert saved["retained_tasks"] == ["timeout"]
+    assert saved["recovery_tasks"] == ["missing", "outage-loss", "outage-win"]
+    assert saved["observed_trials"][2]["reward"] == 0.0
