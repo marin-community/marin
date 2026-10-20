@@ -13,6 +13,8 @@ import torch
 from omegaconf import OmegaConf
 
 import skyrl_train.trainer as trainer_module
+import skyrl_train.telemetry as telemetry_module
+from skyrl_train.batch_source import DriverBatchSource
 from skyrl_train.callbacks.base import TrainerControl
 from skyrl_train.config.utils import get_default_config
 from marinskyrl.distillation import compile_distillation_plan_from_config
@@ -159,12 +161,15 @@ async def test_empty_ftpo_batch_sync_keeps_last_completed_model_version(complete
     trainer.all_timings = {}
     trainer.all_startup_timings = {}
     trainer.all_metrics = {}
+    trainer.context = None
     await trainer._sync_policy_for_rollouts(reason="initial")
     for step in (completed_step + 1, completed_step + 2):
         trainer.global_step = step
-        status = await trainer._run_training(
+        source = DriverBatchSource(trainer, trainer.context)
+        source.prepare_from_batch(
             {"ftpo_chosen_mask": torch.zeros((2, 3, 2), dtype=torch.bool), "loss_mask": torch.zeros((2, 3))}
         )
+        status = await trainer._run_training(source)
         assert status["policy_update_steps"] == 0
         await trainer._sync_policy_for_rollouts(reason="training_step")
         await trainer._sync_policy_for_rollouts(reason="evaluation")
@@ -370,15 +375,13 @@ def test_step_end_exports_hf_model_only_after_checkpoint_upload_commits(checkpoi
 def test_consumed_staleness_counts_selected_masked_sequences_by_group(dtype, monkeypatch):
     events = []
     monkeypatch.setattr(
-        trainer_module,
+        telemetry_module,
         "record_event",
         lambda name, values, attributes: events.append((name, values, attributes)),
     )
-    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
-    trainer.global_step = 7
     masks = torch.tensor([[1, 1, 0, 0], [0, 0, 0, 0], [1, 0, 1, 1]], dtype=dtype)
 
-    trainer._record_consumed_staleness(["a", "b", "a"], [2, 0, 2], masks)
+    telemetry_module.record_consumed_staleness(["a", "b", "a"], [2, 0, 2], masks.sum(-1).tolist(), step=7)
 
     assert [event[1] for event in events] == [
         {"staleness": 2, "groups": 1, "sequences": 2, "response_tokens": 5},
@@ -627,6 +630,8 @@ def test_replace_mode_rejects_batch_without_teacher_evidence(ray_init, dummy_con
     trainer.colocate_all = False
     trainer.global_step = 1
     trainer.all_timings = {}
+    trainer.all_metrics = {}
+    trainer.context = None
     trainer._training_metrics_enabled = False
     batch = TrainingInputBatch(
         {
@@ -640,7 +645,9 @@ def test_replace_mode_rejects_batch_without_teacher_evidence(ray_init, dummy_con
     batch.metadata = {"response_length": 2}
 
     with pytest.raises(ValueError, match="replace requires teacher evidence on every training batch"):
-        asyncio.run(trainer._run_training(batch))
+        source = DriverBatchSource(trainer, trainer.context)
+        source.prepare_from_batch(batch)
+        asyncio.run(trainer._run_training(source))
 
 
 @pytest.mark.parametrize("reward_mode", ["add", "replace"])

@@ -1,4 +1,3 @@
-from skyrl_train.trajectory_runners.rollout_metrics import rollout_length_metrics
 from typing import List, Tuple, Union, Optional, Dict, Any, Sequence
 from collections import defaultdict
 from math import fsum
@@ -16,23 +15,6 @@ from skyrl_train.trajectory_runners.types import (
     TaskRequestBatch,
     PreferenceRequestBatch,
 )
-from skyrl_train.trajectory_runners.trajectory_retention import RETENTION_METRIC_PREFIX
-from skyrl_train.metric_names import (
-    IDENTITY_AWARE_REWARD_METRIC_PREFIX,
-    TASK_ROLLOUT_METRIC_PREFIX,
-    TIS_ALIGNED_TOKENS_METRIC,
-    TIS_ALIGNMENT_ALERT_METRIC,
-    TIS_EXACT_MATCH_FRACTION_METRIC,
-    TIS_LCS_FALLBACK_FRACTION_METRIC,
-    TIS_UNALIGNED_FRACTION_METRIC,
-    TIS_ALIGNMENT_FAIL_COUNT_METRIC,
-    TIS_LCS_FALLBACK_MESSAGES_METRIC,
-    TIS_LCS_FALLBACK_ALERT_METRIC,
-    TIS_TITO_FULL_ATTEMPTS_METRIC,
-    TIS_TITO_FULL_SUCCESS_FRACTION_METRIC,
-    TIS_TITO_FULL_DECLINE_COUNT_METRIC,
-    TIS_TITO_FULL_DECLINE_METRIC_PREFIX,
-)
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
     NormalizedReward,
     refresh_trajectory_reward_shaping_metrics,
@@ -40,6 +22,7 @@ from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
 from skyrl_train.metric_names import ROLLOUT_FAILURE_FRACTION_METRIC
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from loguru import logger
+from skyrl_train.trajectory_runners.rollout_metrics import rollout_length_metrics
 from skyrl_gym.verification import VerificationResult, VerificationStatus, normalized_verifier_score
 
 
@@ -192,6 +175,13 @@ def scalar_reward_token_credit(reward: float, response_ids: Sequence[int]) -> Li
     if token_rewards:
         token_rewards[-1] = float(reward)
     return token_rewards
+
+
+def token_reward_rows(rewards, response_ids) -> List[List[float]]:
+    """Retain token rewards or credit each scalar on its final response token."""
+    if rewards and isinstance(rewards[0], list):
+        return rewards
+    return [scalar_reward_token_credit(reward, response) for reward, response in zip(rewards, response_ids)]
 
 
 def _concatenate_rewards(
@@ -358,7 +348,7 @@ def normalize_trajectory_batches(
     }
     if rollout_routed_experts_concat is not None:
         result["rollout_routed_experts"] = rollout_routed_experts_concat
-    if any(output.get("rollout_policy_steps") is not None for output in trajectory_batches):
+    if "rollout_policy_steps" in fields.present:
         result["rollout_policy_steps"] = [
             row
             for output in trajectory_batches
@@ -416,83 +406,13 @@ def concatenate_trajectory_batches(
     fields = BatchFields.from_groups([BatchFields.from_batch(batch) for batch in trajectory_batches])
     result = normalize_trajectory_batches(trajectory_batches, fields=fields)
 
-    # Re-aggregate rollout metrics
-    rollout_metrics = get_rollout_metrics(
-        result["response_ids"],
-        result["rewards"],
-        result.get("env_metrics"),
-        result.get("env_classes"),
-        verification_results=result.get("verification_results"),
+    from skyrl_train.rollouts.buffer import RowFacts
+    from skyrl_train.batch_metrics import rollout_metrics
+
+    result["rollout_metrics"] = rollout_metrics(
+        tuple(RowFacts.from_batch(batch) for batch in trajectory_batches),
+        tis_lcs_alert_threshold=tis_lcs_alert_threshold,
     )
-
-    # TIS alignment metrics use token-weighted fractions across batches.
-    total_aligned = 0.0
-    sum_exact = sum_lcs = sum_unaligned = 0.0
-    sum_fail = sum_lcs_msgs = 0.0
-    saw_tis = False
-    for output in trajectory_batches:
-        rm = output.get("rollout_metrics") or {}
-        n = rm.get(TIS_ALIGNED_TOKENS_METRIC)
-        if n is None:
-            continue
-        saw_tis = True
-        total_aligned += n
-        sum_exact += rm.get(TIS_EXACT_MATCH_FRACTION_METRIC, 0.0) * n
-        sum_lcs += rm.get(TIS_LCS_FALLBACK_FRACTION_METRIC, 0.0) * n
-        sum_unaligned += rm.get(TIS_UNALIGNED_FRACTION_METRIC, 0.0) * n
-        sum_fail += rm.get(TIS_ALIGNMENT_FAIL_COUNT_METRIC, 0.0)
-        sum_lcs_msgs += rm.get(TIS_LCS_FALLBACK_MESSAGES_METRIC, 0.0)
-    if saw_tis:
-        denom = max(total_aligned, 1.0)
-        rollout_metrics[TIS_ALIGNED_TOKENS_METRIC] = total_aligned
-        rollout_metrics[TIS_EXACT_MATCH_FRACTION_METRIC] = sum_exact / denom
-        rollout_metrics[TIS_LCS_FALLBACK_FRACTION_METRIC] = sum_lcs / denom
-        rollout_metrics[TIS_UNALIGNED_FRACTION_METRIC] = sum_unaligned / denom
-        rollout_metrics[TIS_ALIGNMENT_FAIL_COUNT_METRIC] = sum_fail
-        rollout_metrics[TIS_LCS_FALLBACK_MESSAGES_METRIC] = sum_lcs_msgs
-        lcs_alert = 1.0 if (sum_lcs / denom) > tis_lcs_alert_threshold else 0.0
-        rollout_metrics[TIS_LCS_FALLBACK_ALERT_METRIC] = lcs_alert
-        total_tito_attempts = sum(
-            (output.get("rollout_metrics") or {}).get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0)
-            for output in trajectory_batches
-        )
-        total_tito_successes = sum(
-            (output.get("rollout_metrics") or {}).get(TIS_TITO_FULL_SUCCESS_FRACTION_METRIC, 0.0)
-            * (output.get("rollout_metrics") or {}).get(TIS_TITO_FULL_ATTEMPTS_METRIC, 0.0)
-            for output in trajectory_batches
-        )
-        rollout_metrics[TIS_TITO_FULL_ATTEMPTS_METRIC] = total_tito_attempts
-        rollout_metrics[TIS_TITO_FULL_SUCCESS_FRACTION_METRIC] = (
-            total_tito_successes / total_tito_attempts if total_tito_attempts else 0.0
-        )
-        total_tito_declines = sum(
-            (output.get("rollout_metrics") or {}).get(TIS_TITO_FULL_DECLINE_COUNT_METRIC, 0.0)
-            for output in trajectory_batches
-        )
-        rollout_metrics[TIS_TITO_FULL_DECLINE_COUNT_METRIC] = total_tito_declines
-        rollout_metrics[TIS_ALIGNMENT_ALERT_METRIC] = (
-            1.0 if sum_unaligned > 0 or lcs_alert or total_tito_declines > 0 else 0.0
-        )
-        for reason in TitoFullDeclineReason:
-            name = f"{TIS_TITO_FULL_DECLINE_METRIC_PREFIX}{reason.value}"
-            rollout_metrics[name] = sum(
-                (output.get("rollout_metrics") or {}).get(name, 0.0) for output in trajectory_batches
-            )
-
-    rollout_metrics.update(
-        merge_batch_failure_metrics([batch.get("rollout_metrics") or {} for batch in trajectory_batches])
-    )
-
-    # Retention counts per group, and this rebuilds rollout_metrics from responses and rewards, so
-    # the per-group counters have to be carried across or the archives are written unobserved.
-    for output in trajectory_batches:
-        for name, value in (output.get("rollout_metrics") or {}).items():
-            if name.startswith(
-                (RETENTION_METRIC_PREFIX, IDENTITY_AWARE_REWARD_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX)
-            ):
-                rollout_metrics[name] = rollout_metrics.get(name, 0.0) + value
-
-    result["rollout_metrics"] = rollout_metrics
     refresh_trajectory_reward_shaping_metrics(result)
 
     num_prompts = len(result["prompt_token_ids"])
@@ -705,10 +625,3 @@ def prepare_trajectory_request(
 def _re_sentinel_rows(n: int, sentinel_row: np.ndarray) -> np.ndarray:
     """Return a compact sentinel block with the learned route geometry."""
     return np.zeros((n, *sentinel_row.shape), dtype=sentinel_row.dtype)
-
-
-def token_reward_rows(rewards, response_ids) -> List[List[float]]:
-    """Retain token rewards or credit each scalar on its final response token."""
-    if rewards and isinstance(rewards[0], list):
-        return rewards
-    return [scalar_reward_token_credit(reward, response) for reward, response in zip(rewards, response_ids)]
