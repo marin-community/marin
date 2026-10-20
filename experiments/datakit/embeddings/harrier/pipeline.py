@@ -20,6 +20,7 @@ from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import write_artifact
 from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_REPO, HARRIER_REVISION
+from marin.processing.embeddings.read_chunks import rows_per_chunk
 from pydantic import BaseModel, Field
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
@@ -33,7 +34,6 @@ from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx
 
 from experiments.datakit.embeddings.harrier.tei_client import TeiEmbeddingClient
-from experiments.datakit.embeddings.luxical.pipeline import rows_per_chunk
 
 logger = logging.getLogger(__name__)
 
