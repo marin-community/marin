@@ -26,18 +26,20 @@ from taskforge.llm.structured import StructuredOutputError
 from zephyr.context import ZephyrContext
 from zephyr.coordinator import ZephyrExecutionResult
 
-from experiments.post_training.capability_driven_envs.analyze_failed_runs import (
-    FAILURE_OPERATION,
-    ROLLOUTS_WITHOUT_IDEAS,
+from experiments.post_training.capability_driven_envs.analyze_failed_runs.models import (
     Capability,
     Group,
     Groups,
     MaybeIdea,
     RolloutIdeas,
+)
+from experiments.post_training.capability_driven_envs.analyze_failed_runs.pipeline import (
+    ROLLOUTS_WITHOUT_IDEAS,
     analyze_failed_runs,
     merge_ideas,
     yield_ideas,
 )
+from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollouts import FAILURE_OPERATION
 from experiments.post_training.capability_driven_envs.generate_tasks import task_workpieces
 from experiments.post_training.capability_driven_envs.tests.test_generate_tasks import COMPLETION
 
