@@ -157,8 +157,7 @@ After the synthetic gate passes, use the same worker command and source with
 `--steps 20`, a new run ID, and these additional arguments:
 
 ```bash
---real-data --data-schedule-steps 390251 \
-  --data-output-root s3://marin-us-east-02a/marin/users/<user>/<unique-run-id>
+--real-data --data-schedule-steps 390251
 ```
 
 The data source is the current Harrier mixture adopted from
@@ -170,9 +169,9 @@ The `real_data_view` event records every component's sequence count. The trial
 processes 2,621,440 global training tokens from fresh seed zero.
 The measured run reported all 200 components nonempty, with at least 826
 sequences in the smallest component. Main weights, component order and the
-390251-step mixture horizon were preserved. Each process uses the existing
-1 GB jagged-array read cache. The output root owns mixture metadata; this
-command does not request a checkpoint.
+390251-step mixture horizon were preserved. Each data-loading process uses the existing
+1 GB jagged-array read cache. Component lengths are reported in the logs; this
+command creates no data artifacts or checkpoints.
 
 The runner closes the disposable compilation-sample iterator before compiling,
 then opens the training iterator at the checkpoint step. It closes that

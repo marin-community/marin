@@ -286,8 +286,9 @@ def _real_data_loader(
     args: argparse.Namespace, model_config: GrugModelConfig, batch_size: int, flops_per_example: float, mesh: Mesh
 ) -> DataLoader[GrugLmExample]:
     set_jagged_array_read_cache_bytes(HERO_TENSORSTORE_CACHE_BYTES)
+    # Resolve the adopted input only; this loader creates no output artifacts.
     ctx = StepContext.for_run(
-        output_path=args.data_output_root,
+        output_path=".",
         prefix="s3://marin-us-east-02a/marin",
         deps=(HARRIER_MIX_2026_08_18_STORE,),
     )

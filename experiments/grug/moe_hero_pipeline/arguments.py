@@ -20,7 +20,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--local-device-id", type=int)
     parser.add_argument("--processes-per-task", type=int, help="Local process count for the main recipe runtime")
     parser.add_argument("--real-data", action="store_true", help="Read the current immutable Hero Harrier mixture")
-    parser.add_argument("--data-output-root", help="Caller-owned root for resolving the real-data context")
     parser.add_argument(
         "--data-schedule-steps", type=int, help="Hero mixture schedule horizon, independent of trial steps"
     )
@@ -94,8 +93,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("diagnostic-layers requires full-hero and a positive layer count")
     if args.sequence_length is not None and args.sequence_length < 1:
         parser.error("sequence-length must be positive")
-    if args.real_data and (not args.main_hero_recipe or not args.data_output_root):
-        parser.error("real-data requires main-hero-recipe and data-output-root")
+    if args.real_data and not args.main_hero_recipe:
+        parser.error("real-data requires main-hero-recipe")
     if args.real_data and (args.data_schedule_steps is None or args.data_schedule_steps < args.steps):
         parser.error("real-data requires data-schedule-steps at least as large as steps")
     if args.moe_implementation is not None and not args.main_hero_recipe:
