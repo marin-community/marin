@@ -55,12 +55,33 @@ class JuneSnowballConfig(SnowballConfig):
         return JuneSnowballLMHeadModel
 
     def training_config(self) -> GrugModelConfig:
-        fields = {
-            field.name: getattr(self, field.name)
-            for field in dataclasses.fields(SnowballConfig)
-            if field.name not in ("reference_checkpoint", "tokenizer", "inference_attention_implementation")
-        }
-        return GrugModelConfig(**fields, disable_pko=True, disable_long_rope=True, capacity_factor=self.capacity_factor)
+        if self.projection_implementation != "native":
+            raise ValueError("June Snowball training does not support fixed-schedule projection")
+        if self.rms_norm_implementation != "native":
+            raise ValueError("June Snowball training does not support non-native RMS normalization")
+        return GrugModelConfig(
+            vocab_size=self.vocab_size,
+            hidden_dim=self.hidden_dim,
+            intermediate_dim=self.intermediate_dim,
+            shared_expert_intermediate_dim=self.shared_expert_intermediate_dim,
+            num_experts=self.num_experts,
+            num_experts_per_token=self.num_experts_per_token,
+            num_layers=self.num_layers,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            head_dim=self.head_dim,
+            max_seq_len=self.max_seq_len,
+            sliding_window=self.sliding_window,
+            layer_norm_eps=self.layer_norm_eps,
+            initializer_std=self.initializer_std,
+            qk_mult=self.qk_mult,
+            rope=self.rope,
+            attention_implementation=self.attention_implementation,
+            moe_implementation=self.moe_implementation,
+            capacity_factor=self.capacity_factor,
+            disable_pko=True,
+            disable_long_rope=True,
+        )
 
 
 class JuneSnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[JuneSnowballConfig]):
