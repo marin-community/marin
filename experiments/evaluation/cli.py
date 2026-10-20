@@ -109,7 +109,8 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
         f"target_cluster={batch.accelerator.target_cluster or 'none'}  "
-        f"priority={priority_band_name(batch.priority_band)}  max_concurrent={batch.max_concurrent}"
+        f"priority={priority_band_name(batch.priority_band)}  instances={batch.instances}  "
+        f"max_concurrent={batch.max_concurrent}"
     )
     if batch.judge is not None:
         click.echo(
@@ -183,6 +184,13 @@ def cli() -> None:
 @click.option("--accelerator", default=None, help="Slice override, e.g. 'v6e-8' or 'H100x8'.")
 @click.option("--limit", type=int, default=None, help="Override max eval instances per task.")
 @click.option(
+    "--instances",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Candidate serving instances, each using the selected accelerator; multiple instances share a broker.",
+)
+@click.option(
     "--max-concurrent",
     type=click.IntRange(min=1),
     default=DEFAULT_EVAL_CONCURRENCY,
@@ -197,6 +205,9 @@ def cli() -> None:
     help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
+@click.option(
+    "--run-id", default=None, help="Stable launch ID; repeat the command with this ID to reuse completed evals."
+)
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
 @click.option(
@@ -228,16 +239,18 @@ def launch(
     accelerator: str | None,
     limit: int | None,
     max_concurrent: int,
+    instances: int,
     seed: int | None,
     version: str | None,
     description: str | None,
+    run_id: str | None,
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
     federated_cluster: str | None,
     priority: str | None,
 ) -> None:
-    """Submit evaluations sharing one inference server for MODEL."""
+    """Submit evaluations against a shared candidate endpoint for MODEL."""
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
@@ -269,6 +282,7 @@ def launch(
         accelerator=accelerator,
         limit=limit,
         max_concurrent=max_concurrent,
+        instances=instances,
         seed=seed,
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
@@ -278,6 +292,7 @@ def launch(
         judge_accelerator=judge_accelerator,
         version=version,
         description=description,
+        run_id=run_id,
     )
     try:
         batch = prepare_evaluation_batch(spec)

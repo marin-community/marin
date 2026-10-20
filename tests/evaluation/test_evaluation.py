@@ -18,13 +18,12 @@ import pytest
 from click.testing import CliRunner
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
-    EvalSample,
     EvaluationStore,
-    Grading,
     SampleKind,
     sample_from_archive_row,
 )
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.eval_policy import HARBOR_COMMIT, SEPTEMBER_16_VERSION, source_config_digest
@@ -553,6 +552,7 @@ def _write_evalchemy_output(
     samples: dict[str, list[dict]],
     *,
     scored_counts: Mapping[str, int] | None = None,
+    failure_category: str | None = None,
 ) -> None:
     sample_counts = {task: max((int(row["doc_id"]) for row in rows), default=-1) + 1 for task, rows in samples.items()}
     benchmark_metadata = {}
@@ -580,31 +580,32 @@ def _write_evalchemy_output(
         }
         canonical_results[task] = {canonical_name: next(iter(results[task].values()))}
 
-    store = EvaluationStore.open(output_dir, writer_id="evalchemy-test")
+    data_store = DataStore.open(output_dir, writer_id="evalchemy-test")
+    store = EvaluationStore(data_store)
     try:
-        store.add_source_artifact(
-            f"evalchemy/{task_dir}/native/results_test.json",
-            json.dumps(
-                {
-                    "results": results,
-                    "benchmark_metadata": benchmark_metadata,
-                    "canonical_results": canonical_results,
-                    "task_outcomes": {
-                        task: {"status": "succeeded", "scored_count": (scored_counts or {}).get(task, count)}
-                        for task, count in sample_counts.items()
-                    },
-                }
-            ).encode(),
-            content_type="application/json",
+        data_store.table("evalchemy_results", primary_key=("source_prefix",)).append(
+            {
+                "source_prefix": task_dir,
+                "document": json.dumps(
+                    {
+                        "results": results,
+                        "benchmark_metadata": benchmark_metadata,
+                        "canonical_results": canonical_results,
+                        "task_outcomes": {
+                            task: {
+                                "status": "failed" if failure_category else "succeeded",
+                                "scored_count": (scored_counts or {}).get(task, count),
+                                "failure": {"category": failure_category},
+                            }
+                            for task, count in sample_counts.items()
+                        },
+                    }
+                ),
+                "scored": failure_category is None,
+            }
         )
         for task, rows in samples.items():
             normalized_task = task_dir if len(samples) == 1 else f"{task_dir}/{task}"
-            payload = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
-            store.add_source_artifact(
-                f"evalchemy/{task_dir}/native/samples_{task}_native.jsonl",
-                payload,
-                content_type="application/x-ndjson",
-            )
             for row in rows:
                 for sample in samples_from_lm_eval(normalized_task, row, primary_sources[task]):
                     store.add_sample(sample)
@@ -666,7 +667,7 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
     assert succeeded.model.config is not None
     assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
-    assert [(row.run_id, row.status) for row in catalog_rows] == [
+    assert sorted((row.run_id, row.status) for row in catalog_rows) == [
         ("run-failure", "failed"),
         ("run-success", "succeeded"),
     ]
@@ -935,6 +936,73 @@ def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypa
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
 
 
+@pytest.mark.parametrize("missing_result", [True, False], ids=["missing", "unscored"])
+def test_evalchemy_executor_rejects_incomplete_task_beside_scored_results(tmp_path, monkeypatch, missing_result):
+    output_dir = f"file://{tmp_path / 'incomplete'}"
+    _write_evalchemy_output(
+        output_dir,
+        "good_0shot",
+        {"good": {"exact_match,none": 1.0}},
+        {"good": [_lm_eval_generation(0, "exact_match", 1.0, "4")]},
+    )
+    if not missing_result:
+        with DataStore.open(output_dir, writer_id="unscored-task") as store:
+            store.table("evalchemy_results", primary_key=("source_prefix",)).append(
+                {"source_prefix": "bad_0shot", "document": json.dumps({"results": {}}), "scored": False}
+            )
+            store.seal()
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(name="mixed", tasks=(EvalTaskConfig("good", 0), EvalTaskConfig("bad", 0)))
+    )
+
+    with pytest.raises(EvaluationError, match="bad_0shot") as exc_info:
+        executor(_remote_session(), output_dir, {})
+
+    assert exc_info.value.status is RunStatus.ARTIFACT_FAILED
+    assert exc_info.value.jobs == {"eval": "/eval/completed"}
+
+
+@pytest.mark.parametrize("failed_sample_has_grade", [True, False])
+def test_evalchemy_executor_accepts_scored_partial_results_and_reports_drops(
+    tmp_path, monkeypatch, failed_sample_has_grade
+):
+    output_dir = f"file://{tmp_path / 'partial'}"
+    marker = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] request timed out"
+    samples = [_lm_eval_generation(i, "exact_match", 1.0, "4") for i in range(9)]
+    failed_sample = _lm_eval_generation(9, "exact_match", 0.0, marker)
+    if not failed_sample_has_grade:
+        failed_sample.pop("exact_match")
+    samples.append(failed_sample)
+    _write_evalchemy_output(
+        output_dir,
+        "gsm8k_5shot",
+        {"gsm8k": {"exact_match,none": 1.0}},
+        {"gsm8k": samples},
+        scored_counts={"gsm8k": 9},
+        failure_category="AgentTimeoutError",
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig("gsm8k", 5),)))
+
+    outcome = executor(_remote_session(), output_dir, {})
+
+    assert outcome.metrics == {"gsm8k_5shot": {"exact_match,none": 1.0}}
+    assert outcome.coverage["gsm8k_5shot"] == TaskCoverage(
+        n_benchmark=10,
+        n_attempted=10,
+        n_scored=9,
+        n_correct=9,
+        errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+    )
+
+
 def test_aggregate_coverage_keeps_the_full_benchmark_extent():
     coverage = {
         "custom": TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=0, errors={"ungraded": 10}),
@@ -1161,7 +1229,9 @@ def test_evalchemy_executor_uses_aggregate_count_when_custom_task_omits_sample_s
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
     executor = EvalchemyExecutor(
-        EvalchemyRunConfig(name="mmlu-pro", tasks=(EvalTaskConfig(name="MMLUPro", num_fewshot=0),))
+        EvalchemyRunConfig(
+            name="mmlu-pro", tasks=(EvalTaskConfig(name="MMLUPro", num_fewshot=0, task_alias="mmlu-pro"),)
+        )
     )
 
     outcome = executor(_remote_session(), output_dir, {})
@@ -1203,7 +1273,10 @@ def test_evalchemy_executor_uses_code_task_scored_count_when_samples_omit_scores
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
     executor = EvalchemyExecutor(
-        EvalchemyRunConfig(name="humanevalplus", tasks=(EvalTaskConfig(name="HumanEvalPlus", num_fewshot=0),))
+        EvalchemyRunConfig(
+            name="humanevalplus",
+            tasks=(EvalTaskConfig(name="HumanEvalPlus", num_fewshot=0, task_alias="humanevalplus"),),
+        )
     )
 
     outcome = executor(_remote_session(), output_dir, {})
@@ -1220,7 +1293,7 @@ def test_evalchemy_executor_uses_code_task_scored_count_when_samples_omit_scores
     }
 
 
-def test_evalchemy_executor_rebuilds_native_prompts_before_normalizing_rollouts(tmp_path, monkeypatch):
+def test_evalchemy_executor_normalizes_native_prompts_into_rollouts(tmp_path, monkeypatch):
     output_dir = f"file://{tmp_path / 'native-prompt'}"
     prompt = json.dumps([{"role": "user", "content": "Question: 2+2?"}])
     raw = _lm_eval_generation(0, "exact_match", 1.0, "4")
@@ -1231,25 +1304,6 @@ def test_evalchemy_executor_rebuilds_native_prompts_before_normalizing_rollouts(
         {"gsm8k": {"exact_match,none": 1.0}},
         {"gsm8k": [raw]},
     )
-    with EvaluationStore.open(output_dir, writer_id="evalchemy-without-prompt") as store:
-        store.add_sample(
-            EvalSample(
-                task="gsm8k_5shot",
-                doc_id="0",
-                kind=SampleKind.GENERATION,
-                output="4",
-                grading=Grading(
-                    method="lm-eval:exact_match",
-                    metric="exact_match",
-                    filter="none",
-                    score=1.0,
-                    passed=True,
-                ),
-                metrics={"exact_match": 1.0},
-                correct=True,
-            )
-        )
-        store.seal()
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
@@ -1832,7 +1886,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "apply_chat_template": True,
             "debug": False,
             "max_eval_instances": 2,
-            "num_concurrent": 16,
+            "num_concurrent": 64,
             "batch_size": "1",
             "seed": 1234,
             "extra_gen_kwargs": {},
@@ -1866,6 +1920,8 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
                     ],
                     "n_benchmark": 1,
                     "n_attempted": 1,
+                    "reducers": [],
+                    "requires_judge": False,
                 },
             }
         ],

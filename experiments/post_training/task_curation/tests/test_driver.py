@@ -105,6 +105,25 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     assert "Unknown source: unknown" in unknown.output
 
 
+def test_local_canary_cannot_write_an_explicit_production_catalog(tmp_path, catalog):
+    production = tmp_path / "production"
+    result = CliRunner().invoke(
+        main,
+        [
+            *arguments(tmp_path),
+            "--mode",
+            "full",
+            "--cache-dir",
+            str(tmp_path / "canary"),
+            "--publish-catalog",
+            str(production),
+            "--run",
+        ],
+    )
+    assert result.exit_code == 2
+    assert not production.exists()
+
+
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)

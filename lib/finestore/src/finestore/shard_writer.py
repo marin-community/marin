@@ -32,12 +32,29 @@ BLOB_PART_ROW_GROUP_ROWS = 1
 BLOB_DESCRIPTOR_ROW_GROUP_ROWS = 1024
 
 
+def _bounded_slices(rows: pa.Table, max_rows: int) -> Iterator[pa.Table]:
+    """Split rows into slices within the row limit and, above one row, the byte target."""
+    start = 0
+    while start < rows.num_rows:
+        length = min(max_rows, rows.num_rows - start)
+        piece = rows.slice(start, length)
+        while length > 1 and piece.nbytes > ROW_GROUP_TARGET_BYTES:
+            length //= 2
+            piece = rows.slice(start, length)
+        yield piece
+        start += length
+
+
 def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int) -> Iterator[pa.Table]:
-    """Group retained Arrow rows by row count and actual buffer size."""
+    """Group retained Arrow rows by row count and actual buffer size.
+
+    Tables of any length are accepted; one larger than a row group is split first. A single
+    row can still exceed the byte target.
+    """
     group: list[pa.Table] = []
     group_rows = 0
     group_bytes = 0
-    for table in row_tables:
+    for table in (piece for rows in row_tables for piece in _bounded_slices(rows, max_rows)):
         if group and (group_rows + table.num_rows > max_rows or group_bytes + table.nbytes > ROW_GROUP_TARGET_BYTES):
             yield pa.concat_tables(group)
             group = []
@@ -103,16 +120,23 @@ class _HashingSink:
 class ShardWriter:
     """Streams record batches to one immutable Parquet shard, one row group per ``write_table`` call.
 
-    Open it on the final object path; it writes to a temp sibling and renames into place on
-    :meth:`close` (or context-manager exit). Every appended table must share the writer's schema.
+    Open it on the final object path. Local shards are written to a temp sibling and renamed
+    into place on :meth:`close` (or context-manager exit); object-store shards are uploaded
+    directly. Every appended table must share the writer's schema.
     """
 
     def __init__(self, path: str, schema: pa.Schema) -> None:
         self._schema = schema
-        StoragePath(path).parent.mkdirs()
+        target = StoragePath(path)
         self._stack = contextlib.ExitStack()
-        temp_path = self._stack.enter_context(atomic_rename(path))
-        handle = self._stack.enter_context(StoragePath(temp_path).open("wb"))
+        if target.is_remote:
+            # An object-store PUT is atomic and the shard is unreferenced until its commit
+            # lands, so writing the final key directly saves the copy and delete of a rename.
+            write_path = path
+        else:
+            target.parent.mkdirs()
+            write_path = self._stack.enter_context(atomic_rename(path))
+        handle = self._stack.enter_context(StoragePath(write_path).open("wb"))
         self._sink = _HashingSink(handle)
         self._writer = self._stack.enter_context(
             pq.ParquetWriter(

@@ -97,7 +97,6 @@ uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json
 uv run marina release infra/marina/applets/rl_data_catalog --base-version CURRENT_VERSION
 
 uv run python infra/marina/applets/rl_data_catalog/load.py \
-  --catalog-root CATALOG_ROOT \
   --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
@@ -109,13 +108,65 @@ default release records its source commit and subtree hash in the immutable pack
 Use `--allow-dirty` to explicitly release branch or uncommitted source without
 verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
 
+The loader defaults to the published catalog in CoreWeave's `us-east-02a` bucket at
+`s3://marin-us-east-02a/marin/rl-data/catalog/production`.
+Use `--catalog-root` to explicitly select another catalog, such as a local preview.
+The default keeps production updates independent of an operator's local curation cache.
+
+Production FULL campaigns add `--publish-catalog
+s3://marin-us-east-02a/marin/rl-data/catalog/production` to the
+[campaign command](task-curation.md#run-a-campaign) with assessment enabled.
+`--cache-dir` selects local execution and a local artifact root, so production
+publication rejects it. Production uses the shared artifact cache under
+`--artifact-root` (default `s3://marin-us-east-02a/marin`) and an explicit
+`--review-cache` for model requests. Reuse the existing cache locations, pinned
+inputs, recipe versions, rubric and model revisions to reuse completed work.
+Assessment can use cached results; enabling it does not force regrading.
+A new report directory does not invalidate the caches. Switching a local or GCP
+artifact root to S3 does not move its cached work. Verify retained artifacts and
+model-request caches are available before running a campaign from the new root.
+The publication destination is independent: a GCP campaign can keep its existing
+`--artifact-root` and `--review-cache` while publishing to the S3 catalog. Run
+beside those caches. The default S3 artifact root will not reuse work present
+only at a different GCP root.
+Run history, assessments and evidence accumulate in the shared catalog.
+Without this option, SAMPLE/FULL publish beside their report. QUICK does not publish
+a grading snapshot. Adding a dataset declaration alone does not execute its pipeline.
+
+Publication updates selected sources and preserves all other production entries,
+including their pinned declarations. Use `--source` to grade only new or changed
+sources; the other sources' assessments carry forward without executing their
+pipelines. Metadata-only edits to names, tags or URLs
+therefore reach production when that source is selected. Removing a declaration
+from code does not retire its production entry. Older attempts are ignored per
+source, so an out-of-order campaign can still publish its other sources. Failed
+attempts under a changed assessment key clear the old grade; exact-key retries
+can reuse completed evidence. The key includes rubric, model and pipeline identity.
+
+After the campaign publishes, run the loader above to refresh Postgres. The shared
+catalog updates during production runs; Atlas refresh remains an explicit operation
+and can be retried without inference or a Marina restart. Curriculum publication
+and import are separate; grading a new source does not generate its heatmap coverage.
+
 Coordinate the code release and data load: the new API returns 503 until a
-catalog has been selected. Run the loader in the
-catalog's storage region. It reads through `CurationCatalog`, sends byte-bounded
+catalog has been selected. The loader reads through `CurationCatalog`, sends byte-bounded
 SQL batches, checks sample and packet coverage, then selects the load with one
-UPDATE. An unchanged snapshot skips loading. One operator runs updates; concurrent
-loaders are unsupported. Abandoned and obsolete staging rows are removed on the
-next update. Schema changes may require downtime.
+conditional UPDATE. An unchanged snapshot skips loading. If the catalog or serving
+selection changes during an import, that import fails and can be retried. Cleanup
+after successful selection removes only older loads observed before staging; it
+preserves imports that started later. Schema changes may require downtime. FineStore's snapshot reader caches
+requested Parquet byte ranges under a shared memory budget. The loader needs no
+separate metadata cache and keeps evidence packet reads batched. A bounded import
+can run from a workstation; prefer the catalog's storage region for large transfers.
+
+The production catalog was seeded from the relocated October 12 snapshot. Its initial
+manifest retains immutable shards in
+`s3://marin-us-east-02a/marin/rl-data/migrations/2026-10-15/`.
+That verified archive remains part of production storage and must be retained.
+Schemas were copied into the production root so writers can extend the catalog.
+New writes use that root. The legacy catalog remains historical evidence.
+This catalog bootstrap preserves published grades and evidence; it does not
+relocate the original GCP execution artifacts or model-request cache.
 
 Packets are stored separately as JSON text, preserving escaped null characters.
 Inventory queries scan structured metadata and verdict rows. Atlas performs no

@@ -5,8 +5,10 @@ import json
 import shutil
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Any, cast
 
 import pyarrow as pa
@@ -37,7 +39,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 
-from infra.marina.applets.rl_data_catalog.load import load_catalog
+from infra.marina.applets.rl_data_catalog.load import Query, load_catalog
 from infra.marina.applets.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.applets.rl_data_catalog.server.app import create_api, migrate
 
@@ -64,6 +66,20 @@ def catalog_database(database_url: str) -> Iterator[Engine]:
         with admin.begin() as connection:
             connection.execute(text(f"DROP SCHEMA {schema} CASCADE"))
         admin.dispose()
+
+
+@pytest.fixture
+def catalog_query(catalog_database: Engine) -> Query:
+    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        validate_query(sql)
+        with catalog_database.begin() as connection:
+            result = connection.execute(text(sql), parameters)
+            return {
+                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
+                "row_count": result.rowcount,
+            }
+
+    return query
 
 
 def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False, source_id: str = "math") -> None:
@@ -342,20 +358,12 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
 
 @pytest.mark.parametrize("unavailable_status", ["insufficient_context", "skipped"])
 def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
-    catalog_database, tmp_path, monkeypatch, unavailable_status
+    catalog_database, catalog_query, tmp_path, monkeypatch, unavailable_status
 ):
     monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
     monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
     engine = catalog_database
-
-    def query(sql, parameters):
-        validate_query(sql)
-        with engine.begin() as connection:
-            result = connection.execute(text(sql), parameters)
-            return {
-                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
-                "row_count": result.rowcount,
-            }
+    query = catalog_query
 
     path = curriculum_release(tmp_path, unavailable_status)
     coverage_path = tmp_path / "coverage.json"
@@ -446,18 +454,14 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert client.get("/sources").json()["sources"][0]["coverage"] == source["coverage"]
 
 
-def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(catalog_database, tmp_path: Path) -> None:
+def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
+    catalog_database, catalog_query, tmp_path: Path
+) -> None:
     engine = catalog_database
     root = str(tmp_path / "catalog")
     publish_sample(root, "first")
 
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        with engine.begin() as connection:
-            result = connection.execute(text(sql), parameters)
-            return {
-                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
-                "row_count": result.rowcount,
-            }
+    query = catalog_query
 
     loaded = load_catalog(CurationCatalog(root), query)
     assert loaded["counts"] == {"sources": 1, "assessments": 1, "populations": 2, "items": 3, "packets": 3}
@@ -509,6 +513,87 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(cat
         assert client.get("/sources").json()["snapshot_id"] == "next"
         assert client.get("/evidence", params={"source_id": "math", "task_id": "one"}).json() == packet
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
+
+
+def test_a_competing_atlas_cutover_prevents_an_older_load_from_being_selected(catalog_query, tmp_path):
+    older, newer = str(tmp_path / "older"), str(tmp_path / "newer")
+    publish_sample(older, "older")
+    publish_sample(newer, "newer")
+    interrupted = False
+
+    def overlapping_query(sql, parameters):
+        nonlocal interrupted
+        result = catalog_query(sql, parameters)
+        if sql.startswith("INSERT INTO atlas_packets") and not interrupted:
+            interrupted = True
+            assert load_catalog(CurationCatalog(newer), catalog_query)["changed"]
+        return result
+
+    with pytest.raises(RuntimeError, match="Atlas selection changed"):
+        load_catalog(CurationCatalog(older), overlapping_query)
+    selected = catalog_query(
+        "SELECT l.snapshot_id, count(p.*) AS packets FROM atlas_current c JOIN atlas_loads l USING(load_id) "
+        "JOIN atlas_packets p USING(load_id) GROUP BY l.snapshot_id",
+        {},
+    )["rows"]
+    assert selected == [{"snapshot_id": "newer", "packets": 3}]
+
+
+def test_a_new_catalog_snapshot_during_import_leaves_the_serving_load_unchanged(catalog_query, tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "first")
+    load_catalog(CurationCatalog(root), catalog_query)
+    publish_sample(root, "next")
+
+    def changing_catalog_query(sql, parameters):
+        result = catalog_query(sql, parameters)
+        if sql.startswith("INSERT INTO atlas_packets"):
+            publish_sample(root, "later")
+        return result
+
+    with pytest.raises(RuntimeError, match="Catalog selection changed"):
+        load_catalog(CurationCatalog(root), changing_catalog_query)
+    assert catalog_query("SELECT l.snapshot_id FROM atlas_current c JOIN atlas_loads l USING(load_id)", {})["rows"] == [
+        {"snapshot_id": "first"}
+    ]
+    assert load_catalog(CurationCatalog(root), catalog_query)["changed"]
+
+
+def test_atlas_cleanup_preserves_a_load_started_after_its_cutover(catalog_query, tmp_path):
+    roots = [str(tmp_path / name) for name in ("baseline", "first", "later")]
+    for root, name in zip(roots, ("baseline", "first", "later"), strict=True):
+        publish_sample(root, name)
+    load_catalog(CurationCatalog(roots[0]), catalog_query)
+    staged, continue_load = Event(), Event()
+    later = None
+
+    def later_query(sql, parameters):
+        result = catalog_query(sql, parameters)
+        if sql.startswith("INSERT INTO atlas_packets"):
+            staged.set()
+            assert continue_load.wait(timeout=15)
+        return result
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+
+        def first_query(sql, parameters):
+            nonlocal later
+            if sql.startswith("DELETE FROM atlas_sources") and later is None:
+                later = executor.submit(load_catalog, CurationCatalog(roots[2]), later_query)
+                assert staged.wait(timeout=15)
+            return catalog_query(sql, parameters)
+
+        try:
+            assert load_catalog(CurationCatalog(roots[1]), first_query)["changed"]
+        finally:
+            continue_load.set()
+        assert later is not None
+        assert later.result(timeout=30)["changed"]
+    assert catalog_query(
+        "SELECT l.snapshot_id, count(p.*) AS packets FROM atlas_current c JOIN atlas_loads l USING(load_id) "
+        "JOIN atlas_packets p USING(load_id) GROUP BY l.snapshot_id",
+        {},
+    )["rows"] == [{"snapshot_id": "later", "packets": 3}]
 
 
 @pytest.mark.parametrize(

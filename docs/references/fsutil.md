@@ -1,7 +1,7 @@
 # fsutil: browsing Marin's buckets
 
 `fsutil` lists, reads, sizes, copies, and removes objects across every bucket declared in
-`config/*.yaml` — GCS, CoreWeave AI Object Storage, and R2 — from one command, and opens
+`config/*.yaml` — GCS and CoreWeave AI Object Storage — from one command, and opens
 an interactive browser over all of them.
 
 ```bash
@@ -18,7 +18,7 @@ uv run fsutil usage s3://marin-us-east-02a -o usage-report.md
 uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
 uv run fsutil mv /tmp/run.json gs://marin-us-central2/archive/
 uv run fsutil rsync --dry-run --delete /tmp/checkpoints gs://marin-us-central2/checkpoints
-uv run fsutil verified-copy gs://marin-us-central2/exports/model s3://marin-na/marin/exports/model
+uv run fsutil verified-copy gs://marin-us-central2/exports/model s3://marin-us-east-02a/marin/exports/model
 uv run fsutil hash gs://marin-us-central2/archive/run.json
 uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix s3://marin-us-east-02a/tmp/old-prefix
 ```
@@ -43,9 +43,7 @@ export CW_KEY_ID=<key-id>
 export CW_KEY_SECRET=<key-secret>
 ```
 
-R2 buckets use `R2_KEY_ID` / `R2_KEY_SECRET` the same way. Either backend also accepts
-the generic `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` pair, which is enough when only
-one of them is in play.
+CoreWeave also accepts the generic `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` pair.
 
 `fsutil buckets` reports which backends are reachable, so an unconfigured one shows up
 before a command fails against it. A backend with no credentials only breaks commands
@@ -121,7 +119,7 @@ source store. Object stores cannot atomically rename a prefix, so consumers may 
 objects appear one at a time and must check for the manifest before using the destination.
 
 The command hashes each source object while uploading it. For configured S3-compatible
-destinations such as R2, it uses fixed-size multipart parts, calculates the corresponding
+destinations, it uses fixed-size multipart parts, calculates the corresponding
 content-derived ETag, and compares that value with destination metadata after the upload. Other
 destinations are read back and checked against the source SHA-256. The command records the SHA-256
 and source and staging identities under a sibling `<DST>.verified-copy-status` prefix. A retry skips
@@ -218,10 +216,10 @@ until the file ends; other formats show the bounded preview.
 
 ## Where the bucket list comes from
 
-Buckets and backends are declared in `config/*.yaml` under `data.region_buckets`, and
-each S3-compatible backend's endpoint and credential variables under `data.stores`.
-`fsutil` builds one filesystem per backend from that config, so adding a bucket is a
-config change rather than a code change. The same routing is available to library code
-as `rigging.filesystem.buckets.filesystem_for(url)`, which is the way to reach two S3 backends
-from one process — the process-wide `AWS_*` / `FSSPEC_S3` variables can only describe
-one at a time.
+Buckets are declared in `config/*.yaml` under `data.region_buckets` and
+`data.stores.<backend>.temp_bucket`. Backend endpoints and credential variables
+are declared under `data.stores`.
+`fsutil` builds filesystems from that config, so adding a bucket is a configuration
+change. Python callers can use `rigging.filesystem.buckets.filesystem_for(url)`
+for the same routing. Unregistered S3 buckets use the process-wide `AWS_*` and
+`FSSPEC_S3` settings.

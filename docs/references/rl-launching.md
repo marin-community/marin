@@ -53,8 +53,8 @@ workloads use separate Daytona credentials.
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
-The runtime executes tasks through `TaskSession` and sends token requests to model engines.
-Harbor tasks use the Shellbox session. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
+The runtime executes tasks through RolloutEngine harnesses and sends token requests to model engines.
+Harbor tasks use the shell harness. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 
 The launcher uses the frozen project in `config/external/MarinSkyRL` in an isolated environment.

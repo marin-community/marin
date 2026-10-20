@@ -1,0 +1,341 @@
+{
+  "method": "deduplicate train rows by optimizer step, retain final record for each; exact complete contiguous range checked",
+  "records": [
+    {
+      "step": 1,
+      "timestamp_utc": "2026-09-23 19:20:54.782",
+      "metrics": {
+        "generate/avg_num_tokens": 6017.93994140625
+      }
+    },
+    {
+      "step": 2,
+      "timestamp_utc": "2026-09-23 20:54:56.404",
+      "metrics": {
+        "generate/avg_num_tokens": 5628.701171875
+      }
+    },
+    {
+      "step": 3,
+      "timestamp_utc": "2026-09-23 22:06:37.813",
+      "metrics": {
+        "generate/avg_num_tokens": 6153.3214111328125
+      }
+    },
+    {
+      "step": 4,
+      "timestamp_utc": "2026-09-23 23:41:58.228",
+      "metrics": {
+        "generate/avg_num_tokens": 5035.526123046875
+      }
+    },
+    {
+      "step": 5,
+      "timestamp_utc": "2026-09-24 00:44:08.391",
+      "metrics": {
+        "generate/avg_num_tokens": 5380.9400634765625
+      }
+    },
+    {
+      "step": 6,
+      "timestamp_utc": "2026-09-24 01:41:29.792",
+      "metrics": {
+        "generate/avg_num_tokens": 4536.937255859375
+      }
+    },
+    {
+      "step": 7,
+      "timestamp_utc": "2026-09-24 02:48:12.766",
+      "metrics": {
+        "generate/avg_num_tokens": 3097.9625244140625
+      }
+    },
+    {
+      "step": 8,
+      "timestamp_utc": "2026-09-24 03:42:07.300",
+      "metrics": {
+        "generate/avg_num_tokens": 3730.9947509765625
+      }
+    },
+    {
+      "step": 9,
+      "timestamp_utc": "2026-09-24 04:24:25.381",
+      "metrics": {
+        "generate/avg_num_tokens": 3211.2525634765625
+      }
+    },
+    {
+      "step": 10,
+      "timestamp_utc": "2026-09-24 05:11:49.221",
+      "metrics": {
+        "generate/avg_num_tokens": 3407.6422119140625
+      }
+    },
+    {
+      "step": 11,
+      "timestamp_utc": "2026-09-24 06:11:29.317",
+      "metrics": {
+        "generate/avg_num_tokens": 2884.5482177734375
+      }
+    },
+    {
+      "step": 12,
+      "timestamp_utc": "2026-09-24 07:00:47.515",
+      "metrics": {
+        "generate/avg_num_tokens": 2553.166015625
+      }
+    },
+    {
+      "step": 13,
+      "timestamp_utc": "2026-09-24 07:40:27.882",
+      "metrics": {
+        "generate/avg_num_tokens": 2661.229736328125
+      }
+    },
+    {
+      "step": 14,
+      "timestamp_utc": "2026-09-24 08:40:58.364",
+      "metrics": {
+        "generate/avg_num_tokens": 2283.77490234375
+      }
+    },
+    {
+      "step": 15,
+      "timestamp_utc": "2026-09-24 09:08:22.469",
+      "metrics": {
+        "generate/avg_num_tokens": 3200.1424560546875
+      }
+    },
+    {
+      "step": 16,
+      "timestamp_utc": "2026-09-24 10:04:13.118",
+      "metrics": {
+        "generate/avg_num_tokens": 1810.5438232421875
+      }
+    },
+    {
+      "step": 17,
+      "timestamp_utc": "2026-09-24 10:45:41.847",
+      "metrics": {
+        "generate/avg_num_tokens": 2877.615966796875
+      }
+    },
+    {
+      "step": 18,
+      "timestamp_utc": "2026-09-24 11:33:08.126",
+      "metrics": {
+        "generate/avg_num_tokens": 2597.3665771484375
+      }
+    },
+    {
+      "step": 19,
+      "timestamp_utc": "2026-09-24 12:07:15.683",
+      "metrics": {
+        "generate/avg_num_tokens": 2459.109375
+      }
+    },
+    {
+      "step": 20,
+      "timestamp_utc": "2026-09-24 12:40:55.355",
+      "metrics": {
+        "generate/avg_num_tokens": 1692.8380126953125
+      }
+    },
+    {
+      "step": 21,
+      "timestamp_utc": "2026-09-24 13:14:54.555",
+      "metrics": {
+        "generate/avg_num_tokens": 2160.76513671875
+      }
+    },
+    {
+      "step": 22,
+      "timestamp_utc": "2026-09-24 13:50:20.339",
+      "metrics": {
+        "generate/avg_num_tokens": 1392.5888671875
+      }
+    },
+    {
+      "step": 23,
+      "timestamp_utc": "2026-09-24 14:12:56.170",
+      "metrics": {
+        "generate/avg_num_tokens": 1521.7132568359375
+      }
+    },
+    {
+      "step": 24,
+      "timestamp_utc": "2026-09-24 14:48:00.586",
+      "metrics": {
+        "generate/avg_num_tokens": 1866.2593994140625
+      }
+    },
+    {
+      "step": 25,
+      "timestamp_utc": "2026-09-24 15:18:42.080",
+      "metrics": {
+        "generate/avg_num_tokens": 1285.5718994140625
+      }
+    },
+    {
+      "step": 26,
+      "timestamp_utc": "2026-09-24 15:50:22.428",
+      "metrics": {
+        "generate/avg_num_tokens": 1474.787353515625
+      }
+    },
+    {
+      "step": 27,
+      "timestamp_utc": "2026-09-24 16:12:12.412",
+      "metrics": {
+        "generate/avg_num_tokens": 2007.150634765625
+      }
+    },
+    {
+      "step": 28,
+      "timestamp_utc": "2026-09-24 17:09:08.082",
+      "metrics": {
+        "generate/avg_num_tokens": 2272.6221923828125
+      }
+    },
+    {
+      "step": 29,
+      "timestamp_utc": "2026-09-24 17:57:08.002",
+      "metrics": {
+        "generate/avg_num_tokens": 2568.1956787109375
+      }
+    },
+    {
+      "step": 30,
+      "timestamp_utc": "2026-09-24 18:30:47.213",
+      "metrics": {
+        "generate/avg_num_tokens": 2909.4896240234375
+      }
+    },
+    {
+      "step": 31,
+      "timestamp_utc": "2026-09-24 19:14:00.484",
+      "metrics": {
+        "generate/avg_num_tokens": 2261.1455078125
+      }
+    },
+    {
+      "step": 32,
+      "timestamp_utc": "2026-09-24 19:56:39.356",
+      "metrics": {
+        "generate/avg_num_tokens": 2700.6458740234375
+      }
+    },
+    {
+      "step": 33,
+      "timestamp_utc": "2026-09-24 20:21:37.298",
+      "metrics": {
+        "generate/avg_num_tokens": 2605.1339111328125
+      }
+    },
+    {
+      "step": 34,
+      "timestamp_utc": "2026-09-24 21:15:46.292",
+      "metrics": {
+        "generate/avg_num_tokens": 2013.423583984375
+      }
+    },
+    {
+      "step": 35,
+      "timestamp_utc": "2026-09-24 21:44:33.726",
+      "metrics": {
+        "generate/avg_num_tokens": 2645.38037109375
+      }
+    },
+    {
+      "step": 36,
+      "timestamp_utc": "2026-09-24 22:34:01.747",
+      "metrics": {
+        "generate/avg_num_tokens": 1864.9444580078125
+      }
+    },
+    {
+      "step": 37,
+      "timestamp_utc": "2026-09-24 23:09:06.118",
+      "metrics": {
+        "generate/avg_num_tokens": 2706.5025634765625
+      }
+    },
+    {
+      "step": 38,
+      "timestamp_utc": "2026-09-24 23:50:47.031",
+      "metrics": {
+        "generate/avg_num_tokens": 2226.022216796875
+      }
+    },
+    {
+      "step": 39,
+      "timestamp_utc": "2026-09-25 00:11:05.768",
+      "metrics": {
+        "generate/avg_num_tokens": 2082.5535888671875
+      }
+    },
+    {
+      "step": 40,
+      "timestamp_utc": "2026-09-25 00:57:47.248",
+      "metrics": {
+        "generate/avg_num_tokens": 1990.6060791015625
+      }
+    },
+    {
+      "step": 41,
+      "timestamp_utc": "2026-09-25 01:36:38.282",
+      "metrics": {
+        "generate/avg_num_tokens": 2458.7398681640625
+      }
+    },
+    {
+      "step": 42,
+      "timestamp_utc": "2026-09-25 02:14:32.542",
+      "metrics": {
+        "generate/avg_num_tokens": 1906.2376708984375
+      }
+    },
+    {
+      "step": 43,
+      "timestamp_utc": "2026-09-25 02:49:37.733",
+      "metrics": {
+        "generate/avg_num_tokens": 1984.33935546875
+      }
+    },
+    {
+      "step": 44,
+      "timestamp_utc": "2026-09-25 03:22:53.702",
+      "metrics": {
+        "generate/avg_num_tokens": 2223.2191162109375
+      }
+    },
+    {
+      "step": 45,
+      "timestamp_utc": "2026-09-25 04:01:29.573",
+      "metrics": {
+        "generate/avg_num_tokens": 1796.8048095703125
+      }
+    },
+    {
+      "step": 46,
+      "timestamp_utc": "2026-09-25 04:44:49.651",
+      "metrics": {
+        "generate/avg_num_tokens": 2184.2884521484375
+      }
+    },
+    {
+      "step": 47,
+      "timestamp_utc": "2026-09-25 05:13:12.626",
+      "metrics": {
+        "generate/avg_num_tokens": 2008.4024658203125
+      }
+    },
+    {
+      "step": 48,
+      "timestamp_utc": "2026-09-25 06:03:39.355",
+      "metrics": {
+        "generate/avg_num_tokens": 2347.864013671875
+      }
+    }
+  ]
+}

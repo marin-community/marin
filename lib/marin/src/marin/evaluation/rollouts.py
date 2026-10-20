@@ -11,20 +11,23 @@ import json
 from collections.abc import Iterable, Iterator
 
 from finestore.eval import (
+    ARCHIVE_ROLLOUTS_TABLE,
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     ROLLOUT_SCHEMA_VERSION,
+    ROLLOUTS_MERGE_KEY,
     ConversationType,
     EvalSample,
-    EvaluationStore,
     ParticipantType,
     RolloutContentType,
     RolloutRecord,
     SampleKind,
     StepRecord,
+    rollouts_schema,
     sample_from_archive_row,
 )
 from finestore.reader import ReadView
+from finestore.store import DataStore
 
 _ASSISTANT_ROLES = frozenset({"agent", "assistant", "model"})
 _SYSTEM_ROLES = frozenset({"context", "developer", "system"})
@@ -206,11 +209,18 @@ def normalize_rollouts(root: str, *, writer_id: str) -> None:
     first = next(records, None)
     if first is None:
         return
-    with EvaluationStore.open(root, writer_id=writer_id) as store:
-        store.add_rollouts((first,))
+    # The evaluator owns its source tables and their conflict policy; register only our output.
+    with DataStore.open(root, writer_id=writer_id) as store:
+        table = store.table(
+            ARCHIVE_ROLLOUTS_TABLE,
+            schema=rollouts_schema(),
+            primary_key=ROLLOUTS_MERGE_KEY,
+            schema_version=ROLLOUT_SCHEMA_VERSION,
+        )
+        table.append(first.model_dump(mode="json"))
         for record in records:
-            store.add_rollouts((record,))
-        store.add_artifact(
+            table.append(record.model_dump(mode="json"))
+        store.write_object(
             _COMPLETE_OBJECT,
             json.dumps(
                 {

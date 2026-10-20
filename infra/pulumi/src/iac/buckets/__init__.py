@@ -25,6 +25,8 @@ class DataBuckets(pulumi.ComponentResource):
         gcp_provider: pulumi.ProviderResource,
         coreweave_provider: pulumi.ProviderResource,
         cloudflare_provider: pulumi.ProviderResource,
+        r2_account_id: str,
+        r2_bucket_name: str,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:buckets:DataBuckets", name, None, opts)
@@ -48,7 +50,8 @@ class DataBuckets(pulumi.ComponentResource):
 
         R2DataBuckets(
             "r2",
-            data_config=s3_data_config,
+            account_id=r2_account_id,
+            bucket_name=r2_bucket_name,
             lifecycle_config=gcp_data_config,
             cloudflare_provider=cloudflare_provider,
             opts=pulumi.ResourceOptions(parent=self),

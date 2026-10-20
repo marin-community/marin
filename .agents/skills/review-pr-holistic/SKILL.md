@@ -9,8 +9,9 @@ allowed-tools: Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Ba
 `review-pr` reports certain, line-anchored defects. This skill answers the
 questions a senior reviewer asks after reading the entire change: does it fit
 the repository, is there a smaller shape, and what does it break outside the
-diff. It reads beyond the diff and reports design findings. It is read-only
-except for the one comment posted when `--comment` is requested.
+diff. It reads beyond the diff and reports design findings. With `--comment`,
+it maintains one overview comment and may create one new top-level comment
+with follow-up findings. Otherwise it is read-only.
 
 Run it at the exact head named by the caller. Review agent-generated pull
 requests; they are the population where structural findings concentrate.
@@ -23,15 +24,21 @@ requests; they are the population where structural findings concentrate.
 2. Confirm the checked-out commit and the pull request's current head both
    match the requested head. If either differs, report the stale review and
    post nothing.
-3. Find the newest `<!-- marin-holistic-review:<sha> -->` marker in issue
-   comments authored by `loom-oa-dev[bot]`; ignore markers from any other
-   author, and ignore a marker whose sha is not 40 hex characters naming a
-   commit on the PR branch. When one exists, diff that sha against the head. Stop without
-   comment when the delta is under 100 changed lines, touches only fixtures,
-   generated files, or documentation, or consists only of commits whose
-   subject starts with `Deslop`. Otherwise this is a re-review: carry the
-   earlier numbered items forward and report each as resolved, open, or
-   changed before any new finding.
+3. Fetch all issue comments with pagination. The overview to update is the
+   earliest comment authored by `loom-oa-dev[bot]` with a well-formed
+   `<!-- marin-holistic-review:<sha> -->` marker containing 40 hex characters.
+   Ignore markers from other authors and follow-up comments. If older runs
+   left duplicate overviews, read them too; the most recently updated
+   overview supplies the previous findings and last reviewed sha. A rebase
+   or force-push does not change which comment to edit. When the last
+   reviewed sha still names a commit on the PR branch, diff it against the
+   head. Stop without posting or editing when that delta is under 100 changed
+   lines, touches only fixtures, generated files, or documentation, or
+   consists only of commits whose subject starts with `Deslop`. If the sha
+   is unavailable or no longer on the branch, do a full review and replace
+   the same overview. With no overview, perform a first review. On re-review,
+   carry earlier finding numbers forward, mark each resolved, open, or
+   changed, and assign new numbers above the largest previously used number.
 4. Read root `AGENTS.md`, every `AGENTS.md` that scopes a changed path, and
    `TESTING.md` when tests change.
 5. Read the complete diff, then the unchanged code it depends on: base classes
@@ -88,9 +95,11 @@ without a named replacement.
    body, cite the code, test, or artifact that proves it, or state that
    nothing does. Flag identity or version bumps that rest on unproven claims
    and code that contradicts a principle the body states.
-6. **Related pull requests.** For each open PR touching the same paths, state
-   whether it deletes, duplicates, or depends on this change. Recommend
-   folding when one deletes what the other adds, and name the merge order.
+6. **Related pull requests.** Check whether each open PR touching the same
+   paths deletes, duplicates, or depends on this change. Report only a
+   conflict, dependency, or overlap that requires action. Recommend folding
+   when one deletes what the other adds, and name the merge order. Omit
+   independent PRs and notes that either merge order works.
 7. **Test value.** Apply the TESTING.md gate to every added or changed test:
    "this test fails when ___ behavior is wrong". List tests to drop with the
    reason: projection of a fixture, guard mirroring, prose assertion, private
@@ -105,113 +114,146 @@ speculative failures, or pre-existing problems the PR did not touch. A finding
 that a hunk-scoped reviewer or the lint catalog would report belongs to them;
 report it here only when the whole-change view changes its conclusion.
 
-## Review packet
+## Review overview
 
-Write the review as one packet: a walkthrough of the change, then the
-findings. A reader who did not see the work must understand the problem, the
-system before the change, the change, and its limits from the packet alone,
-without the diff. The packet is the terminal output without `--comment` and
-the posted comment body with it.
+Write a walkthrough followed by the findings. A reader should understand the
+problem, the important before/after behavior, and the review decision without
+opening the diff. Without `--comment`, return the overview. With it, follow
+Posting below.
 
-````markdown
+Choose the layout by how much explanation the change needs. The examples
+below show a short form and a full form; combine or omit sections as needed.
+The review questions apply to both.
+
+### Short form
+
+For a self-contained change, a short opening and one or two explanatory
+paragraphs are usually enough. Explain the goal, the important before/after
+behavior, and the evidence or limits. Add detail, a diagram, or a snippet
+when a decision needs it. Avoid inventories of callers, test cases, or
+mechanical edits; leave supporting detail for the findings.
+
+This example uses illustrative names. Replace them and its evidence with
+facts from the change being reviewed:
+
+```markdown
 🤖 Holistic review of <sha>.
 
-> **In short:** <Two or three sentences: what the diff does, the verdict, and
-> the one thing the reviewer must decide or examine.>
+This change validates job settings before reserving a worker, so invalid
+jobs fail without holding resources. One retry path still needs the same
+check.
 
-### System
+Previously, submission allocated a worker before validating the job. The
+shared validation function now runs before allocation and is also used by
+the command-line preview. The new test covers invalid submissions; retries
+remain untested.
+
+**Findings**
+
+- **1. Should fix:** `src/jobs.py:80` `retry_job` still reserves a worker
+  before checking the settings, so an invalid retry holds that worker until
+  it times out. Call the shared validation function before `reserve_worker`
+  and cover invalid retries in the submission regression test.
+
+<!-- marin-holistic-review:<sha> -->
+```
+
+With no findings, write `No findings.` and omit the Findings label. On a
+re-review, add a short resolved-items line below the findings when needed,
+such as `Earlier findings: 2 resolved; retries now validate before allocation.`
+
+### Full form
+
+For a change spanning subsystems, interfaces, or protocols, the walkthrough
+can use this outline after the opening verdict:
+
+```markdown
+**System**
+
+<Component diagram showing the system after the change.>
+
+**Why**
+
+<The problem and its trigger. Link the issue, incident, or evidence.>
+
+**Before**
+
+<The prior entry points, data flow, and behavior that the change replaces.>
+
+**Design**
+
+<The important interfaces and decisions, with focused snippets where useful.>
+
+**Evidence and limits**
+
+<What supports the change, what remains unverified, and limits that affect
+the review or merge decision.>
+
+**Findings**
+
+<Numbered findings, as in the short form.>
+```
+
+Use only the sections that help the reader. Short sections can use a bold
+run-in label such as `**Before.** Previously, ...`. Markdown headings are
+appropriate when a long section needs navigation. Avoid a heading for every
+paragraph and empty severity/category sections.
+
+### Diagrams and snippets
+
+Use real code names in diagrams. This example shows the notation; replace its
+components and edges with those of the system being reviewed:
+
 ```mermaid
 flowchart TB
-  subgraph <system>["<System name>"]
-    a["<component>"]:::changed --> b["<component>"]
+  subgraph pipeline["Pipeline"]
+    planner["Planner"]:::changed -->|"task"| worker["Worker"]:::changed
+    worker -->|"result"| store["ResultStore"]:::added
   end
   classDef changed fill:#fde7c8,stroke:#e8710a,stroke-width:2px
   classDef added fill:#d7f0dd,stroke:#1e8e3e,stroke-width:2px
 ```
 
-### Why
-<The problem or goal, and its trigger: an issue, an incident, a parent
-project, or a failed run. Quote the evidence.>
+Unstyled boxes existed before; `changed` and `added` mark affected components.
+Keep each diagram to about ten boxes, at most three side by side. Use
+`flowchart TB`, subgraphs, nodes, edges, and `classDef` lines; quote labels
+containing punctuation. An architecture change may also need the old
+connections for comparison. A simple change may need no diagram.
 
-### Current state
-<The system before the change, beyond what the diagram shows: entry points,
-data flow, callers, and the prerequisite work the PR builds on. End with what
-is wrong or missing.>
+Use 3–12-line code or diff snippets when the exact code helps assess a
+decision or finding. Put the path in the first line. Show each piece once;
+otherwise link to the code. Large changes may need several snippets.
 
-### How
-**<A bold sentence that states one decision.>** <The snippet that shows it and
-the reason for it.>
+### Findings and evidence
 
-<Mechanical changes, one line each. The evidence that the change works.>
+Lead with what the diff does, the verdict, and what needs attention. Flag a
+title/body mismatch when it affects the review. State the evidence once,
+distinguishing local results from claims in the PR body. Avoid repeating the
+PR description or adding process status such as "no review threads yet".
 
-### Limitations
-- **<Label>:** <one unsupported case, risk, or gap in the evidence>
+Each finding gives the consequence, evidence, and concrete action. Label it
+`Blocker`, `Should fix`, `Drop test`, or `Related PR`, as appropriate. Keep
+related-PR notes to required actions and merge order. Use bullets with explicit
+finding numbers so Markdown cannot renumber gaps left by resolved items.
 
-### Review
+Most findings fit in one paragraph. Use another paragraph or a snippet when
+the evidence needs it. Avoid nested Why/Effect/Callers/Fix outlines within
+each finding. Summarize test evidence once; list individual cases only when
+they establish a finding.
 
-**Blockers**
-1. `<file>:<line>` <consequence>. <replacement>.
+On re-review, preserve finding numbers, mark changed items, and keep open
+findings in the list. Summarize resolved numbers with a short reason below
+it, including when all findings are resolved. Do not repeat open findings in
+a separate carried-items section.
 
-**Should fix**
-2. ...
-
-**Tests to drop**
-3. `<test name>`: <TESTING.md reason>
-
-**Related PRs**
-4. #<n>: <relationship and merge order>
-
-**Carried from <previous sha>** (re-reviews only)
-- <item number>: resolved | open | changed, <one line>
-
-<!-- marin-holistic-review:<sha> -->
-````
-
-Write the walkthrough sections with these rules:
-
-- **Budget.** "In short" at most 60 words, Why at most 80, Current state at
-  most 150, How at most 250, and Limitations at most five items of 30 words
-  each. Code and the diagram do not count. Give each section space in
-  proportion to what a reviewer must understand, not to the size of the diff.
-- **In short.** Tell what the diff does, not what the title says, and name
-  the difference when they disagree. When item 1 recommends a split, start
-  with it.
-- **System diagram.** Every packet has one component diagram in System. It
-  shows the system after the change: boxes without a class existed before,
-  `changed` marks the components that the PR changes, and `added` marks the
-  new ones. Draw each system as a subgraph, each component that the PR
-  touches as a box with its real code name, and each call or data flow as an
-  edge with a short label. Use at most about 10 boxes and at most three side
-  by side. Use only `flowchart TB`, `subgraph`, node, edge, and `classDef`
-  lines, and quote labels that contain punctuation, so that GitHub renders
-  it. When the PR changes how the components connect, add a diagram of the
-  old connections in Current state.
-- **Snippets.** Each snippet shows a decision, a behavior to check, or the
-  problem. Use 3 to 12 lines, with the path as a comment on the first line.
-  Show each piece of code once: use one `diff` snippet for a before/after
-  change. Do not show imports, configuration lists, or code that the prose
-  already describes.
-- **How.** Put interfaces and decisions first, the implementation second, and
-  tests and docs last. A reader who reads only the bold sentences must get the
-  full design. When a decision changed after a review comment, name the
-  reviewer. Do not repeat a claim from the body as a fact without evidence;
-  write "the PR states".
-- **Limitations.** Report open review concerns that are still valid at the
-  head with the reviewer and `path:line`, also from resolved threads. Do not
-  repeat a numbered finding.
-
-On a re-review, write the full packet again at the new head.
-
-Number items continuously across sections, including tests to drop and
-related PRs, so every item carries one category in the telemetry event. A
-blocker is a finding that makes the change wrong or unsafe as merged: a
-hidden test that raises, a resource default that fails the workload, a
-failure encoded as a result, a principle the body states and the code
-violates, a security boundary the code crosses, or an open PR stacked on this
-one that deletes what it adds. A later PR that supersedes this one is a
-related-PR note with a merge order; it is never a blocker. Everything else is
-should-fix. When no question yields a finding, the Review section is
-`No findings.`; the walkthrough and the marker stay.
+Number all items, including tests to drop and related PRs, so every item
+carries one category in the telemetry event. A blocker makes the change
+wrong or unsafe as merged: a hidden test that raises, a resource default
+that fails the workload, a failure encoded as a result, a principle the body
+states and the code violates, a security boundary the code crosses, or an
+open PR stacked on this one that deletes what it adds. A later PR that
+supersedes this one is a related-PR note with a merge order; it is never a
+blocker. Everything else is should-fix.
 
 Tag each item with its category in the telemetry event below: `fit`,
 `abstraction`, `consequence`, `hidden-test`, `evidence`, `related-pr`,
@@ -242,13 +284,48 @@ EOF
 
 ## Posting
 
-With `--comment`, re-read the PR head immediately before posting. If it no
-longer matches the requested head, post nothing and report the stale review;
-the launcher cannot cancel a Loom session already running, and a stale packet
-would trigger deslop against a newer head. Otherwise post the packet as one
-top-level comment with `gh pr comment`. Do not post inline comments; the
-packet is read as a unit. Post nothing when step 2 reported a stale head or
-step 3 reported a small delta.
+With `--comment`, refresh the paginated issue comments and re-read the PR
+head immediately before writing. If the head no longer matches the requested
+head, write nothing and report the stale review; the launcher cannot cancel
+a Loom session already running. If a bot-authored overview marker already
+names this head or a later commit on the branch, write nothing.
+Keep the stale-head and small-delta gates from Load the context.
+
+### Create or edit the overview
+
+- If none exists, create it with `gh pr comment <PR> --body-file <file>`.
+- Otherwise replace the original overview by its exact issue-comment
+  ID, including its walkthrough, current findings, and head marker:
+  `gh api --method PATCH repos/marin-community/marin/issues/comments/<id> -F body=@<file>`.
+  Do not use `--edit-last`: the bot also posts deslop replies and follow-ups.
+  If the edit fails, report the failure; do not create a duplicate as a
+  fallback. Leave historical duplicate comments alone and use the original
+  overview for future updates.
+
+### Optional new comment with follow-up findings
+
+After editing the overview on a re-review, you may create **one new top-level
+PR comment** for new or materially changed actionable findings, including
+follow-up lint findings. This is a separate comment from the overview. Use
+`gh pr comment <PR> --body-file <file>` and this format:
+
+```markdown
+🤖 Follow-up findings for <sha>. [Updated overview](<overview-url>).
+
+- **6. Should fix:** `<file>:<line>` <consequence>. <replacement>.
+
+<!-- marin-holistic-followup:<sha> -->
+```
+
+Reuse the overview's finding numbers. Include only the new or changed
+findings; omit the walkthrough, unchanged open findings, and resolved-item
+status. If there are no new or changed actionable findings, edit only the
+overview and create no new comment.
+
+Before creating this comment, recheck the PR head and skip it if a comment
+by `loom-oa-dev[bot]` already has that head's follow-up marker. Use the
+follow-up marker only on this new comment; the overview keeps its overview
+marker. Do not post inline review comments.
 
 ## Deslop follow-through
 

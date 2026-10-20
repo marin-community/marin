@@ -31,6 +31,7 @@ from experiments.post_training.task_curation.campaign import (
     error_chain,
     write_campaign_report,
 )
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
 
 
 @contextmanager
@@ -78,6 +79,7 @@ def run_local_steps(
             started_at=started_at,
             source_ids=source_ids,
             execution={"max_workers": max_workers},
+            catalog_root=str(output_root / CATALOG_DIRECTORY),
         )
 
     report(CampaignStatus.RUNNING)
