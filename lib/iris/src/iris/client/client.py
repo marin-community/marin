@@ -799,8 +799,9 @@ class IrisClient:
                 (a loopback-trusted tunnel).
             extra_bundle_includes: Glob patterns (relative to ``workspace``) for
                 required files excluded by default, such as validation tests or a
-                gitignored frontend ``dist``. Explicit ``bundle_exclude`` patterns
-                and exclusions for credentials, caches, and local builds still apply.
+                gitignored frontend ``dist``. Overrides ``[tool.iris.bundle].exclude``
+                in the workspace pyproject. Explicit ``bundle_exclude`` patterns and
+                exclusions for credentials, caches, and local builds still apply.
             bundle_exclude: Regex matched against each candidate bundle path
                 (POSIX, relative to ``workspace``); matching paths are dropped from
                 the bundle. Trims otherwise-tracked files that a job does not need,

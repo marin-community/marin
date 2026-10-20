@@ -219,7 +219,7 @@ members = [
 #   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
 #   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
-exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*", "vendor/skyrl", "vendor/skyrl/**"]
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*", "vendor/skyrl", "vendor/skyrl/**", "vendor/harbor", "vendor/harbor/**"]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
@@ -266,6 +266,10 @@ name = "pytorch-cpu-fallback"
 url = "https://download.pytorch.org/whl/cpu/torch/"
 format = "flat"
 
+[tool.iris.bundle]
+include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*"]
+exclude = ["^vendor/harbor/tests(/|$)"]
+
 [tool.black]
 line-length = 121
 target-version = ["py312"]
@@ -276,6 +280,7 @@ extend-exclude = """
 (
     scripts/
     | vendor/skyrl/
+    | vendor/harbor/
 )
 """
 
@@ -287,7 +292,7 @@ target-version = "py312"
 # Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` and
 # `scripts/cost_manager/**` hold scripts invoked directly by `.github/workflows`
 # and stay under ruff.
-extend-exclude = ["scripts/", "vendor/skyrl/"]
+extend-exclude = ["scripts/", "vendor/skyrl/", "vendor/harbor/"]
 extend-include = ["scripts/ci/**/*.py", "scripts/cost_manager/**/*.py"]
 
 [tool.ruff.lint]
@@ -458,6 +463,7 @@ ignore-missing-imports = [
 # Exclude non-production code from type checking
 project-excludes = [
     "vendor/skyrl/**",
+    "vendor/harbor/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",
@@ -537,6 +543,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
+    "tpu: include in TPU CI; also run on CPU when supported",
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",

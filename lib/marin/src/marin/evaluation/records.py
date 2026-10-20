@@ -331,6 +331,7 @@ class HarborRef(BaseModel):
     )
     harbor_config_commit: str | None = Field(
         default=None,
+        description="Upstream Harbor import base; eval_runtime identifies the vendored source and dependency lock",
         pattern=FULL_GIT_COMMIT_PATTERN,
         exclude_if=lambda value: value is None,
     )
@@ -394,8 +395,9 @@ class HostedJudgeRef(BaseModel):
 class Provenance(BaseModel):
     """Where the run came from: launch-time git SHA, eval runtime, and launch host.
 
-    ``eval_runtime`` is Evalchemy's commit-pinned package requirement or Harbor's pinned package
-    requirements. Records written before external evaluators used ``eval_image`` or
+    ``eval_runtime`` identifies Evalchemy's pinned package, vendored Harbor's upstream revision
+    and runtime digests, or a historical Harbor environment's pinned packages.
+    Records written before external evaluators used ``eval_image`` or
     ``evalchemy_image`` for the same value.
     """
 

@@ -99,15 +99,7 @@ class VllmGpuRelease:
     wheels: tuple[VllmGpuWheel, ...]
 
 
-EXTERNAL_PROJECTS = (
-    ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
-    ExternalProject(
-        "harbor",
-        "harbor",
-        "HARBOR",
-        runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
-    ),
-)
+EXTERNAL_PROJECTS = (ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),)
 
 
 def locked_package(lock_path: Path, distribution: str) -> dict:

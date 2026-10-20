@@ -270,6 +270,7 @@ def test_te_bin_and_group_axes_by_function():
     assert v_c["D"] == [D]
 
 
+@pytest.mark.tpu
 def test_attention_context_parallel_matches_no_context_mesh():
     # Require at least 2 devices to run context-parallel shard
     if len(jax.devices()) < 2:
@@ -456,6 +457,7 @@ def test_te_flash_attention_non_causal_mask_raises():
         )
 
 
+@pytest.mark.tpu
 def test_tpu_splash_attention():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
@@ -491,6 +493,7 @@ def test_tpu_splash_attention():
         assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
 
 
+@pytest.mark.tpu
 def test_tpu_splash_attention_sliding_window():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
@@ -526,7 +529,7 @@ def test_tpu_splash_attention_sliding_window():
         assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
 
 
-@pytest.mark.parametrize("impl", ["default", "jax_flash", "vanilla"])
+@pytest.mark.parametrize("impl", [pytest.param("default", marks=pytest.mark.tpu), "jax_flash", "vanilla"])
 def test_segment_ids_are_respected(impl):
     # test that we can't attend to something outside of the range
     # splash needs 128

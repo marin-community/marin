@@ -48,8 +48,9 @@ HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
 
 EXCLUDE_PATTERNS = [
-    # SkyRL retains its upstream formatting and license notices; its wheel is audited separately.
+    # Vendored runtimes retain upstream formatting and license notices.
     "vendor/skyrl/**",
+    "vendor/harbor/**",
     # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
     "experiments/post_training/task_curation/datasets/*/scorers/**",
     ".git/**",

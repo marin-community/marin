@@ -22,6 +22,7 @@ from marin.evaluation.harbor.driver_config import (
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
 )
+from marin.evaluation.harbor.provenance import vendored_harbor_source
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
     _read_trial,
@@ -30,7 +31,6 @@ from marin.evaluation.harbor.runner import (
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, ModelConfigRef, RunStatus
 from marin.evaluation.runner import EvaluationError
-from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
@@ -430,33 +430,69 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     }
 
 
-def test_historical_harbor_descriptor_uses_locked_dependencies(tmp_path, monkeypatch):
-    commit = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
-    project = f"config/external/harbor/pins/{commit}"
-    lock_dir = tmp_path / project
-    lock_dir.mkdir(parents=True)
-    (lock_dir / "uv.lock").write_text(
-        f"""
-[[package]]
-name = "harbor"
-source = {{ git = "https://github.com/marin-community/harbor.git#{commit}" }}
-[[package]]
-name = "marin-external-harbor"
-dependencies = [{{ name = "gcsfs" }}]
-[[package]]
-name = "gcsfs"
-version = "1.0"
-"""
+@pytest.fixture
+def vendored_runtime_workspace(tmp_path):
+    for relative in (
+        "vendor/harbor/src/harbor",
+        "lib/rigging/src/rigging",
+        "lib/finestore/src/finestore",
+        "lib/marin/src/marin/evaluation/harbor",
+    ):
+        directory = tmp_path / relative
+        directory.mkdir(parents=True)
+        (directory / "__init__.py").write_text("runtime = 1\n")
+    (tmp_path / "lib/marin/src/marin/evaluation/harbor/trial_driver.py").write_text("runtime = 1\n")
+    for relative in ("vendor/harbor", "lib/rigging", "lib/finestore"):
+        (tmp_path / relative / "pyproject.toml").write_text('[project]\nname = "example"\n')
+    (tmp_path / "vendor/harbor/UPSTREAM.toml").write_text(
+        'repository = "https://example.org/harbor"\n'
+        f'commit = "{driver_config.HARBOR_SOURCE.commit}"\n'
+        'version = "0.8.1"\n'
     )
-    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: tmp_path)
-    monkeypatch.setattr(driver_config, "HARBOR", replace(HARBOR, runtime_requirements=("future==1",)))
+    (tmp_path / "vendor/harbor/uv.lock").write_text("version = 1\n")
+    return tmp_path
 
-    descriptor = driver_config.harbor_runtime_descriptor(commit, project)
 
-    assert "gcsfs==1.0" in descriptor
-    assert "future==1" not in descriptor
-    with pytest.raises(ValueError, match="pins"):
-        driver_config.harbor_runtime_descriptor("0" * 40, project)
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "vendor/harbor/src/harbor/__init__.py",
+        "vendor/harbor/pyproject.toml",
+        "vendor/harbor/uv.lock",
+        "lib/rigging/src/rigging/__init__.py",
+        "lib/finestore/src/finestore/__init__.py",
+        "lib/marin/src/marin/evaluation/harbor/trial_driver.py",
+    ],
+)
+def test_vendored_runtime_identity_changes_with_executed_sources(vendored_runtime_workspace, relative, monkeypatch):
+    project = vendored_runtime_workspace / "vendor/harbor"
+    upstream = vendored_harbor_source(project)
+    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: vendored_runtime_workspace)
+    original = driver_config.harbor_runtime_descriptor()
+
+    path = vendored_runtime_workspace / relative
+    path.write_bytes(path.read_bytes() + b"\nchanged\n")
+
+    assert driver_config.harbor_runtime_descriptor() != original
+    assert vendored_harbor_source(project) == upstream
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "vendor/harbor/src/harbor/__pycache__/__init__.cpython-312.pyc",
+        "vendor/harbor/tests/unit/test_example.py",
+        "vendor/harbor/registry.json",
+    ],
+)
+def test_vendored_runtime_identity_ignores_unexecuted_files(vendored_runtime_workspace, monkeypatch, relative):
+    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: vendored_runtime_workspace)
+    original = driver_config.harbor_runtime_descriptor()
+    path = vendored_runtime_workspace / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"unexecuted")
+
+    assert driver_config.harbor_runtime_descriptor() == original
 
 
 def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):

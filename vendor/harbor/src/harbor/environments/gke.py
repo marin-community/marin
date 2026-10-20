@@ -1,0 +1,1450 @@
+from __future__ import annotations
+
+import asyncio
+import atexit
+import io
+import os
+import shlex
+import socket
+import subprocess
+import tarfile
+import tempfile
+from contextlib import asynccontextmanager
+from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, BinaryIO, Callable, Optional, TypeVar
+
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from harbor.environments.base import BaseEnvironment, ExecResult
+from harbor.environments.capabilities import (
+    EnvironmentCapabilities,
+    EnvironmentResourceCapabilities,
+)
+from harbor.models.environment_type import EnvironmentType
+from harbor.models.task.config import EnvironmentConfig
+from harbor.models.trial.config import ResourceMode
+from harbor.models.trial.paths import TrialPaths
+from harbor.utils.logger import logger
+from harbor.utils.optional_import import MissingExtraError
+
+try:
+    from kubernetes import client as k8s_client
+    from kubernetes import config as k8s_config
+    from kubernetes.client.rest import ApiException
+    from kubernetes.stream import stream
+
+    _HAS_KUBERNETES = True
+except ImportError:
+    _HAS_KUBERNETES = False
+
+if TYPE_CHECKING:
+    from kubernetes import client as k8s_client
+
+
+_T = TypeVar("_T")
+_GKE_EXEC_STREAM_DRAIN_TIMEOUT = 0.25
+
+
+# Maps user-friendly GPU type names (from task.toml gpu_types) to GKE accelerator
+# node labels used in cloud.google.com/gke-accelerator node selectors.
+# Keys are lowercase for matching; values are the exact GKE label strings.
+GKE_GPU_TYPE_MAP: dict[str, str] = {
+    "t4": "nvidia-tesla-t4",
+    "l4": "nvidia-l4",
+    "a100": "nvidia-tesla-a100",
+    "a100-40gb": "nvidia-tesla-a100",
+    "a100-80gb": "nvidia-a100-80gb",
+    "rtx-pro-6000": "nvidia-rtx-pro-6000",
+    "h100": "nvidia-h100-80gb",
+    "h100-mega": "nvidia-h100-mega-80gb",
+    "h200": "nvidia-h200-141gb",
+    "b200": "nvidia-b200",
+    "gb200": "nvidia-gb200",
+}
+
+# Maps user-friendly TPU aliases (from task.toml [environment.tpu].type) to GKE TPU
+# accelerator node labels used in cloud.google.com/gke-tpu-accelerator node selectors.
+# Keys are lowercase aliases; values are the exact GKE label strings.
+GKE_TPU_TYPE_MAP: dict[str, str] = {
+    "v3": "tpu-v3-slice",
+    "v3-device": "tpu-v3-device",
+    "v4": "tpu-v4-podslice",
+    "v5e": "tpu-v5-lite-podslice",
+    "v5p": "tpu-v5p-slice",
+    "v6e": "tpu-v6e-slice",
+    "trillium": "tpu-v6e-slice",
+    "v7": "tpu7x",
+    "ironwood": "tpu7x",
+}
+
+
+class KubernetesClientManager:
+    """
+    Singleton manager for the Kubernetes client.
+
+    Ensures a single shared client instance across all GKEEnvironment instances,
+    with proper cleanup at program termination.
+    """
+
+    _instance: KubernetesClientManager | None = None
+    _lock = asyncio.Lock()
+
+    def __init__(self):
+        if not _HAS_KUBERNETES:
+            raise MissingExtraError(package="kubernetes", extra="gke")
+        self._core_api = None
+        self._reference_count = 0
+        self._client_lock = asyncio.Lock()
+        self._initialized = False
+        self._cleanup_registered = False
+        self._logger = logger.getChild(__name__)
+        # Store cluster config to validate consistency across calls
+        self._cluster_name: str | None = None
+        self._region: str | None = None
+        self._project_id: str | None = None
+
+    @classmethod
+    async def get_instance(cls) -> "KubernetesClientManager":
+        """Get or create the singleton instance."""
+        if cls._instance is None:
+            async with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+
+        assert cls._instance is not None
+
+        return cls._instance
+
+    def _init_client(self, cluster_name: str, region: str, project_id: str):
+        """Initialize Kubernetes client with GKE credentials."""
+        if self._initialized:
+            return
+
+        try:
+            k8s_config.load_kube_config()
+            self._core_api = k8s_client.CoreV1Api()
+            self._initialized = True
+        except k8s_config.ConfigException:
+            get_creds_cmd = [
+                "gcloud",
+                "container",
+                "clusters",
+                "get-credentials",
+                cluster_name,
+                "--region",
+                region,
+                "--project",
+                project_id,
+            ]
+
+            result = subprocess.run(get_creds_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to get GKE credentials: {result.stderr}\n"
+                    f"Ensure cluster {cluster_name} exists in {region}"
+                )
+
+            k8s_config.load_kube_config()
+            self._core_api = k8s_client.CoreV1Api()
+            self._initialized = True
+
+        # Store cluster config for validation
+        self._cluster_name = cluster_name
+        self._region = region
+        self._project_id = project_id
+
+    async def get_client(self, cluster_name: str, region: str, project_id: str):
+        """
+        Get the shared Kubernetes CoreV1Api client, creating it if necessary.
+        Also increments the reference count.
+
+        Note: This manager assumes all GKEEnvironment instances in a process
+        connect to the same cluster. If a different cluster is requested after
+        initialization, a ValueError is raised.
+        """
+        async with self._client_lock:
+            if not self._initialized:
+                self._logger.debug("Creating new Kubernetes client")
+                await asyncio.to_thread(
+                    self._init_client, cluster_name, region, project_id
+                )
+
+                if not self._cleanup_registered:
+                    atexit.register(self._cleanup_sync)
+                    self._cleanup_registered = True
+            else:
+                # Validate cluster config matches
+                if (
+                    self._cluster_name != cluster_name
+                    or self._region != region
+                    or self._project_id != project_id
+                ):
+                    raise ValueError(
+                        f"KubernetesClientManager already initialized for cluster "
+                        f"'{self._cluster_name}' in {self._region} (project: {self._project_id}). "
+                        f"Cannot connect to cluster '{cluster_name}' in {region} "
+                        f"(project: {project_id}). Use separate processes for different clusters."
+                    )
+
+            self._reference_count += 1
+            self._logger.debug(
+                f"Kubernetes client reference count incremented to {self._reference_count}"
+            )
+            return self._core_api
+
+    async def release_client(self):
+        """
+        Decrement the reference count for the client.
+        Note: Actual cleanup happens at program exit via atexit.
+        """
+        async with self._client_lock:
+            if self._reference_count > 0:
+                self._reference_count -= 1
+                self._logger.debug(
+                    f"Kubernetes client reference count decremented to {self._reference_count}"
+                )
+
+    def _cleanup_sync(self):
+        """Synchronous cleanup wrapper for atexit."""
+        try:
+            asyncio.run(self._cleanup())
+        except Exception as e:
+            self._logger.error(f"Error during Kubernetes client cleanup: {e}")
+
+    async def _cleanup(self):
+        """Clean up the Kubernetes client if it exists."""
+        async with self._client_lock:
+            if self._initialized:
+                try:
+                    self._logger.debug("Cleaning up Kubernetes client at program exit")
+                    self._core_api = None
+                    self._initialized = False
+                    self._logger.debug("Kubernetes client cleaned up successfully")
+                except Exception as e:
+                    self._logger.error(f"Error cleaning up Kubernetes client: {e}")
+
+
+class GKEEnvironment(BaseEnvironment):
+    """
+    GKE implementation for Harbor sandboxes.
+
+    Supports both Standard GKE and Autopilot clusters.
+    """
+
+    @classmethod
+    def preflight(cls) -> None:
+        import shutil
+
+        if not shutil.which("gcloud"):
+            raise SystemExit(
+                "GKE requires the gcloud CLI to be installed. "
+                "See https://cloud.google.com/sdk/docs/install"
+            )
+        kubeconfig = Path(
+            os.environ.get("KUBECONFIG", Path.home() / ".kube" / "config")
+        )
+        if not kubeconfig.exists():
+            raise SystemExit(
+                "GKE requires Kubernetes credentials. Run "
+                "'gcloud container clusters get-credentials <CLUSTER> "
+                "--region <REGION>' to configure kubectl, or set the "
+                "KUBECONFIG environment variable."
+            )
+
+    def __init__(
+        self,
+        environment_dir: Path,
+        environment_name: str,
+        session_id: str,
+        trial_paths: TrialPaths,
+        task_env_config: EnvironmentConfig,
+        cluster_name: str,
+        region: str,
+        namespace: str,
+        registry_location: str,
+        registry_name: str,
+        project_id: Optional[str] = None,
+        memory_limit_multiplier: float | None = None,
+        cloud_build_machine_type: str = "E2_HIGHCPU_8",
+        cloud_build_disk_size_gb: int = 200,
+        **kwargs,
+    ):
+        """
+        Initialize GKE environment.
+
+        Args:
+            environment_dir: Path to the environment directory containing Dockerfile
+            environment_name: Name of the environment (e.g., sb__hello-world)
+            session_id: Session ID for this trial
+            trial_paths: Trial paths for logs and output
+            task_env_config: Task environment configuration (includes cpus, memory_mb, storage_mb)
+            project_id: GCP project ID (defaults to env var or gcloud config)
+            cluster_name: GKE cluster name
+            region: GCP region
+            namespace: Kubernetes namespace
+            registry_location: Artifact Registry location (e.g., us-central1)
+            registry_name: Artifact Registry repository name
+            memory_limit_multiplier: Optional multiplier for memory limits.
+                None or 0: no limits (Burstable QoS, can use all node memory)
+                1: limits == requests (Guaranteed QoS, strict enforcement)
+                >1: limits = multiplier * requests (Burstable with ceiling)
+            cloud_build_machine_type: Cloud Build machine type (default: E2_HIGHCPU_8)
+            cloud_build_disk_size_gb: Cloud Build disk size in GB (default: 200)
+        """
+        if not _HAS_KUBERNETES:
+            raise MissingExtraError(package="kubernetes", extra="gke")
+
+        super().__init__(
+            environment_dir=environment_dir,
+            environment_name=environment_name,
+            session_id=session_id,
+            trial_paths=trial_paths,
+            task_env_config=task_env_config,
+            **kwargs,
+        )
+
+        self._validate_gke_accelerator_config()
+
+        # GKE configuration
+        self.project_id = project_id or self._get_default_project()
+        self.cluster_name = cluster_name
+        self.region = region
+        self.namespace = namespace
+
+        # Resource configuration from task_env_config.
+        cpu_request = self._resource_request_value(
+            "cpu", auto_mode=ResourceMode.REQUEST
+        )
+        cpu_limit = self._resource_limit_value("cpu", auto_mode=ResourceMode.REQUEST)
+        memory_request = self._resource_request_value(
+            "memory", auto_mode=ResourceMode.REQUEST
+        )
+        memory_limit = self._resource_limit_value(
+            "memory", auto_mode=ResourceMode.REQUEST
+        )
+        self.cpu_request = str(cpu_request) if cpu_request is not None else None
+        self.cpu_limit = str(cpu_limit) if cpu_limit is not None else None
+        self.memory_request = (
+            f"{memory_request}Mi" if memory_request is not None else None
+        )
+        self.ephemeral_storage_request = (
+            f"{storage_mb}Mi" if (storage_mb := self._effective_storage_mb) else None
+        )
+
+        if memory_limit is not None:
+            self.memory_limit = f"{memory_limit}Mi"
+        elif (
+            self._memory_resource_mode == ResourceMode.AUTO
+            and memory_request is not None
+            and memory_limit_multiplier is not None
+            and memory_limit_multiplier > 0
+        ):
+            limit_memory_mb = int(memory_request * memory_limit_multiplier)
+            self.memory_limit = f"{limit_memory_mb}Mi"
+        else:
+            self.memory_limit = None
+
+        # Cloud Build configuration
+        self.cloud_build_machine_type = cloud_build_machine_type
+        self.cloud_build_disk_size_gb = cloud_build_disk_size_gb
+
+        self.registry_location = registry_location
+        self.registry_name = registry_name
+
+        # Pod naming - GKE compatible (max 63 chars, lowercase, alphanumeric + hyphens)
+        self.pod_name = f"{session_id.lower().replace('_', '-')}"[:63]
+
+        # Client manager for shared Kubernetes client
+        self._client_manager: KubernetesClientManager | None = None
+        self._core_api: k8s_client.CoreV1Api | None = None
+
+    def _get_default_project(self) -> str:
+        """Get default GCP project from environment or gcloud config."""
+        # Check environment variable first
+        project = os.environ.get("GCP_PROJECT") or os.environ.get(
+            "GOOGLE_CLOUD_PROJECT"
+        )
+        if project:
+            return project
+
+        # Fall back to gcloud config
+        try:
+            result = subprocess.run(
+                ["gcloud", "config", "get-value", "project"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            raise ValueError(
+                "No GCP project specified. Set project_id parameter, "
+                "GCP_PROJECT environment variable, or configure gcloud default project."
+            )
+
+    @property
+    def _api(self) -> k8s_client.CoreV1Api:
+        """Return the Kubernetes API client, raising if not initialized."""
+        if self._core_api is None:
+            raise RuntimeError(
+                "Kubernetes client not initialized. Call _ensure_client() first."
+            )
+        return self._core_api
+
+    @asynccontextmanager
+    async def _open_exec_stream(self, command, *, stderr, stdin, stdout):
+        """Open a pod exec stream without mutating the environment's REST client."""
+        api_client = k8s_client.ApiClient(self._api.api_client.configuration)
+        api = k8s_client.CoreV1Api(api_client)
+        resp = None
+        executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix=f"harbor-gke-handshake-{self.pod_name}",
+        )
+        handshake = executor.submit(
+            stream,
+            api.connect_get_namespaced_pod_exec,
+            self.pod_name,
+            self.namespace,
+            command=command,
+            stderr=stderr,
+            stdin=stdin,
+            stdout=stdout,
+            tty=False,
+            _preload_content=False,
+        )
+        cleanup_transferred = False
+        executor_shutdown = False
+        try:
+            try:
+                resp = await asyncio.shield(asyncio.wrap_future(handshake))
+            except asyncio.CancelledError:
+                self._schedule_late_stream_cleanup(
+                    handshake,
+                    executor,
+                    close_result=True,
+                    api_client=api_client,
+                )
+                cleanup_transferred = True
+                raise
+            executor.shutdown(wait=False, cancel_futures=True)
+            executor_shutdown = True
+            yield resp
+        finally:
+            if not cleanup_transferred:
+                if not executor_shutdown:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                self._close_exec_stream_response(resp)
+                self._close_api_client(api_client)
+
+    async def _ensure_client(self):
+        """Ensure Kubernetes client is initialized via the singleton manager."""
+        if self._client_manager is None:
+            self._client_manager = await KubernetesClientManager.get_instance()
+        if self._core_api is None:
+            shared = await self._client_manager.get_client(
+                self.cluster_name, self.region, self.project_id
+            )
+            # Reuse the manager-initialized authentication configuration, but keep
+            # each environment's mutable REST ApiClient private.
+            self._core_api = k8s_client.CoreV1Api(
+                k8s_client.ApiClient(shared.api_client.configuration)
+            )
+
+    @staticmethod
+    def type() -> EnvironmentType:
+        return EnvironmentType.GKE
+
+    @classmethod
+    def resource_capabilities(cls) -> EnvironmentResourceCapabilities:
+        return EnvironmentResourceCapabilities(
+            cpu_limit=True,
+            cpu_request=True,
+            memory_limit=True,
+            memory_request=True,
+        )
+
+    @property
+    def capabilities(self) -> EnvironmentCapabilities:
+        return EnvironmentCapabilities(gpus=True, tpus=True)
+
+    @property
+    def _environment_definition_path(self) -> Path:
+        return self.environment_dir / "Dockerfile"
+
+    def _validate_definition(self):
+        if not self._environment_definition_path.exists():
+            raise FileNotFoundError(
+                f"{self._environment_definition_path} not found. Please ensure the "
+                "file exists."
+            )
+
+    def _resolve_gpu_accelerator_label(self, gpu_type: str) -> str:
+        """Translate a user-supplied GPU type to its GKE accelerator label."""
+        gpu_type_raw = gpu_type.lower().strip()
+        if gpu_type_raw in GKE_GPU_TYPE_MAP:
+            return GKE_GPU_TYPE_MAP[gpu_type_raw]
+        if gpu_type_raw in GKE_GPU_TYPE_MAP.values():
+            return gpu_type_raw
+        supported = ", ".join(
+            sorted(set(GKE_GPU_TYPE_MAP.keys()) | set(GKE_GPU_TYPE_MAP.values()))
+        )
+        raise RuntimeError(
+            f"GPU type '{gpu_type}' is not supported on GKE. "
+            f"Supported types: {supported}"
+        )
+
+    def _resolve_tpu_accelerator_label(self, tpu_type: str) -> str:
+        """Translate a user-supplied TPU type to its GKE accelerator label."""
+        tpu_type_raw = tpu_type.lower().strip()
+        if tpu_type_raw in GKE_TPU_TYPE_MAP:
+            return GKE_TPU_TYPE_MAP[tpu_type_raw]
+        if tpu_type_raw in GKE_TPU_TYPE_MAP.values():
+            return tpu_type_raw
+        supported = ", ".join(
+            sorted(set(GKE_TPU_TYPE_MAP.keys()) | set(GKE_TPU_TYPE_MAP.values()))
+        )
+        raise RuntimeError(
+            f"TPU type '{tpu_type}' is not supported on GKE. "
+            f"Supported types: {supported}"
+        )
+
+    def _validate_gke_accelerator_config(self):
+        """Eagerly resolve GKE-specific accelerator configuration.
+
+        Validates the first GPU / TPU type to be a supported GKE
+        accelerator. Also validates that the task does not request both
+        GPU and TPU. Fails before start() pays for an image build.
+        """
+        tpu = self.task_env_config.tpu
+        if self._effective_gpus > 0 and tpu is not None:
+            raise RuntimeError(
+                "GKE pods can only target one accelerator family per pod "
+                "via nodeSelector, but the task requests both GPU and TPU."
+            )
+
+        if self._effective_gpus > 0 and self.task_env_config.gpu_types:
+            self._resolve_gpu_accelerator_label(self.task_env_config.gpu_types[0])
+        if tpu is not None:
+            self._resolve_tpu_accelerator_label(tpu.type)
+
+    def _get_image_url(self) -> str:
+        """Get the container image URL in Artifact Registry."""
+        return f"{self.registry_location}-docker.pkg.dev/{self.project_id}/{self.registry_name}/{self.environment_name}:latest"
+
+    async def _image_exists(self) -> bool:
+        """Check if image already exists in Artifact Registry."""
+        image_name = self.environment_name
+
+        check_cmd = [
+            "gcloud",
+            "artifacts",
+            "docker",
+            "images",
+            "describe",
+            f"{self.registry_location}-docker.pkg.dev/{self.project_id}/{self.registry_name}/{image_name}:latest",
+            "--project",
+            self.project_id,
+        ]
+
+        try:
+            result = await asyncio.create_subprocess_exec(
+                *check_cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await result.wait()
+            return result.returncode == 0
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to check for existing image, will attempt to build. Error: {e}"
+            )
+            return False
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=5, max=60),
+        reraise=True,
+    )
+    async def _build_and_push_image(self):
+        """Build and push image using Cloud Build with retries."""
+        image_url = self._get_image_url()
+        self.logger.debug(f"Building and pushing image: {image_url}")
+
+        build_cmd = [
+            "gcloud",
+            "builds",
+            "submit",
+            "--tag",
+            image_url,
+            "--project",
+            self.project_id,
+            "--region",
+            self.region,
+            "--timeout",
+            "2400",  # 40 minutes for large images
+            "--machine-type",
+            self.cloud_build_machine_type,
+            "--disk-size",
+            str(self.cloud_build_disk_size_gb),
+            "--quiet",
+            str(self.environment_dir),
+        ]
+
+        result = await asyncio.create_subprocess_exec(
+            *build_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await result.communicate()
+
+        if result.returncode != 0:
+            error_msg = stderr.decode()
+            raise RuntimeError(
+                f"Image build failed: {error_msg}\nStdout: {stdout.decode()}"
+            )
+
+        self.logger.debug(f"Successfully built and pushed: {image_url}")
+
+    async def start(self, force_build: bool):
+        """Start a pod in GKE."""
+        # Initialize Kubernetes client via singleton manager
+        await self._ensure_client()
+
+        # Hybrid build approach: build only if needed
+        if force_build:
+            await self._build_and_push_image()
+        else:
+            if not await self._image_exists():
+                self.logger.debug(
+                    f"Image {self._get_image_url()} not found, building..."
+                )
+                await self._build_and_push_image()
+            else:
+                self.logger.debug(f"Using existing image: {self._get_image_url()}")
+
+        # Build resource requests
+        requests = {}
+        if self.cpu_request:
+            requests["cpu"] = self.cpu_request
+        if self.memory_request:
+            requests["memory"] = self.memory_request
+        if self.ephemeral_storage_request:
+            requests["ephemeral-storage"] = self.ephemeral_storage_request
+
+        # Build resource limits (optional)
+        limits = {}
+        if self.cpu_limit:
+            limits["cpu"] = self.cpu_limit
+        if self.memory_limit:
+            limits["memory"] = self.memory_limit
+
+        node_selector: dict[str, str] = {}
+        tolerations: list[k8s_client.V1Toleration] = []
+
+        # GPU configuration
+        gpu_count = self._effective_gpus
+        if gpu_count > 0:
+            gpu_str = str(gpu_count)
+            limits["nvidia.com/gpu"] = gpu_str
+            requests["nvidia.com/gpu"] = gpu_str
+
+            tolerations.append(
+                k8s_client.V1Toleration(
+                    key="nvidia.com/gpu",
+                    operator="Exists",
+                    effect="NoSchedule",
+                )
+            )
+
+            if self.task_env_config.gpu_types:
+                if len(self.task_env_config.gpu_types) > 1:
+                    self.logger.debug(
+                        "Multiple GPU types specified but GKE pods can only target "
+                        "one accelerator type via nodeSelector. Using the first: "
+                        f"{self.task_env_config.gpu_types[0]}"
+                    )
+
+                node_selector["cloud.google.com/gke-accelerator"] = (
+                    self._resolve_gpu_accelerator_label(
+                        self.task_env_config.gpu_types[0]
+                    )
+                )
+
+        # TPU configuration
+        tpu = self.task_env_config.tpu
+        if tpu is not None:
+            # Per-pod chip count is fully determined by the topology — see
+            # TpuSpec.chip_count. There is no independent user-supplied
+            # count to disagree with.
+            chip_str = str(tpu.chip_count)
+            limits["google.com/tpu"] = chip_str
+            requests["google.com/tpu"] = chip_str
+
+            tolerations.append(
+                k8s_client.V1Toleration(
+                    key="google.com/tpu",
+                    operator="Exists",
+                    effect="NoSchedule",
+                )
+            )
+
+            node_selector["cloud.google.com/gke-tpu-accelerator"] = (
+                self._resolve_tpu_accelerator_label(tpu.type)
+            )
+            node_selector["cloud.google.com/gke-tpu-topology"] = tpu.topology
+
+        # Create Pod specification
+        pod = k8s_client.V1Pod(
+            api_version="v1",
+            kind="Pod",
+            metadata=k8s_client.V1ObjectMeta(
+                name=self.pod_name,
+                namespace=self.namespace,
+                labels={
+                    "app": "sandbox",
+                    "session": self.session_id,
+                    "environment": self.environment_name.replace("/", "-"),
+                },
+            ),
+            spec=k8s_client.V1PodSpec(
+                containers=[
+                    k8s_client.V1Container(
+                        name="main",
+                        image=self._get_image_url(),
+                        command=["sleep", "infinity"],
+                        resources=k8s_client.V1ResourceRequirements(
+                            requests=requests or None,
+                            limits=limits or None,
+                        ),
+                        volume_mounts=[],
+                    )
+                ],
+                restart_policy="Never",
+                node_selector=node_selector or None,
+                tolerations=tolerations or None,
+            ),
+        )
+
+        # Create the pod
+        try:
+            await asyncio.to_thread(
+                self._api.create_namespaced_pod,
+                namespace=self.namespace,
+                body=pod,
+            )
+        except ApiException as e:
+            if e.status == 409:  # Already exists
+                self.logger.debug(f"Pod {self.pod_name} already exists, recreating...")
+                # Delete existing pod inline (don't call stop() as it releases the client)
+                try:
+                    await asyncio.to_thread(
+                        self._api.delete_namespaced_pod,
+                        name=self.pod_name,
+                        namespace=self.namespace,
+                        body=k8s_client.V1DeleteOptions(
+                            grace_period_seconds=0, propagation_policy="Foreground"
+                        ),
+                    )
+                    # Wait for deletion
+                    for _ in range(60):
+                        try:
+                            await asyncio.to_thread(
+                                self._api.read_namespaced_pod,
+                                name=self.pod_name,
+                                namespace=self.namespace,
+                            )
+                            await asyncio.sleep(1)
+                        except ApiException as del_e:
+                            if del_e.status == 404:
+                                break
+                    else:
+                        raise RuntimeError(
+                            f"Pod {self.pod_name} was not deleted in time."
+                        )
+                except ApiException as del_e:
+                    if del_e.status != 404:
+                        raise RuntimeError(f"Failed to delete existing pod: {del_e}")
+
+                await asyncio.to_thread(
+                    self._api.create_namespaced_pod,
+                    namespace=self.namespace,
+                    body=pod,
+                )
+            else:
+                raise RuntimeError(f"Failed to create pod: {e}")
+
+        # GPU / TPU nodes on Autopilot can take 10-15 minutes to cold-start
+        # (provision VM, install drivers, register with cluster), so use a
+        # longer timeout when accelerators are requested.
+        if gpu_count > 0 or self.task_env_config.tpu is not None:
+            pod_ready_timeout = 1200
+        else:
+            pod_ready_timeout = 300
+        await self._wait_for_pod_ready(timeout_sec=pod_ready_timeout)
+
+        # On Autopilot clusters, the kubelet may not accept exec connections
+        # immediately after the pod reports Running/Ready.
+        await self._wait_for_container_exec_ready()
+
+        mkdir_result = await self.ensure_dirs(self._mount_targets(writable_only=True))
+        if mkdir_result is not None and mkdir_result.return_code != 0:
+            raise RuntimeError(
+                f"Failed to create mounted directories in pod {self.pod_name}: "
+                f"stdout={mkdir_result.stdout}, stderr={mkdir_result.stderr}"
+            )
+
+        await self._upload_environment_dir_after_start()
+
+    async def stop(self, delete: bool):
+        """Stop/delete the pod."""
+        if self._client_manager is None and self._core_api is None:
+            return
+
+        try:
+            if delete:
+                try:
+                    await asyncio.to_thread(
+                        self._api.delete_namespaced_pod,
+                        name=self.pod_name,
+                        namespace=self.namespace,
+                        body=k8s_client.V1DeleteOptions(
+                            grace_period_seconds=0,
+                            propagation_policy="Foreground",
+                        ),
+                    )
+                    # Wait for pod to be deleted
+                    for _ in range(60):
+                        try:
+                            await asyncio.to_thread(
+                                self._api.read_namespaced_pod,
+                                name=self.pod_name,
+                                namespace=self.namespace,
+                            )
+                            await asyncio.sleep(1)
+                        except ApiException as e:
+                            if e.status == 404:
+                                break
+                    else:
+                        self.logger.warning(
+                            f"Pod {self.pod_name} did not terminate within 60 seconds."
+                        )
+                except ApiException as e:
+                    if e.status != 404:
+                        raise
+        finally:
+            core_api = self._core_api
+            self._core_api = None
+            if core_api is not None:
+                try:
+                    await asyncio.to_thread(core_api.api_client.close)
+                except Exception as e:
+                    self.logger.error(f"Error closing Kubernetes API client: {e}")
+
+            if self._client_manager:
+                try:
+                    await self._client_manager.release_client()
+                except Exception as e:
+                    self.logger.error(f"Error releasing Kubernetes client: {e}")
+                finally:
+                    self._client_manager = None
+
+    async def exec(
+        self,
+        command: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+        user: str | int | None = None,
+    ) -> ExecResult:
+        """Execute command in pod using kubectl exec equivalent."""
+        user = self._resolve_user(user)
+        env = self._merge_env(env)
+
+        await self._ensure_client()
+
+        full_command = f"bash -c {shlex.quote(command)}"
+
+        if env:
+            for key, value in env.items():
+                full_command = f"{key}={shlex.quote(value)} {full_command}"
+
+        effective_cwd = cwd or self.task_env_config.workdir
+        if effective_cwd:
+            full_command = f"cd {effective_cwd} && {full_command}"
+
+        if user is not None:
+            # su requires a username; resolve numeric UIDs via getent
+            if isinstance(user, int):
+                user_arg = f"$(getent passwd {user} | cut -d: -f1)"
+            else:
+                user_arg = shlex.quote(user)
+            # Use su (not su -) to preserve the working directory
+            full_command = f"su {user_arg} -s /bin/bash -c {shlex.quote(full_command)}"
+
+        exec_command = ["sh", "-c", full_command]
+
+        try:
+            async with self._open_exec_stream(
+                command=exec_command,
+                stderr=True,
+                stdin=False,
+                stdout=True,
+            ) as resp:
+                stdout, stderr = await self._read_exec_stream(
+                    resp, timeout_sec if timeout_sec else None
+                )
+                return_code = resp.returncode if resp.returncode is not None else 0
+
+                return ExecResult(
+                    stdout=stdout,
+                    stderr=stderr,
+                    return_code=return_code,
+                )
+
+        except asyncio.TimeoutError:
+            return ExecResult(
+                stdout=None,
+                stderr=f"Command timed out after {timeout_sec} seconds",
+                return_code=124,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                return ExecResult(
+                    stdout=None,
+                    stderr=f"Pod {self.pod_name} not found (404).",
+                    return_code=1,
+                )
+            elif e.status == 500:
+                error_body = str(e.body) if hasattr(e, "body") else str(e)
+                if "No agent available" in error_body:
+                    return ExecResult(
+                        stdout=None,
+                        stderr=f"Pod {self.pod_name} unavailable: No agent available.",
+                        return_code=1,
+                    )
+                return ExecResult(
+                    stdout=None,
+                    stderr=f"Internal server error on pod {self.pod_name}: {e.reason}",
+                    return_code=1,
+                )
+            else:
+                return ExecResult(
+                    stdout=None,
+                    stderr=f"API error ({e.status}) on pod {self.pod_name}: {e.reason}",
+                    return_code=1,
+                )
+        except Exception as e:
+            return ExecResult(
+                stdout=None,
+                stderr=str(e),
+                return_code=1,
+            )
+
+    def _read_exec_output(self, resp):
+        """Read output from exec stream."""
+        stdout = ""
+        stderr = ""
+
+        while resp.is_open():
+            resp.update(timeout=1)
+            if resp.peek_stdout():
+                stdout += resp.read_stdout()
+            if resp.peek_stderr():
+                stderr += resp.read_stderr()
+
+        return stdout, stderr
+
+    def _read_and_finalize_exec_output(self, resp):
+        output = self._read_exec_output(resp)
+        resp.run_forever(timeout=0)
+        return output
+
+    def _write_and_finalize_exec_input(self, resp, data: bytes) -> None:
+        resp.write_stdin(data)
+        resp.run_forever(timeout=1)
+
+    def _read_exec_tar_output(
+        self, resp, tar_buffer: BinaryIO, read_stderr: bool
+    ) -> str:
+        stderr = ""
+        while resp.is_open():
+            resp.update(timeout=1)
+            if resp.peek_stdout():
+                data = resp.read_stdout()
+                if isinstance(data, str):
+                    data = data.encode("utf-8", errors="surrogateescape")
+                tar_buffer.write(data)
+            if read_stderr and resp.peek_stderr():
+                stderr += resp.read_stderr()
+        return stderr
+
+    async def _run_exec_stream_io(
+        self,
+        resp,
+        operation: Callable[[], _T],
+        timeout_sec: int | float | None = None,
+    ) -> _T:
+        executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix=f"harbor-gke-reader-{self.pod_name}",
+        )
+        operation_future = executor.submit(operation)
+        wrapped_future = asyncio.wrap_future(operation_future)
+        cleanup_transferred = False
+        try:
+            if timeout_sec is None:
+                return await asyncio.shield(wrapped_future)
+            return await asyncio.wait_for(
+                asyncio.shield(wrapped_future),
+                timeout=timeout_sec,
+            )
+        except BaseException as error:
+            self._abort_exec_stream(resp)
+            cancellation = error if isinstance(error, asyncio.CancelledError) else None
+            loop = asyncio.get_running_loop()
+            cleanup_deadline = loop.time() + _GKE_EXEC_STREAM_DRAIN_TIMEOUT
+            while not operation_future.done():
+                remaining = cleanup_deadline - loop.time()
+                if remaining <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(wrapped_future),
+                        timeout=remaining,
+                    )
+                except asyncio.CancelledError as cleanup_cancellation:
+                    cancellation = cleanup_cancellation
+                    continue
+                except asyncio.TimeoutError:
+                    break
+                except BaseException:
+                    break
+            if operation_future.done():
+                try:
+                    operation_future.result()
+                except BaseException:
+                    pass
+            else:
+                self._schedule_late_stream_cleanup(
+                    operation_future,
+                    executor,
+                )
+                cleanup_transferred = True
+            if cancellation is not None:
+                raise cancellation
+            raise
+        finally:
+            if not cleanup_transferred:
+                executor.shutdown(wait=False, cancel_futures=True)
+
+    async def _read_exec_stream(
+        self, resp, timeout_sec: int | float | None = None
+    ) -> tuple[str, str]:
+        return await self._run_exec_stream_io(
+            resp,
+            partial(self._read_and_finalize_exec_output, resp),
+            timeout_sec,
+        )
+
+    @classmethod
+    def _schedule_late_stream_cleanup(
+        cls,
+        operation: Future[Any],
+        executor: ThreadPoolExecutor,
+        *,
+        close_result: bool = False,
+        api_client: Any | None = None,
+    ) -> None:
+        def finish(done: Future[Any]) -> None:
+            late_response = None
+            try:
+                result = done.result()
+                if close_result:
+                    late_response = result
+            except BaseException:
+                pass
+            cls._close_exec_stream_response(late_response)
+            cls._close_api_client(api_client)
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        def enqueue(done: Future[Any]) -> None:
+            try:
+                executor.submit(finish, done)
+            except RuntimeError:
+                finish(done)
+
+        operation.add_done_callback(enqueue)
+
+    @staticmethod
+    def _close_exec_stream_response(resp) -> None:
+        if resp is None:
+            return
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _close_api_client(api_client) -> None:
+        if api_client is None:
+            return
+        try:
+            api_client.close()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _abort_exec_stream(resp) -> None:
+        """Abort the socket without waiting for a WebSocket close handshake."""
+        websocket = getattr(resp, "sock", None)
+        if websocket is None:
+            return
+        try:
+            websocket.abort()
+        except Exception:
+            raw_socket = getattr(websocket, "sock", None)
+            if raw_socket is not None:
+                try:
+                    raw_socket.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+
+    async def _check_pod_terminated(self) -> None:
+        """Raise immediately if the pod or any container is in a terminal state."""
+        try:
+            pod = await asyncio.to_thread(
+                self._api.read_namespaced_pod,
+                name=self.pod_name,
+                namespace=self.namespace,
+            )
+        except ApiException:
+            return
+
+        phase = pod.status.phase if pod.status else None
+        if phase in ("Failed", "Succeeded"):
+            raise RuntimeError(
+                f"Pod {self.pod_name} is in terminal phase '{phase}' and cannot accept exec."
+            )
+
+        if pod.status and pod.status.container_statuses:
+            for cs in pod.status.container_statuses:
+                terminated = None
+                if cs.state and cs.state.terminated:
+                    terminated = cs.state.terminated
+                elif cs.last_state and cs.last_state.terminated:
+                    terminated = cs.last_state.terminated
+                if terminated is not None:
+                    reason = terminated.reason or ""
+                    exit_code = terminated.exit_code
+                    raise RuntimeError(
+                        f"Container '{cs.name}' in pod {self.pod_name} has terminated "
+                        f"(reason={reason!r}, exit_code={exit_code}). Cannot exec into dead container."
+                    )
+
+    async def _wait_for_container_exec_ready(self, max_attempts: int = 60):
+        """Wait for container to be ready for exec operations."""
+        for attempt in range(max_attempts):
+            await self._check_pod_terminated()
+            try:
+                test_command = ["true"]
+                async with self._open_exec_stream(
+                    command=test_command,
+                    stderr=False,
+                    stdin=False,
+                    stdout=True,
+                ):
+                    pass
+                return
+            except ApiException as e:
+                if "container not found" in str(e) or e.status == 500:
+                    if attempt % 10 == 0:
+                        self.logger.debug(
+                            f"Container not ready, attempt {attempt + 1}/{max_attempts}"
+                        )
+                    await asyncio.sleep(3)
+                    continue
+                else:
+                    raise
+            except Exception as e:
+                if attempt < max_attempts - 1:
+                    if attempt % 10 == 0:
+                        self.logger.debug(f"Error checking container readiness: {e}")
+                    await asyncio.sleep(3)
+                    continue
+                else:
+                    raise
+        raise RuntimeError(
+            f"Container not ready for exec after {max_attempts} attempts"
+        )
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    async def upload_file(self, source_path: Path | str, target_path: str):
+        """Upload file using kubectl cp equivalent."""
+        await self._ensure_client()
+
+        await self._wait_for_container_exec_ready()
+
+        source_path = Path(source_path)
+
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+            tar.add(str(source_path), arcname=Path(target_path).name)
+        tar_buffer.seek(0)
+
+        target_dir = str(Path(target_path).parent)
+        await self.exec(f"mkdir -p {target_dir}", user="root")
+
+        exec_command = ["tar", "xf", "-", "-C", target_dir]
+
+        async with self._open_exec_stream(
+            command=exec_command,
+            stderr=True,
+            stdin=True,
+            stdout=True,
+        ) as resp:
+            await self._run_exec_stream_io(
+                resp,
+                partial(self._write_and_finalize_exec_input, resp, tar_buffer.read()),
+            )
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        reraise=True,
+    )
+    async def upload_dir(self, source_dir: Path | str, target_dir: str):
+        """Upload directory using kubectl cp equivalent."""
+        await self._ensure_client()
+
+        await self._wait_for_container_exec_ready()
+
+        source_dir = Path(source_dir)
+
+        files_to_upload = []
+        for item in source_dir.rglob("*"):
+            if item.is_file():
+                arcname = str(item.relative_to(source_dir))
+                files_to_upload.append(arcname)
+
+        if not files_to_upload:
+            self.logger.warning(f"No files to upload from {source_dir}")
+            return
+
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+            for item in source_dir.rglob("*"):
+                if item.is_file():
+                    arcname = str(item.relative_to(source_dir))
+                    tar.add(str(item), arcname=arcname)
+        tar_buffer.seek(0)
+        tar_size = len(tar_buffer.getvalue())
+
+        mkdir_result = await self.exec(f"mkdir -p {target_dir}", user="root")
+        if mkdir_result.return_code != 0:
+            raise RuntimeError(
+                f"Failed to create target directory {target_dir}: {mkdir_result.stderr}"
+            )
+
+        exec_command = ["tar", "xf", "-", "-C", target_dir]
+
+        try:
+            async with self._open_exec_stream(
+                command=exec_command,
+                stderr=True,
+                stdin=True,
+                stdout=True,
+            ) as resp:
+                try:
+                    await self._run_exec_stream_io(
+                        resp,
+                        partial(
+                            self._write_and_finalize_exec_input,
+                            resp,
+                            tar_buffer.read(),
+                        ),
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to write tar data to pod {self.pod_name}: {e}"
+                    )
+        except ApiException as e:
+            if e.status == 500:
+                raise RuntimeError(
+                    f"Pod {self.pod_name} returned 500 error during upload."
+                )
+            raise
+        self.logger.debug(
+            f"Successfully uploaded {len(files_to_upload)} files ({tar_size} bytes) to {target_dir}"
+        )
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    async def download_file(self, source_path: str, target_path: Path | str):
+        """Download file from pod."""
+        await self._ensure_client()
+
+        target_path = Path(target_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        exec_command = ["tar", "cf", "-", source_path]
+
+        with tempfile.TemporaryFile() as tar_buffer:
+            async with self._open_exec_stream(
+                command=exec_command,
+                stderr=True,
+                stdin=False,
+                stdout=True,
+            ) as resp:
+                await self._run_exec_stream_io(
+                    resp,
+                    partial(self._read_exec_tar_output, resp, tar_buffer, False),
+                )
+
+            tar_buffer.seek(0)
+            with tarfile.open(fileobj=tar_buffer, mode="r") as tar:
+                for member in tar.getmembers():
+                    if member.name == source_path or member.name.startswith(
+                        source_path.lstrip("/")
+                    ):
+                        member.name = target_path.name
+                        tar.extract(member, path=str(target_path.parent))
+                        break
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        reraise=True,
+    )
+    async def download_dir(self, source_dir: str, target_dir: Path | str):
+        """Download directory from pod."""
+        await self._ensure_client()
+
+        target_dir = Path(target_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        exec_command = ["sh", "-c", f"cd {source_dir} && tar cf - ."]
+
+        with tempfile.TemporaryFile() as tar_buffer:
+            try:
+                async with self._open_exec_stream(
+                    command=exec_command,
+                    stderr=True,
+                    stdin=False,
+                    stdout=True,
+                ) as resp:
+                    stderr_data = await self._run_exec_stream_io(
+                        resp,
+                        partial(self._read_exec_tar_output, resp, tar_buffer, True),
+                    )
+
+                if stderr_data and (
+                    "No such file or directory" in stderr_data
+                    or "cannot cd" in stderr_data
+                ):
+                    raise RuntimeError(
+                        f"Failed to access directory {source_dir} in pod {self.pod_name}: {stderr_data.strip()}"
+                    )
+
+                if tar_buffer.tell() == 0:
+                    raise RuntimeError(
+                        f"No data received when downloading {source_dir} from pod {self.pod_name}."
+                    )
+
+                tar_buffer.seek(0)
+                try:
+                    with tarfile.open(fileobj=tar_buffer, mode="r") as tar:
+                        tar.extractall(path=str(target_dir))
+                except tarfile.TarError as e:
+                    raise RuntimeError(
+                        f"Failed to extract directory {source_dir} from pod {self.pod_name}: {e}"
+                    )
+            except ApiException as e:
+                if e.status == 404:
+                    raise RuntimeError(f"Pod {self.pod_name} not found (404).")
+                elif e.status == 500:
+                    raise RuntimeError(
+                        f"Pod {self.pod_name} is in an error state (500)."
+                    )
+                raise
+
+    async def _wait_for_pod_ready(self, timeout_sec: int = 300):
+        """Wait for pod to be ready."""
+        self.logger.debug(f"Waiting for pod {self.pod_name} to be ready...")
+
+        for attempt in range(timeout_sec):
+            try:
+                pod = await asyncio.to_thread(
+                    self._api.read_namespaced_pod,
+                    name=self.pod_name,
+                    namespace=self.namespace,
+                )
+
+                if pod.status.phase == "Running":
+                    if pod.status.container_statuses:
+                        if all(c.ready for c in pod.status.container_statuses):
+                            self.logger.debug(f"Pod {self.pod_name} is ready!")
+                            return
+
+                elif pod.status.phase in ["Failed", "Unknown", "Error"]:
+                    error_details = self._get_pod_failure_summary(pod)
+                    raise RuntimeError(f"Pod failed to start: {error_details}")
+
+                elif pod.status.phase == "Pending":
+                    # Check for image pull errors
+                    if pod.status.container_statuses:
+                        for c in pod.status.container_statuses:
+                            if c.state.waiting:
+                                if (
+                                    "ImagePullBackOff" in c.state.waiting.reason
+                                    or "ErrImagePull" in c.state.waiting.reason
+                                ):
+                                    raise RuntimeError(
+                                        f"Failed to pull image: {c.state.waiting.message or c.state.waiting.reason}"
+                                    )
+
+                if attempt % 10 == 0:
+                    self.logger.debug(
+                        f"Pod status: {pod.status.phase} ({attempt}s elapsed)"
+                    )
+
+            except ApiException as e:
+                if e.status != 404:
+                    raise RuntimeError(f"Kubernetes API error: {e.status} - {e.reason}")
+
+            await asyncio.sleep(1)
+
+        raise RuntimeError(f"Pod not ready after {timeout_sec} seconds")
+
+    def _get_pod_failure_summary(self, pod) -> str:
+        """Get a summary of pod failure reasons."""
+        reasons = []
+
+        if pod.status.reason:
+            reasons.append(f"Reason: {pod.status.reason}")
+        if pod.status.message:
+            reasons.append(f"Message: {pod.status.message}")
+
+        if pod.status.container_statuses:
+            for c in pod.status.container_statuses:
+                if c.state.waiting:
+                    reasons.append(
+                        f"Container {c.name} waiting: {c.state.waiting.reason}"
+                    )
+                elif c.state.terminated:
+                    reasons.append(
+                        f"Container {c.name} terminated: {c.state.terminated.reason} "
+                        f"(exit code {c.state.terminated.exit_code})"
+                    )
+
+        return "; ".join(reasons) if reasons else "Unknown error"

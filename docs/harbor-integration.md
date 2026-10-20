@@ -74,7 +74,7 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 `--harbor-config` is repeatable and additive with `--evals`. All selected built-in and supplied
-Harbor policies pass pinned-schema and placeholder effective-job validation before the launcher
+Harbor policies pass schema and placeholder effective-job validation before the launcher
 opens an Iris client.
 
 To resume one Harbor evaluation, pass its object-store results root with `--resume-results-path`
@@ -148,9 +148,9 @@ secret source declarations in `experiments/evaluation/evals.py`.
 
 ## Ownership boundary
 
-Marin's Harbor evaluation runs in isolated uv environments. The root workspace also locks an
-optional Harbor dependency for TaskCompendium's adapters. Evaluation uses the exact Git revision
-identified by `marin.external_dependencies.HARBOR` for two isolated calls:
+Harbor lives in `vendor/harbor` as an independent uv project with its own lockfile. It uses editable
+local Rigging and FineStore sources. Marin has no Harbor dependency; its launcher invokes Harbor
+through an isolated subprocess CLI for two calls:
 
 1. Preflight parses YAML or JSON with Harbor's Pydantic models, rejects unsupported launch shapes,
    validates a placeholder model/endpoint overlay, loads the dataset through Harbor to count tasks,
@@ -163,10 +163,19 @@ Runtime values do not change the source-policy digest. Policy kwargs override mo
 the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
+The runtime uses `vendor/harbor/uv.lock`. Its runtime descriptor records the upstream
+revision from `UPSTREAM.toml`, the lock digest, and a digest of the packaged source and local Marin
+libraries. The upstream revision identifies the import base; execution always uses the vendored
+source. Published September cohort labels remain validated against their original runtimes and
+cannot label new vendored runs. Reproduce historical runs from their recorded Marin checkout.
+The vendored package evaluates prebuilt task datasets; dataset generators are omitted.
+See the [vendor maintenance guide](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md)
+for dependency updates and direct evaluation CLI commands.
+
 ### Trial error taxonomy
 
 Preflight snapshots Harbor's infrastructure, agent, passthrough, and undecided error categories from
-the pinned Harbor runtime in the isolated environment. Marin uses that snapshot to classify trial results and records
+the selected Harbor runtime in the isolated environment. Marin uses that snapshot to classify trial results and records
 the Harbor commit SHA in `record.json`. Undecided errors are known to Harbor but have no default scoring
 policy; Marin leaves them ungraded and counts them against the completion gate. Names absent from all
 four categories fail the run as an infrastructure failure, so taxonomy changes cannot silently alter
