@@ -48,7 +48,7 @@ from experiments.grug.moe.kda_prep_pallas import (
     GateKind,
     fused_chunk_prep,
 )
-from experiments.grug.moe.kda_state_pallas import StateGrads, StateLayout, chunk_state_pass
+from experiments.grug.moe.kda_state_pallas import StateGrads, chunk_state_pass
 
 _L2NORM_EPS = L2NORM_EPS
 # Triton warps of the mid-referenced (sub_chunk_size) prep kernels, tuned on H100 at C=32, d=128
@@ -644,7 +644,9 @@ def kda_fused(
     state_grads: StateGrads = StateGrads.XLA,
     state_block_v: int = 32,
     state_primal_block_v: int = 0,
-    state_layout: StateLayout = StateLayout.DK_ROWS,
+    state_saved_dtype: jnp.dtype = jnp.float32,
+    state_grads_chunks: int = 1,
+    state_grads_num_stages: int = 1,
 ) -> Float[Array, "B L H Dv"]:
     """Fused-kernel KDA in the model's ``(batch, seq, heads, head_dim)`` layout (GPU).
 
@@ -674,8 +676,10 @@ def kda_fused(
     ``state_grads`` picks where the state pass's backward forms its d_v-contracting cotangents.
     ``state_block_v`` is the state pass's d_v tile (64 is fastest on GB200, 32 on H100).
     ``state_primal_block_v`` (> 0) runs the primal (non-differentiated) state pass on a kernel with that d_v
-    tile that skips the per-chunk stores only the backward reads; ``state_layout`` picks the on-chip
-    orientation of the state (``StateLayout``). Both are the same math as the defaults.
+    tile that skips the per-chunk stores only the backward reads (same math). ``state_saved_dtype`` is the
+    storage dtype of the state backward's per-chunk v_new and dS (bfloat16 rounds those stored copies, as
+    ``h`` already is). ``state_grads_chunks`` / ``state_grads_num_stages`` block the ``StateGrads.PALLAS``
+    cotangent kernel over several chunks per program as a pipelined loop (same math).
     """
     b, length, heads, _ = q.shape
     pad = (-length) % chunk_size
@@ -721,6 +725,8 @@ def kda_fused(
         save_states=save_chunk_states,
         grads=state_grads,
         primal_block_v=state_primal_block_v,
-        layout=state_layout,
+        saved_dtype=state_saved_dtype,
+        grads_chunks=state_grads_chunks,
+        grads_num_stages=state_grads_num_stages,
     )
     return out[:, :length] if pad else out

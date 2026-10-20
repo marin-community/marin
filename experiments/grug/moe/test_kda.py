@@ -18,7 +18,7 @@ import pytest
 
 from experiments.grug.moe.kda import chunk_kda, kda_fused, recurrent_kda
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind
-from experiments.grug.moe.kda_state_pallas import StateGrads, StateLayout
+from experiments.grug.moe.kda_state_pallas import StateGrads
 
 jax.config.update("jax_default_matmul_precision", "float32")
 
@@ -332,11 +332,11 @@ def test_kda_fused_gate_and_grouped_kv_match_unfused(packed, sub_chunk_size):
 @pytest.mark.parametrize("packed", [False, True])
 @pytest.mark.parametrize("save_states", [False, True])
 @pytest.mark.parametrize(
-    ("primal_block_v", "layout"),
-    [(32, StateLayout.DK_ROWS), (0, StateLayout.DV_ROWS), (32, StateLayout.DV_ROWS)],
+    ("primal_block_v", "grads_chunks"),
+    [(32, 1), (0, 3), (32, 3)],
 )
-def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_block_v, layout):
-    """The lean primal state pass and the transposed-state kernels reproduce the default kernels' values and
+def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_block_v, grads_chunks):
+    """The lean primal state pass and the multi-chunk cotangent kernel reproduce the default kernels' values and
     gradients (the GB200 configuration: 32-token chunks in one decay tile, the on-chip sigmoid gate with its
     -5 floor, packed documents), with the per-chunk states recomputed or saved for the backward."""
     rng = np.random.RandomState(31)
@@ -359,7 +359,7 @@ def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_blo
         state_block_v=16,
         save_chunk_states=save_states,
     )
-    variant = dict(base, state_primal_block_v=primal_block_v, state_layout=layout)
+    variant = dict(base, state_primal_block_v=primal_block_v, state_grads_chunks=grads_chunks, state_grads_num_stages=2)
 
     def loss(kw, q, k, v, a, beta, rate, bias):
         return jnp.sum(w * kda_fused(q, k, v, a, beta, gate=(rate, bias), **kw))
@@ -371,6 +371,31 @@ def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_blo
     for x, y in zip(got, want, strict=True):
         assert np.isfinite(np.asarray(x)).all()
         np.testing.assert_allclose(np.asarray(x), np.asarray(y), rtol=1e-5, atol=1e-5)
+
+
+def test_kda_fused_bf16_saved_states_track_fp32():
+    """Storing the state backward's per-chunk v_new and dS in bf16 keeps every gradient within bf16 accuracy of
+    the fp32-stored kernels (and leaves the forward unchanged)."""
+    rng = np.random.RandomState(41)
+    b, length, heads, d = 1, 96, 2, 32
+    q, k, v = (jnp.asarray(rng.randn(b, length, heads, d), jnp.float32) for _ in range(3))
+    g = -jnp.abs(jnp.asarray(rng.randn(b, length, heads, d), jnp.float32)) * 0.3
+    beta = jnp.asarray(rng.rand(b, length, heads), jnp.float32)
+    w = jnp.asarray(rng.randn(b, length, heads, d), jnp.float32)
+    base = dict(
+        chunk_size=32, sub_chunk_size=32, matmul_dtype=jnp.float32, interpret=True, state_grads=StateGrads.PALLAS
+    )
+
+    def loss(saved_dtype, *args):
+        return jnp.sum(w * kda_fused(*args, state_saved_dtype=saved_dtype, **base))
+
+    args = (q, k, v, g, beta)
+    np.testing.assert_array_equal(np.asarray(loss(jnp.bfloat16, *args)), np.asarray(loss(jnp.float32, *args)))
+    got = jax.grad(functools.partial(loss, jnp.bfloat16), argnums=tuple(range(5)))(*args)
+    want = jax.grad(functools.partial(loss, jnp.float32), argnums=tuple(range(5)))(*args)
+    for x, y in zip(got, want, strict=True):
+        scale = float(np.max(np.abs(np.asarray(y))))
+        assert float(np.max(np.abs(np.asarray(x) - np.asarray(y)))) < 2e-2 * scale
 
 
 # --- Packed documents: hard state resets at document boundaries ---

@@ -51,17 +51,6 @@ class StateGrads(StrEnum):
     PALLAS = "pallas"  # one parallel kernel per (g, chunk) reading every per-chunk tensor once
 
 
-class StateLayout(StrEnum):
-    """On-chip orientation of the state ``S`` (``d_k x d_v``) in the sequential passes."""
-
-    # S held as (d_k, block_v): every per-step GEMM takes the state (or v_new / dS) as its right operand,
-    # which goes through shared memory each step.
-    DK_ROWS = "dk_rows"
-    # S^T held as (block_v, d_k): the state, v_new and dS are the left operands of the per-step GEMMs (the
-    # flash-attention P @ V pattern, register-resident); per-chunk h / v_new / dS are saved transposed.
-    DV_ROWS = "dv_rows"
-
-
 class StateConfig(NamedTuple):
     num_heads: int
     block_v: int
@@ -74,9 +63,11 @@ class StateConfig(NamedTuple):
     # the primal on the saving kernel (``block_v``).
     primal_block_v: int
     primal_num_warps: int
-    layout: StateLayout
     grads_block_v: int
     grads_num_warps: int
+    grads_chunks: int  # chunks per program of the cotangent kernel (a software-pipelined loop when > 1)
+    grads_num_stages: int
+    saved_dtype: str  # dtype of the backward-only per-chunk v_new and dS (float32 or bfloat16)
 
 
 def _state_fwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_ref, out_ref, h_ref, vnew_ref, st_ref):
@@ -90,82 +81,12 @@ def _state_fwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_r
     def body(i, s):
         h_ref[i] = s.astype(h_ref.dtype)
         vn = vp_ref[i] - dot_f32(kcd_ref[i].astype(f32), s)
-        vnew_ref[i] = vn
+        vnew_ref[i] = vn.astype(vnew_ref.dtype)
         out = dot_f32(qi_ref[i].astype(f32), s) + dot_f32(attn_ref[i].astype(f32), vn)
         out_ref[pl.ds(pl.multiple_of(i * c, c), c), :] = out.astype(out_ref.dtype)
         return decay_ref[i][:, None] * s + dot_f32(kw_ref[i].astype(f32), vn, trans_a=True)
 
     st_ref[...] = lax.fori_loop(0, n, body, s0_ref[...])
-
-
-def _state_fwd_t_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_ref, out_ref, *refs, save: bool):
-    """``_state_fwd_kernel`` on the transposed state ``S^T`` (``StateLayout.DV_ROWS``): with ``vt = v_new^T``,
-    ``vt = Vp^T - S^T Kcd^T``, ``out^T = S^T Qi^T + vt attn^T`` and ``S^T <- S^T Diag(decay) + vt Kw``, so the
-    state and v_new are always left GEMM operands. With ``save``, h and v_new are stored transposed,
-    ``(block_v, d_k)`` / ``(block_v, C)`` per chunk."""
-    h_ref, vnew_ref, st_ref = refs if save else (None, None, refs[0])
-    n, c = kw_ref.shape[:2]
-
-    def body(i, st):
-        if save:
-            h_ref[i] = st.astype(h_ref.dtype)
-        vt = vp_ref[i].T - dot_f32(st, kcd_ref[i].astype(f32), trans_b=True)
-        if save:
-            vnew_ref[i] = vt
-        out_t = dot_f32(st, qi_ref[i].astype(f32), trans_b=True) + dot_f32(vt, attn_ref[i].astype(f32), trans_b=True)
-        out_ref[pl.ds(pl.multiple_of(i * c, c), c), :] = out_t.T.astype(out_ref.dtype)
-        return st * decay_ref[i][None, :] + dot_f32(vt, kw_ref[i].astype(f32))
-
-    st_ref[...] = lax.fori_loop(0, n, body, s0_ref[...].T).T
-
-
-def _state_bwd_t_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, decay_ref, dout_ref, dst_ref, ds_ref, dvp_ref, ds0_ref):
-    """``_state_bwd_kernel`` on the transposed cotangent ``dS^T`` (``StateLayout.DV_ROWS``):
-    ``dvt = dout^T attn + dS^T Kw^T`` and ``dS^T <- dS^T Diag(decay) - dvt Kcd + dout^T Qi``. Per-chunk dS is
-    stored transposed; dV_pseudo in its own layout."""
-    n, c = kw_ref.shape[:2]
-
-    def body(j, dst):
-        i = n - 1 - j  # dst is the cotangent of S_i^T (the state leaving chunk i)
-        ds_ref[i] = dst
-        dout_t = dout_ref[pl.ds(pl.multiple_of(i * c, c), c), :].astype(f32).T
-        dvt = dot_f32(dout_t, attn_ref[i].astype(f32)) + dot_f32(dst, kw_ref[i].astype(f32), trans_b=True)
-        dvp_ref[i] = dvt.T
-        ds_in = dst * decay_ref[i][None, :] - dot_f32(dvt, kcd_ref[i].astype(f32))
-        return ds_in + dot_f32(dout_t, qi_ref[i].astype(f32))
-
-    ds0_ref[...] = lax.fori_loop(0, n, body, dst_ref[...].T).T
-
-
-def _state_grads_t_kernel(
-    h_ref, ds_ref, vnew_ref, dvp_ref, dout_ref, dqi_ref, dattn_ref, dkw_ref, dkcd_ref, ddecay_ref, *, block_v: int
-):
-    """``_state_grads_kernel`` on the transposed per-chunk h^T, dS^T, v_new^T (``StateLayout.DV_ROWS``):
-    dQi = dout h^T, dattn = dout v_new^T, dKw = v_new dS^T, dKcd = -dVp h^T, ddecay = colsum(h^T * dS^T)."""
-    dv, dk = h_ref.shape
-    c = vnew_ref.shape[1]
-    bv = block_v
-    dqi = jnp.zeros((c, dk), f32)
-    dattn = jnp.zeros((c, c), f32)
-    dkw = jnp.zeros((c, dk), f32)
-    dkcd = jnp.zeros((c, dk), f32)
-    ddecay = jnp.zeros((dk,), f32)
-    for j in range(dv // bv):
-        rows = pl.ds(j * bv, bv)
-        h = h_ref[rows, :].astype(f32)
-        ds = ds_ref[rows, :]
-        vt = vnew_ref[rows, :]
-        dout = dout_ref[:, rows].astype(f32)
-        dqi = dqi + dot_f32(dout, h)
-        dattn = dattn + dot_f32(dout, vt)
-        dkw = dkw + dot_f32(vt, ds, trans_a=True)
-        dkcd = dkcd - dot_f32(dvp_ref[:, rows], h)
-        ddecay = ddecay + jnp.sum(h * ds, axis=0)
-    dqi_ref[...] = dqi.astype(dqi_ref.dtype)
-    dattn_ref[...] = dattn.astype(dattn_ref.dtype)
-    dkw_ref[...] = dkw.astype(dkw_ref.dtype)
-    dkcd_ref[...] = dkcd.astype(dkcd_ref.dtype)
-    ddecay_ref[...] = ddecay
 
 
 def _state_fwd_lean_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_ref, out_ref, st_ref):
@@ -187,7 +108,7 @@ def _state_bwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, decay_ref, dout_ref, ds
     def body(j, ds):
         # ds is the cotangent of S_i (the state leaving chunk i).
         i = n - 1 - j
-        ds_ref[i] = ds
+        ds_ref[i] = ds.astype(ds_ref.dtype)
         dout = dout_ref[pl.ds(pl.multiple_of(i * c, c), c), :].astype(f32)
         dvn = dot_f32(attn_ref[i].astype(f32), dout, trans_a=True) + dot_f32(kw_ref[i].astype(f32), ds)
         dvp_ref[i] = dvn
@@ -198,56 +119,62 @@ def _state_bwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, decay_ref, dout_ref, ds
 
 
 def _state_grads_kernel(
-    h_ref, ds_ref, vnew_ref, dvp_ref, dout_ref, dqi_ref, dattn_ref, dkw_ref, dkcd_ref, ddecay_ref, *, block_v: int
+    h_ref, ds_ref, vnew_ref, dvp_ref, dout_ref, dqi_ref, dattn_ref, dkw_ref, dkcd_ref, ddecay_ref, *, block_v, chunks
 ):
-    """One chunk's d_v-contracting cotangents from its entering state ``h``, the cotangent ``ds``
-    of the state it leaves, ``v_new``, ``dV_pseudo`` and the output cotangent, walking d_v in
-    column blocks: dQi = dout h^T, dattn = dout v_new^T, dKw = v_new dS^T, dKcd = -dVp h^T and
-    ddecay = rowsum(h * dS) (the einsums of the XLA path, with each tensor read once)."""
-    dk, dv = h_ref.shape
-    c = vnew_ref.shape[0]
-    dqi = jnp.zeros((c, dk), f32)
-    dattn = jnp.zeros((c, c), f32)
-    dkw = jnp.zeros((c, dk), f32)
-    dkcd = jnp.zeros((c, dk), f32)
-    ddecay = jnp.zeros((dk,), f32)
-    for j in range(dv // block_v):
-        cols = pl.ds(j * block_v, block_v)
-        h = h_ref[:, cols].astype(f32)
-        ds = ds_ref[:, cols]
-        vnew = vnew_ref[:, cols]
-        dout = dout_ref[:, cols].astype(f32)
-        dqi = dqi + dot_f32(dout, h, trans_b=True)
-        dattn = dattn + dot_f32(dout, vnew, trans_b=True)
-        dkw = dkw + dot_f32(vnew, ds, trans_b=True)
-        dkcd = dkcd - dot_f32(dvp_ref[:, cols], h, trans_b=True)
-        ddecay = ddecay + jnp.sum(h * ds, axis=1)
-    dqi_ref[...] = dqi.astype(dqi_ref.dtype)
-    dattn_ref[...] = dattn.astype(dattn_ref.dtype)
-    dkw_ref[...] = dkw.astype(dkw_ref.dtype)
-    dkcd_ref[...] = dkcd.astype(dkcd_ref.dtype)
-    ddecay_ref[...] = ddecay
+    """The d_v-contracting cotangents of ``chunks`` consecutive chunks, each from its entering state ``h``,
+    the cotangent ``ds`` of the state it leaves, ``v_new``, ``dV_pseudo`` and the output cotangent, walking
+    d_v in column blocks: dQi = dout h^T, dattn = dout v_new^T, dKw = v_new dS^T, dKcd = -dVp h^T and
+    ddecay = rowsum(h * dS) (the einsums of the XLA path, with each tensor read once). Several chunks per
+    program run as a loop the compiler software-pipelines (the next chunk's loads under this one's GEMMs)."""
+    dk, dv = h_ref.shape[-2:]
+    c = vnew_ref.shape[-2]
+
+    def chunk(i):
+        rows = pl.ds(pl.multiple_of(i * c, c), c)
+        dqi = jnp.zeros((c, dk), f32)
+        dattn = jnp.zeros((c, c), f32)
+        dkw = jnp.zeros((c, dk), f32)
+        dkcd = jnp.zeros((c, dk), f32)
+        ddecay = jnp.zeros((dk,), f32)
+        for j in range(dv // block_v):
+            cols = pl.ds(j * block_v, block_v)
+            h = h_ref[i, :, cols].astype(f32)
+            ds = ds_ref[i, :, cols].astype(f32)
+            vnew = vnew_ref[i, :, cols].astype(f32)
+            dout = dout_ref[rows, cols].astype(f32)
+            dqi = dqi + dot_f32(dout, h, trans_b=True)
+            dattn = dattn + dot_f32(dout, vnew, trans_b=True)
+            dkw = dkw + dot_f32(vnew, ds, trans_b=True)
+            dkcd = dkcd - dot_f32(dvp_ref[i, :, cols], h, trans_b=True)
+            ddecay = ddecay + jnp.sum(h * ds, axis=1)
+        dqi_ref[i] = dqi.astype(dqi_ref.dtype)
+        dattn_ref[i] = dattn.astype(dattn_ref.dtype)
+        dkw_ref[i] = dkw.astype(dkw_ref.dtype)
+        dkcd_ref[i] = dkcd.astype(dkcd_ref.dtype)
+        ddecay_ref[i] = ddecay
+
+    if chunks == 1:
+        chunk(0)
+    else:
+        lax.fori_loop(0, chunks, lambda i, carry: (chunk(i), carry)[1], 0)
 
 
 def _state_grads_call(qi, attn, kw, kcd, h, vnew, dout, ds, dvp, cfg: StateConfig):
-    """The per-chunk d_v-contracting cotangents; h / v_new / dS are transposed under ``StateLayout.DV_ROWS``."""
     gb, n, c, dk = kw.shape
     dv = dvp.shape[-1]
     heads = cfg.num_heads
-    transposed = cfg.layout == StateLayout.DV_ROWS
+    cpb = cfg.grads_chunks
+    if n % cpb:
+        raise ValueError(f"{n} chunks do not split into programs of grads_chunks={cpb}")
 
     def chunk(*dims):
-        return pl.BlockSpec((None, None, *dims), lambda gi, ni: (gi, ni) + (0,) * len(dims))
+        return pl.BlockSpec((None, cpb, *dims), lambda gi, ni: (gi, ni) + (0,) * len(dims))
 
-    dout_spec = pl.BlockSpec((None, c, None, dv), lambda gi, ni: (gi // heads, ni, gi % heads, 0))
-    if transposed:
-        kernel, saved_specs = _state_grads_t_kernel, [chunk(dv, dk), chunk(dv, dk), chunk(dv, c)]
-    else:
-        kernel, saved_specs = _state_grads_kernel, [chunk(dk, dv), chunk(dk, dv), chunk(c, dv)]
+    dout_spec = pl.BlockSpec((None, cpb * c, None, dv), lambda gi, ni: (gi // heads, ni, gi % heads, 0))
     return pl.pallas_call(
-        functools.partial(kernel, block_v=min(cfg.grads_block_v, dv)),
-        grid=(gb, n),
-        in_specs=[*saved_specs, chunk(c, dv), dout_spec],
+        functools.partial(_state_grads_kernel, block_v=min(cfg.grads_block_v, dv), chunks=cpb),
+        grid=(gb, n // cpb),
+        in_specs=[chunk(dk, dv), chunk(dk, dv), chunk(c, dv), chunk(c, dv), dout_spec],
         out_specs=[chunk(c, dk), chunk(c, c), chunk(c, dk), chunk(c, dk), chunk(dk)],
         out_shape=[
             jax.ShapeDtypeStruct(qi.shape, qi.dtype),
@@ -256,7 +183,7 @@ def _state_grads_call(qi, attn, kw, kcd, h, vnew, dout, ds, dvp, cfg: StateConfi
             jax.ShapeDtypeStruct(kcd.shape, kcd.dtype),
             jax.ShapeDtypeStruct((gb, n, dk), f32),
         ],
-        compiler_params=plt.CompilerParams(num_warps=cfg.grads_num_warps, num_stages=1),
+        compiler_params=plt.CompilerParams(num_warps=cfg.grads_num_warps, num_stages=cfg.grads_num_stages),
         interpret=cfg.interpret,
         name="kda_state_bwd_grads",
     )(h, ds, vnew, dvp, dout)
@@ -281,29 +208,14 @@ def _state_slab(dk, bv):
     return pl.BlockSpec((None, dk, bv), lambda gi, vi: (gi, 0, vi))
 
 
-def _tslab(n, bv, d):
-    """Program (g, v)'s (block_v, d) rows of a transposed per-chunk ``(G, n, d_v, d)`` tensor."""
-    return pl.BlockSpec((None, n, bv, d), lambda gi, vi: (gi, 0, vi, 0))
-
-
 def _state_fwd_call(qi, attn, kw, kcd, vp, decay, s0, out_dtype, cfg: StateConfig):
     """Forward state pass that also stores the per-chunk h (entering state) and v_new for the backward."""
     gb, n, c, dk = kw.shape
     dv = vp.shape[-1]
     bv = min(cfg.block_v, dv)
     heads = cfg.num_heads
-    out_spec, out_sds = _seq_slab(n * c, heads, bv), jax.ShapeDtypeStruct((gb // heads, n * c, heads, dv), out_dtype)
-    st_sds = jax.ShapeDtypeStruct((gb, dk, dv), f32)
-    if cfg.layout == StateLayout.DV_ROWS:
-        kernel = functools.partial(_state_fwd_t_kernel, save=True)
-        saved_specs = [_tslab(n, bv, dk), _tslab(n, bv, c)]
-        saved_sds = [jax.ShapeDtypeStruct((gb, n, dv, dk), kw.dtype), jax.ShapeDtypeStruct((gb, n, dv, c), f32)]
-    else:
-        kernel = _state_fwd_kernel
-        saved_specs = [_vslab(n, dk, bv), _vslab(n, c, bv)]
-        saved_sds = [jax.ShapeDtypeStruct((gb, n, dk, dv), kw.dtype), jax.ShapeDtypeStruct((gb, n, c, dv), f32)]
     return pl.pallas_call(
-        kernel,
+        _state_fwd_kernel,
         grid=(gb, dv // bv),
         in_specs=[
             _full(n, c, dk),
@@ -314,8 +226,13 @@ def _state_fwd_call(qi, attn, kw, kcd, vp, decay, s0, out_dtype, cfg: StateConfi
             _full(n, dk),
             _state_slab(dk, bv),
         ],
-        out_specs=[out_spec, *saved_specs, _state_slab(dk, bv)],
-        out_shape=[out_sds, *saved_sds, st_sds],
+        out_specs=[_seq_slab(n * c, heads, bv), _vslab(n, dk, bv), _vslab(n, c, bv), _state_slab(dk, bv)],
+        out_shape=[
+            jax.ShapeDtypeStruct((gb // heads, n * c, heads, dv), out_dtype),
+            jax.ShapeDtypeStruct((gb, n, dk, dv), kw.dtype),
+            jax.ShapeDtypeStruct((gb, n, c, dv), jnp.dtype(cfg.saved_dtype)),
+            jax.ShapeDtypeStruct((gb, dk, dv), f32),
+        ],
         compiler_params=plt.CompilerParams(num_warps=cfg.num_warps, num_stages=cfg.num_stages),
         interpret=cfg.interpret,
         name="kda_state_fwd",
@@ -328,12 +245,8 @@ def _state_fwd_lean_call(qi, attn, kw, kcd, vp, decay, s0, out_dtype, cfg: State
     dv = vp.shape[-1]
     bv = min(cfg.primal_block_v, dv)
     heads = cfg.num_heads
-    if cfg.layout == StateLayout.DV_ROWS:
-        kernel = functools.partial(_state_fwd_t_kernel, save=False)
-    else:
-        kernel = _state_fwd_lean_kernel
     return pl.pallas_call(
-        kernel,
+        _state_fwd_lean_kernel,
         grid=(gb, dv // bv),
         in_specs=[
             _full(n, c, dk),
@@ -360,9 +273,8 @@ def _state_bwd_call(qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg: StateConf
     dv = dout.shape[-1]
     bv = min(cfg.block_v, dv)
     heads = cfg.num_heads
-    transposed = cfg.layout == StateLayout.DV_ROWS
     ds, dvp, ds0 = pl.pallas_call(
-        _state_bwd_t_kernel if transposed else _state_bwd_kernel,
+        _state_bwd_kernel,
         grid=(gb, dv // bv),
         in_specs=[
             _full(n, c, dk),
@@ -373,9 +285,9 @@ def _state_bwd_call(qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg: StateConf
             _seq_slab(n * c, heads, bv),
             _state_slab(dk, bv),
         ],
-        out_specs=[_tslab(n, bv, dk) if transposed else _vslab(n, dk, bv), _vslab(n, c, bv), _state_slab(dk, bv)],
+        out_specs=[_vslab(n, dk, bv), _vslab(n, c, bv), _state_slab(dk, bv)],
         out_shape=[
-            jax.ShapeDtypeStruct((gb, n, dv, dk) if transposed else (gb, n, dk, dv), f32),
+            jax.ShapeDtypeStruct((gb, n, dk, dv), jnp.dtype(cfg.saved_dtype)),
             jax.ShapeDtypeStruct((gb, n, c, dv), f32),
             jax.ShapeDtypeStruct((gb, dk, dv), f32),
         ],
@@ -389,8 +301,6 @@ def _state_bwd_call(qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg: StateConf
     if cfg.grads == StateGrads.PALLAS:
         dqi, dattn, dkw, dkcd, ddecay = _state_grads_call(qi, attn, kw, kcd, h, vnew, dout, ds, dvp, cfg)
         return dqi, dattn, dkw, dkcd, dvp, ddecay, ds0
-    if transposed:
-        raise ValueError("StateLayout.DV_ROWS needs StateGrads.PALLAS")
     b = gb // heads
     dout_g = dout.reshape(b, n, c, heads, dv)
     h_g = h.reshape(b, heads, n, dk, dv)
@@ -399,9 +309,9 @@ def _state_bwd_call(qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg: StateConf
     dattn = jnp.einsum("bnrhv,bhnjv->bhnrj", dout_g, vnew_g, preferred_element_type=f32)
     dqi = dqi.reshape(gb, n, c, dk).astype(qi.dtype)
     dattn = dattn.reshape(gb, n, c, c).astype(attn.dtype)
-    dkw = jnp.einsum("gncv,gndv->gncd", vnew, ds).astype(kw.dtype)
+    dkw = jnp.einsum("gncv,gndv->gncd", vnew, ds, preferred_element_type=f32).astype(kw.dtype)
     dkcd = -jnp.einsum("gncv,gndv->gncd", dvp, h, preferred_element_type=f32).astype(kcd.dtype)
-    ddecay = jnp.sum(h.astype(f32) * ds, axis=-1)
+    ddecay = jnp.sum(h.astype(f32) * ds.astype(f32), axis=-1)
     return dqi, dattn, dkw, dkcd, dvp, ddecay, ds0
 
 
@@ -456,9 +366,11 @@ def chunk_state_pass(
     grads: StateGrads = StateGrads.XLA,
     primal_block_v: int = 0,
     primal_num_warps: int = 4,
-    layout: StateLayout = StateLayout.DK_ROWS,
     grads_block_v: int = _GRADS_BLOCK_V,
     grads_num_warps: int = _GRADS_NUM_WARPS,
+    grads_chunks: int = 1,
+    grads_num_stages: int = 1,
+    saved_dtype: jnp.dtype = f32,
 ) -> tuple[jax.Array, jax.Array]:
     """Sequential inter-chunk KDA state pass with the chunk outputs fused in (differentiable).
 
@@ -477,9 +389,10 @@ def chunk_state_pass(
         primal_block_v: d_v tile of the primal (non-differentiated) forward, which then runs a kernel that
             skips the per-chunk h / v_new stores only the backward reads; 0 keeps the saving kernel there.
         primal_num_warps: Triton warps of that lean primal kernel.
-        layout: on-chip orientation of the state in the sequential passes (``StateLayout``; ``DV_ROWS``
-            needs ``grads=StateGrads.PALLAS``).
-        grads_block_v, grads_num_warps: d_v block / warps of the ``StateGrads.PALLAS`` cotangent kernel.
+        grads_block_v, grads_num_warps, grads_chunks, grads_num_stages: d_v block, warps, chunks per program
+            and pipeline stages of the ``StateGrads.PALLAS`` cotangent kernel.
+        saved_dtype: storage dtype of the backward-only per-chunk ``v_new`` and ``dS`` (bfloat16 halves their
+            HBM traffic; the state itself and every on-chip product stay fp32).
 
     Returns:
         ``(out, final_state)``: ``out_n = q_inflate_n S_{n-1} + attn_n v_new_n`` in model
@@ -499,8 +412,10 @@ def chunk_state_pass(
         StateGrads(grads),
         primal_block_v,
         primal_num_warps,
-        StateLayout(layout),
         grads_block_v,
         grads_num_warps,
+        grads_chunks,
+        grads_num_stages,
+        jnp.dtype(saved_dtype).name,
     )
     return _state_pass(q_inflate, attn, kw, k_cumdecay, v_pseudo, decay, initial_state, jnp.dtype(out_dtype), cfg)
