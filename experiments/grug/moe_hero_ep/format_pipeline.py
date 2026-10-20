@@ -35,14 +35,22 @@ from experiments.grug.moe_hero_ep.format_eval import (
     PilotBudget,
     SmokeRecord,
     compare_candidates,
+    compare_native_candidates,
     plan_pilot,
     validate_smoke_checkpoint,
 )
+from experiments.grug.moe_hero_ep.format_handoff import CandidateHandoffRequest, assemble_candidate
 from experiments.grug.moe_hero_ep.format_sample import native_evaluation_model
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Record, digest
 from experiments.grug.moe_hero_ep.sft import BaseReference, SftConfig
-from experiments.grug.moe_hero_ep.sft_launch import HeroSftCheckpoint, HeroSftModel, sft_measurement_identity
+from experiments.grug.moe_hero_ep.sft_launch import (
+    HeroSftCheckpoint,
+    HeroSftModel,
+    PilotInspection,
+    read_pilot_inspection,
+    sft_measurement_identity,
+)
 from experiments.sft.launcher import (
     _TRAIN_RESOURCES,
     ArtifactDatasetSpec,
@@ -79,6 +87,12 @@ class FormatSftRecipe:
     resume_sft_config: SftConfig | None = None
 
 
+class PilotContinuation(Record):
+    inspection_path: str
+    inspection_digest: str
+    candidate_handoff: CandidateHandoffRequest
+
+
 class LaunchEvidence(Record):
     baseline: CandidateEvaluation
     parent: CandidateEvaluation
@@ -88,6 +102,83 @@ class LaunchEvidence(Record):
     # A bounded learning smoke precedes the measured pilot budget.
     smoke: SmokeRecord | None = None
     pilot_budget: PilotBudget | None = None
+    continuation: PilotContinuation | None = None
+
+
+def validate_pilot_continuation(recipe: FormatSftRecipe, evidence: LaunchEvidence) -> PilotInspection:
+    """Recompute native gates on the exact previous segment before any more updates."""
+    assert evidence.pilot_budget is not None and evidence.continuation is not None
+    continuation = evidence.continuation
+    previous = read_pilot_inspection(continuation.inspection_path, continuation.inspection_digest)
+    budget = evidence.pilot_budget
+    identity = sft_measurement_identity(
+        reference=recipe.reference,
+        model=recipe.model,
+        sft=recipe.sft,
+        data_manifest_digest=recipe.data_manifest_digest,
+        acquisition_panel_digest=recipe.acquisition_panel_digest,
+        batch_size=recipe.batch_size,
+        expert_axis_size=recipe.expert_axis_size,
+        context_axis_size=recipe.context_axis_size,
+        replica_axis_size=recipe.replica_axis_size,
+        resources=recipe.resources,
+    )
+    if (
+        previous.status != "awaiting_evaluation"
+        or previous.handoff.step >= recipe.sft.num_steps
+        or previous.handoff.processed_tokens >= recipe.max_processed_tokens
+        or previous.sft != recipe.sft
+        or recipe.resume_sft_config != recipe.sft
+        or previous.handoff.base != recipe.reference
+        or recipe.resume_checkpoint != previous.handoff.compact_checkpoint
+        or previous.measurement_identity_digest != identity
+        or previous.max_processed_tokens != recipe.max_processed_tokens
+        or previous.inspection.early_update != budget.early_inspection_update
+        or previous.inspection.non_padding_tokens != budget.inspection_non_padding_tokens
+        or previous.inspection.policy_digest != digest(evidence.policy.model_dump(mode="json"))
+        or previous.inspection.budget_digest != digest(budget.model_dump(mode="json"))
+    ):
+        raise ValueError("Pilot continuation changed its exact state, data, schedule or original inspection budget")
+    request = continuation.candidate_handoff
+    if (
+        request.candidate != Candidate.D
+        or request.parent != Candidate.C
+        or request.checkpoint.uri != previous.handoff.native_checkpoint
+        or request.checkpoint.metadata_digest != previous.handoff.native_metadata_digest
+        or request.checkpoint.step != previous.handoff.step
+        or request.tokenizer != recipe.reference.tokenizer
+        or request.tokenizer_revision != recipe.reference.tokenizer_revision
+        or request.format_panel_id != budget.format_panel_id
+    ):
+        raise ValueError("Pilot continuation evaluation does not pin the exact paused export and panels")
+    candidate, _ = assemble_candidate(request)
+    native = []
+    for parent in (evidence.prepared, evidence.baseline):
+        regression = compare_native_candidates(
+            evidence.baseline, parent, candidate, evidence.policy, require_format=False
+        )
+        if regression["decision"] != "accept":
+            raise ValueError(f"Pilot continuation requires diagnosis of native regression evidence: {regression}")
+        native.append(
+            compare_native_candidates(evidence.baseline, parent, candidate, evidence.policy, require_format=True)
+        )
+    if all(result["decision"] == "accept" for result in native):
+        raise ValueError("Native formatting and content gates already pass; stop training even while serving is pending")
+    if any(
+        result["uncertain"] or any(not name.startswith("format_") for name in result["violations"]) for result in native
+    ):
+        raise ValueError("Only measured formatting failures can authorize another bounded pilot segment")
+    return PilotInspection(
+        early_update=budget.early_inspection_update,
+        non_padding_tokens=budget.inspection_non_padding_tokens,
+        policy_digest=previous.inspection.policy_digest,
+        budget_digest=previous.inspection.budget_digest,
+        reviewed_step=previous.handoff.step,
+        reviewed_tokens=previous.handoff.processed_tokens,
+        reviewed_inspection_digest=continuation.inspection_digest,
+        reviewed_inspection_path=continuation.inspection_path,
+        reviewed_evaluation_id=candidate.evaluation_id,
+    )
 
 
 def validate_prepared_ancestry(recipe: FormatSftRecipe, evidence: LaunchEvidence) -> None:
@@ -181,7 +272,11 @@ def validate_launch_evidence(recipe: FormatSftRecipe, evidence: LaunchEvidence) 
     if (evidence.smoke is None) != (evidence.pilot_budget is None):
         raise ValueError("Pilot evidence needs both measured smoke and budget; omit both for the initial smoke")
     if evidence.smoke is None:
-        if recipe.resume_checkpoint is not None or recipe.resume_sft_config is not None:
+        if (
+            recipe.resume_checkpoint is not None
+            or recipe.resume_sft_config is not None
+            or evidence.continuation is not None
+        ):
             raise ValueError("The initial learning smoke must start with fresh optimizer state")
         return {"stage": "learning_smoke", "candidate_gate": decision}
     assert evidence.pilot_budget is not None
@@ -218,17 +313,35 @@ def validate_launch_evidence(recipe: FormatSftRecipe, evidence: LaunchEvidence) 
         or recipe.sft.vocab_learning_rate != expected.vocab_peak_lr
     ):
         raise ValueError("Pilot launch does not match its measured token/update/LR budget")
-    if expected.reuse_smoke_optimizer != (recipe.resume_checkpoint is not None):
-        raise ValueError("Pilot optimizer lineage disagrees with its measured budget")
-    if expected.reuse_smoke_optimizer and recipe.resume_checkpoint != evidence.smoke.terminal_checkpoint:
-        raise ValueError("Pilot must reuse the measured smoke's exact terminal compact checkpoint")
-    if recipe.resume_sft_config != (evidence.smoke.sft_config if expected.reuse_smoke_optimizer else None):
-        raise ValueError("Pilot must pin its reused smoke's original SFT schedule explicitly")
-    return {"stage": "pilot", "candidate_gate": decision, "pilot_budget": budget}
+    if evidence.continuation is not None:
+        inspection = validate_pilot_continuation(recipe, evidence)
+    else:
+        if expected.reuse_smoke_optimizer != (recipe.resume_checkpoint is not None):
+            raise ValueError("Pilot optimizer lineage disagrees with its measured budget")
+        if expected.reuse_smoke_optimizer and recipe.resume_checkpoint != evidence.smoke.terminal_checkpoint:
+            raise ValueError("Pilot must reuse the measured smoke's exact terminal compact checkpoint")
+        if recipe.resume_sft_config != (evidence.smoke.sft_config if expected.reuse_smoke_optimizer else None):
+            raise ValueError("Pilot must pin its reused smoke's original SFT schedule explicitly")
+        inspection = PilotInspection(
+            expected.early_inspection_update,
+            expected.inspection_non_padding_tokens,
+            digest(evidence.policy.model_dump(mode="json")),
+            digest(expected.model_dump(mode="json")),
+        )
+    return {
+        "stage": "pilot",
+        "candidate_gate": decision,
+        "pilot_budget": budget,
+        "pilot_inspection": dataclasses.asdict(inspection),
+    }
 
 
 def build_format_sft(
-    recipe: FormatSftRecipe, manifest: dict, acquisition: AcquisitionPanel
+    recipe: FormatSftRecipe,
+    manifest: dict,
+    acquisition: AcquisitionPanel,
+    *,
+    pilot_inspection: PilotInspection | None = None,
 ) -> ArtifactStep[HeroSftCheckpoint]:
     """Build the current-Hero backend with weighted, individually pinned chat sources."""
     contents = {key: value for key, value in manifest.items() if key != "manifest_digest"}
@@ -284,6 +397,7 @@ def build_format_sft(
         acquisition_panel_digest=recipe.acquisition_panel_digest,
         resume_checkpoint=recipe.resume_checkpoint,
         resume_sft_config=recipe.resume_sft_config,
+        pilot_inspection=pilot_inspection,
     )
     spec = SFTSpec(
         name=recipe.name,
@@ -356,7 +470,8 @@ def main() -> None:
     acquisition_fs, acquisition_path = filesystem_for(recipe.acquisition_panel_path)
     with acquisition_fs.open(acquisition_path) as stream:
         acquisition = AcquisitionPanel.model_validate_json(stream.read())
-    step = build_format_sft(recipe, manifest, acquisition)
+    inspection = draccus.decode(PilotInspection, gates["pilot_inspection"]) if "pilot_inspection" in gates else None
+    step = build_format_sft(recipe, manifest, acquisition, pilot_inspection=inspection)
     verify_training_data(recipe, manifest)
     launch = materialized_config(step, args.output_prefix)
     with args.launch_config.open("x") as stream:

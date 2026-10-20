@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import textwrap
 
 import jax
@@ -11,6 +12,25 @@ import pytest
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
 from experiments.grug.moe_hero_ep.sft import _local_cross_entropy
+from experiments.grug.moe_hero_ep.sft_launch import PilotInspection, PilotStop, sft_stop_reason
+
+
+def test_pilot_pauses_on_actual_boundaries_and_prioritizes_strict_total_caps():
+    inspection = PilotInspection(3, 40, "policy", "budget")
+
+    def stop(step, tokens, next_tokens=0, inspection=inspection, cap=80):
+        return sft_stop_reason(step, tokens, next_tokens, num_steps=10, max_processed_tokens=cap, inspection=inspection)
+
+    # Reused smoke already beyond the early boundary must export before learning.
+    assert stop(4, 32) == PilotStop.EARLY_UPDATE
+    reviewed = dataclasses.replace(inspection, reviewed_step=4, reviewed_tokens=32)
+    assert stop(4, 32, inspection=reviewed) is None
+    assert stop(5, 64, inspection=reviewed) == PilotStop.TOKEN_INSPECTION
+    # One complete update can cross an inspection threshold, but never the cap.
+    assert stop(4, 32, 32, inspection=reviewed) is None
+    assert stop(5, 64, 32, inspection=reviewed) == PilotStop.TOKEN_CAP
+    assert stop(5, 40, cap=40, inspection=reviewed) == PilotStop.TOKEN_CAP
+    assert stop(10, 40, inspection=reviewed) == PilotStop.UPDATE_CAP
 
 
 def test_chunked_vocab_delta_loss_and_activation_gradients_match_dense_reference():
@@ -61,7 +81,10 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
         from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
         from experiments.grug.moe_hero_ep.weights import restore_weights
         from experiments.grug.moe_hero_ep.format_eval import AcquisitionCase, AcquisitionPanel, AcquisitionDiagnostic
-        from experiments.grug.moe_hero_ep.sft_launch import HeroSftCheckpoint, write_sft_handoff
+        from experiments.grug.moe_hero_ep.sft_launch import (
+            HeroSftCheckpoint, write_sft_handoff, HeroSftInspection, PilotInspection, PilotStop,
+            pilot_inspection_due, read_pilot_inspection, save_pilot_inspection,
+        )
         from experiments.grug.moe_hero_ep.sft import (
             SftConfig, BaseReference, initialize_sft, sft_logits, sft_loss,
             make_sft_step, save_sft_checkpoint, restore_sft_checkpoint, merge_sft,
@@ -258,6 +281,41 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
                     expected_merged = merge_sft(restored_base, learned.params, donor_sft)
                     np.testing.assert_array_equal(ordinary.output_proj, expected_merged.output_proj)
                     assert handoff.metadata_digest == digest(export_metadata)
+                    # A mandatory early pause exports the exact state. Continuing with
+                    # the whole-pilot schedule preserves Adam and the next data update.
+                    boundary = PilotInspection(early_update=1, non_padding_tokens=donor_ids.size + 8,
+                                               policy_digest="pinned-policy", budget_digest="pinned-budget")
+                    assert pilot_inspection_due(int(reset.step), int(reset.processed_tokens), boundary) is None
+                    assert (
+                        pilot_inspection_due(int(learned.step), int(learned.processed_tokens), boundary)
+                        == PilotStop.EARLY_UPDATE
+                    )
+                    inspection = HeroSftInspection(
+                        handoff=handoff.handoff, compact_metadata_digest=digest(compact_metadata),
+                        sft=donor_sft, measurement_identity_digest="pinned-model-data-batch",
+                        inspection=boundary, max_processed_tokens=donor_ids.size * 4,
+                        stop_reason=PilotStop.EARLY_UPDATE,
+                    )
+                    save_pilot_inspection(CHECKPOINT_ROOT, inspection)
+                    inspection_json = json.loads((Path(CHECKPOINT_ROOT) / "inspection.json").read_text())
+                    checked = read_pilot_inspection(CHECKPOINT_ROOT + "/inspection.json", digest(inspection_json))
+                    assert checked.status == "awaiting_evaluation" and checked.sft == donor_sft
+                    continued = restore_sft_checkpoint(compact_path, reset, actual_reference, donor_sft, mesh)
+                    next_boundary = dataclasses.replace(boundary, reviewed_step=int(continued.step),
+                                                        reviewed_tokens=int(continued.processed_tokens))
+                    assert (pilot_inspection_due(
+                        int(continued.step), int(continued.processed_tokens), next_boundary
+                    ) is None)
+                    resumed, _ = make_sft_step(donor_sft)(continued, restored_base, donor_ids, donor_weights,
+                                                         jnp.ones_like(donor_ids, dtype=bool))
+                    uninterrupted, _ = make_sft_step(donor_sft)(learned, restored_base, donor_ids, donor_weights,
+                                                               jnp.ones_like(donor_ids, dtype=bool))
+                    for actual, expected in zip(jax.tree.leaves(resumed), jax.tree.leaves(uninterrupted), strict=True):
+                        np.testing.assert_array_equal(actual, expected)
+                    assert (
+                        pilot_inspection_due(int(resumed.step), int(resumed.processed_tokens), next_boundary)
+                        == PilotStop.TOKEN_INSPECTION
+                    )
                     try:
                         initialize_from_checkpoint(actual_reference,
                             dataclasses.replace(donor_config, qk_mult=2.), mesh, donor_sft)

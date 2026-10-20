@@ -323,12 +323,46 @@ Review learning and compilation evidence before selecting a pilot budget. Pin
 in the next launch's `LaunchEvidence.smoke` and `LaunchEvidence.pilot_budget`.
 The launcher requires both together, recomputes the budget, and checks the
 recipe's token cap, update count, warmup, learning rates and optimizer lineage.
+Set `PilotBudget.format_panel_id` to the pinned D acceptance panel, including at
+least 500 simple-chat cases. It can differ from the smaller initial C diagnostic.
 It also requires the same model, adapter coverage/rank, data and acquisition
 panels, global batch, mesh and resources as the measured smoke. When reusing
 optimizer state, set `resume_checkpoint` to the measured terminal compact
 checkpoint and `resume_sft_config` to its original exact `SftConfig`. Only the
 four reviewed schedule fields (duration, warmup and the two learning rates) may
 change; retained updates and token counts remain in the pilot budget.
+
+Pilot training ends the current segment at the first unevaluated early-update
+or actual non-padding-token inspection boundary. An inspection can overshoot
+its token target by one complete update; the overall token cap remains strict.
+A reused smoke that already reached a boundary pauses before further updates.
+The segment saves compact state, exports ordinary weights and writes immutable
+`inspection.json`. Its status distinguishes `awaiting_evaluation` from
+`budget_exhausted`; a paused export does not establish acceptance.
+
+Evaluate that exact ordinary export with the pinned native suite and assemble
+its candidate handoff. To continue, set `LaunchEvidence.continuation` using the
+[PilotContinuation](https://github.com/marin-community/marin/blob/main/experiments/grug/moe_hero_ep/format_pipeline.py)
+schema: the prior `inspection_path`, the canonical digest of its entire parsed
+JSON as `inspection_digest`, and the exact `CandidateHandoffRequest` as
+`candidate_handoff`. Use the inspection's compact checkpoint for
+`resume_checkpoint` and keep `resume_sft_config` equal to the entire pilot's
+unchanged `SftConfig`. Compute the inspection digest with
+[the shared digest helper](https://github.com/marin-community/marin/blob/main/experiments/grug/moe_hero_ep/ops/vibe_check/completions.py):
+SHA256 of UTF-8 `json.dumps(record, sort_keys=True, separators=(",", ":"))`.
+For each segment, choose a fresh `recipe.name` and unused `--output-prefix`, and
+set runtime `MARIN_PREFIX` to that prefix. Compact state, ordinary export and
+`inspection.json` are written beneath that segment's training artifact path.
+
+Continuation recomputes the actual held-out candidate measurements and requires
+passing loss, content and routing gates against both C and A. Only measured
+formatting failures permit further training. Once native formatting and content
+gates pass, training stops even if serving parity remains pending. Missing
+measurements, regression, exhausted budgets or changed state/data/policy/budget
+identities reject continuation. The whole-pilot LR schedule, Adam moments,
+cumulative counters and data cursor persist across segments. Every further
+training launch still requires authorization.
+
 Keep a full-SFT throughput control optional and report a speedup only when
 weights, hardware and batch configurations match.
 

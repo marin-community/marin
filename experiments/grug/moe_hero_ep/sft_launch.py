@@ -10,6 +10,8 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
+from functools import partial
 
 import draccus
 import jax
@@ -28,6 +30,7 @@ from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, Field
+from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -43,6 +46,7 @@ from experiments.grug.moe_hero_ep.sft import (
     make_sft_optimizer_step,
     restore_sft_checkpoint,
     save_sft_checkpoint,
+    sft_manifest,
 )
 from experiments.grug.moe_hero_ep.train import (
     _apply_hero_ep_runtime_defaults,
@@ -55,6 +59,54 @@ from experiments.sft.launcher import SFTSpec, _trainer
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class PilotInspection:
+    """Original pilot boundaries and the last evaluated segment's actual counters."""
+
+    early_update: int
+    non_padding_tokens: int
+    policy_digest: str
+    budget_digest: str
+    reviewed_step: int = 0
+    reviewed_tokens: int = 0
+    reviewed_inspection_digest: str | None = None
+    reviewed_inspection_path: str | None = None
+    reviewed_evaluation_id: str | None = None
+
+
+class PilotStop(StrEnum):
+    EARLY_UPDATE = "early_update"
+    TOKEN_INSPECTION = "token_inspection"
+    UPDATE_CAP = "update_cap"
+    TOKEN_CAP = "token_cap"
+
+
+def pilot_inspection_due(step: int, processed_tokens: int, inspection: PilotInspection) -> PilotStop | None:
+    """Pause before another update once an unevaluated original boundary is reached."""
+    if inspection.reviewed_step < inspection.early_update <= step:
+        return PilotStop.EARLY_UPDATE
+    if inspection.reviewed_tokens < inspection.non_padding_tokens <= processed_tokens:
+        return PilotStop.TOKEN_INSPECTION
+    return None
+
+
+def sft_stop_reason(
+    step: int,
+    processed_tokens: int,
+    next_batch_tokens: int,
+    *,
+    num_steps: int,
+    max_processed_tokens: int,
+    inspection: PilotInspection | None,
+) -> PilotStop | None:
+    """Apply strict total caps before allowing an unevaluated inspection or update."""
+    if step >= num_steps:
+        return PilotStop.UPDATE_CAP
+    if processed_tokens >= max_processed_tokens or processed_tokens + next_batch_tokens > max_processed_tokens:
+        return PilotStop.TOKEN_CAP
+    return pilot_inspection_due(step, processed_tokens, inspection) if inspection is not None else None
+
+
 class HeroSftHandoff(BaseModel):
     native_checkpoint: str
     native_metadata_digest: str
@@ -63,6 +115,75 @@ class HeroSftHandoff(BaseModel):
     processed_tokens: int = Field(ge=1)
     supervised_tokens: int = Field(ge=1)
     base: BaseReference
+
+
+class HeroSftInspection(BaseModel):
+    handoff: HeroSftHandoff
+    compact_metadata_digest: str
+    sft: SftConfig
+    measurement_identity_digest: str
+    inspection: PilotInspection
+    max_processed_tokens: int
+    stop_reason: PilotStop
+
+    @property
+    def status(self) -> str:
+        return (
+            "awaiting_evaluation"
+            if self.stop_reason in (PilotStop.EARLY_UPDATE, PilotStop.TOKEN_INSPECTION)
+            else "budget_exhausted"
+        )
+
+
+def read_pilot_inspection(path: str, expected_digest: str) -> HeroSftInspection:
+    """Recheck an immutable inspection handoff against both permanent checkpoints."""
+    raw = json.loads(StoragePath(path).read_text())
+    if digest(raw) != expected_digest:
+        raise ValueError("Pilot inspection handoff differs from its pin")
+    record = HeroSftInspection.model_validate(raw)
+    handoff = record.handoff
+    compact = json.loads((StoragePath(handoff.compact_checkpoint) / "metadata.json").read_text())
+    native = json.loads((StoragePath(handoff.native_checkpoint) / "metadata.json").read_text())
+    manifest = sft_manifest(handoff.base, record.sft)
+    counters = {
+        "sft_step": handoff.step,
+        "processed_tokens": handoff.processed_tokens,
+        "supervised_tokens": handoff.supervised_tokens,
+    }
+    if (
+        digest(compact) != record.compact_metadata_digest
+        or digest(native) != handoff.native_metadata_digest
+        or any(
+            metadata.get("is_temporary") is not False
+            or metadata.get("step") != handoff.step
+            or metadata.get("hero_sft") != json.loads(json.dumps(manifest))
+            for metadata in (compact, native)
+        )
+        or compact.get("hero_sft_counters") != counters
+        or native.get("merge_base") != "BF16-rounded candidate C"
+        or handoff.processed_tokens > record.max_processed_tokens
+        or handoff.step > record.sft.num_steps
+    ):
+        raise ValueError("Pilot inspection differs from its actual compact/export state or schedule")
+    if record.status == "awaiting_evaluation" and (
+        handoff.step >= record.sft.num_steps or handoff.processed_tokens >= record.max_processed_tokens
+    ):
+        raise ValueError("Pilot inspection exhausted its total update/token budget")
+    if (
+        record.status == "awaiting_evaluation"
+        and pilot_inspection_due(handoff.step, handoff.processed_tokens, record.inspection) != record.stop_reason
+    ):
+        raise ValueError("Pilot inspection did not reach its declared boundary")
+    return record
+
+
+def save_pilot_inspection(output_path: str, record: HeroSftInspection) -> None:
+    """Publish one immutable segment handoff; evaluation is a separate bounded job."""
+    payload = record.model_dump(mode="json")
+    payload["status"] = record.status
+    conditional_object(str(StoragePath(output_path) / "inspection.json")).write(
+        (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode(), expected_version=None
+    )
 
 
 class HeroSftCheckpoint(Artifact):
@@ -123,6 +244,7 @@ class HeroSftRunConfig:
     acquisition_panel_digest: str
     resume_checkpoint: str | None = None
     resume_sft_config: SftConfig | None = None
+    pilot_inspection: PilotInspection | None = None
 
 
 def sft_measurement_identity(
@@ -201,6 +323,19 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
             state = restore_sft_checkpoint(config.resume_checkpoint, state, config.reference, previous, mesh)
         elif config.resume_sft_config is not None:
             raise ValueError("A prior SFT configuration requires an explicit compact resume checkpoint")
+        if config.pilot_inspection is not None and config.pilot_inspection.reviewed_evaluation_id is not None:
+            inspection = config.pilot_inspection
+            if inspection.reviewed_inspection_path is None or inspection.reviewed_inspection_digest is None:
+                raise ValueError("Evaluated pilot continuation lacks its immutable inspection pin")
+            reviewed = read_pilot_inspection(inspection.reviewed_inspection_path, inspection.reviewed_inspection_digest)
+            if (
+                reviewed.handoff.compact_checkpoint != config.resume_checkpoint
+                or reviewed.sft != config.sft
+                or int(state.step) != inspection.reviewed_step
+                or int(state.processed_tokens) != inspection.reviewed_tokens
+                or int(state.supervised_tokens) != reviewed.handoff.supervised_tokens
+            ):
+                raise ValueError("Restored pilot state differs from its evaluated inspection and data cursor")
         gradient_step = make_sft_gradients(config.sft)
         optimizer_step = make_sft_optimizer_step(config.sft)
         compiled_gradient = None
@@ -223,8 +358,11 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
         )
         state_bytes = sum(x.nbytes for x in jax.tree.leaves((state.adapter_opt_state, state.vocab_opt_state)))
         trainable_bytes = sum(x.nbytes for x in jax.tree.leaves(state.params))
-        last_saved_step = int(state.step) if config.resume_checkpoint else None
-        last_saved_checkpoint = config.resume_checkpoint
+        # Every segment owns a compact checkpoint with its full current schedule,
+        # including a reused smoke that already reached the first inspection.
+        last_saved_step = None
+        last_saved_checkpoint = None
+        stop_reason = None
         telemetry_path = StoragePath(config.output_path) / "telemetry"
         if jax.process_index() == 0:
             telemetry_path.mkdirs()
@@ -236,16 +374,23 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
             key=jax.random.PRNGKey(config.sft.seed),
         )
         loader = build_train_loader(dataset, batch_schedule=schedule, mesh=mesh)
-        for batch in loader.iter_from_step(int(state.step)):
-            if int(state.step) >= config.sft.num_steps:
-                break
+        stop = partial(
+            sft_stop_reason,
+            num_steps=config.sft.num_steps,
+            max_processed_tokens=config.max_processed_tokens,
+            inspection=config.pilot_inspection,
+        )
+        stop_reason = stop(int(state.step), int(state.processed_tokens), 0)
+        batches = () if stop_reason is not None else loader.iter_from_step(int(state.step))
+        for batch in batches:
             if isinstance(batch, LmExample):
                 batch = grug_lm_example_from_named(batch)
             valid = token_validity_from_attention_mask(
                 batch.attn_mask, batch_size=batch.tokens.shape[0], sequence_length=batch.tokens.shape[1]
             )
             batch_tokens = int(jnp.sum(valid))
-            if int(state.processed_tokens) + batch_tokens > config.max_processed_tokens:
+            stop_reason = stop(int(state.step), int(state.processed_tokens), batch_tokens)
+            if stop_reason is not None:
                 break
             if compiled_gradient is None:
                 compile_start = time.perf_counter()
@@ -377,6 +522,11 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                     (telemetry_path / f"checkpoint-{int(state.step):06d}.json").write_text(
                         json.dumps(checkpoint_record, indent=2) + "\n"
                     )
+            stop_reason = stop(int(state.step), int(state.processed_tokens), 0)
+            if stop_reason is not None:
+                break
+        if stop_reason is None:
+            raise RuntimeError("Training data exhausted before a declared inspection or total budget boundary")
         if int(state.step) == 0:
             raise ValueError("Token cap permits no updates; choose a smaller batch or revise the budget before launch")
         if last_saved_step != int(state.step):
@@ -393,7 +543,20 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                 )
         native_path = f"{config.output_path}/export/step-{int(state.step)}"
         export_sft(native_path, frozen, state, config.reference, config.sft)
-        write_sft_handoff(config.output_path, native_path, last_saved_checkpoint, state, config.reference)
+        assert last_saved_checkpoint is not None
+        handoff = write_sft_handoff(config.output_path, native_path, last_saved_checkpoint, state, config.reference)
+        if config.pilot_inspection is not None and jax.process_index() == 0:
+            compact = json.loads((StoragePath(last_saved_checkpoint) / "metadata.json").read_text())
+            inspection = HeroSftInspection(
+                handoff=handoff,
+                compact_metadata_digest=digest(compact),
+                sft=config.sft,
+                measurement_identity_digest=measurement_identity,
+                inspection=config.pilot_inspection,
+                max_processed_tokens=config.max_processed_tokens,
+                stop_reason=stop_reason,
+            )
+            save_pilot_inspection(config.output_path, inspection)
     levanter.tracker.current_tracker().finish()
 
 
@@ -446,6 +609,7 @@ class HeroSftModel:
     acquisition_panel_digest: str
     resume_checkpoint: str | None = None
     resume_sft_config: SftConfig | None = None
+    pilot_inspection: PilotInspection | None = None
 
     def tokenizer_cache_key(self) -> str:
         return f"{self.reference.tokenizer}@{self.reference.tokenizer_revision}"
@@ -489,4 +653,5 @@ class HeroSftModel:
             self.acquisition_panel_digest,
             self.resume_checkpoint,
             self.resume_sft_config,
+            self.pilot_inspection,
         )

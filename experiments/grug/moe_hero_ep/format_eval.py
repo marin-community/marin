@@ -448,7 +448,7 @@ def paired_content_interval(parent: dict[str, bool], child: dict[str, bool]) -> 
     }
 
 
-def compare_candidates(
+def compare_native_candidates(
     baseline: CandidateEvaluation,
     parent: CandidateEvaluation,
     child: CandidateEvaluation,
@@ -570,8 +570,6 @@ def compare_candidates(
                     or long_metric.observed_rate < policy.observed_format_minimum
                 ):
                     violations.append("format_context65k")
-        if not child.serving_parity_passed or not child.serving_parity_report:
-            uncertain.append("native_to_serving_parity")
     return {
         "baseline_evaluation_id": baseline.evaluation_id,
         "parent_evaluation_id": parent.evaluation_id,
@@ -583,6 +581,23 @@ def compare_candidates(
         "loss_change": child.heldout_loss - parent.heldout_loss,
         "policy": policy.model_dump(mode="json"),
     }
+
+
+def compare_candidates(
+    baseline: CandidateEvaluation,
+    parent: CandidateEvaluation,
+    child: CandidateEvaluation,
+    policy: GatePolicy,
+    *,
+    require_format: bool,
+) -> dict:
+    """Apply native candidate gates and require serving parity for final acceptance."""
+    result = compare_native_candidates(baseline, parent, child, policy, require_format=require_format)
+    if require_format and (not child.serving_parity_passed or not child.serving_parity_report):
+        result["uncertain"].append("native_to_serving_parity")
+        if result["decision"] == "accept":
+            result["decision"] = "inconclusive"
+    return result
 
 
 class AcquisitionCase(Record):
@@ -903,6 +918,7 @@ def summarize_smoke(record: SmokeRecord) -> dict:
 
 
 class PilotBudget(Record):
+    format_panel_id: str = Field(min_length=1)
     inspection_non_padding_tokens: int = Field(gt=0)
     cap_non_padding_tokens: int = Field(gt=0)
     minimum_learning_updates: int = Field(gt=0)

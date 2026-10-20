@@ -26,6 +26,7 @@ from experiments.grug.moe_hero_ep.format_eval import (
     SmokeUpdate,
     assemble_smoke,
     compare_candidates,
+    compare_native_candidates,
     completion_failures,
     grade_panel,
     matched_throughput,
@@ -282,6 +283,15 @@ def test_candidate_gates_keep_uncertain_content_and_route_failures_visible():
     )
     staged_policy = policy.model_copy(update={"baseline_evaluation_id": initial.evaluation_id})
     assert compare_candidates(initial, parent_c, trained, staged_policy, require_format=True)["decision"] == "accept"
+    pending_serving = trained.model_copy(update={"serving_parity_passed": False, "serving_parity_report": None})
+    assert (
+        compare_candidates(initial, parent_c, pending_serving, staged_policy, require_format=True)["decision"]
+        == "inconclusive"
+    )
+    assert (
+        compare_native_candidates(initial, parent_c, pending_serving, staged_policy, require_format=True)["decision"]
+        == "accept"
+    )
     with pytest.raises(ValueError, match="content_panel_id"):
         compare_candidates(
             initial,
@@ -362,6 +372,7 @@ def test_pilot_uses_non_padding_measurements_and_rejects_too_few_updates():
     assert measured["supervised_tokens"] == 80000
     assert measured["executed_tokens"] == 262144
     budget = PilotBudget(
+        format_panel_id="heldout-format-acceptance",
         inspection_non_padding_tokens=1000000,
         cap_non_padding_tokens=4000000,
         minimum_learning_updates=20,

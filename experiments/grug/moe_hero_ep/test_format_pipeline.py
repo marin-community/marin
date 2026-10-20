@@ -5,8 +5,11 @@ import dataclasses
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import draccus
+import jax
+import numpy as np
 import pytest
 from fray.types import ResourceConfig
 from marin.execution.lazy import materialized_config
@@ -22,19 +25,32 @@ from experiments.grug.moe_hero_ep.format_eval import (
     PilotBudget,
     Serialization,
 )
+from experiments.grug.moe_hero_ep.format_handoff import CandidateHandoffRequest, assemble_candidate
 from experiments.grug.moe_hero_ep.format_pipeline import (
     FormatSftRecipe,
     LaunchEvidence,
+    PilotContinuation,
     build_format_sft,
     validate_launch_evidence,
     verify_training_data,
 )
 from experiments.grug.moe_hero_ep.format_sample import native_evaluation_model
-from experiments.grug.moe_hero_ep.model import GrugModelConfig
+from experiments.grug.moe_hero_ep.format_suite import NativeSuiteRequest, run_suite
+from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.grug.moe_hero_ep.sft import BaseReference, SftConfig
-from experiments.grug.moe_hero_ep.sft_launch import HeroSftCheckpoint, sft_measurement_identity
+from experiments.grug.moe_hero_ep.sft import BaseReference, SftConfig, sft_manifest
+from experiments.grug.moe_hero_ep.sft_launch import (
+    HeroSftCheckpoint,
+    HeroSftHandoff,
+    HeroSftInspection,
+    PilotInspection,
+    PilotStop,
+    save_pilot_inspection,
+    sft_measurement_identity,
+)
 from experiments.grug.moe_hero_ep.test_format_eval import smoke_record
+
+pytest_plugins = ["experiments.grug.moe_hero_ep.test_format_handoff"]
 
 
 @pytest.fixture
@@ -292,6 +308,7 @@ def _pilot_evidence(recipe, evidence, root):
         }
     )
     budget = PilotBudget(
+        format_panel_id="heldout-format-acceptance",
         inspection_non_padding_tokens=500000,
         cap_non_padding_tokens=1000000,
         minimum_learning_updates=5,
@@ -344,4 +361,208 @@ def test_pilot_binds_measurements_and_exact_resume_state(prepared_recipe, tmp_pa
         }
     )
     with pytest.raises(ValueError, match="actual counters"):
+        validate_launch_evidence(recipe, evidence)
+
+
+@pytest.fixture
+def paused_pilot(request, prepared_recipe, completed_suite, suite_inputs, tmp_path):
+    # Reuse genuine retained suite bytes and rerun the suite at a paused D export.
+    # Only model execution/storage and tokenizer acquisition are external fakes.
+    handoff_request, prior_manifest = completed_suite
+    suite = NativeSuiteRequest.model_validate(prior_manifest["request"])
+    _, tokenizer = suite_inputs
+    loss, format_cases = getattr(request, "param", (2.0, 1))
+    original_format = suite.panels[0]
+    formatting = original_format.model_copy(
+        update={
+            "panel": original_format.panel.model_copy(
+                update={
+                    "cases": tuple(
+                        original_format.panel.cases[0].model_copy(update={"id": f"format-{i}"})
+                        for i in range(format_cases)
+                    ),
+                }
+            )
+        }
+    )
+    recipe = dataclasses.replace(
+        prepared_recipe[0],
+        model=draccus.decode(GrugModelConfig, suite.model),
+        reference=dataclasses.replace(prepared_recipe[0].reference, tokenizer=suite.tokenizer),
+    )
+    recipe, evidence = _prepared_evidence(recipe, tmp_path)
+    recipe, evidence = _pilot_evidence(recipe, evidence, tmp_path)
+    manifest = sft_manifest(recipe.reference, recipe.sft)
+    compact, native = tmp_path / "paused-compact", tmp_path / "paused-export"
+    compact.mkdir()
+    native.mkdir()
+    counters = {"sft_step": 4, "processed_tokens": 200000, "supervised_tokens": 80000}
+    compact_metadata = {"is_temporary": False, "step": 4, "hero_sft": manifest, "hero_sft_counters": counters}
+    native_metadata = {"is_temporary": False, "step": 4, "hero_sft": manifest, "merge_base": "BF16-rounded candidate C"}
+    (compact / "metadata.json").write_text(json.dumps(compact_metadata))
+    (native / "metadata.json").write_text(json.dumps(native_metadata))
+    checkpoint = suite.checkpoint.model_copy(
+        update={"uri": str(native), "metadata_digest": digest(native_metadata), "step": 4}
+    )
+    suite = suite.model_copy(update={"checkpoint": checkpoint, "panels": (formatting, *suite.panels[1:])})
+    measured = json.loads((Path(handoff_request.suite_root) / "pt/report.json").read_text())["repeat_measurements"][0]
+    measured["loss"] = loss
+    measured["loss_sum"] = loss * measured["loss_weight"]
+    measured["rows"][0].update(loss=loss, loss_sum=loss * measured["rows"][0]["loss_weight"])
+    answer = tokenizer.encode("x")[0]
+
+    def logits_backend(model, mesh):
+        def logits(tokens, positions):
+            scores = np.full((len(tokens), len(tokenizer)), -100.0)
+            for row in range(len(tokens)):
+                scores[row, 128009 if tokens[row, positions[row]] == answer else answer] = 0
+            return scores
+
+        return logits
+
+    destination = tmp_path / "paused-suite"
+    with (
+        patch("experiments.grug.moe_hero_ep.format_suite.load_tokenizer", return_value=tokenizer),
+        patch(
+            "experiments.grug.moe_hero_ep.format_suite.restore_weights",
+            side_effect=lambda uri, metadata_digest, config, mesh: Transformer.init(config, key=jax.random.key(0)),
+        ),
+        patch("experiments.grug.moe_hero_ep.format_suite.native_logits", side_effect=logits_backend),
+        patch("experiments.grug.moe_hero_ep.format_suite.measure_pt_model", return_value=measured),
+    ):
+        suite_manifest = run_suite(suite, str(destination))
+    candidate_request = CandidateHandoffRequest.model_validate(
+        {
+            **handoff_request.model_dump(),
+            "candidate": Candidate.D,
+            "parent": Candidate.C,
+            "suite_root": str(destination),
+            "suite_manifest_digest": suite_manifest["manifest_digest"],
+            "checkpoint": checkpoint,
+            "format_panel_id": formatting.panel.panel_id,
+        }
+    )
+    candidate, _ = assemble_candidate(candidate_request)
+    shared = {
+        key: getattr(candidate, key)
+        for key in (
+            "model_config_digest",
+            "panel_id",
+            "content_panel_id",
+            "tokenizer_revision",
+            "backend",
+            "evaluation_dtype",
+            "heldout_loss_panel",
+            "content",
+            "routing",
+        )
+    }
+    baseline = evidence.baseline.model_copy(update=shared)
+    evidence = evidence.model_copy(
+        update={
+            "baseline": baseline,
+            "parent": evidence.parent.model_copy(update=shared),
+            "prepared": evidence.prepared.model_copy(update=shared),
+            "policy": evidence.policy.model_copy(
+                update={
+                    "baseline_evaluation_id": baseline.evaluation_id,
+                    "content_accuracy_decline": 1.0,
+                    "routing_maximums": {"max_load_factor": 3.0},
+                }
+            ),
+        }
+    )
+    evidence = evidence.model_copy(
+        update={"pilot_budget": evidence.pilot_budget.model_copy(update={"format_panel_id": formatting.panel.panel_id})}
+    )
+    boundary = PilotInspection(
+        evidence.pilot_budget.early_inspection_update,
+        evidence.pilot_budget.inspection_non_padding_tokens,
+        digest(evidence.policy.model_dump(mode="json")),
+        digest(evidence.pilot_budget.model_dump(mode="json")),
+    )
+    identity = evidence.smoke.measurement_identity_digest
+    record = HeroSftInspection(
+        handoff=HeroSftHandoff(
+            native_checkpoint=str(native),
+            native_metadata_digest=digest(native_metadata),
+            compact_checkpoint=str(compact),
+            step=4,
+            processed_tokens=200000,
+            supervised_tokens=80000,
+            base=recipe.reference,
+        ),
+        compact_metadata_digest=digest(compact_metadata),
+        sft=recipe.sft,
+        measurement_identity_digest=identity,
+        inspection=boundary,
+        max_processed_tokens=recipe.max_processed_tokens,
+        stop_reason=PilotStop.EARLY_UPDATE,
+    )
+    output = tmp_path / "paused"
+    output.mkdir()
+    save_pilot_inspection(str(output), record)
+    inspection_path = output / "inspection.json"
+    continuation = PilotContinuation(
+        inspection_path=str(inspection_path),
+        inspection_digest=digest(json.loads(inspection_path.read_text())),
+        candidate_handoff=candidate_request,
+    )
+    recipe = dataclasses.replace(recipe, resume_checkpoint=str(compact), resume_sft_config=recipe.sft)
+    return recipe, evidence.model_copy(update={"continuation": continuation})
+
+
+def test_pilot_continuation_recomputes_exact_paused_suite_and_preserves_original_boundaries(paused_pilot):
+    recipe, evidence = paused_pilot
+    result = validate_launch_evidence(recipe, evidence)
+    assert result["pilot_inspection"]["reviewed_step"] == 4
+    assert result["pilot_inspection"]["reviewed_tokens"] == 200000
+    assert result["pilot_inspection"]["non_padding_tokens"] == evidence.pilot_budget.inspection_non_padding_tokens
+    with pytest.raises(ValueError, match="exact terminal compact"):
+        validate_launch_evidence(recipe, evidence.model_copy(update={"continuation": None}))
+    with pytest.raises(ValueError, match="state, data, schedule"):
+        validate_launch_evidence(dataclasses.replace(recipe, resume_sft_config=evidence.smoke.sft_config), evidence)
+    changed = evidence.continuation.candidate_handoff.model_copy(
+        update={
+            "checkpoint": evidence.continuation.candidate_handoff.checkpoint.model_copy(
+                update={"metadata_digest": "a" * 64}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="exact paused export"):
+        validate_launch_evidence(
+            recipe,
+            evidence.model_copy(
+                update={"continuation": evidence.continuation.model_copy(update={"candidate_handoff": changed})}
+            ),
+        )
+    changed_budget = evidence.pilot_budget.model_copy(update={"smoke_learning_review": "other-review"})
+    with pytest.raises(ValueError, match="original inspection budget"):
+        validate_launch_evidence(recipe, evidence.model_copy(update={"pilot_budget": changed_budget}))
+    wrong_panel = evidence.continuation.candidate_handoff.model_copy(update={"format_panel_id": "other-panel"})
+    with pytest.raises(ValueError, match="exact paused export and panels"):
+        validate_launch_evidence(
+            recipe,
+            evidence.model_copy(
+                update={"continuation": evidence.continuation.model_copy(update={"candidate_handoff": wrong_panel})}
+            ),
+        )
+    report = Path(evidence.continuation.candidate_handoff.suite_root) / "pt/report.json"
+    report.write_text(report.read_text() + " ")
+    with pytest.raises(ValueError, match="output bytes changed"):
+        validate_launch_evidence(recipe, evidence)
+
+
+@pytest.mark.parametrize("paused_pilot", [(3.0, 1)], indirect=True)
+def test_pilot_continuation_rejects_measured_regression(paused_pilot):
+    recipe, evidence = paused_pilot
+    with pytest.raises(ValueError, match="diagnosis of native regression"):
+        validate_launch_evidence(recipe, evidence)
+
+
+@pytest.mark.parametrize("paused_pilot", [(2.0, 500)], indirect=True)
+def test_pilot_continuation_stops_on_native_acceptance_with_serving_pending(paused_pilot):
+    recipe, evidence = paused_pilot
+    assert evidence.continuation.candidate_handoff.serving_parity_report is None
+    with pytest.raises(ValueError, match="already pass; stop training"):
         validate_launch_evidence(recipe, evidence)
