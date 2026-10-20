@@ -22,7 +22,7 @@ ACCELERATOR_MAX_RESULT_ROWS = 500_000
 def accelerator_overview_dataset(
     clusters: tuple[str, ...], start_ms: int, end_ms: int, requested_bucket_ms: int, view: str | None = None
 ) -> DashboardDataset:
-    """Build fleet, per-device, and run-attribution GPU sources."""
+    """Build shared GPU sources for the requested view group or the full overview."""
     validate_values("clusters", clusters, max_values=ACCELERATOR_MAX_CLUSTERS, max_length=128)
     bucket_ms = bounded_bucket_ms(
         start_ms,

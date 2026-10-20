@@ -26,8 +26,9 @@ import argparse
 import json
 import re
 import time
+from collections.abc import Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass, replace
 from itertools import pairwise
 from pathlib import Path
@@ -108,7 +109,15 @@ def interval_ms(duration: int, max_points: int, minimum: str = "") -> int:
     return max(rounded, duration_ms(minimum.removeprefix(">")) if minimum else 1)
 
 
-def substitute(value: str, variables: dict[str, str | list[str]], macros: dict[str, int]) -> str:
+def dashboard_variables(path: Path) -> dict[str, dict[str, list[str]]]:
+    """Load selectors with one representation for scalar and multi-value inputs."""
+    return {
+        filename: {name: [value] if isinstance(value, str) else value for name, value in variables.items()}
+        for filename, variables in json.loads(path.read_text()).items()
+    }
+
+
+def substitute(value: str, variables: dict[str, list[str]], macros: dict[str, int]) -> str:
     """Interpolate supported Grafana variables, rejecting unresolved macros."""
 
     def replacement(match: re.Match[str]) -> str:
@@ -118,8 +127,7 @@ def substitute(value: str, variables: dict[str, str | list[str]], macros: dict[s
         name, _, formatting = expression.partition(":")
         if name not in variables or formatting not in ("", "csv", "sqlstring"):
             raise ValueError(f"unsupported or missing Grafana variable {match[0]!r}")
-        configured = variables[name]
-        values = [configured] if isinstance(configured, str) else configured
+        values = variables[name]
         if formatting == "sqlstring":
             return ",".join("'" + item.replace("'", "''") + "'" for item in values)
         return ",".join(values)
@@ -132,7 +140,7 @@ def substitute(value: str, variables: dict[str, str | list[str]], macros: dict[s
 
 def panel_requests(
     dashboard: dict,
-    variables: dict[str, str | list[str]],
+    variables: dict[str, list[str]],
     end_ms: int,
 ) -> tuple[list[PanelRequest], list[dict]]:
     """Resolve visible Finelog targets and explain every skipped target or row."""
@@ -238,22 +246,44 @@ def replay_page(client: TestClient, source: RecordingSource, requests: list[Pane
     }
 
 
+@contextmanager
+def replay_clock(end_ms: int | None) -> Iterator[None]:
+    """Scope the isolated-process clock override, including for baseline imports."""
+    original_time = server.time
+    if end_ms is not None:
+        server.time = SimpleNamespace(time=lambda: end_ms / 1_000 + 1, monotonic=time.monotonic)
+    try:
+        yield
+    finally:
+        server.time = original_time
+
+
+def replay_dashboard(
+    upstream: LogClient, requests: list[PanelRequest], output: Path, workers: int, warm: bool
+) -> Generator[dict, None, None]:
+    """Own one bridge cache across the cold and optional warm page loads."""
+    output.mkdir(parents=True)
+    source = RecordingSource(upstream, output)
+    config = replace(replay_bridge_config(), max_rows=500_000, query_timeout_ms=_QUERY_TIMEOUT_MS)
+    app = server.create_app(config, {FINELOG_CLUSTER: source}, {}, None, None, None)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        for phase in (("cold", "warm") if warm else ("cold",)):
+            yield {"phase": phase, **replay_page(client, source, requests, workers)}
+
+
 def run_replay(args: argparse.Namespace) -> dict:
     """Replay selected dashboards with a fresh bridge cache per iteration."""
     if Path(server.__file__).resolve().parent != args.grafana_dir.resolve() / "src":
         raise ValueError("PYTHONPATH must select the --grafana-dir bridge src directory")
     dashboard_dir = args.grafana_dir / "dashboards"
     dashboards = stitch_all(dashboard_dir, dashboard_dir / "panels")
-    configured = json.loads(args.variables.read_text())
+    configured = dashboard_variables(args.variables)
     filenames = args.dashboard or sorted(dashboards)
     prepared = {
         filename: panel_requests(dashboards[filename], configured.get(filename, {}), args.to_ms)
         for filename in filenames
     }
     args.output.mkdir(parents=True, exist_ok=False)
-    original_time = server.time
-    if args.live_window:
-        server.time = SimpleNamespace(time=lambda: args.to_ms / 1_000 + 1, monotonic=time.monotonic)
     result = {
         "grafana_dir": str(args.grafana_dir.resolve()),
         "address": args.address,
@@ -263,26 +293,16 @@ def run_replay(args: argparse.Namespace) -> dict:
         "variables": configured,
         "pages": [],
     }
-    try:
+    with replay_clock(args.to_ms if args.live_window else None):
         with closing(LogClient.connect(args.address, timeout_ms=_QUERY_TIMEOUT_MS)) as upstream:
             for iteration in range(args.iterations):
                 for filename, (requests, skipped) in prepared.items():
                     output = args.output / Path(filename).stem / f"iteration-{iteration}"
-                    output.mkdir(parents=True)
-                    source = RecordingSource(upstream, output)
-                    config = replace(replay_bridge_config(), max_rows=500_000, query_timeout_ms=_QUERY_TIMEOUT_MS)
-                    app = server.create_app(config, {FINELOG_CLUSTER: source}, {}, None, None, None)
-                    with TestClient(app, raise_server_exceptions=False) as client:
-                        for phase in (("cold", "warm") if args.warm else ("cold",)):
-                            page = {
-                                "dashboard": filename,
-                                "iteration": iteration,
-                                "phase": phase,
-                                "skipped_panels": skipped,
-                                **replay_page(client, source, requests, args.workers),
-                            }
+                    with closing(replay_dashboard(upstream, requests, output, args.workers, args.warm)) as replays:
+                        for replay in replays:
+                            page = {"dashboard": filename, "iteration": iteration, "skipped_panels": skipped, **replay}
                             result["pages"].append(page)
-                            (output / f"{phase}.json").write_text(json.dumps(page, indent=2) + "\n")
+                            (output / f"{page['phase']}.json").write_text(json.dumps(page, indent=2) + "\n")
                             (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
                             print(
                                 json.dumps(
@@ -294,8 +314,6 @@ def run_replay(args: argparse.Namespace) -> dict:
                                 ),
                                 flush=True,
                             )
-    finally:
-        server.time = original_time
     return result
 
 

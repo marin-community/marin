@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Five namespace-bounded sources shared by the Jobs dashboard."""
+"""Namespace-bounded source groups for the Jobs dashboard's requested view."""
 
 from dashboard_dataset import DashboardDataset, SourceQuery, bounded_bucket_ms, validate_optional_values, validate_values
 from vllm_observability import sql_values
@@ -29,7 +29,7 @@ def jobs_overview_dataset(
     requested_bucket_ms: int,
     view: str | None = None,
 ) -> DashboardDataset:
-    """Build one bounded source per Iris telemetry namespace."""
+    """Build the requested view's shared namespace source, or all sources when view is None."""
     validate_values("clusters", clusters, max_values=JOBS_MAX_CLUSTERS, max_length=JOBS_IDENTITY_MAX_LENGTH)
     validate_optional_values("jobs", jobs, max_values=JOBS_MAX_JOBS, max_length=JOBS_IDENTITY_MAX_LENGTH)
     bucket_ms = bounded_bucket_ms(

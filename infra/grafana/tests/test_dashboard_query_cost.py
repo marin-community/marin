@@ -83,7 +83,9 @@ def test_dashboard_discovery_replays_visible_targets_with_panel_time_and_variabl
             },
         ],
     }
-    requests, skipped = benchmark.panel_requests(dashboard, {"run": "O'Brien", "cluster": ["cw-a", "marin"]}, 10_800_000)
+    requests, skipped = benchmark.panel_requests(
+        dashboard, {"run": ["O'Brien"], "cluster": ["cw-a", "marin"]}, 10_800_000
+    )
 
     assert len(requests) == 2
     assert requests[0].params == {
@@ -103,13 +105,13 @@ def test_dashboard_discovery_replays_visible_targets_with_panel_time_and_variabl
 @pytest.mark.parametrize("value", ["${run:percentencode}", "$__interval", "${missing}"])
 def test_dashboard_replay_rejects_unresolved_request_macros(value):
     with pytest.raises(ValueError, match="unsupported"):
-        benchmark.substitute(value, {"run": "selected"}, {})
+        benchmark.substitute(value, {"run": ["selected"]}, {})
 
 
 def test_dashboard_replay_writes_evidence_and_reuses_only_warm_bridge_caches(tmp_path, monkeypatch):
     grafana_dir = Path(server.__file__).resolve().parent.parent
     variables = tmp_path / "variables.json"
-    variables.write_text(json.dumps({"nodes.json": {"cluster": ["cw-a"], "node": ["node-a"]}}))
+    variables.write_text(json.dumps({"nodes.json": {"cluster": ["cw-a"], "node": "node-a"}}))
     observed_clocks = []
     with duckdb.connect() as database:
         database.execute(

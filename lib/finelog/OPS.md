@@ -741,12 +741,13 @@ server, including a loopback SSH tunnel, instead of starting a shadow process:
 ```bash
 uv run python -m finelog.benchmarks.grafana_dashboard_bench \
   --query-file queries.json --address http://127.0.0.1:19001 \
-  --start-ms 1792525906776 --end-ms 1792528906776 \
   --warmup 1 --iterations 5 --output timings.json
 ```
 
 Results include result digests, plain `EXPLAIN` wall time and plan, and
-`EXPLAIN ANALYZE` wall time and scan counters. RPC wall time includes queueing;
+`EXPLAIN ANALYZE` wall time and scan counters under `workloads`. Each workload
+records its rendered dashboard `window`; literal query files record `window: null`
+because their bounds come from their SQL. RPC wall time includes queueing;
 it does not isolate planner CPU. Keep the original Parquet files for the
 baseline and compare result digests before interpreting a sampled speedup.
 

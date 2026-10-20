@@ -3,19 +3,22 @@
 
 """Benchmark Finelog queries from Grafana dashboards or fixed SQL exports.
 
-The server runs in shadow mode: it serves reads from ``--log-dir`` and refuses a
-`gs://`/`s3://` archive at startup, so it cannot compact, evict, or drop what it
-was pointed at. Pass each dashboard variable as ``--variable NAME=VALUE``;
+Benchmark-owned servers run in shadow mode: they serve reads from ``--log-dir``
+and refuse a `gs://`/`s3://` archive at startup, preventing compaction, eviction,
+and deletion. ``--address`` measures an existing server without changing its
+mode or background work. Pass dashboard variables as ``--variable NAME=VALUE``;
 repeat the option name to model a Grafana multi-value selection. The JSON result
 records latency, result rows and bytes, digest, and ``EXPLAIN ANALYZE`` scan
 metrics for every rendered SQL target.
 
 Bridge-generated dataset queries are not embedded in dashboard JSON. Export
 their source queries as a JSON array of ``{"name": ..., "sql": ...}`` objects
-and pass ``--query-file``. These queries execute verbatim; their time bounds
-must already match ``--start-ms`` and ``--end-ms``. Use ``--address`` instead of
-``--server-binary`` and ``--log-dir`` to measure an existing server. EXPLAIN wall
-times include RPC overhead and queueing, so they are not pure planner CPU time.
+and pass ``--query-file``. These queries execute verbatim; freeze their time
+bounds in the SQL before comparing servers. ``--start-ms``, ``--end-ms``,
+``--interval-ms``, and ``--variable`` apply only to dashboard rendering. Results
+record each workload's rendered window, or null for literal query files.
+EXPLAIN wall times include RPC overhead and queueing, so they are not pure
+planner CPU time.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import time
 from collections import defaultdict
 from collections.abc import Sequence
 from contextlib import nullcontext
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from finelog.benchmarks.grafana_dashboard_corpus import DashboardCorpus, DashboardQuery, load_dashboard_corpus
@@ -43,6 +46,13 @@ from finelog.benchmarks.query_measurement import (
     stats_client,
 )
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
+
+
+@dataclass(frozen=True)
+class BenchmarkWorkload:
+    path: Path
+    corpus: DashboardCorpus
+    window: dict[str, object] | None
 
 
 def _measure_query(
@@ -99,8 +109,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--address", help="measure an existing server, for example an SSH tunnel to the hub")
     parser.add_argument("--server-binary", type=Path)
     parser.add_argument("--log-dir", type=Path)
-    parser.add_argument("--start-ms", type=int, required=True)
-    parser.add_argument("--end-ms", type=int, required=True)
+    parser.add_argument("--start-ms", type=int, help="dashboard rendering start; required with --dashboard")
+    parser.add_argument("--end-ms", type=int, help="dashboard rendering end; required with --dashboard")
     parser.add_argument("--interval-ms", type=positive_int, default=60_000)
     parser.add_argument(
         "--variable",
@@ -127,11 +137,21 @@ def _variables_by_name(raw_variables: Sequence[str]) -> dict[str, tuple[str, ...
     return {name: tuple(items) for name, items in values.items()}
 
 
+def _query_file_corpus(path: Path) -> DashboardCorpus:
+    contents = path.read_bytes()
+    queries = tuple(DashboardQuery(item["name"], item["name"], "A", item["sql"]) for item in json.loads(contents))
+    if not queries or len({query.name for query in queries}) != len(queries):
+        raise ValueError(f"query file must contain uniquely named queries: {path}")
+    return DashboardCorpus(path.stem, path.stem, "", hashlib.sha256(contents).hexdigest(), queries)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     if not args.dashboard and not args.query_file:
         parser.error("provide --dashboard or --query-file")
+    if args.dashboard and (args.start_ms is None or args.end_ms is None):
+        parser.error("--dashboard requires --start-ms and --end-ms")
     if args.address:
         if args.server_binary or args.log_dir:
             parser.error("--address cannot be combined with --server-binary or --log-dir")
@@ -140,8 +160,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif not args.server_binary or not args.log_dir:
         parser.error("provide --address or both --server-binary and --log-dir")
     variables = _variables_by_name(args.variable)
-    corpora = [
-        (
+    rendered_window = {
+        "start_ms": args.start_ms,
+        "end_ms": args.end_ms,
+        "interval_ms": args.interval_ms,
+        "variables": variables,
+    }
+    workloads = [
+        BenchmarkWorkload(
             dashboard,
             load_dashboard_corpus(
                 dashboard,
@@ -150,15 +176,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 interval_ms=args.interval_ms,
                 variables=variables,
             ),
+            rendered_window,
         )
         for dashboard in args.dashboard
     ]
-    for path in args.query_file:
-        contents = path.read_bytes()
-        queries = tuple(DashboardQuery(item["name"], item["name"], "A", item["sql"]) for item in json.loads(contents))
-        if not queries or len({query.name for query in queries}) != len(queries):
-            raise ValueError(f"query file must contain uniquely named queries: {path}")
-        corpora.append((path, DashboardCorpus(path.stem, path.stem, "", hashlib.sha256(contents).hexdigest(), queries)))
+    workloads.extend(BenchmarkWorkload(path, _query_file_corpus(path), None) for path in args.query_file)
     server = (
         nullcontext(args.address)
         if args.address
@@ -171,8 +193,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     with server as address:
         client = stats_client(address)
-        dashboards = []
-        for dashboard, corpus in corpora:
+        results = []
+        for workload in workloads:
             queries = [
                 _measure_query(
                     client,
@@ -181,26 +203,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     iterations=args.iterations,
                     include_explain=args.explain,
                 )
-                for query in corpus.queries
+                for query in workload.corpus.queries
             ]
-            dashboards.append(
+            results.append(
                 {
-                    "path": str(dashboard),
-                    "sha256": corpus.sha256,
-                    "uid": corpus.uid,
-                    "title": corpus.title,
-                    "refresh": corpus.refresh,
+                    "path": str(workload.path),
+                    "sha256": workload.corpus.sha256,
+                    "uid": workload.corpus.uid,
+                    "title": workload.corpus.title,
+                    "refresh": workload.corpus.refresh,
+                    "window": workload.window,
                     "queries": queries,
                 }
             )
         payload = {
-            "dashboards": dashboards,
-            "window": {
-                "start_ms": args.start_ms,
-                "end_ms": args.end_ms,
-                "interval_ms": args.interval_ms,
-                "variables": variables,
-            },
+            "workloads": results,
             "server_binary": str(args.server_binary) if args.server_binary else None,
             "address": address,
             "query_timeout_ms": args.query_timeout_ms,
@@ -211,8 +228,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         json.dumps(
             {
                 "output": str(args.output),
-                "dashboards": len(dashboards),
-                "queries": sum(len(dashboard["queries"]) for dashboard in dashboards),
+                "workloads": len(results),
+                "queries": sum(len(workload["queries"]) for workload in results),
             }
         )
     )

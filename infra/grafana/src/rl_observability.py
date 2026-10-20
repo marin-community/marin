@@ -88,7 +88,7 @@ def rl_overview_dataset(
     requested_bucket_ms: int,
     view: str | None = None,
 ) -> DashboardDataset:
-    """Build bounded RL-core and engine sources."""
+    """Build the requested phase, Ray or engine source group, or all sources when view is None."""
     validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=RL_MAX_CLUSTER_LENGTH)
     validate_value("run", run, max_length=RL_MAX_RUN_LENGTH)
     bucket_ms = bounded_bucket_ms(
@@ -369,38 +369,34 @@ def rl_gpu_dataset(
     clusters_sql = sql_values(clusters)
     run_sql = sql_string(run)
     dcgm_scope = f"timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"
+    device_identity_sql = f"""COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           {bucket} AS t,
+           node_name AS node,
+           json_get(attributes_json, 'gpu_uuid') AS gpu"""
+    node_agent_from_sql = """FROM selected_nodes
+    JOIN "telemetry_v1.node_agent"
+      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
+     AND node_name = selected_nodes.node"""
     series_names = _DCGM_SERIES
     if view is not None:
         series_names = tuple(name for name in _DCGM_SERIES if name != "gpu_utilization_percent")
     gpu_sql = f"""
 WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_samples AS (
-    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-           {bucket} AS t,
-           node_name AS node,
-           json_get(attributes_json, 'gpu_uuid') AS gpu,
+    SELECT {device_identity_sql},
            name,
            value,
            LAG(value) OVER (
                PARTITION BY cluster, node_name, name, resource_attributes_json, attributes_json
                ORDER BY timestamp_ms, seq
            ) AS previous_value
-    FROM selected_nodes
-    JOIN "telemetry_v1.node_agent"
-      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
-     AND node_name = selected_nodes.node
+    {node_agent_from_sql}
     WHERE name IN ({sql_values(_DCGM_COUNTERS)}) AND {dcgm_scope}
 ), gpu AS (
-    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-           {bucket} AS t,
-           node_name AS node,
-           json_get(attributes_json, 'gpu_uuid') AS gpu,
+    SELECT {device_identity_sql},
            name,
            AVG(value) AS mean_value,
            MAX(value) AS max_value
-    FROM selected_nodes
-    JOIN "telemetry_v1.node_agent"
-      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
-     AND node_name = selected_nodes.node
+    {node_agent_from_sql}
     WHERE name IN ({sql_values((*series_names, "gpu_power_watts"))}) AND {dcgm_scope}
     GROUP BY 1, 2, 3, 4, 5
     UNION ALL BY NAME
@@ -467,15 +463,9 @@ ORDER BY 4 DESC, node, gpu
             # cannot give one GPU or node more weight in the run-wide mean.
             gpu_sql = f"""
 WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, gpu AS (
-    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-           {bucket} AS t,
-           node_name AS node,
-           json_get(attributes_json, 'gpu_uuid') AS gpu,
+    SELECT {device_identity_sql},
            AVG(value) AS mean_value
-    FROM selected_nodes
-    JOIN "telemetry_v1.node_agent"
-      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
-     AND node_name = selected_nodes.node
+    {node_agent_from_sql}
     WHERE name = 'gpu_utilization_percent' AND {dcgm_scope}
     GROUP BY 1, 2, 3, 4
 )

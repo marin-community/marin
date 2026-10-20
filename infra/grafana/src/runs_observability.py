@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Two bounded sources shared by the multi-run training dashboard."""
+"""Bounded metric and power source groups for the multi-run training dashboard."""
 
 from dashboard_dataset import DashboardDataset, SourceQuery, bounded_bucket_ms, validate_values
 from vllm_observability import sql_values
@@ -40,7 +40,7 @@ def runs_overview_dataset(
     requested_bucket_ms: int,
     view: str | None = None,
 ) -> DashboardDataset:
-    """Build bounded multi-run metric and GPU-attribution sources."""
+    """Build the requested metric or power source group, or both groups when view is None."""
     validate_values("clusters", clusters, max_values=RUNS_MAX_CLUSTERS, max_length=RUNS_IDENTITY_MAX_LENGTH)
     validate_values("runs", runs, max_values=RUNS_MAX_RUNS, max_length=RUNS_IDENTITY_MAX_LENGTH)
     bucket_ms = bounded_bucket_ms(
