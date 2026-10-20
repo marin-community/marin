@@ -405,12 +405,15 @@ def gpu_fa4_cute_sm100_attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    rel_bias: Float[Array, "B Hq Q W"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Run native SM100 forward and one-block backward for BF16 D128 GQA.
+    """Run native SM100 forward and one-block backward for BF16 D128 MHA/GQA.
 
-    Select with ``implementation="gpu_fa4_cute_sm100"``. Supports GQA ratios
-    4, 6, and 8 and the same packed causal/window masks as ``gpu_fa4_cute``.
-    Use ``gpu_fa4_cute`` on Hopper or for other supported head layouts.
+    Select with ``implementation="gpu_fa4_cute_sm100"``. Supports query-per-KV-head ratios in
+    ``SM100_GQA_RATIOS`` and the same packed causal/window masks as ``gpu_fa4_cute``, plus the optional
+    banded Inkling bias ``rel_bias`` ([B, Hq, Q, W]; ``rel_extent`` a multiple of 128), which both native
+    kernels apply in-kernel. Use ``gpu_fa4_cute`` on Hopper or for other supported head layouts.
     """
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_cute_sm100_attention requires the JAX GPU backend.")
@@ -421,7 +424,7 @@ def gpu_fa4_cute_sm100_attention(
     if q.shape[2] // k.shape[2] not in SM100_GQA_RATIOS:
         raise ValueError(f"gpu_fa4_cute_sm100 requires a GQA ratio in {SM100_GQA_RATIOS}.")
     config = sm100_flash4_cute_kernel_config()
-    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
+    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config, rel_bias=rel_bias)
 
 
 def fa4_cute_segment_bounds(

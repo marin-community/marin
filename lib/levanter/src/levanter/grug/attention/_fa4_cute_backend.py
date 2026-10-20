@@ -119,8 +119,8 @@ def segmented_flash_attention_forward(
         q_offset: Context-parallel shard offset, shape [1] int32. Local query ``i`` sits at
             global position ``i + q_offset``, which is the causal upper bound the kernel
             applies. The query slice must fit within K/V; unpartitioned queries use zero.
-        rel_bias: Optional banded Inkling bias [B, Hq, S, W] (see ``_inkling_relpos``). Only the
-            segmented SM80/SM90/SM120 forward applies it, and only with ``q_offset == 0``.
+        rel_bias: Optional banded Inkling bias [B, Hq, S, W] (see ``_inkling_relpos``), applied only with
+            ``q_offset == 0``.
 
     Returns:
         ``(out, lse)`` where ``out`` has shape [B, Sq, Hq, Dv] and ``lse`` has
@@ -138,8 +138,6 @@ def segmented_flash_attention_forward(
         raise _optional_dependency_error() from exc
 
     if kernel_config.sm100_forward is not None:
-        if use_rel_bias:
-            raise NotImplementedError("The native SM100 FA4 forward does not apply the Inkling rel_bias.")
         config = kernel_config.sm100_forward
         # One sparse query block spans every Q stage in the upstream schedule.
         sparse = _packed_segment_forward_block_sparse_indices_with_full(
@@ -156,11 +154,20 @@ def segmented_flash_attention_forward(
             head_dim_v=v.shape[-1],
             qhead_per_kvhead=q.shape[2] // k.shape[2],
             config=config,
+            use_rel_bias=use_rel_bias,
         )
         input_spec, output_spec = _cutlass_attention_forward_specs(modules, vector_elems=8)
         metadata_spec = modules.cjax.TensorSpec(static=True)
-        # The native forward takes no rel_bias: replace its spec with the four block-sparse metadata specs.
+        # The four block-sparse metadata tensors follow q_offset; the banded bias, when present, comes last.
         input_spec = (*input_spec[:-1], metadata_spec, metadata_spec, metadata_spec, metadata_spec)
+        bias_args = ()
+        if use_rel_bias:
+            # W divisibility lets the kernel read a key tile's band slice with 128-bit loads.
+            input_spec = (
+                *input_spec,
+                modules.cjax.TensorSpec(mode=(2, 3, 1, 0), divisibility=(1, 1, 1, 8), static=True),
+            )
+            bias_args = (rel_bias.astype(q.dtype),)
         call = cutlass_call(
             launcher,
             output_shape_dtype=(
@@ -183,6 +190,7 @@ def segmented_flash_attention_forward(
             sparse.partial_block_idx,
             sparse.full_block_cnt,
             sparse.full_block_idx,
+            *bias_args,
         )
 
     forward_tile = kernel_config.forward_tile
@@ -1249,6 +1257,8 @@ def _validate_rel_bias(q: jax.Array, rel_bias: jax.Array, kernel_config: Flash4C
     if seq_len % REL_BIAS_BLOCK != 0:
         raise ValueError(f"banded rel_bias needs S={seq_len} to be a multiple of {REL_BIAS_BLOCK}")
     key_tiles = [kernel_config.forward_tile[1], kernel_config.backward_tile[1]]
+    if kernel_config.sm100_forward is not None:
+        key_tiles.append(kernel_config.sm100_forward.tile[1])
     if kernel_config.sm90_backward is not None:
         key_tiles.append(kernel_config.sm90_backward.tile[1])
     for tile_n in key_tiles:

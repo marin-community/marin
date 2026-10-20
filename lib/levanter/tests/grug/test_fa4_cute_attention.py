@@ -442,8 +442,8 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_
 
 @pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (4, 4), (12, 1)])
 @pytest.mark.parametrize("sliding_window", [None, 192])
-@pytest.mark.parametrize("rel_extent", [128, 64])
-@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_pallas_fa4"])
+@pytest.mark.parametrize("rel_extent", [128, 64, 256])
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_pallas_fa4", "gpu_fa4_cute_sm100"])
 def test_real_gpu_fa4_cute_inkling_bias_matches_reference(
     q_heads, kv_heads, sliding_window, rel_extent, implementation
 ):
@@ -451,11 +451,18 @@ def test_real_gpu_fa4_cute_inkling_bias_matches_reference(
 
     Covers GQA and MHA (the MLA layout), packed segments, and a band (rel_extent) shorter than both the
     window and the sequence so in-band, out-of-band, and masked tiles all occur. On SM100 a 128 extent runs
-    the native backward and 64 the segmented one. Gradients are taken w.r.t. the compact distance-indexed
-    bias, which is how the model parameterizes the band.
+    the native backward and 64 the segmented one; ``gpu_fa4_cute_sm100`` also runs the native forward with the
+    bias. Gradients are taken w.r.t. the compact distance-indexed bias, which is how the model parameterizes
+    the band.
     """
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    if implementation == "gpu_fa4_cute_sm100":
+        if fa4_cute.gpu_compute_capability() != 100:
+            pytest.skip("Native SM100 requires SM100.")
+        if q_heads // kv_heads not in SM100_GQA_RATIOS or rel_extent % 128:
+            pytest.skip("Native SM100 serves SM100_GQA_RATIOS and 128-multiple band extents.")
+        pytest.importorskip("flash_attn.cute.flash_fwd_sm100")
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
@@ -485,6 +492,46 @@ def test_real_gpu_fa4_cute_inkling_bias_matches_reference(
         expected_grad = np.asarray(expected_grad, dtype=np.float32)
         rel_err = np.max(np.abs(actual_grad - expected_grad)) / np.max(np.abs(expected_grad))
         assert rel_err < 3e-2, f"{name}: max-normalized error {rel_err:.3e}"
+
+
+def test_real_gpu_fa4_cute_sm100_inkling_bias_has_no_future_leakage():
+    """Future keys, values, and future-key band entries must not move any earlier query's output.
+
+    Every band entry is nonzero (including the columns of keys after the query, which the model's bias
+    leaves at zero), then future values are scaled by 1e6, future keys redrawn, and future-key band entries
+    set to 1e4. Outputs before the cut must stay bitwise equal.
+    """
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    if fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("Native SM100 requires SM100.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("flash_attn.cute.flash_fwd_sm100")
+    batch, seq_len, heads, head_dim, rel_extent, cut = 2, 768, 4, 128, 256, 300
+    width = rel_extent + 128
+    keys = jax.random.split(jax.random.PRNGKey(3), 5)
+    q = jax.random.normal(keys[0], (batch, seq_len, heads, head_dim), dtype=jnp.bfloat16)
+    k = jax.random.normal(keys[1], (batch, seq_len, heads, head_dim), dtype=jnp.bfloat16)
+    v = jax.random.normal(keys[2], (batch, seq_len, heads, head_dim), dtype=jnp.bfloat16)
+    band = (jax.random.normal(keys[3], (batch, heads, seq_len, width)) * 2.0).astype(jnp.bfloat16)
+
+    future = (jnp.arange(seq_len) >= cut)[None, :, None, None]
+    k_future = jnp.where(future, jax.random.normal(keys[4], k.shape, dtype=jnp.bfloat16) * 10, k)
+    v_future = jnp.where(future, v * 1e6, v)
+    query = jnp.arange(seq_len)[:, None]
+    key_of_column = query // 128 * 128 - rel_extent + jnp.arange(width)[None, :]
+    band_future = jnp.where((key_of_column >= cut)[None, None], jnp.bfloat16(1e4), band)
+
+    run = jax.jit(
+        lambda q, k, v, b: attention(q, k, v, AttentionMask.causal(), implementation="gpu_fa4_cute_sm100", rel_bias=b)
+    )
+    base = np.asarray(run(q, k, v, band), dtype=np.float32)
+    perturbed = np.asarray(run(q, k_future, v_future, band_future), dtype=np.float32)
+
+    np.testing.assert_array_equal(perturbed[:, :cut], base[:, :cut])
+    assert np.isfinite(base).all()
+    # The perturbation reaches the outputs at and after the cut, so the check above is not vacuous.
+    assert np.max(np.abs(perturbed[:, cut:] - base[:, cut:])) > 1.0
 
 
 @pytest.mark.parametrize("sliding_window", [None, 31])
