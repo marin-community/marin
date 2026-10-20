@@ -9,7 +9,9 @@ as ``rollout_model.assistant_wire_message`` builds it. ``ReasoningReplay`` decid
 ``reasoning_content`` (GLM's chat template ignores ``reasoning``): GLM's own reasoning replayed on
 every later turn is what fills long agent prompts, and the template renders an absent
 ``reasoning_content`` as the same empty think block as ``""``. Tool calls in one turn run in order,
-one at a time, because shell calls depend on each other's effects.
+one at a time, because shell calls depend on each other's effects. Every turn carries the record's
+``rollout_model.routing_key`` as ``prompt_cache_key``, so the router keeps a run's turns on the node
+that already holds its prefix in cache.
 
 Model mistakes go back to the model as tool results and the run continues:
 
@@ -47,7 +49,7 @@ from taskforge.ledger.records import EntryKind, span
 from taskforge.llm.client import Completion, ContextExhausted, FinishReason, ModelClient, ToolCall, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_complete
-from taskforge.llm.rollout_model import assistant_wire_message
+from taskforge.llm.rollout_model import PROMPT_CACHE_KEY, assistant_wire_message, routing_key
 
 INVALID_ARGUMENTS_KEY = "invalid_arguments"
 TRUNCATED_CALL_MESSAGE = (
@@ -229,7 +231,7 @@ async def run_agent(
         messages: The opening conversation, usually a system and a user message.
         tools: Tools offered on every turn; names must be unique.
         max_turns: Model replies allowed; tool calls in the last reply still run.
-        record: Ledger and span identity for the turn and tool-call entries.
+        record: Ledger and span identity for the turn and tool-call entries, and the run's ``routing_key``.
         replay: Whether replayed assistant turns carry their reasoning; they do by default.
         stop: Called with each turn that made tool calls, after they ran; ``True`` ends the run with
             ``AgentStop.STOPPED``, for example once a tool has handed in the run's result.
@@ -237,7 +239,9 @@ async def run_agent(
     by_name = {tool.name: tool for tool in tools}
     if len(by_name) != len(tools):
         raise ValueError(f"tool names are not unique: {[tool.name for tool in tools]}")
-    request_fields: dict[str, object] = {"tools": [tool.definition() for tool in tools]} if tools else {}
+    request_fields: dict[str, object] = {PROMPT_CACHE_KEY: routing_key(record)}
+    if tools:
+        request_fields["tools"] = [tool.definition() for tool in tools]
     conversation = list(messages)
     turns: list[AgentTurn] = []
     usage = NO_USAGE

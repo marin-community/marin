@@ -1415,7 +1415,7 @@ requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-communit
 
 [[package]]
 name = "marin-finelog"
-version = "0.2.19.dev30724030287"
+version = "0.2.67.dev39325146809"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -1429,36 +1429,21 @@ dependencies = [
     { name = "pyyaml" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/29/8b/756b0b4a34f6efd6f3fe774fd5f5956d8442ca5c57098af217552e280c50/marin_finelog-0.2.19.dev30724030287.tar.gz", hash = "sha256:48cede11b7b875749c769dce94f03ce76c00722b032878c33c7712f42fc85b59", size = 93938, upload-time = "2026-08-02T00:20:06.672Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/26/694b552a55a8f21728a7e8cb4a830c901035b384836fa5f5ae6de54b3145/marin_finelog-0.2.67.dev39325146809.tar.gz", hash = "sha256:ba87a3f4bfa2708192265542dd161c02323b4f6ffbd2a0d31e227f1a20cd4aff", size = 140404, upload-time = "2026-10-19T21:39:15.662Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/ab/d2256bfb3744727ad79e7b136bf2da7de86b8c4e387c0c0606cc4e3a7864/marin_finelog-0.2.19.dev30724030287-py3-none-any.whl", hash = "sha256:5f5ca55819b9d94092bb4bb9baae5a562f590d70e30158afaf7b67fc74442c6c", size = 93401, upload-time = "2026-08-02T00:19:53.172Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/f9/2a96881139f3c387235edc8a449f75dcd55f22cc8bba9e38dc7b85b9606c/marin_finelog-0.2.67.dev39325146809-py3-none-any.whl", hash = "sha256:b60df11b8f41c0258a10b241ad3751bad9de7c44c01fa6de75310f0149b26926", size = 133847, upload-time = "2026-10-19T21:39:02.792Z" },
 ]
 
 [[package]]
 name = "marin-finelog-server"
-version = "0.2.54.dev35409391246"
+version = "0.2.67.dev39325146809"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "platform_machine != 'x86_64' and sys_platform == 'linux'",
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b6/73/ef30df3841718d0ecc6f599457370df6e30f7c96386ae7b206a29187366b/marin_finelog_server-0.2.54.dev35409391246.tar.gz", hash = "sha256:182733d4c93d65c19179dc2ac34fbc2252541b91791d6106f3152f19172e89b0", size = 634981, upload-time = "2026-09-19T01:03:59.556Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/8a/7062b49ed9b999b38ca88f42572edb00e37ae9ed640df49829908cf98c38/marin_finelog_server-0.2.67.dev39325146809.tar.gz", hash = "sha256:bd5e26418af3cc74aa1b928969fca0f1d198e2705aa37cd70af60b4384c23d19", size = 646831, upload-time = "2026-10-19T21:39:16.905Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/f0/5ddfb8ec7677dc62085f267607adff719fe81697c4d488eb7363aa65014b/marin_finelog_server-0.2.54.dev35409391246-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:71cd826638bf27dcf5ecdaa6beeacc3d98a1d8d58f955439c759e80fc980a6f6", size = 41598817, upload-time = "2026-09-19T01:03:53.25Z" },
-    { url = "https://files.pythonhosted.org/packages/3f/e7/6581a935256829d5f28fbcbd70bb167a43208be4f8cf726a19a7ec5ac163/marin_finelog_server-0.2.54.dev35409391246-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3f4b91665af442e6d44ae2894ecd5ba9621491ad4a8aecf648705f4f2fdb9a10", size = 44306818, upload-time = "2026-09-19T01:03:56.035Z" },
-]
-
-[[package]]
-name = "marin-finelog-server"
-version = "0.2.55.dev35451177481"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'win32'",
-    "sys_platform == 'emscripten'",
-    "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/74/2e91bbcf98be4f0502ac571b6552c6c2ca0700938a8a04338fd6468c530f/marin_finelog_server-0.2.55.dev35451177481-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:4e8d30360be8c450bbf246796fe2d78d28f0668e33d6ffe138fedc44788a64bd", size = 42312243, upload-time = "2026-09-19T15:46:57.396Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/f4/96317e35cf35279f311303ef56078971e19df2969a4cfab6c9e4df19e2d9/marin_finelog_server-0.2.67.dev39325146809-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:cbe9c862134555e7cdadb18796e0ccce26c9e938cc4f1d5fa1b781fe0c213022", size = 15346902, upload-time = "2026-10-19T21:39:04.931Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/af/0ce4cab7d541ec9a9811e17f8d628be6ce3735385fb2d4163dfb053d1ed0/marin_finelog_server-0.2.67.dev39325146809-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:0cb2149e9f47d9d841ef2ef1cbab5a1f33d0905a36adf46cc88c38d287073212", size = 15773140, upload-time = "2026-10-19T21:39:07.751Z" },
+    { url = "https://files.pythonhosted.org/packages/21/61/04732fe3cc9cc4b143921b50041887c15857bd16567488023642eb400a4d/marin_finelog_server-0.2.67.dev39325146809-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:6bbd8291ca075b38be5028d2d691fb64a514ed1ce48b60d73bb4427c2041ef04", size = 18169948, upload-time = "2026-10-19T21:39:10.354Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/e2/f3efc7dc550b3b0b3a301771e1cc0f73ffe5a6a36535da72126c892ef360/marin_finelog_server-0.2.67.dev39325146809-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:a65b40311ff052102fb8055fc9457aae99bf277a7416a3f8e2cf1088df120855", size = 17575898, upload-time = "2026-10-19T21:39:13.506Z" },
 ]
 
 [[package]]
@@ -1491,8 +1476,7 @@ dependencies = [
     { name = "httpx" },
     { name = "humanfriendly" },
     { name = "marin-finelog" },
-    { name = "marin-finelog-server", version = "0.2.54.dev35409391246", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "marin-finelog-server", version = "0.2.55.dev35451177481", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
+    { name = "marin-finelog-server" },
     { name = "marin-finestore" },
     { name = "marin-iris-native" },
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
@@ -1630,7 +1614,7 @@ schema = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#32edb00f784dac6995136d034ad7231a9b985bc0" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#81ae0ef7033c500207b191a2ae7c3806f6dc78ff" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -1649,8 +1633,7 @@ dependencies = [
     { name = "langdetect" },
     { name = "loguru" },
     { name = "marin-finelog" },
-    { name = "marin-finelog-server", version = "0.2.54.dev35409391246", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "marin-finelog-server", version = "0.2.55.dev35451177481", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
+    { name = "marin-finelog-server" },
     { name = "marin-finestore" },
     { name = "marin-iris" },
     { name = "marin-iris-native" },

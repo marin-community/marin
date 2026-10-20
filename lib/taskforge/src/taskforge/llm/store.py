@@ -11,9 +11,15 @@ its own entry; ``sample`` defaults to 0 for a request drawn once.
 ``request.json`` is written before the call, ``response.json`` (every ``Completion``, including
 raw events) after it, and ``result.json`` last; a cached value is reused only when ``result.json``
 exists and records the same hash.
+
+Concurrent requests for one key in a process are filled once: the first makes the call, and the rest
+wait for it and read its entry. A store root belongs to one process; two processes filling the same
+key race.
 """
 
+import asyncio
 import json
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -59,6 +65,7 @@ class CallStore:
     def __init__(self, root: Path, client: ModelClient):
         self.root = root
         self.client = client
+        self._fills: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def item_dir(self, stage: str, key: str) -> Path:
         return self.root / "items" / stage / key
@@ -94,12 +101,13 @@ class CallStore:
         """Return the cached completion for this exact request and ``sample``, or make the call and record it."""
         request = canonical_request(self.client.model, messages, policy, request_fields, sample)
         work, key = self._begin(stage, request)
-        if self._cached(work, key) is not None:
-            return _COMPLETIONS.validate_json((work / "response.json").read_text())[0]
-        write_json(work / "request.json", {"request_hash": key, "stage": stage, "request": request})
-        completion = await self.client.complete(messages, policy, request_fields)
-        self._finish(work, key, (completion,), {"content": completion.content})
-        return completion
+        async with self._fills[key]:
+            if self._cached(work, key) is not None:
+                return _COMPLETIONS.validate_json((work / "response.json").read_text())[0]
+            write_json(work / "request.json", {"request_hash": key, "stage": stage, "request": request})
+            completion = await self.client.complete(messages, policy, request_fields)
+            self._finish(work, key, (completion,), {"content": completion.content})
+            return completion
 
     async def structured[T: BaseModel](
         self,
@@ -114,11 +122,12 @@ class CallStore:
         fields = {"response_format": response_format(output_type)}
         request = canonical_request(self.client.model, messages, policy, fields, sample)
         work, key = self._begin(stage, request)
-        cached = self._cached(work, key)
-        if cached is not None:
-            completions = _COMPLETIONS.validate_json((work / "response.json").read_text())
-            return StructuredResult(output_type.model_validate(cached["value"]), completions)
-        write_json(work / "request.json", {"request_hash": key, "stage": stage, "request": request})
-        result = await self.client.complete_structured(messages, output_type, policy)
-        self._finish(work, key, result.completions, result.value.model_dump(mode="json"))
-        return result
+        async with self._fills[key]:
+            cached = self._cached(work, key)
+            if cached is not None:
+                completions = _COMPLETIONS.validate_json((work / "response.json").read_text())
+                return StructuredResult(output_type.model_validate(cached["value"]), completions)
+            write_json(work / "request.json", {"request_hash": key, "stage": stage, "request": request})
+            result = await self.client.complete_structured(messages, output_type, policy)
+            self._finish(work, key, result.completions, result.value.model_dump(mode="json"))
+            return result
