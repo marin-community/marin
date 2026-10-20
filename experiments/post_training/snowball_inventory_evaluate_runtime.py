@@ -191,7 +191,9 @@ def preflight(request: dict) -> dict:
 
 def results(request: dict) -> dict:
     config = load_document(request["launch_config_yaml"])
-    root = StoragePath(str(config.artifacts.export_root) + "/dumped_evals/eval_only")
+    step = request.get("evaluation_step")
+    session = "eval_only" if step is None else f"global_step_{step}_evals"
+    root = StoragePath(str(config.artifacts.export_root) + "/dumped_evals/" + session)
     outcomes = []
     for directory, _, files in root.walk():
         for filename in files:
@@ -212,6 +214,15 @@ def results(request: dict) -> dict:
                             "task_id": request["dataset_uids"][row["uid"]],
                             "score": score,
                             "stop_reason": row.get("stop_reason"),
+                            "verification_status": verification["status"].value if verification is not None else None,
+                            "failure_type": (
+                                row.get("exception_type")
+                                or (
+                                    (verification.get("diagnostics") or {}).get("cause_error_type")
+                                    if verification
+                                    else None
+                                )
+                            ),
                         }
                     )
     return {"outcomes": outcomes}

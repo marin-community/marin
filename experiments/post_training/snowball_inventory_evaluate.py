@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import subprocess
+from collections import Counter
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -79,6 +80,8 @@ class EvaluationOutcome:
     task_id: str
     score: float | None
     stop_reason: str | None
+    verification_status: str | None = None
+    failure_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,7 @@ class FamilyResult:
     fixed_denominator_mean: float
     coverage: float
     length_stops: int
+    failure_categories: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -141,6 +145,13 @@ def summarize_panel(tasks: list[PanelTask], outcomes: list[EvaluationOutcome]) -
                 fixed_denominator_mean=sum(scored) / len(selected),
                 coverage=len(scored) / len(selected),
                 length_stops=sum(outcome.stop_reason == "length" for outcome in completed),
+                failure_categories=dict(
+                    Counter(
+                        outcome.failure_type or outcome.verification_status or "unscored"
+                        for outcome in completed
+                        if outcome.score is None
+                    )
+                ),
             )
         )
     pairing = [(task.task_id, task.evaluation_family, task.contract_id) for task in tasks]
@@ -157,6 +168,8 @@ def summarize_panel(tasks: list[PanelTask], outcomes: list[EvaluationOutcome]) -
                 "attempted": task.task_id in observed,
                 "score": observed[task.task_id].score if task.task_id in observed else None,
                 "stop_reason": observed[task.task_id].stop_reason if task.task_id in observed else None,
+                "verification_status": observed[task.task_id].verification_status if task.task_id in observed else None,
+                "failure_type": observed[task.task_id].failure_type if task.task_id in observed else None,
             }
             for task in tasks
         ],

@@ -42,8 +42,8 @@ ROLE_PLAN = SNOWBALL_RECIPE.role_plan
 CHECKPOINT_INTERVAL = 25
 
 
-def training_recipe(max_steps: int) -> dict:
-    recipe = smoke_recipe(20_480, 4_096, role_plan=ROLE_PLAN, max_steps=max_steps)
+def training_recipe(max_steps: int, *, request_window_tokens: int = 20_480, max_new_tokens: int = 4_096) -> dict:
+    recipe = smoke_recipe(request_window_tokens, max_new_tokens, role_plan=ROLE_PLAN, max_steps=max_steps)
     trainer = recipe["trainer"]
     trainer["project_name"] = "marin-snowball-curriculum"
     trainer["ckpt_interval"] = CHECKPOINT_INTERVAL

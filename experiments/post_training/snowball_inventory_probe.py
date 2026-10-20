@@ -28,6 +28,8 @@ from rolloutengine.machines import _machine_spec
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Backend, MachineFactory
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
+from skyrl_train.dataset.tasks import TaskDataset
+from skyrl_train.tokenizer import create_tokenizer
 from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -56,6 +58,15 @@ class SourceProbe:
     reward: float | None
 
 
+@dataclass(frozen=True)
+class ValidationTask:
+    task_id: str
+    evaluation_family: str
+    contract_id: str
+    source_contract_id: str
+    dataset_uid: str
+
+
 @dataclass
 class ProbeReport:
     status: str = "running"
@@ -66,6 +77,9 @@ class ProbeReport:
     validation_sha256: str | None = None
     validation_rows: int = 0
     validation_engine_checks: int = 0
+    validation_family_counts: dict[str, int] = field(default_factory=dict)
+    validation_tasks: list[ValidationTask] = field(default_factory=list)
+    training_loader_rows: int | None = None
     contract_source_id: str | None = None
     contract_task_id: str | None = None
     source_counts: dict[str, int] = field(default_factory=dict)
@@ -144,6 +158,7 @@ async def probe(
     expected_sha256: str,
     report: ProbeReport,
     expected_validation_sha256: str | None,
+    validation_family_counts: dict[str, int] | None = None,
 ) -> None:
     report.package_revisions = package_revisions()
     report.phase = "launch_configuration"
@@ -176,6 +191,20 @@ async def probe(
         judge_connection = JudgeConnection(remote_judge["base_url"], os.environ[remote_judge["api_key_env"]])
         os.environ["VERIFYIT_JUDGE_MODEL"] = config.runtime.task_env["VERIFYIT_JUDGE_MODEL"]
         scripts, native = inventory_representatives(path, report, factories, token_prefix, judge_connection)
+        tokenizer = None
+        validation_canaries = {}
+        if validation_family_counts is not None:
+            tokenizer = create_tokenizer(
+                model_path=str(config.inputs.model.tokenizer_uri),
+                revision=str(config.inputs.model.tokenizer_revision),
+                disable_fast_tokenizer=bool(config.skyrl.trainer.disable_fast_tokenizer),
+            )
+            training_dataset = TaskDataset(
+                [str(path)], tokenizer, int(config.skyrl.trainer.max_prompt_length), num_workers=1
+            )
+            report.training_loader_rows = len(training_dataset)
+            if report.training_loader_rows != EXPECTED_ROWS:
+                raise ValueError("The selected initializer's training loader dropped inventory rows")
         if config.inputs.validation_data:
             report.phase = "validation_contracts"
             if len(config.inputs.validation_data) != 1 or expected_validation_sha256 is None:
@@ -189,15 +218,58 @@ async def probe(
                 report.validation_sha256 = hashlib.file_digest(source, "sha256").hexdigest()
             if report.validation_sha256 != expected_validation_sha256:
                 raise ValueError("The validation panel differs from its expected SHA-256")
-            engine = RolloutEngine(factories, {"token_prefix": token_prefix})
-            for batch in pq.ParquetFile(validation_path).iter_batches(columns=["task_rollout_spec"], batch_size=256):
+            engines = {}
+            counts = Counter()
+            tasks = []
+            columns = ["task_rollout_spec"]
+            if validation_family_counts is not None:
+                columns.extend(["task_id", "evaluation_family", "contract_id", "source_contract_id"])
+            for batch in pq.ParquetFile(validation_path).iter_batches(columns=columns, batch_size=256):
                 for row in batch.to_pylist():
                     spec = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
-                    engine.check(spec.model_copy(update={"judge_connection": judge_connection}))
+                    if spec.harness not in engines:
+                        harness = token_prefix if spec.harness == "token_prefix" else shell_harness(spec.harness)
+                        engines[spec.harness] = RolloutEngine(factories, {spec.harness: harness})
+                    engines[spec.harness].check(spec.model_copy(update={"judge_connection": judge_connection}))
                     report.validation_rows += 1
                     report.validation_engine_checks += 1
-            if report.validation_rows != EXPECTED_VALIDATION_ROWS:
+                    if validation_family_counts is not None:
+                        if row["task_id"] != spec.task.id:
+                            raise ValueError("Validation pairing ID differs from its runtime task")
+                        family = row["evaluation_family"]
+                        counts[family] += 1
+                        tasks.append(row)
+                        if isinstance(spec.task.grader, ScriptGrader):
+                            if spec.verifier_machine is None or spec.verifier_machine.backend != Backend.DAYTONA:
+                                raise ValueError("Original panel graders require their source Daytona backend")
+                            validation_canaries.setdefault(family, spec)
+            if validation_family_counts is None and report.validation_rows != EXPECTED_VALIDATION_ROWS:
                 raise ValueError("The complete 243-contract validation panel did not pass engine checks")
+            if validation_family_counts is not None:
+                assert tokenizer is not None
+                if counts != validation_family_counts or len({row["task_id"] for row in tasks}) != len(tasks):
+                    raise ValueError("Full-panel family counts or unique pairing IDs differ")
+                if set(validation_canaries) != set(validation_family_counts) - {"structural"}:
+                    raise ValueError("Every original script-grading family requires a validation canary")
+                validation_dataset = TaskDataset(
+                    [str(validation_path)], tokenizer, int(config.skyrl.trainer.max_prompt_length), num_workers=1
+                )
+                if len(validation_dataset) != len(tasks):
+                    raise ValueError("The selected initializer's validation loader dropped panel rows")
+                admitted = validation_dataset.collate_fn(list(validation_dataset))
+                for expected, actual in zip(tasks, admitted, strict=True):
+                    if expected["task_id"] != actual["input"].spec.task.id:
+                        raise ValueError("Validation loader changed original panel ordering")
+                    report.validation_tasks.append(
+                        ValidationTask(
+                            expected["task_id"],
+                            expected["evaluation_family"],
+                            expected["contract_id"],
+                            expected["source_contract_id"],
+                            actual["uid"],
+                        )
+                    )
+                report.validation_family_counts = dict(counts)
         elif expected_validation_sha256 is not None:
             raise ValueError("A validation hash was supplied without a configured validation panel")
     report.phase = "script_grading"
@@ -219,6 +291,18 @@ async def probe(
     report.checks.append(SourceProbe(native.source.dataset, native.id, grade.status, grade.reward))
     if grade.status != Outcome.GRADED:
         raise ValueError("The native closure grader did not produce a grade")
+    report.phase = "validation_grading"
+    for family, spec in sorted(validation_canaries.items()):
+        assert isinstance(spec.task.grader, ScriptGrader) and spec.verifier_machine is not None
+        grade = await grade_empty_in_sandbox(
+            spec.task,
+            factories[spec.verifier_machine.backend],
+            _machine_spec(spec.task.grader.environment, spec.verifier_machine),
+            timeout=spec.limits.verifier_timeout,
+        )
+        report.checks.append(SourceProbe(family, spec.task.id, grade.status, grade.reward))
+        if grade.status != Outcome.GRADED or grade.reward != 0:
+            raise ValueError("An original validation grader did not reject the empty submission with a usable zero")
     report.status = "passed"
     report.phase = "complete"
 
@@ -233,11 +317,19 @@ def write_report(output_uri: str, report: ProbeReport) -> None:
 @click.option("--launch-config", type=click.Path(exists=True, path_type=Path), required=True)
 @click.option("--expected-sha256", required=True)
 @click.option("--expected-validation-sha256")
+@click.option("--validation-family-counts", help="Required explicit JSON family counts for a full development panel.")
 @click.option("--output-uri", required=True, help="Destination JSON report URI.")
-def main(launch_config: Path, expected_sha256: str, expected_validation_sha256: str | None, output_uri: str) -> None:
+def main(
+    launch_config: Path,
+    expected_sha256: str,
+    expected_validation_sha256: str | None,
+    validation_family_counts: str | None,
+    output_uri: str,
+) -> None:
     report = ProbeReport()
     try:
-        asyncio.run(probe(launch_config, expected_sha256, report, expected_validation_sha256))
+        counts = json.loads(validation_family_counts) if validation_family_counts is not None else None
+        asyncio.run(probe(launch_config, expected_sha256, report, expected_validation_sha256, counts))
     except Exception as error:
         report.status = "failed"
         report.error_type = type(error).__name__

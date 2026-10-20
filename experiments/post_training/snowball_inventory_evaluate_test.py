@@ -17,7 +17,11 @@ def panel():
 
 def test_missing_grade_remains_in_family_and_aggregate_denominators(panel):
     report = summarize_panel(
-        panel, [EvaluationOutcome("calendar-a", 1.0, "stop"), EvaluationOutcome("native-c", None, "length")]
+        panel,
+        [
+            EvaluationOutcome("calendar-a", 1.0, "stop", "verified"),
+            EvaluationOutcome("native-c", None, "length", "unavailable", "ProviderRateLimitError"),
+        ],
     )
 
     assert report["complete"] is False
@@ -27,6 +31,8 @@ def test_missing_grade_remains_in_family_and_aggregate_denominators(panel):
     assert report["families"]["calendar"]["coverage"] == 0.5
     assert report["families"]["structural"]["scored"] == 0
     assert report["families"]["structural"]["length_stops"] == 1
+    assert report["families"]["structural"]["failure_categories"] == {"ProviderRateLimitError": 1}
+    assert report["families"]["calendar"]["failure_categories"] == {}
     assert [row["attempted"] for row in report["tasks"]] == [True, False, True]
 
 

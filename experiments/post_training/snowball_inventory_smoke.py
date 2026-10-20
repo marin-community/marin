@@ -3,6 +3,7 @@
 
 """Ten optimizer updates over the versioned Snowball curriculum inventory."""
 
+import json
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -50,10 +51,15 @@ class InventoryRunConfig:
     training: SkyRLRunConfig
     pool_sha256: str
     validation_sha256: str | None = None
+    validation_family_counts: dict[str, int] | None = None
 
 
 def verify_pool_runtime(
-    launch_config_yaml: str, expected_sha256: str, output_uri: str, validation_sha256: str | None
+    launch_config_yaml: str,
+    expected_sha256: str,
+    output_uri: str,
+    validation_sha256: str | None,
+    validation_family_counts: dict[str, int] | None = None,
 ) -> None:
     with TemporaryDirectory(prefix="snowball-launch-preflight-") as directory:
         path = Path(directory) / "launch.yaml"
@@ -76,6 +82,8 @@ def verify_pool_runtime(
         ]
         if validation_sha256 is not None:
             command.extend(["--expected-validation-sha256", validation_sha256])
+        if validation_family_counts is not None:
+            command.extend(["--validation-family-counts", json.dumps(validation_family_counts, sort_keys=True)])
         subprocess.run(
             command,
             cwd=Path(__file__).resolve().parents[2],
@@ -89,7 +97,13 @@ def run_inventory(config: InventoryRunConfig) -> SkyRLRun:
     remote(
         verify_pool_runtime,
         resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
-    )(config.training.launch_config_yaml, config.pool_sha256, report_uri, config.validation_sha256)
+    )(
+        config.training.launch_config_yaml,
+        config.pool_sha256,
+        report_uri,
+        config.validation_sha256,
+        config.validation_family_counts,
+    )
     return run_skyrl(config.training)
 
 
