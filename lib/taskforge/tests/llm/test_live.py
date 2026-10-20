@@ -19,7 +19,7 @@ from typing import Annotated
 
 import pytest
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
-from rolloutengine.contracts import ModelRequest
+from rolloutengine.models import ModelRequest
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
@@ -331,8 +331,6 @@ def test_rollout_model_turn_is_recorded_in_the_ledger(glm_source, live_provider,
     request = ModelRequest(
         ({"role": "user", "content": "Name the largest planet in the solar system in one word."},),
         {},
-        prefix_token_ids=(),
-        assistant_message_index=None,
     )
 
     async def go():

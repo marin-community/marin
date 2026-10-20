@@ -8,7 +8,7 @@ from dataclasses import replace
 
 import pytest
 from pydantic import BaseModel
-from rolloutengine.contracts import ModelRequest, TokenUsage
+from rolloutengine.models import ModelRequest, TokenUsage
 
 from taskforge.ledger.records import EntryKind, Ledger
 from taskforge.llm.agent import ReasoningReplay, run_agent
@@ -48,7 +48,7 @@ async def test_rollout_model_records_retried_statuses_and_the_turns_usage(fake_g
     fake_glm.stream(content="done", prompt_tokens=3, completion_tokens=2)
     model = GlmRolloutModel(client, ROLLOUT_POLICY, call_ledger(ledger))
 
-    turn = await model(ModelRequest(CONVERSATION, {}, prefix_token_ids=(1, 2), assistant_message_index=None))
+    turn = await model(ModelRequest(CONVERSATION, {}))
 
     assert (turn.text, turn.usage) == ("done", TokenUsage(prompt_tokens=3, completion_tokens=2))
     [entry] = ledger.entries
@@ -67,7 +67,7 @@ async def test_rollout_model_records_a_call_that_runs_out_of_attempts(fake_glm, 
     model = GlmRolloutModel(client, ROLLOUT_POLICY, call_ledger(ledger))
 
     with pytest.raises(ModelUnavailable):
-        await model(ModelRequest(CONVERSATION[:1], {}, prefix_token_ids=(), assistant_message_index=None))
+        await model(ModelRequest(CONVERSATION[:1], {}))
 
     [entry] = ledger.entries
     assert entry.cause == "ModelUnavailable"
