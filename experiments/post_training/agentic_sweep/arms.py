@@ -56,6 +56,7 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache, tokenize
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
@@ -498,6 +499,7 @@ def main() -> None:
     parser.add_argument("--preemption-retries", type=int, default=0)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
+    configure_coreweave_s3()
     manifest_bytes = (StoragePath(args.arm_data) / "manifest.json").read_bytes()
     if hashlib.sha256(manifest_bytes).hexdigest() != args.manifest_sha256:
         raise ValueError("Arm manifest hash mismatch")
