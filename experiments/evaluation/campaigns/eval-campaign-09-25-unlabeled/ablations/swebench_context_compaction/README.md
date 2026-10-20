@@ -76,3 +76,13 @@ both inputs. Each task has one trial. The report includes their combined mean,
 missing and unscored counts, and each trial's URI, checksum, and score.
 `all_tasks_scored` becomes true only when all 500 manifest tasks have a score.
 The command does not publish to EvalDash. Verify Iris job completion separately.
+
+The audit also reads `service_outages.json`. It excludes any completed agent
+execution that overlaps a recorded outage whose `results_root` contains the
+trial's source URI, regardless of
+reward. These exclusions are analysis metadata; raw rewards and native error
+types remain unchanged. The report records the outage file's checksum and
+counts excluded tasks as unscored. An outage with `finished_at: null` remains
+open. Set its end only after inference requests have been verified to succeed
+again, then rerun the audit.
+Use `--service-outages PATH` to audit another recorded outage set.

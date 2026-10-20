@@ -9,6 +9,7 @@ import json
 import statistics
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 from marin.evaluation.harbor.driver_config import preflight_harbor_configs
@@ -17,7 +18,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 
-def combine(manifest: dict, retained: list[dict], recovered: list[dict]) -> dict:
+def combine(manifest: dict, retained: list[dict], recovered: list[dict], outages: list[dict]) -> dict:
     """Combine disjoint task outcomes while keeping missing and unscored counts."""
     expected = {Path(task["path"]).name for task in manifest["task_descriptors"]}
     old_tasks = set(manifest["retained_tasks"])
@@ -33,13 +34,30 @@ def combine(manifest: dict, retained: list[dict], recovered: list[dict]) -> dict
             seen.add(task)
     if {row["task_name"] for row in retained} != old_tasks:
         raise ValueError("retained evidence is missing")
-    records = retained + recovered
+    records = [dict(row) for row in retained + recovered]
+    for record in records:
+        phase = record.get("agent_execution") or {}
+        if not phase.get("started_at") or not phase.get("finished_at"):
+            continue
+        start = datetime.fromisoformat(phase["started_at"])
+        finish = datetime.fromisoformat(phase["finished_at"])
+        for outage in outages:
+            if not record["source_uri"].startswith(outage["results_root"].rstrip("/") + "/"):
+                continue
+            if finish <= datetime.fromisoformat(outage["started_at"]):
+                continue
+            if outage["finished_at"] and start >= datetime.fromisoformat(outage["finished_at"]):
+                continue
+            record["scored"] = False
+            record["exclusion_reason"] = "inference_service_outage"
+            break
     rewards = [row["reward"] for row in records if row["scored"]]
     return {
         "expected_tasks": len(expected),
         "completed_tasks": len(records),
         "scored_tasks": len(rewards),
         "unscored_tasks": len(records) - len(rewards),
+        "outage_excluded_tasks": sum(row.get("exclusion_reason") == "inference_service_outage" for row in records),
         "pending_tasks": sorted(expected - seen),
         "all_tasks_scored": len(rewards) == len(expected),
         "mean_reward": statistics.mean(rewards) if rewards else None,
@@ -48,9 +66,11 @@ def combine(manifest: dict, retained: list[dict], recovered: list[dict]) -> dict
     }
 
 
-def audit(manifest_path: Path, recovery_results: str) -> dict:
+def audit(manifest_path: Path, recovery_results: str, outages_path: Path) -> dict:
     """Read frozen source evidence and new results using the pinned taxonomy."""
     manifest = json.loads(manifest_path.read_text())
+    outages_payload = outages_path.read_bytes()
+    outages = json.loads(outages_payload)
     config_path = manifest_path.with_name("harbor.yaml")
     taxonomy = preflight_harbor_configs([(config_path, {})])[0].error_taxonomy
     if taxonomy.commit != manifest["harbor_commit"]:
@@ -94,15 +114,21 @@ def audit(manifest_path: Path, recovery_results: str) -> dict:
                 "reward": trial.reward,
                 "scored": trial.scored,
                 "error_type": trial.error["type"] if trial.error else None,
+                "agent_execution": data.get("agent_execution"),
             }
 
         with ThreadPoolExecutor(max_workers=12) as pool:
             retained = list(pool.map(lambda row: read(row["source_uri"], row), source))
             recovered = list(pool.map(lambda path: read("s3://" + path + "/result.json", None), directories))
     report = combine(
-        manifest, [row for row in retained if row is not None], [row for row in recovered if row is not None]
+        manifest, [row for row in retained if row is not None], [row for row in recovered if row is not None], outages
     )
-    return {"manifest": str(manifest_path), "recovery_results": recovery_results, **report}
+    return {
+        "manifest": str(manifest_path),
+        "recovery_results": recovery_results,
+        "service_outages_sha256": hashlib.sha256(outages_payload).hexdigest(),
+        **report,
+    }
 
 
 def main() -> None:
@@ -110,8 +136,9 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--recovery-results", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--service-outages", type=Path, default=Path(__file__).with_name("service_outages.json"))
     args = parser.parse_args()
-    report = audit(args.manifest, args.recovery_results)
+    report = audit(args.manifest, args.recovery_results, args.service_outages)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps({key: value for key, value in report.items() if key not in ("trials", "pending_tasks")}))
 
