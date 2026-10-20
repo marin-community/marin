@@ -10,9 +10,8 @@ from typing import Any
 
 import pytest
 from rolloutengine.cleanup import _Cleanup
-from rolloutengine.lowering import SHELLBOX_SESSION
 from rolloutengine.machines import _machine_spec, _prepare_machine
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -39,7 +38,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from verifyit.spec import NumericSpec
+from verifyit.spec import JudgeSpec, NumericSpec
 
 from taskforge.sandbox import factories
 from taskforge.sandbox.factories import (
@@ -48,6 +47,7 @@ from taskforge.sandbox.factories import (
     MachineRole,
     RefusalReason,
     container_backend,
+    grading_environment,
     machine_factories,
     task_refusals,
     warm_local_python,
@@ -56,17 +56,14 @@ from taskforge.spec import draft
 
 IMAGE = "registry.example/task@sha256:" + "0" * 64
 SHELL = ("shell", "filesystem")
-SESSION = TaskSessionSpec(
-    task_session=SHELLBOX_SESSION,
+LIMITS = draft.rollout_limits(
     max_turns=1,
     model_turn_timeout=None,
-    command_timeout=1,
     tool_turn_timeout=2,
     total_turn_timeout=None,
     attempt_timeout=None,
     verifier_timeout=5,
     cleanup_timeout=1,
-    max_total_tokens=None,
 )
 
 
@@ -124,7 +121,7 @@ def lowered(
     capabilities: tuple[str, ...] = SHELL,
     grader: Grader | None = None,
     verifier_machine: MachineRuntimeSpec | None = None,
-) -> LoweredTaskSpec:
+) -> TaskRolloutSpec:
     environment = (
         EnvironmentRequirements()
         if task_machine is None
@@ -144,12 +141,16 @@ def lowered(
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
         resources=ResourceGroups(),
     )
-    return LoweredTaskSpec(
-        task=task, runtime=TaskRuntimeSpec(task_machine=task_machine, verifier_machine=verifier_machine), session=SESSION
+    return TaskRolloutSpec(
+        task=task,
+        harness=draft.SHELL_HARNESS,
+        task_machine=task_machine,
+        verifier_machine=verifier_machine,
+        limits=LIMITS,
     )
 
 
-def reasons(spec: LoweredTaskSpec, machines) -> set[tuple[RefusalReason, MachineRole]]:
+def reasons(spec: TaskRolloutSpec, machines) -> set[tuple[RefusalReason, MachineRole]]:
     return {(refusal.reason, refusal.where) for refusal in task_refusals(spec, machines)}
 
 
@@ -208,6 +209,15 @@ def test_verifier_machine_is_checked_against_its_own_backend():
     [refusal] = task_refusals(spec, IRIS)
     assert (refusal.reason, refusal.where) == (RefusalReason.UNSUPPORTED, MachineRole.VERIFIER)
     assert "GPU" in refusal.detail
+
+
+def test_a_judge_takes_no_verifier_machine_whatever_environment_its_grader_names():
+    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=IMAGE)
+    judge = verifyit_package(JudgeSpec(references=("r",), question="q", model="m"), environment=environment).grader
+    numeric = verifyit_package(NumericSpec("1", tolerance_abs=0, tolerance_rel=0), environment=environment).grader
+
+    assert grading_environment(lowered(None, grader=judge).task) is None
+    assert grading_environment(lowered(None, grader=numeric).task) == environment
 
 
 def test_laptop_without_docker_omits_its_factory_and_logs_why(monkeypatch, caplog):
