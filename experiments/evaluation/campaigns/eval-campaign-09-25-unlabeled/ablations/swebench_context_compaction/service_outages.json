@@ -222,5 +222,103 @@
     "finished_at": null,
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "65k/16k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211449-google-gemma-4-26B-A4B-it-swebench-65k-16k-no-summary-aa3182575716437dab464021f8d2ad98-harbor-1367a30667c357789f0085a5e5ee1691/results",
+    "started_at": "2026-10-20T23:37:07.271332Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-211449-269fb598-2-151c1f2ebb49afb3-97b3a",
+    "arm": "65k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211746-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-131k-16k-no-summary-eeca7066407f431b951d5bce1ed63e9d-harbor-69c1ba86fa7c57458d40dda177e9aacb/results",
+    "started_at": "2026-10-20T23:37:07.273401Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-211746-54b998f4-2-e95a7c9600b8f26b-7ae8b",
+    "arm": "131k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200324-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-32k-8k-summary-99b6b05cd4ab4bb4aef42f8cf76fbb3e-32k-8k-summary-8e3161346e6d56a2a16f9cc120867f13/results",
+    "started_at": "2026-10-20T23:37:07.273986Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200324-8dfc8e0d-4-3d70c9f8e57a6f5c-8857f",
+    "arm": "32k/8k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195646-Qwen-Qwen3.6-35B-A3B-swebench-65k-16k-summary-1c54924de79046249ff367dc660388d2-65k-16k-summary-e7cbd26c69425cbbb4d3f4f0c662cc72/results",
+    "started_at": "2026-10-20T23:37:07.275137Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-195646-a71b3ed6-6-8df54e57e0a15d4c-a1aa2",
+    "arm": "65k/16k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211953-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-no-summary-bf2a409496644e9696dc84012b7f2faf-harbor-4d67df54f1b25829bb81ef1d05b94665/results",
+    "started_at": "2026-10-20T23:37:07.281029Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-211953-9532e714-4-cb1588110d35d99f-67c7d",
+    "arm": "65k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195526-Qwen-Qwen3.6-35B-A3B-swebench-32k-8k-summary-c7803e1e44884c96ae48f55f67eec1fa-32k-8k-summary-38fb91f20481579f9c591e0190f9928c/results",
+    "started_at": "2026-10-20T23:37:07.281617Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-195526-d6e953ed-3-ab5fe64537019946-4d472",
+    "arm": "32k/8k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200205-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-65k-16k-summary-98cea9cde5f14cd8b9feda873e8e75b1-65k-16k-summary-d401cf7abca251269cc2a9023dbe47e7/results",
+    "started_at": "2026-10-20T23:37:07.296152Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200205-4f4ca116-2-1faa86a659793f20-202ea",
+    "arm": "65k/16k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200045-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-32k-8k-summary-4eb260adacdf4384830a0f69fff88ed7-32k-8k-summary-cf8e8e3f7707534a9eca0ed0c694a67c/results",
+    "started_at": "2026-10-20T23:37:07.296749Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200045-b8680c34-2-6c2baab49e2b98ee-dcd9b",
+    "arm": "32k/8k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211609-google-gemma-4-26B-A4B-it-swebench-131k-16k-no-summary-b932337c1f2a43f8aeec48855e0604e1-harbor-e4709bcd7ab85767a3b9128e711608ed/results",
+    "started_at": "2026-10-20T23:37:07.302264Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-211609-fa521cfe-1-2378b9a5732908b2-6821a",
+    "arm": "131k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200028-google-gemma-4-26B-A4B-it-swebench-65k-16k-summary-d3f9500038a04796972503728e1dd59e-65k-16k-summary-d27a7cf16b7352709da157160580ae21/results",
+    "started_at": "2026-10-20T23:37:07.304156Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200028-98a42c32-2-7cec2aa3b079d77d-20b6d",
+    "arm": "65k/16k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-212113-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-131k-16k-no-summary-656bb1d55ea64f1891f0d97c6a431138-harbor-0f63a464cee25ab19b1c7a27505b1794/results",
+    "started_at": "2026-10-20T23:37:07.309362Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-212113-137310d6-3-0145da610a040287-fb5cf",
+    "arm": "131k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211329-Qwen-Qwen3.6-35B-A3B-swebench-131k-16k-no-summary-b2ca61c701a640a78c6f0ab0c38a043b-harbor-35ab8bb847515f0a8a78861240cb1264/results",
+    "started_at": "2026-10-20T23:37:07.309804Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-211329-2e27281a-3-11c1db03a2b28592-68ed5",
+    "arm": "131k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211627-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-65k-16k-no-summary-f76df848f8f547879d420b66da1301f3-harbor-3aefc1f8a8e059a3a8e7727a01f4fbb1/results",
+    "started_at": "2026-10-20T23:37:07.310742Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-211627-850b4c8f-1-ba194985ddab0eb4-f09a4",
+    "arm": "65k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211312-Qwen-Qwen3.6-35B-A3B-swebench-65k-16k-no-summary-233d957240f7403ab7cef4141b20dee0-harbor-4efa052b552c551d8682c8eb88a059fd/results",
+    "started_at": "2026-10-20T23:37:56.995125Z",
+    "finished_at": null,
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-211312-315e87b6-1-f1cee0095c926a82-7bbeb",
+    "arm": "65k/16k, no summary"
   }
 ]
