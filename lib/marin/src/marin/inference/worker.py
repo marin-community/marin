@@ -11,16 +11,21 @@ from contextlib import contextmanager
 from typing import Any
 
 import httpx
-from rigging.timing import ExponentialBackoff
+from rigging.timing import ExponentialBackoff, Timer
 
 from marin.inference.http_proxy import forwardable_response_headers
 from marin.inference.types import (
+    WORKER_HEARTBEAT_SECONDS,
     InferenceRequest,
     InferenceRequestProvider,
     InferenceResponse,
     LeasedInferenceRequest,
     LeasedInferenceResponse,
     RunningModel,
+    StreamChunk,
+    StreamEnd,
+    StreamError,
+    StreamStart,
     format_request_ids,
 )
 
@@ -36,10 +41,12 @@ class InferenceWorker:
         broker: InferenceRequestProvider,
         upstream: RunningModel,
         request_timeout_seconds: float,
+        worker_id: str,
     ) -> None:
         self._broker = broker
         self._upstream = upstream
         self._request_timeout_seconds = request_timeout_seconds
+        self._worker_id = worker_id
 
     def run_forever(
         self,
@@ -53,7 +60,9 @@ class InferenceWorker:
         if stop_event is None:
             stop_event = threading.Event()
         backoff = ExponentialBackoff() if backoff is None else backoff.copy()
-        in_flight: set[Future[LeasedInferenceResponse]] = set()
+        in_flight: set[Future[LeasedInferenceResponse | None]] = set()
+        heartbeat = Timer()
+        heartbeat_at = -WORKER_HEARTBEAT_SECONDS
         logger.info(
             "InferenceWorker starting upstream=%s model=%s max_in_flight=%d timeout_seconds=%.1f",
             self._upstream.endpoint.base_url,
@@ -67,6 +76,9 @@ class InferenceWorker:
                 ThreadPoolExecutor(max_workers=max_in_flight, thread_name_prefix="inference-worker-request") as pool,
             ):
                 while not stop_event.is_set():
+                    if heartbeat.elapsed_seconds() - heartbeat_at >= WORKER_HEARTBEAT_SECONDS:
+                        self._broker.heartbeat(self._worker_id)
+                        heartbeat_at = heartbeat.elapsed_seconds()
                     available_slots = max_in_flight - len(in_flight)
                     if available_slots:
                         # `max_in_flight` counts individual HTTP requests; vLLM does its own continuous batching.
@@ -86,17 +98,17 @@ class InferenceWorker:
                             backoff.reset()
 
                     if not in_flight:
-                        stop_event.wait(backoff.next_interval())
+                        stop_event.wait(min(WORKER_HEARTBEAT_SECONDS, backoff.next_interval()))
                         continue
 
                     done, _ = wait(
                         in_flight,
-                        timeout=backoff.next_interval(),
+                        timeout=min(WORKER_HEARTBEAT_SECONDS, backoff.next_interval()),
                         return_when=FIRST_COMPLETED,
                     )
                     in_flight.difference_update(done)
                     if done:
-                        responses = [future.result() for future in done]
+                        responses = [response for future in done if (response := future.result()) is not None]
                         self._broker.submit_responses(responses)
                         logger.info(
                             "InferenceWorker submitted responses count=%d in_flight=%d/%d statuses=%s request_ids=%s",
@@ -110,18 +122,60 @@ class InferenceWorker:
         finally:
             logger.info("InferenceWorker stopping in_flight=%d", len(in_flight))
 
-    def _forward_one(self, client: httpx.Client, leased_request: LeasedInferenceRequest) -> LeasedInferenceResponse:
+    def _forward_one(
+        self, client: httpx.Client, leased_request: LeasedInferenceRequest
+    ) -> LeasedInferenceResponse | None:
         request = leased_request.request
         if request.path.startswith("/v1/"):
             url = self._upstream.endpoint.url(request.path.removeprefix("/v1/"))
         else:
             url = self._upstream.endpoint.server_url(request.path)
+        if request.streaming:
+            self._stream(client, leased_request, url)
+            return None
         try:
             response = self._send(client, request, url)
             inference_response = _response_from_upstream(request, response)
         except Exception as exc:
             inference_response = _response_from_exception(request, exc, timeout_seconds=self._request_timeout_seconds)
         return LeasedInferenceResponse(lease_id=leased_request.lease_id, response=inference_response)
+
+    def _stream(self, client: httpx.Client, leased: LeasedInferenceRequest, url: str) -> None:
+        request = leased.request
+        sequence = 0
+        try:
+            if request.query_string:
+                url = f"{url}?{request.query_string}"
+            with client.stream(request.method, url, content=request.payload, headers=dict(request.headers)) as response:
+                start = StreamStart(
+                    request.request_id,
+                    leased.lease_id,
+                    sequence,
+                    response.status_code,
+                    tuple(forwardable_response_headers(response.headers).items()),
+                )
+                if not self._broker.submit_stream_event(start):
+                    return
+                sequence += 1
+                for payload in response.iter_raw():
+                    if not self._broker.submit_stream_event(
+                        StreamChunk(request.request_id, leased.lease_id, sequence, payload)
+                    ):
+                        return
+                    sequence += 1
+                self._broker.submit_stream_event(StreamEnd(request.request_id, leased.lease_id, sequence))
+        except Exception as error:
+            if sequence == 0:
+                self._broker.submit_responses(
+                    [
+                        LeasedInferenceResponse(
+                            leased.lease_id,
+                            _response_from_exception(request, error, timeout_seconds=self._request_timeout_seconds),
+                        )
+                    ]
+                )
+            else:
+                self._broker.submit_stream_event(StreamError(request.request_id, leased.lease_id, sequence, str(error)))
 
     def _send(self, client: httpx.Client, request: InferenceRequest, url: str) -> httpx.Response:
         method = request.method.upper()
@@ -168,7 +222,11 @@ def _response_from_upstream(request: InferenceRequest, response: httpx.Response)
         request_id=request.request_id,
         status_code=response.status_code,
         payload=response.content,
-        headers=tuple(forwardable_response_headers(response.headers).items()),
+        headers=tuple(
+            (key, value)
+            for key, value in forwardable_response_headers(response.headers).items()
+            if key.lower() != "content-encoding"
+        ),
     )
 
 
