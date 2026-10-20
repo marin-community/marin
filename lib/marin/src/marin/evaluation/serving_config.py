@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from functools import cache
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 
 from fray.types import ResourceConfig, create_environment
 from huggingface_hub import HfApi, hf_hub_download
@@ -17,10 +18,13 @@ from iris.cluster.setup_scripts import default_setup_script
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
+from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
     BrokerConfig,
+    InferenceProxyConfig,
+    InferenceWorkerConfig,
     IrisConfig,
     LevanterEngineConfig,
     RemoteInferenceConfig,
@@ -33,7 +37,10 @@ from marin.inference.config import (
 logger = logging.getLogger(__name__)
 
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
-EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
+_BROKER_DEADLINE_MARGIN_SECONDS = 60
+EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = MappingProxyType({Platform.GPU: 4096, Platform.TPU: 512})
+_EVAL_WORKER_MAX_IN_FLIGHT = 64
+_EVAL_PROXY_MIN_PENDING_REQUESTS = 256
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
 _MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
@@ -206,7 +213,7 @@ def _vllm_engine_config(
         max_num_batched_tokens=(
             serve.max_num_batched_tokens
             if serve.max_num_batched_tokens is not None
-            else EVAL_SERVE_MAX_NUM_BATCHED_TOKENS
+            else EVAL_SERVE_MAX_NUM_BATCHED_TOKENS[platform]
         ),
         max_num_seqs=serve.max_num_seqs,
         extra_args=(*extra_args, *_QUIET_VLLM_ARGS),
@@ -239,9 +246,24 @@ def inference_config_for_model(
     api_model: str | None = None,
     instances: int = 1,
     broker: BrokerConfig | None = None,
+    request_timeout_seconds: float = EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)
+    if instances > 1 and broker is None:
+        # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
+        broker = BrokerConfig(
+            worker=InferenceWorkerConfig(
+                max_in_flight=_EVAL_WORKER_MAX_IN_FLIGHT,
+                request_timeout_seconds=request_timeout_seconds + _BROKER_DEADLINE_MARGIN_SECONDS,
+            ),
+            proxy=InferenceProxyConfig(
+                max_pending_requests=max(_EVAL_PROXY_MIN_PENDING_REQUESTS, instances * _EVAL_WORKER_MAX_IN_FLIGHT),
+                request_timeout_seconds=request_timeout_seconds + 3 * _BROKER_DEADLINE_MARGIN_SECONDS,
+                readiness_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
+            ),
+            request_lease_timeout_seconds=request_timeout_seconds + 2 * _BROKER_DEADLINE_MARGIN_SECONDS,
+        )
     if serve.speculative is not None and accelerator.platform is not Platform.GPU:
         raise ValueError("speculative serving requires the GPU vLLM backend")
     geometry = serving_geometry(serve, accelerator)

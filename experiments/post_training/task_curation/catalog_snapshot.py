@@ -10,6 +10,7 @@ from typing import Any
 
 from finestore.rl.curation import (
     ASSESSMENTS,
+    ATTEMPTS,
     CURRENT,
     INVENTORY,
     ITEMS,
@@ -42,7 +43,6 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.source_metadata import source_declaration
 
 
 def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
@@ -144,9 +144,31 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
     return assessment
 
 
+def published_source_starts(catalog: CurationCatalog) -> dict[str, datetime]:
+    """Return each source's latest published campaign start from retained run history."""
+    published = {key[0] for key in catalog.view.keys(SNAPSHOTS)}
+    starts = {
+        row["run_id"]: row["started_at"]
+        for row in catalog.view.iter_rows(RUNS, columns=["run_id", "started_at"])
+        if row["run_id"] in published
+    }
+    latest: dict[str, datetime] = {}
+    for row in catalog.view.iter_rows(ATTEMPTS, columns=["run_id", "source_id", "status"]):
+        if row["run_id"] not in starts or row["source_id"] is None or row["status"] == AssessmentStatus.SKIPPED:
+            continue
+        started_at = starts[row["run_id"]]
+        if started_at is None:
+            raise ValueError(f"Published campaign {row['run_id']} has no start time")
+        started = datetime.fromisoformat(started_at)
+        source_id = row["source_id"]
+        if source_id not in latest or started > latest[source_id]:
+            latest[source_id] = started
+    return latest
+
+
 def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> CatalogSnapshot:
     """Archive selected outputs before publishing their typed catalog snapshot."""
-    declarations = [source_declaration(source) for source in sources]
+    declarations = [source.declaration for source in sources]
     by_id = {row.id: row for row in declarations}
     if len(by_id) != len(declarations):
         raise ValueError("Catalog source IDs must be unique")
@@ -171,16 +193,33 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                 raise ValueError("Campaign sources must be unique members of the catalog inventory")
             pointer = catalog.view.point(CURRENT, name="latest")
             previous = {row.id: row for row in catalog.sources(pointer["snapshot_id"])} if pointer else {}
+            if run["started_at"] is None:
+                raise ValueError(f"Campaign {run_id} has no start time")
+            started = datetime.fromisoformat(run["started_at"])
+            superseded = {
+                source_id
+                for source_id, prior_start in published_source_starts(catalog).items()
+                if source_id in selected and source_id in previous and started < prior_start
+            }
+            declarations.extend(row.declaration for source_id, row in previous.items() if source_id not in by_id)
             completed = set(catalog.view.keys(ASSESSMENTS))
             rows = []
             for declaration in declarations:
                 prior = previous.get(declaration.id)
+                attempt = selected.get(declaration.id)
+                if prior is not None and (attempt is None or declaration.id in superseded):
+                    reason = prior.reason
+                    if declaration.id in superseded:
+                        reason = "; ".join(
+                            part for part in (reason, f"Ignored superseded attempt from campaign {run_id}") if part
+                        )
+                    rows.append(prior.model_copy(update={"snapshot_id": run_id, "reason": reason}))
+                    continue
                 unchanged = (
                     prior is not None
                     and prior.declaration.pipeline == declaration.pipeline
                     and prior.declaration.dataset_revision == declaration.dataset_revision
                 )
-                attempt = selected.get(declaration.id)
                 key = prior.assessment_key if unchanged else None
                 status = prior.latest_attempt_status if unchanged else AssessmentStatus.SKIPPED
                 reason = (
@@ -225,6 +264,9 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             snapshot = CatalogSnapshot(
                 snapshot_id=run_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
             )
+            lease.refresh()
+            if store.read_view().point(CURRENT, name="latest") != pointer:
+                raise RuntimeError("Catalog selection changed during publication; retry publication")
             with store.transaction() as transaction:
                 transaction.table(INVENTORY).extend(row.model_dump(mode="json") for row in rows)
                 transaction.table(SNAPSHOTS).add(snapshot.model_dump(mode="json"))

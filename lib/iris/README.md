@@ -11,8 +11,9 @@ Distributed job orchestration for Marin.
 uv run iris --cluster=marin cluster start
 
 # Start a local cluster for testing (mimics the config without GCP)
-# Dashboard is available at the printed URL; press Ctrl+C to stop.
-uv run iris --cluster=marin cluster start --local
+# Dashboard is available at the printed URL; press Ctrl+C to stop. The local
+# controller embeds the native log server from the `controller` extra.
+uv run --package marin-iris --extra controller iris --cluster=marin cluster start --local
 
 # Check cluster status
 uv run iris --cluster=marin cluster status
@@ -292,6 +293,19 @@ This enables JAX and other TPU-aware frameworks to initialize correctly inside j
 ## Bundle Storage (Required)
 
 Jobs can include a `bundle_blob` containing workspace files. The controller stores these in a shared location accessible to all workers.
+
+Workspace bundles have a 25 MiB limit on the compressed ZIP. Iris collects tracked
+and untracked files using `git ls-files --cached --others --exclude-standard`,
+then excludes these paths at any depth: `docs/`, `tests/`, `.agents/`, `.claude/`,
+`.codex/`, `.github/`, Rust `target/` directories, and `journeys-out/` directories.
+It also excludes notebooks, native `.so` files, and `AGENTS.md`, `TESTING.md`, and
+`OPS.md`. The same exclusions apply when Git is unavailable.
+Package metadata, lockfiles, runtime resources, and generated Iris RPC modules
+remain eligible for inclusion. Use `extra_bundle_includes` (or CLI `--include`)
+to add required files excluded by default, such as a validation job's tests and
+`conftest.py` files or a Git-ignored frontend `dist/`. Explicit `bundle_exclude`
+patterns (CLI `--exclude`) and build/cache exclusions, including Rust `target/`
+directories and native `.so` files, still apply to these includes.
 
 **Configuration** (required):
 

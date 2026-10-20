@@ -172,8 +172,9 @@ class _Segment:
 def _carries_token(chunk: ChatCompletionChunk) -> bool:
     """Check a chunk for generated text in its content, reasoning or tool-call deltas.
 
-    vLLM's reasoning parser streams reasoning in ``delta.reasoning``, a field outside the SDK's model.
-    A chunk holding only reasoning counts as a token for the stall clock and for ``ttft``.
+    vLLM's reasoning parser streams reasoning in ``delta.reasoning``, a field absent from the SDK's
+    ``ChoiceDelta`` schema. A chunk holding only reasoning counts as a token for the stall clock and
+    for ``ttft``.
     """
     return any(
         choice.delta.content or choice.delta.tool_calls or (choice.delta.model_extra or {}).get("reasoning")

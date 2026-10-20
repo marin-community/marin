@@ -13,6 +13,50 @@ CREATE TABLE IF NOT EXISTS atlas_current (
     name TEXT PRIMARY KEY, load_id TEXT
 );
 INSERT INTO atlas_current (name) VALUES ('latest') ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS curriculum_loads (
+    load_id TEXT PRIMARY KEY, release_id TEXT NOT NULL, release_uri TEXT NOT NULL,
+    manifest JSONB NOT NULL, loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS curriculum_current (
+    name TEXT PRIMARY KEY, load_id TEXT, previous_load_id TEXT
+);
+INSERT INTO curriculum_current (name) VALUES ('latest') ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS curriculum_sources (
+    load_id TEXT NOT NULL, source_id TEXT NOT NULL, declaration JSONB NOT NULL,
+    family TEXT NOT NULL, alignment JSONB,
+    PRIMARY KEY (load_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS curriculum_nodes (
+    load_id TEXT NOT NULL, subject_id TEXT NOT NULL, node_id TEXT NOT NULL,
+    parent_id TEXT, kind TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL,
+    PRIMARY KEY (load_id, subject_id, node_id)
+);
+CREATE TABLE IF NOT EXISTS curriculum_ancestors (
+    load_id TEXT NOT NULL, subject_id TEXT NOT NULL, node_id TEXT NOT NULL, ancestor_id TEXT NOT NULL,
+    PRIMARY KEY (load_id, subject_id, node_id, ancestor_id)
+);
+CREATE TABLE IF NOT EXISTS curriculum_tasks (
+    load_id TEXT NOT NULL, source_id TEXT NOT NULL, task_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL, description_status TEXT NOT NULL, description TEXT NOT NULL,
+    detail JSONB NOT NULL,
+    PRIMARY KEY (load_id, source_id, task_id),
+    FOREIGN KEY (load_id, source_id) REFERENCES curriculum_sources (load_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS curriculum_matches (
+    load_id TEXT NOT NULL, source_id TEXT NOT NULL, task_id TEXT NOT NULL,
+    subject_id TEXT NOT NULL, capability_id TEXT NOT NULL, facet TEXT NOT NULL,
+    membership_similarity DOUBLE PRECISION NOT NULL, capability_similarity DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (load_id, source_id, task_id, subject_id),
+    FOREIGN KEY (load_id, source_id, task_id) REFERENCES curriculum_tasks (load_id, source_id, task_id)
+);
+CREATE INDEX IF NOT EXISTS curriculum_match_area
+    ON curriculum_matches (load_id, subject_id, capability_id, source_id, task_id);
+CREATE TABLE IF NOT EXISTS curriculum_statistics (
+    load_id TEXT NOT NULL, source_id TEXT NOT NULL, metric TEXT NOT NULL,
+    subject_id TEXT NOT NULL, node_id TEXT NOT NULL, instances BIGINT NOT NULL,
+    PRIMARY KEY (load_id, source_id, metric, subject_id, node_id),
+    FOREIGN KEY (load_id, source_id) REFERENCES curriculum_sources (load_id, source_id)
+);
 CREATE TABLE IF NOT EXISTS atlas_sources (
     load_id TEXT NOT NULL, id TEXT NOT NULL, declaration JSONB NOT NULL,
     assessment_key TEXT, latest_attempt_key TEXT, latest_attempt_status TEXT NOT NULL,
