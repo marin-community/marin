@@ -11,8 +11,11 @@ import torch
 from cloud.iris.hf_model_cache import stage_model_metadata
 from marinskyrl.model_manifest import snapshot_model_manifest
 from skyrl_train.io import io
-from skyrl_train.io.remote_safetensors import RemoteSafetensorsTensorStore, lazy_first_dim_patterns_for_bridge
 from skyrl_train.models.grug_moe import GRUG_STACKED_EXPERT_SLICE_PATTERNS
+from skyrl_train.distributed.megatron.remote_weight_tasks import prefetch_items_from_tasks
+from skyrl_train.config.remote_read import RemoteReadMode
+import skyrl_train.io.remote_safetensors as remote_safetensors
+from skyrl_train.io.remote_safetensors import RemoteSafetensorsTensorStore, lazy_first_dim_patterns_for_bridge
 
 
 class CountingFileSystem(AbstractFileSystem):
@@ -25,6 +28,7 @@ class CountingFileSystem(AbstractFileSystem):
         self.shards = shards or {}
         self.opens = 0
         self.fetched_bytes = 0
+        self.gets = 0
 
     def info(self, path, **kwargs):
         return {"name": path, "type": "file", "size": len(self.shards.get(path, self.payload))}
@@ -41,9 +45,17 @@ class CountingFileSystem(AbstractFileSystem):
         )
 
     def cat_file(self, path, start=None, end=None, **kwargs):
+        self.gets += 1
         payload = self.shards.get(path, self.payload)[start:end]
         self.fetched_bytes += len(payload)
         return payload
+
+
+def _task(hf_param, megatron_param="dense", owned=True):
+    return SimpleNamespace(
+        megatron_module=object() if owned else None,
+        mapping=SimpleNamespace(hf_param=hf_param, megatron_param=megatron_param),
+    )
 
 
 def _write_index(metadata_dir: Path, weight_map: dict[str, str]) -> None:
@@ -74,15 +86,6 @@ def test_single_key_and_expert_slice_reads_fetch_only_requested_bytes(
     else:
         save_file(tensors, shard)
     shards = {f"bucket/policy/{expert_shard.name}": expert_shard.read_bytes()} if split_shards else {}
-    filesystem = CountingFileSystem(shard.read_bytes(), shards)
-    local_filesystem_for = io.filesystem_and_path
-    monkeypatch.setattr(
-        io,
-        "filesystem_and_path",
-        lambda path: (filesystem, path.removeprefix("s3://"))
-        if path.startswith("s3://")
-        else local_filesystem_for(path),
-    )
     metadata = tmp_path / "metadata"
     if indexed:
         _write_index(
@@ -91,30 +94,64 @@ def test_single_key_and_expert_slice_reads_fetch_only_requested_bytes(
         )
     else:
         metadata.mkdir()
-    store = RemoteSafetensorsTensorStore(
-        "s3://bucket/policy",
-        metadata,
-        lazy_first_dim_patterns=GRUG_STACKED_EXPERT_SLICE_PATTERNS,
-    )
-    for index in (2, 0, 1):
-        key = f"layer.{index}.weight"
-        torch.testing.assert_close(store.load_tensors([key])[key], tensors[key])
-    if expert_layout == "stacked":
-        experts = store.load_tensors([expert_key])[expert_key]
+    results = {}
+    local_filesystem_for = io.filesystem_and_path
+    for mode in RemoteReadMode:
+        filesystem = CountingFileSystem(shard.read_bytes(), shards)
+        monkeypatch.setattr(
+            io,
+            "filesystem_and_path",
+            lambda path: (filesystem, path.removeprefix("s3://"))
+            if path.startswith("s3://")
+            else local_filesystem_for(path),
+        )
+        store = RemoteSafetensorsTensorStore(
+            "s3://bucket/policy",
+            metadata,
+            lazy_first_dim_patterns=GRUG_STACKED_EXPERT_SLICE_PATTERNS,
+        )
+        tasks = [
+            _task({"left": "layer.2.weight", "right": "layer.0.weight"}),
+            _task("layer.1.weight"),
+            *[
+                _task(
+                    expert_key
+                    if expert_layout == "stacked"
+                    else f"model.layers.0.mlp.experts.{index}.down_proj.weight",
+                    str(index),
+                )
+                for index in (2, 0, 1)
+            ],
+            _task("unrequested.weight", owned=False),
+            _task("missing.weight"),
+        ]
+        if mode == RemoteReadMode.PREFETCH:
+            store.plan_prefetch(prefetch_items_from_tasks(tasks, store.lazy_first_dim_keys, int))
         for index in (2, 0, 1):
-            torch.testing.assert_close(experts[index], tensors[expert_key][index])
-    else:
-        expert_keys = [f"model.layers.0.mlp.experts.{expert}.down_proj.weight" for expert in (2, 0, 1)]
-        experts = store.load_tensors(expert_keys)
-        for key in expert_keys:
-            torch.testing.assert_close(experts[key], tensors[key], rtol=0, atol=0)
-    unrequested = tensors["unrequested.weight"]
-    expected_bytes = (
-        len(filesystem.payload) + sum(map(len, shards.values())) - unrequested.numel() * unrequested.element_size()
-    )
-    assert filesystem.opens == (2 if split_shards else 1)
-    assert filesystem.fetched_bytes == expected_bytes
-    assert not tuple(metadata.glob("*.safetensors"))
+            key = f"layer.{index}.weight"
+            torch.testing.assert_close(store.load_tensors([key])[key], tensors[key])
+        if expert_layout == "stacked":
+            experts = store.load_tensors([expert_key])[expert_key]
+            for index in (2, 0, 1):
+                torch.testing.assert_close(experts[index], tensors[expert_key][index])
+        else:
+            expert_keys = [f"model.layers.0.mlp.experts.{expert}.down_proj.weight" for expert in (2, 0, 1)]
+            experts = store.load_tensors(expert_keys)
+            for key in expert_keys:
+                torch.testing.assert_close(experts[key], tensors[key], rtol=0, atol=0)
+        unrequested = tensors["unrequested.weight"]
+        expected_bytes = (
+            len(filesystem.payload) + sum(map(len, shards.values())) - unrequested.numel() * unrequested.element_size()
+        )
+        assert filesystem.opens == (2 if split_shards else 1)
+        assert filesystem.fetched_bytes == expected_bytes
+        assert not tuple(metadata.glob("*.safetensors"))
+
+        store.close()
+        if mode == RemoteReadMode.PREFETCH:
+            assert store.read_stats.prefetch_misses == store.read_stats.prefetch_unused == 0
+        results[mode] = filesystem.gets
+    assert results[RemoteReadMode.PREFETCH] < results[RemoteReadMode.PER_KEY]
 
 
 def test_invalid_index_is_not_replaced_by_single_file_fallback(tmp_path: Path) -> None:
@@ -141,9 +178,13 @@ def test_twelve_rank_simulation_records_bounded_remote_reads_and_local_disk(tmp_
     remote.mkdir()
     shard_name = "model-00001-of-00001.safetensors"
     rank_count = 12
-    stacked_key = "model.layers.0.mlp.experts.down_proj.weight"
+    stacked_keys = ["model.layers.0.mlp.experts.gate_proj.weight", "model.layers.0.mlp.experts.up_proj.weight"]
+    tensors = {
+        key: torch.arange(rank_count * 100_000, dtype=torch.float32).reshape(rank_count, 100_000) + index
+        for index, key in enumerate(stacked_keys)
+    }
     save_file(
-        {stacked_key: torch.arange(rank_count * 100_000, dtype=torch.float32).reshape(rank_count, 100_000)},
+        tensors,
         remote / shard_name,
     )
     (remote / "config.json").write_text("{}")
@@ -169,11 +210,12 @@ def test_twelve_rank_simulation_records_bounded_remote_reads_and_local_disk(tmp_
         for metadata in metadata_dirs
     ]
     for rank, store in enumerate(stores):
-        stacked = store.load_tensors([stacked_key])[stacked_key]
-        torch.testing.assert_close(
-            stacked[rank],
-            torch.arange(rank * 100_000, (rank + 1) * 100_000, dtype=torch.float32),
-        )
+        store.plan_prefetch((key, rank) for key in stacked_keys)
+        for key in stacked_keys:
+            stacked = store.load_tensors([key])[key]
+            torch.testing.assert_close(stacked[rank], tensors[key][rank], rtol=0, atol=0)
+        assert store.read_stats.prefetch_misses == store.read_stats.prefetch_unused == 0
+        store.close()
 
     artifact_bytes = (remote / shard_name).stat().st_size
     s3_bytes_read = filesystem.fetched_bytes
@@ -184,3 +226,61 @@ def test_twelve_rank_simulation_records_bounded_remote_reads_and_local_disk(tmp_
     assert s3_bytes_read < artifact_bytes * 1.1
     assert local_disk_high_water_bytes < artifact_bytes * 0.01
     assert not tuple(tmp_path.glob("rank-*/*.safetensors"))
+
+
+@pytest.mark.parametrize("window_bytes", [16, 9], ids=["split-ranges", "oversized-fallback"])
+def test_prefetch_bounded_ranges_and_unplanned_reads_preserve_tensors(tmp_path, monkeypatch, window_bytes):
+    tensors = {str(index): torch.arange(12, dtype=torch.uint8) + index for index in range(3)}
+    tensors.update({str(index): torch.tensor([index, index + 1], dtype=torch.uint8) for index in range(3, 7)})
+    tensors.update(
+        {
+            "3_gap": torch.ones(3, dtype=torch.uint8),
+            "4_gap": torch.ones(3, dtype=torch.uint8),
+            "5_gap": torch.ones(1, dtype=torch.uint8),
+            "outside": torch.arange(4, dtype=torch.uint8),
+        }
+    )
+    shard = tmp_path / "model.safetensors"
+    save_file(tensors, shard)
+    metadata = tmp_path / "metadata"
+    _write_index(metadata, {key: shard.name for key in tensors})
+    filesystem = CountingFileSystem(shard.read_bytes())
+    monkeypatch.setattr(io, "filesystem_and_path", lambda path: (filesystem, path.removeprefix("s3://")))
+    monkeypatch.setattr(remote_safetensors, "_PREFETCH_MAX_BLOCK", 8)
+    monkeypatch.setattr(remote_safetensors, "_PREFETCH_MAX_GAP", 2)
+    monkeypatch.setattr(remote_safetensors, "_PREFETCH_WINDOW_BYTES", window_bytes)
+    payload_start = 8 + int.from_bytes(filesystem.payload[:8], "little")
+    header = json.loads(filesystem.payload[8:payload_start])
+    cat_ranges = filesystem.cat_ranges
+    requested = []
+
+    def bounded_ranges(paths, starts, ends, **kwargs):
+        sizes = [end - start for start, end in zip(starts, ends, strict=True)]
+        assert sum(sizes) <= window_bytes
+        assert max(sizes) <= 8
+        requested.extend(zip(starts, ends, strict=True))
+        return cat_ranges(paths, starts, ends, **kwargs)
+
+    monkeypatch.setattr(filesystem, "cat_ranges", bounded_ranges)
+    store = RemoteSafetensorsTensorStore("s3://bucket/policy", metadata)
+    store.plan_prefetch((key, None) for key in map(str, range(7)))
+    try:
+        for key in ("outside", *map(str, range(7))):
+            torch.testing.assert_close(store.load_tensors([key])[key], tensors[key], rtol=0, atol=0)
+        assert store.read_stats.prefetch_unused == 0
+    finally:
+        store.close()
+    expected = []
+    if window_bytes == 16:
+        for key in ("0", "1", "2"):
+            start = payload_start + header[key]["data_offsets"][0]
+            expected.extend([(start, start + 8), (start + 8, start + 12)])
+    expected.extend(
+        [
+            tuple(payload_start + value for value in header["3"]["data_offsets"]),
+            tuple(payload_start + value for value in header["4"]["data_offsets"]),
+            (payload_start + header["5"]["data_offsets"][0], payload_start + header["6"]["data_offsets"][1]),
+        ]
+    )
+    assert requested == expected
+    assert filesystem.fetched_bytes == payload_start + 36 + 8 + 4 + 1

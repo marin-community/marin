@@ -116,6 +116,7 @@ trainer:
       tokenizer_path: ${trainer.policy.model.path}
       tokenizer_revision: ${trainer.policy.model.revision}
       source_uri: null
+      remote_read_mode: prefetch
       source_identity: null
       lora:
           rank: 0
@@ -154,6 +155,7 @@ trainer:
       tokenizer_path: ${trainer.policy.model.tokenizer_path}
       tokenizer_revision: ${trainer.policy.model.tokenizer_revision}
       source_uri: ${trainer.policy.model.source_uri}
+      remote_read_mode: ${trainer.policy.model.remote_read_mode}
       source_identity: ${trainer.policy.model.source_identity}
     sequence_parallel_size: 1
   critic:
