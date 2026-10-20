@@ -96,17 +96,14 @@ HARBOR_PROJECT = "config/external/harbor"
 AGENTS_PATH = Path(__file__).parent / "harbor_agents"
 MINI_SWE_CONSTRAINTS = AGENTS_PATH / "mini-swe-agent-2.1.0-constraints.txt"
 # Relay students: each one's eval serving config and pinned Hub revision (None when the config names a fixed copy).
+# Each student is served from a regional bucket copy (see its YAML); the second field is the Hub revision the copy
+# matches, recorded in driver_config.
 STUDENTS = {
-    # Snowball v0 (4eeb756b has the same weights as the config's 271c4b3c; the later commit only corrects the card).
-    "v0": (
-        Path(
-            "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/"
-            "open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.yaml"
-        ),
-        "4eeb756b404db25bc04e4daf49dfb9817bceb741",
+    "v0": (Path("experiments/post_training/sft_shootout/students/snowball-v0.yaml"), "4eeb756b404db25bc04e4daf49dfb9817bceb741"),
+    "v0.1": (
+        Path("experiments/post_training/sft_shootout/students/snowball-v0.1.yaml"),
+        "6783e9743478bd25a9ce03ab3460e84d6a9814b0",
     ),
-    # Snowball v0.1 @ 6783e974, from a verified bucket copy (see the YAML).
-    "v0.1": (Path("experiments/post_training/sft_shootout/students/snowball-v0.1.yaml"), None),
 }
 # The relay student's OpenAI base URL: a capability URL (a bearer credential) for serve_student.py's endpoint,
 # passed only through the environment.
@@ -180,9 +177,7 @@ def capability_endpoint(app: Starlette, name: str) -> Iterator[str]:
 
 
 def student_model(student: str) -> ModelConfig:
-    config, revision = STUDENTS[student]
-    model = load_model_config(config)
-    return model if revision is None else replace(model, revision=revision)
+    return load_model_config(STUDENTS[student][0])
 
 
 def student_provenance(student: str) -> dict:
@@ -190,7 +185,7 @@ def student_provenance(student: str) -> dict:
     return {
         "config": str(STUDENTS[student][0]),
         "location": model.location,
-        "revision": model.revision,
+        "hub_revision": STUDENTS[student][1],
         "tokenizer": model.tokenizer or model.location,
         "tokenizer_revision": model.effective_tokenizer_revision,
     }
