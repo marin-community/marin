@@ -26,6 +26,7 @@ from collections import defaultdict, deque
 import numpy as np
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
+from skyrl_train.exactness_check import ExactnessCheck
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.context import TrainingContext, TrainingContextState
@@ -159,6 +160,7 @@ from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY, policy_e
 from marinskyrl.runtime_options import WeightSyncTransport
 from skyrl_train.utils.logging_utils import log_exception_as_text
 from skyrl_train.weight_sync.expert_block.driver import ExpertBlockSync
+from skyrl_train.weight_sync.base import WeightSyncReason
 from skyrl_train.hf_export_schema import (
     DEFAULT_HF_HUB_REVISION,
     DEFAULT_HF_UPLOAD_MODE,
@@ -336,6 +338,8 @@ class RayPPOTrainer:
 
     # Set at startup when generator.weight_sync_transport is expert_block.
     _expert_block_sync: ExpertBlockSync | None = None
+    # Set at construction when trainer.numerics.check.every_weight_syncs is above 0.
+    _exactness_check: ExactnessCheck | None = None
     _policy_version_step: int | None = None
 
     _training_metrics_enabled: bool = False
@@ -366,6 +370,9 @@ class RayPPOTrainer:
         self.colocate_all = cfg.trainer.placement.colocate_all
         self.tracker = tracker
         self.tokenizer = tokenizer
+        every_weight_syncs = cfg.trainer.numerics.check.every_weight_syncs
+        if every_weight_syncs > 0:
+            self._exactness_check = ExactnessCheck(every_weight_syncs, cfg.generator.sampling_params, tokenizer)
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         self.inference_engine_client = inference_engine_client
@@ -792,7 +799,7 @@ class RayPPOTrainer:
             self.policy_model.backload_to_gpu(backload_optimizer=True, backload_model=True)
             return await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
         finally:
-            await self._sync_policy_for_rollouts(reason="checkpoint_restore")
+            await self._sync_policy_for_rollouts(reason=WeightSyncReason.CHECKPOINT_RESTORE)
 
     def _record_checkpoint_save_failure(self, state: TrainerState) -> None:
         self._checkpoint_save_failures += 1.0
@@ -1182,7 +1189,7 @@ class RayPPOTrainer:
         self.all_metrics["speculator/update_failures"] = float(self._speculator_update_failures)
         await self._refresh_latest_speculator()
 
-    async def _sync_policy_for_rollouts(self, *, reason: str) -> None:
+    async def _sync_policy_for_rollouts(self, *, reason: WeightSyncReason) -> None:
         """Load the policy's current weights into the inference engines.
 
         Colocated engines sleep while the policy trains; they wake for the weights and then take the GPU
@@ -1192,11 +1199,11 @@ class RayPPOTrainer:
         if not self._inference_engines_configured():
             return
         if self.cfg.trainer.algorithm.policy_loss_type == PolicyLossType.DPO and reason not in (
-            "initial",
-            "evaluation",
+            WeightSyncReason.INITIAL,
+            WeightSyncReason.EVALUATION,
         ):
             return
-        timings = self.all_startup_timings if reason == "initial" else self.all_timings
+        timings = self.all_startup_timings if reason == WeightSyncReason.INITIAL else self.all_timings
         with Timer("sync_weights", timings) as update_timer:
             if self.colocate_all:
                 await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=True, offload_model=False)
@@ -1216,6 +1223,20 @@ class RayPPOTrainer:
                 await self.inference_engine_client.resume_generation(policy_step=self.global_step + 1)
         self._log_weight_update_completed(reason=reason, duration_seconds=update_timer.duration)
         self._inference_policy_step = self.policy_version_step
+        if self._exactness_check is not None and self._exactness_check.count_sync(reason):
+            self._exactness_check.start_generation(self.inference_engine_client)
+
+    def _score_exactness_check(self) -> None:
+        """Score the engines' exactness-check responses with the policy, which holds the weights they last received."""
+        check = self._exactness_check
+        if check is None or check.pending is None:
+            return
+        batch = check.batch(self.policy_model.actor_infos[0].rank.dp_size, self._resolve_num_experts())
+        batch.metadata["global_step"] = self.global_step
+        started = time.monotonic()
+        outputs = ray.get(self.policy_model.async_run_ray_method("mesh", "forward", data=batch))
+        logprobs = concatenate_outputs_after_mesh_dispatch(self.policy_model.actor_infos, outputs)["output"]
+        self.all_metrics.update(check.compare(logprobs, time.monotonic() - started))
 
     @property
     def policy_version_step(self) -> int:
@@ -1264,7 +1285,7 @@ class RayPPOTrainer:
             with Timer(timer_label, timings):
                 self.policy_model.offload_to_cpu(offload_optimizer=True, offload_model=False)
 
-    def _log_weight_update_completed(self, *, reason: str, duration_seconds: float) -> None:
+    def _log_weight_update_completed(self, *, reason: WeightSyncReason, duration_seconds: float) -> None:
         if self._training_metrics_enabled:
             record_event(
                 "weight_sync_completed",
@@ -1324,7 +1345,7 @@ class RayPPOTrainer:
                 restored_data = True
 
         await self._start_draft_trainer()
-        await self._sync_policy_for_rollouts(reason="initial")
+        await self._sync_policy_for_rollouts(reason=WeightSyncReason.INITIAL)
 
         if self._ftpo_stopped:
             await self._handle_resume_at_max_steps()
@@ -1557,7 +1578,7 @@ class RayPPOTrainer:
         await self._poll_speculator_lifecycle()
         step_wall.start("weight_sync")
         with async_phase_window("weight_sync", step=self.global_step, enabled=self._rollout_spans_enabled):
-            await self._sync_policy_for_rollouts(reason="training_step")
+            await self._sync_policy_for_rollouts(reason=WeightSyncReason.TRAINING_STEP)
 
         logger.info(status)
         self.all_metrics.update({"trainer/epoch": epoch, "trainer/global_step": self.global_step})
@@ -1616,7 +1637,7 @@ class RayPPOTrainer:
                 self.eval_trajectory_runner, self.cfg, self.global_step, self.eval_trajectory_sink
             ) as pool:
                 if self._inference_engines_configured() and self._inference_policy_step != self.policy_version_step:
-                    await self._sync_policy_for_rollouts(reason="evaluation")
+                    await self._sync_policy_for_rollouts(reason=WeightSyncReason.EVALUATION)
                 yield pool
         finally:
             self.context.resume()
@@ -1657,6 +1678,8 @@ class RayPPOTrainer:
             self.all_metrics["policy/policy_update_steps"] = 0.0
             self.all_metrics["ftpo/empty_batch"] = 1.0
             return {"policy_update_steps": 0.0}
+        if self._exactness_check is not None:
+            self.all_metrics.update(await self._exactness_check.finish_generation())
         # The drain after the last weight sync can go stale while the rollout buffer fills, so align the
         # policy actor loops immediately before every forward.
         await self._drain_policy_event_loops()
@@ -2913,7 +2936,7 @@ class RayPPOTrainer:
         # calculate action log probs
         if self.colocate_all:
             self.policy_model.backload_to_gpu(backload_optimizer=False, backload_model=True)
-
+        self._score_exactness_check()
         action_log_probs_refs = self.policy_model.async_run_ray_method("mesh", "forward", data=data_fwd_pass)
         if self.colocate_all:
             all_rank_action_log_probs: List[TrainingOutputBatch] = ray.get(action_log_probs_refs)

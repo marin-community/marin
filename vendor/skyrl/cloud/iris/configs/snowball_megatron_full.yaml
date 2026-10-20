@@ -1,0 +1,93 @@
+# Snowball 67B-A2B on the Megatron trainer at the long-generation benchmark geometry:
+# 1024-token prompts, 8192-token generations, 64 prompts x 8 samples per step,
+# four PP2 x EP8 policy nodes (reference model colocated) and four expert-parallel
+# vLLM nodes. Checkpoints are off (ckpt_interval past max_steps). The fixed
+# geometry selects DP-local optimizer shards if checkpointing is enabled; see the
+# smoke config for the checkpoint path.
+entrypoint: standard
+
+context_budget:
+  request_window_tokens: 9216
+  max_new_tokens_per_turn: 8192
+  max_turns: 1
+
+environment:
+  env_class: gsm8k
+
+trainer:
+  strategy: megatron
+  flash_attn: false
+  use_sample_packing: false
+  offload_optimizer_during_rollouts: true
+  gradient_checkpointing: true
+  algorithm:
+    advantage_estimator: grpo
+    use_kl_loss: true
+  numerics:
+    check:
+      every_weight_syncs: 10
+  epochs: 1
+  max_steps: 3
+  update_epochs_per_batch: 1
+  train_batch_size: 64
+  policy_mini_batch_size: 64
+  eval_batch_size: 64
+  # Equal to micro_train_batch_size_per_gpu so both passes run the same kernels (see docs).
+  micro_forward_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: 1
+  eval_before_train: false
+  eval_interval: -1
+  ckpt_interval: 100
+  resume_mode: none
+  logger: console
+  policy:
+    optimizer_config:
+      lr: 1.0e-6
+      max_grad_norm: 1.0
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      optimizer_checkpoint_sharding_type: dp_reshardable
+      ddp_config:
+        overlap_grad_reduce: true
+        overlap_param_gather: true
+        grad_reduce_in_fp32: false
+  ref:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+  placement:
+    colocate_all: false
+    policy_num_nodes: 4
+    policy_num_gpus_per_node: 8
+
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_data_parallel_size: 8
+  inference_engine_expert_parallel_size: 8
+  num_inference_engines: 4
+  n_samples_per_prompt: 8
+  gpu_memory_utilization: 0.75
+  enforce_eager: false
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  sampling_params:
+    temperature: 1.0
+    top_p: 1.0
+
+data:
+  kind: parquet
+  train_data: []
+  val_data: []
+
+extra_env:
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True

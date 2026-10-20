@@ -32,7 +32,7 @@ def enable_trainer_batch_invariance(enabled: bool) -> None:
 
     if os.environ.get(VLLM_BATCH_INVARIANT_ENV) != "1":
         raise RuntimeError(
-            f"trainer.algorithm.batch_invariant=true, but {VLLM_BATCH_INVARIANT_ENV}=1 "
+            f"trainer.numerics.mode=batch_invariant, but {VLLM_BATCH_INVARIANT_ENV}=1 "
             "was not propagated to the trainer worker"
         )
 
@@ -42,7 +42,7 @@ def enable_trainer_batch_invariance(enabled: bool) -> None:
         batch_invariant = importlib.import_module("vllm.model_executor.determinism.batch_invariant")
     except ImportError as error:
         raise RuntimeError(
-            "trainer.algorithm.batch_invariant=true requires the pinned Marin vLLM runtime; "
+            "trainer.numerics.mode=batch_invariant requires the pinned Marin vLLM runtime; "
             "launch training with the vllm extra"
         ) from error
 

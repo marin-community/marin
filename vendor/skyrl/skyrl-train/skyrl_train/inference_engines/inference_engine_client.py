@@ -1,6 +1,7 @@
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
     SESSION_ID_HEADER,
+    UNKNOWN_ENGINE_DP_RANK,
     InferenceEngineInterface,
     InferenceEngineInput,
     InferenceEngineOutput,
@@ -93,6 +94,13 @@ class InferenceEngineClient(InferenceEngineInterface):
             full_config: DictConfig - See ppo_base_config.yaml
         """
         self.engines = engines
+        # create_ray_wrapped_inference_engines lists one local engine per data-parallel rank, in rank order within
+        # each engine group; a remote server's rank is unknown.
+        data_parallel_size = int(full_config.generator.inference_engine_data_parallel_size)
+        self._engine_dp_ranks = [
+            index % data_parallel_size if full_config.generator.run_engines_locally else UNKNOWN_ENGINE_DP_RANK
+            for index in range(len(engines))
+        ]
         self.tokenizer = tokenizer
         # Use served_model_name if configured (for Harbor/LiteLLM compatibility),
         # otherwise fall back to the full model path.
@@ -797,6 +805,19 @@ class InferenceEngineClient(InferenceEngineInterface):
             finish_reason=finish_reason,
             stop_reason=stop_reason,
         )
+
+    async def generate_on_live_engines(
+        self, prompt_token_ids: List[int], sampling_params: Dict[str, Any]
+    ) -> List[tuple[int, InferenceEngineOutput]]:
+        """One response to ``prompt_token_ids`` from every live engine, with that engine's data-parallel rank."""
+        ranks = [rank for index, rank in enumerate(self._engine_dp_ranks) if index not in self._dead_engines]
+        engine_input = InferenceEngineInput(prompt_token_ids=[prompt_token_ids], sampling_params=sampling_params)
+        outputs = await self._run_on_all_engines("generate", engine_input)
+        for output in outputs:
+            routes = output.get("routed_experts")
+            if routes is not None:
+                output["routed_experts"] = [_route_rows(routes[0], len(output["response_ids"][0]))]
+        return list(zip(ranks, outputs, strict=True))
 
     def _chat_request(self, request_payload: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
         """Prepare the common direct, HTTP, and streaming chat request boundary."""
