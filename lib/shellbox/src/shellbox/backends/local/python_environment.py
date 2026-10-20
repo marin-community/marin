@@ -149,9 +149,6 @@ def resolve_python_environment(cache: Path, requirements: tuple[str, ...], pytho
     with (directory / "resolve.lock").open("w") as guard:
         fcntl.flock(guard, fcntl.LOCK_EX)
         lock = directory / "requirements.lock"
-        if not lock.exists() and not requirements:
-            # Resolving nothing still costs uv seconds of index and interpreter discovery.
-            lock.write_text("")
         if not lock.exists():
             logger.info("Resolving %d Python requirements for Python %s", len(requirements), python_version)
             source = directory / "requirements.in"
