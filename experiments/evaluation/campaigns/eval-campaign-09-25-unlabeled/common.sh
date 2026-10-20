@@ -192,6 +192,26 @@ for path in Path(os.environ["STAGED_HARBOR_DIR"]).glob("*.yaml"):
 PY
 }
 
+campaign_model_groups() {
+  CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" uv run --project "$MARIN_DIR" python - "$@" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+import yaml
+
+model, *benchmarks = sys.argv[1:]
+campaign = yaml.safe_load(Path(os.environ["CAMPAIGN_CONFIG"]).read_text())
+overrides = campaign.get("model_config_overrides", {}).get(model, {})
+groups = {}
+for benchmark in benchmarks:
+    config = overrides.get(benchmark, f"model-configs/{model}.yaml")
+    groups.setdefault(config, []).append(benchmark)
+for config, names in groups.items():
+    print(f"{config}\t{' '.join(names)}")
+PY
+}
+
 # A model-specific canonical chat template may be composed into the effective model config.
 # All other serving and agent settings are copied unchanged from the canonical model YAML.
 stage_model_config() {

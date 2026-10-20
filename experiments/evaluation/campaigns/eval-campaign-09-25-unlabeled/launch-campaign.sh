@@ -134,75 +134,49 @@ if [ "${#selected_harbor_names[@]}" -gt 0 ]; then
 fi
 
 for model in "${models[@]}"; do
-  model_config="$MODEL_CONFIG_DIR/$model.yaml"
-  [ -f "$model_config" ] || die "unknown model config: $model"
-  override_eval=
-  if [ "$suite" = terminal-bench ]; then
-    override_eval=tb2-recovery
-  elif [ "$suite" = agentic ] && [ "${#selected_harbor_names[@]}" -eq 1 ]; then
-    override_eval="${selected_harbor_names[0]}"
-  elif [ "$suite" = nonagentic ] && [ "${#selected_evalchemy_names[@]}" -eq 1 ]; then
-    override_eval="${selected_evalchemy_names[0]}"
-  fi
-  if [ -n "$override_eval" ]; then
-    override=$(cd "$MARIN_DIR" && CAMPAIGN_CONFIG="$CAMPAIGN_CONFIG" MODEL_NAME="$model" EVAL_NAME="$override_eval" uv run python - <<'PY'
-import os
-from pathlib import Path
-
-import yaml
-
-campaign = yaml.safe_load(Path(os.environ["CAMPAIGN_CONFIG"]).read_text())
-print(campaign.get("model_config_overrides", {}).get(os.environ["MODEL_NAME"], {}).get(os.environ["EVAL_NAME"], ""))
-PY
-)
-    if [ -n "$override" ]; then
-      model_config="$CANONICAL_CONFIG_ROOT/$override"
-      [ -f "$model_config" ] || die "missing canonical model override: $model_config"
-    fi
-  fi
+  [ -f "$MODEL_CONFIG_DIR/$model.yaml" ] || die "unknown model config: $model"
   reset_staging_root
-  stage_model_config "$model" "$model_config"
   stage_harbor_configs "$model"
-
-  base_arguments=(
-    --model-config "$STAGED_MODEL_CONFIG"
-    --federated_cluster "$FEDERATED_CLUSTER"
-    --priority "$PRIORITY"
-  )
-  if [ -n "$version" ]; then
-    base_arguments+=(--version "$version")
-  fi
-  if [ -n "$limit" ]; then
-    base_arguments+=(--limit "$limit")
-  fi
-  if [ "$suite" = all ] || [ "$suite" = nonagentic ]; then
-    arguments=("${base_arguments[@]}")
-    for name in "${evalchemy_names[@]}"; do
-      arguments+=(--evalchemy-config "$EVALCHEMY_CONFIG_DIR/$name.yaml")
-    done
-    echo "== $model (nonagentic; $([ "$submit" = 1 ] && echo submit || echo validate))"
-    run_campaign_launch "$submit" "${arguments[@]}"
-  fi
-  if [ "$suite" = all ] || [ "$suite" = agentic ] || [ "$suite" = terminal-bench ]; then
-    arguments=("${base_arguments[@]}")
-    launch_harbor_names=("${harbor_names[@]}")
-    if [ "$suite" = terminal-bench ]; then
-      launch_harbor_names=(tb2-recovery)
-    elif [ "${#selected_harbor_names[@]}" -gt 0 ]; then
-      launch_harbor_names=("${selected_harbor_names[@]}")
-    fi
-    for name in "${launch_harbor_names[@]}"; do
-      arguments+=(--harbor-config "$STAGED_HARBOR_DIR/$name.yaml")
-    done
-    for name in "${launch_harbor_names[@]}"; do
-      if [ "$name" = bixbench-pi ]; then
-        arguments+=(--judge-model-config "$JUDGE_MODEL_CONFIG" --judge-accelerator H100x8)
-        break
+  for mechanism in nonagentic agentic; do
+    if [ "$mechanism" = nonagentic ]; then
+      [ "$suite" = all ] || [ "$suite" = nonagentic ] || continue
+      launch_names=("${evalchemy_names[@]}")
+      config_flag=--evalchemy-config
+      config_directory=$EVALCHEMY_CONFIG_DIR
+    else
+      [ "$suite" = all ] || [ "$suite" = agentic ] || [ "$suite" = terminal-bench ] || continue
+      launch_names=("${harbor_names[@]}")
+      if [ "$suite" = terminal-bench ]; then
+        launch_names=(tb2-recovery)
+      elif [ "${#selected_harbor_names[@]}" -gt 0 ]; then
+        launch_names=("${selected_harbor_names[@]}")
       fi
-    done
-    echo "== $model (agentic; $([ "$submit" = 1 ] && echo submit || echo validate))"
-    run_campaign_launch "$submit" "${arguments[@]}"
-  fi
+      config_flag=--harbor-config
+      config_directory=$STAGED_HARBOR_DIR
+    fi
+    groups=$(campaign_model_groups "$model" "${launch_names[@]}")
+    while IFS=$'\t' read -r config names; do
+      stage_model_config "$model" "$CANONICAL_CONFIG_ROOT/$config"
+      arguments=(
+        --model-config "$STAGED_MODEL_CONFIG"
+        --federated_cluster "$FEDERATED_CLUSTER"
+        --priority "$PRIORITY"
+        --version "$version"
+      )
+      if [ -n "$limit" ]; then
+        arguments+=(--limit "$limit")
+      fi
+      read -r -a group_names <<< "$names"
+      for name in "${group_names[@]}"; do
+        arguments+=("$config_flag" "$config_directory/$name.yaml")
+        if [ "$mechanism" = agentic ] && [ "$name" = bixbench-pi ]; then
+          arguments+=(--judge-model-config "$JUDGE_MODEL_CONFIG" --judge-accelerator H100x8)
+        fi
+      done
+      echo "== $model ($mechanism; $config; $([ "$submit" = 1 ] && echo submit || echo validate))"
+      run_campaign_launch "$submit" "${arguments[@]}"
+    done <<< "$groups"
+  done
 done
 
 echo "completed ${#models[@]} model launch plan(s)"

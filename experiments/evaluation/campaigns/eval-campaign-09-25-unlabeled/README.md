@@ -57,6 +57,10 @@ mechanism. Repeat `--evalchemy NAME` or `--harbor NAME` to select individual con
 with its corresponding suite to avoid launching the other mechanism. `--wait` waits for durable
 records and requires CoreWeave object-store credentials.
 
+Benchmarks with the same model config share a server within each suite. The launcher
+submits a separate group for a benchmark-specific model override, such as Tau³'s larger
+context window.
+
 The launcher writes generated effective configs beneath
 `experiments/evaluation/campaigns/.launch-staging/` and local provenance snapshots beneath
 `experiments/evaluation/campaigns/.launch-snapshots/`. Both paths are ignored by Git. Durable
