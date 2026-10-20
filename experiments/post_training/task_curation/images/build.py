@@ -302,43 +302,10 @@ def _require_docker(repository: str) -> None:
     raise RuntimeError(f"Docker has no credentials for {host}; run `docker login {host}` before building")
 
 
-def _git_tracked(directory: Path, pathspec: str) -> set[str]:
-    listed = subprocess.run(
-        ["git", "ls-files", "-z", "--", pathspec], cwd=directory, check=True, capture_output=True, text=True
-    ).stdout
-    return {path for path in listed.split("\0") if path}
-
-
-def _inside_git_worktree(directory: Path) -> bool:
-    return (
-        subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=directory,
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-        == "true"
-    )
-
-
-def _require_tracked(environment: Environment) -> None:
-    """Require tracked inputs inside Git worktrees and reject executable runtime files."""
-    fragment = environment.dockerfile
-    if (
-        fragment is not None
-        and _inside_git_worktree(fragment.parent)
-        and fragment.name not in _git_tracked(fragment.parent, fragment.name)
-    ):
-        raise ValueError(f"{fragment} must be tracked by git")
+def _reject_executable_runtime_files() -> None:
+    """Iris source bundles drop executable permission bits from runtime packages."""
     for package in RUNTIME_PACKAGES:
         files = context_files(package)
-        found = {file.path for file in files}
-        if _inside_git_worktree(package) and found != (expected := _git_tracked(package, ".")):
-            raise ValueError(
-                f"{package} must contain exactly its git-tracked files; "
-                f"untracked: {sorted(found - expected)}, missing: {sorted(expected - found)}"
-            )
         executable = [file.path for file in files if file.mode == EXECUTABLE_MODE]
         if executable:
             raise ValueError(f"{package} has executable files {executable}")
@@ -380,7 +347,7 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
     builds_image = placement(environment) == Placement.BUILT_IMAGE
     if builds_image:
         _require_docker(build.repository)
-    _require_tracked(environment)
+    _reject_executable_runtime_files()
     image = None
     with TemporaryDirectory() as directory:
         context = Path(directory)

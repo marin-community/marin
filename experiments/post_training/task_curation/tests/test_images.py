@@ -192,12 +192,16 @@ def test_the_repository_is_where_a_build_pushes_not_identity():
     assert environment_artifact(environment, "other.invalid/images").name == environment_artifact(environment).name
 
 
-def test_build_refuses_a_dockerfile_fragment_git_does_not_track(repository, docker_log, tmp_path):
+def test_build_from_an_untracked_dockerfile_in_a_worktree_records_the_environment(repository, docker_log, tmp_path):
     untracked = repository / "untracked.Dockerfile"
     untracked.write_text(TOOLCHAIN_FRAGMENT)
     environment = Environment(requirements=REQUIREMENTS, dockerfile=untracked)
-    with pytest.raises(ValueError, match="tracked by git"):
-        build_environment(environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out")))
+    built = build_environment(
+        environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out"))
+    )
+    assert StoragePath(built.lock_url).read_text() == COMPILED_LOCK
+    assert built.image is not None
+    assert built.identity == identity_digest(environment)
 
 
 def test_build_from_a_gitless_source_bundle_records_the_environment(docker_log, tmp_path):
