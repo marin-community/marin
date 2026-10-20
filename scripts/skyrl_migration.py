@@ -47,6 +47,7 @@ AGENT_LABEL = "agent-generated"
 PR_BRANCH_PREFIX = "skyrl-migration/pr-"
 DESTINATION_MARKER = "skyrl-destination"
 DESTINATION_PATTERN = re.compile(r"<!-- " + DESTINATION_MARKER + r": ([0-9a-f]{40}) -->")
+SOURCE_REFERENCE_PATTERN = re.compile(r"(?<![\w/])(?:#|GH-)(\d+)\b")
 LOCAL_CHANGES_PATCH = "skyrl-migration/local-changes.patch"
 WHEEL_RUNTIME_ROOTS = {"cloud", "marinskyrl", "skyrl_train", "skyrl_gym", "chat_templates", "open_mopd_versions.py"}
 
@@ -1015,10 +1016,23 @@ def validate_fresh(record: dict) -> None:
 
 def source_references(body: str) -> str:
     return re.sub(
-        r"(?<![\w/])(?:#|GH-)(\d+)\b",
-        lambda match: f"https://github.com/{SOURCE}/issues/{match[1]}",
+        r"\[[^\]\n]*\]\([^\n)]*\)|" + SOURCE_REFERENCE_PATTERN.pattern,
+        lambda match: match[0] if match[1] is None else f"https://github.com/{SOURCE}/issues/{match[1]}",
         body,
     )
+
+
+def transferred_issue_body_matches(original: str, transferred: str) -> bool:
+    """Accept GitHub's reference qualification while rejecting other body edits."""
+    parts = []
+    cursor = 0
+    for reference in SOURCE_REFERENCE_PATTERN.finditer(original):
+        parts.append(re.escape(original[cursor : reference.start()]))
+        qualified = f"{SOURCE}#{reference[1]}"
+        parts.append(f"(?:{re.escape(reference[0])}|{re.escape(qualified)})")
+        cursor = reference.end()
+    parts.append(re.escape(original[cursor:]))
+    return re.fullmatch("".join(parts), transferred) is not None
 
 
 def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
@@ -1026,20 +1040,21 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
     record = read_json(snapshot_dir / SNAPSHOT_FILE)
     patches = [MigrationPatch(**patch) for patch in read_json(snapshot_dir / "selection.json")["patches"]]
     validate_cutover(cutover, record["source_sha"], patches)
-    validate_fresh(record)
     owner, name = TARGET.split("/")
     repository_id = graphql(
         "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}", owner=owner, name=name
     )["repository"]["id"]
     state = read_json(state_path) if state_path.exists() else {}
     for issue in record["issues"]:
+        if issue["node_id"] in state:
+            continue
+        # GitHub changes node IDs on transfer; the original REST URL redirects to the moved issue.
+        current_issue = gh(f"repos/{SOURCE}/issues/{issue['number']}")
         node = graphql(
             "query($id:ID!){node(id:$id){... on Issue{id number url body updatedAt state repository{nameWithOwner}}}}",
-            id=issue["node_id"],
+            id=current_issue["node_id"],
         )["node"]
         origin = issue["html_url"]
-        body = source_references(issue["body"] or "")
-        body += f"\n\nTransferred from {origin}.\n<!-- skyrl-migration: issue={issue['node_id']} -->\n"
         if node["repository"]["nameWithOwner"] == SOURCE:
             if node["updatedAt"] != issue["updated_at"] or node["state"] != "OPEN":
                 raise ValueError(f"Issue changed since snapshot: {origin}")
@@ -1051,8 +1066,25 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
             )["transferIssue"]["issue"]
         if node["repository"]["nameWithOwner"] != TARGET:
             raise ValueError(f"Issue moved to an unexpected repository: {origin}")
+        original_body = issue["body"] or ""
+        linked_comments = [comment for comment in issue["comments"] if comment["html_url"] in original_body]
+        if linked_comments:
+            transferred_comments = github_items(f"repos/{TARGET}/issues/{node['number']}/comments?per_page=100")
+            for original_comment in linked_comments:
+                matches = [
+                    comment
+                    for comment in transferred_comments
+                    if comment["user"]["id"] == original_comment["user"]["id"]
+                    and comment["created_at"] == original_comment["created_at"]
+                    and comment["updated_at"] == original_comment["updated_at"]
+                ]
+                if len(matches) != 1:
+                    raise ValueError(f"Transferred discussion changed; reconcile manually: {node['url']}")
+                original_body = original_body.replace(original_comment["html_url"], matches[0]["html_url"])
+        body = source_references(original_body)
+        body += f"\n\nTransferred from {origin}.\n<!-- skyrl-migration: issue={issue['node_id']} -->\n"
         if node["body"] != body:
-            if (node["body"] or "") != (issue["body"] or ""):
+            if not transferred_issue_body_matches(original_body, node["body"] or ""):
                 raise ValueError(f"Transferred issue body changed; reconcile manually: {node['url']}")
             gh(f"repos/{TARGET}/issues/{node['number']}", method="PATCH", payload={"body": body})
         state[issue["node_id"]] = {"source": origin, "destination": node["url"]}

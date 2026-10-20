@@ -18,7 +18,8 @@ from skyrl_train.inline_harbor_client import HarborTrialClient
 
 
 @pytest.mark.asyncio
-async def test_cohort_cache_shares_pinned_inputs_across_concurrent_trials(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mixed_settings", [False, True])
+async def test_cohort_cache_shares_pinned_inputs_across_concurrent_trials(tmp_path, monkeypatch, mixed_settings):
     repository = tmp_path / "repository"
     repository.mkdir()
     subprocess.run(["git", "init", "-q", str(repository)], check=True)
@@ -65,8 +66,8 @@ async def test_cohort_cache_shares_pinned_inputs_across_concurrent_trials(tmp_pa
                 path=f"task-{index}",
                 git_url=repository.as_uri(),
                 git_commit_id=revision,
-                download_dir=tmp_path / "cache",
-                overwrite=True,
+                download_dir=tmp_path / (f"cache-{index}" if mixed_settings else "cache"),
+                overwrite=index != 1 if mixed_settings else True,
             )
             for index in range(3)
         ]
@@ -83,7 +84,7 @@ async def test_cohort_cache_shares_pinned_inputs_across_concurrent_trials(tmp_pa
     cache = HarborTaskCache()
     prepared = await asyncio.gather(*(cache.prepare(config) for _ in range(3)))
     # These are real external Git operations, not internal helper calls.
-    assert len(fetches) == 1
+    assert len(fetches) == (3 if mixed_settings else 1)
     repository.rename(tmp_path / "unavailable-repository")
     for index, ready in enumerate(prepared):
         selected = ready.tasks[index]
@@ -93,7 +94,7 @@ async def test_cohort_cache_shares_pinned_inputs_across_concurrent_trials(tmp_pa
         assert result.results[0].cached
         assert (result.paths[0] / "instruction.md").read_text() == f"original task {index}"
         assert selected.get_task_id() == config.tasks[index].get_task_id()
-    assert all(task.overwrite for task in config.tasks)
+    assert [task.overwrite for task in config.tasks] == ([True, False, True] if mixed_settings else [True] * 3)
 
 
 @pytest.mark.asyncio

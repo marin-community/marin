@@ -282,6 +282,18 @@ Declare scheduled agent or script watches under `marin-loom:watches` in
 `weekday-job-check` entry shows agent configuration. Use `promptFile` for prompts
 stored under `infra/loom`; Pulumi includes their contents in the manifest.
 
+The `goals` watch runs the `pm` profile ([instructions](profiles/pm/AGENTS.md)),
+which keeps the Marin high-level board and the goals document below its
+`Status` heading in line with the goals the document lists. It needs:
+
+- the `LOOM_PM_BOARD_TOKEN` secret in `hai-gcp-models`, holding a fine-grained
+  token with `marin-community` Projects read and write access, because Loom's
+  session tokens cannot write organization projects;
+- the document shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as
+  an editor;
+- the `marin` IAM stack applied first, for the `loom-vm` token-creator grant on
+  itself that mints a documents-scoped token.
+
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
 for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for

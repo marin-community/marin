@@ -512,7 +512,7 @@ def test_wheel_audit_accepts_source_edits_and_rejects_different_packaged_content
 def github_fake(
     monkeypatch: pytest.MonkeyPatch, record: dict, cutover_sha: str, destination: Path | None = None
 ) -> dict:
-    remote: dict = {"pulls": [], "issues": {}, "transfers": 0, "interrupt": False}
+    remote: dict = {"pulls": [], "issues": {}, "transfers": 0, "interrupt": False, "rewrite_references": False}
     provenance = {"source": migration.SOURCE, "source_sha": record["source_sha"]}
 
     def api(endpoint: str, *, method: str = "GET", payload: dict | None = None):
@@ -524,6 +524,8 @@ def github_fake(
             return {"sha": record["source_sha"]}
         if endpoint == f"repos/{migration.TARGET}":
             return {"default_branch": "main"}
+        if endpoint.startswith(f"repos/{migration.SOURCE}/issues/") and method == "GET":
+            return {"node_id": remote["issues"]["id"]}
         if endpoint == f"repos/{migration.TARGET}/pulls" and method == "POST":
             assert destination is not None and payload is not None
             number = len(remote["pulls"]) + 100
@@ -551,8 +553,13 @@ def github_fake(
         raise AssertionError((endpoint, method))
 
     def paginate(endpoint: str):
+        if endpoint == f"repos/{migration.TARGET}/issues/100/comments?per_page=100":
+            return [
+                comment | {"html_url": f"https://github.com/{migration.TARGET}/issues/100#issuecomment-200"}
+                for comment in record["issues"][0]["comments"]
+            ]
         if endpoint.startswith(f"repos/{migration.SOURCE}/pulls?"):
-            return record["pulls"]
+            return remote.get("fork_pulls", record["pulls"])
         if endpoint.startswith(f"repos/{migration.TARGET}/labels?"):
             return [{"name": "agent-generated"}]
         if endpoint.startswith(f"repos/{migration.TARGET}/pulls?"):
@@ -563,13 +570,25 @@ def github_fake(
     def graph(query: str, **variables: str):
         if "transferIssue" in query:
             remote["issues"] |= {
+                "id": "transferred-issue-node",
                 "repository": {"nameWithOwner": migration.TARGET},
                 "url": f"https://github.com/{migration.TARGET}/issues/100",
                 "number": 100,
             }
+            remote["issues"]["body"] = remote["issues"]["body"].replace(
+                f"https://github.com/{migration.SOURCE}/issues/3#issuecomment-10",
+                f"https://github.com/{migration.TARGET}/issues/100#issuecomment-200",
+            )
+            if remote["rewrite_references"]:
+                remote["issues"]["body"] = (
+                    remote["issues"]["body"]
+                    .replace("#12", f"{migration.SOURCE}#12")
+                    .replace("#298", f"{migration.SOURCE}#298")
+                )
             remote["transfers"] += 1
             return {"transferIssue": {"issue": dict(remote["issues"])}}
         if "node(id:" in query:
+            assert variables["id"] == remote["issues"]["id"]
             return {"node": dict(remote["issues"])}
         return {"repository": {"id": "target-id"}}
 
@@ -579,8 +598,10 @@ def github_fake(
     return remote
 
 
-def test_issue_transfer_recovers_after_remote_success_and_lost_response(
-    snapshot_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("rewrite_references", [False, True])
+@pytest.mark.parametrize("human_edit", [False, True])
+def test_issue_transfer_recovers_after_remote_success_and_protects_edits(
+    snapshot_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rewrite_references: bool, human_edit: bool
 ) -> None:
     record = migration.read_json(snapshot_dir / "snapshot.json")
     issue = {
@@ -588,13 +609,29 @@ def test_issue_transfer_recovers_after_remote_success_and_lost_response(
         "node_id": "issue-node",
         "html_url": f"https://github.com/{migration.SOURCE}/issues/3",
         "updated_at": "2026-10-19T00:00:00Z",
-        "body": "Related to #12 and GH-13.",
+        "body": (
+            "Related to #12 and GH-13. Literal `#14`. "
+            f"Already qualified {migration.SOURCE}#15. "
+            "See [upstream #298](https://github.com/NovaSky-AI/SkyRL/pull/298)."
+            f" See [discussion](https://github.com/{migration.SOURCE}/issues/3#issuecomment-10)."
+        ),
+        "comments": [
+            {
+                "id": 10,
+                "html_url": f"https://github.com/{migration.SOURCE}/issues/3#issuecomment-10",
+                "created_at": "2026-10-18T00:00:00Z",
+                "updated_at": "2026-10-18T00:00:00Z",
+                "user": {"id": 123},
+            }
+        ],
     }
     record["issues"] = [issue]
     migration.write_json(snapshot_dir / "snapshot.json", record)
     migration.plan(snapshot_dir, snapshot_dir / "manifest.toml", None)
     remote = github_fake(monkeypatch, record, "cutover")
+    remote["fork_pulls"] = [{"number": 4, "head": {"sha": "new"}, "base": {"sha": "base", "ref": "main"}}]
     remote["issues"] = {
+        "id": issue["node_id"],
         "body": issue["body"],
         "number": 3,
         "url": issue["html_url"],
@@ -603,15 +640,31 @@ def test_issue_transfer_recovers_after_remote_success_and_lost_response(
         "repository": {"nameWithOwner": migration.SOURCE},
     }
     remote["interrupt"] = True
+    remote["rewrite_references"] = rewrite_references
     state = tmp_path / "transferred.json"
     with pytest.raises(RuntimeError, match="Lost response"):
         migration.transfer_issues(snapshot_dir, state, 99)
+    if human_edit:
+        remote["issues"]["body"] += "\nHuman clarification."
+        edited = remote["issues"]["body"]
+        with pytest.raises(ValueError, match="body changed"):
+            migration.transfer_issues(snapshot_dir, state, 99)
+        assert remote["issues"]["body"] == edited
+        assert remote["transfers"] == 1
+        return
     migration.transfer_issues(snapshot_dir, state, 99)
     migration.transfer_issues(snapshot_dir, state, 99)
     assert remote["transfers"] == 1
     assert migration.read_json(state)["issue-node"]["destination"].endswith("/issues/100")
     assert f"https://github.com/{migration.SOURCE}/issues/12" in remote["issues"]["body"]
     assert f"https://github.com/{migration.SOURCE}/issues/13" in remote["issues"]["body"]
+    assert "[upstream #298](https://github.com/NovaSky-AI/SkyRL/pull/298)" in remote["issues"]["body"]
+    assert f"Already qualified {migration.SOURCE}#15." in remote["issues"]["body"]
+    assert f"[discussion](https://github.com/{migration.TARGET}/issues/100#issuecomment-200)" in remote["issues"]["body"]
+    remote["issues"]["body"] += "\nHuman clarification after completed transfer."
+    completed_body = remote["issues"]["body"]
+    migration.transfer_issues(snapshot_dir, state, 99)
+    assert remote["issues"]["body"] == completed_body
 
 
 @pytest.mark.parametrize("adapted", [False, True])
