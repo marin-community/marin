@@ -46,6 +46,7 @@ from experiments.grug.moe.kda_prep_pallas import (
     EraseInput,
     GateFn,
     GateKind,
+    Segments,
     fused_chunk_prep,
 )
 from experiments.grug.moe.kda_state_pallas import StateGrads, chunk_state_pass
@@ -511,6 +512,7 @@ def _fused_prep(
     erase_input: EraseInput = EraseInput.GATE,
     chunks_per_program: int = 1,
     chunk_stages: int = 1,
+    segments: Segments = Segments.PRECOMPUTED,
 ) -> ChunkPrep:
     """Fused Pallas prep on model-layout ``(B, L, H, d)`` inputs; per-chunk outputs ``(G, n, ...)``."""
     return fused_chunk_prep(
@@ -531,6 +533,7 @@ def _fused_prep(
         interpret=interpret,
         chunks_per_program=chunks_per_program,
         chunk_stages=chunk_stages,
+        segments=segments,
         **(_SUB_TILED_WARPS if sub_chunk_size else {}),
     )
 
@@ -654,6 +657,7 @@ def kda_fused(
     state_grads_num_stages: int = 1,
     prep_chunks: int = 1,
     prep_chunk_stages: int = 1,
+    prep_segments: Segments = Segments.PRECOMPUTED,
 ) -> Float[Array, "B L H Dv"]:
     """Fused-kernel KDA in the model's ``(batch, seq, heads, head_dim)`` layout (GPU).
 
@@ -688,7 +692,8 @@ def kda_fused(
     storage dtype of the state backward's per-chunk v_new and dS (bfloat16 rounds those stored copies, as
     ``h`` already is). ``state_grads_chunks`` / ``state_grads_num_stages`` block the ``StateGrads.PALLAS``
     cotangent kernel over several chunks per program as a pipelined loop, and ``prep_chunks`` /
-    ``prep_chunk_stages`` the prep kernels (same math).
+    ``prep_chunk_stages`` the prep kernels (same math). ``prep_segments`` picks where packed documents'
+    restarted cumulative log-decay is formed (``Segments``; same math).
     """
     b, length, heads, _ = q.shape
     pad = (-length) % chunk_size
@@ -719,6 +724,7 @@ def kda_fused(
         erase_input=erase_input,
         chunks_per_program=prep_chunks,
         chunk_stages=prep_chunk_stages,
+        segments=prep_segments,
     )
     state = jnp.zeros((b * heads, q.shape[-1], v.shape[-1]), jnp.float32)
     out, _ = chunk_state_pass(

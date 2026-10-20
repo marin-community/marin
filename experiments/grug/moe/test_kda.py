@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from experiments.grug.moe.kda import chunk_kda, kda_fused, recurrent_kda
-from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind
+from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind, Segments
 from experiments.grug.moe.kda_state_pallas import StateGrads
 
 jax.config.update("jax_default_matmul_precision", "float32")
@@ -332,10 +332,18 @@ def test_kda_fused_gate_and_grouped_kv_match_unfused(packed, sub_chunk_size):
 @pytest.mark.parametrize("packed", [False, True])
 @pytest.mark.parametrize("save_states", [False, True])
 @pytest.mark.parametrize(
-    ("primal_block_v", "grads_chunks", "prep_chunks"),
-    [(32, 1, 1), (0, 3, 1), (0, 1, 3), (32, 3, 3)],
+    ("primal_block_v", "grads_chunks", "prep_chunks", "segments"),
+    [
+        (32, 1, 1, Segments.PRECOMPUTED),
+        (0, 3, 1, Segments.PRECOMPUTED),
+        (0, 1, 3, Segments.PRECOMPUTED),
+        (0, 1, 1, Segments.FOLDED),
+        (32, 3, 3, Segments.FOLDED),
+    ],
 )
-def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_block_v, grads_chunks, prep_chunks):
+def test_kda_fused_kernel_variants_match_default(
+    packed, save_states, primal_block_v, grads_chunks, prep_chunks, segments
+):
     """The lean primal state pass and the multi-chunk cotangent and prep kernels reproduce the default kernels' values
     and gradients (the GB200 configuration: 32-token chunks in one decay tile, the on-chip sigmoid gate with its
     -5 floor, packed documents), with the per-chunk states recomputed or saved for the backward."""
@@ -365,6 +373,7 @@ def test_kda_fused_kernel_variants_match_default(packed, save_states, primal_blo
         state_grads_chunks=grads_chunks,
         state_grads_num_stages=2,
         prep_chunks=prep_chunks,
+        prep_segments=segments,
         prep_chunk_stages=2,
     )
 

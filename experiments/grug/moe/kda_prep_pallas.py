@@ -72,6 +72,7 @@ class PrepConfig(NamedTuple):
     tail_block_d: int
     tail_num_warps: int
     interpret: bool
+    segments: str  # Segments: how packed documents' restarted cumsum reaches the heavy kernels
     chunks: int  # chunks per program: a loop the compiler software-pipelines when > 1 (``_chunked_call``)
     chunk_stages: int  # pipeline stages of that loop
 
@@ -159,14 +160,22 @@ def _log_decay(g_raw, gate_refs, cols=slice(None)):
     return gate_log_decay(fn, g_raw, p_ref[cols].astype(f32)[None, :], bias_ref[cols].astype(f32)[None, :])
 
 
+class Segments(StrEnum):
+    """How the heavy kernels get the document-restarted cumulative log-decay G of packed sequences."""
+
+    PRECOMPUTED = "precomputed"  # a separate kernel writes G (fp32) first (``_seg_decay_fwd_kernel``)
+    FOLDED = "folded"  # each heavy kernel forms G on-chip from the (gated) log-decay and the document starts
+
+
 class _DocMasks(NamedTuple):
     same: jax.Array  # (C, C) bool: tokens in the same document
     carry_in: jax.Array  # (C,) fp32: token still in the document the chunk started in
     last_doc: jax.Array  # (C,) fp32: token in the chunk's last document
     carry_through: jax.Array  # () fp32: no document starts inside the chunk
+    lower: jax.Array | None  # (C, C) bf16 within-document cumsum operator (``Segments.FOLDED``), else None
 
 
-def _doc_masks(starts_ref) -> _DocMasks | None:
+def _doc_masks(starts_ref, segmented: Segments | None = None) -> _DocMasks | None:
     """Document masks of one chunk from its document-start flags (see kda._segment_masks).
     ``None`` when the sequence is unsegmented."""
     if starts_ref is None:
@@ -178,6 +187,7 @@ def _doc_masks(starts_ref) -> _DocMasks | None:
         carry_in=(idx == 0.0).astype(f32),
         last_doc=(idx == total).astype(f32),
         carry_through=(total == 0.0).astype(f32),
+        lower=_doc_lower_mask(starts_ref) if segmented == Segments.FOLDED else None,
     )
 
 
@@ -239,7 +249,10 @@ def _doc_lower_mask(starts_ref):
 def _cum_log_decay(g_ref, gate_refs, docs: _DocMasks | None, cols=slice(None)):
     """The chunk's cumulative log-decay G (C x cols). Unsegmented: cumsum of the (gated)
     log-decay. With documents, ``g_ref`` already holds G restarted at every document start
-    (``_seg_decay_fwd_kernel``), which keeps the heavy kernels free of that work."""
+    (``Segments.PRECOMPUTED``: ``_seg_decay_fwd_kernel``), or (``Segments.FOLDED``) G is that
+    restarted cumsum of the (gated) log-decay formed here, the same exact 0/1-mask product."""
+    if docs is not None and docs.lower is not None:
+        return _exact_mask_matmul(docs.lower, _log_decay(g_ref[:, cols].astype(f32), gate_refs, cols))
     if docs is not None:
         return g_ref[:, cols].astype(f32)
     return jnp.cumsum(_log_decay(g_ref[:, cols].astype(f32), gate_refs, cols), axis=0)
@@ -275,7 +288,7 @@ def _prep_fwd_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm,
     gate_refs, starts_ref, erase_ref, out_refs = _split_refs(refs, gated, segmented, erased)
     qi_ref, kcd_ref, vp_ref, attn_ref, kw_ref, decay_ref = out_refs[:6]
     c, dk = q_ref.shape
-    docs = _doc_masks(starts_ref)
+    docs = _doc_masks(starts_ref, segmented)
     k, _ = _norm_qk(k_ref[...].astype(f32), l2norm, 1.0)
     beta = b_ref[...].astype(f32)[:, None]
 
@@ -400,7 +413,7 @@ def _prep_fwd_sub_kernel(
     gate_refs, starts_ref, erase_ref, out_refs = _split_refs(refs, gated, segmented, erased)
     qi_ref, kcd_ref, vp_ref, attn_ref, kw_ref, decay_ref = out_refs[:6]
     c, dk = q_ref.shape
-    docs = _doc_masks(starts_ref)
+    docs = _doc_masks(starts_ref, segmented)
     idx = _doc_index(starts_ref)
     k, _ = _norm_qk(k_ref[...].astype(f32), l2norm, 1.0)
     beta = b_ref[...].astype(f32)[:, None]
@@ -453,7 +466,7 @@ def _wy_bwd_sub_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2nor
     gate_refs, starts_ref, erase_ref, refs = _split_refs(refs, gated, segmented, erased)
     t_ref, dkcd_ref, dvp_ref, dqi_in_ref, dattn_ref, dv_ref, deb_ref, dkc_ref, dqs_ref, dbv_ref = refs
     c, dk = k_ref.shape
-    docs = _doc_masks(starts_ref)
+    docs = _doc_masks(starts_ref, segmented)
     idx = _doc_index(starts_ref)
     idx_rows = _idx_rows(starts_ref, c, sub)
     beta = b_ref[...].astype(f32)[:, None]
@@ -516,7 +529,7 @@ def _wy_bwd_kernel(q_ref, k_ref, v_ref, g_ref, b_ref, *refs, mm_dtype, l2norm, g
     gate_refs, starts_ref, erase_ref, refs = _split_refs(refs, gated, segmented, erased)
     t_ref, dkcd_ref, dvp_ref, dqi_in_ref, dattn_ref, dv_ref, dkbe_ref, dkd_ref, dqi_ref, dbv_ref = refs
     c, dk = k_ref.shape
-    docs = _doc_masks(starts_ref)
+    docs = _doc_masks(starts_ref, segmented)
     beta = b_ref[...].astype(f32)[:, None]
     t = t_ref[...]
     row, col = _iota2(c, 0), _iota2(c, 1)
@@ -573,7 +586,7 @@ def _tail_bwd_kernel(q_ref, k_ref, g_ref, b_ref, *refs, l2norm, block_d, gated, 
     gate_refs, starts_ref, erase_ref, refs = _split_refs(refs, gated, segmented, erased)
     dqi_ref, dkw_ref, ddecay_ref, dkbe_ref, dkd_ref, dbv_ref, dq_ref, dk_ref, dg_ref, db_ref, *derase_ref = refs
     c, dk = q_ref.shape
-    docs = _doc_masks(starts_ref)
+    docs = _doc_masks(starts_ref, segmented)
     blocks = [pl.ds(j * block_d, block_d) for j in range(dk // block_d)]
     beta = b_ref[...].astype(f32)[:, None]
     q_scale = dk**-0.5
@@ -850,7 +863,8 @@ def _seg_decay_bwd_call(g, gate, starts, dcum, cfg: PrepConfig):
 
 
 def _prep_fwd_call(q, k, v, g, beta, gate, starts, erase, cfg: PrepConfig, save_t: bool):
-    if starts is not None:  # packed documents: the heavy kernel reads the restarted cumsum G
+    segments = None if starts is None else Segments(cfg.segments)
+    if segments == Segments.PRECOMPUTED:  # packed documents: the heavy kernel reads the restarted cumsum G
         g, gate = _seg_decay_fwd_call(g, gate, starts, cfg), None
     b, length, heads, dk = q.shape
     dv = v.shape[-1]
@@ -875,7 +889,7 @@ def _prep_fwd_call(q, k, v, g, beta, gate, starts, erase, cfg: PrepConfig, save_
     if save_t:
         out_shape.append(sds(c, c, dtype=mmd))
         out_specs += _specs(c, c)
-    gated, segmented = _gate_fn(gate, cfg), starts is not None
+    gated, segmented = _gate_fn(gate, cfg), segments
     erased = None if erase is None else EraseInput(cfg.erase_input)
     if cfg.sub_chunk:
         kernel = functools.partial(_prep_fwd_sub_kernel, sub=cfg.sub_chunk)
@@ -919,8 +933,9 @@ def _group_sum(x: jax.Array, group: int, dtype) -> jax.Array:
 
 
 def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg: PrepConfig):
-    if starts is not None:  # heavy kernels on the restarted cumsum G; dL/dG -> dL/dg after
-        g_in, gate_in = g, gate
+    segments = None if starts is None else Segments(cfg.segments)
+    g_in, gate_in = g, gate  # with documents the heavy kernels emit dL/dG; dL/dg after
+    if segments == Segments.PRECOMPUTED:  # heavy kernels on the restarted cumsum G
         g, gate = _seg_decay_fwd_call(g, gate, starts, cfg), None
     b, length, heads, dk = q.shape
     dv_dim = v.shape[-1]
@@ -928,7 +943,7 @@ def _prep_bwd_call(q, k, v, g, beta, gate, starts, erase, t, cts: ChunkPrep, cfg
     c = cfg.chunk_size
     gb, n = b * heads, length // c
     mmd = jnp.dtype(cfg.mm_dtype)
-    gated, segmented = _gate_fn(gate, cfg), starts is not None
+    gated, segmented = _gate_fn(gate, cfg), segments
     erased = None if erase is None else EraseInput(cfg.erase_input)
     gate_specs = [
         *(_head_row_specs(heads, dk) if gated else []),
@@ -1070,6 +1085,7 @@ def fused_chunk_prep(
     tail_num_warps: int = 8,
     chunks_per_program: int = 1,
     chunk_stages: int = 1,
+    segments: Segments = Segments.PRECOMPUTED,
     interpret: bool = False,
 ) -> ChunkPrep:
     """Fused KDA intra-chunk prep (differentiable).
@@ -1105,6 +1121,8 @@ def fused_chunk_prep(
         num_warps, bwd_num_warps: Triton warps per program (forward / backward kernels).
         tail_block_d, tail_num_warps: d_k column block / warps of the backward's
             elementwise tail kernel.
+        segments: with ``doc_starts``, whether the restarted cumulative log-decay is precomputed by its own
+            kernel or formed inside each heavy kernel (``Segments``; same math).
         chunks_per_program, chunk_stages: consecutive chunks each prep program handles, as a loop with that
             many software-pipeline stages (same math).
         interpret: run in the Pallas interpreter (CPU tests).
@@ -1137,6 +1155,7 @@ def fused_chunk_prep(
         tail_block_d,
         tail_num_warps,
         interpret,
+        Segments(segments).value,
         chunks_per_program,
         chunk_stages,
     )
