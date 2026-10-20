@@ -6,11 +6,10 @@
 import json
 
 from taskcompendium.convert.structure_closure import structure_closure_task
-from taskcompendium.models import TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
+from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
-from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow, Reply
+from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 from verifyit.json_objects import unique_object
-from verifyit.spec import StructureClosureSpec
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -33,7 +32,7 @@ it is not an independent final benchmark. Static closure checks and controls do 
 """
 
 
-def structural_row(row: dict, _context: ConversionContext) -> bool:
+def is_structural_row(row: dict, _context: ConversionContext) -> bool:
     native = json.loads(row["lowered_task_spec"], object_pairs_hook=unique_object)
     return native["task"]["source"]["dataset"] == "structure-closure"
 
@@ -45,18 +44,11 @@ def convert(row: RawRow, _context: ConversionContext) -> NormalizedTask | Import
     )
 
 
-def reference_continuation(task: TaskSpec) -> Reply:
-    assert isinstance(task.grader, VerifyitGrader)
-    spec = verifyit_spec(task.grader)
-    assert isinstance(spec, StructureClosureSpec)
-    return Reply(TextMessage(role="assistant", content=spec.expected[len(spec.prefix) :]))
-
-
 def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="SnowballV01:structure-closure" + ("/validation" if split == "validation" else ""),
+                id="SnowballV01:structure-closure" + ("/validation" if intended_use == IntendedUse.EVAL else ""),
                 title=f"Snowball v0.1 structural closure · {split}",
                 origin="SnowballV01",
                 family="structural",
@@ -68,12 +60,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name=f"snowball-v01-structure-closure-{split}",
                 version="2",
                 source=HfSource(
-                    REPOSITORY, REVISION, (f"{split}.parquet",), SourceFormat.PARQUET, select=structural_row
+                    REPOSITORY, REVISION, (f"{split}.parquet",), SourceFormat.PARQUET, select=is_structural_row
                 ),
                 convert=convert,
                 intended_use=intended_use,
                 rubric=RUBRIC,
-                controls=Controls(golden=reference_continuation),
+                controls=Controls(golden=reference_reply),
             ),
             pipeline=process_rows,
         )
