@@ -1,4 +1,4 @@
-# DROP task override (marin-community/evalchemy#31).
+# DROP task override.
 #
 # Identical to the upstream lm-eval `drop` task (EleutherAI/lm-evaluation-harness
 # v0.4.12) EXCEPT for the added `filter_list`, which extracts the short answer span from

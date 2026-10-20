@@ -27,7 +27,7 @@ DEFAULT_DEADLINE = _lcb_grader.DEFAULT_DEADLINE
 
 
 def _worker_run(sample, generation, debug, connection, timeout):
-    """Child side: apply the shared grader's memory cap (best-effort) then run ``run_test`` once and send the result over the pipe."""
+    """Grade one generation and report its test outcomes and metadata."""
     _lcb_grader.apply_memory_cap(_lcb_grader.DEFAULT_MAX_MEMORY_BYTES)
     res, metadata = run_test(sample, test=generation, debug=debug, timeout=timeout)
     try:

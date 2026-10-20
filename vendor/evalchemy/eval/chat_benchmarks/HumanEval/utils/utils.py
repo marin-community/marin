@@ -47,7 +47,7 @@ def get_function_name(question: str, lang: str):
     return func_name, func_prefix
 
 
-def get_code_block(input: str, lang: str):
+def get_code_block(input: str):
     input = input.split("\n")
     beg = 0
     while not input[0].strip().startswith("```") and beg < len(input) - 2:
@@ -76,7 +76,7 @@ def extract_generation_code(example: str, lang_code: str, verbose: bool = False)
 
         # If the model did not repeat the question, add it to the output
         if func_name not in output:
-            output = "```" + lang + "\n" + question + "\n" + get_code_block(output, lang_code) + "\n```"
+            output = "```" + lang + "\n" + question + "\n" + get_code_block(output) + "\n```"
 
         code_block: str = re.findall(f"```{lang.lower()}\n(.*?)```", output, re.DOTALL | re.IGNORECASE)[0]
         if verbose:

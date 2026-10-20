@@ -3,7 +3,7 @@ from eval.sources.common import text_specs
 
 import json
 import logging
-import fsspec
+from rigging.filesystem.factory import open_url
 from typing import Any, Dict, List, Optional  # noqa: F401
 
 
@@ -84,7 +84,7 @@ class MATH500Benchmark(BaseBenchmark):
         path = self.data_file or fetch_hf(
             self.SOURCE.dataset, "test.jsonl", revision=HF_REVISION, cache_prefix=self.dataset_cache,
         )
-        with fsspec.open(path, "rt", encoding="utf-8") as f:
+        with open_url(path, "rt", encoding="utf-8") as f:
             questions = [json.loads(x) for x in f]
 
         if self.debug:

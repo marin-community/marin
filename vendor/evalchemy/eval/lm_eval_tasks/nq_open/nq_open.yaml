@@ -11,7 +11,7 @@ training_split: train
 validation_split: validation
 description: "Answer these questions:\n\n"
 doc_to_text: "Q: {{question}}?\nRespond with exactly \"Answer: <short answer>\"."
-doc_to_target: "{{answer}}" # TODO: should be multi-target
+doc_to_target: "{{answer}}"
 fewshot_delimiter: "\n"
 fewshot_config:
   doc_to_target: "Answer: {{answer}}"

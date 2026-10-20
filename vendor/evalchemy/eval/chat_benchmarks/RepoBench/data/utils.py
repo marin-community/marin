@@ -44,7 +44,6 @@ def construct_prompt(data: dict, language: str = "python", tokenizer=None, max_t
                 if exceed_token_nums < 0:
                     break
 
-            # join the lines back
             cross_file_prompt = "\n".join(cross_file_prompt_lines[:i]) + "\n\n"
 
     # combine the cross-file prompt and in-file prompt

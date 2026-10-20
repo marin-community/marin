@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-import fsspec
+from rigging.filesystem.factory import open_url
 
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
 from eval.data_sources import fetch_hf
@@ -37,7 +37,7 @@ class HumanEvalPlusBenchmark(BaseBenchmark):
                 raise ValueError(f"HumanEvalPlus has no upstream dataset for {language}")
             path = fetch_hf(HUMANEVALPLUS_REPO, "test.jsonl", revision=HUMANEVALPLUS_REVISION,
                             cache_prefix=self.dataset_cache)
-        with fsspec.open(path, "rt") as data:
+        with open_url(path, "rt") as data:
             examples = [json.loads(line) for line in data if line.strip()]
         if self.data_dir is None:
             # The bundled harness explicitly invoked check after defining it.

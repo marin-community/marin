@@ -5,7 +5,7 @@ import os
 from typing import Optional
 import warnings
 
-import fsspec
+from rigging.filesystem.factory import open_url
 import pyarrow.parquet as pq
 
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
@@ -79,12 +79,12 @@ class BigCodeBenchBenchmark(BaseBenchmark):
                 source = SourceRef("bigcode/bigcodebench-hard", split=BIGCODEBENCH_VERSION,
                                    revision=BIGCODEBENCH_HARD_REVISION)
             if self.data_dir is not None:
-                with fsspec.open(os.path.join(self.data_dir, f"BigCodeBench-{prompt_type}.json"), "rt") as data:
+                with open_url(os.path.join(self.data_dir, f"BigCodeBench-{prompt_type}.json"), "rt") as data:
                     rows = json.load(data)
             else:
                 path = fetch_hf(source.dataset, "data/v0.1.3-00000-of-00001.parquet",
                                 revision=source.revision, cache_prefix=self.dataset_cache)
-                with fsspec.open(path, "rb") as data:
+                with open_url(path, "rb") as data:
                     raw_rows = pq.read_table(data).to_pylist()
                 prompt_field = "complete_prompt" if prompt_type.startswith("complete") else "instruct_prompt"
                 rows = [{**{key: row[key] for key in ("task_id", "test", "entry_point", "doc_struct",

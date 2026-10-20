@@ -1,4 +1,4 @@
-# TruthfulQA MC2 override (marin-community/evalchemy#154).
+# TruthfulQA MC2 override.
 #
 # This is the upstream lm-eval v0.4.12 task with numerically stable probability
 # normalization. Evalchemy's include path gives this config precedence over the

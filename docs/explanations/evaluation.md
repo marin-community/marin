@@ -55,8 +55,8 @@ After the evaluator seals those tables, Marin derives the shared `rollouts_v1` t
 
 Evalchemy's HF-backed sources pin each dataset file to a full commit SHA.
 `fetch_hf(repo_id, filename, revision=sha, cache_prefix=prefix)` returns a local path
-or an object-store URL that readers open through `fsspec.open`. Files are staged
-under `{prefix}/{repo_id}/{sha}/{filename}`. A lease and completion marker prevent
+or an object-store URL that readers open through Rigging's guarded `open_url`.
+Files are staged under `{prefix}/{repo_id}/{sha}/{filename}`. A lease and completion marker prevent
 readers from using interrupted uploads; completed entries need no HF request.
 
 Marin sets the prefix to its configured 30-day scratch store, using the evaluation

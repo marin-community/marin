@@ -68,7 +68,6 @@ def play_a_match_gt(match: MatchSingle, output_file: str, debug=False):
     score = 0
     category = None
 
-    # todo: find a better solution than a long if statement.
     splits = task_or_subtask.split("_")
     try:
         if splits[0] in ["amc", "smc"] or (len(splits) > 1 and splits[1] == "amc"):

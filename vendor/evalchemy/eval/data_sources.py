@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import posixpath
 import re
 import shutil
 from pathlib import PurePosixPath
@@ -12,6 +11,7 @@ from huggingface_hub.utils import validate_repo_id
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 
 _STAGING_TIMEOUT = Duration.from_minutes(15)
@@ -34,13 +34,14 @@ def fetch_hf(repo_id: str, filename: str, *, revision: str, cache_prefix: str | 
     if cache_prefix is None:
         return hf_hub_download(repo_id, filename, repo_type="dataset", revision=revision)
 
-    destination = f"{cache_prefix.rstrip('/')}/{repo_id}/{revision}/{filename}"
+    destination_path = StoragePath(cache_prefix) / repo_id / revision / filename
+    destination = str(destination_path)
     filesystem, path = url_to_fs(destination)
     complete = f"{path}.complete"
     if filesystem.exists(complete) and filesystem.exists(path):
         return destination
 
-    filesystem.makedirs(posixpath.dirname(path), exist_ok=True)
+    destination_path.parent.mkdirs(exist_ok=True)
     # Lease paths must retain their scheme so rigging selects the native
     # conditional-write implementation for S3 and GCS.
     lease = create_lock(f"{destination}.lock")

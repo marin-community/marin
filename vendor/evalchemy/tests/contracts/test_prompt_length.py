@@ -41,24 +41,6 @@ REPO_LOCAL_BENCHMARKS = (
 CONTEXT_LENGTH = 40_896
 
 
-class _RequestCapturingLM:
-    """LM stand-in that records the generation kwargs each request carries."""
-
-    rank = 0
-    world_size = 1
-
-    def __init__(self):
-        self.gen_kwargs = []
-
-    @staticmethod
-    def apply_chat_template(messages):
-        return "\n".join(str(message["content"]) for message in messages)
-
-    def generate_until(self, instances):
-        self.gen_kwargs.extend(instance.args[1] for instance in instances)
-        return ["" for _ in instances]
-
-
 def _lengths(longest_prompt_tokens: int, margin: int = 256) -> PromptLengths:
     entry = BenchmarkPromptLength(
         distinct_prompt_count=10,

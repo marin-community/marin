@@ -8,8 +8,7 @@ from lm_eval.tasks import TaskManager
 from lm_eval.tasks._yaml_loader import load_yaml
 from lm_eval.utils import apply_template
 
-# The evalchemy `eval` package is copied into site-packages, not editable-installed, so
-# put this worktree first on the path to import the in-tree fix under test.
+# Put this worktree first when importing the DROP implementation under test.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))

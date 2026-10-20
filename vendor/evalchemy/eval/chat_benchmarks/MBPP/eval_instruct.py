@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Dict, Generator, List, Optional
 
-import fsspec
+from rigging.filesystem.factory import open_url
 import pyarrow.parquet as pq
 
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
@@ -67,13 +67,13 @@ class MBPPBenchmark(BaseBenchmark):
 
     def load_examples(self):
         if self.data_dir is not None:
-            with fsspec.open(os.path.join(self.data_dir, DATA_FILE), "rt") as data:
+            with open_url(os.path.join(self.data_dir, DATA_FILE), "rt") as data:
                 return [json.loads(line) for line in data if line.strip()]
         rows = []
         for split in ("prompt", "train", "test", "validation"):
             path = fetch_hf(DATASET_REPO, f"full/{split}-00000-of-00001.parquet",
                             revision=DATASET_REVISION, cache_prefix=self.dataset_cache)
-            with fsspec.open(path, "rb") as data:
+            with open_url(path, "rb") as data:
                 rows.extend(pq.read_table(data).to_pylist())
         return sorted(rows, key=lambda row: row["task_id"])
 
@@ -120,7 +120,7 @@ Here is my problem:
     def iter_specs(self, options):
         examples = self.load_examples()
         if self.data_dir is not None:
-            with fsspec.open(os.path.join(self.data_dir, "mbpp_test.jsonl"), "rt") as data:
+            with open_url(os.path.join(self.data_dir, "mbpp_test.jsonl"), "rt") as data:
                 problems = {row["task_id"]: row for line in data if line.strip() for row in [json.loads(line)]}
         else:
             problems = {row["task_id"]: {"task_id": row["task_id"], "prompt": row["text"],

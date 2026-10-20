@@ -281,10 +281,9 @@ def _string_to_dict(to_convert):
 
 
 def get_package_version(package_name: str) -> str:
-    """Get the version of a package."""
     return version(package_name)
 
 
 def get_multi_package_version(package_names: Sequence[str]) -> str:
-    """Get the version of multiple packages."""
+    """Return space-separated package==version entries."""
     return " ".join([f"{p}=={get_package_version(p)}" for p in package_names])

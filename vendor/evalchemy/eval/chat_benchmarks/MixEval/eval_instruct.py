@@ -7,13 +7,14 @@ import logging
 import os
 import json
 
-import fsspec
+from rigging.filesystem.factory import open_url
 
 from eval.constants import AUTO_ANNOTATOR_MODEL
 from eval.data_sources import fetch_hf
 from eval.task import BaseBenchmark
 
 HF_REVISION = "66a05ec3821a2b5089ed1e32a5d65ab6ecdbf906"
+HF_DATASET_VERSION = "2024-06-01"
 DEFAULT_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mix_eval", "data")
 
 
@@ -31,7 +32,7 @@ class MixEvalBenchmark(BaseBenchmark):
     def __init__(
         self,
         benchmark: str = "mixeval",
-        version: str = "2024-06-01",
+        version: str = HF_DATASET_VERSION,
         data_path: str | None = None,
         annotator_model: str = "gpt-4o-mini-2024-07-18",
         debug: bool = False,
@@ -59,7 +60,7 @@ class MixEvalBenchmark(BaseBenchmark):
         self.data_path = data_path
         self.debug = debug
         self.dataset_split = "MixEval_Hard" if benchmark == "mixeval_hard" else "MixEval"
-        if version != "2024-06-01":
+        if version != HF_DATASET_VERSION:
             self.dataset_name = "MixEval"
             self.dataset_split = "test"
             self.dataset_revision = version
@@ -67,12 +68,12 @@ class MixEvalBenchmark(BaseBenchmark):
     def load_split(self, filename: str) -> list[dict[str, Any]]:
         """Load one split from the pinned June source or the selected local snapshot."""
         folder = "mixeval-hard" if self.benchmark == "mixeval_hard" else "mixeval"
-        if self.version == "2024-06-01" and self.data_path is None:
+        if self.version == HF_DATASET_VERSION and self.data_path is None:
             path = fetch_hf(
                 self.SOURCE.dataset, f"data/mixeval-jsonl/{folder}/{filename}l",
                 revision=HF_REVISION, cache_prefix=self.dataset_cache,
             )
-            with fsspec.open(path, "rt", encoding="utf-8") as data:
+            with open_url(path, "rt", encoding="utf-8") as data:
                 rows = [json.loads(line) for line in data]
             for row in rows:
                 if row["context"] == "None":
@@ -81,7 +82,7 @@ class MixEvalBenchmark(BaseBenchmark):
                     del row["options"]
         else:
             path = os.path.join(self.data_path or DEFAULT_DATA_PATH, f"mixeval-{self.version}", folder, filename)
-            with fsspec.open(path, "rt", encoding="utf-8") as data:
+            with open_url(path, "rt", encoding="utf-8") as data:
                 rows = [{**row, "id": identity} for identity, row in json.load(data).items()]
         return rows[:2] if self.debug else rows
 

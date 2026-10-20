@@ -5,7 +5,7 @@ import json
 import logging
 import os
 
-import fsspec
+from rigging.filesystem.factory import open_url
 
 from eval.data_sources import fetch_hf
 from eval.task import BaseBenchmark
@@ -63,7 +63,7 @@ class IFEvalBenchmark(BaseBenchmark):
         path = data_path or fetch_hf(
             self.SOURCE.dataset, "ifeval_input_data.jsonl", revision=HF_REVISION, cache_prefix=self.dataset_cache,
         )
-        with fsspec.open(path, "rt", encoding="utf-8") as data:
+        with open_url(path, "rt", encoding="utf-8") as data:
             examples = [json.loads(line) for line in data]
         if canonical:
             for row in examples:

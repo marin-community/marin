@@ -4,7 +4,7 @@ import os
 from typing import Any, Dict, Optional
 import warnings
 
-import fsspec
+from rigging.filesystem.factory import open_url
 
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
 from eval.data_sources import fetch_hf
@@ -135,7 +135,7 @@ class CruxEvalBenchmark(BaseBenchmark):
         path = os.path.join(self.data_dir, "cruxeval.jsonl") if self.data_dir is not None else fetch_hf(
             CRUXEVAL_REPO, "test.jsonl", revision=CRUXEVAL_REVISION, cache_prefix=self.dataset_cache,
         )
-        with fsspec.open(path, "rt") as data:
+        with open_url(path, "rt") as data:
             rows = [json.loads(line) for line in data if line.strip()]
         if self.debug:
             rows = rows[:10]

@@ -3,7 +3,7 @@ import logging
 import os
 from typing import List, Optional
 
-import fsspec
+from rigging.filesystem.factory import open_url
 import pyarrow.parquet as pq
 
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
@@ -163,14 +163,14 @@ class MultipleBenchmark(BaseBenchmark):
 
     def load_examples(self, language):
         if self.data_dir is not None:
-            with fsspec.open(os.path.join(self.data_dir, f"multipl-e-{language}.json"), "rt") as data:
+            with open_url(os.path.join(self.data_dir, f"multipl-e-{language}.json"), "rt") as data:
                 return json.load(data)
         upstream_language = {"julia": "jl", "racket": "rkt"}.get(language, language)
         rows = []
         for suite in (("humaneval",) if language == "dart" else ("humaneval", "mbpp")):
             path = fetch_hf(MULTIPLE_REPO, f"{suite}-{upstream_language}/test-00000-of-00001.parquet",
                             revision=MULTIPLE_REVISION, cache_prefix=self.dataset_cache)
-            with fsspec.open(path, "rb") as data:
+            with open_url(path, "rb") as data:
                 examples = pq.read_table(data).to_pylist()
             for example in examples:
                 prompt = example["prompt"]

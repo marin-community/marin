@@ -6,7 +6,7 @@ from eval.contracts.eval_spec import SourceRef
 import ast
 import csv
 import logging
-import fsspec
+from rigging.filesystem.factory import open_url
 from typing import Any, Dict, List, Optional
 
 
@@ -59,7 +59,7 @@ class SimpleQABenchmark(BaseBenchmark):
         path = self.data_file or fetch_hf(
             self.SOURCE.dataset, "simple_qa_test_set.csv", revision=HF_REVISION, cache_prefix=self.dataset_cache,
         )
-        with fsspec.open(path, "rt", newline="", encoding="utf-8") as data:
+        with open_url(path, "rt", newline="", encoding="utf-8") as data:
             questions = []
             for source_index, row in enumerate(csv.DictReader(data)):
                 metadata = ast.literal_eval(row["metadata"])

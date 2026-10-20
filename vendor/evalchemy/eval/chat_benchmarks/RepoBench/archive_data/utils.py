@@ -247,7 +247,6 @@ def get_first_line_not_comment(code: str, language: str = "python"):
 
     if language == "python":
         for line in lines:
-            # if the line is empty, then skip
             if not line.strip():
                 continue
             # if the line is a start of a multiline comment, then set the in_multiline_comment to True and skip
@@ -269,7 +268,6 @@ def get_first_line_not_comment(code: str, language: str = "python"):
 
     elif language == "java":
         for line in lines:
-            # if the line is empty, then skip
             if not line.strip():
                 continue
             # if the line is a start of a multiline comment, then set the in_multiline_comment to True and skip

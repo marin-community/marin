@@ -3,7 +3,7 @@ import logging
 import os
 from typing import Dict, Generator, List, Optional
 
-import fsspec
+from rigging.filesystem.factory import open_url
 import pyarrow.parquet as pq
 
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
@@ -70,11 +70,11 @@ class MBPPPlusBenchmark(BaseBenchmark):
 
     def load_examples(self):
         if self.data_dir is not None:
-            with fsspec.open(os.path.join(self.data_dir, DATA_FILE), "rt") as data:
+            with open_url(os.path.join(self.data_dir, DATA_FILE), "rt") as data:
                 return [json.loads(line) for line in data if line.strip()]
         path = fetch_hf(DATASET_REPO, "data/test-00000-of-00001-d5781c9c51e02795.parquet",
                         revision=DATASET_REVISION, cache_prefix=self.dataset_cache)
-        with fsspec.open(path, "rb") as data:
+        with open_url(path, "rb") as data:
             return pq.read_table(data).to_pylist()
 
     def read_test_examples(self, examples: List[Dict]) -> Generator[Dict[str, str], None, None]:

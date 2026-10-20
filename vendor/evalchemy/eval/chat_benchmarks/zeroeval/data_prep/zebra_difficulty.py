@@ -21,7 +21,6 @@ for N in range(2, 7):
 # Create a DataFrame for better visualization
 df = pd.DataFrame(data, columns=[f"M={i}" for i in range(2, 7)], index=[f"N={i}" for i in range(2, 7)])
 
-# Convert the difficulties to log scale
 log_df = df.applymap(lambda x: np.log10(x))
 
 

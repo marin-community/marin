@@ -30,9 +30,6 @@ SAMPLE_METRICS_FIELD = "metrics"
 SAMPLE_METRICS_ANNOTATION = "sample_metrics"
 """Field a grader annotates on a generated example to carry its own scores."""
 
-REPEATED_SAMPLE_METRICS_ANNOTATION = "sample_metrics_by_repeat"
-"""Field carrying one metric mapping per independently graded repetition."""
-
 SAMPLE_COORDINATES_ANNOTATION = "_sample_coordinates"
 """Stable namespace, ordinal, and output position copied with each generated example."""
 
@@ -99,25 +96,6 @@ def record_sample_metrics(example: MutableMapping[str, Any], **values: bool | fl
     example[SAMPLE_METRICS_ANNOTATION] = {name: _metric_value(name, value) for name, value in values.items()}
 
 
-def record_repeated_sample_metrics(example: MutableMapping[str, Any], **values: Sequence[bool | float]) -> None:
-    """Record independently graded repetitions and their aggregate mean."""
-    if not values:
-        raise SampleMetricsError("a repeated sample must record at least one metric value")
-    lengths = {len(repetitions) for repetitions in values.values()}
-    if len(lengths) != 1 or not lengths or next(iter(lengths)) == 0:
-        raise SampleMetricsError("repeated sample metrics must have the same non-zero repetition count")
-
-    repeated = [
-        {name: _metric_value(name, repetitions[index]) for name, repetitions in values.items()}
-        for index in range(next(iter(lengths)))
-    ]
-    example[REPEATED_SAMPLE_METRICS_ANNOTATION] = repeated
-    record_sample_metrics(
-        example,
-        **{name: sum(row[name] for row in repeated) / len(repeated) for name in values},
-    )
-
-
 def sample_metric_fields(example: Mapping[str, Any]) -> dict[str, Any]:
     """Return the record fields carrying one example's recorded metrics."""
     metrics = example.get(SAMPLE_METRICS_ANNOTATION)
@@ -135,24 +113,6 @@ def sample_failure_fields(example: Mapping[str, Any], repeat: int = 0) -> dict[s
     if categories is None or categories[repeat] is None:
         return {}
     return {"failure_category": categories[repeat]}
-
-
-def repeated_sample_metric_fields(example: Mapping[str, Any]) -> list[dict[str, Any]] | None:
-    """Return serialized metric fields for each repetition, when present."""
-    repeated = example.get(REPEATED_SAMPLE_METRICS_ANNOTATION)
-    if repeated is None:
-        return None
-    if not isinstance(repeated, Sequence) or isinstance(repeated, (str, bytes)) or not repeated:
-        raise SampleMetricsError(
-            f"{REPEATED_SAMPLE_METRICS_ANNOTATION} must be a non-empty sequence of metric mappings"
-        )
-    fields = []
-    for metrics in repeated:
-        if not isinstance(metrics, Mapping) or not metrics:
-            raise SampleMetricsError(f"{REPEATED_SAMPLE_METRICS_ANNOTATION} entries must be non-empty metric mappings")
-        values = {name: _metric_value(name, value) for name, value in metrics.items()}
-        fields.append({SAMPLE_METRICS_FIELD: list(values), **values})
-    return fields
 
 
 def validate_sample_metrics(task_name: str, records: Sequence[Mapping[str, Any]]) -> None:
