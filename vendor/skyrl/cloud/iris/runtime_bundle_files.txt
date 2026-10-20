@@ -49,3 +49,16 @@ chat_templates/delphi_v0.jinja2
 chat_templates/delphi_v1.jinja2
 chat_templates/gpt2_completion.jinja2
 chat_templates/qwen3_thinking_acc.jinja2
+marinskyrl/entrypoints.py
+marinskyrl/recipe_schema/__init__.py
+marinskyrl/recipe_schema/budget.py
+marinskyrl/recipe_schema/declared.py
+marinskyrl/recipe_schema/documents.py
+marinskyrl/recipe_schema/launch_result.py
+marinskyrl/recipe_schema/model.py
+marinskyrl/recipe_schema/ownership.py
+marinskyrl/recipe_schema/py.typed
+marinskyrl/recipe_schema/recipe.py
+marinskyrl/recipe_schema/rules.py
+marinskyrl/recipe_schema/sections.py
+marinskyrl/recipe_schema/settings.py

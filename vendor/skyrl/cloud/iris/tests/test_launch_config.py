@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 import yaml
 from omegaconf import OmegaConf
 from rolloutengine.models import ModelTurn
+from omegaconf.errors import MissingMandatoryValue
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
@@ -90,12 +92,12 @@ def _raw_config() -> dict[str, Any]:
             },
             "model_num_attention_heads": 8,
             "trainer": {
-                "seed": 42,
                 "strategy": "megatron",
                 "algorithm": {"use_kl_loss": False},
                 "placement": {
                     "colocate_all": True,
                     "policy_num_nodes": 1,
+                    "ref_num_nodes": 1,
                     "policy_num_gpus_per_node": 8,
                 },
                 "train_batch_size": 8,
@@ -140,7 +142,7 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
 
 def test_launch_rejects_terminal_export_without_request_callback(tmp_path):
     raw = _raw_config()
-    raw["skyrl"]["trainer"].update(export_hf_artifact=True, ckpt_interval=1, hf_save_interval=-1)
+    raw["skyrl"]["trainer"].update(ckpt_interval=1, hf_save_interval=-1)
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
 
@@ -275,6 +277,111 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
 
     assert load_launch_config(path).runtime.training_type == expected
+
+
+@pytest.mark.parametrize("geometry", ["colocated", "two-node", "native-defaults", "shared-ref", "separate-ref", "dpo"])
+def test_source_launch_fills_allocation_without_document_changes(tmp_path, geometry):
+    raw = _raw_config()
+    placement = raw["skyrl"]["trainer"]["placement"]
+    if geometry != "colocated":
+        placement["colocate_all"] = False
+        raw["iris"]["allocation"]["num_nodes"] = 2
+    if geometry in {"shared-ref", "separate-ref"}:
+        raw["skyrl"]["trainer"]["algorithm"]["use_kl_loss"] = True
+        placement["colocate_policy_ref"] = geometry == "shared-ref"
+        raw["iris"]["allocation"]["num_nodes"] = 2 if geometry == "shared-ref" else 3
+    if geometry == "native-defaults":
+        placement.update(policy_num_gpus_per_node=None, colocate_policy_ref=False)
+        del raw["skyrl"]["trainer"]["micro_train_batch_size_per_gpu"]
+        raw["skyrl"]["trainer"]["algorithm"] = {}
+        del raw["skyrl"]["generator"]["backend"]
+        raw["iris"]["allocation"]["num_nodes"] = 3
+    if geometry == "dpo":
+        raw["skyrl"].update(
+            config_groups={"algorithm_recipe": "dpo"},
+            environment={"env_class": "preference_pair"},
+            trainer={
+                "strategy": "megatron",
+                "use_sample_packing": False,
+                "micro_train_batch_size_per_gpu": 2,
+                "placement": {**placement, "colocate_policy_ref": True},
+            },
+        )
+        raw["skyrl"]["generator"]["n_samples_per_prompt"] = 2
+        raw["iris"]["allocation"]["num_nodes"] = 1
+    if geometry == "colocated":
+        raw["skyrl"]["generator"]["engine_init_kwargs"] = {"user_options": {"nested": {}}}
+        raw["skyrl"]["data"] = {"kind": "parquet"}
+        raw["inputs"]["data_kind"] = "parquet"
+    path = tmp_path / "source.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    explicit = load_launch_config(path)
+    if geometry == "colocated":
+        assert OmegaConf.to_container(explicit.skyrl.generator.engine_init_kwargs.user_options) == {}
+        OmegaConf.save(explicit, path)
+        assert load_launch_config(path).inputs.data_kind == "parquet"
+    del raw["iris"]["allocation"]["num_nodes"]
+    del raw["runtime"]["profile"]
+    del raw["inputs"]["data_kind"]
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    assert json.dumps(OmegaConf.to_container(load_launch_config(path), resolve=True)) == json.dumps(
+        OmegaConf.to_container(explicit, resolve=True)
+    )
+
+
+def test_source_launch_rejects_missing_geometry_and_conflicting_author_values(tmp_path):
+    cases = []
+    for field in (
+        "trainer.placement.policy_num_nodes",
+        "trainer.placement.ref_num_nodes",
+        "generator.num_inference_engines",
+    ):
+        for explicit_null in (False, True):
+            raw = OmegaConf.create(_raw_config())
+            del raw.iris.allocation.num_nodes
+            parent, key = field.rsplit(".", 1)
+            if explicit_null:
+                OmegaConf.update(raw.skyrl, field, None)
+            else:
+                del OmegaConf.select(raw.skyrl, parent)[key]
+            cases.append((raw, field))
+    for recipe_key, envelope_key in (("train_data", "train_data"), ("val_data", "validation_data")):
+        raw = OmegaConf.create(_raw_config())
+        raw.skyrl.data = {recipe_key: ["/authored/data"]}
+        raw.inputs[envelope_key] = [
+            {
+                "uri": "s3://data/gsm8k",
+                "identity": "sha256:gsm8k",
+                "local_path": "/tmp/data/gsm8k",
+                "relative_path": "train.parquet",
+                "kind": "directory",
+            }
+        ]
+        cases.append((raw, f"data.{recipe_key} conflicts"))
+    for role in ("policy", "ref"):
+        raw = OmegaConf.create(_raw_config())
+        raw.skyrl.trainer.placement[f"{role}_num_gpus_per_node"] = 32
+        cases.append((raw, "gpus_per_node"))
+    raw = OmegaConf.create(_raw_config())
+    raw.inputs.data_kind = "parquet"
+    cases.append((raw, "inputs.data_kind"))
+    raw = OmegaConf.create(_raw_config())
+    raw.skyrl.trainer.train_batch_size = "8"
+    cases.append((raw, "train_batch_size"))
+    path = tmp_path / "invalid.yaml"
+    for raw, error in cases:
+        OmegaConf.save(raw, path)
+        with pytest.raises(ValueError, match=error):
+            load_launch_config(path)
+    raw = OmegaConf.create(_raw_config())
+    raw.skyrl.data = {"kind": "parquet"}
+    del raw.inputs.data_kind
+    OmegaConf.save(raw, path)
+    resolved = load_launch_config(path)
+    del resolved.inputs.data_kind
+    OmegaConf.save(resolved, path)
+    with pytest.raises(MissingMandatoryValue, match="data_kind"):
+        load_launch_config(path)
 
 
 def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Path) -> None:
@@ -419,7 +526,7 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
                 "algorithm.off_policy_correction": "custom",
                 "algorithm.off_policy_correction_rules": [{"action": "truncate", "high": 2.0}],
             },
-            "kind must be token or sequence",
+            "kind",
         ),
         (
             {
@@ -489,6 +596,7 @@ def test_launch_validates_correction_and_selection_contract(tmp_path: Path, over
 def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path, recipe: str, nodes: int):
     raw = _raw_config()
     raw["skyrl"] = {"defaults": [recipe, "_self_"], "trainer": {"max_steps": 2}}
+    raw["inputs"]["data_kind"] = "parquet"
     raw["iris"]["allocation"]["num_nodes"] = nodes
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))

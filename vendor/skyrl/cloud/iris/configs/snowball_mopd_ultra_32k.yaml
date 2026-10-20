@@ -81,7 +81,6 @@ trainer:
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: 50
-  max_ckpts_to_keep: 2
   resume_mode: none
   logger: console
   policy:

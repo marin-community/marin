@@ -22,7 +22,9 @@ class ContextBudget(Section):
     def _response_fits(self) -> Self:
         if self.request_window_tokens <= self.max_new_tokens_per_turn:
             raise ValueError("request_window_tokens must exceed max_new_tokens_per_turn")
-        if "serving_window_tokens" in self.model_fields_set and self.serving_window_tokens < self.request_window_tokens:
+        if "serving_window_tokens" not in self.model_fields_set:
+            object.__setattr__(self, "serving_window_tokens", self.request_window_tokens)
+        if self.serving_window_tokens < self.request_window_tokens:
             raise ValueError("serving_window_tokens must cover the complete request_window_tokens")
         return self
 

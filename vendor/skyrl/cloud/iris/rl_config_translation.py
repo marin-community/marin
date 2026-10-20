@@ -7,28 +7,30 @@ import binascii
 import copy
 from importlib.resources import files
 import json
-import math
 import os
-from dataclasses import dataclass, field, fields
-from enum import StrEnum
+from dataclasses import dataclass, field
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, Mapping, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol, get_args, get_origin
 
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.config.objective_spec import validate_objective
-from skyrl_train.config.ftpo import FTPOConfig
 
 from cloud.iris.paths import resolve_paths_in_dict
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT as CHECKPOINT_EXPORT_MODULE
 from marinskyrl.environment_contract import TrainingType
 from marinskyrl.distillation import DistillationPlan, compile_distillation_plan, validate_distillation_runtime_support
 from marinskyrl.resource_locator import join_resource_path, model_source_for_path
-from marinskyrl.speculative_decoding import STANDARD_TRAINING_ENTRYPOINT, parse_speculative_decoding_config
+from marinskyrl.speculative_decoding import parse_speculative_decoding_config
 from marinskyrl.remote_io import filesystem_and_path, open_output_stream
 from marinskyrl.rollout_grading import validate_nemotron_ultra_grading
+from marinskyrl.recipe_schema import ContextBudget, RLEntrypoint, SkyRLRecipe
+from marinskyrl.recipe_schema.model import FrozenMap, Section
+from marinskyrl.recipe_schema.documents import set_path
+from marinskyrl.entrypoints import RL_ENTRYPOINTS
 
 # Directory containing the bundled example RL config YAML files.
 SKYRL_CONFIG_DIR = Path(__file__).parent / "configs"
@@ -46,41 +48,7 @@ TRAINER_NON_PATH_KEYS = frozenset(
 )
 
 
-class RLEntrypoint(StrEnum):
-    """Execution modes supported by Iris RL configurations."""
-
-    GENERATE = "generate"
-    STANDARD = "standard"
-    TASKCOMPENDIUM = "taskcompendium"
-    TERMINAL_BENCH = "terminal_bench"
-    TERMINAL_BENCH_GENERATE = "terminal_bench_generate"
-
-
-RL_ENTRYPOINTS = MappingProxyType(
-    {
-        RLEntrypoint.GENERATE: "skyrl_train.entrypoints.main_generate",
-        RLEntrypoint.STANDARD: STANDARD_TRAINING_ENTRYPOINT,
-        RLEntrypoint.TASKCOMPENDIUM: "skyrl_train.entrypoints.taskcompendium",
-        RLEntrypoint.TERMINAL_BENCH: "skyrl_train.entrypoints.terminal_bench",
-        RLEntrypoint.TERMINAL_BENCH_GENERATE: "skyrl_train.entrypoints.terminal_bench_generate",
-    }
-)
 CHECKPOINT_EXPORT_ENTRYPOINT = CHECKPOINT_EXPORT_MODULE
-
-
-def resolve_rl_entrypoint(value: str | None, *, config_path: Path) -> str:
-    """Resolve one supported RL execution mode to its packaged module."""
-    name = RLEntrypoint.STANDARD if value is None else value
-    try:
-        entrypoint = RLEntrypoint(name)
-    except ValueError as error:
-        choices = ", ".join(item.value for item in RLEntrypoint)
-        raise ValueError(
-            f"{config_path}: entrypoint must be a registered name ({choices}); got {name!r}. "
-            "Python module paths are not accepted in RL configs."
-        ) from error
-
-    return RL_ENTRYPOINTS[entrypoint]
 
 
 _RL_ENTRYPOINTS_BY_MODULE = MappingProxyType({module: name for name, module in RL_ENTRYPOINTS.items()})
@@ -110,189 +78,18 @@ class HPCGeometry(Protocol):
     gpus_per_node: int
 
 
-_REQUIRED_CONTEXT_BUDGET_FIELDS = frozenset(
-    {
-        "request_window_tokens",
-        "max_new_tokens_per_turn",
-        "max_turns",
-    }
-)
-_CONTEXT_BUDGET_FRACTION_FIELDS = frozenset({"generated_budget_fraction", "overlong_cache_fraction"})
-_CONTEXT_BUDGET_FIELDS = _REQUIRED_CONTEXT_BUDGET_FIELDS | _CONTEXT_BUDGET_FRACTION_FIELDS | {"serving_window_tokens"}
-_DEFAULT_GENERATED_BUDGET_FRACTION = 0.5
-_DEFAULT_OVERLONG_CACHE_FRACTION = 0.25
-
-_DERIVED_CONTEXT_FIELDS = (
-    ("trainer", "max_prompt_length"),
-    ("generator", "max_input_length"),
-    ("generator", "max_turns"),
-    ("generator", "sampling_params", "max_generate_length"),
-    ("generator", "engine_init_kwargs", "max_model_len"),
-    ("terminal_bench", "harbor", "max_turns"),
-    ("generator", "trajectory_reward_shaping", "overlong", "l_max"),
-    ("generator", "trajectory_reward_shaping", "overlong", "l_cache"),
-)
-
-
-@dataclass(frozen=True)
-class ContextBudget:
-    """One coherent token budget for an Iris RL rollout request."""
-
-    request_window_tokens: int
-    max_new_tokens_per_turn: int
-    max_turns: int
-    serving_window_tokens: int
-    generated_budget_fraction: float = _DEFAULT_GENERATED_BUDGET_FRACTION
-    overlong_cache_fraction: float = _DEFAULT_OVERLONG_CACHE_FRACTION
-
-    @property
-    def max_input_tokens(self) -> int:
-        """Return the input allowance after reserving one complete response."""
-        return self.request_window_tokens - self.max_new_tokens_per_turn
-
-    @property
-    def generated_tokens_per_trajectory(self) -> int:
-        """Return the generated-token allowance used by trajectory-level shaping."""
-        if self.max_turns == 1:
-            return self.max_new_tokens_per_turn
-        return max(1, int(self.request_window_tokens * self.generated_budget_fraction))
-
-    @property
-    def overlong_cache_tokens(self) -> int:
-        """Return the soft-overlong transition width."""
-        return int(self.generated_tokens_per_trajectory * self.overlong_cache_fraction)
-
-    def as_dict(self) -> Dict[str, int | float]:
-        """Return the persisted representation, including derived client input."""
-        return {
-            "request_window_tokens": self.request_window_tokens,
-            "serving_window_tokens": self.serving_window_tokens,
-            "max_new_tokens_per_turn": self.max_new_tokens_per_turn,
-            "max_turns": self.max_turns,
-            "generated_budget_fraction": self.generated_budget_fraction,
-            "overlong_cache_fraction": self.overlong_cache_fraction,
-            "max_input_tokens": self.max_input_tokens,
-            "generated_tokens_per_trajectory": self.generated_tokens_per_trajectory,
-            "overlong_cache_tokens": self.overlong_cache_tokens,
-        }
-
-
-def _path_is_declared(mapping: Dict[str, Any], path: tuple[str, ...]) -> bool:
-    value: Any = mapping
-    for key in path:
-        if not isinstance(value, dict) or key not in value:
-            return False
-        value = value[key]
-    return True
-
-
-def _validate_no_derived_context_fields(raw: Dict[str, Any], config_path: Path) -> None:
-    declared = [".".join(path) for path in _DERIVED_CONTEXT_FIELDS if _path_is_declared(raw, path)]
-    if declared:
-        raise ValueError(
-            f"{config_path} declares derived context fields: {', '.join(declared)}. "
-            "Declare only context_budget instead."
-        )
-
-
-def _require_positive_integer(value: Any, field_name: str, config_path: Path) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{config_path}: context_budget.{field_name} must be a positive integer, got {value!r}")
-    return value
-
-
-def _require_fraction(value: Any, field_name: str, config_path: Path, *, allow_zero: bool) -> float:
-    valid = False
-    if not isinstance(value, bool) and isinstance(value, (int, float)):
-        lower_bound_satisfied = value >= 0 if allow_zero else value > 0
-        valid = math.isfinite(value) and lower_bound_satisfied and value <= 1
-    if not valid:
-        interval = "[0, 1]" if allow_zero else "(0, 1]"
-        raise ValueError(f"{config_path}: context_budget.{field_name} must be in {interval}, got {value!r}")
-    return float(value)
-
-
-def resolve_context_budget(raw: Dict[str, Any], config_path: Path) -> ContextBudget:
-    """Validate and resolve the single public context budget declaration.
-
-    The request window includes the prompt and the current response. The derived
-    client input limit therefore reserves the complete per-turn output allowance.
-    """
-    _validate_no_derived_context_fields(raw, config_path)
-    config = raw.get("context_budget")
-    if not isinstance(config, dict):
-        raise ValueError(f"{config_path}: context_budget must be a mapping")
-
-    unknown = set(config) - _CONTEXT_BUDGET_FIELDS
-    if unknown:
-        raise ValueError(f"{config_path}: unknown context_budget fields: {', '.join(sorted(unknown))}")
-    missing = _REQUIRED_CONTEXT_BUDGET_FIELDS - set(config)
-    if missing:
-        raise ValueError(f"{config_path}: missing context_budget fields: {', '.join(sorted(missing))}")
-
-    budget = ContextBudget(
-        request_window_tokens=_require_positive_integer(
-            config["request_window_tokens"], "request_window_tokens", config_path
-        ),
-        max_new_tokens_per_turn=_require_positive_integer(
-            config["max_new_tokens_per_turn"], "max_new_tokens_per_turn", config_path
-        ),
-        max_turns=_require_positive_integer(config["max_turns"], "max_turns", config_path),
-        serving_window_tokens=_require_positive_integer(
-            config.get("serving_window_tokens", config["request_window_tokens"]), "serving_window_tokens", config_path
-        ),
-        generated_budget_fraction=_require_fraction(
-            config.get("generated_budget_fraction", _DEFAULT_GENERATED_BUDGET_FRACTION),
-            "generated_budget_fraction",
-            config_path,
-            allow_zero=False,
-        ),
-        overlong_cache_fraction=_require_fraction(
-            config.get("overlong_cache_fraction", _DEFAULT_OVERLONG_CACHE_FRACTION),
-            "overlong_cache_fraction",
-            config_path,
-            allow_zero=True,
-        ),
-    )
-    if budget.max_input_tokens <= 0:
-        raise ValueError(
-            f"{config_path}: request_window_tokens ({budget.request_window_tokens}) must exceed "
-            f"max_new_tokens_per_turn ({budget.max_new_tokens_per_turn})"
-        )
-    if budget.serving_window_tokens < budget.request_window_tokens:
-        raise ValueError(f"{config_path}: serving_window_tokens must cover the complete request_window_tokens")
-    return budget
-
-
 def _materialize_context_budget(
     raw: Dict[str, Any], budget: ContextBudget
 ) -> tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]], Dict[str, Any]]:
-    """Return SkyRL sections populated from one resolved context budget."""
-    trainer = copy.deepcopy(raw.get("trainer", {}))
-    generator = copy.deepcopy(raw.get("generator", {}))
-    terminal_bench = copy.deepcopy(raw.get("terminal_bench"))
-    materialized_raw = copy.deepcopy(raw)
-
-    trainer["max_prompt_length"] = budget.max_input_tokens
-    generator["max_input_length"] = budget.max_input_tokens
-    generator["max_turns"] = budget.max_turns
-    generator.setdefault("sampling_params", {})["max_generate_length"] = budget.max_new_tokens_per_turn
-    generator.setdefault("engine_init_kwargs", {})["max_model_len"] = budget.serving_window_tokens
-    generator.setdefault("trajectory_reward_shaping", {})["overlong"] = {
-        "l_max": budget.generated_tokens_per_trajectory,
-        "l_cache": budget.overlong_cache_tokens,
-    }
-
-    if terminal_bench is not None:
-        harbor = terminal_bench.setdefault("harbor", {})
-        harbor["max_turns"] = budget.max_turns
-
-    materialized_raw["context_budget"] = budget.as_dict()
-    materialized_raw["trainer"] = copy.deepcopy(trainer)
-    materialized_raw["generator"] = copy.deepcopy(generator)
-    if terminal_bench is not None:
-        materialized_raw["terminal_bench"] = copy.deepcopy(terminal_bench)
-    return trainer, generator, terminal_bench, materialized_raw
+    """Populate launch-owned token limits from the authored request budget."""
+    materialized = copy.deepcopy(raw)
+    trainer = materialized.setdefault("trainer", {})
+    generator = materialized.setdefault("generator", {})
+    terminal_bench = materialized.get("terminal_bench")
+    for path, value in budget.derived_values(terminal_bench).items():
+        set_path(materialized, path, value)
+    materialized["context_budget"] = budget.as_dict()
+    return trainer, generator, terminal_bench, materialized
 
 
 def write_resolved_context_budget(budget: ContextBudget, destination: Path | str, config_path: Path) -> Path | str:
@@ -318,95 +115,12 @@ def write_resolved_context_budget(budget: ContextBudget, destination: Path | str
     return destination
 
 
-# =============================================================================
-# SkyRL Internal Engine Kwargs - DO NOT SET IN YAML CONFIGS
-# =============================================================================
-# These kwargs are set internally by SkyRL and will cause "duplicate keyword
-# argument" errors if also specified in engine_init_kwargs.
-#
-# Source: skyrl_train/inference_engines/ray_wrapped_inference_engine.py
-# =============================================================================
-
-SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
-    {
-        # Hardcoded values
-        "trust_remote_code",  # Always True
-        "worker_extension_cls",  # vLLM SkyRL extension path
-        "data_parallel_backend",  # Hardcoded "mp"
-        "max_logprobs",  # Hardcoded 1
-        # Calculated from config/environment
-        "distributed_executor_backend",  # Calculated from TP size ("uni" or "ray")
-        "enforce_eager",  # Set from generator.enforce_eager config
-        "tensor_parallel_size",  # Set from generator config
-        "data_parallel_size",  # Set from generator config
-        "seed",  # Set from config
-        "enable_prefix_caching",  # Set from generator config
-        "dtype",  # Set from generator.model_dtype
-        "gpu_memory_utilization",  # Set from generator config
-        "max_num_batched_tokens",  # Set from generator config
-        "max_num_seqs",  # Set from generator config
-        "enable_sleep_mode",  # Set from trainer.placement.colocate_all
-        "vllm_v1_disable_multiproc",  # Set from generator config
-        # Ray internal management
-        "bundle_indices",  # Calculated from parallelism config
-        "num_gpus",  # Ray resource allocation
-        "noset_visible_devices",  # Ray CUDA_VISIBLE_DEVICES handling
-        # SGLang-specific (if using SGLang backend)
-        "model_path",  # Set from trainer.policy.model.path
-        "tp_size",  # Alias for tensor_parallel_size
-        "mem_fraction_static",  # Alias for gpu_memory_utilization
-        "random_seed",  # Alias for seed
-        "disable_radix_cache",  # Inverse of enable_prefix_caching
-        "max_prefill_tokens",  # Alias for max_num_batched_tokens
-        "max_running_requests",  # Alias for max_num_seqs
-        "mm_attention_backend",  # Hardcoded "fa3"
-        "attention_backend",  # Hardcoded "fa3"
-        "enable_memory_saver",  # Set from inference_engine_enable_sleep
-        "tokenizer",  # Passed from external tokenizer
-        "custom_weight_loader",  # Hardcoded SkyRL path
-        "skip_tokenizer_init",  # Hardcoded True for SGLang
-        "speculative_config",  # Derived from generator.speculative_decoding
-    }
-)
-
-
-def validate_engine_init_kwargs(
-    engine_init_kwargs: Dict[str, Any],
-    config_path: Optional[Path] = None,
-) -> None:
-    """Fail fast if ``engine_init_kwargs`` contains SkyRL-internal keys.
-
-    SkyRL sets certain vLLM/SGLang engine kwargs internally; specifying them in
-    the YAML config causes "duplicate keyword argument" errors at runtime.
-
-    Raises:
-        ValueError: If any forbidden keys are found in engine_init_kwargs.
-    """
-    if not engine_init_kwargs:
-        return
-
-    forbidden_found = set(engine_init_kwargs.keys()) & SKYRL_INTERNAL_ENGINE_KWARGS
-
-    if forbidden_found:
-        config_context = f" in {config_path}" if config_path else ""
-        forbidden_list = "\n".join(f"  - {k}" for k in sorted(forbidden_found))
-        all_forbidden = "\n".join(f"  - {k}" for k in sorted(SKYRL_INTERNAL_ENGINE_KWARGS))
-
-        raise ValueError(
-            f"engine_init_kwargs{config_context} contains keys that SkyRL sets internally.\n"
-            f"These will cause 'duplicate keyword argument' errors at runtime.\n\n"
-            f"FORBIDDEN KEYS FOUND:\n{forbidden_list}\n\n"
-            f"Remove these from your config. SkyRL handles them automatically.\n\n"
-            f"FULL LIST OF SKYRL-INTERNAL KWARGS (never set these):\n{all_forbidden}\n\n"
-            f"SAFE TO SET: kv_cache_dtype, quantization, cpu_offload_gb, etc."
-        )
-
-
 @dataclass
 class ParsedRLConfig:
     """Result of parsing an RL configuration YAML file."""
 
     config_path: Path
+    recipe: SkyRLRecipe
     raw: Dict[str, Any]
     context_budget: ContextBudget
     entrypoint: str
@@ -432,34 +146,6 @@ class ParsedCheckpointExportConfig:
     config_path: Path
     config_groups: Dict[str, str]
     trainer: Dict[str, Any]
-
-
-def validate_tp_divides_heads(
-    tensor_parallel_size: int,
-    num_attention_heads: Optional[int],
-    config_path: Optional[Path] = None,
-) -> None:
-    """Fail fast if the inference TP size does not divide the model's attention-head count.
-
-    vLLM requires ``num_attention_heads % tensor_parallel_size == 0``; a bad value (e.g.
-    TP=8 against the dense delphi arch's 42 heads) wedges vLLM at engine init with no
-    launcher-side signal. Skipped when ``num_attention_heads`` is unset (existing configs).
-
-    Raises:
-        ValueError: If ``num_attention_heads`` is set and not divisible by TP.
-    """
-    if not num_attention_heads:
-        return
-    if num_attention_heads % tensor_parallel_size != 0:
-        valid = [t for t in range(1, num_attention_heads + 1) if num_attention_heads % t == 0]
-        config_context = f" in {config_path}" if config_path else ""
-        raise ValueError(
-            f"generator.inference_engine_tensor_parallel_size={tensor_parallel_size} does not "
-            f"divide model_num_attention_heads={num_attention_heads}{config_context}.\n"
-            f"vLLM requires num_attention_heads % tensor_parallel_size == 0, or the engine "
-            f"wedges at init with no launcher signal.\n"
-            f"Valid TP values for {num_attention_heads} heads: {valid} (NEVER 8 for delphi's 42)."
-        )
 
 
 def resolve_rl_config_path(raw_path: str) -> Path:
@@ -522,11 +208,8 @@ def load_rl_recipe(config_path: str) -> DictConfig:
         )
 
 
-def parse_rl_config(
-    config_path: str,
-    model_override: Optional[str] = None,
-) -> ParsedRLConfig:
-    """Parse an RL config YAML and extract all settings."""
+def parse_rl_config(config_path: str, model_override: str | None = None) -> ParsedRLConfig:
+    """Validate an authored recipe and prepare its sparse launch sections."""
     path = resolve_rl_config_path(config_path)
     raw = OmegaConf.to_container(load_rl_recipe(str(path)), resolve=False) or {}
     if not isinstance(raw, dict):
@@ -538,54 +221,38 @@ def parse_rl_config(
 
     config_groups = raw.get("config_groups", {})
     if "algorithm_recipe" in config_groups:
-        recipe = _compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
-        raw = OmegaConf.to_container(OmegaConf.merge(OmegaConf.to_container(recipe, resolve=False), raw), resolve=False)
+        group = _compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
+        raw = OmegaConf.to_container(OmegaConf.merge(OmegaConf.to_container(group, resolve=False), raw), resolve=False)
         assert isinstance(raw, dict)
+    try:
+        recipe = SkyRLRecipe.from_document(raw)
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
     distillation_plan = compile_distillation_plan(raw)
-    context_budget = resolve_context_budget(raw, path)
-
-    entrypoint = resolve_rl_entrypoint(raw.get("entrypoint"), config_path=path)
+    context_budget = recipe.context_budget
+    entrypoint = RL_ENTRYPOINTS[recipe.entrypoint]
     trainer, generator, terminal_bench, materialized_raw = _materialize_context_budget(raw, context_budget)
     data = dict(raw.get("data", {}))
-    environment = raw.get("environment", {})
-    trajectory_runner = raw.get("trajectory_runner", {})
-    # data.kind selects launcher staging and is not part of SkyRL's data config.
-    data_kind = data.pop("kind", "tasks")
-
-    # Validate engine_init_kwargs doesn't contain SkyRL-internal keys.
-    engine_init_kwargs = generator.get("engine_init_kwargs", {})
-    validate_engine_init_kwargs(engine_init_kwargs, config_path=path)
-
-    # Resolve relative paths in config sections to absolute paths so they work
-    # regardless of the working directory at runtime. Skip data.train_data /
-    # data.val_data as they may be HF repo IDs.
+    data.pop("kind", None)
     trainer = resolve_paths_in_dict(trainer, skip_keys=TRAINER_NON_PATH_KEYS)
     generator = resolve_paths_in_dict(generator)
-
     parse_speculative_decoding_config(
         generator.get("speculative_decoding"),
-        backend=generator.get("backend", "vllm"),
-        run_engines_locally=generator.get("run_engines_locally", True),
+        backend=recipe.generator.backend,
+        run_engines_locally=recipe.generator.run_engines_locally,
         entrypoint=entrypoint,
-        colocate_all=trainer.get("placement", {}).get("colocate_all", True),
-        num_inference_engines=generator.get("num_inference_engines", 1),
-        tensor_parallel_size=generator.get("inference_engine_tensor_parallel_size", 4),
-        pipeline_parallel_size=generator.get("inference_engine_pipeline_parallel_size", 1),
+        colocate_all=recipe.trainer.placement.colocate_all,
+        tensor_parallel_size=recipe.generator.inference_engine_tensor_parallel_size,
+        pipeline_parallel_size=recipe.generator.inference_engine_pipeline_parallel_size,
         engine_init_kwargs=generator.get("engine_init_kwargs", {}),
         context=f"{path}: generator.speculative_decoding",
+        **recipe.generator.model_dump(include={"num_inference_engines"}, exclude_unset=True),
     )
-
     if model_override:
         trainer.setdefault("policy", {}).setdefault("model", {})["path"] = model_override
-
-    tensor_parallel_size = generator.get("inference_engine_tensor_parallel_size", 1)
-
-    # TP-divides-heads guard (delphi's 42-head arch forbids TP=8). No-op unless the config
-    # declares model_num_attention_heads.
-    validate_tp_divides_heads(tensor_parallel_size, raw.get("model_num_attention_heads"), config_path=path)
-
     return ParsedRLConfig(
         config_path=path,
+        recipe=recipe,
         raw=materialized_raw,
         context_budget=context_budget,
         entrypoint=entrypoint,
@@ -594,11 +261,11 @@ def parse_rl_config(
         trainer=trainer,
         generator=generator,
         data=data,
-        environment=environment,
-        trajectory_runner=trajectory_runner,
+        environment=materialized_raw.get("environment", {}),
+        trajectory_runner=raw.get("trajectory_runner", {}),
         terminal_bench=terminal_bench,
-        tensor_parallel_size=tensor_parallel_size,
-        data_kind=data_kind,
+        tensor_parallel_size=recipe.generator.inference_engine_tensor_parallel_size,
+        data_kind=recipe.data.kind,
     )
 
 
@@ -619,21 +286,6 @@ def parse_checkpoint_export_config(
         config_groups=dict(raw.get("config_groups", {})),
         trainer=trainer,
     )
-
-
-_OPTIONAL_HYDRA_PATTERNS = {
-    ".distillation",
-    ".domain_weights",
-    ".engine_init_kwargs",
-    ".chat_template_kwargs",
-    ".speculative_decoding",
-    ".hf_hub_",
-    ".enable_db_registration",
-    ".optimizer_kwargs",
-    ".rope_scaling",
-    ".wrap_policy",
-    ".transformer_config_kwargs",
-}
 
 
 def _apply_policy_model_source(trainer: Dict[str, Any], exp_args: Dict[str, Any]) -> str | None:
@@ -657,15 +309,20 @@ def _apply_policy_model_source(trainer: Dict[str, Any], exp_args: Dict[str, Any]
     return model_path
 
 
-def _role_gpus_per_node(
+def role_gpus_per_node(
     placement: Dict[str, Any],
     key: str,
     launch_gpus_per_node: int,
 ) -> int:
+    """Use the allocation width when unset and reject an authored excess."""
     configured = placement.get(key)
-    if configured is not None and int(configured) <= launch_gpus_per_node:
-        return int(configured)
-    return launch_gpus_per_node
+    if configured is None:
+        return launch_gpus_per_node
+    if int(configured) > launch_gpus_per_node:
+        raise ValueError(
+            f"trainer.placement.{key}={configured} exceeds the available {launch_gpus_per_node} GPUs per node"
+        )
+    return int(configured)
 
 
 @dataclass(frozen=True)
@@ -708,7 +365,7 @@ def _checkpoint_export_trainer(
     num_nodes = int(exp_args.get("num_nodes", 1))
     gpus_per_node = int(exp_args.get("gpus_per_node", hpc.gpus_per_node))
     placement["policy_num_nodes"] = num_nodes
-    placement["policy_num_gpus_per_node"] = _role_gpus_per_node(
+    placement["policy_num_gpus_per_node"] = role_gpus_per_node(
         placement,
         "policy_num_gpus_per_node",
         gpus_per_node,
@@ -778,16 +435,20 @@ def _skyrl_config_sections(
         placement["policy_num_nodes"] = policy_num_nodes if policy_num_nodes is not None else num_nodes
     if placement.get("ref_num_nodes") is None:
         placement["ref_num_nodes"] = policy_num_nodes if policy_num_nodes is not None else num_nodes
-    placement["policy_num_gpus_per_node"] = _role_gpus_per_node(placement, "policy_num_gpus_per_node", gpus_per_node)
-    placement["ref_num_gpus_per_node"] = _role_gpus_per_node(placement, "ref_num_gpus_per_node", gpus_per_node)
+    placement["policy_num_gpus_per_node"] = role_gpus_per_node(placement, "policy_num_gpus_per_node", gpus_per_node)
+    placement["ref_num_gpus_per_node"] = role_gpus_per_node(placement, "ref_num_gpus_per_node", gpus_per_node)
     trainer["placement"] = placement
 
     if generator.get("num_inference_engines") is None:
         generator["num_inference_engines"] = (num_nodes * gpus_per_node) // parsed.tensor_parallel_size
-    if exp_args.get("train_data"):
-        data["train_data"] = _data_override(exp_args["train_data"])
-    if exp_args.get("val_data"):
-        data["val_data"] = _data_override(exp_args["val_data"])
+    for key in ("train_data", "val_data"):
+        supplied = _data_override(exp_args.get(key))
+        if not supplied:
+            continue
+        authored = data.get(key)
+        if authored and authored != supplied:
+            raise ValueError(f"data.{key} conflicts with the nonempty launch inputs")
+        data[key] = supplied
 
     model_path = _apply_policy_model_source(trainer, dict(exp_args))
     if model_path:
@@ -821,16 +482,35 @@ def _skyrl_config_sections(
     return sections
 
 
-_OPEN_CONFIG_ROOTS = frozenset({"teachers", "teacher_routing", RESOLVED_HARBOR_CONFIG_KEY})
-_FTPO_CONFIG_PATHS = frozenset(f"trainer.algorithm.ftpo.{item.name}" for item in fields(FTPOConfig))
+def _schema_admission() -> tuple[frozenset[str], frozenset[str]]:
+    """Return admitted field paths and open-mapping prefixes from the author schema."""
+    paths: set[str] = set()
+    mappings: set[str] = set()
+
+    def visit(annotation: Any, path: str) -> None:
+        if isinstance(annotation, type) and issubclass(annotation, Section):
+            for name, field in annotation.model_fields.items():
+                child = f"{path}.{name}" if path else name
+                paths.add(child)
+                visit(field.annotation, child)
+        elif annotation is FrozenMap or get_origin(annotation) in (dict, Mapping):
+            mappings.add(path)
+        else:
+            for child in get_args(annotation):
+                visit(child, path)
+
+    visit(SkyRLRecipe, "")
+    paths = {RESOLVED_HARBOR_CONFIG_KEY if path == "terminal_bench" else path for path in paths}
+    mappings = {RESOLVED_HARBOR_CONFIG_KEY if path == "terminal_bench" else path for path in mappings}
+    return frozenset(paths), frozenset(mappings)
+
+
+_SCHEMA_CONFIG_PATHS, _MAPPING_CONFIG_PATHS = _schema_admission()
 
 
 def _path_allows_new_keys(path: str) -> bool:
-    return (
-        path in _FTPO_CONFIG_PATHS
-        or path.startswith("environment.task_sessions.")
-        or path.split(".", 1)[0] in _OPEN_CONFIG_ROOTS
-        or any(pattern in f".{path}" for pattern in _OPTIONAL_HYDRA_PATTERNS)
+    return path in _SCHEMA_CONFIG_PATHS or any(
+        path == root or path.startswith(f"{root}.") for root in _MAPPING_CONFIG_PATHS
     )
 
 

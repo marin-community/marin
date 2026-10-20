@@ -105,8 +105,6 @@ trainer:
   logger: wandb
 
   run_name: null
-  ckpt_path: null
-  export_path: null
 
   policy:
     optimizer_config:
@@ -126,8 +124,7 @@ trainer:
       transformer_config_kwargs:
         gradient_accumulation_fusion: false
   ref:
-    model:
-      path: Qwen/Qwen3-Coder-30B-A3B-Instruct
+    model: {}
     megatron_config:
       moe_router_replay: true
       tensor_model_parallel_size: 4

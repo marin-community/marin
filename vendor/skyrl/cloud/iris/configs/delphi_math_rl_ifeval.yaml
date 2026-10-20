@@ -1,0 +1,80 @@
+
+entrypoint: standard
+
+context_budget:
+  request_window_tokens: 4096
+  max_new_tokens_per_turn: 3584
+  max_turns: 1
+
+
+model_num_attention_heads: 42
+
+environment:
+  env_class: ifeval
+
+trainer:
+  strategy: megatron
+  algorithm:
+    advantage_estimator: grpo
+    use_kl_loss: false
+    use_entropy_loss: false
+    eps_clip_low: 0.2
+    eps_clip_high: 0.2
+
+  epochs: 20
+  max_steps: 100
+
+  train_batch_size: 64
+  policy_mini_batch_size: 64
+  eval_batch_size: 64
+  micro_forward_batch_size_per_gpu: 2
+  micro_train_batch_size_per_gpu: 2
+
+  eval_before_train: false
+  eval_interval: 0
+
+  project_name: delphi_rl_scaling_6279
+  logger: wandb
+
+  policy:
+    optimizer_config:
+      lr: 3.0e-6
+      max_grad_norm: 0.5
+  placement:
+    colocate_all: false
+    policy_num_nodes: 2
+    policy_num_gpus_per_node: 8
+    policy_strict_spread_pg: true
+    policy_per_gpu_bundles: true
+
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+
+  inference_engine_tensor_parallel_size: 2
+  num_inference_engines: 8
+  n_samples_per_prompt: 8
+
+  gpu_memory_utilization: 0.85
+  enforce_eager: false
+  max_num_batched_tokens: 8192
+
+  run_engines_locally: true
+  weight_sync_backend: nccl
+
+  sampling_params:
+    temperature: 0.7
+    top_p: 1.0
+
+  chat_template:
+    source: file
+    name_or_path: chat_templates/delphi_v0.jinja2
+
+extra_env:
+  HF_HUB_OFFLINE: "1"
+  NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+
+data:
+  kind: parquet
+  train_data: []
+  val_data: []
