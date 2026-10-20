@@ -653,7 +653,7 @@ def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
     assert plan.tpu_types == ("v6e-4", "v5litepod-4", "v5p-8", "v4-8")
 
 
-def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatch):
+def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatch, dashboard_ports):
     registered_metadata: dict[str, str] = {}
     model_id = "Qwen/Qwen3-0.6B"
 

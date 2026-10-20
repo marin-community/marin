@@ -5,8 +5,10 @@ import json
 import shutil
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Any, cast
 
 import pyarrow as pa
@@ -37,7 +39,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 
-from infra.marina.applets.rl_data_catalog.load import load_catalog
+from infra.marina.applets.rl_data_catalog.load import Query, load_catalog
 from infra.marina.applets.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.applets.rl_data_catalog.server.app import create_api, migrate
 
@@ -66,9 +68,23 @@ def catalog_database(database_url: str) -> Iterator[Engine]:
         admin.dispose()
 
 
-def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False) -> None:
+@pytest.fixture
+def catalog_query(catalog_database: Engine) -> Query:
+    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        validate_query(sql)
+        with catalog_database.begin() as connection:
+            result = connection.execute(text(sql), parameters)
+            return {
+                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
+                "row_count": result.rowcount,
+            }
+
+    return query
+
+
+def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False, source_id: str = "math") -> None:
     declaration = SourceDeclaration(
-        id="math",
+        id=source_id,
         name="math",
         display_name="Math",
         origin="native",
@@ -130,7 +146,7 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False)
         store.flush()
         assessment = Assessment(
             pipeline_key=key,
-            source_id="math",
+            source_id=source_id,
             scope="full",
             model={"model": "glm", "revision": "1", "max_tokens": 4096, "max_attempts": 3, "retry_max_tokens": 8192},
             rubric="Check answerability",
@@ -141,7 +157,7 @@ def publish_sample(root: str, snapshot_id: str, *, missing_packet: bool = False)
         snapshot = CatalogSnapshot(snapshot_id=snapshot_id, created_at="2026-10-13T00:00:00Z", source_count=1)
         source = SnapshotSource(
             snapshot_id=snapshot_id,
-            id="math",
+            id=source_id,
             declaration=declaration,
             assessment_key=key,
             latest_attempt_key=key,
@@ -342,26 +358,29 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
 
 @pytest.mark.parametrize("unavailable_status", ["insufficient_context", "skipped"])
 def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
-    catalog_database, tmp_path, monkeypatch, unavailable_status
+    catalog_database, catalog_query, tmp_path, monkeypatch, unavailable_status
 ):
     monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load.MAX_BATCH_BYTES", 2500)
     monkeypatch.setattr("infra.marina.applets.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
     engine = catalog_database
-
-    def query(sql, parameters):
-        validate_query(sql)
-        with engine.begin() as connection:
-            result = connection.execute(text(sql), parameters)
-            return {
-                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
-                "row_count": result.rowcount,
-            }
+    query = catalog_query
 
     path = curriculum_release(tmp_path, unavailable_status)
     coverage_path = tmp_path / "coverage.json"
     assert load_curriculum(str(path), str(coverage_path), query)["counts"]["tasks"] == 4
     assert load_curriculum(str(path), str(coverage_path), query)["changed"] is False
+    catalog_root = str(tmp_path / "catalog")
+    publish_sample(catalog_root, "graded", source_id="a")
+    load_catalog(CurationCatalog(catalog_root), query)
     with TestClient(create_api(cast(AppletServices, CatalogServices(engine)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        assert source["task_count"] == 3
+        assert source["coverage"] == {
+            "example_count": 300,
+            "intended_use": "train",
+            "top_area": {"subject_id": "D01", "node_id": "subject:D01", "name": "Mathematics", "instances": 200},
+        }
+        assert source["assessment"]["admitted"]["grade"] == "unknown"
         first = client.get("/curriculum").json()
         assert first["totals"] == {
             "denominator": 400,
@@ -371,30 +390,26 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             "insufficient_context": 100 * int(unavailable_status == "insufficient_context"),
             "skipped": 100 * int(unavailable_status == "skipped"),
         }
-        assert sum(cell["count"] for cell in first["cells"]) == 300
-        assert sum(column["denominator"] for column in first["columns"]) == 400
-        assert sum(column["processed_sources"] for column in first["columns"]) == 2
-        sources = first["columns"]
-        assert {row["column_id"] for row in sources} == {"a", "b", "inventory"}
-        assert next(row for row in sources if row["column_id"] == "inventory")["denominator"] == 0
+        assert {row["source_id"] for row in first["sources"]} == {"a", "b", "inventory"}
+        assert next(row for row in first["sources"] if row["source_id"] == "inventory")["alignment"] is None
         assert {(row["node_id"], row["count"]) for row in first["area_counts"]} == {
             ("subject:D01", 300),
             ("arithmetic", 200),
             ("add", 200),
         }
         assert first["examples"]["sample_task_count"] == 4
-        default = client.get("/curriculum", params={"parent_id": "subject:D01", "subject_id": "D01"}).json()
-        assert sum(cell["count"] for cell in default["cells"]) == 200
+        default = client.get("/curriculum", params={"subject_id": "D01"}).json()
         assert default["scope_summary"] == {"subject_members": 300, "capability_matches": 200}
         source_view = client.get("/curriculum", params={"source_id": "a"}).json()
         assert source_view["totals"]["denominator"] == 300
-        assert source_view["cells"][0]["count"] == 200
         assert {(row["node_id"], row["count"]) for row in source_view["area_counts"]} == {
             ("subject:D01", 200),
             ("arithmetic", 100),
             ("add", 100),
         }
         assert client.get("/curriculum", params={"intended_use": "eval"}).json()["totals"]["denominator"] == 0
+        source_tasks = client.get("/curriculum/tasks", params={"source_id": "b"}).json()
+        assert [(row["source_id"], row["task_id"]) for row in source_tasks["tasks"]] == [("b", "one")]
         diverse = client.get("/curriculum/tasks", params={"limit": 2}).json()
         remainder = client.get("/curriculum/tasks", params={"limit": 2, "cursor": diverse["next_cursor"]}).json()
         assert [(row["source_id"], row["task_id"]) for row in diverse["tasks"] + remainder["tasks"]] == [
@@ -436,20 +451,17 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             connection.execute(text("DROP TABLE curriculum_matches"))
             connection.execute(text("DROP TABLE curriculum_tasks"))
         assert client.get("/curriculum").json()["totals"] == first["totals"]
+        assert client.get("/sources").json()["sources"][0]["coverage"] == source["coverage"]
 
 
-def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(catalog_database, tmp_path: Path) -> None:
+def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
+    catalog_database, catalog_query, tmp_path: Path
+) -> None:
     engine = catalog_database
     root = str(tmp_path / "catalog")
     publish_sample(root, "first")
 
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        with engine.begin() as connection:
-            result = connection.execute(text(sql), parameters)
-            return {
-                "rows": [dict(row) for row in result.mappings()] if result.returns_rows else [],
-                "row_count": result.rowcount,
-            }
+    query = catalog_query
 
     loaded = load_catalog(CurationCatalog(root), query)
     assert loaded["counts"] == {"sources": 1, "assessments": 1, "populations": 2, "items": 3, "packets": 3}
@@ -474,6 +486,7 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(cat
     services = cast(AppletServices, CatalogServices(engine))
     with TestClient(create_api(services)) as client:
         inventory = client.get("/sources").json()
+        assert inventory["sources"][0]["coverage"] is None
         assessment = inventory["sources"][0]["assessment"]
         assert inventory["snapshot_id"] == "first"
         assert assessment["admitted"]["grade"] == "unknown"
@@ -500,6 +513,87 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(cat
         assert client.get("/sources").json()["snapshot_id"] == "next"
         assert client.get("/evidence", params={"source_id": "math", "task_id": "one"}).json() == packet
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
+
+
+def test_a_competing_atlas_cutover_prevents_an_older_load_from_being_selected(catalog_query, tmp_path):
+    older, newer = str(tmp_path / "older"), str(tmp_path / "newer")
+    publish_sample(older, "older")
+    publish_sample(newer, "newer")
+    interrupted = False
+
+    def overlapping_query(sql, parameters):
+        nonlocal interrupted
+        result = catalog_query(sql, parameters)
+        if sql.startswith("INSERT INTO atlas_packets") and not interrupted:
+            interrupted = True
+            assert load_catalog(CurationCatalog(newer), catalog_query)["changed"]
+        return result
+
+    with pytest.raises(RuntimeError, match="Atlas selection changed"):
+        load_catalog(CurationCatalog(older), overlapping_query)
+    selected = catalog_query(
+        "SELECT l.snapshot_id, count(p.*) AS packets FROM atlas_current c JOIN atlas_loads l USING(load_id) "
+        "JOIN atlas_packets p USING(load_id) GROUP BY l.snapshot_id",
+        {},
+    )["rows"]
+    assert selected == [{"snapshot_id": "newer", "packets": 3}]
+
+
+def test_a_new_catalog_snapshot_during_import_leaves_the_serving_load_unchanged(catalog_query, tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "first")
+    load_catalog(CurationCatalog(root), catalog_query)
+    publish_sample(root, "next")
+
+    def changing_catalog_query(sql, parameters):
+        result = catalog_query(sql, parameters)
+        if sql.startswith("INSERT INTO atlas_packets"):
+            publish_sample(root, "later")
+        return result
+
+    with pytest.raises(RuntimeError, match="Catalog selection changed"):
+        load_catalog(CurationCatalog(root), changing_catalog_query)
+    assert catalog_query("SELECT l.snapshot_id FROM atlas_current c JOIN atlas_loads l USING(load_id)", {})["rows"] == [
+        {"snapshot_id": "first"}
+    ]
+    assert load_catalog(CurationCatalog(root), catalog_query)["changed"]
+
+
+def test_atlas_cleanup_preserves_a_load_started_after_its_cutover(catalog_query, tmp_path):
+    roots = [str(tmp_path / name) for name in ("baseline", "first", "later")]
+    for root, name in zip(roots, ("baseline", "first", "later"), strict=True):
+        publish_sample(root, name)
+    load_catalog(CurationCatalog(roots[0]), catalog_query)
+    staged, continue_load = Event(), Event()
+    later = None
+
+    def later_query(sql, parameters):
+        result = catalog_query(sql, parameters)
+        if sql.startswith("INSERT INTO atlas_packets"):
+            staged.set()
+            assert continue_load.wait(timeout=15)
+        return result
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+
+        def first_query(sql, parameters):
+            nonlocal later
+            if sql.startswith("DELETE FROM atlas_sources") and later is None:
+                later = executor.submit(load_catalog, CurationCatalog(roots[2]), later_query)
+                assert staged.wait(timeout=15)
+            return catalog_query(sql, parameters)
+
+        try:
+            assert load_catalog(CurationCatalog(roots[1]), first_query)["changed"]
+        finally:
+            continue_load.set()
+        assert later is not None
+        assert later.result(timeout=30)["changed"]
+    assert catalog_query(
+        "SELECT l.snapshot_id, count(p.*) AS packets FROM atlas_current c JOIN atlas_loads l USING(load_id) "
+        "JOIN atlas_packets p USING(load_id) GROUP BY l.snapshot_id",
+        {},
+    )["rows"] == [{"snapshot_id": "later", "packets": 3}]
 
 
 @pytest.mark.parametrize(

@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import base64
 import hashlib
+import io
 import json
 import sys
+import tarfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -82,14 +83,14 @@ storage_mb = 4096
         Source(
             dataset="skill2env/skill2env",
             revision=RELEASE.split("@")[1],
-            row=f"tasks/{digest.hexdigest()}.jsonl:0",
+            row=f"tasks/{digest.hexdigest()}.tar.gz:0",
             importer_revision="fixture",
         ),
         {
             "release": RELEASE,
             "task_ref": f"skill2env/{name}@sha256:{digest.hexdigest()}",
-            "files": {path: base64.b64encode(blob).decode() for path, blob in files.items()},
-            "modes": {path: "644" for path in files},
+            "files": files,
+            "modes": {path: "755" if path.endswith(".sh") else "644" for path in files},
         },
     )
 
@@ -107,18 +108,37 @@ def test_prepared_selections_keep_distinct_stable_task_ids(tmp_path):
         (root / "tasks").mkdir(parents=True)
         for row in selection:
             digest = hashlib.sha256(row.data["task_ref"].encode()).hexdigest()
-            (root / "tasks" / f"{digest}.jsonl").write_text(json.dumps(row.data) + "\n")
+            with tarfile.open(root / "tasks" / f"{digest}.tar.gz", "w:gz") as archive:
+                for name, blob in row.data["files"].items():
+                    member = tarfile.TarInfo(name)
+                    member.size = len(blob)
+                    member.mode = int(row.data["modes"][name], 8)
+                    archive.addfile(member, io.BytesIO(blob))
         tasks = {}
         for shard in conversion_shards(str(root), recipe.source):
             for record in staged_file_rows(str(root), shard, recipe.source, context):
                 converted = convert_record(record, recipe)
                 assert isinstance(converted.result, NormalizedTask)
                 tasks[record["data"]["task_ref"]] = converted.result.task.id
+                verifier = next(file for file in converted.result.task.resources.verifier if file.path == "test.sh")
+                assert verifier.mode == "755"
         assert len(tasks) == len(selection)
         identities.append(tasks)
     first_ids, second_ids, combined_ids = identities
     assert len(combined_ids) == len(set(combined_ids.values())) == 2
     assert combined_ids == {**first_ids, **second_ids}
+    # Replacing an archive under its original immutable filename must fail before conversion.
+    payload = next((root / "tasks").glob("*.tar.gz"))
+    with tarfile.open(payload, "w:gz") as archive:
+        for name, blob in first.data["files"].items():
+            if name == "instruction.md":
+                blob = b"Changed instruction"
+            member = tarfile.TarInfo(name)
+            member.size = len(blob)
+            archive.addfile(member, io.BytesIO(blob))
+    with pytest.raises(ValueError, match="Archive contents differ"):
+        for shard in conversion_shards(str(root), recipe.source):
+            list(staged_file_rows(str(root), shard, recipe.source, context))
 
 
 def test_conversion_retains_hidden_files_and_detects_modified_exports():
@@ -135,7 +155,7 @@ def test_conversion_retains_hidden_files_and_detects_modified_exports():
     assert restored.source == row.source
     contract = next(resource for resource in restored.resources.verifier if resource.path == "curation-contract.json")
     assert json.loads(resource_bytes(contract))["task_ref"] == row.data["task_ref"]
-    changed = {**row.data, "files": {**row.data["files"], "tests/test.sh": base64.b64encode(b"exit 0").decode()}}
+    changed = {**row.data, "files": {**row.data["files"], "tests/test.sh": b"exit 0"}}
     with pytest.raises(ValueError, match="differ from the pinned task"):
         convert_task(replace(row, data=changed), ConversionContext({}, None))
 

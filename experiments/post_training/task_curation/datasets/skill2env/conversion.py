@@ -3,14 +3,16 @@
 
 """Convert offline, single-workspace Skill2Env tasks without rewriting native tests."""
 
-import base64
 import hashlib
 import json
 import re
 import shlex
+import tarfile
 import tomllib
-from pathlib import Path
+from collections.abc import Iterator
+from pathlib import Path, PurePosixPath
 
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.models import (
     AnswerType,
@@ -40,13 +42,41 @@ CONTRACT_PATH = "curation-contract.json"
 RELEASE = "skill2env/skill2env@sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c"
 
 
+def read_task(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
+    """Read one native archive, retaining file contents and permission modes."""
+    files = {}
+    modes = {}
+    with path.open("rb") as stream, tarfile.open(fileobj=stream, mode="r|gz") as archive:
+        for member in archive:
+            name = member.name.removeprefix("./")
+            if member.isdir():
+                continue
+            if not member.isfile():
+                yield {"release": RELEASE, "unsupported": "unsupported_package_links"}
+                return
+            if PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts or name in files:
+                raise ValueError(f"Invalid or duplicate archive path: {name}")
+            content = archive.extractfile(member)
+            assert content is not None
+            files[name] = content.read()
+            modes[name] = format(member.mode & 0o7777, "o")
+    config = tomllib.loads(files["task.toml"].decode())
+    digest = hashlib.sha256()
+    for name, blob in sorted(files.items()):
+        digest.update(f"{name}\0{hashlib.sha256(blob).hexdigest()}\n".encode())
+    task_ref = f"{config['task']['name']}@sha256:{digest.hexdigest()}"
+    if path.name != hashlib.sha256(task_ref.encode()).hexdigest() + ".tar.gz":
+        raise ValueError("Archive contents differ from the pinned task filename")
+    yield {"release": RELEASE, "task_ref": task_ref, "files": files, "modes": modes}
+
+
 def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
     data = row.data
     if data["release"] != RELEASE:
         raise ValueError("Input belongs to another Skill2Env release")
     if "unsupported" in data:
         return unsupported(data["unsupported"], "Native export could not preserve this task")
-    files = {path: base64.b64decode(encoded, validate=True) for path, encoded in data["files"].items()}
+    files = data["files"]
     digest = hashlib.sha256()
     for path, blob in sorted(files.items()):
         digest.update(f"{path}\0{hashlib.sha256(blob).hexdigest()}\n".encode())

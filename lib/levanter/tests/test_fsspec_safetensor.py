@@ -93,6 +93,7 @@ def test_load_from_remote_file_url(tmp_path, monkeypatch):
 async def test_dtype_override(tmp_path):
     data = {
         "floaty": np.arange(start=0, stop=1, step=0.1, dtype=np.float32),
+        "bfloat": np.array([1.5, -2.25], dtype=jnp.bfloat16),
         "ints": np.arange(6, dtype=np.int32).reshape(2, 3),
     }
     path = tmp_path / "dtype.safetensors"
@@ -113,3 +114,14 @@ async def test_dtype_override(tmp_path):
     )
     assert tensors["ints"].dtype == jnp.int32
     np.testing.assert_array_equal(np.asarray(tensors["ints"]), data["ints"])
+
+    widened = await read_safetensors_fsspec(
+        f"file://{path}",
+        dtype_override=jnp.float32,
+        sharding_fn=lambda _: None,
+    )
+
+    assert widened["bfloat"].dtype == jnp.float32
+    np.testing.assert_array_equal(np.asarray(widened["bfloat"]), np.asarray(data["bfloat"], dtype=np.float32))
+    assert widened["ints"].dtype == jnp.int32
+    np.testing.assert_array_equal(np.asarray(widened["ints"]), data["ints"])

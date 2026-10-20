@@ -12,6 +12,7 @@ K8sControllerProvider).
 import base64
 import json
 import os
+from pathlib import Path
 
 import pytest
 from iris.cluster.config import (
@@ -30,7 +31,10 @@ from iris.cluster.config import (
     ScaleGroupConfig,
     SliceConfig,
     StorageConfig,
+    resolve_config_secrets,
+    resolve_principal_references,
 )
+from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
@@ -474,6 +478,49 @@ def test_preflight_controller_caches_signing_key_without_mutating_kubernetes(mon
     secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-env")
     assert base64.b64decode(secret["data"]["IRIS_SIGNING_KEY"]).decode() == "key-before-build"
 
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("change_spec", [False, True])
+def test_directory_only_deploy_keeps_payload_in_controller_secret(tmp_path: Path, monkeypatch, change_spec: bool):
+    directory = tmp_path / "directory.json"
+    before = {"human-999": "before@example.com"}
+    after = {"human-999": "after@example.com"}
+    directory.write_text(json.dumps(before))
+    # A stale pod fallback in the operator shell must not replace the persistent source.
+    monkeypatch.setenv("IRIS_PRINCIPAL_DIRECTORY", "stale")
+    provider, k8s = _make_provider()
+    config = _make_cluster_config()
+    config.auth = AuthConfig(
+        principal_directory=["env:IRIS_PRINCIPAL_DIRECTORY", f"file:{directory}"],
+        allowed_submitters=["principal:human-999"],
+    )
+    _seed_prerequisites(k8s, config)
+    provider.preflight_controller(config)
+    assert k8s.get_json(K8sResource.SECRETS, "iris-controller-env") is None
+    if change_spec:
+        directory = tmp_path / "new-directory.json"
+        config.auth.principal_directory = ("env:IRIS_PRINCIPAL_DIRECTORY", f"file:{directory}")
+    directory.write_text(json.dumps(after))
+    provider.start_controller(config)
+
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-env")
+    payload = base64.b64decode(secret["data"]["IRIS_PRINCIPAL_DIRECTORY"]).decode()
+    expected = after if change_spec else before
+    assert json.loads(payload) == expected
+    configmap = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")
+    assert "before@example.com" not in json.dumps(configmap)
+    assert "after@example.com" not in json.dumps(configmap)
+    rendered = IrisClusterConfig.model_validate_json(configmap["data"]["config.json"])
+    assert rendered.auth.allowed_submitters == ["principal:human-999"]
+    monkeypatch.setenv("IRIS_PRINCIPAL_DIRECTORY", payload)
+    runtime = resolve_principal_references(resolve_config_secrets(rendered))
+    auth = create_controller_auth(runtime.auth, cluster_name=runtime.name)
+    assert auth.allowed_submitters == (expected["human-999"],)
+    deployment = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
+    env_from = deployment["spec"]["template"]["spec"]["containers"][0]["envFrom"]
+    assert {entry["secretRef"]["name"] for entry in env_from} == {"iris-controller-env"}
+    assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
     provider.shutdown()
 
 

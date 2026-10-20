@@ -87,14 +87,33 @@ work. Source manifests and `corpus.json` record exact artifact locations and
 manifest hashes. Consumers should follow these references rather than list
 directories and infer the latest version.
 
-Each campaign has its own FineStore catalog beside its report; there is no
-global catalog selecting versions across all campaigns. Source records retain
-each run's result and artifact path. FineStore's conflict check covers one writer
+By default, each campaign has a FineStore catalog beside its report. Production FULL
+campaigns use `--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/production`
+to accumulate results across versioned report directories, with assessment enabled.
+`--cache-dir` selects local execution and a local artifact root, so shared
+publication rejects it; local and SAMPLE runs keep separate catalogs. Remote runs
+reuse completed artifacts under `--artifact-root` and model requests under the
+explicit `--review-cache`. Reuse those locations, pinned inputs, recipe versions,
+rubric and model revisions across campaigns. A new report directory or enabling
+assessment does not force recomputation of completed work. Switching artifact
+roots does not copy completed work or model-request caches; verify their reuse
+before executing a campaign from a new root. Moving the publication catalog alone
+does not change the artifact or model-request cache locations.
+Source records retain each run's result and artifact path. FineStore's conflict check covers one writer
 session; another writer can replace the same key. Catalog keys include run IDs
 to separate results, but these conventions do not enforce access control.
 Credentials with object write access can overwrite underlying files. Campaign
 reports and `corpus.json` are mutable, so a shared unversioned `--output-root`
 is unsuitable for publication.
+
+Use `--source` to grade only new or changed sources. Shared publication preserves
+unselected source entries, declarations and assessments without executing their
+pipelines.
+Published non-skipped attempts, including failed attempts, establish each source's
+latest accepted run start time. A superseded source keeps its newer state while the rest of the
+campaign publishes. Registry removal does not implicitly retire a production source.
+After publication, run the [Atlas loader](rl-data-atlas.md#updating-atlas) explicitly;
+Postgres refresh is independent of model execution and Marina rollout.
 
 When building grader environments outside the driver, set `MARIN_PREFIX` to the
 same artifact root:
@@ -220,7 +239,7 @@ The `CurationRecipe` configuration has these fields:
 | Field | Meaning |
 |---|---|
 | `name` | Catalog key and artifact name. |
-| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)` or `HarborHubSource(name, revision)`. |
+| `source` | `HfSource(repo, revision, files, format, select, decode, read)` or `UrlSource(url, sha256, filename, format, ...)` or `HarborHubSource(name, revision, read)`. |
 | `convert` | `(RawRow, ConversionContext) -> TaskSpec | NormalizedTask | ImportRejection`; it fixes the task's grader. |
 | `version` | Converter revision; bump it when conversion or bundled grader code changes. |
 | `intended_use` | `train` or `eval`. |
@@ -239,22 +258,21 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 `None` when the declaration names no `grader`.
 `required_grader_environment(context)` returns the environment or raises.
 
-Harbor Hub sources acquire the complete pinned release through the existing cached
-source-download step. The isolated `config/external/harbor` runtime checks that
-Harbor resolves the requested release digest and verifies each task's content
-before writing `tasks/<task-reference-hash>.jsonl` and a release manifest.
-Each filename hashes the full immutable task reference, so differently named
-tasks with identical contents remain separate. The manifest records the resolved
-task list. Dataset-level scoring files are not supported. Packages with links or
-more than 8 MiB of exported files produce explicit unsupported rows.
+`HarborHubSource(name, revision, read)` acquires a complete release pinned by
+`sha256:...`. It caches the original task archives as
+`tasks/<task-reference-hash>.tar.gz`, verifies their extracted contents with the
+pinned Harbor runtime, and records the task references in `release.json`.
+The recipe's `read(StoragePath, ConversionContext)` yields rows from each archive,
+using the same custom-reader interface as HF sources. Acquisition does not
+convert task files or impose a package size cutoff. Dataset-level scoring files
+are not supported.
 
-Release membership is resolved by Harbor using the pinned release digest.
-
-The download identity includes the release, exporter code, and locked runtime.
-Curation sampling happens after acquisition. Existing `--input-root` and
-`--input-file` overrides bypass acquisition; for a bounded local export, run
+The existing download cache, sampling, and local-input overrides apply. Retries
+reuse completed archives; use a fresh override directory for a different release
+or task selection. The cache identity includes the release, acquisition code, and
+pinned Harbor commit. To acquire selected tasks locally, run
 `python -m experiments.post_training.task_curation.harbor_hub --help` in the
-pinned Harbor environment. Use a fresh output directory per export.
+pinned Harbor environment.
 
 ## Environments
 
@@ -296,15 +314,15 @@ identity; lock-backed worker environments retain their existing identities.
 
 ## Graders and controls
 
-A task's grader is one of four kinds:
+A task's grader is one of three kinds:
 
 - `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
   in process; with `environment=required_grader_environment(context)` it grades
-  in a fresh machine of the grader's environment.
+  in a fresh machine of the grader's environment. A `judge` grades on the host,
+  through its judge service, also when it declares an environment.
 - `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
   TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
   to a file (`FileReward`).
-- `SessionGrader` marks a task graded by its registered interactive session.
 - `NoGrader` records a source evaluator this repository cannot run, with the
   source contract. Its rows never reach `final/`.
 

@@ -7,7 +7,7 @@ and verifies each downloaded task's content digest using the pinned client in
 `config/external/harbor`. The resolved task list is retained in the export
 manifest. Acquisition does not edit upstream tasks.
 
-Export a bounded selection for QUICK conversion; Docker and registry access are not required:
+Acquire a bounded selection for QUICK conversion; Docker and container-registry access are not required:
 
 ```bash
 uv run --isolated --project config/external/harbor --frozen python \
@@ -18,7 +18,7 @@ uv run --isolated --project config/external/harbor --frozen python \
 ```
 
 Repeat `--task` for more tasks; `--all` selects the release's complete population.
-Each task is exported to `tasks/<task-reference-hash>.jsonl`, using a SHA-256
+Each native task archive is cached at `tasks/<task-reference-hash>.tar.gz`, using a SHA-256
 hash of the full immutable task reference. Its pipeline identity stays the same
 across selections, including when differently named tasks share content.
 Conversion retains the native `environment/` files as an
@@ -45,10 +45,10 @@ validating grading in those containers are follow-up work. The converted tasks
 cannot execute in SAMPLE/FULL while their build contexts remain unresolved.
 
 Without an input override, the normal source-download step acquires and caches
-all 7,496 packages before curation sampling. Use the bounded export above for
+all 7,496 packages before curation sampling. Use the bounded acquisition above for
 local inspection. The `--input-root` option applies to every selected source,
 so run this selection separately from sources using their normal downloads.
-A selected export is a subset, not evidence about the entire release.
+A selected acquisition is a subset, not evidence about the entire release.
 
 The grading definition invokes the unchanged `tests/test.sh` in a separate sandbox. Private
 tests and reference solutions are excluded from agent resources. It retains
