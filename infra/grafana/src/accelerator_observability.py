@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Three bounded sources shared by the fleet accelerator dashboard."""
+"""Bounded source families shared by fleet accelerator panels."""
 
 import math
 
@@ -20,7 +20,7 @@ ACCELERATOR_MAX_RESULT_ROWS = 500_000
 
 
 def accelerator_overview_dataset(
-    clusters: tuple[str, ...], start_ms: int, end_ms: int, requested_bucket_ms: int
+    clusters: tuple[str, ...], start_ms: int, end_ms: int, requested_bucket_ms: int, view: str | None = None
 ) -> DashboardDataset:
     """Build fleet, per-device, and run-attribution GPU sources."""
     validate_values("clusters", clusters, max_values=ACCELERATOR_MAX_CLUSTERS, max_length=128)
@@ -43,6 +43,82 @@ AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({cluster_values})
 AND timestamp_ms >= {start_ms}
 AND timestamp_ms < {end_ms}
 """.strip()
+    if view in ("power", "gpus", "nodes"):
+        # These tiles need one latest power sample per device, not device histories
+        # or training attribution. Keep the full selected window for stale devices.
+        sql = f"""
+SELECT SUM(value) / 1000.0 AS power, COUNT(DISTINCT gpu_uuid) AS gpus, COUNT(DISTINCT node) AS nodes
+FROM (
+    SELECT json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,
+           FIRST_VALUE(node_name ORDER BY timestamp_ms DESC) AS node,
+           FIRST_VALUE(value ORDER BY timestamp_ms DESC) AS value
+    FROM "telemetry_v1.node_agent"
+    WHERE {common_filter} AND name = 'gpu_power_watts'
+    GROUP BY cluster, json_get(attributes_json, 'gpu_uuid')
+)
+""".strip()
+        return DashboardDataset(
+            name="Accelerator current power",
+            cache_key=(clusters, start_ms, end_ms),
+            sources=(SourceQuery("latest_power", sql, 1),),
+            setup_sql=(),
+            views={name: f"SELECT {name} AS value FROM latest_power" for name in ("power", "gpus", "nodes")},
+            max_result_rows=3,
+        )
+    if view == "faulted":
+        sql = f"""
+SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS "cluster", node_name AS node,
+       json_get(attributes_json, 'gpu_index') AS gpu,
+       MAX(CASE WHEN name = 'gpu_xid_error_code' THEN value END) AS xid,
+       MAX(CASE WHEN name = 'gpu_row_remap_failures' THEN value END) AS remap_failures,
+       MAX(CASE WHEN name = 'gpu_pcie_replay_errors' THEN value END) AS pcie_replays
+FROM "telemetry_v1.node_agent"
+WHERE {common_filter}
+  AND name IN ('gpu_xid_error_code', 'gpu_row_remap_failures', 'gpu_pcie_replay_errors')
+GROUP BY 1, 2, 3 HAVING MAX(value) > 0
+ORDER BY xid DESC, remap_failures DESC, pcie_replays DESC
+LIMIT {ACCELERATOR_MAX_DEVICE_ROWS + 1}
+""".strip()
+        return DashboardDataset(
+            name="Accelerator faults",
+            cache_key=(clusters, start_ms, end_ms),
+            sources=(SourceQuery("faulted", sql, ACCELERATOR_MAX_DEVICE_ROWS),),
+            setup_sql=(),
+            views={"faulted": "SELECT * FROM faulted ORDER BY xid DESC, remap_failures DESC, pcie_replays DESC"},
+            max_result_rows=ACCELERATOR_MAX_DEVICE_ROWS,
+        )
+    if view in ("power_series", "utilization_series"):
+        # Sum per-device means for power; utilization remains sample-weighted.
+        sql = f"""
+SELECT t, origin_cluster AS series, SUM(value) / 1000.0 AS value, 'power_series' AS metric
+FROM (
+    SELECT {bucket} AS t, COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           node_name, json_get(attributes_json, 'gpu_uuid') AS gpu_uuid, AVG(value) AS value
+    FROM "telemetry_v1.node_agent"
+    WHERE {common_filter} AND name = 'gpu_power_watts'
+    GROUP BY 1, 2, 3, 4
+)
+GROUP BY 1, 2
+UNION ALL
+SELECT {bucket} AS t, COALESCE(NULLIF(cluster, ''), 'marin') AS series,
+       AVG(value) AS value, 'utilization_series' AS metric
+FROM "telemetry_v1.node_agent"
+WHERE {common_filter} AND name = 'gpu_utilization_percent'
+GROUP BY 1, 2
+ORDER BY t, series, metric
+LIMIT {ACCELERATOR_MAX_FLEET_ROWS + 1}
+""".strip()
+        return DashboardDataset(
+            name="Accelerator power and utilization",
+            cache_key=(clusters, start_ms, end_ms, bucket_ms),
+            sources=(SourceQuery("history", sql, ACCELERATOR_MAX_FLEET_ROWS),),
+            setup_sql=(),
+            views={
+                name: f"SELECT t, series, value FROM history WHERE metric = '{name}' ORDER BY t, series"
+                for name in ("power_series", "utilization_series")
+            },
+            max_result_rows=ACCELERATOR_MAX_FLEET_ROWS,
+        )
     fleet_sql = f"""
 WITH raw AS (
     SELECT {bucket} AS t,
@@ -83,6 +159,9 @@ ORDER BY t, "cluster", name
 LIMIT {ACCELERATOR_MAX_FLEET_ROWS + 1}
 """.strip()
     inventory_start_ms = max(start_ms, end_ms - 10 * 60 * 1000)
+    # Fault tables have a separate panel window. Only the combined dataset needs
+    # their rows alongside device histories and freshness.
+    fault_union = "UNION ALL SELECT * FROM faults" if view is None else ""
     device_sql = f"""
 WITH latest AS (
     SELECT 'latest' AS kind,
@@ -200,7 +279,7 @@ WITH latest AS (
 SELECT kind, t, "cluster", node, gpu, gpu_uuid, name, value, series, last_ms
 FROM (
     SELECT * FROM latest
-    UNION ALL SELECT * FROM faults
+    {fault_union}
     UNION ALL SELECT * FROM sm
     UNION ALL SELECT * FROM temperature_distribution
     UNION ALL SELECT * FROM model_power
@@ -319,15 +398,61 @@ GROUP BY 1 ORDER BY lag_seconds DESC
             "WHERE kind = 'temperature_distribution' GROUP BY 1, 2 ORDER BY 1, 2"
         ),
     }
+    sources = (
+        SourceQuery("fleet", fleet_sql, ACCELERATOR_MAX_FLEET_ROWS),
+        SourceQuery("devices", device_sql, ACCELERATOR_MAX_DEVICE_ROWS),
+        SourceQuery("attribution", attribution_sql, ACCELERATOR_MAX_ATTRIBUTION_ROWS),
+    )
+    source_views = {
+        "fleet": (
+            "mean_utilization",
+            "mean_tensor",
+            "hottest",
+            "power_series",
+            "utilization_series",
+            "tensor",
+            "hbm",
+            "temperature_series",
+            "fault_count",
+        ),
+        "devices": ("freshness", "model_power", "sm", "temperature_distribution"),
+        "attribution": ("run_power",),
+    }
+    setup_sql = ()
+    if view is not None:
+        if view not in views:
+            raise ValueError(f"unknown Accelerator overview view {view!r}")
+        for source_name, names in source_views.items():
+            if view in names:
+                sources = tuple(source for source in sources if source.name == source_name)
+                views = {name: views[name] for name in names}
+                break
+        if view in source_views["devices"]:
+            # Device rasters repeat labels for every point. Bound the samples
+            # before packing, then enforce that same budget on the Arrow lists.
+            packed_sql = f"""
+SELECT kind, "cluster", node, gpu, gpu_uuid, name, series,
+       array_agg(named_struct('t', t, 'value', value, 'last_ms', last_ms)) AS points
+FROM ({device_sql}) AS device_samples
+GROUP BY 1, 2, 3, 4, 5, 6, 7
+LIMIT {ACCELERATOR_MAX_DEVICE_ROWS + 1}
+""".strip()
+            sources = (
+                SourceQuery("device_series", packed_sql, ACCELERATOR_MAX_DEVICE_ROWS, ACCELERATOR_MAX_DEVICE_ROWS),
+            )
+            setup_sql = (
+                """
+CREATE VIEW devices AS
+SELECT kind, point.t AS t, "cluster", node, gpu, gpu_uuid, name,
+       point.value AS value, series, point.last_ms AS last_ms
+FROM (SELECT * EXCLUDE (points), unnest(points) AS point FROM device_series)
+""".strip(),
+            )
     return DashboardDataset(
         name="Accelerator overview",
-        cache_key=(clusters, start_ms, end_ms, bucket_ms),
-        sources=(
-            SourceQuery("fleet", fleet_sql, ACCELERATOR_MAX_FLEET_ROWS),
-            SourceQuery("devices", device_sql, ACCELERATOR_MAX_DEVICE_ROWS),
-            SourceQuery("attribution", attribution_sql, ACCELERATOR_MAX_ATTRIBUTION_ROWS),
-        ),
-        setup_sql=(),
+        cache_key=(clusters, start_ms, end_ms, bucket_ms, tuple(source.name for source in sources)),
+        sources=sources,
+        setup_sql=setup_sql,
         views=views,
         max_result_rows=ACCELERATOR_MAX_RESULT_ROWS,
     )

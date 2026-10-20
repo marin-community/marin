@@ -81,7 +81,12 @@ def _run_nodes_cte(bucket: str, clusters_sql: str, run_sql: str, start_ms: int, 
 
 
 def rl_overview_dataset(
-    clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
+    clusters: tuple[str, ...],
+    run: str,
+    start_ms: int,
+    end_ms: int,
+    requested_bucket_ms: int,
+    view: str | None = None,
 ) -> DashboardDataset:
     """Build bounded RL-core and engine sources."""
     validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=RL_MAX_CLUSTER_LENGTH)
@@ -99,6 +104,11 @@ def rl_overview_dataset(
     straggler_bucket = f"{start_ms} + (t - {start_ms}) - (t - {start_ms}) % {RL_STRAGGLER_BUCKET_MS}"
     clusters_sql = sql_values(clusters)
     run_sql = sql_string(run)
+    core_names = _CORE_NAMES
+    if view in ("critical_path", "straggler"):
+        core_names = ("phase_duration_seconds",)
+    elif view in ("ray_object_store", "ray_spill"):
+        core_names = tuple(name for name in _CORE_NAMES if name != "phase_duration_seconds")
     core_sql = f"""
 WITH selected AS (
     SELECT timestamp_ms AS t,
@@ -116,7 +126,7 @@ WITH selected AS (
     WHERE run_id = {run_sql}
       AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
       AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
-      AND name IN ({sql_values(_CORE_NAMES)})
+      AND name IN ({sql_values(core_names)})
 ), aggregates AS (
     SELECT 'aggregate' AS statistic,
        bucket_t AS t, name, execution_uid, phase, outcome, clock_domain,
@@ -274,13 +284,28 @@ GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
     }
+    sources = {
+        "core": SourceQuery("core", core_sql, RL_MAX_CORE_ROWS),
+        "engine": SourceQuery("engine", engine_sql, RL_MAX_ENGINE_ROWS),
+    }
+    source_group = "all"
+    if view is not None:
+        if view not in views:
+            raise ValueError(f"unknown RL overview view {view!r}")
+        source_groups = {
+            "critical_path": "phases",
+            "straggler": "phases",
+            "ray_object_store": "ray",
+            "ray_spill": "ray",
+        }
+        source_group = source_groups.get(view, "engine")
+        source_name = "engine" if source_group == "engine" else "core"
+        sources = {source_name: sources[source_name]}
+        views = {name: sql for name, sql in views.items() if source_groups.get(name, "engine") == source_group}
     return DashboardDataset(
         name="RL overview",
-        cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
-        sources=(
-            SourceQuery("core", core_sql, RL_MAX_CORE_ROWS),
-            SourceQuery("engine", engine_sql, RL_MAX_ENGINE_ROWS),
-        ),
+        cache_key=(clusters, run, start_ms, end_ms, bucket_ms, source_group),
+        sources=tuple(sources.values()),
         setup_sql=(),
         views=views,
         max_result_rows=RL_MAX_RESULT_ROWS,
@@ -288,7 +313,12 @@ GROUP BY 1, 2 ORDER BY 1
 
 
 def rl_gpu_dataset(
-    clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
+    clusters: tuple[str, ...],
+    run: str,
+    start_ms: int,
+    end_ms: int,
+    requested_bucket_ms: int,
+    view: str | None = None,
 ) -> DashboardDataset:
     """Build node-GPU detail or a zoom message for ranges longer than seven hours."""
     validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=RL_MAX_CLUSTER_LENGTH)
@@ -320,6 +350,8 @@ def rl_gpu_dataset(
                 f"{status}"
             ),
         }
+        if view is not None and view not in views:
+            raise ValueError(f"unknown RL GPU view {view!r}")
         return DashboardDataset(
             name="RL GPU",
             cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
@@ -332,6 +364,9 @@ def rl_gpu_dataset(
     clusters_sql = sql_values(clusters)
     run_sql = sql_string(run)
     dcgm_scope = f"timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"
+    series_names = _DCGM_SERIES
+    if view is not None:
+        series_names = tuple(name for name in _DCGM_SERIES if name != "gpu_utilization_percent")
     gpu_sql = f"""
 WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_samples AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
@@ -361,7 +396,7 @@ WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, counter_
     JOIN "telemetry_v1.node_agent"
       ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
      AND node_name = selected_nodes.node
-    WHERE name IN ({sql_values((*_DCGM_SERIES, "gpu_power_watts"))}) AND {dcgm_scope}
+    WHERE name IN ({sql_values((*series_names, "gpu_power_watts"))}) AND {dcgm_scope}
     GROUP BY 1, 2, 3, 4, 5
     UNION ALL BY NAME
     SELECT origin_cluster, t, node, gpu, name,
@@ -380,7 +415,7 @@ SELECT CASE WHEN GROUPING(node) = 1 THEN 'series' ELSE 'device' END AS statistic
        CASE WHEN GROUPING(node) = 0 THEN SUM(increase) END AS increase
 FROM attributed
 GROUP BY GROUPING SETS ((t, name), (name, node, gpu))
-HAVING (GROUPING(node) = 1 AND name IN ({sql_values(_DCGM_SERIES)}))
+HAVING (GROUPING(node) = 1 AND name IN ({sql_values(series_names)}))
     OR (GROUPING(node) = 0 AND name IN ({sql_values(_DCGM_DEVICE)}))
 ORDER BY statistic, t, name
 LIMIT {RL_MAX_GPU_ROWS + 1}
@@ -416,9 +451,38 @@ ORDER BY 4 DESC, node, gpu
             "WHERE statistic = 'series' AND name = 'gpu_utilization_percent' ORDER BY t"
         ),
     }
+    source_group = "all"
+    if view is not None:
+        if view not in views:
+            raise ValueError(f"unknown RL GPU view {view!r}")
+        source_group = "utilization" if view == "gpu_utilization" else "detail"
+        views = {name: sql for name, sql in views.items() if (name == "gpu_utilization") == (view == "gpu_utilization")}
+        if view == "gpu_utilization":
+            # Average each device before combining devices, so scrape frequency
+            # cannot give one GPU or node more weight in the run-wide mean.
+            gpu_sql = f"""
+WITH {_run_nodes_cte(bucket, clusters_sql, run_sql, start_ms, end_ms)}, gpu AS (
+    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           {bucket} AS t,
+           node_name AS node,
+           json_get(attributes_json, 'gpu_uuid') AS gpu,
+           AVG(value) AS mean_value
+    FROM selected_nodes
+    JOIN "telemetry_v1.node_agent"
+      ON COALESCE(NULLIF(cluster, ''), 'marin') = selected_nodes.origin_cluster
+     AND node_name = selected_nodes.node
+    WHERE name = 'gpu_utilization_percent' AND {dcgm_scope}
+    GROUP BY 1, 2, 3, 4
+)
+SELECT 'series' AS statistic, t, 'gpu_utilization_percent' AS name, AVG(mean_value) AS mean_value
+FROM run_node JOIN gpu USING (origin_cluster, t, node)
+WHERE run_node.run = {run_sql}
+GROUP BY t ORDER BY t
+LIMIT {RL_MAX_GPU_ROWS + 1}
+""".strip()
     return DashboardDataset(
         name="RL GPU",
-        cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
+        cache_key=(clusters, run, start_ms, end_ms, bucket_ms, source_group),
         sources=(SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),),
         setup_sql=(),
         views=views,

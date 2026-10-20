@@ -27,6 +27,7 @@ def jobs_overview_dataset(
     start_ms: int,
     end_ms: int,
     requested_bucket_ms: int,
+    view: str | None = None,
 ) -> DashboardDataset:
     """Build one bounded source per Iris telemetry namespace."""
     validate_values("clusters", clusters, max_values=JOBS_MAX_CLUSTERS, max_length=JOBS_IDENTITY_MAX_LENGTH)
@@ -240,16 +241,37 @@ ORDER BY GREATEST(oldest_building_age_ms, oldest_pending_age_ms) DESC
             "FROM events WHERE kind = 'bucketed' GROUP BY 1, 2 ORDER BY 1"
         ),
     }
+    sources = (
+        SourceQuery("task_state", state_sql, JOBS_MAX_STATE_ROWS),
+        SourceQuery("events", event_sql, JOBS_MAX_EVENT_ROWS),
+        SourceQuery("provisioning", provisioning_sql, JOBS_MAX_PROVISIONING_ROWS),
+        SourceQuery("tasks", task_sql, JOBS_MAX_RESOURCE_ROWS),
+        SourceQuery("workers", worker_sql, JOBS_MAX_RESOURCE_ROWS),
+    )
+    source_views = {
+        "task_state": (
+            "fleet_state",
+            "oldest_waiting",
+            "waiting_jobs",
+            "active_jobs",
+            "fleet_tasks",
+            "stuck_jobs",
+            "queue_depth",
+        ),
+        "events": ("warning_count", "recent_warnings", "warning_reasons"),
+        "provisioning": ("provisioning_failures", "provisioning_outcomes", "provisioning_latency"),
+        "tasks": ("task_memory", "task_cpu"),
+        "workers": ("worker_cpu", "worker_memory"),
+    }
+    for source_name, names in source_views.items():
+        if view in names:
+            sources = tuple(source for source in sources if source.name == source_name)
+            views = {name: views[name] for name in names}
+            break
     return DashboardDataset(
         name="Jobs overview",
-        cache_key=(clusters, jobs, start_ms, end_ms, bucket_ms),
-        sources=(
-            SourceQuery("task_state", state_sql, JOBS_MAX_STATE_ROWS),
-            SourceQuery("events", event_sql, JOBS_MAX_EVENT_ROWS),
-            SourceQuery("provisioning", provisioning_sql, JOBS_MAX_PROVISIONING_ROWS),
-            SourceQuery("tasks", task_sql, JOBS_MAX_RESOURCE_ROWS),
-            SourceQuery("workers", worker_sql, JOBS_MAX_RESOURCE_ROWS),
-        ),
+        cache_key=(clusters, jobs, start_ms, end_ms, bucket_ms, tuple(source.name for source in sources)),
+        sources=sources,
         setup_sql=(),
         views=views,
         max_result_rows=JOBS_MAX_RESULT_ROWS,
