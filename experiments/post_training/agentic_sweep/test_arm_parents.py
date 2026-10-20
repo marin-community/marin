@@ -23,7 +23,7 @@ def manifest(parent_name, arm):
     }
 
 
-def graph(rows, parent_name, plateau=False):
+def graph(rows, parent_name, plateau=False, data_variant="high"):
     return pipeline(
         rows,
         "a" * 64,
@@ -33,6 +33,7 @@ def graph(rows, parent_name, plateau=False):
         1e-6,
         [ArmEpoch(f"epoch-{epoch}", 16, 1, 128, 256) for epoch in range(3)],
         plateau,
+        data_variant=data_variant,
     )
 
 
@@ -56,6 +57,27 @@ def test_parent_and_plateau_outputs_are_disjoint_and_use_the_selected_weights():
             tracker_ids.add(config.trainer.id)
             fingerprints.add(trained.fingerprint())
     assert len(outputs) == len(tracker_ids) == len(fingerprints) == 10
+
+
+@pytest.mark.parametrize("parent_name", tuple(PARENTS))
+def test_low_plain_has_distinct_cache_checkpoint_and_tracker_identity(parent_name):
+    rows = manifest(parent_name, "plain")
+    high = graph(rows, parent_name)
+    low = graph(rows, parent_name, data_variant="low")
+    high_train, low_train = high["train"], low["train"]
+    assert low_train.name == f"checkpoints/karan/plain-low-{parent_name}-v7-20261020-lr1e-06-3ep"
+    assert low_train.path("/outputs") != high_train.path("/outputs")
+    assert low_train.fingerprint() != high_train.fingerprint()
+    assert {cache.path("/outputs") for cache in high["caches"]}.isdisjoint(
+        cache.path("/outputs") for cache in low["caches"]
+    )
+    configurations = [
+        trained.build_config(StepContext.for_run(trained.path("/outputs"), "/outputs", deps=trained.deps)).train_config
+        for trained in (high_train, low_train)
+    ]
+    assert configurations[0].trainer.id != configurations[1].trainer.id
+    assert configurations[0].initialize_from_hf == configurations[1].initialize_from_hf == PARENTS[parent_name].uri
+    assert rows["arm"] == "plain"
 
 
 def test_wrong_parent_tokenizer_or_relay_student_cannot_build_a_training_graph():
