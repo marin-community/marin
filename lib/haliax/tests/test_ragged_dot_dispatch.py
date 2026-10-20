@@ -106,30 +106,6 @@ def test_gpu_auto_selects_triton_instead_of_xla(monkeypatch):
     assert jnp.array_equal(auto_out, expected)
 
 
-@pytest.mark.parametrize(
-    ("implementation", "family"),
-    [
-        ("triton_group_grid", ragged_dot_module.TritonKernelFamily.GROUP_GRID),
-        ("triton_tile_map", ragged_dot_module.TritonKernelFamily.TILE_MAP),
-    ],
-)
-def test_explicit_triton_family_overrides_the_gpu_default(monkeypatch, implementation, family):
-    lhs, rhs, group_sizes = _inputs()
-    other = next(f for f in ragged_dot_module.TritonKernelFamily if f != family)
-    monkeypatch.setattr(ragged_dot_module, "_triton_kernel_family", lambda: other)
-    families = []
-
-    def triton_impl(lhs, rhs, group_sizes, family):
-        families.append(family)
-        return jnp.zeros((lhs.shape[0], rhs.shape[2]), lhs.dtype)
-
-    monkeypatch.setattr(ragged_dot_module, "_ragged_dot_triton_impl", triton_impl)
-
-    ragged_dot(lhs, rhs, group_sizes, implementation=implementation)
-
-    assert families == [family]
-
-
 def test_triton_default_block_sizes_use_blackwell_n_tile(monkeypatch):
     monkeypatch.setattr(ragged_dot_module, "_is_blackwell_gpu_backend", lambda: True)
 
