@@ -294,6 +294,34 @@ This enables JAX and other TPU-aware frameworks to initialize correctly inside j
 
 Jobs can include a `bundle_blob` containing workspace files. The controller stores these in a shared location accessible to all workers.
 
+Workspace bundles have a 25 MiB limit on the compressed ZIP. Iris collects tracked
+and untracked files using `git ls-files --cached --others --exclude-standard`,
+then excludes these paths at any depth: `docs/`, `tests/`, `.agents/`, `.claude/`,
+`.codex/`, `.github/`, Rust `target/` directories, and `journeys-out/` directories.
+It also excludes notebooks, native `.so` files, and `AGENTS.md`, `TESTING.md`, and
+`OPS.md`. The same exclusions apply when Git is unavailable.
+Package metadata, lockfiles, runtime resources, and generated Iris RPC modules
+remain eligible for inclusion. Use `extra_bundle_includes` (or CLI `--include`)
+to add required files excluded by default, such as a validation job's tests and
+`conftest.py` files or a Git-ignored frontend `dist/`. Explicit `bundle_exclude`
+patterns (CLI `--exclude`) and build/cache exclusions, including Rust `target/`
+directories and native `.so` files, still apply to these includes.
+
+Workspace `pyproject.toml` can include runtime assets excluded by default and
+exclude tracked files from every submitted bundle:
+
+```toml
+[tool.iris.bundle]
+include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*"]
+exclude = ["^vendor/harbor/tests(/|$)"]
+```
+
+Include patterns are globs; exclude patterns are regular expressions matched
+against paths relative to the workspace. Repository exclusions apply after
+repository includes. For a validation job that needs excluded tests, pass globs
+through `IrisClient.remote(..., extra_bundle_includes=["vendor/harbor/tests/**/*.py"])`.
+Caller `bundle_exclude` patterns and build/cache exclusions still apply.
+
 **Configuration** (required):
 
 ```yaml

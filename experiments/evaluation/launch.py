@@ -28,12 +28,11 @@ from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
-    HARBOR_RUNTIME_PROJECT,
     ValidatedHarborConfig,
     harbor_runtime_descriptor,
     preflight_harbor_configs,
 )
-from marin.evaluation.harbor.runner import canonical_served_name
+from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
@@ -139,8 +138,10 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
+    retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
+    resume_results_path: str | None = None
     cache_key: str | None = None
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
@@ -222,7 +223,9 @@ def _resolve_definitions(
     model: ModelConfig,
     limit: int | None,
     seed: int | None,
+    retry_unscored_harbor_trials: bool,
     version: str | None,
+    judge_model: ModelConfig | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
@@ -230,11 +233,7 @@ def _resolve_definitions(
     model_agent_kwargs = harbor_model_agent_kwargs(model)
     requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
     runtime_commits = RUNTIME_COMMITS.get(version or "", {})
-    harbor_commit = runtime_commits.get("harbor")
-    harbor_project = (
-        f"{HARBOR_RUNTIME_PROJECT}/pins/{harbor_commit}" if harbor_commit is not None else HARBOR_RUNTIME_PROJECT
-    )
-    validated_configs = iter(preflight_harbor_configs(requests, runtime_project=harbor_project))
+    validated_configs = iter(preflight_harbor_configs(requests))
     evalchemy_commit = runtime_commits.get("evalchemy", EVALCHEMY.commit)
     evalchemy_dependency = replace(EVALCHEMY, commit=evalchemy_commit)
 
@@ -268,8 +267,14 @@ def _resolve_definitions(
                 name,
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
-                    runtime_descriptor=harbor_runtime_descriptor(config.error_taxonomy.commit, config.runtime_project),
-                    executor=definition.executor_for(config, model, runtime_task_limit),
+                    runtime_descriptor=harbor_runtime_descriptor(),
+                    executor=definition.executor_for(
+                        config,
+                        model,
+                        runtime_task_limit,
+                        retry_unscored_harbor_trials,
+                        judge_model,
+                    ),
                     endpoint_route=EndpointRoute.CAPABILITY,
                     secret_env=dict(definition.secret_env_for(config)),
                 ),
@@ -337,7 +342,23 @@ def build_evaluation_batch(
         isinstance(definition, HarborDefinition) for _, definition in requested_definitions
     ):
         model = replace(model, serve=resolved_serve_config(model))
-    definitions = _resolve_definitions(requested_definitions, model, spec.limit, spec.seed, spec.version)
+    definitions = _resolve_definitions(
+        requested_definitions,
+        model,
+        spec.limit,
+        spec.seed,
+        spec.retry_unscored_harbor_trials,
+        spec.version,
+        judge.model if judge is not None else None,
+    )
+    if spec.retry_unscored_harbor_trials and spec.resume_results_path is None:
+        raise ValueError("--retry-unscored-harbor-trials requires --resume-results-path")
+    if spec.resume_results_path is not None:
+        if len(definitions) != 1 or not isinstance(definitions[0][1].executor, HarborExecutor):
+            raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
+        if "://" not in spec.resume_results_path:
+            raise ValueError("--resume-results-path must be an object-store path")
+        validate_harbor_resume_root(spec.resume_results_path, definitions[0][1].executor.resume_identity)
     model_ref = ModelRef(
         name=model.name,
         location=model.location,
@@ -363,7 +384,6 @@ def build_evaluation_batch(
             if name in secret_env and secret_env[name] != spec_value:
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
-
     evaluations: list[Evaluation] = []
     for eval_key, definition in definitions:
         cache_key = json.dumps(
@@ -382,12 +402,13 @@ def build_evaluation_batch(
             sort_keys=True,
         )
         run_id = _run_id(model.name, eval_key, cache_key, group_id if spec.cache_key is None else None)
+        output_dir = spec.resume_results_path or prefix_join(records_prefix, f"{run_id}/results")
         evaluations.append(
             Evaluation(
                 identity=EvaluationIdentity(
                     run_id=run_id,
                     created_at=created_at,
-                    output_dir=prefix_join(records_prefix, f"{run_id}/results"),
+                    output_dir=output_dir,
                     eval_ref=definition.record_ref,
                     eval_runtime=definition.runtime_descriptor,
                 ),
