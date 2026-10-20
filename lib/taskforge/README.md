@@ -482,18 +482,26 @@ outcome keeps the first lowering, and the probe records no evidence. A verifier 
 back, and a package machine, which runs on the local backend alone, is not probed: the fallback only
 ever moves the grader-base CPython between the two backends that run it, never the declared machine.
 
-`stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
-`LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on
-`model.for_step("<kind>/<trial>/<attempt>")`, so a `GlmRolloutModel` records and routes every trial
-attempt under its own step. `TrialPlan.deadlines` and `EngineSettings`
-replace the builder's session limits, and `task_digest(lowered)` hashes what runs, answer format
-included. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
-`stage50_validate.classify.classify` is the only failure classifier. Every trial runs under the
-engine's messages trace (`EngineSettings.apply`): a trial is graded, never trained on, so the engine
-does not hold its turns to exact tokens. A trial is attempted again for a retryable cause;
+`stage50_validate.trials.run_trials(spec, plan, settings, model)` runs k trials of a
+`TaskRolloutSpec` through `EngineSettings.engine()`, the `RolloutEngine` whose shell harness has
+`EngineSettings.command_timeout`. Each attempt runs on `model.for_step("<kind>/<trial>/<attempt>")`, so
+a `GlmRolloutModel` records and routes every trial attempt under its own step. `TrialPlan.deadlines`
+and `EngineSettings` replace the builder's limits. The `TRIAL` span's `input_hash` is
+`task_digest(spec, command_timeout)`, the sha256 of Taskforge's own record of what the trial ran
+(`trial_record`): a JSON object of the task (answer format included), the task and verifier machine
+selections, the effective `RolloutLimits` and the command timeout, so it does not follow the shape of
+the engine's spec. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
+`stage50_validate.classify.classify` is the only failure classifier: an interruption maps by its
+operation (`start`, `prepare`, `model`, `advance`, `grade`) unless its original error names a cause, and
+an `attempt` interruption, the attempt deadline, is `ATTEMPT_TIMEOUT` even when the harness ended after
+the deadline. Every trial runs under the engine's messages trace (`EngineSettings.apply`) with no token
+budget: a trial is graded, never trained on, so the engine does not hold its turns to exact tokens, and
+an attempt's `TRIAL` span counts its tokens from each turn's `usage` across the rollout's conversations.
+The attempt file holds the outcome, its grade and the whole `Rollout`. A trial is attempted again for a
+retryable cause;
 `TrialPlan.first_attempt` numbers attempts after the ones on disk, so a re-entered trial continues
 where it stopped. `stage50_validate.evidence.Evidence(outcomes).reward_stats(kind)` totals the graded
-trials. `stage50_validate.controls.replay(lowered, controls, plan, settings)` replays each control as
+trials. `stage50_validate.controls.replay(spec, controls, plan, settings)` replays each control as
 one `CONTROL` trial named by its id.
 
 ## Testing
