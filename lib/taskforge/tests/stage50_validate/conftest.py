@@ -22,8 +22,7 @@ from pathlib import Path
 from typing import Any, Self
 
 import pytest
-from rolloutengine.contracts import ModelRequest, ModelTurn
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.models import ModelRequest, ModelTurn, TaskRolloutSpec, TokenUsage
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineSpec, MachineTerminated, Result
 from taskcompendium.grading_result import Outcome
@@ -51,7 +50,7 @@ from taskforge.spec.draft import (
     lower,
     machine,
     requirements,
-    session,
+    rollout_limits,
 )
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 
@@ -59,10 +58,9 @@ MATH_ANSWER = "395"
 NUMBERS = "12\n7\n30\n11\n"
 NUMBERS_SUM = 60
 FACTORIES = {Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()}
-SESSION = session(
+LIMITS = rollout_limits(
     max_turns=4,
     model_turn_timeout=None,
-    command_timeout=10,
     tool_turn_timeout=20,
     total_turn_timeout=None,
     attempt_timeout=None,
@@ -88,7 +86,7 @@ def source(row: str) -> Source:
     return Source(dataset="taskforge-validate-tests", revision="1", row=row, importer_revision="1")
 
 
-def lowered(task: TaskSpec) -> LoweredTaskSpec:
+def lowered(task: TaskSpec) -> TaskRolloutSpec:
     """``task`` lowered for a laptop: a ShellSim task machine and a verifier machine when it has them."""
     has_machine = SHELL_CAPABILITY in task.environment_requirements.capabilities
     return lower(
@@ -96,18 +94,18 @@ def lowered(task: TaskSpec) -> LoweredTaskSpec:
         host=MachineHost.LAPTOP,
         task_machine=SHELLSIM if has_machine else None,
         verifier_machine=None if grading_environment(task) is None else SHELLSIM,
-        session=SESSION,
+        limits=LIMITS,
         factories=FACTORIES,
     )
 
 
 @pytest.fixture
-def relower() -> Callable[[TaskSpec], LoweredTaskSpec]:
+def relower() -> Callable[[TaskSpec], TaskRolloutSpec]:
     return lowered
 
 
 @pytest.fixture
-def math_task() -> LoweredTaskSpec:
+def math_task() -> TaskRolloutSpec:
     task = assemble(
         "validate-math",
         "What is 17 * 23 + 4? Reply with only the number, nothing else.",
@@ -121,7 +119,7 @@ def math_task() -> LoweredTaskSpec:
 
 
 @pytest.fixture
-def json_task() -> LoweredTaskSpec:
+def json_task() -> TaskRolloutSpec:
     task = assemble(
         "validate-json",
         "Report the sum of 12, 7, 30 and 11 as a JSON object whose only key is sum.",
@@ -156,12 +154,12 @@ def file_task_spec(grader_script: str = SUM_GRADER, setup: tuple[str, ...] = (),
 
 
 @pytest.fixture
-def file_task() -> LoweredTaskSpec:
+def file_task() -> TaskRolloutSpec:
     return lowered(file_task_spec())
 
 
 @pytest.fixture
-def file_task_with() -> Callable[..., LoweredTaskSpec]:
+def file_task_with() -> Callable[..., TaskRolloutSpec]:
     """``file_task`` with another grader script, setup commands or grader timeout."""
     return lambda grader_script=SUM_GRADER, setup=(), grader_timeout=30: lowered(
         file_task_spec(grader_script, tuple(setup), grader_timeout)
@@ -283,9 +281,14 @@ def assistant_shell(command: str, call_id: str = "c1") -> dict[str, Any]:
     }
 
 
+SCRIPTED_USAGE = TokenUsage(prompt_tokens=30, completion_tokens=4)
+
+
 @dataclass
 class ScriptModel:
-    """Answers each request with the next of ``messages``, with ids that preserve the served prefix.
+    """Answers each request with the next of ``messages``, with ids that preserve the served tokens.
+
+    Every turn reports ``SCRIPTED_USAGE``, which the trial's token accounting counts instead of the ids.
 
     From turn ``hang_from`` on, a request waits forever, so only a timeout ends it. With a
     ``barrier``, every request waits until all of the barrier's parties are in flight. ``requests``
@@ -307,9 +310,10 @@ class ScriptModel:
             await asyncio.Event().wait()
         if self.barrier is not None:
             await self.barrier.wait()
-        prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)
+        continuation = request.continuation
+        prompt = (10, 11) if continuation is None else (*continuation.served_token_ids, 90)
         stop = "tool_calls" if "tool_calls" in self.messages[index] else "stop"
-        return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), stop)
+        return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), stop, usage=SCRIPTED_USAGE)
 
 
 @dataclass
