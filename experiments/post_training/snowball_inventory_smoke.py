@@ -3,6 +3,7 @@
 
 """Ten optimizer updates over the versioned Snowball curriculum inventory."""
 
+import json
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -41,7 +42,9 @@ SEED = 20261020
 ROLE_PLAN = replace(SNOWBALL_RECIPE.role_plan, train_batch_size=32, policy_mini_batch_size=32)
 
 
-def verify_pool_runtime(pool_uri: str, expected_sha256: str, output_uri: str) -> None:
+def verify_pool_runtime(
+    pool_uri: str, expected_sha256: str, output_uri: str, task_sessions: dict, judge_model: str
+) -> None:
     subprocess.run(
         [
             "uv",
@@ -58,6 +61,10 @@ def verify_pool_runtime(pool_uri: str, expected_sha256: str, output_uri: str) ->
             expected_sha256,
             "--output-uri",
             prefix_join(output_uri, "report.json"),
+            "--task-sessions-json",
+            json.dumps(task_sessions),
+            "--judge-model",
+            judge_model,
         ],
         cwd=Path(__file__).resolve().parents[2],
         check=True,
@@ -126,6 +133,7 @@ def main(
         "models/snowball-inventory-smoke-input", model_version, model_uri, kind=LevanterCheckpoint
     )
     pool = ArtifactStep.adopt("documents/snowball-inventory-runtime", pool_version, pool_uri)
+    recipe = smoke_recipe(request_window_tokens, max_new_tokens)
     preflight = apply(
         user_owned_name("documents/snowball-inventory-runtime-probe"),
         remote(
@@ -135,13 +143,15 @@ def main(
         version=resolve_version(name, None),
         pool_uri=pool,
         expected_sha256=pool_sha256,
+        task_sessions=recipe["environment"]["task_sessions"],
+        judge_model=recipe["extra_env"]["VERIFYIT_JUDGE_MODEL"],
         output_uri=OUT,
     )
     rl = skyrl_step(
         SkyRLSpec(
             name=name,
             version=resolve_version(name, None),
-            config_yaml=yaml.safe_dump(smoke_recipe(request_window_tokens, max_new_tokens), sort_keys=False),
+            config_yaml=yaml.safe_dump(recipe, sort_keys=False),
             runtime=SkyRLRuntime(profile=SNOWBALL_RECIPE.profile),
             model=ArtifactHfModel(
                 step=model,
