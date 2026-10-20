@@ -100,7 +100,7 @@ def test_every_import_form_counts_and_an_upward_import_is_refused(tmp_path):
     module.write_text(
         "from taskforge import stage40_build_with_program, llm\n"
         "import taskforge.content_hash\n"
-        "from taskforge.stage20_triage.verdict import accept\n"
+        "from taskforge.stage20_triage.preflight import preflight\n"
     )
 
     assert sorted(imported_packages(module)) == [

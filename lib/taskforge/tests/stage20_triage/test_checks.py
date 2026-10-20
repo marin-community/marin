@@ -5,7 +5,15 @@ from dataclasses import replace
 
 import pytest
 
-from taskforge.stage10_proposal.model import BuildItem, Environment, ResearchItem, ResearchKind, Verification, parse
+from taskforge.stage10_proposal.model import (
+    BuildItem,
+    Environment,
+    ResearchItem,
+    ResearchKind,
+    SolverMachine,
+    Verification,
+    parse,
+)
 from taskforge.stage20_triage.checks import (
     ALL_COMBINATIONS,
     CHECKS,
@@ -48,6 +56,20 @@ def test_header_rejects_repeated_build_names(proposal):
     items = (BuildItem("grader", "one"), BuildItem("grader", "two"))
     p = replace(proposal, header=replace(proposal.header, build=items))
     assert status("header_schema_valid", p) == (CheckStatus.FAIL, "build names repeat: ['grader']")
+
+
+@pytest.mark.parametrize(
+    ("environment", "machine", "violation"),
+    [
+        (Environment.CONTAINER, SolverMachine.CPYTHON, "a container proposal runs in its own image"),
+        (Environment.REASONING, None, "a reasoning proposal declares one of"),
+        (Environment.SHELLSIM, SolverMachine.NONE, "only a reasoning proposal may declare none"),
+    ],
+)
+def test_the_solver_machine_must_fit_the_environment(proposal, environment, machine, violation):
+    p = replace(proposal, header=replace(proposal.header, environment=environment, solver_machine=machine))
+    result, reason = status("solver_machine_fits", p)
+    assert result is CheckStatus.FAIL and violation in reason
 
 
 def test_disallowed_combination_fails_and_null_skips(proposal):

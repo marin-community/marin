@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic proposal checks: everything triage can decide without a model.
+"""Deterministic proposal checks, what triage's preflight decides on (``preflight.preflight``).
 
 Each check reports PASS (the property holds), FAIL (it does not; a fact about the document, not an
 opinion), or SKIP (the property does not apply to this proposal). SKIP never counts as PASS. A FATAL
-failure rejects the proposal before any model call; ADVISORY failures are shown to the rubric.
+failure rejects the proposal; an ADVISORY failure is recorded on the verdict and decides nothing.
 
 Every check carries a comment recording the false positives and false negatives it is expected to
 have, so a reader knows how far to trust a FAIL. Grounded proposals (``Grounding.GROUNDED``) run
@@ -29,6 +29,7 @@ from taskforge.stage10_proposal.model import (
     body_sections,
     parse,
     render,
+    solver_machine_violation,
 )
 
 GRADER_HEADING = "Grader design and controls"
@@ -77,7 +78,7 @@ class CheckResult:
 
     @property
     def blocks(self) -> bool:
-        """Whether this result rejects the proposal without a model call."""
+        """Whether this result rejects the proposal."""
         return self.status is CheckStatus.FAIL and self.severity is Severity.FATAL
 
 
@@ -154,8 +155,8 @@ def header_schema_valid(p: TaskProposal, ctx: CheckContext) -> Outcome:
 
 # Expected false positives: none; the allowed set is configuration, so a FAIL means the caller's
 # stages cannot take this pairing. Expected false negatives: a pairing that is allowed in general but
-# wrong for this task (a judge where an exact match suffices); that is the rubric's environment_fit
-# axis. Null proposals SKIP: they build nothing, so their pairing is moot.
+# wrong for this task (a judge where an exact match suffices), which no check here can judge. Null
+# proposals SKIP: they build nothing, so their pairing is moot.
 def combination_allowed(p: TaskProposal, ctx: CheckContext) -> Outcome:
     if is_null(p):
         return CheckStatus.SKIP, "null proposal"
@@ -163,6 +164,19 @@ def combination_allowed(p: TaskProposal, ctx: CheckContext) -> Outcome:
     if pair not in ctx.allowed_combinations:
         return CheckStatus.FAIL, f"{pair[0]} x {pair[1]} is not an allowed combination"
     return CheckStatus.PASS, f"{pair[0]} x {pair[1]} is allowed"
+
+
+# Expected false positives: none; the rule is ``stage10_proposal.model.solver_machine_violation``,
+# the one ``parse`` enforces, so only a proposal built in code (or edited after parsing) fails it.
+# Expected false negatives: a machine that fits the environment but cannot run the task (ShellSim for
+# a task that needs a real clock), and a machine the host cannot provide, which is the host's failure
+# and not the proposal's: the build stage checks it before any model call.
+def solver_machine_fits(p: TaskProposal, ctx: CheckContext) -> Outcome:
+    violation = solver_machine_violation(p.header.environment, p.header.solver_machine)
+    if violation is not None:
+        return CheckStatus.FAIL, violation
+    machine = "no machine" if p.header.solver_machine is None else f"solver_machine {p.header.solver_machine}"
+    return CheckStatus.PASS, f"{machine} fits a {p.header.environment} proposal"
 
 
 # Keyword evidence in the grader section (and, for executable checks, a code file among the
@@ -295,6 +309,7 @@ def null_reason_only(p: TaskProposal, ctx: CheckContext) -> Outcome:
 CHECKS: tuple[Check, ...] = (
     RuleCheck("header_schema_valid", Severity.FATAL, header_schema_valid),
     RuleCheck("combination_allowed", Severity.FATAL, combination_allowed),
+    RuleCheck("solver_machine_fits", Severity.FATAL, solver_machine_fits),
     RuleCheck("grader_matches_verification", Severity.ADVISORY, grader_matches_verification),
     RuleCheck("required_sections", Severity.FATAL, required_sections),
     RuleCheck("research_has_purpose", Severity.ADVISORY, research_has_purpose),
