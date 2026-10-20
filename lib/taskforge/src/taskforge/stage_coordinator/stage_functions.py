@@ -10,7 +10,7 @@ as they are and may also call any stage directly::
     ------------  -----------  -------------------------------------------
     triage        Triage       ``stage20_triage.verdict.accept``
     author        Author       ``stage30_author.author.static_author(program)``
-    load_program  LoadProgram  ``stage30_author.loader.load_program_source``
+    load_program  LoadProgram  ``stage30_author.loader.load_program_source`` bound to an ``SdkExports``
     build         Build        ``stage40_build_with_program.run.run_build``
     validate      Validate     a caller's function
     review        Review       a caller's function

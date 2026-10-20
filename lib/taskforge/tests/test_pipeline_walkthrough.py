@@ -27,7 +27,7 @@ from taskforge.llm.structured import StructuredOutputError
 from taskforge.spec.draft import assemble, requirements
 from taskforge.stage20_triage.verdict import accept
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
-from taskforge.stage30_author.loader import load_program_source
+from taskforge.stage30_author.loader import SdkExports, load_program_source
 from taskforge.stage30_author.program import (
     RLEnvBuildProgram,
     rl_env_build_program,
@@ -149,6 +149,14 @@ async def review(summary: object) -> Decision:
     return Accept(band=BandOutcome.IN_BAND)
 
 
+NO_SDK_NAMES = SdkExports(defining_modules={})
+"""The walkthrough's programs read no name they leave unbound, so the loader has no SDK name to suggest."""
+
+
+def load_toy_program(source: str) -> RLEnvBuildProgram:
+    return load_program_source(source, NO_SDK_NAMES)
+
+
 def no_call(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("this stage does not run")
 
@@ -156,7 +164,7 @@ def no_call(*args: object, **kwargs: object) -> NoReturn:
 STAGES = StageFunctions(
     triage=accept,
     author=static_author(PROGRAM),
-    load_program=load_program_source,
+    load_program=load_toy_program,
     build=run_build,
     validate=validate,
     review=review,
@@ -185,7 +193,7 @@ class SourceAuthor:
 
     async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
-        return AuthoredProgram(load_program_source(self.source), self.source)
+        return AuthoredProgram(load_toy_program(self.source), self.source)
 
 
 HOST_FAILURE = BuildInfrastructureFailure("image_pull", "the sandbox image did not pull")
@@ -283,7 +291,7 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
 
     def load_program(source: str) -> RLEnvBuildProgram:
         loaded.append(source)
-        return load_program_source(source)
+        return load_toy_program(source)
 
     log = InMemoryEventLog()
     stages = replace(STAGES, author=author, load_program=load_program)
@@ -463,7 +471,7 @@ class CutAuthor:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
             raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
-        return AuthoredProgram(load_program_source(SOURCE), SOURCE)
+        return AuthoredProgram(load_toy_program(SOURCE), SOURCE)
 
 
 async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_author_samples_again(tmp_path):
