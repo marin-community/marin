@@ -672,6 +672,16 @@ def test_context_parallel_kernel_matches_reference_on_gpu():
         got = forward(weight, sharded_x)
         got_dw, got_dx = jax.grad(loss, argnums=(0, 1))(weight, sharded_x)
         frozen_weight_dx = jax.grad(loss, argnums=1)(weight, sharded_x)
-    for actual, expected in ((got, want), (got_dw, want_dw), (got_dx, want_dx)):
+    for actual, expected in ((got, want), (got_dx, want_dx)):
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+    # Context shards accumulate dW in a different order. Check both float32
+    # reductions against the independent oracle with the existing FP32 bound.
+    oracle = _dw_oracle(x, segment_ids, cotangent, weight.shape[0])
+    absolute_sum = _dw_oracle(jnp.abs(x), segment_ids, jnp.abs(cotangent), weight.shape[0])
+    terms = x.shape[0] * x.shape[1] + 1
+    gamma = terms * 2.0**-24 / (1 - terms * 2.0**-24)
+    bound = gamma * absolute_sum
+    for actual in (got_dw, want_dw):
+        error = np.abs(np.asarray(jax.device_get(actual), np.float64) - oracle)
+        assert np.all(error <= bound), f"context dW error is up to {np.max(error / bound):.2f}x its bound"
     np.testing.assert_allclose(np.asarray(frozen_weight_dx), np.asarray(want_dx), rtol=1e-5, atol=1e-5)
