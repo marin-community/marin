@@ -33,6 +33,7 @@ from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
+from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
 from transformers import GPT2Config as HfGpt2Config
 
@@ -129,26 +130,24 @@ def test_url_reference_export_copies_code_and_preserves_trained_weights(
     config = Gpt2Config(
         hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
-    reference = f"memory://hf-reference/{uuid.uuid4().hex}"
-    fs = fsspec.filesystem("memory")
-    fs.pipe(f"{reference}/configuration_custom.py", b"CUSTOM_ARCHITECTURE = True\n")
-    fs.pipe(f"{reference}/nested/modeling_custom.py", b"CUSTOM_MODEL = True\n")
-    fs.pipe(f"{reference}/.git/config", b"git metadata")
-    fs.pipe(f"{reference}/reference-weights.safetensors", b"stale weights")
-    fs.pipe(f"{reference}/pytorch_model.bin", b"stale torch weights")
-    fs.pipe(f"{reference}/pytorch_model-00001-of-00002.bin", b"stale torch shard")
-    fs.pipe(
-        f"{reference}/{SAFE_TENSORS_INDEX_NAME}",
+    reference = StoragePath("memory://hf-reference") / uuid.uuid4().hex
+    (reference / "configuration_custom.py").write_bytes(b"CUSTOM_ARCHITECTURE = True\n")
+    (reference / "nested/modeling_custom.py").write_bytes(b"CUSTOM_MODEL = True\n")
+    (reference / ".git/config").write_bytes(b"git metadata")
+    (reference / "reference-weights.safetensors").write_bytes(b"stale weights")
+    (reference / "pytorch_model.bin").write_bytes(b"stale torch weights")
+    (reference / "pytorch_model-00001-of-00002.bin").write_bytes(b"stale torch shard")
+    (reference / SAFE_TENSORS_INDEX_NAME).write_bytes(
         json.dumps({"weight_map": {"transformer.wte.weight": "reference-weights.safetensors"}}).encode(),
     )
-    fs.pipe(f"{reference}/weights.blob", b"LFS weights")
+    (reference / "weights.blob").write_bytes(b"LFS weights")
     if attributes is not None:
-        fs.pipe(f"{reference}/.gitattributes", attributes.encode())
+        (reference / ".gitattributes").write_bytes(attributes.encode())
 
-    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=RepoRef(reference))
+    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=RepoRef(str(reference)))
     with use_test_mesh():
         model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
-        fs.pipe(f"{reference}/config.json", config.to_hf_config(model.Vocab.size).to_json_string().encode())
+        (reference / "config.json").write_bytes(config.to_hf_config(model.Vocab.size).to_json_string().encode())
         converter.save_pretrained(model, str(tmp_path), max_shard_size=max_shard_size, save_reference_code=True)
         restored = converter.load_pretrained(Gpt2LMHeadModel, ref=str(tmp_path), config=config)
         assert_trees_all_equal(model, restored)
