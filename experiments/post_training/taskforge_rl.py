@@ -104,7 +104,7 @@ BASELINE_NODES = 1
 BASELINE_EVAL_INTERVAL = 1000
 # A thinking turn on these tasks runs 5-15k tokens (baseline median 7.6k, p95 17k per rollout) and
 # can reach the 32k cap; the window holds a few such turns plus shell output.
-CONTEXT_BUDGET = {"request_window_tokens": 65536, "max_new_tokens_per_turn": 32768, "max_turns": 16}
+CONTEXT_BUDGET = {"request_window_tokens": 65536, "max_new_tokens_per_turn": 32768, "max_turns": 20}
 # Qwen's recommended Thinking-2507 decoding. Training samples at temperature one to stay on-policy.
 EVAL_SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
 TRAIN_SAMPLING = {"temperature": 1.0, "top_p": 1.0, "top_k": -1}
