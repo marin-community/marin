@@ -23,6 +23,7 @@ from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.config.query_bias import resolve_grug_query_bias_update
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
+from skyrl_train.config.remote_read import validate_remote_read_config
 from skyrl_train.config.behavior_logprobs import configure_behavior_logprob_sampling
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.objective_spec import rollout_logprobs_required, validate_objective
@@ -452,6 +453,7 @@ def validate_cfg(cfg: DictConfig):
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
     if cfg.trainer.critic.model.path:
         raise ValueError("Megatron does not support a critic worker")
+    validate_remote_read_config(cfg)
     distillation_plan = compile_distillation_plan_from_config(cfg)
     validate_distillation_runtime_support(distillation_plan)
     validate_nemotron_ultra_grading(cfg, distillation_plan)
