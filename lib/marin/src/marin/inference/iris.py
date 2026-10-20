@@ -24,6 +24,7 @@ from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.resources.state import TaskState, is_job_finished
+from rigging import telemetry
 from rigging.connect import capability_path, proxy_path
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
@@ -68,6 +69,7 @@ from marin.inference.types import (
 from marin.inference.worker import InferenceWorker, run_inference_worker
 
 logger = logging.getLogger(__name__)
+_WORKER_LIFECYCLE_POLL_FAILURES = telemetry.counter("marin_inference_worker_lifecycle_poll_failures", unit="{failure}")
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
@@ -938,7 +940,8 @@ def _watch_broker_workers(jobs: list[JobHandle], broker: InferenceRequestProvide
                 if all(JobStatus.finished(job.status()) for job in jobs):
                     broker.finish()
                     return
-            except Exception:
+            except Exception as error:
+                _WORKER_LIFECYCLE_POLL_FAILURES.add(1, attributes={"failure_kind": type(error).__name__})
                 logger.warning("Could not refresh inference worker lifecycle", exc_info=True)
 
     thread = threading.Thread(target=watch, name="inference-worker-lifecycle", daemon=True)
