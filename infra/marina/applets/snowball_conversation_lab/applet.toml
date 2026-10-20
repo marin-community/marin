@@ -1,7 +1,0 @@
-applet_id = "25f504c6-c6fb-4e14-8401-07dd8e6fbfba"
-title = "Snowball conversation lab"
-description = "Live GLM-as-user conversations, agentic traces, and checkpoint comparisons against Qwen."
-python_entrypoint = "server.app:create_api"
-build_command = "npm --prefix ../snowball_conversation_lab/web ci && node ../snowball_conversation_lab/web/build.mjs"
-
-source_paths = ["infra/marina/applets/snowball_conversation_lab/web"]

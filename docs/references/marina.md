@@ -32,9 +32,6 @@ Start with `infra/marina/examples/problem-set-applet/` for Python/Postgres or
 declares its stable `applet_id` UUID and optional repository-relative
 `source_paths` for shared build inputs in the same `applet.toml`.
 
-The [Snowball applet reference](snowball-conversations.md) lists the maintained
-conversation, comparison and curriculum packages and their release requirements.
-
 ```bash
 uv run marina validate my-app
 uv run marina release my-app --dry-run --json
