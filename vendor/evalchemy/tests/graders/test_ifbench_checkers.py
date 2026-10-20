@@ -15,6 +15,10 @@ ALPHABET = (
     "Jays move. Kites move. Lions move. Moles move. Newts move. Owls move. Pigs move. Quails move. Rats move. "
     "Seals move. Toads move. Urchins move. Voles move. Wolves move. Xerus move. Yaks move. Zebras move."
 )
+EMPTY_FIELD_TABLE = (
+    '"StudentID"\t"Subject"\t"Grade"\t"Semester"\t"Score"\n"1"\t"Math"\t"A"\t"Fall"\t"95"\n'
+    '"2"\t\t"B"\t"Fall"\t"85"\n"3"\t"Art"\t"C"\t"Fall"\t"75"'
+)
 
 CASES = {
     "F1-word-indices": (
@@ -50,6 +54,7 @@ CASES = {
         True,
     ),
     "F9-opening-quote": ("custom:sentence_alphabet", {}, ALPHABET, True),
+    "F15-empty-field": ("custom:csv_quotes", {}, EMPTY_FIELD_TABLE, False),
 }
 
 

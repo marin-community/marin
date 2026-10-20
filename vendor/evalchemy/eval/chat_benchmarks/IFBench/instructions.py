@@ -1877,7 +1877,8 @@ class QuotesCSVChecker(Instruction):
 		for row in data:
 			if len(row) != 5:
 				return False
-			if not all(field.strip()[0] == '"' and field.strip()[-1] == '"' for field in row):
+			# Upstream IFBench 1c40f0c reads field.strip()[0], which raises IndexError on an empty field.
+			if not all(field.strip().startswith('"') and field.strip().endswith('"') for field in row):
 				return False
 		return True
 
