@@ -182,6 +182,25 @@ def test_weighted_sum_grad_in_forward_matches_reference(token_block_size):
         np.testing.assert_allclose(actual, expected, atol=tol, rtol=tol)
 
 
+def test_weighted_sum_grad_in_forward_without_z_loss_stays_finite_for_huge_logits():
+    # lse**2 overflows float32 at these logits; a disabled z-loss must not turn 0 * inf into NaN.
+    x = jnp.ones((1, 1), dtype=jnp.float32)
+    w = jnp.array([[2e19, 0.0]], dtype=jnp.float32)
+    y = jnp.array([1], dtype=jnp.int32)
+    weight = jnp.ones((1,), dtype=jnp.float32)
+
+    def weighted_sum(x, w):
+        return linear_softmax_cross_entropy_weighted_sum(x, y, w, weight, logsumexp_weight=None, token_block_size=1)
+
+    value, grads = jax.value_and_grad(weighted_sum, argnums=(0, 1))(x, w)
+    ref_loss, _ = linear_softmax_cross_entropy_loss_reference(x, y, w)
+
+    np.testing.assert_allclose(weighted_sum(x, w), ref_loss[0], rtol=1e-6)
+    np.testing.assert_allclose(value, ref_loss[0], rtol=1e-6)
+    for grad in grads:
+        assert np.all(np.isfinite(np.asarray(grad)))
+
+
 def test_bwd_delta_supertile_soft_cap_scales_label_term():
     x = jnp.array([[4.0, -3.0], [2.5, 3.5]], dtype=jnp.float32)
     w_supertile = jnp.array(
