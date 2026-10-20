@@ -387,14 +387,17 @@ class RecordStore:
     def __init__(self) -> None:
         self._records: list[EvalRunRecord] = []
         self._by_id: dict[str, EvalRunRecord] = {}
+        self._metadata = build_meta([])
         self._archived: set[str] = set()
         self._lock = threading.Lock()
 
     def _set_snapshot(self, records: list[EvalRunRecord]) -> None:
         by_id = {record.run_id: record for record in records}
+        metadata = build_meta(records)
         with self._lock:
             self._records = records
             self._by_id = by_id
+            self._metadata = metadata
 
     def _snapshot(self) -> tuple[list[EvalRunRecord], dict[str, EvalRunRecord]]:
         with self._lock:
@@ -495,8 +498,11 @@ class RecordStore:
         return build_comparison(records, request, models)
 
     def meta(self) -> dict:
-        records, _by_id = self._snapshot()
-        return build_meta(records, frozenset(self.archived_models()))
+        self._snapshot()
+        with self._lock:
+            metadata = dict(self._metadata)
+        metadata["archived_models"] = sorted(self.archived_models())
+        return metadata
 
     def groups(
         self,
@@ -651,11 +657,14 @@ class PgRecordStore(RecordStore):
         if generation <= current_generation:
             return
         snapshot = fetch_snapshot(self._engine)
+        by_id = {record.run_id: record for record in snapshot.records}
+        metadata = build_meta(snapshot.records)
         with self._lock:
             if snapshot.generation <= self._catalog_generation:
                 return
             self._records = snapshot.records
-            self._by_id = {record.run_id: record for record in snapshot.records}
+            self._by_id = by_id
+            self._metadata = metadata
             self._catalog_generation = snapshot.generation
             self._snapshot_updated_at = snapshot.updated_at
         logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))

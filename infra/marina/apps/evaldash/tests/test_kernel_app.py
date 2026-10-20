@@ -157,6 +157,40 @@ def test_metadata_database_wait_does_not_block_other_requests(engine, catalog):
         sqlalchemy.event.remove(engine, "before_cursor_execute", bound_metadata_wait)
 
 
+def test_metadata_refreshes_with_catalog_and_archive_updates_without_a_new_generation(engine, catalog, records):
+    store = evaldash_app.PgRecordStore(engine)
+    assert "added-model" not in store.meta()["models"]
+    added = catalog.records[0].model_copy(
+        update={
+            "run_id": "metadata-added-run",
+            "model": catalog.records[0].model.model_copy(update={"name": "added-model"}),
+            "user": "added-user",
+            "version": "added-cohort",
+        }
+    )
+    write_record(added, records)
+    config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": records})
+    asyncio.run(
+        evaldash_app.PostgresIngestor(
+            engine, config.prefixes, config.ingest_interval, config.revalidate_after
+        ).run_once()
+    )
+    store.reload_if_changed()
+    updated = store.meta()
+    assert "added-model" in updated["models"]
+    assert "added-user" in updated["facets"]["user"]
+    assert "added-cohort" in updated["run_facets"]["version"]
+    generation = store.store_info().catalog_generation
+    assert generation > catalog.generation
+
+    store.set_model_archived("added-model", True, "operator")
+    assert store.meta()["archived_models"] == ["added-model"]
+    assert store.store_info().catalog_generation == generation
+    store.set_model_archived("added-model", False, "operator")
+    assert store.meta()["archived_models"] == []
+    assert store.store_info().catalog_generation == generation
+
+
 def test_reconciliation_batches_verification_writes_and_preserves_last_valid_records(engine, records):
     with engine.begin() as conn:
         evaldash_app.migrate(conn)

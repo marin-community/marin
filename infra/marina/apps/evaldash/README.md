@@ -49,7 +49,7 @@ Each source change and its selected `eval_catalog_runs`/`eval_catalog_metrics` p
 transaction. The lowest configured prefix priority wins duplicate run IDs, so a removed canonical
 record promotes its legacy copy without rereading it. The transaction advances
 `eval_catalog_state.generation`. Each serving instance checks that generation at most once every 10
-seconds and swaps its in-memory aggregate views only after a newer generation commits. A failed check
+seconds and swaps its in-memory record snapshot only after a newer generation commits. A failed check
 serves the last good snapshot and retries after the same interval. Snapshot loads read the generation
 and records in one read-only `REPEATABLE READ` transaction, so a writer can commit during a load
 without blocking it or mixing records from different generations.
@@ -75,6 +75,10 @@ and Escape. Filters, result limit, and launch/flat view are carried in the run-l
 Runs span all cohorts; the cohort carried by the shell navigation applies to scored views.
 Filtering launches by eval retains all their sibling runs and the full launch's status.
 `/meta` returns `run_facets` over all records, including smoke runs, separately from panel facets.
+Its model, benchmark, cohort, and filter lists are computed when a catalog snapshot loads or refreshes.
+Requests reuse those lists and read current archive flags independently; archiving does not require a
+new catalog generation. Metadata requests run in a worker thread so database waits leave the async
+event loop available to other requests.
 
 Model detail links record the selected cohort in `?cohort=`, including `all` and `unversioned`,
 so reopening a link restores the same runs and scores. Links without a cohort resolve to the
