@@ -14,10 +14,8 @@ from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavaila
 from shellbox.machine import HostImage, MachineSpec, NetworkPolicy, PackageSpec, UnsupportedMachineSpec
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
-    CommandSemantics,
     ConversationTrace,
     DockerBuildContext,
-    EnvironmentRequirements,
     GradingAttempt,
     ScriptGrader,
     Source,
@@ -37,18 +35,18 @@ from experiments.post_training.task_curation.datasets.skill2env.tasks import sou
 from experiments.post_training.task_curation.pipeline import source_recipe
 
 
-def exported_row(name: str = "fixture") -> RawRow:
+def exported_row(name: str = "fixture", working_directory: str = "/workspace") -> RawRow:
     files = {
         "instruction.md": b"Repair the answer and keep the checker intact.",
-        "environment/Dockerfile": b"FROM python:3.12-slim\nWORKDIR /workspace\n",
+        "environment/Dockerfile": b"FROM python:3.12-slim\nWORKDIR /opt/dependencies\nWORKDIR /workspace\n",
         "environment/workspace/checker.txt": b"original",
-        "solution/solve.sh": b"echo correct > /workspace/answer.txt\n",
+        "solution/solve.sh": b"echo correct > answer.txt\n",
         "tests/test.sh": b"python3 /tests/check.py\nexit 1\n",
         "tests/check.py": (
             b"""import json
 from pathlib import Path
-answer = Path('/workspace/answer.txt')
-checker = Path('/workspace/checker.txt')
+answer = Path('answer.txt')
+checker = Path('checker.txt')
 rewards = {
     'answer': float(answer.exists() and answer.read_text().strip() == 'correct'),
     'checker': float(checker.exists() and checker.read_text() == 'original'),
@@ -74,7 +72,15 @@ storage_mb = 4096
 """
         ),
     }
-    files["task.toml"] = files["task.toml"].replace(b"skill2env/fixture", f"skill2env/{name}".encode())
+    files["environment/Dockerfile"] = files["environment/Dockerfile"].replace(
+        b"WORKDIR /workspace", f"WORKDIR {working_directory}".encode()
+    )
+    files[f"environment{working_directory}/checker.txt"] = files.pop("environment/workspace/checker.txt")
+    files["task.toml"] = (
+        files["task.toml"]
+        .replace(b"skill2env/fixture", f"skill2env/{name}".encode())
+        .replace(b"/workspace/answer.txt", f"{working_directory}/answer.txt".encode())
+    )
     digest = hashlib.sha256()
     for path in sorted(files):
         digest.update(f"{path}\0{hashlib.sha256(files[path]).hexdigest()}\n".encode())
@@ -173,7 +179,7 @@ def test_unbuilt_export_preserves_contexts_and_private_roles_but_cannot_execute(
     actor_files = {resource.path: resource_bytes(resource) for resource in actor.docker_build.files}
     grader_files = {resource.path: resource_bytes(resource) for resource in grader.docker_build.files}
     assert actor_files == {
-        "Dockerfile": b"FROM python:3.12-slim\nWORKDIR /workspace\n",
+        "Dockerfile": b"FROM python:3.12-slim\nWORKDIR /opt/dependencies\nWORKDIR /workspace\n",
         "workspace/checker.txt": b"original",
     }
     assert grader_files["workspace/checker.txt"] == b"original"
@@ -198,23 +204,26 @@ def test_unbuilt_export_preserves_contexts_and_private_roles_but_cannot_execute(
         ({}, {"answer": 0.0, "checker": 0.0}, 0.0),
     ],
 )
+@pytest.mark.parametrize("working_directory", ["/workspace", "/workspace/fleet"])
 @pytest.mark.asyncio
-async def test_native_script_grades_captured_workspace_and_preserves_components(files, components, score):
-    task = convert_task(exported_row(), ConversionContext({}, None))
+async def test_native_script_grades_captured_workspace_and_preserves_components(
+    files, components, score, working_directory
+):
+    task = convert_task(exported_row(working_directory=working_directory), ConversionContext({}, None))
     assert isinstance(task, TaskSpec) and isinstance(task.grader, ScriptGrader)
     # The fixture uses only stdlib; use a real local sandbox at the machine boundary.
-    environment = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, package_spec=PackageSpec(), working_directory="/workspace"
-    )
+    environment = task.environment_requirements.model_copy(update={"docker_build": None, "package_spec": PackageSpec()})
+    assert task.grader.environment is not None
+    grader_environment = task.grader.environment.model_copy(update={"docker_build": None, "package_spec": PackageSpec()})
     task = task.model_copy(
         update={
             "environment_requirements": environment,
-            "grader": task.grader.model_copy(update={"environment": environment}),
+            "grader": task.grader.model_copy(update={"environment": grader_environment}),
         }
     )
     attempt = GradingAttempt(
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="Done"))),
-        {f"/workspace/{path}": blob for path, blob in files.items()},
+        {f"{working_directory}/{path}": blob for path, blob in files.items()},
     )
     runtime = Path(sys.prefix)
     try:

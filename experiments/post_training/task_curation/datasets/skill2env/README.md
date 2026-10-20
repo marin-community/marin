@@ -1,7 +1,7 @@
 # Skill2Env conversion
 
 The existing `Harbor Hub:skill2env` catalog entry has a conversion recipe for
-network-disabled tasks with a single `/workspace`, native programmatic tests,
+network-disabled tasks whose final Docker working directory is within `/workspace`, native programmatic tests,
 and a reference solution. Acquisition resolves the pinned release through Harbor
 and verifies each downloaded task's content digest using the pinned client in
 `config/external/harbor`. The resolved task list is retained in the export
@@ -21,6 +21,8 @@ Repeat `--task` for more tasks; `--all` selects the release's complete populatio
 Each native task archive is cached at `tasks/<task-reference-hash>.tar.gz`, using a SHA-256
 hash of the full immutable task reference. Its pipeline identity stays the same
 across selections, including when differently named tasks share content.
+Earlier build-time working directories are retained; actor and verifier execution
+use the final literal absolute working directory.
 Conversion retains the native `environment/` files as an
 unresolved `DockerBuildContext`. The verifier context adds workspace clearing
 so submitted deletions are preserved. Private tests and reference solutions

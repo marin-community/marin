@@ -89,8 +89,18 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
     if any(path.startswith("steps/") for path in files):
         return unsupported("native_steps", "Multi-step tasks require a session execution contract")
     dockerfile = files["environment/Dockerfile"].decode()
-    if re.findall(r"(?im)^WORKDIR\s+(\S+)\s*$", dockerfile) != [WORKSPACE]:
-        return unsupported("native_workspace", "Requires exactly one /workspace WORKDIR")
+    final_stage = re.split(r"(?im)^[ \t]*FROM[ \t]+", dockerfile)[-1]
+    workdirs = re.findall(r"(?im)^[ \t]*WORKDIR[ \t]+([^\r\n]*)", final_stage)
+    if not workdirs or re.fullmatch(r"\S+", workdirs[-1].strip()) is None:
+        return unsupported("native_workspace", "Requires a final literal absolute WORKDIR within /workspace")
+    workdir = PurePosixPath(workdirs[-1].strip())
+    if (
+        not workdir.is_relative_to(WORKSPACE)
+        or ".." in workdir.parts
+        or any(character in str(workdir) for character in ("$", "\\", "'", '"'))
+    ):
+        return unsupported("native_workspace", "Requires a final literal absolute WORKDIR within /workspace")
+    working_directory = str(workdir)
     if not all(path.startswith(WORKSPACE + "/") for path in config.get("artifacts", [])):
         return unsupported("native_outputs", "Outputs outside /workspace need another capture contract")
     for section in ("environment", "agent", "verifier"):
@@ -115,7 +125,9 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
     actor_build = DockerBuildContext(files=context)
     # A pristine workspace would resurrect files deleted by the submitted solution.
     verifier_dockerfile = (
-        dockerfile.rstrip() + "\nUSER root\nRUN rm -rf /workspace && mkdir -p /workspace\nWORKDIR /workspace\n"
+        dockerfile.rstrip()
+        + f"\nUSER root\nRUN rm -rf /workspace && mkdir -p {shlex.quote(working_directory)}\n"
+        + f"WORKDIR {working_directory}\n"
     )
     grader_build = DockerBuildContext(
         files=tuple(
@@ -128,13 +140,13 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         capabilities=("shell", "filesystem"),
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=actor_build,
-        working_directory=WORKSPACE,
+        working_directory=working_directory,
         environment_variables={**environment_variables, **config["agent"].get("env", {})},
     )
     verifier_environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=grader_build,
-        working_directory=WORKSPACE,
+        working_directory=working_directory,
         environment_variables=environment_variables,
     )
     verifier = tuple(
@@ -169,7 +181,7 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         answer_format=PlainText(),
         grader=ScriptGrader(
             argv=("python3", f"/tests/{ADAPTER_PATH}"),
-            cwd=WORKSPACE,
+            cwd=working_directory,
             answer_path=None,
             environment=verifier_environment,
             env=config["verifier"].get("env", {}),
