@@ -818,6 +818,9 @@ settings reject the colons in a connection name). `GF_DATABASE_PASSWORD` comes f
 create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.md`) before
 the rollout, or Grafana fails to reach its database.
 
+Grafana's metadata pool is capped at 10 open and 2 idle connections so bursts
+leave capacity for Marina and the other databases on this instance.
+
 IAP is the outer gate. Its `X-Goog-Authenticated-User-Email` header becomes a Grafana
 auth-proxy account. The container's nginx listener adds a fixed `Editor` role for those
 accounts, which lets every admitted person create and expire alert silences. Grafana syncs
