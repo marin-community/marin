@@ -72,6 +72,8 @@ test = [
     "universal-pathlib",
     # for scaling law plotting tests
     "plotly",
+    # SOTOPIA length-control regression tests fit a logistic model.
+    "scikit-learn",
 ]
 lint = [
     "ruff==0.14.3",
