@@ -15,7 +15,7 @@ from typing import Any, cast
 
 from openai import AsyncOpenAI
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.harness.prefill import PrefillHarness
 from rolloutengine.models import (
     GradedRollout,
     GradedRolloutInterrupted,
@@ -89,14 +89,11 @@ async def evaluate_task(
         if actual.messages != expected.messages:
             raise ValueError("Harness conditioning differs from the frozen task")
         request = replace(actual, options=expected.options)
-        turn = await model(request)
-        if turn.message.get("reasoning_content"):
-            raise ValueError("Closure evaluation requires raw text, before reasoning-parser transformations")
-        return turn
+        return await model(request)
 
-    engine = RolloutEngine({}, {"closure": ShellHarness(command_timeout=None)})
+    engine = RolloutEngine({}, {"prefill": PrefillHarness()})
     spec = TaskRolloutSpec(
-        task=task, harness="closure", task_machine=None, verifier_machine=None, limits=limits, trace=trace
+        task=task, harness="prefill", task_machine=None, verifier_machine=None, limits=limits, trace=trace
     )
     engine.check(spec)
     try:
