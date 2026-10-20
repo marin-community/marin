@@ -118,7 +118,7 @@ def build_dashboard_app(
     request_timeout_seconds: float = 600.0,
     shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
 ) -> Starlette:
-    """Build the app fronting a local serving backend without preparing tool ports.
+    """Build the dashboard and reverse proxy for a local serving backend.
 
     Args:
         upstream_base_url: Root URL of the backend's OpenAI server (without ``/v1``).
