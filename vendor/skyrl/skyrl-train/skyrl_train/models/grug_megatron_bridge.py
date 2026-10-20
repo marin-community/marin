@@ -50,10 +50,22 @@ class GrugModelProvider(GPTModelProvider):
     grug_sconv_kernel: int = 4
     grug_sconv_sites: tuple[str, ...] = ()
     grug_hero: bool = False
+    grug_checkpoint_cpu_offload: bool = False
 
     def provide(self, pre_process=None, post_process=None, vp_stage=None) -> GrugGPTModel:
         if self.virtual_pipeline_model_parallel_size:
             raise NotImplementedError("Grug on Megatron does not support virtual pipeline parallelism")
+        if self.grug_checkpoint_cpu_offload:
+            if (
+                self.recompute_granularity != "full"
+                or self.recompute_method != "uniform"
+                or self.pipeline_model_parallel_size < 2
+            ):
+                raise ValueError(
+                    "Grug checkpoint CPU offload requires full/uniform recomputation and pipeline parallelism"
+                )
+            if self.cpu_offloading or self.fine_grained_activation_offloading:
+                raise ValueError("Grug checkpoint CPU offload cannot be combined with other activation offload modes")
         assert self.vocab_size is not None, "vocab_size must be configured before calling provide()"
         assert not self.should_pad_vocab, "Grug keeps the checkpoint vocab size; vLLM pads it on the serving side"
 

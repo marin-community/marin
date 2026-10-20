@@ -150,6 +150,7 @@ def init_worker_with_type(
     num_nodes=1,
     cfg=None,
     num_training_steps: int | None = None,
+    ray_actor_type=None,
 ) -> PPORayActorGroup:
     if cfg is None:
         cfg = get_test_actor_config()
@@ -163,7 +164,7 @@ def init_worker_with_type(
         get_ray_pg_ready_with_timeout(pg, timeout=30)
         num_gpus_per_actor = 0.75
 
-    worker_cls = import_worker(cfg.trainer.strategy, worker_type)
+    worker_cls = import_worker(cfg.trainer.strategy, worker_type) if ray_actor_type is None else ray_actor_type
     model = PPORayActorGroup(
         cfg,
         num_nodes=num_nodes,
