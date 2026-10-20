@@ -1423,7 +1423,9 @@ def segmented_flash_attention_forward_sm100_launcher(
             v_bshd,
             out_bshd,
             lse,
-            softmax_scale,
+            # The score-mod path hands the scale to a ``Float32 | None`` kernel parameter, which does not
+            # convert a Python float.
+            cutlass.Float32(softmax_scale),
             aux_data=utils.AuxData(tensors=aux_tensors),
             blocksparse_tensors=sparse,
             stream=stream,
