@@ -36,6 +36,9 @@ def validate_expert_block_transport(config: Mapping[str, Any]) -> None:
             problems.append("the policy must use tensor_model_parallel_size 1")
         if megatron["expert_tensor_parallel_size"] not in (None, 1):
             problems.append("the policy must use expert_tensor_parallel_size 1")
+        # Expert-block groups do not use the broadcast communicator's channel override.
+        if megatron.get("nccl_max_channels") not in (None, 1):
+            problems.append("expert_block must keep nccl_max_channels at null or 1; use broadcast for more channels")
         # Trainer and engine EP sizes may differ. Whether each divides the expert count is
         # checked when the ranks report.
         if megatron["expert_model_parallel_size"] < 1 or generator["inference_engine_expert_parallel_size"] < 1:
