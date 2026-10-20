@@ -14,9 +14,9 @@ src/taskforge/
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
   content_hash.py              canonical JSON and its sha256 digests
   ledger/                      timed spans to per-workpiece JSONL and, under Iris, Finelog
-  llm/                         the ModelClient protocol, the GLM client and its token-id route, sampling
-                               policy, structured output, call cache, ledger recording, agent loop, web
-                               tools, the RolloutEngine model
+  llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
+                               output, call cache, ledger recording, agent loop, web tools, the
+                               RolloutEngine model
   sandbox/                     MachineFactory selection per host, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
@@ -167,13 +167,11 @@ run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
                     (record: CallLedger)
                       |              |
                       v              v
-          GlmClient.complete      span(LLM_CALL) -> Ledger.record(LedgerEntry)
-          or .generate,                              |-> JsonlLedger   <root>/<workpiece_id>.jsonl
-          retries and holds                          '-> FinelogLedger taskforge.ledger (under Iris)
-                      |
+          GlmClient.complete,     span(LLM_CALL) -> Ledger.record(LedgerEntry)
+          retries and holds                          |-> JsonlLedger   <root>/<workpiece_id>.jsonl
+                      |                              '-> FinelogLedger taskforge.ledger (under Iris)
                       v
           GLM-5.3 router: POST /v1/chat/completions (streamed)
-                          or POST /inference/v1/generate (token ids)
 ```
 
 `llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
@@ -185,10 +183,10 @@ own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each a
 `max_tokens`.
 
 `llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
-the messages trace. Each turn is one streamed chat-completions call with `return_token_ids`, and
-the turn reports the ids the server sent in its chunks (no logprobs are requested), and the call's usage; under
-`TraceMode.MESSAGES` the engine records them without checking them, and a stream without them gives
-a turn with empty ids. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
+the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
+and the call's usage with empty token ids; the rollout model requests neither token ids nor logprobs.
+Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage against the session's
+token budget. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
 
@@ -483,7 +481,8 @@ replace the builder's session limits, and `task_digest(lowered)` hashes what run
 included. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
 `stage50_validate.classify.classify` is the only failure classifier. Every trial runs under the
 engine's messages trace (`EngineSettings.apply`): a trial is graded, never trained on, so the engine
-does not hold its turns to exact tokens. A trial is attempted again for a retryable cause;
+does not hold its turns to exact tokens, and an attempt's `TRIAL` span counts its tokens from each
+turn's `usage`. A trial is attempted again for a retryable cause;
 `TrialPlan.first_attempt` numbers attempts after the ones on disk, so a re-entered trial continues
 where it stopped. `stage50_validate.evidence.Evidence(outcomes).reward_stats(kind)` totals the graded
 trials. `stage50_validate.controls.replay(lowered, controls, plan, settings)` replays each control as

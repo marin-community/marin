@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Self
 
 import pytest
-from rolloutengine.contracts import ModelRequest, ModelTurn
+from rolloutengine.contracts import ModelRequest, ModelTurn, TokenUsage
 from rolloutengine.spec import LoweredTaskSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineSpec, MachineTerminated, Result
@@ -283,9 +283,14 @@ def assistant_shell(command: str, call_id: str = "c1") -> dict[str, Any]:
     }
 
 
+SCRIPTED_USAGE = TokenUsage(prompt_tokens=30, completion_tokens=4)
+
+
 @dataclass
 class ScriptModel:
     """Answers each request with the next of ``messages``, with ids that preserve the served prefix.
+
+    Every turn reports ``SCRIPTED_USAGE``, which the trial's token accounting counts instead of the ids.
 
     From turn ``hang_from`` on, a request waits forever, so only a timeout ends it. With a
     ``barrier``, every request waits until all of the barrier's parties are in flight. ``requests``
@@ -309,7 +314,7 @@ class ScriptModel:
             await self.barrier.wait()
         prompt = (*request.prefix_token_ids, 90) if request.prefix_token_ids else (10, 11)
         stop = "tool_calls" if "tool_calls" in self.messages[index] else "stop"
-        return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), stop)
+        return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), stop, usage=SCRIPTED_USAGE)
 
 
 @dataclass

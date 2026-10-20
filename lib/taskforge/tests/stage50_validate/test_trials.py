@@ -174,9 +174,7 @@ async def test_each_trial_of_a_glm_model_records_and_routes_under_its_own_attemp
     tmp_path, math_task, fakes, fake_glm, fast_provider
 ):
     for _ in range(2):
-        fake_glm.stream(
-            content="395", prompt_tokens=3, completion_tokens=2, prompt_token_ids=(1, 2, 3), token_ids=(4, 5)
-        )
+        fake_glm.stream(content="395", prompt_tokens=3, completion_tokens=2)
     trial_plan = plan(tmp_path, k=2, max_retries=0)
 
     async with GlmClient(fake_source(fake_glm), replace(fast_provider, max_attempts=1)) as client:
@@ -336,7 +334,8 @@ async def test_trials_run_under_the_messages_trace(tmp_path, file_task, fakes):
     assert set(rollout.loss_mask) == {0}
     assert [request.prefix_token_ids for request in model.requests] == [(), ()]
     [entry] = ledger(tmp_path)
-    assert (entry.tokens_in, entry.tokens_out) == (4, 2)
+    # Two turns of 30 prompt and 4 completion tokens each, counted from usage, not from the ids.
+    assert (entry.tokens_in, entry.tokens_out) == (60, 8)
 
 
 async def test_the_attempt_file_keeps_the_steps(tmp_path, file_task, fakes):

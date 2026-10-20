@@ -25,10 +25,9 @@ from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import AttemptOutcome, Completion, ContextExhausted, FinishReason
 from taskforge.llm.glm_client import GlmClient, request_kwargs
-from taskforge.llm.glm_format import parse_turn
 from taskforge.llm.policy import GLM_MAX_OUTPUT_TOKENS, LLMPolicy, Message, ReasoningEffort
 from taskforge.llm.recording import CallLedger
-from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel
+from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import response_format
 from tests.conftest import GLM_MODEL, unique_run_name
 
@@ -342,78 +341,8 @@ def test_rollout_model_turn_is_recorded_in_the_ledger(glm_source, live_provider,
 
     turn = asyncio.run(go())
     [entry] = list(read_entries(ledger.path_for(record_to.workpiece_id)))
-    assert turn.response_token_ids and turn.prompt_token_ids
+    assert (turn.prompt_token_ids, turn.response_token_ids) == ((), ())
+    assert turn.usage is not None and turn.usage.prompt_tokens and turn.usage.completion_tokens
     assert (entry.kind, entry.step, entry.cause) == (EntryKind.LLM_CALL, "solver", None)
-    assert (entry.tokens_in, entry.tokens_out) == (len(turn.prompt_token_ids), len(turn.response_token_ids))
+    assert (entry.tokens_in, entry.tokens_out) == (turn.usage.prompt_tokens, turn.usage.completion_tokens)
     assert entry.attrs["turn"] == "0" and int(entry.attrs["attempts"]) >= 1
-
-
-ORACLE_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "shell",
-            "description": "Run a shell command and return its output.",
-            "parameters": {
-                "type": "object",
-                "properties": {"command": {"type": "string"}, "timeout": {"type": "integer"}},
-                "required": ["command"],
-            },
-        },
-    }
-]
-ORACLE_PROMPTS = {
-    "reply": "Say hello in one short sentence. Do not call any tool.",
-    "one_call": "List the files in /tmp with the shell tool, with a timeout of 30 seconds. Make exactly one call.",
-    "two_calls": (
-        "In one reply, make two shell tool calls: first write a three-line Python script to /tmp/a.py with a "
-        "heredoc (the command spans several lines), then run it with python3."
-    ),
-}
-
-
-def sampled_bytes(completion: Completion) -> list[bytes]:
-    """Each sampled token's bytes, from the logprobs of the call's completed request."""
-    [attempt] = [a for a in completion.attempts if a.outcome is AttemptOutcome.COMPLETED]
-    entries = [
-        entry
-        for event in attempt.events
-        for choice in json.loads(event).get("choices", [])
-        for entry in (choice.get("logprobs") or {}).get("content") or ()
-    ]
-    return [bytes(entry["bytes"]) for entry in entries]
-
-
-@pytest.mark.live_glm
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("case", sorted(ORACLE_PROMPTS))
-def test_live_token_parse_matches_server_parse(glm_source, live_provider, evidence_dir, case):
-    """The oracle for ``glm_format.parse_turn``: the server's own parse of the same sampled tokens."""
-    messages: list[Message] = [{"role": "user", "content": ORACLE_PROMPTS[case]}]
-    policy = LLMPolicy(reasoning_effort=ReasoningEffort.LOW, max_continuations=0)
-    fields = {**TOKEN_FIELDS, "tools": ORACLE_TOOLS}
-
-    async def go() -> Completion:
-        async with GlmClient(glm_source, live_provider) as client:
-            return await client.complete(messages, policy, fields)
-
-    completion = asyncio.run(go())
-    parsed = parse_turn(sampled_bytes(completion), ORACLE_TOOLS, "oracle")
-    ours = (parsed.reasoning, parsed.content, [(c.name, json.loads(c.arguments)) for c in parsed.tool_calls])
-    server = (
-        completion.reasoning,
-        completion.content,
-        [(c.name, json.loads(c.arguments)) for c in completion.tool_calls],
-    )
-    run = record(
-        evidence_dir,
-        f"i_token_parse_{case}",
-        "glm_format.parse_turn of the sampled token bytes against the server's reasoning and tool parsers",
-        request_body(messages, policy, fields),
-        [completion],
-        ours=ours,
-        server=server,
-    )
-    assert completion.finish_reason is not FinishReason.LENGTH
-    assert ours == server
-    promote(evidence_dir, run, f"i_token_parse_{case}")

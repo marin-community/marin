@@ -9,8 +9,7 @@ made up to that point.
 
 Callers go through ``ModelClient`` for free-text replies (``complete``) and for replies validated
 against a pydantic output type (``complete_structured``, which also returns every completion the call took).
-``taskforge.llm.glm_client.GlmClient`` implements it. A call on GLM's token-id route, which samples
-from prompt token ids without a chat template, returns a ``TokenCompletion``.
+``taskforge.llm.glm_client.GlmClient`` implements it.
 """
 
 from collections.abc import Mapping, Sequence
@@ -104,30 +103,6 @@ class Completion:
     attempts: tuple[Attempt, ...]
 
 
-@dataclass(frozen=True)
-class TokenCompletion:
-    """A token-id route call: the sampled ids with their raw logprobs and the bytes each id decodes to.
-
-    A token's bytes can end inside a UTF-8 character, so text comes from joining every token's bytes
-    before decoding (``taskforge.llm.glm_format.decode``). Special tokens arrive as their literal text.
-    """
-
-    token_ids: tuple[int, ...]
-    logprobs: tuple[float, ...]
-    token_bytes: tuple[bytes, ...]
-    finish_reason: FinishReason
-    usage: Usage
-    wall_time: float
-    attempts: tuple[Attempt, ...]
-
-
-class TokenEvidenceError(Exception):
-    """A token-id route response whose ids, logprobs and token bytes do not align, or with a sampled id lacking bytes.
-
-    No retry fixes it, so it is never retried.
-    """
-
-
 class ModelRequestRejected(Exception):
     """The server rejected a request for a reason a retry cannot fix; ``attempts`` ends with that request."""
 
@@ -186,15 +161,3 @@ class ModelClient(Protocol):
     async def complete_structured[T: BaseModel](
         self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]: ...
-
-
-class TokenGenerator(ModelClient, Protocol):
-    """A ``ModelClient`` that also samples from prompt token ids without a chat template.
-
-    ``generate`` raises the errors ``ModelClient`` lists, and ``TokenEvidenceError`` for a response
-    whose ids, logprobs and bytes do not align.
-    """
-
-    async def generate(
-        self, token_ids: Sequence[int], policy: LLMPolicy, *, max_tokens: int, routing_key: str
-    ) -> TokenCompletion: ...

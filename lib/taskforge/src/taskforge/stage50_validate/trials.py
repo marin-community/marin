@@ -22,7 +22,8 @@ Every trial runs under the engine's messages trace (``TaskSessionSpec.trace = ME
 ``EngineSettings.apply``): a trial is graded and never trained on, so the engine records the token
 ids a model reports without checking them, with an all-zero loss mask, and a model's next prompt
 need not extend the ids of its last turn. The attempt span's ``tokens_in`` and
-``tokens_out`` sum the prompt and response ids of the attempt's turns.
+``tokens_out`` sum the ``usage`` of the attempt's turns; a scripted turn reports none and counts
+nothing.
 
 A graded attempt's record says whether the candidate's own code did not load
 (``candidate_code_error``); the span carries ``candidate_code_error="true"`` when it did.
@@ -333,8 +334,9 @@ def record_attempt(
     fields.attrs = _attributes(outcome)
     rollout = outcome.rollout
     if rollout is not None and rollout.steps:
-        fields.tokens_in = sum(len(step.turn.prompt_token_ids) for step in rollout.steps)
-        fields.tokens_out = sum(len(step.turn.response_token_ids) for step in rollout.steps)
+        usages = [step.turn.usage for step in rollout.steps if step.turn.usage is not None]
+        fields.tokens_in = sum(usage.prompt_tokens for usage in usages)
+        fields.tokens_out = sum(usage.completion_tokens for usage in usages)
         fields.finish_reason = rollout.stop_reason
     if isinstance(outcome, Ungraded):
         fields.cause = str(outcome.cause)

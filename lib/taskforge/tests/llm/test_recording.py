@@ -8,7 +8,7 @@ from dataclasses import replace
 
 import pytest
 from pydantic import BaseModel
-from rolloutengine.contracts import ModelRequest
+from rolloutengine.contracts import ModelRequest, TokenUsage
 
 from taskforge.ledger.records import EntryKind, Ledger
 from taskforge.llm.agent import ReasoningReplay, run_agent
@@ -42,15 +42,15 @@ def call_ledger(ledger: Ledger) -> CallLedger:
     return CallLedger(ledger=ledger, workpiece_id="workpiece-1", round=2, step="solver")
 
 
-async def test_rollout_model_records_retried_statuses_and_keeps_served_ids(fake_glm, client, ledger):
+async def test_rollout_model_records_retried_statuses_and_the_turns_usage(fake_glm, client, ledger):
     fake_glm.status(429, "slow down")
     fake_glm.status(503, "busy")
-    fake_glm.stream(content="done", prompt_tokens=3, completion_tokens=2, prompt_token_ids=(1, 2, 3), token_ids=(4, 5))
+    fake_glm.stream(content="done", prompt_tokens=3, completion_tokens=2)
     model = GlmRolloutModel(client, ROLLOUT_POLICY, call_ledger(ledger))
 
     turn = await model(ModelRequest(CONVERSATION, {}, prefix_token_ids=(1, 2), assistant_message_index=None))
 
-    assert (turn.prompt_token_ids, turn.response_token_ids, turn.text) == ((1, 2, 3), (4, 5), "done")
+    assert (turn.text, turn.usage) == ("done", TokenUsage(prompt_tokens=3, completion_tokens=2))
     [entry] = ledger.entries
     assert (entry.kind, entry.workpiece_id, entry.round, entry.step) == (EntryKind.LLM_CALL, "workpiece-1", 2, "solver")
     assert (entry.tokens_in, entry.tokens_out, entry.finish_reason) == (3, 2, "stop")

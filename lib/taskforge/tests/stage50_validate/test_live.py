@@ -102,12 +102,20 @@ def shell_commands(outcome: Outcome) -> list[str]:
     ]
 
 
+def response_tokens(outcome: Outcome) -> int:
+    """The completion tokens the rollout's turns report in their usage; 0 without a rollout."""
+    rollout = outcome.rollout
+    if rollout is None:
+        return 0
+    return sum(step.turn.usage.completion_tokens for step in rollout.steps if step.turn.usage is not None)
+
+
 def outcome_summary(outcome: Outcome) -> dict[str, object]:
     rollout = outcome.rollout
     common = {
         "turns": 0 if rollout is None else len(rollout.steps),
         "stop_reason": None if rollout is None else rollout.stop_reason,
-        "response_tokens": 0 if rollout is None else sum(len(step.turn.response_token_ids) for step in rollout.steps),
+        "response_tokens": response_tokens(outcome),
         "shell_calls": shell_commands(outcome),
         "final_message": None if rollout is None or not rollout.messages else rollout.messages[-1].get("content"),
     }
