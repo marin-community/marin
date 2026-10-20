@@ -111,12 +111,25 @@ class LocalSandbox:
 
 @cache
 def local_sandbox() -> LocalSandbox:
-    """Probe once whether bubblewrap can sandbox commands here (it needs root or user namespaces on Linux)."""
+    """Probe once whether bubblewrap can sandbox commands here (it needs root or user namespaces on Linux).
+
+    The factory overlays the host's system directories copy-on-write in each machine, so a generated task
+    that writes under ``/opt`` or another system directory, through a file it ships or a setup command,
+    runs on bubblewrap instead of falling back to a container. The overlay needs overlayfs and a temporary
+    directory off overlayfs; a host without them has no local factory. Writes keep file permissions, so a
+    write into a root-owned directory needs a root task, as on Iris under the PRIVILEGED profile.
+    """
     # The local backend needs bubblewrap_bin, which installs only on Linux.
-    from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable  # noqa: PLC0415
+    from shellbox.backends.local.machine import (  # noqa: PLC0415
+        LocalMachineFactory,
+        SandboxUnavailable,
+        SystemDirectories,
+    )
 
     try:
-        return LocalSandbox(factory=LocalMachineFactory(), unavailable=None)
+        return LocalSandbox(
+            factory=LocalMachineFactory(system_directories=SystemDirectories.COPY_ON_WRITE), unavailable=None
+        )
     except SandboxUnavailable as error:
         return LocalSandbox(factory=None, unavailable=str(error))
 
