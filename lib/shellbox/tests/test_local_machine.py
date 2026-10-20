@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path, PurePosixPath
 
 import pytest
+from shellbox.backends.local.launch import COMMAND_NICENESS
 from shellbox.backends.local.machine import (
     NPROC_HEADROOM,
     LocalMachine,
@@ -566,6 +567,12 @@ def test_commands_cannot_gain_privileges(factory):
     status = run_command(factory, Command(("cat", "/proc/self/status"))).stdout.decode().splitlines()
     assert "NoNewPrivs:\t1" in status
     assert "CapEff:\t0000000000000000" in status
+
+
+def test_commands_run_below_the_host_process_cpu_priority(factory):
+    # A CPU-bound command must not starve the host process that drives its machine.
+    niceness = run_command(factory, Command(("sh", "-c", "cut -d' ' -f19 /proc/self/stat"))).stdout
+    assert int(niceness) == min(os.nice(0) + COMMAND_NICENESS, 19)
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="RLIMIT_NPROC does not limit root")
