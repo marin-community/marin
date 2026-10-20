@@ -11,4 +11,8 @@ description: Upload or publish model weights to the Hugging Face Hub. Use for mo
 
   Research artifact. This model has not been properly tested or evaluated and is not necessarily secure. Use at your own risk in production settings.
 
-- Check the published `README.md` and `LICENSE` after uploading or updating the model to confirm that the warning, OpenMDW 1.1 license metadata, and full license text are present.
+- For every model upload or update, also include this exact responsible-use paragraph in the model repository's root `README.md`. Preserve the research-artifact warning above; do not add duplicate copies of either paragraph:
+
+  We release our tools to the public with the intent that they are used safely, ethically, and responsibly. They are meant to contribute to the public's understanding of science, and aid in its advancement. By using this Marin model, you agree to comply with all applicable law.
+
+- Check the published `README.md` and `LICENSE` after uploading or updating the model to confirm that the research-artifact warning, responsible-use paragraph, OpenMDW 1.1 license metadata, and full license text are present.
