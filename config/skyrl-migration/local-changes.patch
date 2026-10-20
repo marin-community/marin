@@ -1,0 +1,2373 @@
+diff --git a/cloud/iris/iris_backend.py b/cloud/iris/iris_backend.py
+index bcb3a1c9e0fc102893cfc01acd2ee0e5bbe18b78..68a57e513616bbd2679a9ab7602f154ecad9757e 100644
+--- a/cloud/iris/iris_backend.py
++++ b/cloud/iris/iris_backend.py
+@@ -55,0 +56 @@ from cloud.iris.runtime_bundle import build_runtime_bundle
++from cloud.iris.ray_ports import RayPort
+@@ -285 +285,0 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
+-        ray_port=int(ray["port"]),
+@@ -291 +291 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
+-        runtime_commit=runtime["launcher_commit"],
++        source_digest=runtime["source_digest"],
+@@ -326,2 +326,5 @@ class IrisBackend:
+-        with contextlib.redirect_stdout(sys.stderr):
+-            return launch(args, config.runtime.launcher_commit)
++        with (
++            build_runtime_bundle(config.runtime.source_digest) as workspace,
++            contextlib.redirect_stdout(sys.stderr),
++        ):
++            return launch(args, workspace)
+@@ -808 +811 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
+-def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcome:
++def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
+@@ -810,2 +812,0 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+-    workspace = build_runtime_bundle(expected_launcher_commit)
+-
+@@ -842 +843 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+-    print(f"[rl-iris] Runtime:    {args.runtime_commit} ({args.runtime_profile.value})", flush=True)
++    print(f"[rl-iris] Runtime:    {args.source_digest} ({args.runtime_profile.value})", flush=True)
+@@ -964 +964,0 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+-    env_vars["OT_AGENT_IRIS_RAY_PORT"] = str(args.ray_port)
+@@ -1101 +1101 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+-                setup_scripts=[task_setup_script(args.runtime_commit, args.runtime_profile)],
++                setup_scripts=[task_setup_script(args.source_digest, args.runtime_profile)],
+@@ -1105,0 +1106 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
++            ports=[port.value for port in RayPort],
+diff --git a/cloud/iris/launch.py b/cloud/iris/launch.py
+index 11d36573d6f39da75acbb9177d3b5c2e9d0bf071..d8db13992b94c515e842abeb792832a70fa74aef 100644
+--- a/cloud/iris/launch.py
++++ b/cloud/iris/launch.py
+@@ -22 +22 @@ from cloud.iris.launch_config import SubmissionMode, load_launch_config
+-from cloud.iris.runtime_bundle import runtime_bundle_inputs
++from cloud.iris.runtime_bundle import resolve_launcher_source, runtime_bundle_inputs
+@@ -64 +64 @@ class LaunchResult:
+-    launcher_commit: str
++    source_digest: str
+@@ -138 +138 @@ def _result(
+-        launcher_commit=str(config.runtime.launcher_commit),
++        source_digest=str(config.runtime.source_digest),
+@@ -166 +166 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
+-    runtime_bundle_inputs(str(config.runtime.launcher_commit))
++    runtime_bundle_inputs(str(config.runtime.source_digest))
+@@ -224,0 +225 @@ def create_parser() -> argparse.ArgumentParser:
++    commands.add_parser("source-digest", help="Identify the checked-out runtime, assets, and lock")
+@@ -233,0 +235,3 @@ def main(argv: list[str] | None = None) -> int:
++    if args.component == "source-digest":
++        print(resolve_launcher_source().digest)
++        return 0
+diff --git a/cloud/iris/launch_config.py b/cloud/iris/launch_config.py
+index ea2cda670db60e0525cd3a4277ed63d297a7d5ba..05991c9c729e266b7c781e251b08858362d3475d 100644
+--- a/cloud/iris/launch_config.py
++++ b/cloud/iris/launch_config.py
+@@ -65 +65 @@ class RuntimeConfig:
+-    launcher_commit: str = MISSING
++    source_digest: str = MISSING
+@@ -126 +125,0 @@ class RayConfig:
+-    port: int = 6379
+@@ -314,2 +313 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
+-        ray["port"] <= 0
+-        or ray["rendezvous_timeout"] <= 0
++        ray["rendezvous_timeout"] <= 0
+@@ -320 +318 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
+-            "ray port, rendezvous timeout, and cluster join timeout must be positive; "
++            "ray rendezvous timeout and cluster join timeout must be positive; "
+diff --git a/cloud/iris/open_mopd_evaluation.py b/cloud/iris/open_mopd_evaluation.py
+index 0760045c9b0b21962e5556508bb2b32c608d9f57..d2a3e34a4e4d991704ee49e43c68a0012b867611 100644
+--- a/cloud/iris/open_mopd_evaluation.py
++++ b/cloud/iris/open_mopd_evaluation.py
+@@ -97 +97 @@ class EvaluationLaunchPlan:
+-    launcher_commit: str
++    source_digest: str
+@@ -394,2 +394,2 @@ def build_plan(
+-        "--launcher-commit",
+-        source.commit,
++        "--source-digest",
++        source.digest,
+@@ -445 +445 @@ def build_plan(
+-        launcher_commit=source.commit,
++        source_digest=source.digest,
+diff --git a/cloud/iris/open_mopd_evaluation_task.py b/cloud/iris/open_mopd_evaluation_task.py
+index cb89fd8865481d09c237adc1d4a6eeef118f2855..8ea0905968b77056a74e8334367655f50ac31489 100644
+--- a/cloud/iris/open_mopd_evaluation_task.py
++++ b/cloud/iris/open_mopd_evaluation_task.py
+@@ -454 +454 @@ def argument_parser() -> argparse.ArgumentParser:
+-    parser.add_argument("--launcher-commit", required=True)
++    parser.add_argument("--source-digest", required=True)
+@@ -494 +494 @@ def main(argv: list[str] | None = None) -> int:
+-        "launcher_commit": args.launcher_commit,
++        "source_digest": args.source_digest,
+diff --git a/cloud/iris/open_mopd_fidelity.py b/cloud/iris/open_mopd_fidelity.py
+index 67111a0117ba549679f537ff10738e839c2abcf3..056c5dba9305d6540d9b0ff99c21bbd0754245b8 100644
+--- a/cloud/iris/open_mopd_fidelity.py
++++ b/cloud/iris/open_mopd_fidelity.py
+@@ -138 +138 @@ class FidelityLaunchPlan:
+-    launcher_commit: str
++    source_digest: str
+@@ -375 +375 @@ def _provenance(task_image: str, source: LauncherSource) -> tuple[str, str]:
+-    return source.commit, task_image
++    return source.digest, task_image
+@@ -393 +393 @@ def _iris_command(
+-    launcher_commit: str,
++    source_digest: str,
+@@ -444,2 +444,2 @@ def _iris_command(
+-        "--launcher-commit",
+-        launcher_commit,
++        "--source-digest",
++        source_digest,
+@@ -465 +465 @@ def build_plan(
+-    launcher_commit, pinned_image = _provenance(task_image, launcher_source)
++    source_digest, pinned_image = _provenance(task_image, launcher_source)
+@@ -473 +473 @@ def build_plan(
+-        launcher_commit=launcher_commit,
++        source_digest=source_digest,
+@@ -482 +482 @@ def build_plan(
+-        launcher_commit=launcher_commit,
++        source_digest=source_digest,
+diff --git a/cloud/iris/open_mopd_fidelity_task.py b/cloud/iris/open_mopd_fidelity_task.py
+index db61c67acb9ded58ee4971499eafa1df9966c9fd..fd0b138f83e36aba811add9c510e3944e007a1ea 100644
+--- a/cloud/iris/open_mopd_fidelity_task.py
++++ b/cloud/iris/open_mopd_fidelity_task.py
+@@ -529 +529 @@ def argument_parser() -> argparse.ArgumentParser:
+-    parser.add_argument("--launcher-commit", required=True)
++    parser.add_argument("--source-digest", required=True)
+@@ -546 +546 @@ def main(argv: list[str] | None = None) -> int:
+-        "launcher_commit": args.launcher_commit,
++        "source_digest": args.source_digest,
+diff --git a/cloud/iris/ray_ports.py b/cloud/iris/ray_ports.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b812285b63b453a381fd01cf888f88d6af36771a
+--- /dev/null
++++ b/cloud/iris/ray_ports.py
+@@ -0,0 +1,42 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++"""Ray endpoints allocated by Iris for each task on a shared host."""
++
++import os
++from enum import StrEnum
++
++from iris.cluster.platforms.types import find_free_port
++
++
++class RayPort(StrEnum):
++    HEAD = "ray_head"
++    DASHBOARD = "ray_dashboard"
++    CLIENT = "ray_client"
++    METRICS = "ray_metrics"
++    RUNTIME_ENV_AGENT = "ray_runtime_env_agent"
++    DASHBOARD_AGENT_GRPC = "ray_dashboard_agent_grpc"
++    DASHBOARD_AGENT_LISTEN = "ray_dashboard_agent_listen"
++    NODE_MANAGER = "ray_node_manager"
++    OBJECT_MANAGER = "ray_object_manager"
++
++
++def allocated_ray_port(port: RayPort) -> int:
++    """Return the task's required scheduler allocation for a Ray endpoint."""
++    return int(os.environ[f"IRIS_PORT_{port.value.upper()}"])
++
++
++def resolve_ray_ports() -> None:
++    """Resolve Iris's task-allocated port placeholders before Ray bootstrap."""
++    ports = {port: allocated_ray_port(port) for port in RayPort}
++    reserved = set(ports.values()) - {0}
++    for port, value in ports.items():
++        if value:
++            continue
++        # Kubernetes supplies zero placeholders; worker-backed tasks supply
++        # concrete allocations. Use the same kernel selection as Iris's JAX launcher.
++        value = find_free_port()
++        while value in reserved:
++            value = find_free_port()
++        reserved.add(value)
++        os.environ[f"IRIS_PORT_{port.value.upper()}"] = str(value)
+diff --git a/cloud/iris/rl_config_translation.py b/cloud/iris/rl_config_translation.py
+index b61d02b4c6a6c90f01702e02697f8ddb5ca46e89..2e2fe4080a9f0749ca632263652b6b22ebecf652 100644
+--- a/cloud/iris/rl_config_translation.py
++++ b/cloud/iris/rl_config_translation.py
+@@ -53 +52,0 @@ class RLEntrypoint(StrEnum):
+-    MINI_SWE = "mini_swe"
+@@ -63 +61,0 @@ RL_ENTRYPOINTS = MappingProxyType(
+-        RLEntrypoint.MINI_SWE: "skyrl_train.entrypoints.mini_swe",
+diff --git a/cloud/iris/runtime_bundle.py b/cloud/iris/runtime_bundle.py
+index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..2c739b7eaa3ac46335f8922a849943201780b418 100644
+--- a/cloud/iris/runtime_bundle.py
++++ b/cloud/iris/runtime_bundle.py
+@@ -6 +5,0 @@ import hashlib
+-import importlib.metadata
+@@ -9 +7,0 @@ import shutil
+-import subprocess
+@@ -11 +9,2 @@ import tempfile
+-import tomllib
++from collections.abc import Iterator
++from contextlib import contextmanager
+@@ -13 +11,0 @@ from dataclasses import asdict, dataclass
+-from enum import StrEnum
+@@ -15 +12,0 @@ from pathlib import Path
+-from urllib.parse import unquote, urlparse
+@@ -21,6 +18,9 @@ BUNDLE_IDENTITY_FILE = ".marinskyrl-runtime.json"
+-DISTRIBUTION_NAME = "marinskyrl"
+-
+-
+-class LauncherSourceKind(StrEnum):
+-    CHECKOUT = "checkout"
+-    INSTALLED = "installed"
++PROVENANCE_FILE = Path("marinskyrl/_vendor_provenance.json")
++RUNTIME_SOURCE_PREFIXES = (
++    "cloud/",
++    "marinskyrl/",
++    "chat_templates/",
++    "skyrl-train/skyrl_train/",
++    "skyrl-gym/skyrl_gym/",
++    "open_mopd_versions.py",
++)
+@@ -34,2 +34 @@ class LauncherSource:
+-    commit: str
+-    kind: LauncherSourceKind = LauncherSourceKind.CHECKOUT
++    digest: str
+@@ -46 +45 @@ class RuntimeBundleIdentity:
+-    launcher_commit: str
++    source_digest: str
+@@ -50,61 +48,0 @@ class RuntimeBundleIdentity:
+-def _git_output(root: Path, *args: str) -> str:
+-    return subprocess.run(
+-        ["git", *args],
+-        cwd=root,
+-        check=True,
+-        capture_output=True,
+-        text=True,
+-    ).stdout.strip()
+-
+-
+-def _checkout_root(path: Path) -> Path | None:
+-    """Return the enclosing MarinSkyRL checkout, or None when the path is outside one."""
+-    result = subprocess.run(
+-        ["git", "rev-parse", "--show-toplevel"],
+-        cwd=path,
+-        check=False,
+-        capture_output=True,
+-        text=True,
+-    )
+-    if result.returncode != 0:
+-        return None
+-    root = Path(result.stdout.strip()).resolve()
+-    project_file = root / "pyproject.toml"
+-    if not project_file.is_file() or not (root / BUNDLE_FILE_MANIFEST).is_file():
+-        return None
+-    project = tomllib.loads(project_file.read_text()).get("project", {})
+-    return root if project.get("name") == DISTRIBUTION_NAME else None
+-
+-
+-def _installed_source() -> LauncherSource:
+-    try:
+-        distribution = importlib.metadata.distribution(DISTRIBUTION_NAME)
+-    except importlib.metadata.PackageNotFoundError as error:
+-        raise RuntimeError("Cannot locate an installed marinskyrl distribution outside a checkout") from error
+-    direct_url = distribution.read_text("direct_url.json")
+-    if not direct_url:
+-        raise RuntimeError("Installed marinskyrl distribution has no direct_url.json source identity")
+-
+-    source_identity = json.loads(direct_url)
+-    parsed_url = urlparse(source_identity.get("url", ""))
+-    if parsed_url.scheme == "file":
+-        checkout = Path(unquote(parsed_url.path)).resolve()
+-        if not checkout.is_dir():
+-            raise RuntimeError(f"Installed marinskyrl checkout is missing: {checkout}")
+-        root = _checkout_root(checkout)
+-        if root is None:
+-            raise RuntimeError(f"Installed marinskyrl checkout is missing or invalid: {checkout}")
+-        return LauncherSource(root=root, commit=_git_output(root, "rev-parse", "HEAD"))
+-
+-    vcs_info = source_identity.get("vcs_info")
+-    if not isinstance(vcs_info, dict) or vcs_info.get("vcs") != "git":
+-        raise RuntimeError("Installed marinskyrl distribution does not identify a Git commit")
+-    commit = vcs_info.get("commit_id")
+-    if not isinstance(commit, str) or not commit:
+-        raise RuntimeError("Installed marinskyrl distribution does not identify a Git commit")
+-    root = Path(distribution.locate_file("")).resolve()
+-    if not (root / BUNDLE_FILE_MANIFEST).is_file():
+-        raise RuntimeError(f"Installed marinskyrl distribution is missing {BUNDLE_FILE_MANIFEST}")
+-    return LauncherSource(root=root, commit=commit, kind=LauncherSourceKind.INSTALLED)
+-
+-
+@@ -112,5 +50,6 @@ def resolve_launcher_source() -> LauncherSource:
+-    """Resolve the immutable runtime bytes a launch will ship."""
+-    checkout = _checkout_root(Path.cwd())
+-    if checkout is not None:
+-        return LauncherSource(root=checkout, commit=_git_output(checkout, "rev-parse", "HEAD"))
+-    return _installed_source()
++    """Identify the checked-out runtime source, assets, and independent lock."""
++    files = tuple(
++        RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(PROJECT_ROOT / path))
++        for path in _bundle_paths(PROJECT_ROOT)
++    )
++    return LauncherSource(root=PROJECT_ROOT, digest=_files_digest(files))
+@@ -134,9 +73,18 @@ def read_manifest_paths(root: Path) -> tuple[str, ...]:
+-def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
+-    manifest = source.root / BUNDLE_FILE_MANIFEST
+-    paths: list[Path] = []
+-    for value in read_manifest_paths(source.root):
+-        path = _bundle_relative_path(value)
+-        if path in paths:
+-            raise ValueError(f"Runtime bundle manifest contains a duplicate path: {value}")
+-        if not (source.root / path).is_file():
+-            raise FileNotFoundError(f"Runtime bundle file does not exist: {value}")
++def _bundle_paths(root: Path) -> tuple[Path, ...]:
++    names = set(read_manifest_paths(root))
++    names.update({BUNDLE_FILE_MANIFEST.as_posix(), PROVENANCE_FILE.as_posix(), "pyproject.toml", "uv.lock"})
++    for prefix in RUNTIME_SOURCE_PREFIXES:
++        source = root / prefix
++        if source.is_dir():
++            names.update(path.relative_to(root).as_posix() for path in source.rglob("*") if path.is_file())
++        elif source.is_file():
++            names.add(prefix)
++    paths = []
++    for name in sorted(names):
++        path = _bundle_relative_path(name)
++        if {"tests", "__pycache__"}.intersection(path.parts) or path.suffix in {".pyc", ".pyo"}:
++            continue
++        original = root / path
++        original.resolve().relative_to(root.resolve())
++        if not original.is_file():
++            raise FileNotFoundError(f"Runtime source file is missing: {name}")
+@@ -144,2 +91,0 @@ def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
+-    if not paths:
+-        raise ValueError(f"Runtime bundle manifest is empty: {manifest}")
+@@ -149,10 +95,3 @@ def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
+-def _reject_uncommitted_runtime(source: LauncherSource, paths: tuple[Path, ...]) -> None:
+-    if source.kind is LauncherSourceKind.INSTALLED:
+-        return
+-    relative_paths = [BUNDLE_FILE_MANIFEST.as_posix(), *(path.as_posix() for path in paths)]
+-    status = _git_output(source.root, "status", "--porcelain", "--untracked-files=all", "--", *relative_paths)
+-    if status:
+-        raise RuntimeError(
+-            "Runtime bundle inputs contain uncommitted changes, so launcher_commit cannot identify their bytes:\n"
+-            f"{status}"
+-        )
++def _files_digest(files: tuple[RuntimeBundleFile, ...]) -> str:
++    encoded = json.dumps([(entry.path, entry.sha256) for entry in files], separators=(",", ":")).encode()
++    return hashlib.sha256(encoded).hexdigest()
+@@ -170 +109 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+-    """Verify the files synced into an Iris task and return their launcher commit."""
++    """Verify the files synced into an Iris task and return their source digest."""
+@@ -178 +117 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+-    launcher_commit = value.get("launcher_commit")
++    source_digest = value.get("source_digest")
+@@ -180 +119 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+-    if not isinstance(launcher_commit, str) or not isinstance(file_values, list):
++    if not isinstance(source_digest, str) or not isinstance(file_values, list):
+@@ -196 +135,4 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+-    return launcher_commit
++    actual = tuple(RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(root / path)) for path in _bundle_paths(root))
++    if _files_digest(actual) != source_digest or _files_digest(tuple(files)) != source_digest:
++        raise ValueError("Bundled source files do not match the selected runtime identity")
++    return source_digest
+@@ -199 +141 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+-def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource, tuple[Path, ...]]:
++def runtime_bundle_inputs(expected_source_digest: str) -> tuple[LauncherSource, tuple[Path, ...]]:
+@@ -202 +144 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
+-    if source.commit != expected_launcher_commit:
++    if source.digest != expected_source_digest:
+@@ -204 +146 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
+-            f"Selected launcher checkout commit {source.commit} does not match requested {expected_launcher_commit}"
++            f"Selected runtime source identity {source.digest} does not match requested {expected_source_digest}"
+@@ -206,2 +148 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
+-    paths = _bundle_paths(source)
+-    _reject_uncommitted_runtime(source, paths)
++    paths = _bundle_paths(source.root)
+@@ -211,14 +152,18 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
+-def build_runtime_bundle(expected_launcher_commit: str) -> Path:
+-    """Copy the selected runtime files into an Iris workspace."""
+-    source, paths = runtime_bundle_inputs(expected_launcher_commit)
+-
+-    workspace = Path(tempfile.mkdtemp(prefix="marinskyrl-runtime-bundle-"))
+-    files: list[RuntimeBundleFile] = []
+-    for relative_path in paths:
+-        destination = workspace / relative_path
+-        destination.parent.mkdir(parents=True, exist_ok=True)
+-        shutil.copy2(source.root / relative_path, destination)
+-        files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
+-    identity = RuntimeBundleIdentity(launcher_commit=source.commit, files=tuple(files))
+-    (workspace / BUNDLE_IDENTITY_FILE).write_text(json.dumps(asdict(identity), indent=2, sort_keys=True) + "\n")
+-    return workspace
++@contextmanager
++def build_runtime_bundle(expected_source_digest: str) -> Iterator[Path]:
++    """Own the copied Iris workspace until submission and supervision finish."""
++    source, paths = runtime_bundle_inputs(expected_source_digest)
++
++    with tempfile.TemporaryDirectory(prefix="marinskyrl-runtime-bundle-") as directory:
++        workspace = Path(directory)
++        files: list[RuntimeBundleFile] = []
++        for relative_path in paths:
++            destination = workspace / relative_path
++            destination.parent.mkdir(parents=True, exist_ok=True)
++            shutil.copy2(source.root / relative_path, destination)
++            files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
++        identity = RuntimeBundleIdentity(source_digest=source.digest, files=tuple(files))
++        if _files_digest(identity.files) != expected_source_digest:
++            raise ValueError("Runtime source changed while building its bundle")
++        (workspace / BUNDLE_IDENTITY_FILE).write_text(json.dumps(asdict(identity), indent=2, sort_keys=True) + "\n")
++        yield workspace
+diff --git a/cloud/iris/runtime_environment.py b/cloud/iris/runtime_environment.py
+index 040e332390eb5ba18c7b3099b3f3f72609a3a588..2c1d14460ce824862bcbabfc645bd3d8bfeef5da 100644
+--- a/cloud/iris/runtime_environment.py
++++ b/cloud/iris/runtime_environment.py
+@@ -9,2 +9 @@ from enum import StrEnum
+-MARINSKYRL_REPOSITORY = "https://github.com/marin-community/MarinSkyRL.git"
+-MARINSKYRL_TASK_ROOT = "/app/marinskyrl"
++MARINSKYRL_TASK_ROOT = "/app"
+@@ -47,2 +46,2 @@ def runtime_profile_for_strategy(
+-def task_setup_script(commit: str, profile: RuntimeProfile) -> str:
+-    """Build the Iris setup script for a frozen SkyRL checkout and dependency profile."""
++def task_setup_script(source_digest: str, profile: RuntimeProfile) -> str:
++    """Verify bundled source and install its independently frozen dependency profile."""
+@@ -54,5 +53,2 @@ checkout={shlex.quote(checkout)}
+-git init -q "$checkout"
+-git -C "$checkout" remote add origin {shlex.quote(MARINSKYRL_REPOSITORY)}
+-git -C "$checkout" fetch --depth=1 origin {shlex.quote(commit)}
+-git -C "$checkout" checkout -q --detach FETCH_HEAD
+-test "$(git -C "$checkout" rev-parse HEAD)" = {shlex.quote(commit)}
++cd "$checkout"
++python3.12 -c {shlex.quote('from cloud.iris.runtime_bundle import validate_bundled_runtime; assert validate_bundled_runtime() == ' + repr(source_digest))}
+diff --git a/cloud/iris/skyrl_entrypoint.py b/cloud/iris/skyrl_entrypoint.py
+index 9fb5a71ffa4317ad024112dbcf508eedaa89b722..d3f6b9513bfc79975a0aa0a6b7a53b659e31679a 100644
+--- a/cloud/iris/skyrl_entrypoint.py
++++ b/cloud/iris/skyrl_entrypoint.py
+@@ -24 +24 @@ def run_config(config_path: Path) -> None:
+-                "launcher_commit": str(config.runtime.launcher_commit),
++                "source_digest": str(config.runtime.source_digest),
+diff --git a/cloud/iris/task_runtime.py b/cloud/iris/task_runtime.py
+index 5f7d72c486ca1e1cd327ff4149cdba1c784ba407..606217487f868ce979c71088c4dd6ee30da6f0ec 100644
+--- a/cloud/iris/task_runtime.py
++++ b/cloud/iris/task_runtime.py
+@@ -84,0 +85 @@ from cloud.iris.paths import resolve_repo_path
++from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
+@@ -1011,23 +1011,0 @@ def clear_rendezvous(rendezvous_dir: str) -> None:
+-# Ray port allocation on cw-us-east-02a — PIN every named system port OUTSIDE the
+-# worker_ports range so Ray's own randomized agent ports can never collide with it.
+-#
+-# Ray assigns several system components (metrics_export, runtime_env_agent,
+-# dashboard_agent_grpc, dashboard_agent_listen, node/object_manager) by picking a
+-# RANDOM free port from the same ephemeral zone as the default worker_ports range
+-# (10002–19999), and Ray's pre-start validation aborts the node when a random agent
+-# port lands inside worker_ports:
+-#   ValueError: Ray component worker_ports is trying to use a port number <N>
+-#   that is used by other components.
+-# Shifting worker_ports does NOT help — the random agent ports follow. The fix:
+-# keep worker_ports at Ray's DEFAULT 10002–19999 and PIN every agent port Ray would
+-# otherwise randomize to a fixed value in the low 8xxx band — OUTSIDE 10002–19999 and
+-# distinct from gcs(6379)/dashboard(8265)/client_server(10001). Applied on BOTH head
+-# and worker.
+-RAY_METRICS_EXPORT_PORT = 8090
+-RAY_RUNTIME_ENV_AGENT_PORT = 8092
+-RAY_DASHBOARD_AGENT_GRPC_PORT = 8093
+-RAY_DASHBOARD_AGENT_LISTEN_PORT = 8094
+-RAY_NODE_MANAGER_PORT = 8076
+-RAY_OBJECT_MANAGER_PORT = 8077
+-
+-
+@@ -1035,4 +1013,2 @@ def _ray_port_flags() -> list[str]:
+-    """Ray port flags shared by head + worker: pin EVERY named system port that Ray
+-    would otherwise randomize to a fixed value OUTSIDE the default worker_ports range
+-    (10002–19999), so no random agent port can ever collide with worker_ports (see the
+-    collision note above). worker_ports is left at Ray's default."""
++    # Iris tasks share host networking. Named endpoints must use scheduler allocations;
++    # worker processes ask the kernel for ports outside Iris's reserved allocation range.
+@@ -1040,6 +1016,8 @@ def _ray_port_flags() -> list[str]:
+-        f"--metrics-export-port={RAY_METRICS_EXPORT_PORT}",
+-        f"--runtime-env-agent-port={RAY_RUNTIME_ENV_AGENT_PORT}",
+-        f"--dashboard-agent-grpc-port={RAY_DASHBOARD_AGENT_GRPC_PORT}",
+-        f"--dashboard-agent-listen-port={RAY_DASHBOARD_AGENT_LISTEN_PORT}",
+-        f"--node-manager-port={RAY_NODE_MANAGER_PORT}",
+-        f"--object-manager-port={RAY_OBJECT_MANAGER_PORT}",
++        f"--metrics-export-port={allocated_ray_port(RayPort.METRICS)}",
++        f"--runtime-env-agent-port={allocated_ray_port(RayPort.RUNTIME_ENV_AGENT)}",
++        f"--dashboard-agent-grpc-port={allocated_ray_port(RayPort.DASHBOARD_AGENT_GRPC)}",
++        f"--dashboard-agent-listen-port={allocated_ray_port(RayPort.DASHBOARD_AGENT_LISTEN)}",
++        f"--node-manager-port={allocated_ray_port(RayPort.NODE_MANAGER)}",
++        f"--object-manager-port={allocated_ray_port(RayPort.OBJECT_MANAGER)}",
++        "--min-worker-port=0",
++        "--max-worker-port=0",
+@@ -1118 +1095,0 @@ def ray_start_head(
+-    ray_port: int,
+@@ -1127 +1104,3 @@ def ray_start_head(
+-        f"--port={ray_port}",
++        f"--port={allocated_ray_port(RayPort.HEAD)}",
++        f"--dashboard-port={allocated_ray_port(RayPort.DASHBOARD)}",
++        f"--ray-client-server-port={allocated_ray_port(RayPort.CLIENT)}",
+@@ -1801 +1780 @@ def run_head(
+-    ray_port = args.ray_port
++    ray_port = allocated_ray_port(RayPort.HEAD)
+@@ -1852 +1830,0 @@ def run_head(
+-        ray_port,
+@@ -1881 +1859 @@ def run_head(
+-    with ray_metrics_telemetry(head_ip, RAY_METRICS_EXPORT_PORT, CONTROLLER_ROLE):
++    with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
+@@ -2009 +1987 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
+-    with ray_metrics_telemetry(node_ip, RAY_METRICS_EXPORT_PORT, WORKER_ROLE):
++    with ray_metrics_telemetry(node_ip, allocated_ray_port(RayPort.METRICS), WORKER_ROLE):
+@@ -2069 +2046,0 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
+-        ray_port=int(config.ray.port),
+@@ -2249,0 +2227 @@ def main() -> None:
++    resolve_ray_ports()
+diff --git a/cloud/iris/tests/conftest.py b/cloud/iris/tests/conftest.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a0b7f6b8b896dc2611b72f23921961d04f2badc9
+--- /dev/null
++++ b/cloud/iris/tests/conftest.py
+@@ -0,0 +1,14 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++import pytest
++
++from cloud.iris.ray_ports import RayPort
++
++
++@pytest.fixture
++def iris_ray_ports(monkeypatch):
++    ports = {port: 12000 + index for index, port in enumerate(RayPort)}
++    for port, value in ports.items():
++        monkeypatch.setenv(f"IRIS_PORT_{port.value.upper()}", str(value))
++    return ports
+diff --git a/cloud/iris/tests/test_launch_config.py b/cloud/iris/tests/test_launch_config.py
+index e8b2629de3f789cdf13a6ab8e433d3ca9a6ea8fd..d8377728e54734aa12d195750a73e44178032728 100644
+--- a/cloud/iris/tests/test_launch_config.py
++++ b/cloud/iris/tests/test_launch_config.py
+@@ -41 +41 @@ def _raw_config() -> dict[str, Any]:
+-            "launcher_commit": "a" * 40,
++            "source_digest": "a" * 64,
+@@ -60 +59,0 @@ def _raw_config() -> dict[str, Any]:
+-            "port": 6379,
+diff --git a/cloud/iris/tests/test_open_mopd_evaluation.py b/cloud/iris/tests/test_open_mopd_evaluation.py
+index 841ae67e8fe703957117561ee592b95cb72fc77e..db5f2254a7cedb7178d9e02b6e7977ad9c138e7b 100644
+--- a/cloud/iris/tests/test_open_mopd_evaluation.py
++++ b/cloud/iris/tests/test_open_mopd_evaluation.py
+@@ -246 +246 @@ def test_native_model_evaluation_plan_selects_export_without_reference_model(mon
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+@@ -289 +289 @@ def test_dry_run_exposes_immutable_inputs_without_submitting(
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+@@ -319 +319 @@ def test_submission_requires_omission_acknowledgement(
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+@@ -339 +339 @@ def test_distinct_output_prefixes_produce_distinct_job_names(monkeypatch: pytest
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+@@ -356 +356 @@ def test_checkpoint_evaluation_plan_selects_durable_actor_checkpoint(monkeypatch
+-    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(evaluation, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+diff --git a/cloud/iris/tests/test_open_mopd_fidelity.py b/cloud/iris/tests/test_open_mopd_fidelity.py
+index 6657534dd4f715b8d822fc9655fbf223555ce7f7..cf24a7ef4f27245053980243aea03577bbe1db3a 100644
+--- a/cloud/iris/tests/test_open_mopd_fidelity.py
++++ b/cloud/iris/tests/test_open_mopd_fidelity.py
+@@ -28,14 +27,0 @@ OUTPUT_URI = "s3://bucket/open-mopd/one-step"
+-RELEASED_SCORER_PACKAGES = {
+-    "absl-py",
+-    "appdirs",
+-    "emoji",
+-    "immutabledict",
+-    "jsonlines",
+-    "langdetect",
+-    "nltk",
+-    "syllapy",
+-    "tempdir",
+-    "wget",
+-}
+-
+-
+@@ -50,6 +35,0 @@ def test_runtime_accepts_cuda_local_version_for_public_release(monkeypatch: pyte
+-def test_runtime_manifest_includes_released_scorer_dependencies() -> None:
+-    config = fidelity.load_config(fidelity.DEFAULT_CONFIG)
+-
+-    assert RELEASED_SCORER_PACKAGES <= config.environment.packages.keys()
+-
+-
+@@ -482 +462 @@ def test_cli_dry_run_does_not_submit(monkeypatch: pytest.MonkeyPatch, capsys: py
+-    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+@@ -496 +476 @@ def test_submission_requires_deviation_acknowledgement(
+-    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
++    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
+diff --git a/cloud/iris/tests/test_packaging_boundary.py b/cloud/iris/tests/test_packaging_boundary.py
+index afd4696d3fda03940d52fa4ce014e72aa1a2606b..a82129d476308022364370c35d941d18370199a7 100644
+--- a/cloud/iris/tests/test_packaging_boundary.py
++++ b/cloud/iris/tests/test_packaging_boundary.py
+@@ -16,0 +17 @@ REPOSITORY_ROOT = Path(__file__).parents[3]
++        ("skyrl_train.hf_export", ("flash_attn", "ray", "torch", "vllm")),
+@@ -43,22 +43,0 @@ print(json.dumps(sorted(name for name in blocked if name in sys.modules)))
+-
+-
+-def test_importing_hf_export_does_not_import_training_stacks() -> None:
+-    """The launcher's export step imports skyrl_train.hf_export in a torch-free environment."""
+-    program = """
+-import json
+-import sys
+-
+-import skyrl_train.hf_export
+-
+-blocked = ("flash_attn", "ray", "torch", "vllm")
+-print(json.dumps(sorted(name for name in blocked if name in sys.modules)))
+-"""
+-    result = subprocess.run(
+-        [sys.executable, "-c", program],
+-        cwd=REPOSITORY_ROOT,
+-        check=True,
+-        capture_output=True,
+-        text=True,
+-    )
+-
+-    assert json.loads(result.stdout) == []
+diff --git a/cloud/iris/tests/test_ray_spill_policy.py b/cloud/iris/tests/test_ray_spill_policy.py
+index e4b655e087325225d4873dd1f733afc22829f123..4949e357801c8705fa016fa90c4b8a4bab0298d6 100644
+--- a/cloud/iris/tests/test_ray_spill_policy.py
++++ b/cloud/iris/tests/test_ray_spill_policy.py
+@@ -1,0 +2 @@ import re
++import socket
+@@ -2,0 +4 @@ import sys
++from contextlib import ExitStack
+@@ -5,0 +8 @@ import pytest
++from ray._private.parameter import RayParams
+@@ -11,0 +15 @@ from cloud.iris import task_runtime as runtime  # noqa: E402
++from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports  # noqa: E402
+@@ -19,0 +24,46 @@ from cloud.iris.ray_storage import (  # noqa: E402
++pytestmark = pytest.mark.usefixtures("iris_ray_ports")
++
++
++@pytest.mark.parametrize("first_ports", [(12000, 12100), (0, 0)], ids=["worker", "kubernetes"])
++def test_concurrent_ray_heads_use_disjoint_ports(tmp_path, monkeypatch, first_ports):
++    commands = []
++    monkeypatch.setattr(runtime.subprocess, "run", lambda command, **_kwargs: commands.append(command))
++    endpoints = []
++    with ExitStack() as listeners:
++        for first_port in first_ports:
++            requested = {port: first_port + index if first_port else 0 for index, port in enumerate(RayPort)}
++            for port, value in requested.items():
++                monkeypatch.setenv(f"IRIS_PORT_{port.value.upper()}", str(value))
++            resolve_ray_ports()
++            allocated = {port: allocated_ray_port(port) for port in RayPort}
++            if not first_port:
++                # Hold the real kernel-selected ports while resolving the next task.
++                for value in allocated.values():
++                    listener = listeners.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
++                    listener.bind(("", value))
++            runtime.ray_start_head("127.0.0.1", LocalRaySpillTarget(str(tmp_path / str(first_port))))
++            flags = dict(argument.split("=", 1) for argument in commands[-1] if "=" in argument)
++            ports = {
++                "gcs_server_port": int(flags["--port"]),
++                "dashboard_port": int(flags["--dashboard-port"]),
++                "ray_client_server_port": int(flags["--ray-client-server-port"]),
++                "metrics_export_port": int(flags["--metrics-export-port"]),
++                "runtime_env_agent_port": int(flags["--runtime-env-agent-port"]),
++                "metrics_agent_port": int(flags["--dashboard-agent-grpc-port"]),
++                "dashboard_agent_listen_port": int(flags["--dashboard-agent-listen-port"]),
++                "node_manager_port": int(flags["--node-manager-port"]),
++                "object_manager_port": int(flags["--object-manager-port"]),
++            }
++            # Iris allocates in Ray's old default worker range. Validate the actual
++            # pinned Ray parameters so agents cannot conflict with worker ports.
++            parameters = RayParams(
++                **ports,
++                min_worker_port=int(flags["--min-worker-port"]),
++                max_worker_port=int(flags["--max-worker-port"]),
++            )
++            parameters.update_pre_selected_port()
++            assert ports["gcs_server_port"] == allocated[RayPort.HEAD]
++            assert set(ports.values()) == set(allocated.values())
++            endpoints.append(set(ports.values()))
++    assert endpoints[0].isdisjoint(endpoints[1])
++
+@@ -66 +116 @@ def test_local_spill_directory_exists_before_ray_start(tmp_path, monkeypatch, ro
+-        runtime.ray_start_head("10.0.0.1", 6379, target)
++        runtime.ray_start_head("10.0.0.1", target)
+diff --git a/cloud/iris/tests/test_task_runtime_debug_artifacts.py b/cloud/iris/tests/test_task_runtime_debug_artifacts.py
+index 39e7e82aa1d928be9357d7a9612d6316bea65719..c1f35e6007d1abcf7565b180fbae21d5b705534f 100644
+--- a/cloud/iris/tests/test_task_runtime_debug_artifacts.py
++++ b/cloud/iris/tests/test_task_runtime_debug_artifacts.py
+@@ -12,0 +13 @@ from cloud.iris import task_runtime
++from cloud.iris.ray_ports import RayPort
+@@ -24,0 +26,2 @@ from marinskyrl.environment_contract import (
++pytestmark = pytest.mark.usefixtures("iris_ray_ports")
++
+@@ -31 +34,3 @@ from marinskyrl.environment_contract import (
+-def test_supervisors_share_worker_diagnostics_with_uploader(tmp_path: Path, monkeypatch, rank, mode, explicit_root):
++def test_supervisors_share_worker_diagnostics_with_uploader(
++    tmp_path: Path, monkeypatch, rank, mode, explicit_root, iris_ray_ports
++):
+@@ -45 +49,0 @@ def test_supervisors_share_worker_diagnostics_with_uploader(tmp_path: Path, monk
+-        ray_port=6379,
+@@ -52 +56 @@ def test_supervisors_share_worker_diagnostics_with_uploader(tmp_path: Path, monk
+-    task_runtime.write_rendezvous(args.rendezvous_dir, "192.0.2.1", args.ray_port, "test-gang")
++    task_runtime.write_rendezvous(args.rendezvous_dir, "192.0.2.1", iris_ray_ports[RayPort.HEAD], "test-gang")
+diff --git a/cloud/iris/tests/test_task_runtime_source_selection.py b/cloud/iris/tests/test_task_runtime_source_selection.py
+index 674543c7b6e35b4703eaf4a630a649ffc48fcfcf..69e2ac19f213a67182ff1e3cb98a2a53c7587476 100644
+--- a/cloud/iris/tests/test_task_runtime_source_selection.py
++++ b/cloud/iris/tests/test_task_runtime_source_selection.py
+@@ -10,0 +11 @@ from types import SimpleNamespace
++import pytest
+@@ -14,0 +16,2 @@ from marinskyrl.environment_contract import DEBUG_ARTIFACT_DIR_ENV
++pytestmark = pytest.mark.usefixtures("iris_ray_ports")
++
+@@ -90 +92,0 @@ def _runtime_args(
+-        ray_port=6379,
+diff --git a/cloud/iris/tests/test_tinker_opd_aime24_submission.py b/cloud/iris/tests/test_tinker_opd_aime24_submission.py
+deleted file mode 100644
+index c1dc549bf3fe0013872ef3c0b9d6408eae804a19..0000000000000000000000000000000000000000
+--- a/cloud/iris/tests/test_tinker_opd_aime24_submission.py
++++ /dev/null
+@@ -1,143 +0,0 @@
+-import importlib.util
+-import json
+-import sys
+-from collections.abc import Iterator
+-from contextlib import contextmanager
+-from pathlib import Path
+-from types import SimpleNamespace
+-from typing import Any
+-
+-import pytest
+-
+-SUBMITTER_PATH = Path(__file__).parents[3] / "skyrl-train" / "ci" / "opd" / "tinker_repro" / "submit_iris.py"
+-sys.path.insert(0, str(SUBMITTER_PATH.parent))
+-SPEC = importlib.util.spec_from_file_location("tinker_opd_aime24_submitter", SUBMITTER_PATH)
+-assert SPEC is not None and SPEC.loader is not None
+-submitter = importlib.util.module_from_spec(SPEC)
+-sys.modules[SPEC.name] = submitter
+-SPEC.loader.exec_module(submitter)
+-
+-
+-def test_submit_sends_secret_only_in_environment_and_requests_cpu_worker(monkeypatch) -> None:
+-    captured: dict[str, Any] = {}
+-
+-    class Client:
+-        def submit(self, **kwargs: Any) -> SimpleNamespace:
+-            captured["submit"] = kwargs
+-            return SimpleNamespace(job_id="/ben/tinker-opd-aime24")
+-
+-    @contextmanager
+-    def open_iris_client(*, cluster_name: str, workspace: Path) -> Iterator[Client]:
+-        yield Client()
+-
+-    monkeypatch.setattr(submitter, "open_iris_client", open_iris_client)
+-    api_key = "sentinel-tinker-api-key"
+-    job_id = submitter.submit(
+-        submitter.SubmissionConfig(
+-            checkpoint="tinker://released/sampler_weights/final",
+-            save_dir="s3://evaluation/results",
+-            max_examples=1,
+-        ),
+-        tinker_api_key=api_key,
+-    )
+-
+-    request = captured["submit"]
+-    assert job_id == "/ben/tinker-opd-aime24"
+-    assert request["environment"].env_vars == {"TINKER_API_KEY": api_key}
+-    assert api_key not in request["entrypoint"].command
+-    assert not request["resources"].to_proto().HasField("device")
+-    assert request["max_retries_failure"] == 0
+-    assert request["max_task_failures"] == 0
+-
+-
+-def test_cli_defaults_to_non_secret_dry_run(monkeypatch, capsys, tmp_path: Path) -> None:
+-    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+-    monkeypatch.setattr(submitter, "submit", lambda *args, **kwargs: pytest.fail("dry run submitted a job"))
+-    monkeypatch.setattr(
+-        submitter,
+-        "load_secrets_env_into_os_environ",
+-        lambda path: pytest.fail("dry run read the secrets file"),
+-    )
+-    secrets_env = tmp_path / "explicit-secrets.env"
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--checkpoint",
+-                "tinker://released/sampler_weights/final",
+-                "--save-dir",
+-                "s3://evaluation/unique-run",
+-                "--max-examples",
+-                "1",
+-                "--secrets-env",
+-                str(secrets_env),
+-            ]
+-        )
+-        == 0
+-    )
+-    output = capsys.readouterr().out
+-    plan = json.loads(output.split("\nDry run only.", 1)[0])
+-    assert plan["cluster"] == "cw-rno2a"
+-    assert plan["checkpoint"] == "tinker://released/sampler_weights/final"
+-    assert plan["save_dir"] == "s3://evaluation/unique-run"
+-    assert plan["max_examples"] == 1
+-    assert plan["secrets_env"] == str(secrets_env)
+-    assert "TINKER_API_KEY" not in output
+-
+-
+-def test_cli_submit_loads_export_assignment_before_key_lookup(monkeypatch, capsys, tmp_path: Path) -> None:
+-    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+-    secrets_env = tmp_path / "submit-secrets.env"
+-    secrets_env.write_text("export TINKER_API_KEY='sentinel-tinker'\n")
+-    captured: dict[str, Any] = {}
+-
+-    def submit(config: Any, *, tinker_api_key: str) -> str:
+-        captured["config"] = config
+-        captured["tinker_api_key"] = tinker_api_key
+-        return "/ben/tinker-opd-aime24"
+-
+-    monkeypatch.setattr(submitter, "submit", submit)
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--checkpoint",
+-                "tinker://released/sampler_weights/final",
+-                "--save-dir",
+-                "s3://evaluation/unique-submit",
+-                "--secrets-env",
+-                str(secrets_env),
+-                "--submit",
+-            ]
+-        )
+-        == 0
+-    )
+-
+-    assert captured == {
+-        "config": submitter.SubmissionConfig(
+-            checkpoint="tinker://released/sampler_weights/final",
+-            save_dir="s3://evaluation/unique-submit",
+-            max_examples=None,
+-            secrets_env=str(secrets_env),
+-        ),
+-        "tinker_api_key": "sentinel-tinker",
+-    }
+-    assert "/ben/tinker-opd-aime24" in capsys.readouterr().out
+-
+-
+-def test_cli_submission_requires_key(monkeypatch, capsys, tmp_path: Path) -> None:
+-    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+-
+-    with pytest.raises(SystemExit, match="TINKER_API_KEY must be set"):
+-        submitter.main(
+-            [
+-                "--checkpoint",
+-                "tinker://released/sampler_weights/final",
+-                "--save-dir",
+-                "s3://evaluation/unique-run",
+-                "--secrets-env",
+-                str(tmp_path / "missing.env"),
+-                "--submit",
+-            ]
+-        )
+-    capsys.readouterr()
+diff --git a/cloud/iris/tests/test_tinker_opd_training_submission.py b/cloud/iris/tests/test_tinker_opd_training_submission.py
+deleted file mode 100644
+index 8008dac314a36f9cf0fbf7256155d19b9ee8b8e3..0000000000000000000000000000000000000000
+--- a/cloud/iris/tests/test_tinker_opd_training_submission.py
++++ /dev/null
+@@ -1,205 +0,0 @@
+-import importlib.util
+-import json
+-import sys
+-from collections.abc import Iterator
+-from contextlib import contextmanager
+-from decimal import Decimal
+-from pathlib import Path
+-from types import SimpleNamespace
+-from typing import Any
+-
+-import pytest
+-
+-MODULE_DIR = Path(__file__).parents[3] / "skyrl-train" / "ci" / "opd" / "tinker_repro"
+-sys.path.insert(0, str(MODULE_DIR))
+-SUBMITTER_PATH = MODULE_DIR / "submit_training_iris.py"
+-SPEC = importlib.util.spec_from_file_location("tinker_opd_training_submitter", SUBMITTER_PATH)
+-assert SPEC is not None and SPEC.loader is not None
+-submitter = importlib.util.module_from_spec(SPEC)
+-sys.modules[SPEC.name] = submitter
+-SPEC.loader.exec_module(submitter)
+-
+-
+-def full_sft_config(acknowledgement: Decimal | None) -> Any:
+-    return submitter.SubmissionConfig(
+-        plan=submitter.build_training_plan(
+-            submitter.Stage.SFT_FULL,
+-            run_id="repro-20260914",
+-            output_uri="s3://marin-us-east-02a/experiments/repro-20260914/sft",
+-        ),
+-        cost_acknowledgement=acknowledgement,
+-    )
+-
+-
+-def test_submit_full_stage_keeps_credentials_out_of_argv_and_disables_retries(monkeypatch) -> None:
+-    captured: dict[str, Any] = {}
+-
+-    class Client:
+-        def submit(self, **kwargs: Any) -> SimpleNamespace:
+-            captured["submit"] = kwargs
+-            return SimpleNamespace(job_id="/ben/tinker-sft-full")
+-
+-    @contextmanager
+-    def open_iris_client(*, cluster_name: str, workspace: Path) -> Iterator[Client]:
+-        yield Client()
+-
+-    monkeypatch.setattr(submitter, "open_iris_client", open_iris_client)
+-    credentials = submitter.Credentials(
+-        tinker_api_key="sentinel-tinker-key",
+-        wandb_api_key="sentinel-wandb-key",
+-        hf_token="sentinel-hf-key",
+-    )
+-    job_id = submitter.submit(full_sft_config(Decimal("10000")), credentials=credentials)
+-
+-    assert job_id == "/ben/tinker-sft-full"
+-    request = captured["submit"]
+-    assert request["environment"].env_vars == {
+-        "TINKER_API_KEY": "sentinel-tinker-key",
+-        "WANDB_API_KEY": "sentinel-wandb-key",
+-        "HF_TOKEN": "sentinel-hf-key",
+-    }
+-    command = request["entrypoint"].command
+-    assert not any("sentinel" in argument for argument in command)
+-    # The in-task script re-checks the acknowledgement, so it must be forwarded.
+-    assert command[-2:] == ["--acknowledge-cost-usd", "10000"]
+-    assert not request["resources"].to_proto().HasField("device")
+-    assert request["max_retries_failure"] == 0
+-    assert request["max_task_failures"] == 0
+-
+-
+-def test_cli_defaults_to_dry_run_without_reading_credentials(monkeypatch, capsys, tmp_path: Path) -> None:
+-    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+-    monkeypatch.setattr(submitter, "submit", lambda *args, **kwargs: pytest.fail("dry run submitted a job"))
+-    monkeypatch.setattr(
+-        submitter,
+-        "load_secrets_env_into_os_environ",
+-        lambda path: pytest.fail("dry run read the secrets file"),
+-    )
+-    secrets_env = tmp_path / "explicit-secrets.env"
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--stage",
+-                "sft_full",
+-                "--run-id",
+-                "repro-20260914",
+-                "--output-uri",
+-                "s3://marin-us-east-02a/experiments/repro-20260914/sft",
+-                "--secrets-env",
+-                str(secrets_env),
+-            ]
+-        )
+-        == 0
+-    )
+-    output = capsys.readouterr().out
+-    plan = json.loads(output.split("\nDry run only.", 1)[0])
+-    assert plan["training"]["stage"] == "sft_full"
+-    assert plan["required_cost_acknowledgement_usd"] == "10000"
+-    assert plan["priority"] == "interactive"
+-    assert plan["secrets_env"] == str(secrets_env)
+-    assert "TINKER_API_KEY" not in output
+-
+-
+-def test_cli_submit_loads_export_assignments_before_credential_lookup(monkeypatch, capsys, tmp_path: Path) -> None:
+-    for key in ("TINKER_API_KEY", "WANDB_API_KEY", "HF_TOKEN"):
+-        monkeypatch.delenv(key, raising=False)
+-    secrets_env = tmp_path / "submit-secrets.env"
+-    secrets_env.write_text(
+-        "export TINKER_API_KEY=sentinel-tinker\n"
+-        "export WANDB_API_KEY='sentinel-wandb'\n"
+-        'export HF_TOKEN="sentinel-hf"\n'
+-    )
+-    captured: dict[str, Any] = {}
+-
+-    def submit(config: Any, *, credentials: Any) -> str:
+-        captured["config"] = config
+-        captured["credentials"] = credentials
+-        return "/ben/tinker-sft-plumbing"
+-
+-    monkeypatch.setattr(submitter, "submit", submit)
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--stage",
+-                "sft_plumbing",
+-                "--run-id",
+-                "repro-20260914",
+-                "--output-uri",
+-                "s3://marin-us-east-02a/experiments/repro-20260914/sft-plumbing",
+-                "--secrets-env",
+-                str(secrets_env),
+-                "--submit",
+-            ]
+-        )
+-        == 0
+-    )
+-
+-    assert captured["config"].secrets_env == str(secrets_env)
+-    assert captured["credentials"] == submitter.Credentials(
+-        "sentinel-tinker",
+-        "sentinel-wandb",
+-        "sentinel-hf",
+-    )
+-    assert "/ben/tinker-sft-plumbing" in capsys.readouterr().out
+-
+-
+-def test_cli_defaults_secrets_env_to_configured_approved_file(monkeypatch, capsys, tmp_path: Path) -> None:
+-    secrets_env = tmp_path / "operator-secrets.env"
+-    secrets_env.touch()
+-    monkeypatch.setenv("OT_AGENT_SECRETS_ENV", str(secrets_env))
+-    monkeypatch.setattr(
+-        submitter,
+-        "load_secrets_env_into_os_environ",
+-        lambda path: pytest.fail("dry run read the secrets file"),
+-    )
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--stage",
+-                "sft_plumbing",
+-                "--run-id",
+-                "repro-20260914",
+-                "--output-uri",
+-                "s3://marin-us-east-02a/experiments/repro-20260914/sft-default",
+-            ]
+-        )
+-        == 0
+-    )
+-
+-    output = capsys.readouterr().out
+-    plan = json.loads(output.split("\nDry run only.", 1)[0])
+-    assert plan["secrets_env"] == str(secrets_env)
+-
+-
+-def test_default_secrets_env_falls_back_to_documents_file(monkeypatch, tmp_path: Path) -> None:
+-    secrets_env = tmp_path / "Documents" / "secrets.env"
+-    secrets_env.parent.mkdir()
+-    secrets_env.touch()
+-    monkeypatch.delenv("OT_AGENT_SECRETS_ENV", raising=False)
+-    monkeypatch.setenv("HOME", str(tmp_path))
+-
+-    assert submitter.default_secrets_env() == str(secrets_env)
+-
+-
+-def test_cli_submit_full_stage_without_acknowledgement_cannot_reach_submission(monkeypatch, capsys) -> None:
+-    monkeypatch.setenv("TINKER_API_KEY", "unused")
+-    monkeypatch.setenv("WANDB_API_KEY", "unused")
+-    monkeypatch.setattr(submitter, "submit", lambda *args, **kwargs: pytest.fail("unauthorized full run submitted"))
+-
+-    with pytest.raises(SystemExit, match="requires --acknowledge-cost-usd 10000"):
+-        submitter.main(
+-            [
+-                "--stage",
+-                "sft_full",
+-                "--run-id",
+-                "repro-20260914",
+-                "--output-uri",
+-                "s3://marin-us-east-02a/experiments/repro-20260914/sft",
+-                "--submit",
+-            ]
+-        )
+-    capsys.readouterr()
+diff --git a/cloud/iris/tests/test_vendored_runtime_bundle.py b/cloud/iris/tests/test_vendored_runtime_bundle.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8c615e800cf0c0296bf182f1ab588d0b6c891ae1
+--- /dev/null
++++ b/cloud/iris/tests/test_vendored_runtime_bundle.py
+@@ -0,0 +1,79 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++import json
++from contextlib import nullcontext
++from pathlib import Path
++
++import pytest
++
++from cloud.iris import runtime_bundle
++
++
++@pytest.fixture
++def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
++    project = tmp_path / "vendor/skyrl"
++    files = {
++        "cloud/iris/launch.py": "def main(): pass\n",
++        "cloud/iris/runtime_bundle_files.txt": "cloud/iris/launch.py\n",
++        "skyrl-train/skyrl_train/config/ppo_base_config.yaml": "trainer: {max_steps: 2}\n",
++        "skyrl-gym/skyrl_gym/__init__.py": "",
++        "chat_templates/model.jinja2": "{{ messages }}",
++        "pyproject.toml": '[project]\nname = "marinskyrl"\n',
++        "uv.lock": "version = 1\n",
++    }
++    for name, content in files.items():
++        target = project / name
++        target.parent.mkdir(parents=True, exist_ok=True)
++        target.write_text(content)
++    provenance = project / runtime_bundle.PROVENANCE_FILE
++    provenance.parent.mkdir(parents=True)
++    provenance.write_text(json.dumps({"source_sha": "original-upstream-revision"}))
++    monkeypatch.setattr(runtime_bundle, "PROJECT_ROOT", project)
++    source = runtime_bundle.resolve_launcher_source()
++    with runtime_bundle.build_runtime_bundle(source.digest) as workspace:
++        yield source, workspace
++
++
++def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bundled_source):
++    source, workspace = bundled_source
++    assert (workspace / "uv.lock").read_bytes() == (source.root / "uv.lock").read_bytes()
++    assert (workspace / "chat_templates/model.jinja2").read_text() == "{{ messages }}"
++    assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
++
++
++def test_changed_bundled_training_config_is_rejected(bundled_source):
++    _, workspace = bundled_source
++    (workspace / "skyrl-train/skyrl_train/config/ppo_base_config.yaml").write_text("trainer: {max_steps: 999}\n")
++    with pytest.raises(RuntimeError, match="does not match its recorded identity"):
++        runtime_bundle.validate_bundled_runtime(workspace)
++
++
++@pytest.mark.parametrize("path", ["cloud/iris/launch.py", "cloud/iris/new_runtime.py"])
++def test_source_edits_get_a_new_identity_and_bundle_without_restaging(bundled_source, path):
++    source, _ = bundled_source
++    (source.root / path).write_text("updated = True\n")
++    changed = runtime_bundle.resolve_launcher_source()
++    assert changed.digest != source.digest
++    with runtime_bundle.build_runtime_bundle(changed.digest) as workspace:
++        assert (workspace / path).read_text() == "updated = True\n"
++        assert runtime_bundle.validate_bundled_runtime(workspace) == changed.digest
++
++
++@pytest.mark.parametrize("submission_succeeds", [True, False])
++def test_runtime_workspace_is_removed_after_submission(bundled_source, submission_succeeds):
++    source, _ = bundled_source
++    outcome = nullcontext() if submission_succeeds else pytest.raises(RuntimeError, match="submission failed")
++    with outcome, runtime_bundle.build_runtime_bundle(source.digest) as workspace:
++        assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
++        if not submission_succeeds:
++            raise RuntimeError("submission failed")
++    assert not workspace.exists()
++    assert (source.root / "uv.lock").is_file()
++
++
++def test_unrecorded_file_added_to_a_built_bundle_is_rejected(bundled_source):
++    _, workspace = bundled_source
++    (workspace / "cloud/iris/injected.py").write_text("extra = True\n")
++    with pytest.raises(ValueError, match="do not match the selected runtime identity"):
++        runtime_bundle.validate_bundled_runtime(workspace)
+diff --git a/infra/tests/test_marinskyrl_packaging.py b/infra/tests/test_marinskyrl_packaging.py
+index d1d85c5e8b57e3e50f518c839113013bc3d5ad56..4cc097d59dc919cb2f23a3d2277bc82e45ac6ab6 100644
+--- a/infra/tests/test_marinskyrl_packaging.py
++++ b/infra/tests/test_marinskyrl_packaging.py
+@@ -47,0 +48,3 @@ def test_root_wheel_owns_launcher_and_training_packages(built_wheel: BuiltWheel)
++    assert "skyrl_train/inline_harbor.py" in built_wheel.names
++    assert "skyrl_gym/envs/nemotron_ultra/abstention_prompt.txt" in built_wheel.names
++    assert "skyrl_gym/envs/nemotron_ultra/jailbreak_verifiers.yaml" in built_wheel.names
+diff --git a/pyproject.toml b/pyproject.toml
+index af0e50ef9e2472fc374ceb018c7d7bfa44a696be..13b761d84e4eb960c4c11b74fbc36d04ecca71e4 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -163,0 +164 @@ packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_tra
++"open_mopd_versions.py" = "open_mopd_versions.py"
+@@ -175 +176 @@ environments = [
+-    "sys_platform == 'darwin'",
++    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+diff --git a/skyrl-gym/skyrl_gym/envs/aime/utils.py b/skyrl-gym/skyrl_gym/envs/aime/utils.py
+index 9c15e35fbd9454e9386abfcdd70cc4d3740093e6..6848937295f251e2d7e1888a8680e825d920f575 100644
+--- a/skyrl-gym/skyrl_gym/envs/aime/utils.py
++++ b/skyrl-gym/skyrl_gym/envs/aime/utils.py
+@@ -18 +18 @@ from math_verify import parse
+-from sympy import Basic, Set
++from sympy import Basic, MatrixBase, Set, Tuple
+@@ -39 +39,3 @@ def math_answer_reward(reference: str, candidate: str) -> Reward:
+-    parsed = parse(f"${reference}$", parsing_timeout=5)
++    parsed = parse(f"\\boxed{{{reference}}}", parsing_timeout=5)
++    if any(isinstance(answer, (MatrixBase, Tuple)) for answer in parsed):
++        return grade_math_candidate(MathSpec(expected=reference, profile=MathProfile.BOXED), candidate)
+@@ -98 +99,0 @@ SUBSTITUTIONS = [
+-    (r"\ ", ""),
+@@ -160,0 +162,2 @@ def normalize_final_answer(final_answer: str) -> str:
++    # TeX spacing is removable, but a matrix row delimiter followed by a space is not.
++    final_answer = re.sub(r"(?<!\\)\\ ", "", final_answer)
+@@ -181 +184,2 @@ def normalize_final_answer(final_answer: str) -> str:
+-    final_answer = re.sub(r"(frac)([^{])(.)", "frac{\\2}{\\3}", final_answer)
++    final_answer = re.sub(r"(\\frac)([^{}\\])", r"\1{\2}", final_answer)
++    final_answer = re.sub(r"(\\frac\{[^{}]*\})([^{}\\])", r"\1{\2}", final_answer)
+diff --git a/skyrl-gym/tests/test_aime_answer_normalization.py b/skyrl-gym/tests/test_aime_answer_normalization.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..3da544653db86ad9fc799e376e96d355f68cbdfe
+--- /dev/null
++++ b/skyrl-gym/tests/test_aime_answer_normalization.py
+@@ -0,0 +1,31 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++import pytest
++
++from skyrl_gym.envs.aime.utils import normalize_final_answer
++from skyrl_gym.envs.aime.verifier import AIMEVerifier
++from skyrl_gym.verification import RolloutEvidence
++
++
++@pytest.mark.parametrize(
++    "expected,correct,wrong",
++    [
++        (r"\left(3,\frac{\pi}{2}\right)", r"(3,\frac{\pi}{2})", r"(3,\pi)"),
++        (
++            r"\begin{pmatrix} -1/3 \\ 2/3 \\ 5/3 \end{pmatrix}",
++            r"\begin{pmatrix}-1/3\\2/3\\5/3\end{pmatrix}",
++            r"\begin{pmatrix}-1/3\\2/3\\4/3\end{pmatrix}",
++        ),
++        (r"\frac{270}7\text{ degrees}", r"\frac{270}{7}", r"\frac{271}{7}"),
++        (r"\frac9{19}", r"\frac{9}{19}", r"\frac{9}{20}"),
++        ("42", "42", "42.00001"),
++    ],
++)
++def test_math500_answers_accept_equivalents_and_reject_wrong_answers(
++    expected, correct, wrong
++):
++    judge = AIMEVerifier(normalize_final_answer(expected))
++    for answer, passed in [(correct, True), (wrong, False), ("", False)]:
++        result = judge.verify(RolloutEvidence(response=f"Answer: \\boxed{{{answer}}}"))
++        assert result.passed is passed
+diff --git a/skyrl-gym/tests/test_nemotron_judge_assets.py b/skyrl-gym/tests/test_nemotron_judge_assets.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a66f79c2dd9d222605094d408a4046655bc3b2b8
+--- /dev/null
++++ b/skyrl-gym/tests/test_nemotron_judge_assets.py
+@@ -0,0 +1,62 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++import json
++
++import pytest
++import requests
++
++from skyrl_gym.envs.nemotron_ultra.jailbreak import grade_jailbreak
++from skyrl_gym.envs.nemotron_ultra.judge import OpenAIJudge
++from skyrl_gym.envs.nemotron_ultra.judge_verifiers import grade_abstention
++
++
++def judge_response(verdict: str) -> requests.Response:
++    response = requests.Response()
++    response.status_code = 200
++    response._content = json.dumps({"choices": [{"message": {"content": verdict}, "finish_reason": "stop"}]}).encode()
++    return response
++
++
++@pytest.mark.parametrize(
++    "verdict,reward,label", [("A", 1.0, "correct"), ("B", 0.0, "incorrect"), ("C", 0.5, "abstain")]
++)
++def test_abstention_grades_with_packaged_prompt(monkeypatch, verdict, reward, label):
++    def post(url, *, json, **kwargs):
++        prompt = json["messages"][0]["content"]
++        assert "Question: capital?\nGold target: Paris\nPredicted answer: Paris" in prompt
++        return judge_response(verdict)
++
++    monkeypatch.setattr(requests, "post", post)
++    actual, details = grade_abstention(
++        r"\boxed{Paris}",
++        {"question": "capital?", "answer": "Paris"},
++        OpenAIJudge("https://judge.example/v1", "fixture"),
++    )
++    assert actual == reward
++    assert details["verdict"] == label
++
++
++@pytest.mark.parametrize(
++    "safety,quality,reward",
++    [("SAFE", "HAS_EXPLANATION", 1.0), ("SAFE", "NO_EXPLANATION", 0.3), ("UNSAFE", "HAS_EXPLANATION", 0.0)],
++)
++def test_jailbreak_combines_packaged_policy_verifiers(monkeypatch, safety, quality, reward):
++    def post(url, *, json, **kwargs):
++        prompt = json["messages"][0]["content"]
++        assert "ADVERSARIAL PROMPT:\nfixture request" in prompt
++        assert "MODEL RESPONSE:\nfixture refusal" in prompt
++        verdict = safety if prompt.startswith("You are a safety evaluation assistant.") else quality
++        return judge_response(f"[[{verdict}]]")
++
++    monkeypatch.setattr(requests, "post", post)
++    actual, details = grade_jailbreak(
++        "fixture refusal",
++        {"adversarial_prompt": "fixture request", "response_policy_mapped": "refusal_with_explanation"},
++        OpenAIJudge("https://judge.example/v1", "fixture"),
++    )
++    assert actual == reward
++    assert details["verifier_labels"] == {
++        "safety_check": f"[[{safety}]]",
++        "quality_explanation_check": f"[[{quality}]]",
++    }
+diff --git a/skyrl-train/ci/marin_nightly/run_cat_count_h100.sh b/skyrl-train/ci/marin_nightly/run_cat_count_h100.sh
+deleted file mode 100644
+index b4d768e4d441885b6dfcb4aef739945e5faa055f..0000000000000000000000000000000000000000
+--- a/skyrl-train/ci/marin_nightly/run_cat_count_h100.sh
++++ /dev/null
+@@ -1,57 +0,0 @@
+-#!/usr/bin/env bash
+-set -euo pipefail
+-
+-REPOSITORY_ROOT="$(git rev-parse --show-toplevel)"
+-RUNTIME_COMMIT="$(git rev-parse HEAD)"
+-MARIN_ROOT="${RUNNER_TEMP:-$(mktemp -d)}/cat-count-marin"
+-TARGET_CLUSTER="${TARGET_CLUSTER:-cw-rno2a}"
+-DEADLINE=1200
+-git clone --filter=blob:none --branch main --single-branch https://github.com/marin-community/marin.git "$MARIN_ROOT"
+-sed -i "s/branch = \"main\"/rev = \"$RUNTIME_COMMIT\"/" "$MARIN_ROOT/config/external/MarinSkyRL/pyproject.toml"
+-uv run "$MARIN_ROOT/config/update-external.py" MarinSkyRL
+-python3 -c 'import runpy, sys; pin = runpy.run_path(sys.argv[1])["MARIN_SKYRL"]; assert pin.commit == sys.argv[2], pin.commit' \
+-  "$MARIN_ROOT/lib/marin/src/marin/external_dependencies.py" "$RUNTIME_COMMIT"
+-echo "CAT_COUNT_NIGHTLY marin=$(git -C "$MARIN_ROOT" rev-parse HEAD) runtime=$RUNTIME_COMMIT"
+-
+-for attempt in 1 2; do
+-  log="${RUNNER_TEMP:-/tmp}/cat-count-nightly-a$attempt.log"
+-  version="$(date -u +%Y.%m.%d).${GITHUB_RUN_ID:-$(date +%s)}${GITHUB_RUN_ATTEMPT:-1}$attempt"
+-  start=$(date +%s)
+-  if (cd "$MARIN_ROOT" && timeout --signal=INT --kill-after=30s "${DEADLINE}s" \
+-    uv run --frozen --package marin-core --extra cpu --no-default-groups iris --cluster marin job run \
+-    --target-cluster "$TARGET_CLUSTER" --job-name "${JOB_NAME:?}-a$attempt" \
+-    --cpu 4 --memory 16GB --disk 8GB --extra cpu --priority interactive --max-retries 0 \
+-    --timeout "$DEADLINE" --enable-extra-resources -- python -m experiments.post_training.cat_count_canary \
+-    --preset gate --version "$version" --cluster "$TARGET_CLUSTER" \
+-    --job-timeout-seconds "$DEADLINE" --set trainer.logger=console --run) 2>&1 | tee "$log"; then
+-    status=0
+-  else
+-    status=$?
+-  fi
+-  if ((status == 0)); then
+-    uv run --project "$MARIN_ROOT" --frozen --package marin-core --extra cpu --no-default-groups \
+-      iris --cluster marin job logs "/runner/$JOB_NAME-a$attempt" --no-tail --max-lines 60000 \
+-      2>&1 | tee "$log" || { echo "INFRASTRUCTURE_FAILURE: complete native log unavailable"; exit 2; }
+-  fi
+-  wall_clock=$(($(date +%s) - start))
+-  echo "CAT_COUNT_NIGHTLY attempt=$attempt wall_clock_seconds=$wall_clock exit_status=$status"
+-  if ! grep -q 'WANDB_MIRROR kind=train ' "$log"; then
+-    echo "INFRASTRUCTURE_FAILURE: no training step ran"
+-    uv run --project "$MARIN_ROOT" --frozen --package marin-core --extra cpu --no-default-groups \
+-      iris --cluster marin job cancel --prefix "/runner/$JOB_NAME-a$attempt"
+-    continue
+-  fi
+-  if ((status != 0)); then
+-    echo "GATE_FAILURE: training started but the job did not complete"
+-    exit 1
+-  fi
+-  python3 "$REPOSITORY_ROOT/skyrl-train/ci/marin_nightly/gate.py" --log "$log" \
+-    --spec "$REPOSITORY_ROOT/skyrl-train/ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async.json" \
+-    --wall-clock-seconds "$wall_clock" || { echo "GATE_FAILURE: native metrics failed"; exit 1; }
+-  run_id="$(sed -n '/\[telemetry\].* run_id=/ { s/.* run_id=\([^ ]*\).*/\1/; p; q; }' "$log")"
+-  (cd "$MARIN_ROOT" && uv run --frozen --package marin-core --extra cpu --no-default-groups \
+-    python "$REPOSITORY_ROOT/skyrl-train/ci/marin_nightly/dashboard_readiness.py" --run-id "$run_id") \
+-    || echo "::: the readiness reporter itself failed; the run and its gate are unaffected"
+-  exit 0
+-done
+-exit 2
+diff --git a/skyrl-train/skyrl_train/dataset/replay_buffer.py b/skyrl-train/skyrl_train/dataset/replay_buffer.py
+index 424f8e3bc9ad02f46ece2c25d56b54b3c505aa7f..08da9674ae0e314700de33c353d61c2c48d6df5f 100644
+--- a/skyrl-train/skyrl_train/dataset/replay_buffer.py
++++ b/skyrl-train/skyrl_train/dataset/replay_buffer.py
+@@ -1,3 +1 @@
+-"""
+-Replay buffer utilities.
+-"""
++"""Experience tensors consumed by the training batch iterator and workers."""
+@@ -5,5 +2,0 @@ Replay buffer utilities.
+-# NOTE (sumanthrh): These are replay buffer utilities from OpenRLHF.
+-# While currently unused, we may need them in the future for more involved off-policy algorithms.
+-import copy
+-import random
+-from abc import ABC
+@@ -15 +7,0 @@ import torch
+-import torch.nn.functional as F
+@@ -153,263 +144,0 @@ class Experience:
+-
+-
+-@dataclass
+-class BufferItem:
+-    """BufferItem is an item of experience data.
+-
+-    Shapes of each tensor:
+-    sequences: (S)
+-    action_log_probs: (A)
+-    base_action_log_probs: (A)
+-    values: (1)
+-    returns: (1)
+-    advatanges: (1)
+-    attention_mask: (S)
+-    loss_mask: (A)
+-    action_mask: (A)
+-
+-    "A" is the number of actions.
+-    """
+-
+-    sequences: Integer[torch.Tensor, "seq_len"]  # noqa: F821
+-    action_log_probs: Float[torch.Tensor, "response_len"]  # noqa: F821
+-    base_action_log_probs: Optional[Float[torch.Tensor, "response_len"]]  # noqa: F821
+-    values: Optional[Float[torch.Tensor, "response_len"]]  # noqa: F821
+-    returns: Optional[Float[torch.Tensor, "response_len"]]  # noqa: F821
+-    advantages: Optional[Float[torch.Tensor, "response_len"]]  # noqa: F821
+-    attention_mask: Optional[Integer[torch.LongTensor, "seq_len"]]  # noqa: F821
+-    loss_mask: Optional[Integer[torch.LongTensor, "response_len"]]  # noqa: F821
+-    action_mask: Optional[Integer[torch.Tensor, "response_len"]]  # noqa: F821
+-    num_actions: int
+-    info: Optional[dict]
+-
+-    rollout_logprobs: Optional[Float[torch.Tensor, "response_len"]] = None  # noqa: F821
+-    correction_weights: Optional[Float[torch.Tensor, "response_len"]] = None  # noqa: F821
+-
+-    def to_json(self) -> dict:
+-        def _to_json(obj):
+-            if isinstance(obj, torch.Tensor):
+-                return obj.cpu().tolist()
+-            elif isinstance(obj, dict):
+-                return {k: _to_json(v) for k, v in obj.items()}
+-            elif isinstance(obj, (list, tuple)):
+-                return [_to_json(x) for x in obj]
+-            else:
+-                return obj
+-
+-        return {k: _to_json(v) for k, v in self.__dict__.items()}
+-
+-
+-def split_experience_batch(experience: Experience) -> List[BufferItem]:
+-    keys = (
+-        "sequences",
+-        "action_log_probs",
+-        "base_action_log_probs",
+-        "values",
+-        "returns",
+-        "advantages",
+-        "attention_mask",
+-        "loss_mask",
+-        "action_mask",
+-        "rollout_logprobs",
+-        "correction_weights",
+-        "num_actions",
+-    )
+-    if len(experience.sequences.shape) == 1:
+-        # no padding
+-        batch_size = 1
+-        for key in keys:
+-            value = getattr(experience, key)
+-            if value is not None:
+-                if isinstance(value, torch.Tensor):
+-                    value = value.unsqueeze(0)
+-                setattr(experience, key, value)
+-    else:
+-        batch_size = len(experience.sequences)
+-    batch_kwargs = [{} for _ in range(batch_size)]
+-
+-    for key in keys:
+-        value = getattr(experience, key)
+-        if value is None:
+-            for i in range(batch_size):
+-                batch_kwargs[i][key] = None
+-            continue
+-        vals = [value] * batch_size if isinstance(value, int) else value
+-        if isinstance(vals, torch.Tensor):
+-            vals = torch.unbind(vals)
+-        assert batch_size == len(vals)
+-        for i, v in enumerate(vals):
+-            if isinstance(v, torch.Tensor):
+-                v = v.clone()
+-            batch_kwargs[i][key] = v
+-
+-    for i in range(batch_size):
+-        batch_kwargs[i]["info"] = {}
+-    for k, v in experience.info.items():
+-        vals = torch.unbind(v)
+-        assert batch_size == len(vals)
+-        for i, vv in enumerate(vals):
+-            if isinstance(vv, torch.Tensor):
+-                assert vv.numel() == 1, f"info[{k}] must be a scalar tensor, but got {vv.shape}"
+-                vv = vv.item()
+-            batch_kwargs[i]["info"][k] = vv
+-
+-    items = [BufferItem(**kwargs) for kwargs in batch_kwargs]
+-    return items
+-
+-
+-def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left") -> torch.Tensor:
+-    assert side in ("left", "right")
+-    max_len = max(seq.size(0) for seq in sequences)
+-    padded_sequences = []
+-    for seq in sequences:
+-        pad_len = max_len - seq.size(0)
+-        padding = (pad_len, 0) if side == "left" else (0, pad_len)
+-        padded_sequences.append(F.pad(seq, padding))
+-    return torch.stack(padded_sequences, dim=0)
+-
+-
+-def make_experience_batch(items: List[BufferItem]) -> Experience:
+-    kwargs = {}
+-    keys = (
+-        "sequences",
+-        "action_log_probs",
+-        "base_action_log_probs",
+-        "values",
+-        "returns",
+-        "advantages",
+-        "attention_mask",
+-        "loss_mask",
+-        "action_mask",
+-        "rollout_logprobs",
+-        "correction_weights",
+-        "num_actions",
+-    )
+-    for key in keys:
+-        vals = [getattr(item, key) for item in items]
+-        # NOTE (sumanthrh): Assumes list of Tensors
+-        batch_data = vals if vals[0] is not None else None
+-        kwargs[key] = batch_data
+-
+-    kwargs["info"] = {}
+-    for key in items[0].info.keys():
+-        vals = torch.tensor([item.info[key] for item in items])
+-        kwargs["info"][key] = vals
+-    return Experience(**kwargs)
+-
+-
+-def remove_padding_in_sequences(items):
+-    for item in items:
+-        seq, act_log_prob, base_act_log_prob, value, ret, adv, att_mask, act_mask = (
+-            item.sequences,
+-            item.action_log_probs,
+-            item.base_action_log_probs,
+-            item.values,
+-            item.returns,
+-            item.advantages,
+-            item.attention_mask,
+-            item.action_mask,
+-        )
+-        right_pad = (1 - act_mask.long()).sum()
+-        right_pad = None if right_pad == 0 else -right_pad
+-
+-        # left_pad for seq and att_mask
+-        left_pad = att_mask.long().argmax()
+-        (
+-            item.sequences,
+-            item.action_log_probs,
+-            item.base_action_log_probs,
+-            item.values,
+-            item.returns,
+-            item.advantages,
+-            item.attention_mask,
+-            item.action_mask,
+-        ) = (
+-            seq[left_pad:right_pad],
+-            act_log_prob[:right_pad],
+-            base_act_log_prob[:right_pad] if base_act_log_prob is not None else None,
+-            value[:right_pad] if value is not None else None,
+-            ret[:right_pad] if ret is not None else None,
+-            adv[:right_pad] if adv is not None else None,
+-            att_mask[left_pad:right_pad] if att_mask is not None else None,
+-            act_mask[:right_pad] if act_mask is not None else None,
+-        )
+-        for key in ("loss_mask", "rollout_logprobs", "correction_weights"):
+-            value = getattr(item, key)
+-            if value is not None:
+-                setattr(item, key, value[:right_pad])
+-    return items
+-
+-
+-class NaiveReplayBuffer(ABC):
+-    """Naive replay buffer class. It stores experience.
+-
+-    Args:
+-        sample_batch_size (int): Batch size when sampling.
+-        limit (int, optional): Limit of number of experience samples. A number <= 0 means unlimited. Defaults to 0.
+-        cpu_offload (bool, optional): Whether to offload experience to cpu when sampling. Defaults to True.
+-    """
+-
+-    def __init__(
+-        self,
+-        sample_batch_size: int,
+-        limit: int = 0,
+-        cpu_offload: bool = True,
+-    ) -> None:
+-        super().__init__()
+-        self.sample_batch_size = sample_batch_size
+-        # limit <= 0 means unlimited
+-        self.limit = limit
+-        self.cpu_offload = cpu_offload
+-        self.target_device = (
+-            torch.device(f"cuda:{torch.cuda.current_device()}") if torch.cuda.is_available() else torch.device("cpu")
+-        )
+-        self.items: List[BufferItem] = []
+-
+-    @torch.no_grad()
+-    def split_to_n_batches(self, n_batches: int, drop_last: bool = False) -> List["NaiveReplayBuffer"]:
+-        assert n_batches > 0
+-        if not drop_last:
+-            batch_size = (len(self.items) + n_batches - 1) // n_batches
+-        else:
+-            batch_size = len(self.items) // n_batches
+-        if len(self.items) < batch_size * n_batches:
+-            # padding
+-            padding_size = batch_size * n_batches - len(self.items)
+-            padding_items = random.choices(self.items, k=padding_size)
+-            self.items.extend(padding_items)
+-        bfs = []
+-        items = copy.deepcopy(self.items)
+-        random.shuffle(items)
+-        for i in range(n_batches):
+-            bf = NaiveReplayBuffer(
+-                sample_batch_size=self.sample_batch_size,
+-                limit=self.limit,
+-                cpu_offload=self.cpu_offload,
+-            )
+-            bf.items = items[i * batch_size : (i + 1) * batch_size]
+-            bfs.append(bf)
+-        return bfs
+-
+-    @torch.no_grad()
+-    def append(self, experience: Experience) -> None:
+-        if self.cpu_offload:
+-            experience.to_device(torch.device("cpu"))
+-        items = split_experience_batch(experience)
+-        self.items.extend(items)
+-        if self.limit > 0:
+-            samples_to_remove = len(self.items) - self.limit
+-            if samples_to_remove > 0:
+-                self.items = self.items[samples_to_remove:]
+-
+-    def clear(self) -> None:
+-        self.items.clear()
+-
+-    def __len__(self) -> int:
+-        return len(self.items)
+-
+-    def __getitem__(self, idx: int) -> BufferItem:
+-        return self.items[idx]
+-
+-    def collate_fn(self, batch) -> Experience:
+-        experience = make_experience_batch(batch)
+-        return experience
+diff --git a/skyrl-train/skyrl_train/mismatch_probe/provenance.py b/skyrl-train/skyrl_train/mismatch_probe/provenance.py
+index d9fa4aa7cbda90cdde397159f4f2359f01e5076b..97554d2eec46c72d01d9dfe4df4d83473767b6e2 100644
+--- a/skyrl-train/skyrl_train/mismatch_probe/provenance.py
++++ b/skyrl-train/skyrl_train/mismatch_probe/provenance.py
+@@ -30 +30 @@ def software_provenance(probe, trainer) -> dict[str, str | None]:
+-        "marinskyrl_commit": probe.cfg.get("runtime", {}).get("launcher_commit"),
++        "marinskyrl_source_digest": probe.cfg.get("runtime", {}).get("source_digest"),
+@@ -50 +50 @@ def manifest(probe, trainer, *, status: mismatch.ArchiveStatus):
+-        runtime_commit=software["marinskyrl_commit"],
++        runtime_commit=software["marinskyrl_source_digest"],
+diff --git a/skyrl-train/skyrl_train/trajectory_runners/trajectory_processing.py b/skyrl-train/skyrl_train/trajectory_runners/trajectory_processing.py
+index acdbdb53d3ce65edd726ff8a9594229c293035d0..d79c23e88cc5d7c049190029bf1da3f5d1efa3b2 100644
+--- a/skyrl-train/skyrl_train/trajectory_runners/trajectory_processing.py
++++ b/skyrl-train/skyrl_train/trajectory_runners/trajectory_processing.py
+@@ -2,0 +3 @@ from collections import defaultdict
++from math import fsum
+@@ -88 +89 @@ def get_metrics_from_trajectory_batch(trajectory_batch: TrajectoryBatch, uids: L
+-        mean_reward = float(np.mean([sum(trajectory_rewards) for trajectory_rewards in rewards]))
++        mean_reward = fsum(fsum(trajectory_rewards) for trajectory_rewards in rewards) / len(rewards)
+@@ -90 +91,2 @@ def get_metrics_from_trajectory_batch(trajectory_batch: TrajectoryBatch, uids: L
+-        mean_reward = float(np.mean(rewards))
++        # Evaluation batches arrive in completion order, including after checkpoint restore.
++        mean_reward = fsum(rewards) / len(rewards)
+diff --git a/skyrl-train/tests/cpu/test_evaluation_score_order.py b/skyrl-train/tests/cpu/test_evaluation_score_order.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..385b2d1c4297d526b8a838ba03ada812a7d3178f
+--- /dev/null
++++ b/skyrl-train/tests/cpu/test_evaluation_score_order.py
+@@ -0,0 +1,20 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++from itertools import permutations
++
++import pytest
++
++from skyrl_train.trajectory_runners.trajectory_processing import get_metrics_from_trajectory_batch
++
++
++@pytest.mark.parametrize("per_token", [False, True])
++def test_evaluation_mean_survives_cancellation_and_completion_order(per_token):
++    means = set()
++    for values in permutations((1e16, 1.0, -1e16, 2.0)):
++        rewards = [list(values)] if per_token else list(values)
++        batch = {"rewards": rewards, "unshaped_rewards": [1.0] * len(rewards)}
++        mean, passed = get_metrics_from_trajectory_batch(batch, [str(i) for i in range(len(rewards))])
++        means.add(mean)
++        assert passed == 1.0
++    assert means == ({3.0} if per_token else {0.75})
+diff --git a/uv.lock b/uv.lock
+index 6ee880dd604504e9397d25fca7275b4b74c2fa36..0f4bb64cfcf229bebe908655e732bd35dd9c5fed 100644
+GIT binary patch
+delta 23432
+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
+CJlE;~
+
+delta 100692
+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
+BrZoTn
+

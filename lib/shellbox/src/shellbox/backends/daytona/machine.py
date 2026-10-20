@@ -88,25 +88,10 @@ def _validated_source(source: RegistryImage | DockerfileSource) -> RegistryImage
     return source
 
 
-async def ensure_snapshot(
-    client: AsyncDaytona,
-    source: RegistryImage | DockerfileSource,
-    resources: Resources,
-    *,
-    name: str | None = None,
-) -> str:
-    """Build or await an active snapshot within the caller's startup deadline.
-
-    Launchers can prepare snapshots without starting a sandbox. An explicit name
-    uses the caller's image-to-snapshot mapping; otherwise the name includes the
-    image source key and resource requirements, as it does during machine creation.
-    Registry sources use the reference string; pin a digest to avoid reusing a
-    snapshot after a mutable tag changes.
-    """
-    source = _validated_source(source)
-    if name is None:
-        identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
-        name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
+async def _snapshot(client: AsyncDaytona, source: RegistryImage | DockerfileSource, resources: Resources) -> str:
+    """Build or await a snapshot identified by its source and resource requirements."""
+    identity = f"{image_source_key(source)}\0{json.dumps(asdict(resources), sort_keys=True)}"
+    name = f"shellbox-{hashlib.sha256(identity.encode()).hexdigest()[:40]}"
     try:
         snapshot = await client.snapshot.get(name)
     except DaytonaNotFoundError:
@@ -125,53 +110,39 @@ async def ensure_snapshot(
     return name
 
 
-def _rejected_create_request(error: DaytonaRateLimitError) -> bool:
-    if error.status_code != 429:
-        return False
-    # Daytona 0.200.2 has no public request retry hook. Its create() also performs
-    # reads after POST succeeds; only this generated request frame proves the
-    # POST itself was rejected. Unknown SDK paths fail closed, without retrying.
-    nested: BaseException | None = error
-    seen = set()
-    while nested is not None and id(nested) not in seen:
-        seen.add(id(nested))
-        traceback = nested.__traceback__
-        while traceback is not None:
-            frame = traceback.tb_frame
-            if (
-                frame.f_globals.get("__name__") == "daytona_api_client_async.api.sandbox_api"
-                and frame.f_code.co_name == "create_sandbox"
-            ):
-                return True
-            traceback = traceback.tb_next
-        nested = nested.__cause__ or nested.__context__
-    return False
-
-
 async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float) -> AsyncSandbox:
-    """Retry rejected creation requests inside the caller's startup deadline."""
+    """Retry throttling using a caller-owned name to recover an accepted creation."""
+    assert params.name is not None
     backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
-    attempt = 0
     while True:
-        attempt += 1
         try:
-            return await client.create(params, timeout=timeout)
+            try:
+                return await client.create(params, timeout=timeout)
+            except DaytonaConflictError:
+                sandbox = await client.get(params.name)
+                await sandbox.wait_for_sandbox_start(timeout=timeout)
+                return sandbox
         except DaytonaRateLimitError as error:
-            if not _rejected_create_request(error):
-                raise
-            retry_after = 0
-            for name, value in (error.headers or {}).items():
-                if (
-                    name.lower() == "retry-after-sandbox-create"
-                    and isinstance(value, str)
-                    and value.isascii()
-                    and value.isdecimal()
-                    and len(value) <= 12
-                ):
-                    retry_after = int(value)
+            retry_after = max(
+                (
+                    int(value)
+                    for name, value in (error.headers or {}).items()
+                    if name.lower().startswith("retry-after") and str(value).isdecimal()
+                ),
+                default=0,
+            )
             delay = max(retry_after, backoff.next_interval())
-            logger.warning("Retrying rejected Daytona creation: attempt=%d delay=%.3f", attempt, delay)
+            logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
             await sleep(delay)
+
+
+async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
+    async with asyncio.timeout(INTERRUPT_TIMEOUT):
+        try:
+            sandbox = await client.get(name)
+        except DaytonaNotFoundError:
+            return
+        await client.delete(sandbox)
 
 
 class DaytonaNetworkMode(StrEnum):
@@ -455,7 +426,7 @@ class DaytonaMachineFactory:
             image_reference=reference,
         )
 
-    async def create(self, spec: MachineSpec) -> DaytonaMachine:
+    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
         source = _validated_source(self._check_spec(spec))
         resources = Resources(
             cpu=spec.cpus,
@@ -463,6 +434,18 @@ class DaytonaMachineFactory:
             disk=math.ceil(spec.storage_mb / 1024) if spec.storage_mb is not None else None,
             gpu=spec.gpus or None,
         )
+        return await _snapshot(client, source, resources)
+
+    async def prepare(self, spec: MachineSpec) -> str:
+        """Prepare the snapshot used by create without starting a sandbox.
+
+        Pin registry sources by digest to reuse immutable image content.
+        """
+        timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
+        async with self.client_factory() as client, asyncio.timeout(timeout):
+            return await self._prepare(client, spec)
+
+    async def create(self, spec: MachineSpec) -> DaytonaMachine:
         network = (
             {"network_block_all": spec.network is NetworkPolicy.DENY}
             if self.network_policy is None
@@ -472,10 +455,13 @@ class DaytonaMachineFactory:
             client = await lifetime.enter_async_context(self.client_factory())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
-                snapshot = await ensure_snapshot(client, source, resources)
+                snapshot = await self._prepare(client, spec)
+                name = f"shellbox-{uuid.uuid4().hex}"
+                lifetime.push_async_callback(_delete_named_sandbox, client, name)
                 sandbox = await _create_sandbox(
                     client,
                     CreateSandboxFromSnapshotParams(
+                        name=name,
                         snapshot=snapshot,
                         os_user="root",
                         env_vars=spec.env,
@@ -484,7 +470,6 @@ class DaytonaMachineFactory:
                     ),
                     timeout=timeout,
                 )
-            lifetime.push_async_callback(client.delete, sandbox)
             prepared = await sandbox.process.exec(_control_command("command -v setsid"), timeout=INTERRUPT_TIMEOUT)
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")

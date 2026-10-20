@@ -11,8 +11,8 @@
 import argparse
 import json
 import re
-import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
@@ -28,10 +28,10 @@ GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
-MARINSKYRL_CONFIG_NAME = "MarinSkyRL"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
+SKYRL_MARIN_CHECK = ROOT / "infra/ci/check_skyrl_marin.py"
 GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
 CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
     {
@@ -99,16 +99,7 @@ class VllmGpuRelease:
     wheels: tuple[VllmGpuWheel, ...]
 
 
-EXTERNAL_PROJECTS = (
-    ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
-    ExternalProject(
-        "harbor",
-        "harbor",
-        "HARBOR",
-        runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
-    ),
-    ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),
-)
+EXTERNAL_PROJECTS: tuple[ExternalProject, ...] = ()
 
 
 def locked_package(lock_path: Path, distribution: str) -> dict:
@@ -132,6 +123,31 @@ def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
         raise ValueError(f"{lock_path}: expected a root Git source, found {source!r}")
     repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
     return LockedGitSource(repository=repository, commit=commit)
+
+
+def project_git_distributions(project: ExternalProject) -> tuple[str, ...]:
+    """Return every locked distribution sourced from the project's repository."""
+    lock_path = project.directory / "uv.lock"
+    repository = locked_git_source(lock_path, project.distribution).repository
+    lock = tomllib.loads(lock_path.read_text())
+    distributions = []
+    for package in lock["package"]:
+        git_source = package.get("source", {}).get("git")
+        if git_source is None:
+            continue
+        parsed = urlsplit(git_source)
+        package_repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+        if package_repository == repository:
+            distributions.append(package["name"])
+    return tuple(distributions)
+
+
+def upgrade_project_lock(project: ExternalProject) -> None:
+    """Advance all distributions that share an external project's Git repository."""
+    command = ["uv", "lock", "--project", str(project.directory)]
+    for distribution in project_git_distributions(project):
+        command.extend(("--upgrade-package", distribution))
+    subprocess.run(command, check=True)
 
 
 def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
@@ -313,7 +329,9 @@ def render_pins(
         f")"
         for dependency in dependencies
     )
-    constants = "\n".join(f"    {dependency.project.constant_name}," for dependency in dependencies)
+    entries = f"{entries}\n\n" if entries else ""
+    constants = ", ".join(dependency.project.constant_name for dependency in dependencies)
+    constants = f"({constants},)" if len(dependencies) == 1 else f"({constants})"
     toolchain_entries = "\n".join(
         f'        "{backend}": "{version}",' for backend, version in CUDA_TOOLCHAIN_VERSION_BY_BACKEND.items()
     )
@@ -389,9 +407,7 @@ CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
 )
 
 
-{entries}
-
-VLLM_GPU_RELEASE = VllmGpuRelease(
+{entries}VLLM_GPU_RELEASE = VllmGpuRelease(
     release_tag="{vllm_gpu_release.release_tag}",
     source_commit="{vllm_gpu_release.source_commit}",
     version="{vllm_gpu_release.version}",
@@ -407,9 +423,7 @@ TPU_INFERENCE_FORK_REQUIREMENT = (
     "{tpu_inference_fork_requirement}"
 )
 
-EXTERNAL_DEPENDENCIES = (
-{constants}
-)
+EXTERNAL_DEPENDENCIES = {constants}
 '''
 
 
@@ -537,16 +551,6 @@ def project_by_name(name: str) -> ExternalProject:
     return next(project for project in EXTERNAL_PROJECTS if project.config_name == name)
 
 
-def validate_marinskyrl_environment(project: ExternalProject) -> None:
-    """Check installed metadata that uv's rigging override replaces during resolution."""
-    with tempfile.TemporaryDirectory(prefix="marinskyrl-lock-") as temporary_directory:
-        directory = Path(temporary_directory)
-        for name in ("pyproject.toml", "uv.lock"):
-            shutil.copyfile(project.directory / name, directory / name)
-        subprocess.run(["uv", "sync", "--project", str(directory), "--frozen", "--no-dev", "--quiet"], check=True)
-        subprocess.run(["uv", "pip", "check", "--python", str(directory / ".venv" / "bin" / "python")], check=True)
-
-
 def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, check: bool) -> bool:
     """Render external_dependencies.py from the locks, TPU fork pins, and promoted GPU release.
 
@@ -596,9 +600,33 @@ def promote_gpu_release(manifest_path: Path) -> None:
     print(f"re-pinned vllm GPU release {manifest['release']['tag']} from {manifest_path}")
 
 
+def update_skyrl_marin(project: Path) -> None:
+    """Advance published Marin libraries in the nested lock and reject incompatible APIs."""
+    lock = project / "uv.lock"
+    original = lock.read_bytes()
+    packages = ("verifyit", "rolloutengine", "shellbox", "taskcompendium", "iris", "finestore", "rigging")
+    command = ["uv", "lock", "--project", str(project)]
+    for package in packages:
+        command.extend(("--upgrade-package", f"marin-{package}"))
+    try:
+        subprocess.run(command, check=True)
+        subprocess.run(
+            [sys.executable, str(SKYRL_MARIN_CHECK), "project", "--source", str(project)],
+            check=True,
+        )
+    except BaseException:
+        lock.write_bytes(original)
+        raise
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Upgrade external uv locks and package immutable external runtime inputs."
+    )
+    parser.add_argument(
+        "--skyrl-marin-packages",
+        action="store_true",
+        help="advance published Marin libraries in vendor/skyrl's lock and validate their isolated API",
     )
     parser.add_argument(
         "projects",
@@ -626,13 +654,21 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     args = parser.parse_args()
-    if args.promote_gpu_release is not None and (args.check or args.projects or args.summary_file):
+    if args.promote_gpu_release is not None and (
+        args.check or args.projects or args.summary_file or args.skyrl_marin_packages
+    ):
         parser.error("--promote-gpu-release runs on its own; drop --check, PROJECT, and --summary-file")
+    if args.skyrl_marin_packages and (args.check or args.projects or args.summary_file):
+        parser.error("--skyrl-marin-packages runs on its own; drop --check, PROJECT, and --summary-file")
     return args
 
 
 def main() -> None:
     args = parse_args()
+    if args.skyrl_marin_packages:
+        update_skyrl_marin((ROOT / "vendor/skyrl").resolve())
+        print("Updated published Marin libraries in vendor/skyrl/uv.lock")
+        return
     if args.promote_gpu_release is not None:
         promote_gpu_release(args.promote_gpu_release)
         return
@@ -642,19 +678,7 @@ def main() -> None:
     previous_dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     if not args.check:
         for project in selected:
-            subprocess.run(
-                [
-                    "uv",
-                    "lock",
-                    "--project",
-                    str(project.directory),
-                    "--upgrade-package",
-                    project.distribution,
-                ],
-                check=True,
-            )
-            if project.config_name == MARINSKYRL_CONFIG_NAME:
-                validate_marinskyrl_environment(project)
+            upgrade_project_lock(project)
 
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
