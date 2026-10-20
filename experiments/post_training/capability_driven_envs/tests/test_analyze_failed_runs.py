@@ -19,12 +19,12 @@ from rolloutengine.models import (
     TokenUsage,
     Transition,
 )
-from rolloutengine.test_support import arithmetic_task, rollout_limits
+from rolloutengine.test_support import arithmetic_task, rollout_limits, shell_call
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerCall
 
 from experiments.post_training.capability_driven_envs.analyze_failed_runs import (
-    EvaluatedRun,
+    EvaluatedRollout,
     analyze_failed_runs,
     policy_failures,
 )
@@ -40,16 +40,16 @@ CAPABILITY = {
 }
 
 
-def evaluated(run_id: str, status: Outcome, reward: float | None, *turns: dict, failure=None) -> EvaluatedRun:
-    """A run of the arithmetic task whose policy produced ``turns``, graded with ``status`` and ``reward``."""
+def evaluated(run_id: str, status: Outcome, reward: float | None, *turns: dict, failure=None) -> EvaluatedRollout:
+    """A rollout of the arithmetic task whose policy produced ``turns``, graded with ``status`` and ``reward``."""
     steps = tuple(RolloutStep(ModelTurn(turn, (), (), None, "stop"), Transition(done=False), 0, ()) for turn in turns)
     prompt = {"role": "user", "content": "What is six plus six?"}
     conversation = ConversationRecord((prompt, *turns), (), (), (), None, steps)
     rollout = Rollout(run_id, (conversation,), "stop", failure=failure)
-    return EvaluatedRun(arithmetic_task(id=f"task-{run_id}"), GradedRollout(rollout, GradeResult(status, reward)))
+    return EvaluatedRollout(arithmetic_task(id=f"task-{run_id}"), GradedRollout(rollout, GradeResult(status, reward)))
 
 
-RUNS = [
+ROLLOUTS = [
     evaluated("pass", Outcome.GRADED, 1.0, {"role": "assistant", "content": "12"}),
     evaluated("wrong", Outcome.GRADED, 0.0, {"role": "assistant", "content": "six, " * 600 + "so the answer is 13"}),
     evaluated(
@@ -81,62 +81,65 @@ def analyst(*messages: dict) -> tuple[Any, list[ModelRequest]]:
     return model, requests
 
 
-def tool_call(name: str, **arguments: Any) -> dict:
-    function = {"name": name, "arguments": json.dumps(arguments)}
-    return {"role": "assistant", "content": "", "tool_calls": [{"id": name, "type": "function", "function": function}]}
+def shell_output(request: ModelRequest) -> str:
+    """The output of the shell command that the agent sent before ``request``."""
+    return json.loads(request.messages[-1]["content"])["stdout"]
 
 
-def test_only_the_runs_that_the_policy_failed_are_analyzed():
-    assert [run.result.rollout.run_id for run in policy_failures(RUNS, pass_threshold=1.0)] == ["wrong", "loop"]
+def test_only_the_rollouts_that_the_policy_failed_are_analyzed():
+    assert [rollout.result.rollout.run_id for rollout in policy_failures(ROLLOUTS, pass_threshold=1.0)] == [
+        "wrong",
+        "loop",
+    ]
 
 
-async def test_the_agent_reads_the_failed_runs_and_returns_capability_ideas_for_generate_tasks():
+async def test_the_agent_reads_the_failed_rollouts_as_files_and_returns_capability_ideas_for_generate_tasks():
     model, requests = analyst(
-        tool_call("search_runs", text="Answer is 13"),
-        tool_call("read_run", run_id="loop"),
+        shell_call("jq -c '[.run_id, .repeated_calls]' index.jsonl", call_id="index"),
+        shell_call("grep -il 'answer is 13' *.txt", call_id="search"),
+        shell_call("sed -n 2p loop.txt", call_id="read"),
         {"role": "assistant", "content": json.dumps([CAPABILITY])},
     )
 
     ideas = await analyze_failed_runs(
-        RUNS, model, pass_threshold=1.0, limits=rollout_limits(max_turns=4), catalog_version="round-1"
+        ROLLOUTS, model, pass_threshold=1.0, limits=rollout_limits(max_turns=5), catalog_version="round-1"
     )
 
-    overview = requests[0].messages[1]["content"]
-    assert overview.startswith("2 of 5 runs failed.")
-    assert '"run_id": "loop"' in overview and '"repeated_calls": 1' in overview
-    assert '"run_id": "pass"' not in overview and '"run_id": "infra"' not in overview
-    search, read = requests[1].messages[-1]["content"], requests[2].messages[-1]["content"]
-    assert search.startswith("wrong [1] ...") and search.endswith("so the answer is 13...")
-    assert "[0] user: What is six plus six?" in read
+    assert requests[0].messages[1]["content"].startswith("2 of 5 rollouts failed.")
+    assert [shell_output(request) for request in requests[1:]] == [
+        '["wrong",0]\n["loop",1]\n',
+        "wrong.txt\n",
+        "[0] user: What is six plus six?\n",
+    ]
     [idea] = ideas
     assert (idea.capability_id, idea.catalog_version) == (CAPABILITY["id"], "round-1")
     assert idea.capability["kind"] == "capability" and idea.capability["evidence"] == ["loop"]
     assert task_workpieces({idea.capability_id: idea}, 1) == [(f"{CAPABILITY['id']}--00", idea)]
 
 
-async def test_read_run_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
+async def test_a_rollout_file_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
     policy = {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function"}]}
     result = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, policy).result
-    run = EvaluatedRun(arithmetic_task(id="task-malformed", answer_format=AnswerCall()), result)
+    rollout = EvaluatedRollout(arithmetic_task(id="task-malformed", answer_format=AnswerCall()), result)
     model, requests = analyst(
-        tool_call("read_run", run_id="malformed"),
+        shell_call("cat malformed.txt"),
         {"role": "assistant", "content": json.dumps([{**CAPABILITY, "evidence": ["malformed"]}])},
     )
 
     await analyze_failed_runs(
-        [run], model, pass_threshold=1.0, limits=rollout_limits(max_turns=4), catalog_version="round-1"
+        [rollout], model, pass_threshold=1.0, limits=rollout_limits(max_turns=4), catalog_version="round-1"
     )
 
-    read = requests[1].messages[-1]["content"]
-    assert '"name": "submit_answer"' in read
-    assert '<tool call> malformed {"id": "bad", "type": "function"}' in read
+    tools, *messages = shell_output(requests[1]).splitlines()
+    assert [tool["function"]["name"] for tool in json.loads(tools)["tools"]] == ["submit_answer"]
+    assert messages[-1] == '[1] assistant: <tool call> malformed {"id": "bad", "type": "function"}'
 
 
-async def test_no_failed_run_needs_no_analysis():
+async def test_no_failed_rollout_needs_no_analysis():
     model, requests = analyst()
     assert (
         await analyze_failed_runs(
-            RUNS[:1], model, pass_threshold=1.0, limits=rollout_limits(), catalog_version="round-1"
+            ROLLOUTS[:1], model, pass_threshold=1.0, limits=rollout_limits(), catalog_version="round-1"
         )
         == []
     )
@@ -154,4 +157,6 @@ async def test_no_failed_run_needs_no_analysis():
 async def test_an_answer_that_is_not_grounded_capabilities_is_rejected(answer, message):
     model, _ = analyst({"role": "assistant", "content": answer})
     with pytest.raises(ValueError, match=message):
-        await analyze_failed_runs(RUNS, model, pass_threshold=1.0, limits=rollout_limits(), catalog_version="round-1")
+        await analyze_failed_runs(
+            ROLLOUTS, model, pass_threshold=1.0, limits=rollout_limits(), catalog_version="round-1"
+        )
