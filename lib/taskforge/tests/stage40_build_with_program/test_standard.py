@@ -22,7 +22,8 @@ from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import decision, draft
 from taskforge.spec.decision import DecisionGrader, DecisionUnavailable
-from taskforge.spec.draft import VERDICT_REWARD, answer_grader, rollout_engine
+from taskforge.spec.draft import answer_grader, rollout_engine
+from taskforge.spec.verdict import VERDICT_REWARD
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal, parse
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,

@@ -13,6 +13,11 @@ It writes to ``<evidence_root>/proposal/<run name>/``:
   decision, wall time, and tokens per slot.
 """
 
+import pytest
+
+# These tests run in the marin-taskforge package environment; environments without it skip them.
+pytest.importorskip("taskforge")
+
 import asyncio
 import json
 import os
@@ -23,7 +28,6 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 from taskforge.llm.client import Completion
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient
 from taskforge.llm.policy import LLMPolicy

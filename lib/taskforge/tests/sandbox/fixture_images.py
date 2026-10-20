@@ -29,7 +29,8 @@ from taskcompendium.grader import GraderPackage
 from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import inline_resource
 
-from taskforge.spec.draft import GRADER_RESOURCE_ROOT, PYTHON_GRADER_ARGV, VERDICT_REWARD, script_grader
+from taskforge.spec.draft import GRADER_RESOURCE_ROOT, PYTHON_GRADER_ARGV, script_grader
+from taskforge.spec.verdict import VERDICT_REWARD
 
 SHELL_GRADER_ARGV = ("sh", f"{GRADER_RESOURCE_ROOT}/grade.sh")
 
