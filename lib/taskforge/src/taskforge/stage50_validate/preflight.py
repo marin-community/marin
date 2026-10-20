@@ -4,10 +4,12 @@
 """Start a task's machine on its lowered backend before any trial, and fall back when it cannot.
 
 ``draft.host_requirements`` lowers a grader-base task onto the host's local backend when its shipped
-files and working directories stay off that backend's read-only system directories. A setup command
-can still write under one (``mkdir -p /opt/gen`` in a task's ``setup_commands``), and the lowering
-cannot see that without running the command, so every trial of such a task would fail its setup on
-the local backend while the same task runs in a container.
+files and working directories stay off the directories that backend cannot write. On Iris the local
+factory overlays the system directories copy-on-write, so that is only ``/sys`` and the resolver's
+directory and a task that ships files to ``/opt`` stays local; a read-only factory keeps every system
+directory off limits. A setup command can still write where the lowering did not look, and the
+lowering cannot see that without running the command, so every trial of such a task would fail its
+setup on the local backend while the same task runs in a container; with the overlay that is rare.
 
 ``preflight`` lowers the task, and when its grader-base task machine lands on the local backend it runs
 the engine's own preparation once (machine start, resources, setup commands) by rolling out a probe that
