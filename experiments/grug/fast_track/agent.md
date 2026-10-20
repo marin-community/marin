@@ -18,14 +18,14 @@ and retry or report the failure — do not block waiting for input.
 The ladder and gates below are for model and optimizer changes.
 For data selection, use the [quality-classifier track](README.md#improve-a-quality-classifier).
 [Run a data-track command](README.md#run-a-data-track-command) gives its Iris command, and
-[Compare data-track runs](README.md#compare-data-track-runs) gives its gate. The two tracks use the same metric.
+[Compare data-track runs](README.md#compare-data-track-runs) gives its gate: a capability judge, not Paloma macro loss.
 
 Determine whether a proposed change outperforms the baseline. The baselines are
 the dense and MoE runs recorded in `experiments/grug/fast_track/README.md` —
 compare against the table there (the W&B runs linked below the table).
 
 **Metrics (from wandb, project `marin-community/marin_moe`):**
-- `eval/paloma/macro_loss` (final value) — **the** primary quality metric for all tracks (lower is better).
+- `eval/paloma/macro_loss` (final value) — **the** primary quality metric for model changes (lower is better).
   Report and compare in Paloma macro loss, not bpb. Uncheatable macro loss
   (`eval/uncheatable_eval/macro_loss`) and per-dataset Paloma loss are guardrails.
 - `throughput/tokens_per_second` (averaged over the last 100 steps)
