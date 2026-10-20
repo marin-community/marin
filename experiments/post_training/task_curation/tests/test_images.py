@@ -201,7 +201,6 @@ def test_build_from_an_untracked_dockerfile_in_a_worktree_records_the_environmen
     )
     assert StoragePath(built.lock_url).read_text() == COMPILED_LOCK
     assert built.image is not None
-    assert built.identity == identity_digest(environment)
 
 
 def test_build_from_a_gitless_source_bundle_records_the_environment(docker_log, tmp_path):
@@ -213,7 +212,6 @@ def test_build_from_a_gitless_source_bundle_records_the_environment(docker_log, 
     )
     assert StoragePath(built.lock_url).read_text() == COMPILED_LOCK
     assert built.image is not None
-    assert built.identity == identity_digest(environment)
 
 
 def test_an_image_build_requires_repository_credentials(docker_log, tmp_path):

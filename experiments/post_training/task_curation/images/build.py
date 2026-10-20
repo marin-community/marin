@@ -303,7 +303,7 @@ def _require_docker(repository: str) -> None:
 
 
 def _reject_executable_runtime_files() -> None:
-    """Iris source bundles drop executable permission bits from runtime packages."""
+    """Reject runtime package files with executable permission bits."""
     for package in RUNTIME_PACKAGES:
         files = context_files(package)
         executable = [file.path for file in files if file.mode == EXECUTABLE_MODE]
