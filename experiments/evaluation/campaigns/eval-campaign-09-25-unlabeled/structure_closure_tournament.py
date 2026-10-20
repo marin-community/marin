@@ -50,14 +50,13 @@ from marin.evaluation.runner import (
     EvaluationIdentity,
     EvaluationOutcome,
     LaunchProvenance,
-    submit_evaluation_batch,
 )
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from transformers import AutoTokenizer
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
-from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, _capability_origin, _git_sha
+from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, _capability_origin, _git_sha, launch_group
 
 logger = logging.getLogger(__name__)
 
@@ -377,7 +376,7 @@ def main() -> None:
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         for batch in batches:
-            submitted = submit_evaluation_batch(batch, client)
+            submitted = launch_group(batch, client)
             with args.manifest.open("a") as target:
                 target.write(
                     json.dumps(

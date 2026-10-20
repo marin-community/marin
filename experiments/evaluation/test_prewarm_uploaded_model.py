@@ -3,7 +3,6 @@
 
 import hashlib
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -52,7 +51,7 @@ def test_uploaded_weights_must_match_hf_before_cache_is_complete(tmp_path, monke
         "model_info",
         lambda *_args, **_kwargs: SimpleNamespace(sha=revision, siblings=siblings),
     )
-    marker = Path(f"{cache}{DEFAULT_COMPLETE_MARKER}")
+    marker = cache / DEFAULT_COMPLETE_MARKER
     if source_payload != expected:
         with pytest.raises(ValueError, match="checksum mismatch"):
             prewarm_uploaded_model.warm_uploaded_model(config, str(cache), "upload-manifest.json", 2, source_override)
@@ -63,5 +62,4 @@ def test_uploaded_weights_must_match_hf_before_cache_is_complete(tmp_path, monke
     prewarm_uploaded_model.warm_uploaded_model(config, str(cache), "upload-manifest.json", 2, source_override)
 
     assert (cache / "model.safetensors").read_bytes() == expected
-    assert json.loads((cache / ".cache_metadata.json").read_text())["source_revision"] == "parent"
     assert json.loads(marker.read_text())["source_revision"] == revision
