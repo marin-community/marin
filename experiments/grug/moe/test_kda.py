@@ -8,6 +8,7 @@ anchored to the sequential recurrence (an independent, obviously-correct oracle)
 and in the scalar-gate limit to levanter's HF-validated gated-delta-rule kernel.
 """
 
+import functools
 import itertools
 
 import jax
@@ -17,7 +18,7 @@ import pytest
 
 from experiments.grug.moe.kda import chunk_kda, kda_fused, recurrent_kda
 from experiments.grug.moe.kda_prep_pallas import EraseInput, GateFn, GateKind
-from experiments.grug.moe.kda_state_pallas import StateGrads
+from experiments.grug.moe.kda_state_pallas import StateBwd, StateGrads
 
 jax.config.update("jax_default_matmul_precision", "float32")
 
@@ -326,6 +327,48 @@ def test_kda_fused_gate_and_grouped_kv_match_unfused(packed, sub_chunk_size):
     for x, y in zip(got, want, strict=True):
         assert x.shape == y.shape
         np.testing.assert_allclose(np.asarray(x), np.asarray(y), rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize(
+    ("primal_block_v", "state_bwd", "fused_prep_bwd"),
+    [(32, StateBwd.SPLIT, False), (0, StateBwd.FUSED, False), (0, StateBwd.SPLIT, True), (32, StateBwd.FUSED, True)],
+)
+def test_kda_fused_kernel_variants_match_default(packed, primal_block_v, state_bwd, fused_prep_bwd):
+    """The lean primal state pass, the fused state backward and the fused prep backward reproduce the default
+    kernels' values and gradients (the GB200 configuration: 32-token chunks in one decay tile, the on-chip
+    sigmoid gate with its -5 floor, packed documents)."""
+    rng = np.random.RandomState(31)
+    b, length, heads, d = 2, 96, 3, 32
+    q, k, v = (jnp.asarray(rng.randn(b, length, heads, d), jnp.float32) for _ in range(3))
+    a = jnp.asarray(rng.randn(b, length, heads, d), jnp.float32)
+    beta = jnp.asarray(rng.rand(b, length, heads), jnp.float32)
+    rate = jnp.asarray(rng.uniform(0.5, 2.0, (heads, d)), jnp.float32)
+    bias = jnp.asarray(rng.randn(heads, d), jnp.float32)
+    w = jnp.asarray(rng.randn(b, length, heads, d), jnp.float32)
+    seg = jnp.asarray(np.repeat(np.arange(4), [7, 40, 1, 48])[None].repeat(b, 0), jnp.int32) if packed else None
+    base = dict(
+        chunk_size=32,
+        sub_chunk_size=32,
+        gate_fn=GateFn(GateKind.SIGMOID, 5.0),
+        segment_ids=seg,
+        matmul_dtype=jnp.float32,
+        interpret=True,
+        state_grads=StateGrads.PALLAS,
+        state_block_v=16,
+    )
+    variant = dict(base, state_primal_block_v=primal_block_v, state_bwd=state_bwd, fused_prep_bwd=fused_prep_bwd)
+
+    def loss(kw, q, k, v, a, beta, rate, bias):
+        return jnp.sum(w * kda_fused(q, k, v, a, beta, gate=(rate, bias), **kw))
+
+    args = (q, k, v, a, beta, rate, bias)
+    np.testing.assert_allclose(float(loss(variant, *args)), float(loss(base, *args)), rtol=1e-6)
+    got = jax.grad(functools.partial(loss, variant), argnums=tuple(range(7)))(*args)
+    want = jax.grad(functools.partial(loss, base), argnums=tuple(range(7)))(*args)
+    for x, y in zip(got, want, strict=True):
+        assert np.isfinite(np.asarray(x)).all()
+        np.testing.assert_allclose(np.asarray(x), np.asarray(y), rtol=1e-5, atol=1e-5)
 
 
 # --- Packed documents: hard state resets at document boundaries ---

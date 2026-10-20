@@ -51,6 +51,13 @@ class StateGrads(StrEnum):
     PALLAS = "pallas"  # one parallel kernel per (g, chunk) reading every per-chunk tensor once
 
 
+class StateBwd(StrEnum):
+    """How the state pass's backward is split into kernels."""
+
+    SPLIT = "split"  # reverse pass over d_v slabs emitting dS per chunk, then the d_v-contracting cotangents
+    FUSED = "fused"  # one reverse pass per (g) over the whole d_v that forms every cotangent in-loop (no dS)
+
+
 class StateConfig(NamedTuple):
     num_heads: int
     block_v: int
@@ -59,6 +66,12 @@ class StateConfig(NamedTuple):
     interpret: bool
     save_states: bool
     grads: StateGrads
+    # d_v tile of the primal (non-differentiated) forward, which then skips the h / v_new stores; 0 keeps
+    # the primal on the saving kernel (``block_v``).
+    primal_block_v: int = 0
+    primal_num_warps: int = 4
+    bwd: StateBwd = StateBwd.SPLIT
+    bwd_num_warps: int = 8
 
 
 def _state_fwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_ref, out_ref, h_ref, vnew_ref, st_ref):
@@ -78,6 +91,59 @@ def _state_fwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_r
         return decay_ref[i][:, None] * s + dot_f32(kw_ref[i].astype(f32), vn, trans_a=True)
 
     st_ref[...] = lax.fori_loop(0, n, body, s0_ref[...])
+
+
+def _state_fwd_lean_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, vp_ref, decay_ref, s0_ref, out_ref, st_ref):
+    """``_state_fwd_kernel`` without the per-chunk h / v_new stores (the primal forward needs only ``out``)."""
+    n, c = kw_ref.shape[:2]
+
+    def body(i, s):
+        vn = vp_ref[i] - dot_f32(kcd_ref[i].astype(f32), s)
+        out = dot_f32(qi_ref[i].astype(f32), s) + dot_f32(attn_ref[i].astype(f32), vn)
+        out_ref[pl.ds(pl.multiple_of(i * c, c), c), :] = out.astype(out_ref.dtype)
+        return decay_ref[i][:, None] * s + dot_f32(kw_ref[i].astype(f32), vn, trans_a=True)
+
+    st_ref[...] = lax.fori_loop(0, n, body, s0_ref[...])
+
+
+def _state_bwd_fused_kernel(
+    qi_ref,
+    attn_ref,
+    kw_ref,
+    kcd_ref,
+    decay_ref,
+    h_ref,
+    vnew_ref,
+    dout_ref,
+    dst_ref,
+    dqi_ref,
+    dattn_ref,
+    dkw_ref,
+    dkcd_ref,
+    dvp_ref,
+    ddecay_ref,
+    ds0_ref,
+):
+    """``_state_bwd_kernel`` and ``_state_grads_kernel`` in one reverse pass that owns the whole d_v: every
+    cotangent of chunk i is formed while dS_i is on-chip, so dS never round-trips HBM."""
+    n, c = kw_ref.shape[:2]
+
+    def body(j, ds):
+        i = n - 1 - j  # ds is the cotangent of S_i (the state leaving chunk i)
+        dout = dout_ref[pl.ds(pl.multiple_of(i * c, c), c), :].astype(f32)
+        h = h_ref[i].astype(f32)
+        vn = vnew_ref[i]
+        dvn = dot_f32(attn_ref[i].astype(f32), dout, trans_a=True) + dot_f32(kw_ref[i].astype(f32), ds)
+        dvp_ref[i] = dvn
+        dqi_ref[i] = dot_f32(dout, h, trans_b=True).astype(dqi_ref.dtype)
+        dattn_ref[i] = dot_f32(dout, vn, trans_b=True).astype(dattn_ref.dtype)
+        dkw_ref[i] = dot_f32(vn, ds, trans_b=True).astype(dkw_ref.dtype)
+        dkcd_ref[i] = (-dot_f32(dvn, h, trans_b=True)).astype(dkcd_ref.dtype)
+        ddecay_ref[i] = jnp.sum(h * ds, axis=1)
+        ds_in = decay_ref[i][:, None] * ds - dot_f32(kcd_ref[i].astype(f32), dvn, trans_a=True)
+        return ds_in + dot_f32(qi_ref[i].astype(f32), dout, trans_a=True)
+
+    ds0_ref[...] = lax.fori_loop(0, n, body, dst_ref[...])
 
 
 def _state_bwd_kernel(qi_ref, attn_ref, kw_ref, kcd_ref, decay_ref, dout_ref, dst_ref, ds_ref, dvp_ref, ds0_ref):
@@ -202,9 +268,88 @@ def _state_fwd_call(qi, attn, kw, kcd, vp, decay, s0, out_dtype, cfg: StateConfi
     )(qi, attn, kw, kcd, vp, decay, s0)
 
 
+def _state_fwd_lean_call(qi, attn, kw, kcd, vp, decay, s0, out_dtype, cfg: StateConfig):
+    gb, n, c, dk = kw.shape
+    dv = vp.shape[-1]
+    bv = min(cfg.primal_block_v, dv)
+    heads = cfg.num_heads
+    return pl.pallas_call(
+        _state_fwd_lean_kernel,
+        grid=(gb, dv // bv),
+        in_specs=[
+            _full(n, c, dk),
+            _full(n, c, c),
+            _full(n, c, dk),
+            _full(n, c, dk),
+            _vslab(n, c, bv),
+            _full(n, dk),
+            _state_slab(dk, bv),
+        ],
+        out_specs=[_seq_slab(n * c, heads, bv), _state_slab(dk, bv)],
+        out_shape=[
+            jax.ShapeDtypeStruct((gb // heads, n * c, heads, dv), out_dtype),
+            jax.ShapeDtypeStruct((gb, dk, dv), f32),
+        ],
+        compiler_params=plt.CompilerParams(num_warps=cfg.primal_num_warps, num_stages=cfg.num_stages),
+        interpret=cfg.interpret,
+        name="kda_state_fwd_lean",
+    )(qi, attn, kw, kcd, vp, decay, s0)
+
+
+def _state_bwd_fused_call(qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg: StateConfig):
+    gb, n, c, dk = kw.shape
+    dv = vnew.shape[-1]
+    heads = cfg.num_heads
+
+    def per_g(*dims):
+        return pl.BlockSpec((None, *dims), lambda gi: (gi,) + (0,) * len(dims))
+
+    return pl.pallas_call(
+        _state_bwd_fused_kernel,
+        grid=(gb,),
+        in_specs=[
+            per_g(n, c, dk),
+            per_g(n, c, c),
+            per_g(n, c, dk),
+            per_g(n, c, dk),
+            per_g(n, dk),
+            per_g(n, dk, dv),
+            per_g(n, c, dv),
+            pl.BlockSpec((None, n * c, None, dv), lambda gi: (gi // heads, 0, gi % heads, 0)),
+            per_g(dk, dv),
+        ],
+        out_specs=[
+            per_g(n, c, dk),
+            per_g(n, c, c),
+            per_g(n, c, dk),
+            per_g(n, c, dk),
+            per_g(n, c, dv),
+            per_g(n, dk),
+            per_g(dk, dv),
+        ],
+        out_shape=[
+            jax.ShapeDtypeStruct(qi.shape, qi.dtype),
+            jax.ShapeDtypeStruct(attn.shape, attn.dtype),
+            jax.ShapeDtypeStruct(kw.shape, kw.dtype),
+            jax.ShapeDtypeStruct(kcd.shape, kcd.dtype),
+            jax.ShapeDtypeStruct((gb, n, c, dv), f32),
+            jax.ShapeDtypeStruct((gb, n, dk), f32),
+            jax.ShapeDtypeStruct((gb, dk, dv), f32),
+        ],
+        compiler_params=plt.CompilerParams(num_warps=cfg.bwd_num_warps, num_stages=cfg.num_stages),
+        interpret=cfg.interpret,
+        name="kda_state_bwd_fused",
+    )(qi, attn, kw, kcd, decay, h, vnew, dout, dst)
+
+
 def _state_bwd_call(qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg: StateConfig):
     gb, n, c, dk = kw.shape
     dv = vnew.shape[-1]
+    if cfg.bwd == StateBwd.FUSED:
+        dqi, dattn, dkw, dkcd, dvp, ddecay, ds0 = _state_bwd_fused_call(
+            qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg
+        )
+        return dqi, dattn, dkw, dkcd, dvp, ddecay, ds0
     bv = min(cfg.block_v, dv)
     heads = cfg.num_heads
     ds, dvp, ds0 = pl.pallas_call(
@@ -251,6 +396,9 @@ def _state_bwd_call(qi, attn, kw, kcd, decay, h, vnew, dout, dst, cfg: StateConf
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(7, 8))
 def _state_pass(qi, attn, kw, kcd, vp, decay, s0, out_dtype, cfg: StateConfig):
+    if cfg.primal_block_v:
+        out, st = _state_fwd_lean_call(qi, attn, kw, kcd, vp, decay, s0, out_dtype, cfg)
+        return out, st
     out, _, _, st = _state_fwd_call(qi, attn, kw, kcd, vp, decay, s0, out_dtype, cfg)
     return out, st
 
@@ -295,6 +443,10 @@ def chunk_state_pass(
     interpret: bool = False,
     save_states: bool = False,
     grads: StateGrads = StateGrads.XLA,
+    primal_block_v: int = 0,
+    primal_num_warps: int = 4,
+    bwd: StateBwd = StateBwd.SPLIT,
+    bwd_num_warps: int = 8,
 ) -> tuple[jax.Array, jax.Array]:
     """Sequential inter-chunk KDA state pass with the chunk outputs fused in (differentiable).
 
@@ -309,14 +461,32 @@ def chunk_state_pass(
         block_v: ``d_v`` slab width per program (parallelism vs. re-reading the d_k operands).
         save_states: keep the per-chunk states for the backward instead of re-running the
             forward pass there (same values; costs ``G * n * d_k * d_v`` stored elements).
-        grads: where the backward forms the cotangents that contract over d_v (``StateGrads``).
+        grads: where the backward forms the cotangents that contract over d_v (``StateGrads``; ``SPLIT`` only).
+        primal_block_v: d_v tile of the primal (non-differentiated) forward, which then runs a kernel that
+            skips the per-chunk h / v_new stores only the backward reads; 0 keeps the saving kernel there.
+        primal_num_warps: Triton warps of that lean primal kernel.
+        bwd: ``StateBwd.FUSED`` forms every cotangent inside one reverse pass per (g) over the whole d_v.
+        bwd_num_warps: Triton warps of the fused backward kernel.
 
     Returns:
         ``(out, final_state)``: ``out_n = q_inflate_n S_{n-1} + attn_n v_new_n`` in model
         layout ``(B, L = n*C, num_heads, d_v)`` and the ``(G, d_k, d_v)`` final state.
     """
     dv = v_pseudo.shape[-1]
-    if dv % min(block_v, dv):
-        raise ValueError(f"d_v={dv} must be a multiple of block_v={block_v}")
-    cfg = StateConfig(num_heads, block_v, num_warps, num_stages, interpret, save_states, StateGrads(grads))
+    for name, bv in (("block_v", block_v), ("primal_block_v", primal_block_v or block_v)):
+        if dv % min(bv, dv):
+            raise ValueError(f"d_v={dv} must be a multiple of {name}={bv}")
+    cfg = StateConfig(
+        num_heads,
+        block_v,
+        num_warps,
+        num_stages,
+        interpret,
+        save_states,
+        StateGrads(grads),
+        primal_block_v,
+        primal_num_warps,
+        StateBwd(bwd),
+        bwd_num_warps,
+    )
     return _state_pass(q_inflate, attn, kw, k_cumdecay, v_pseudo, decay, initial_state, jnp.dtype(out_dtype), cfg)
