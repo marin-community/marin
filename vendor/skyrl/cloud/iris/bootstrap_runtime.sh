@@ -72,18 +72,47 @@ fi
 # Keep the development linker name in this environment, outside uv's package cache.
 ln -sf "$CUDA_HOME/lib/libcudart.so.13" "$environment/lib/libcudart.so"
 ln -sf "$CUDA_HOME/lib/libnvrtc.so.13" "$environment/lib/libnvrtc.so"
-"$python" -c "import flash_attn, flash_attn_2_cuda"
-if [[ "$profile" == megatron || "$profile" == megatron-export ]]; then
-  "$python" -c "import transformer_engine.common; from megatron.bridge import AutoBridge"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+check_pids=()
+check_logs=()
+
+run_check() {
+  local name="$1"
+  shift
+  (
+    started=$SECONDS
+    status=0
+    "$@" || status=$?
+    printf '[rl-iris] bootstrap check %s: %ss\n' "$name" "$((SECONDS - started))"
+    exit "$status"
+  ) >"$workdir/check-$name.log" 2>&1 &
+  check_pids+=("$!")
+  check_logs+=("$workdir/check-$name.log")
+}
+
+run_check flash-attention "$python" -c "import flash_attn, flash_attn_2_cuda"
+run_check megatron "$python" -c "import transformer_engine.common; from megatron.bridge import AutoBridge"
+if [[ "$profile" == *-export ]]; then
+  run_check export "$python" -c "import ray, torch; from skyrl_train.checkpoint_exporter import CheckpointExporter"
+else
+  run_check agents "$python" -c "import memray; from shellbox.backends.daytona.machine import DaytonaMachineFactory; from shellbox.backends.shellsim.machine import ShellSimMachineFactory; from rolloutengine.engine import RolloutEngine"
+  run_check vllm "$python" -c "import sys; from pathlib import Path; import quack.activation, torch, vllm; import vllm._C_stable_libtorch, vllm.cumem_allocator; from skyrl_train.models.grug_moe import GRUG_MOE_ARCHITECTURE; from vllm.model_executor.models import ModelRegistry; assert GRUG_MOE_ARCHITECTURE in ModelRegistry.get_supported_archs(); Path(sys.argv[1]).write_text(f'{torch.__version__} {vllm.__version__}')" "$workdir/runtime-versions"
+fi
+
+failed=0
+for index in "${!check_pids[@]}"; do
+  if wait "${check_pids[$index]}"; then
+    cat "${check_logs[$index]}"
+  else
+    failed=1
+    cat "${check_logs[$index]}" >&2
+  fi
+done
+if [[ "$failed" -ne 0 ]]; then
+  exit 1
 fi
 if [[ "$profile" == *-export ]]; then
-  "$python" -c "import ray, torch; from skyrl_train.checkpoint_exporter import CheckpointExporter"
   exit 0
 fi
-"$python" - <<'PY'
-import memray
-from shellbox.backends.daytona.machine import DaytonaMachineFactory
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from rolloutengine.engine import RolloutEngine
-PY
-"$python" -c "import quack.activation, torch, vllm; import vllm._C_stable_libtorch, vllm.cumem_allocator; from skyrl_train.models.grug_moe import GRUG_MOE_ARCHITECTURE; from vllm.model_executor.models import ModelRegistry; assert GRUG_MOE_ARCHITECTURE in ModelRegistry.get_supported_archs(); print('[rl-iris] frozen runtime ready:', torch.__version__, vllm.__version__)"
+printf '[rl-iris] frozen runtime ready: %s\n' "$(cat "$workdir/runtime-versions")"

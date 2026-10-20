@@ -231,16 +231,16 @@ def _dump_eval_results(
         return
     with Timer("dump_eval_results"):
         data_save_dir = evaluation_dump_dir(str(cfg.trainer.export_path), global_step)
-        io.makedirs(data_save_dir, exist_ok=True)
-        dump_per_dataset_eval_results(
-            data_save_dir,
-            tokenizer,
-            rollouts.batch,
-            data_sources,
-            rollouts.env_classes,
-            metrics,
-            rollouts.uids,
-        )
+        with io.local_work_dir(data_save_dir) as local_dir:
+            dump_per_dataset_eval_results(
+                local_dir,
+                tokenizer,
+                rollouts.batch,
+                data_sources,
+                rollouts.env_classes,
+                metrics,
+                rollouts.uids,
+            )
 
 
 @torch.no_grad()

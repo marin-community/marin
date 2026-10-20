@@ -396,7 +396,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             self.actor_module, self.optimizer, non_blocking, backload_optimizer, backload_model
         )
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
@@ -405,7 +405,9 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         # The guess deadlocks the first collective (weight-init barrier) on unmasked-CVD clusters
         # where every actor sees all GPUs (cw-rno2a); see init_worker_process_group_with_device.
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         # Explicitly wrap torch.distributed.broadcast in torch.no_grad() to avoid a warning in Megatron training where the
@@ -475,10 +477,16 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         torch.distributed.barrier()
 
         if self.remote_hf_state is not None:
+            stats = self.remote_hf_state.store.read_stats
             logger.info(
-                "Loaded Megatron policy weights directly from {} (rank range bytes read: {})",
+                "Loaded Megatron policy weights directly from {} "
+                "(rank range bytes read: {}; opens={} reads={} read_seconds={:.2f} MB_per_s={:.2f})",
                 self.cfg.trainer.policy.model.source_uri,
-                self.remote_hf_state.store.bytes_read,
+                stats.bytes_read,
+                stats.opens,
+                stats.reads,
+                stats.read_seconds,
+                stats.bytes_read / 1_000_000 / stats.read_seconds if stats.read_seconds else 0.0,
             )
 
         if self._rank == 0:
@@ -917,14 +925,16 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
     def backload_to_gpu(self, non_blocking=True, **kwargs):
         self.strategy.backload_to_gpu(self.actor_module, None, non_blocking)
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
         # Device-pinned NCCL PG init via the shared helper (see init_worker_process_group_with_device) —
         # avoids the ProcessGroupNCCL device-guess collective deadlock on unmasked-CVD clusters (cw-rno2a).
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         self.strategy = MegatronStrategy(
