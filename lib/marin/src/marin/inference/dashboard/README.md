@@ -143,11 +143,24 @@ result to the next request as structured `tool_calls` and `role: "tool"`
 messages. The same template then renders the result in its trained format.
 The server derives schemas from the function syntax without executing the
 source. Pydantic validates arguments before each call and the return value
-afterward. Calls run in isolated ShellSim environments with CPython and NumPy,
-prepared from the server-configured ports catalog before startup. Python tools
-have 10 billion fuel units, 1 GiB memory, 512 MiB disk, 1 MiB output and a
-10-second worker timeout; source is limited to 64 KiB. Guest code has no ambient
-host filesystem, process, network, environment or clock access.
+afterward. Python-tool invocations and shell commands run in isolated ShellSim
+environments with CPython and NumPy, prepared from the server-configured ports
+catalog on the first valid Python-tool invocation or shell command. Requests in
+one dashboard process share preparation, which runs off the server event loop.
+Dashboard startup, browsing, schema inspection, and inference requests do not
+prepare or download ShellSim packages. A cold cache adds latency to the first
+tool request. Each call then starts a worker that uses the local cache with
+package downloads disabled. Preparation failures return HTTP 503 to the tool
+request; the next tool request retries preparation.
+
+ShellSim's installation cache requires a local filesystem directory. Catalogs
+and their referenced assets accept HTTP(S), file URLs, or local paths. An S3
+mirror must expose the catalog and asset URLs over HTTPS; `s3://` URLs cannot
+serve as installation directories.
+
+Python tools have 10 billion fuel units, 1 GiB memory, 512 MiB disk, 1 MiB output
+and a 10-second worker timeout; source is limited to 64 KiB. Guest code has no
+ambient host filesystem, process, network, environment or clock access.
 
 Within one user turn, each model response that contains one or more calls counts
 as one tool round. **Max tool rounds** in **More settings** controls the number
