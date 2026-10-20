@@ -6,11 +6,11 @@ import pytest
 pytest.importorskip("taskforge")
 
 import json
-from typing import Any
 
 from rolloutengine.models import (
     ConversationRecord,
     GradedRollout,
+    Model,
     ModelRequest,
     ModelTurn,
     Rollout,
@@ -70,7 +70,7 @@ ROLLOUTS = [
 ]
 
 
-def analyst(*messages: dict) -> tuple[Any, list[ModelRequest]]:
+def analyst(*messages: dict) -> tuple[Model, list[ModelRequest]]:
     """A chat model that answers with ``messages`` in order, and the requests that it receives."""
     requests: list[ModelRequest] = []
 

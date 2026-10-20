@@ -115,7 +115,7 @@ tasks evaluate it.
 - A rollout that stopped at its turn limit shows a gap only if it used its turns on repeated or unneeded steps. \
 The agent does not see the limit unless its messages state it.
 
-The workspace has the file index.jsonl, with one JSON object for each failed rollout: its run ID, task, grade, \
+The workspace has the file {index}, with one JSON object for each failed rollout: its run ID, task, grade, \
 stop reason, and counts of turns and tool calls. Each failed rollout also has the file <run_id>.txt. Its first line \
 is a JSON object with the tools that the task gave. The policy's harness can also give a shell tool and the \
 functions of the tool providers. After the first line, each message starts a new line with its number, for example \
@@ -197,7 +197,7 @@ async def analyze_failed_runs(
 
 
 def _analysis_task(failures: Sequence[EvaluatedRollout], total: int, turns: int, catalog_version: str) -> TaskSpec:
-    system = SYSTEM_PROMPT.format(schema=json.dumps(CAPABILITIES.json_schema()))
+    system = SYSTEM_PROMPT.format(index=INDEX, schema=json.dumps(CAPABILITIES.json_schema()))
     user = USER_PROMPT.format(failed=len(failures), total=total, turns=turns)
     index = "".join(f"{json.dumps(_summary(failure))}\n" for failure in failures)
     files = (
