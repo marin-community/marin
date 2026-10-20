@@ -717,6 +717,7 @@ async def test_a_new_conversation_replaces_the_model_options(next_options):
     assert model.requests[1].messages == revised_messages
     assert result.grade.reward == 1.0
     first, revised = result.rollout.conversations
+    assert [conversation.options for conversation in (first, revised)] == [initial_options, next_options]
     assert (first.loss_mask, revised.loss_mask) == ((1,), (1, 0, 0, 1))
 
 
@@ -1092,6 +1093,10 @@ async def test_shell_and_provider_calls_share_one_dispatch_and_a_done_result_end
     transitions = [event.payload for event in observer.events if isinstance(event.payload, TransitionCompleted)]
     assert transitions[-1].observations[-1] == {"role": "tool", "tool_call_id": "submit", "content": "12\n"}
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell", "check"]
+    assert [tool["function"]["name"] for tool in record.rollout.conversations[0].options["tools"]] == [
+        "shell",
+        "check",
+    ]
     observations = model.requests[1].messages[-3:]
     assert json.loads(observations[0]["content"])["exit_code"] == 0
     assert json.loads(observations[1]["content"]) == {"error": "Tool arguments must be a JSON object"}

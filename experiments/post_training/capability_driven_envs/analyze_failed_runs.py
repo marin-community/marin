@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.shell import ShellHarness, task_prompt
+from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import (
     GradedRollout,
     MachineRuntimeSpec,
@@ -114,11 +114,11 @@ tasks evaluate it.
 - A rollout that stopped at its turn limit shows a gap only if it used its turns on repeated or unneeded steps. \
 The agent does not see the limit unless its messages state it.
 
-The workspace has the file {index}, with one JSON object for each failed rollout: its run ID, task, grade, \
-stop reason, and counts of turns and tool calls. Each failed rollout also has the file <run_id>.txt. Its first line \
-is a JSON object with the tools that the task gave. The policy's harness can also give a shell tool and the \
-functions of the tool providers. After the first line, each message starts a new line with its number, for example \
-[0]. Files can be long, so read parts of them, for example with grep, jq, head, or sed. When you are done, answer \
+The workspace has the file {index}, with one JSON object for each failed rollout: its run ID, task messages, grade, \
+stop reason, and counts of turns and tool calls. Each failed rollout also has the file <run_id>.txt. Each conversation \
+starts with a JSON line containing its model options, including the tools it saw and its tool choice. Its messages \
+follow, each starting with a number such as [0]. Files can be long, so read parts of them, for example with grep, \
+jq, head, or sed. When you are done, answer \
 without a tool call. The answer is one JSON array of capabilities that obeys this JSON schema:
 
 {schema}
@@ -129,9 +129,7 @@ USER_PROMPT = """\
 """
 
 
-def policy_failures(
-    rollouts: Sequence[tuple[TaskSpec, GradedRollout]], pass_threshold: float
-) -> list[tuple[TaskSpec, GradedRollout]]:
+def policy_failures(rollouts: Sequence[GradedRollout], pass_threshold: float) -> list[GradedRollout]:
     """The rollouts that the policy failed: graded below ``pass_threshold``, or with no valid submission.
 
     An interrupted attempt, and an infrastructure, task, or grader failure, is not a failure of the policy, so it
@@ -146,11 +144,11 @@ def policy_failures(
             return True
         return grade.status == Outcome.GRADED and grade.reward is not None and grade.reward < pass_threshold
 
-    return [(task, graded) for task, graded in rollouts if failed(graded)]
+    return [graded for graded in rollouts if failed(graded)]
 
 
 async def analyze_failed_runs(
-    rollouts: Sequence[tuple[TaskSpec, GradedRollout]],
+    rollouts: Sequence[GradedRollout],
     model: Model,
     *,
     pass_threshold: float,
@@ -159,8 +157,8 @@ async def analyze_failed_runs(
 ) -> list[CapabilityIdea]:
     """The capabilities that the policy's failed rollouts lack, as ideas for ``generate_tasks``.
 
-    Each graded rollout comes with the task that it ran, because the record does not keep the tools that the task
-    gave. ``model`` drives the analysis agent under ``limits``, for example a ``rolloutengine.chat.ChatModel``. With
+    The conversation records contain the model options and messages that the policy saw. ``model`` drives the
+    analysis agent under ``limits``, for example a ``rolloutengine.chat.ChatModel``. With
     no policy failure, no agent runs. A failed analysis raises ``GradedRolloutInterrupted``, and an answer that is not
     a valid list of capabilities raises ``ValueError``.
     """
@@ -180,7 +178,7 @@ async def analyze_failed_runs(
     )
     result = await engine.run_task(spec, model)
     capabilities = _answer(result.rollout)
-    run_ids = {graded.rollout.run_id for _, graded in failures}
+    run_ids = {graded.rollout.run_id for graded in failures}
     unknown = sorted({run_id for capability in capabilities for run_id in capability.evidence} - run_ids)
     if unknown:
         raise ValueError(f"The analysis cites rollouts that did not fail: {unknown}")
@@ -190,17 +188,15 @@ async def analyze_failed_runs(
     return [_idea(capability, catalog_version) for capability in capabilities]
 
 
-def _analysis_task(
-    failures: Sequence[tuple[TaskSpec, GradedRollout]], total: int, turns: int, catalog_version: str
-) -> TaskSpec:
+def _analysis_task(failures: Sequence[GradedRollout], total: int, turns: int, catalog_version: str) -> TaskSpec:
     system = SYSTEM_PROMPT.format(index=INDEX, schema=json.dumps(CAPABILITIES.json_schema()))
     user = USER_PROMPT.format(failed=len(failures), total=total, turns=turns)
-    index = "".join(f"{json.dumps(_summary(task, graded))}\n" for task, graded in failures)
+    index = "".join(f"{json.dumps(_summary(graded))}\n" for graded in failures)
     files = (
         inline_resource(f"{WORKSPACE}/{INDEX}", index.encode()),
         *(
-            inline_resource(f"{WORKSPACE}/{graded.rollout.run_id}.txt", _rollout_file(task, graded).encode())
-            for task, graded in failures
+            inline_resource(f"{WORKSPACE}/{graded.rollout.run_id}.txt", _rollout_file(graded).encode())
+            for graded in failures
         ),
     )
     return TaskSpec(
@@ -221,17 +217,19 @@ def _analysis_task(
     )
 
 
-def _summary(task: TaskSpec, graded: GradedRollout) -> dict[str, Any]:
+def _summary(graded: GradedRollout) -> dict[str, Any]:
     """The rollout's line in the index: its grade, how it stopped, and its turns and tool calls."""
     rollout, grade = graded.rollout, graded.grade
     turns = [step.turn.message for conversation in rollout.conversations for step in conversation.steps]
     calls = [_call_text(call) for message in turns for call in message.get("tool_calls") or ()]
-    events = task.context.events
-    text = " ".join(event.content for event in events if isinstance(event, TextMessage) and event.role == "user")
+    text = " ".join(
+        str(message.get("content") or "")
+        for conversation in rollout.conversations
+        for message in conversation.messages
+        if message.get("role") == "user"
+    )
     return {
         "run_id": rollout.run_id,
-        "task_id": task.id,
-        "tags": list(task.tags),
         "outcome": grade.status.value,
         "reward": grade.reward,
         "stop_reason": rollout.stop_reason,
@@ -242,16 +240,17 @@ def _summary(task: TaskSpec, graded: GradedRollout) -> dict[str, Any]:
     }
 
 
-def _rollout_file(task: TaskSpec, graded: GradedRollout) -> str:
-    """A line with the tools that the task gave, then each message from a new line that starts with its number."""
-    requirements = task.environment_requirements
-    tools = {
-        "tools": list(task_prompt(task, None, ()).options.get("tools", ())),
-        "tool_providers": sorted(provider.action_interface for provider in requirements.tool_providers.values()),
-        "environment_capabilities": list(requirements.capabilities),
-    }
-    messages = [message for conversation in graded.rollout.conversations for message in conversation.messages]
-    return "".join([f"{json.dumps(tools)}\n", *(f"[{n}] {_render(message)}\n" for n, message in enumerate(messages))])
+def _rollout_file(graded: GradedRollout) -> str:
+    """Render each conversation's model options and numbered messages as an agent-readable file."""
+    lines = []
+    message_index = 0
+    for conversation_index, conversation in enumerate(graded.rollout.conversations):
+        header = {"conversation": conversation_index, "options": conversation.options}
+        lines.append(f"{json.dumps(header)}\n")
+        for message in conversation.messages:
+            lines.append(f"[{message_index}] {_render(message)}\n")
+            message_index += 1
+    return "".join(lines)
 
 
 def _call_text(call: Any) -> str:
