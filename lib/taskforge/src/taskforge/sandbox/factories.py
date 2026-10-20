@@ -84,14 +84,20 @@ class Refusal:
 
 
 @cache
-def docker_unavailable() -> str | None:
+def docker_unavailable_reason() -> str | None:
     """Probe the laptop once for a reachable Docker daemon; return why Docker machines are unavailable, or None."""
     docker = shutil.which("docker")
     if docker is None:
         return "docker CLI not found on PATH"
-    probe = subprocess.run(
-        (docker, "info", "--format", "{{.ServerVersion}}"), capture_output=True, text=True, timeout=DOCKER_PROBE_TIMEOUT
-    )
+    try:
+        probe = subprocess.run(
+            (docker, "info", "--format", "{{.ServerVersion}}"),
+            capture_output=True,
+            text=True,
+            timeout=DOCKER_PROBE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return f"docker daemon did not answer within {DOCKER_PROBE_TIMEOUT}s"
     if probe.returncode:
         return f"docker daemon unreachable: {probe.stderr.strip()[-500:]}"
     return None
@@ -166,7 +172,7 @@ def machine_factories(where: MachineHost, controller_url: str | None) -> Mapping
             factories.append(sandbox.factory)
         else:
             logger.warning("No %s machine factory: %s", Backend.LOCAL, sandbox.unavailable)
-    elif (docker := docker_unavailable()) is None:
+    elif (docker := docker_unavailable_reason()) is None:
         factories.append(DockerMachineFactory())
     else:
         logger.warning("No %s machine factory: %s", Backend.DOCKER, docker)
