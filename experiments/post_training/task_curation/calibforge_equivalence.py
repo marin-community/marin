@@ -10,6 +10,8 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_SCRIPT
+
 
 def filesystem_manifest(container: str) -> dict:
     """Hash exported filesystem entries, including ownership, modes and timestamps."""
@@ -60,7 +62,7 @@ def main() -> None:
             subprocess.run(["docker", "start", reference, candidate], check=True, capture_output=True)
             subprocess.run(["docker", "exec", candidate, "test", "!", "-e", "/setup_files"], check=True)
             subprocess.run(["docker", "exec", candidate, "mkdir", "-p", "/setup_files"], check=True)
-            for filename in ("calibforge-fixtures.tar.gz", "calibforge-initialize.sh"):
+            for filename in (FIXTURE_ARCHIVE, SETUP_SCRIPT):
                 subprocess.run(
                     [
                         "docker",
@@ -71,7 +73,7 @@ def main() -> None:
                     check=True,
                 )
             subprocess.run(
-                ["docker", "exec", candidate, "sh", "/setup_files/calibforge-initialize.sh"],
+                ["docker", "exec", candidate, "sh", f"/setup_files/{SETUP_SCRIPT}"],
                 check=True,
                 capture_output=True,
             )

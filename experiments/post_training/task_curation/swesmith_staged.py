@@ -25,6 +25,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 VERSION = "swesmith-staged-v1"
+WORKSPACE = "/testbed"
 SOURCE_PREFIX = "open-athena/task-trove:laion__swesmith-oracle-filtered-v2/"
 SOURCE_RELEASE = "swesmith-release-v1-20261016"
 SOURCE_SPLIT = "swesmith-split-v1-20261016"
@@ -198,7 +199,7 @@ class DockerPilot:
 
     def shell(self, container: str, command: str, *, check: bool = True) -> subprocess.CompletedProcess:
         return self.command(
-            ["docker", "exec", "-i", "-w", "/testbed", container, "/bin/bash", "-seu"],
+            ["docker", "exec", "-i", "-w", WORKSPACE, container, "/bin/bash", "-seu"],
             stdin=command.encode(),
             check=check,
         )
@@ -214,7 +215,7 @@ class DockerPilot:
         image = self.command(["docker", "commit", container, f"{VERSION}-{label}"]).stdout.decode().strip()
         return image
 
-    def upload(self, container: str, files: dict[str, bytes], root: str = "/testbed") -> None:
+    def upload(self, container: str, files: dict[str, bytes], root: str = WORKSPACE) -> None:
         payload = io.BytesIO()
         with tarfile.open(fileobj=payload, mode="w") as archive:
             for path, content in sorted(files.items()):
@@ -225,12 +226,12 @@ class DockerPilot:
         self.command(["docker", "exec", "-i", container, "tar", "-xf", "-", "-C", root], stdin=payload.getvalue())
 
     def files(self, container: str, paths: list[str]) -> dict[str, bytes]:
-        result = self.command(["docker", "exec", container, "tar", "-cf", "-", "-C", "/testbed", "--", *paths])
+        result = self.command(["docker", "exec", container, "tar", "-cf", "-", "-C", WORKSPACE, "--", *paths])
         return archive_files(result.stdout)
 
 
 def git_value(pilot: DockerPilot, container: str, *args: str) -> str:
-    return pilot.command(["docker", "exec", "-w", "/testbed", container, "/usr/bin/git", *args]).stdout.decode().strip()
+    return pilot.command(["docker", "exec", "-w", WORKSPACE, container, "/usr/bin/git", *args]).stdout.decode().strip()
 
 
 def stage1_contract(pilot: DockerPilot, container: str, task: SourceTask, import_name: str) -> dict:
@@ -246,7 +247,7 @@ def stage1_contract(pilot: DockerPilot, container: str, task: SourceTask, import
         ["docker", "exec", container, "python", "-m", "pip", "list", "--editable", "--format=json"]
     )
     distributions = [
-        item["name"] for item in json.loads(installed.stdout) if item.get("editable_project_location") == "/testbed"
+        item["name"] for item in json.loads(installed.stdout) if item.get("editable_project_location") == WORKSPACE
     ]
     if len(distributions) != 1:
         raise ValueError("Cannot identify the checkout's installed distribution for controls")
@@ -254,7 +255,7 @@ def stage1_contract(pilot: DockerPilot, container: str, task: SourceTask, import
         "origin": task.origin,
         "branch": task.branch,
         "commit": git_value(pilot, container, "rev-parse", "HEAD"),
-        "workspace": "/testbed",
+        "workspace": WORKSPACE,
         "import_name": import_name,
         "distribution_name": distributions[0],
         "symlink_targets": links,
@@ -310,7 +311,7 @@ def pytest_result(pilot: DockerPilot, container: str, verifier: dict, report: st
         "docker",
         "exec",
         "-w",
-        "/testbed",
+        WORKSPACE,
         "-e",
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
         container,
@@ -393,7 +394,6 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
         "solution_sha256": task.solution_hash,
         "base_image": base_image,
         "controls": {},
-        "variants": [],
         "exclusions": [],
     }
     try:
@@ -421,7 +421,7 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
             hidden = {}
             if hidden_paths:
                 hidden_archive = pilot.command(
-                    ["docker", "exec", "-w", "/testbed", container, "git", "archive", fixed_commit, "--", *hidden_paths]
+                    ["docker", "exec", "-w", WORKSPACE, container, "git", "archive", fixed_commit, "--", *hidden_paths]
                 )
                 with tarfile.open(fileobj=io.BytesIO(hidden_archive.stdout)) as archive:
                     hidden = {m.name: archive.extractfile(m).read() for m in archive if m.isfile()}
@@ -486,7 +486,7 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
         for index, patch in enumerate(partials[:8]):
             with pilot.container(verifier_image) as container:
                 pilot.command(
-                    ["docker", "exec", "-i", "-w", "/testbed", container, "git", "apply", "--recount", "-"],
+                    ["docker", "exec", "-i", "-w", WORKSPACE, container, "git", "apply", "--recount", "-"],
                     stdin=patch.encode(),
                 )
                 partial = pytest_result(pilot, container, verifier, "partial")
@@ -512,7 +512,7 @@ def pilot_task(task: SourceTask, output: Path, base_image: str, import_name: str
         if "partial_recipe" in result:
             with pilot.container(mutated) as container:
                 pilot.command(
-                    ["docker", "exec", "-i", "-w", "/testbed", container, "git", "apply", "--recount", "-"],
+                    ["docker", "exec", "-i", "-w", WORKSPACE, container, "git", "apply", "--recount", "-"],
                     stdin=(directory / "private" / "partial.patch").read_bytes(),
                 )
                 pilot.shell(container, "rm -rf /testbed/.git")

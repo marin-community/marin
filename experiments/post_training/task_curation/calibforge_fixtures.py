@@ -13,6 +13,9 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+FIXTURE_ARCHIVE = "calibforge-fixtures.tar.gz"
+SETUP_SCRIPT = "calibforge-initialize.sh"
+
 
 @dataclass(frozen=True)
 class FixtureBundle:
@@ -45,7 +48,7 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
         "set -eu",
         "stage=$(mktemp -d /tmp/calibforge-setup.XXXXXXXX)",
         "trap 'rm -rf \"$stage\"' EXIT",
-        'tar -xzf /setup_files/calibforge-fixtures.tar.gz -C "$stage"',
+        f'tar -xzf /setup_files/{FIXTURE_ARCHIVE} -C "$stage"',
     ]
     resources: dict[str, Path] = {}
     copied_files: set[str] = set()
@@ -122,7 +125,7 @@ def fixture_bundle(context: Path, instructions: list[dict]) -> FixtureBundle:
                 parent = target if directory_target else str(PurePosixPath(target).parent)
                 commands.append("mkdir -p " + shlex.quote(parent))
                 commands.append("cp -a " + staged + " " + shlex.quote(target + ("/" if directory_target else "")))
-    commands.append("rm -f /setup_files/calibforge-fixtures.tar.gz /setup_files/calibforge-initialize.sh")
+    commands.append(f"rm -f /setup_files/{FIXTURE_ARCHIVE} /setup_files/{SETUP_SCRIPT}")
     commands.append("rmdir /setup_files")
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as archive:
@@ -160,8 +163,8 @@ def main() -> None:
             continue
         target = args.output / "tasks" / identity
         target.mkdir(parents=True)
-        (target / "calibforge-fixtures.tar.gz").write_bytes(bundle.payload)
-        (target / "calibforge-initialize.sh").write_text(bundle.setup_script)
+        (target / FIXTURE_ARCHIVE).write_bytes(bundle.payload)
+        (target / SETUP_SCRIPT).write_text(bundle.setup_script)
         record.update(
             status="compiled_pending_equivalence_and_admission",
             base_image=bundle.base_image,

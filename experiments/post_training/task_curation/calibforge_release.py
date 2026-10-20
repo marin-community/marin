@@ -14,6 +14,7 @@ import tomlkit
 from taskcompendium.pipeline.inputs import ConversionContext
 from tomlkit.items import Table
 
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_SCRIPT
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     archive_files,
     unpack_task_binary,
@@ -49,15 +50,15 @@ def transformed_task(row: dict, record: dict, bundles: Path, source: Path, timeo
     environment["docker_image"] = record["base_image"]
     environment["workdir"] = record["workdir"]
     environment["setup"] = {
-        "command": "sh /setup_files/calibforge-initialize.sh",
+        "command": f"sh /setup_files/{SETUP_SCRIPT}",
         "timeout_sec": timeout,
     }
     output = {name: content for name, content in files.items() if not name.startswith("environment/")}
     output["task.toml"] = tomlkit.dumps(config).encode()
     output["environment/Dockerfile"] = f"FROM {record['base_image']}\nWORKDIR /app\n".encode()
     for filename, digest_key in (
-        ("calibforge-fixtures.tar.gz", "payload_sha256"),
-        ("calibforge-initialize.sh", "setup_sha256"),
+        (FIXTURE_ARCHIVE, "payload_sha256"),
+        (SETUP_SCRIPT, "setup_sha256"),
     ):
         content = (bundles / "tasks" / row["path"] / filename).read_bytes()
         if hashlib.sha256(content).hexdigest() != record[digest_key]:

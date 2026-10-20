@@ -14,6 +14,8 @@ import subprocess
 import tarfile
 from pathlib import Path, PurePosixPath
 
+from experiments.post_training.task_curation.calibforge_fixtures import FIXTURE_ARCHIVE, SETUP_SCRIPT
+
 
 def captured_payload(reference_image: str, roots: tuple[str, ...] = ("app",)) -> tuple[bytes, list[dict]]:
     """Capture only regular public fixture files and directories, with original metadata."""
@@ -83,7 +85,7 @@ def main() -> None:
             raise ValueError(f"Capture needs a pinned base and /app workspace: {identity}")
         roots = tuple(reference["public_fixture_roots"])
         payload, entries = captured_payload(reference["reference_image"], roots)
-        generator_script = (args.generators / "tasks" / identity / "calibforge-initialize.sh").read_text()
+        generator_script = (args.generators / "tasks" / identity / SETUP_SCRIPT).read_text()
         removed_scripts = [
             shlex.split(line[1:-1])[-1]
             for line in generator_script.splitlines()
@@ -94,16 +96,16 @@ def main() -> None:
                 "#!/bin/sh",
                 "set -eu",
                 *[f'test ! -d /{root} || test -z "$(ls -A /{root})"' for root in roots],
-                "tar -xzf /setup_files/calibforge-fixtures.tar.gz -C /",
-                "rm -f /setup_files/calibforge-fixtures.tar.gz /setup_files/calibforge-initialize.sh",
+                f"tar -xzf /setup_files/{FIXTURE_ARCHIVE} -C /",
+                f"rm -f /setup_files/{FIXTURE_ARCHIVE} /setup_files/{SETUP_SCRIPT}",
                 "rmdir /setup_files",
                 "",
             ]
         )
         destination = args.output / "tasks" / identity
         destination.mkdir(parents=True, exist_ok=True)
-        (destination / "calibforge-fixtures.tar.gz").write_bytes(payload)
-        (destination / "calibforge-initialize.sh").write_text(script)
+        (destination / FIXTURE_ARCHIVE).write_bytes(payload)
+        (destination / SETUP_SCRIPT).write_text(script)
         records[identity] = {
             **record,
             "payload_sha256": hashlib.sha256(payload).hexdigest(),

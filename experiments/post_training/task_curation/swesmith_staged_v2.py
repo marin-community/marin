@@ -11,10 +11,12 @@ import time
 import tomllib
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 from experiments.post_training.task_curation.swesmith_staged import (
     DockerPilot,
+    SourceTask,
     git_value,
     is_test_path,
     partial_hunks,
@@ -35,7 +37,14 @@ def decoded_files(files: dict[str, str]) -> dict[str, bytes]:
     return {path: base64.b64decode(content) for path, content in files.items()}
 
 
-def source_groups(data: Path, previous: Path) -> list[tuple[str, dict, list]]:
+@dataclass(frozen=True)
+class RepositoryGroup:
+    name: str
+    seed: dict
+    tasks: list[SourceTask]
+
+
+def source_groups(data: Path, previous: Path) -> list[RepositoryGroup]:
     tasks, _ = source_tasks(data)
     sources = {task.parent_id: task for task in tasks}
     eligible = {
@@ -50,7 +59,7 @@ def source_groups(data: Path, previous: Path) -> list[tuple[str, dict, list]]:
             source = sources[row["parent_id"]]
             seeds[source.origin] = row
     return [
-        (
+        RepositoryGroup(
             origin.rsplit("/", 1)[1],
             seed,
             [task for task in tasks if task.origin == origin and task.parent_id in eligible],
@@ -60,8 +69,8 @@ def source_groups(data: Path, previous: Path) -> list[tuple[str, dict, list]]:
     ]
 
 
-def prepare_repository(group: tuple, output: Path, per_repository: int) -> dict:
-    name, seed, tasks = group
+def prepare_repository(group: RepositoryGroup, output: Path, per_repository: int) -> dict:
+    name, seed, tasks = group.name, group.seed, group.tasks
     directory = output / "repositories" / name
     if (directory / "result.json").exists():
         return json.loads((directory / "result.json").read_text())
