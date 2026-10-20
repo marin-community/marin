@@ -1380,14 +1380,34 @@ fn chunk_by_bytes(
         return Ok(Vec::new());
     }
     let schema = ship.schema();
+    // Nested slices can retain child buffers outside the slice. Estimate only
+    // flat batches; the encoded length remains authoritative for every batch.
+    let flat = schema
+        .fields()
+        .iter()
+        .all(|field| !field.data_type().is_nested());
     let mut chunks = Vec::new();
     let mut pending = vec![(0, ship.num_rows())];
     while let Some((start, len)) = pending.pop() {
-        let ipc = encode_ipc(&schema, &[ship.slice(start, len)])
-            .map_err(|e| StatsError::Internal(format!("encode ship chunk: {e}")))?;
-        if ipc.len() <= max_bytes || len == 1 {
-            chunks.push((ipc, seqs.value(start + len - 1)));
-            continue;
+        let slice = ship.slice(start, len);
+        let raw_bytes = if flat {
+            slice
+                .columns()
+                .iter()
+                .map(|column| column.to_data().get_slice_memory_size())
+                .sum::<Result<usize, _>>()
+                .map_err(|e| StatsError::Internal(format!("size ship chunk: {e}")))?
+        } else {
+            0
+        };
+        // Avoid serializing a parent whose buffers alone already exceed the limit.
+        if raw_bytes <= max_bytes || len == 1 {
+            let ipc = encode_ipc(&schema, &[slice])
+                .map_err(|e| StatsError::Internal(format!("encode ship chunk: {e}")))?;
+            if ipc.len() <= max_bytes || len == 1 {
+                chunks.push((ipc, seqs.value(start + len - 1)));
+                continue;
+            }
         }
         let half = len / 2;
         // Visit the left half first to preserve source sequence order.
