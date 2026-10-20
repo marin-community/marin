@@ -25,9 +25,10 @@ except ImportError:
 
 _INSTALL_MSG = (
     "finelog native server extension (finelog_server) is not available. It ships "
-    "in the separate marin-finelog-server wheel; install it (e.g. 'pip install "
+    "in the separate marin-finelog-server wheel; install it with "
+    "'uv sync --package marin-iris --extra controller' (or 'pip install "
     "marin-finelog-server'), or build from source with "
-    "'python scripts/rust_mode.py dev && uv sync'."
+    "'python scripts/rust_mode.py dev' before that sync."
 )
 
 

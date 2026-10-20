@@ -39,7 +39,7 @@ from experiments.post_training.capability_driven_envs.generate_tasks import (
     pool_token,
     run_program,
     selected_ideas,
-    task_items,
+    task_workpieces,
     write_outputs,
 )
 from experiments.post_training.capability_driven_envs.program_prompt import (
@@ -103,7 +103,7 @@ def test_example_program_writes_a_task_spec_with_the_given_id():
     ids=["exit-status", "no-output", "not-a-task-spec", "timeout"],
 )
 def test_program_failures_are_recorded(source, failure):
-    run = asyncio.run(run_program(source, "item--00", timeout=1))
+    run = asyncio.run(run_program(source, "workpiece--00", timeout=1))
 
     assert run.task is None
     assert failure in (run.failure or "")
@@ -118,7 +118,7 @@ def test_timeout_kills_what_the_program_spawned(tmp_path: Path):
         "time.sleep(60)\n"
     )
 
-    run = asyncio.run(run_program(source, "item--00", timeout=0.5))
+    run = asyncio.run(run_program(source, "workpiece--00", timeout=0.5))
 
     assert "did not finish" in (run.failure or "")
     grandchild = int(pid_file.read_text())
@@ -135,7 +135,7 @@ def test_timeout_kills_what_the_program_spawned(tmp_path: Path):
 
 
 def test_failed_program_keeps_its_stderr():
-    run = asyncio.run(run_program("raise SystemExit('bad input')\n", "item--00", timeout=60))
+    run = asyncio.run(run_program("raise SystemExit('bad input')\n", "workpiece--00", timeout=60))
 
     assert run.exit_code == 1 and "bad input" in run.stderr
 
@@ -152,32 +152,32 @@ def test_driver_saves_each_task_and_its_completions_once_at_the_end(tmp_path: Pa
     ideas = selected_ideas(example_catalog_path(), [CAPABILITY])
     model = CannedModel()
 
-    generated = asyncio.run(generate_tasks(model, task_items(ideas, 2), LLMPolicy(), 60, concurrency=2))
+    generated = asyncio.run(generate_tasks(model, task_workpieces(ideas, 2), LLMPolicy(), 60, concurrency=2))
     output = tmp_path / "run"
     assert not output.exists()
     write_outputs(output, generated)
 
-    item_ids = [f"{CAPABILITY}--00", f"{CAPABILITY}--01"]
-    assert json.loads((output / SUMMARY_FILE).read_text()) == dict.fromkeys(item_ids, TASK_STATUS)
+    workpiece_ids = [f"{CAPABILITY}--00", f"{CAPABILITY}--01"]
+    assert json.loads((output / SUMMARY_FILE).read_text()) == dict.fromkeys(workpiece_ids, TASK_STATUS)
     assert model.output_types == [ProgramSubmission, ProgramSubmission]
-    for item_id in item_ids:
-        item_dir = output / item_id
-        assert TaskSpec.model_validate_json((item_dir / "task.json").read_text()).id == item_id
-        assert (item_dir / "program.py").read_text() == example_program_source()
-        [completion] = json.loads((item_dir / "completions.json").read_text())
+    for workpiece_id in workpiece_ids:
+        workpiece_dir = output / workpiece_id
+        assert TaskSpec.model_validate_json((workpiece_dir / "task.json").read_text()).id == workpiece_id
+        assert (workpiece_dir / "program.py").read_text() == example_program_source()
+        [completion] = json.loads((workpiece_dir / "completions.json").read_text())
         assert completion["usage"]["prompt_tokens"] == 100
-        request = json.loads((item_dir / "request.json").read_text())
+        request = json.loads((workpiece_dir / "request.json").read_text())
         assert CAPABILITY in request[-2]["content"]
         assert request[-1]["content"].startswith("Reply with one JSON object")
 
 
-def test_item_without_a_valid_submission_keeps_its_completions_and_no_program(tmp_path: Path):
+def test_workpiece_without_a_valid_submission_keeps_its_completions_and_no_program(tmp_path: Path):
     ideas = selected_ideas(example_catalog_path(), [CAPABILITY])
 
     generated = asyncio.run(
         generate_tasks(
             CannedModel(errors=[StructuredOutputError(ValueError("not a JSON object"), (COMPLETION, COMPLETION))]),
-            task_items(ideas, 1),
+            task_workpieces(ideas, 1),
             LLMPolicy(),
             60,
             1,
@@ -185,10 +185,10 @@ def test_item_without_a_valid_submission_keeps_its_completions_and_no_program(tm
     )
     write_outputs(tmp_path / "run", generated)
 
-    item_dir = tmp_path / "run" / f"{CAPABILITY}--00"
-    assert "structured output invalid" in json.loads((tmp_path / "run" / SUMMARY_FILE).read_text())[item_dir.name]
-    assert len(json.loads((item_dir / "completions.json").read_text())) == 2
-    assert not (item_dir / "program.py").exists() and not (item_dir / "task.json").exists()
+    workpiece_dir = tmp_path / "run" / f"{CAPABILITY}--00"
+    assert "structured output invalid" in json.loads((tmp_path / "run" / SUMMARY_FILE).read_text())[workpiece_dir.name]
+    assert len(json.loads((workpiece_dir / "completions.json").read_text())) == 2
+    assert not (workpiece_dir / "program.py").exists() and not (workpiece_dir / "task.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -196,10 +196,10 @@ def test_item_without_a_valid_submission_keeps_its_completions_and_no_program(tm
     [ModelUnavailable("GLM attempts exhausted after 8: boom", ()), ContextExhausted("prompt too long", ())],
     ids=["unavailable", "context-exhausted"],
 )
-def test_model_error_fails_only_its_item(tmp_path: Path, error: Exception):
+def test_model_error_fails_only_its_workpiece(tmp_path: Path, error: Exception):
     ideas = selected_ideas(example_catalog_path(), [CAPABILITY])
 
-    generated = asyncio.run(generate_tasks(CannedModel(errors=[error]), task_items(ideas, 2), LLMPolicy(), 60, 1))
+    generated = asyncio.run(generate_tasks(CannedModel(errors=[error]), task_workpieces(ideas, 2), LLMPolicy(), 60, 1))
     write_outputs(tmp_path / "run", generated)
 
     failed, written = f"{CAPABILITY}--00", f"{CAPABILITY}--01"
