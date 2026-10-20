@@ -730,9 +730,13 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        async with mcp_app.lifespan(_app):
-            async with read_mcp_app.lifespan(_app):
-                yield
+        try:
+            async with mcp_app.lifespan(_app):
+                async with read_mcp_app.lifespan(_app):
+                    yield
+        finally:
+            if applet_store is not None:
+                await run_in_threadpool(applet_store.close)
 
     api = FastAPI(title="Marina", docs_url=None, redoc_url=None, lifespan=lifespan)
     reserved_hosts = reserved_applet_hosts(config)

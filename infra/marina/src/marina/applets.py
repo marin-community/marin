@@ -37,7 +37,7 @@ from marina.database_setup import (
     MARINA_SCHEMA,
     PROVISION_APPLET_FUNCTION,
 )
-from marina.db import DatabaseSpec, engine_for, engine_for_role, grant_read_on_connection, schema_name
+from marina.db import DatabaseSpec, QueryEngineCache, engine_for, engine_for_role, grant_read_on_connection, schema_name
 from marina.host_bindings import migrate_host_bindings, normalize_hostname
 from marina.manifest import APP_NAME_PATTERN, KERNEL_PREFIXES, AgentPanelManifest, AppJob, agent_panel, app_jobs
 
@@ -424,6 +424,12 @@ class AppletStore:
     def __init__(self, database: DatabaseSpec):
         self.database = database
         self.engine = engine_for(database, MARINA_SCHEMA)
+        self._query_engines = QueryEngineCache(database)
+
+    def close(self) -> None:
+        """Dispose the registry pool and retire SQL-request pools."""
+        self._query_engines.close()
+        self.engine.dispose()
 
     def migrate(self) -> None:
         statements = (
@@ -1070,8 +1076,7 @@ class AppletStore:
     def query(self, applet_id: uuid.UUID, sql: str, parameters: dict[str, object]) -> dict[str, object]:
         self.current_version(applet_id)
         command = validate_query(sql)
-        engine = engine_for_role(self.database, self.schema(applet_id), applet_role(applet_id))
-        try:
+        with self._query_engines.engine(self.schema(applet_id), applet_role(applet_id)) as engine:
             with engine.begin() as connection:
                 connection.execute(text(f"SET LOCAL statement_timeout = '{QUERY_TIMEOUT_MS}ms'"))
                 if command in {"SELECT", "WITH"}:
@@ -1102,8 +1107,6 @@ class AppletStore:
                 if result.returns_rows:
                     raise InvalidQuery(f"{command} statements may not return rows")
                 return {"columns": [], "rows": [], "row_count": result.rowcount}
-        finally:
-            engine.dispose()
 
 
 @dataclass(frozen=True)
