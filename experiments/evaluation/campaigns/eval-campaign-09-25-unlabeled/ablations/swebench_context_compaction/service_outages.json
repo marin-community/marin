@@ -2,7 +2,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211312-Qwen-Qwen3.6-35B-A3B-swebench-65k-16k-no-summary-233d957240f7403ab7cef4141b20dee0-harbor-4efa052b552c551d8682c8eb88a059fd/results",
     "started_at": "2026-10-20T21:52:06.773000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T21:58:41.566896+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "65k/16k, no summary"
   },
@@ -16,7 +16,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195526-Qwen-Qwen3.6-35B-A3B-swebench-32k-8k-summary-c7803e1e44884c96ae48f55f67eec1fa-32k-8k-summary-38fb91f20481579f9c591e0190f9928c/results",
     "started_at": "2026-10-20T21:52:12.166000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:08:57.825070+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "32k/8k, summary"
   },
@@ -30,56 +30,56 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211449-google-gemma-4-26B-A4B-it-swebench-65k-16k-no-summary-aa3182575716437dab464021f8d2ad98-harbor-1367a30667c357789f0085a5e5ee1691/results",
     "started_at": "2026-10-20T21:52:06.773000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:34.472922+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "65k/16k, no summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211609-google-gemma-4-26B-A4B-it-swebench-131k-16k-no-summary-b932337c1f2a43f8aeec48855e0604e1-harbor-e4709bcd7ab85767a3b9128e711608ed/results",
     "started_at": "2026-10-20T21:52:12.166000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:34.395287+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "131k/16k, no summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195909-google-gemma-4-26B-A4B-it-swebench-32k-8k-summary-2d239bc7bdb14c2ca41a0e6680b59edc-32k-8k-summary-b559d1d0bf655b23b4d98795969fb76e/results",
     "started_at": "2026-10-20T21:52:12.166000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:34.436879+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "32k/8k, summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200028-google-gemma-4-26B-A4B-it-swebench-65k-16k-summary-d3f9500038a04796972503728e1dd59e-65k-16k-summary-d27a7cf16b7352709da157160580ae21/results",
     "started_at": "2026-10-20T21:52:12.166000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:34.276832+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "65k/16k, summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211627-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-65k-16k-no-summary-f76df848f8f547879d420b66da1301f3-harbor-3aefc1f8a8e059a3a8e7727a01f4fbb1/results",
     "started_at": "2026-10-20T21:52:12.166000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:34.043439+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "65k/16k, no summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211746-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-131k-16k-no-summary-eeca7066407f431b951d5bce1ed63e9d-harbor-69c1ba86fa7c57458d40dda177e9aacb/results",
     "started_at": "2026-10-20T21:52:12.166000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:34.038841+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "131k/16k, no summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200045-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-32k-8k-summary-4eb260adacdf4384830a0f69fff88ed7-32k-8k-summary-cf8e8e3f7707534a9eca0ed0c694a67c/results",
     "started_at": "2026-10-20T21:52:12.166000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:34.049505+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "32k/8k, summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200205-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-65k-16k-summary-98cea9cde5f14cd8b9feda873e8e75b1-65k-16k-summary-d401cf7abca251269cc2a9023dbe47e7/results",
     "started_at": "2026-10-20T21:52:06.772000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:37.025747+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "65k/16k, summary"
   },
@@ -93,7 +93,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-212113-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-131k-16k-no-summary-656bb1d55ea64f1891f0d97c6a431138-harbor-0f63a464cee25ab19b1c7a27505b1794/results",
     "started_at": "2026-10-20T21:30:38.418000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:38.182864+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "131k/16k, no summary"
   },
@@ -107,7 +107,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200532-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-summary-0e5acf1bd86c43ce91c4c864aa7b5518-65k-16k-summary-9d8f8f35df805226abe49ab91bd96d34/results",
     "started_at": "2026-10-20T21:30:38.418000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:04:38.210714+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "65k/16k, summary"
   }
