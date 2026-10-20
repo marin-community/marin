@@ -1,0 +1,5 @@
+applet_id = "e2bd5c9d-0f93-4ce9-b7af-3c78ca55e5d1"
+title = "Snowball v0 curriculum"
+description = "Browse every selected environment, source allocation, difficulty prior and pinned provenance."
+python_entrypoint = "server.app:create_api"
+build_command = "uv run --no-project python build.py"

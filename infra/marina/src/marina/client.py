@@ -38,9 +38,14 @@ def _cached_login_provider() -> TokenProvider | None:
     return None
 
 
-def bearer_token() -> str:
+def marina_token_provider() -> TokenProvider:
+    """Resolve an expiring-token provider for reuse across a sequence of requests."""
+    return _cached_login_provider() or IapServiceAccountTokenProvider(MARIN_DESKTOP_OAUTH_CLIENT.client_id)
+
+
+def bearer_token(provider: TokenProvider | None = None) -> str:
     """Return an IAP token from a cached Marin login or ambient service account."""
-    provider = _cached_login_provider() or IapServiceAccountTokenProvider(MARIN_DESKTOP_OAUTH_CLIENT.client_id)
+    provider = provider if provider is not None else marina_token_provider()
     try:
         token = provider.get_token()
     except (IapCredentialsUnavailable, IapLoginRequired) as error:
@@ -58,16 +63,19 @@ def marina_request(
     json_body: object | None = None,
     payload: bytes | None = None,
     params: dict[str, object] | None = None,
+    session: requests.Session | None = None,
+    token_provider: TokenProvider | None = None,
 ) -> object | None:
-    """Call one Marina endpoint with the shared CLI authentication behavior."""
+    """Call Marina, optionally reusing a caller-owned transport and token provider."""
     service_url = service_url.rstrip("/")
     headers: dict[str, str] = {}
     if payload is not None:
         headers["Content-Type"] = "application/gzip"
     host = urlparse(service_url).hostname
     if host not in LOCAL_HOSTS:
-        headers["Authorization"] = f"Bearer {bearer_token()}"
-    response = requests.request(
+        headers["Authorization"] = f"Bearer {bearer_token(token_provider)}"
+    request = session.request if session is not None else requests.request
+    response = request(
         method,
         service_url + path,
         params=params,
