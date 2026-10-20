@@ -6,24 +6,25 @@
 Every turn is one ``GlmClient.complete`` call. The turn carries the reply as a chat message and the
 call's usage, which is what the trial's token accounting counts; its token ids are empty and its
 ``logprobs`` ``None``. Under ``TraceMode.MESSAGES`` the engine accepts such a turn, charges its usage
-against the session's token budget, and never trains on it. The rollout model requests neither
-token ids nor logprobs. Chat completions take text, so each prompt is the server's own rendering of
-the conversation, so the model cannot replay an exact token prefix: a request carrying
-``prompt_token_ids`` raises ``RolloutContractError`` before any call.
+against the attempt's token budget, and never trains on it. The rollout model requests neither
+token ids nor logprobs. Chat completions take text, and each prompt is the server's own rendering of
+the conversation, so the model cannot replay an exact token prefix: a request that carries token ids
+(a ``Continuation``, or pinned prompt ids) raises ``RolloutContractError`` before any call. Only the
+exact-token trace sends them.
 
 A rollout turn never continues on ``finish_reason == "length"``: the policy must set
 ``max_continuations=0``, so a turn is one request and the engine grades a cut turn with stop reason
 ``length``.
 
-When the prompt alone fills the context window, the turn raises ``GenerationLimitReached`` with the
-request's prefix ids, which the messages trace leaves empty.
+When the prompt alone fills the context window, the turn raises ``GenerationLimitReached`` with no
+prompt ids: the server rendered the prompt, and the messages trace keeps no tokens of it.
 """
 
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Self
 
-from rolloutengine.contracts import (
+from rolloutengine.models import (
     LENGTH_STOP_REASON,
     GenerationLimitReached,
     ModelRequest,
@@ -138,13 +139,13 @@ class GlmRolloutModel:
         return replace(self, record=replace(self.record, step=step))
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
-        if request.prompt_token_ids is not None:
-            raise RolloutContractError("GlmRolloutModel sends chat messages and cannot replay prompt_token_ids")
+        if request.continuation is not None or request.prompt_token_ids is not None:
+            raise RolloutContractError("GLM serves messages only, so the rollout must use TraceMode.MESSAGES")
         turn = sum(message.get("role") == "assistant" for message in request.messages)
         request_fields = {**request.options, PROMPT_CACHE_KEY: routing_key(self.record)}
         try:
             with llm_call_span(self.record, self.client.model, {"turn": str(turn)}) as fields:
                 completion = await complete_into(fields, self.client, request.messages, self.policy, request_fields)
         except ContextExhausted as error:
-            raise GenerationLimitReached(request.prefix_token_ids) from error
+            raise GenerationLimitReached(()) from error
         return model_turn(completion)
