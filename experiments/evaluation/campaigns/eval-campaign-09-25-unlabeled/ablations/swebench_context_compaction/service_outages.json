@@ -9,7 +9,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211329-Qwen-Qwen3.6-35B-A3B-swebench-131k-16k-no-summary-b2ca61c701a640a78c6f0ab0c38a043b-harbor-35ab8bb847515f0a8a78861240cb1264/results",
     "started_at": "2026-10-20T21:52:12.166000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-20T22:18:47.300717+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "131k/16k, no summary"
   },
