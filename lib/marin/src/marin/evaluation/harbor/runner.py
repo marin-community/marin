@@ -1,18 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a Harbor dataset against an already-served model and normalize the trials.
-
-The group launcher serves a model once and hands this runner an OpenAI endpoint; the runner points a
-Harbor agent at it (``hosted_vllm/<served-name>``) and runs the dataset's trials on the configured
-sandbox environment. Harbor writes each native result and normalized evaluation sample directly to
-the run's FineStore archive. This module reads Harbor's durable trial results only to compute the
-aggregate record metrics and coverage. Harbor also keeps its trial tree under the results root, so a
-completed trial survives a driver killed before the job returns and Harbor's own per-trial resume
-reads it back on the next run.
-
-The ``harbor`` dependency is optional and imported lazily, so importing this module never requires it.
-"""
+"""Run Harbor against served models and aggregate trial metrics and coverage."""
 
 import hashlib
 import json
@@ -24,22 +13,24 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
-    HarborBackendsUnavailable,
     HarborErrorTaxonomy,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
+    harbor_runtime_descriptor,
     run_harbor_driver,
 )
-from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, RunStatus, TaskCoverage
+from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, ModelConfigRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
-from marin.evaluation.runner import EvaluationError, EvaluationOutcome
-from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
-from marin.inference.types import RunningModel
+from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceUnavailable
+from marin.inference.iris import RemoteInferenceSession
+from marin.inference.types import InferenceBackendState, RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +42,9 @@ _TRIAL_READ_WORKERS = 16
 _JOB_DATASET_LENGTH = 32
 _JOB_DIGEST_LENGTH = 12
 _HOSTED_JUDGE_API_KEY = "EMPTY"
+_HARBOR_RESULT_FILE = "harbor_result.json"
+_RESUME_IDENTITY_FILE = "harbor_resume_identity.json"
+_JOB_PREFIX = "harbor_"
 
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
 # margin tolerates float noise).
@@ -119,7 +113,7 @@ class HarborRunResult:
         return min(1.0, self.scored_trials / self.attempted_trials)
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
-        """Metrics keyed like the evalchemy reader: ``{dataset: {metric: value}}``."""
+        """Return mean reward and solved, scored, and attempted trial counts keyed by dataset."""
         metrics = {
             "mean_reward": self.mean_reward,
             "solved": float(self.solved_trials),
@@ -155,11 +149,11 @@ def canonical_served_name(name: str) -> str:
 
 
 def _job_name(dataset: str, identity: tuple[object, ...]) -> str:
-    """A deterministic Harbor job name so a re-run resumes the previous job's completed trials."""
+    """Return a deterministic Harbor job name from the dataset and run identity."""
     key = "|".join(str(value) for value in identity)
     digest = hashlib.sha256(key.encode()).hexdigest()[:_JOB_DIGEST_LENGTH]
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", dataset)[:_JOB_DATASET_LENGTH]
-    return f"harbor_{safe}_{digest}"
+    return f"{_JOB_PREFIX}{safe}_{digest}"
 
 
 def _jobs_dir(output_dir: str) -> StoragePath:
@@ -170,6 +164,41 @@ def _jobs_dir(output_dir: str) -> StoragePath:
 def _job_dir(output_dir: str, job_name: str) -> StoragePath:
     """The durable tree for one job: ``output_dir/harbor_jobs/<job_name>`` (Harbor appends the name)."""
     return _jobs_dir(output_dir) / job_name
+
+
+class HarborResumeIdentity(BaseModel):
+    """Immutable scoring inputs required to reuse a Harbor results root."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal[2] = 2
+    dataset: str
+    policy_digest: str
+    runtime: str
+    task_limit: int | None
+    model: ModelConfigRef
+    judge: ModelConfigRef | None
+
+
+def validate_harbor_resume_root(output_dir: str, identity: HarborResumeIdentity) -> None:
+    """Reject an existing results root unless its recorded scoring inputs match."""
+    path = StoragePath.parse(output_dir) / _RESUME_IDENTITY_FILE
+    if not path.exists():
+        raise ValueError(f"Harbor results root {output_dir!r} has no model-bound resume identity")
+    existing = HarborResumeIdentity.model_validate_json(path.read_text())
+    if existing != identity:
+        raise ValueError(
+            f"Harbor results root {output_dir!r} has different dataset, model, policy, runtime, task limit, or judge"
+        )
+
+
+def _bind_harbor_results_root(output_dir: str, identity: HarborResumeIdentity) -> None:
+    """Persist scoring identity before the first trial, or validate it before reuse."""
+    root = StoragePath.parse(output_dir)
+    if tuple((root / "*").glob()):
+        validate_harbor_resume_root(output_dir, identity)
+        return
+    (root / _RESUME_IDENTITY_FILE).write_text(identity.model_dump_json(indent=2))
 
 
 def _read_trial(result_file: StoragePath, taxonomy: HarborErrorTaxonomy) -> HarborTrial:
@@ -211,14 +240,10 @@ def _read_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> list[Ha
 
 
 def _attempted_trials(job_dir: StoragePath) -> int | None:
-    """The number of trials the job set out to run, from Harbor's own job-level bookkeeping.
+    """Read the intended trial count from job-level ``result.json`` or ``lock.json``.
 
-    Harbor writes ``result.json`` (carrying ``n_total_trials``) and ``lock.json`` (carrying the
-    resolved trial list) at the job root. Counting per-trial result files instead would miss every
-    trial that died before writing one, so a run whose worker was preempted mid-dataset would report
-    perfect coverage -- which is why an unreadable job record yields None rather than the number of
-    results found: the count is unknown, and the runs where it is unknown are exactly the interrupted
-    ones a found-count would certify as complete.
+    Return ``None`` if neither contains a positive count or a nonempty trial list.
+    Counting found results would make interrupted jobs appear complete.
     """
     for name, key in (("result.json", "n_total_trials"), ("lock.json", "trials")):
         path = job_dir / name
@@ -244,7 +269,7 @@ def _job_benchmark(job_dir: StoragePath) -> BenchmarkMetadataRef:
 
 
 def _remove_unscored_trials(job_dir: StoragePath, taxonomy: HarborErrorTaxonomy) -> None:
-    """Remove results Harbor should retry after a confirmed inference interruption."""
+    """Delete trial directories with invalid JSON or known unscored results."""
     for result_file in (job_dir / _TRIAL_RESULT_GLOB).glob():
         try:
             trial = _read_trial(result_file, taxonomy)
@@ -282,11 +307,9 @@ def _aggregate(
     benchmark: BenchmarkMetadataRef,
     trials_per_task: int,
 ) -> HarborRunResult:
-    """Aggregate the graded trials, keeping the ungraded ones as coverage rather than as zeros.
+    """Aggregate rewards over scored trials and retain unscored trials in coverage.
 
-    Rates divide by the graded trials. Dividing by every attempted trial, with an ungraded trial read
-    back as reward 0.0, would publish the worst case as if it were the estimate; the engine recovers
-    that lower bound from the coverage this records.
+    Including unscored trials in the mean would treat missing grades as zero rewards.
     """
     if benchmark.n_benchmark is None or benchmark.n_attempted is None:
         raise ValueError("Harbor benchmark metadata must report task counts")
@@ -313,15 +336,6 @@ def _aggregate(
     )
 
 
-def _backend_state(inference_sessions: tuple[RemoteInferenceSession, ...]) -> InferenceBackendState:
-    states = tuple(session.backend_state() for session in inference_sessions)
-    if InferenceBackendState.FINISHED in states:
-        return InferenceBackendState.FINISHED
-    if InferenceBackendState.RECOVERING in states:
-        return InferenceBackendState.RECOVERING
-    return InferenceBackendState.READY
-
-
 def _run_harbor_job(
     *,
     job_name: str,
@@ -331,22 +345,17 @@ def _run_harbor_job(
     environment: str,
     output_dir: str,
     driver_env: Mapping[str, str],
-    inference_sessions: tuple[RemoteInferenceSession, ...],
+    backend_state: Callable[[], InferenceBackendState],
     benchmark: BenchmarkMetadataRef,
     trials_per_task: int,
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
-    while True:
-        try:
-            run_harbor_driver(config, overlay, driver_env, lambda: _backend_state(inference_sessions))
-            break
-        except HarborBackendsUnavailable as exc:
-            logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
-            _remove_unscored_trials(job_dir, config.error_taxonomy)
-            for inference_session in inference_sessions:
-                inference_session.wait_until_ready()
-            logger.info("inference recovered; resuming Harbor job %s", job_name)
+    try:
+        run_harbor_driver(config, overlay, driver_env, backend_state)
+    except InferenceUnavailable:
+        _remove_unscored_trials(job_dir, config.error_taxonomy)
+        raise
 
     normalize_rollouts(output_dir, writer_id=f"marin-harbor-rollouts-{job_name}")
     trials = _read_trials(job_dir, config.error_taxonomy)
@@ -360,7 +369,7 @@ def _run_harbor_job(
     if recorded_attempted is not None and recorded_attempted > n_attempted:
         raise ValueError(f"Harbor recorded {recorded_attempted} trials but intended only {n_attempted}")
     result = _aggregate(trials, dataset, recorded_benchmark, trials_per_task)
-    StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
+    StoragePath(prefix_join(output_dir, _HARBOR_RESULT_FILE)).write_text(
         json.dumps(
             {
                 "dataset": result.dataset,
@@ -393,16 +402,15 @@ def _run_harbor_job(
 def _evaluation_outcome(
     run: Callable[[], HarborRunResult], output_dir: str, min_completion_rate: float
 ) -> EvaluationOutcome:
-    """Accept a run that graded enough of its trials, and record how much of it happened.
+    """Return metrics and coverage for a run meeting the completion threshold.
 
-    A run clearing the gate keeps its aggregate and its per-trial error distribution, so a downstream
-    reader can tell the model's score apart from the infrastructure quality behind it. A run below the
-    gate fails as an infrastructure failure and still records its coverage so the rejection is legible
-    as counts rather than as prose. Unknown exception names reject the run as taxonomy drift.
-
+    Reject unknown exception names or insufficient completion as infrastructure failures,
+    retaining coverage in the error.
     """
     try:
         result = run()
+    except InferenceUnavailable:
+        raise
     except Exception as exc:
         raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
     unknown_errors = {name: count for name, count in result.errors.items() if name.startswith(_UNKNOWN_ERROR_PREFIX)}
@@ -454,19 +462,35 @@ class HarborExecutor:
     config: ValidatedHarborConfig
     task_limit: int | None
     model_agent_kwargs: Mapping[str, object]
+    model_config: ModelConfigRef
+    judge_config: ModelConfigRef | None = None
     secret_env_keys: tuple[str, ...] = ()
     min_completion_rate: float = DEFAULT_MIN_COMPLETION_RATE
     """Minimum scoreable fraction of attempted trials for accepting the run."""
+    retry_unscored_trials: bool = False
+    """Retry known unscored trials while preserving scored and unknown-error outcomes."""
+
+    @property
+    def resume_identity(self) -> HarborResumeIdentity:
+        return HarborResumeIdentity(
+            dataset=self.config.record_dataset,
+            policy_digest=self.config.digest,
+            runtime=harbor_runtime_descriptor(),
+            task_limit=self.task_limit,
+            model=self.model_config,
+            judge=self.judge_config,
+        )
 
     def _run(
         self,
         model: RunningModel,
         output_dir: str,
         driver_env: Mapping[str, str],
-        inference_sessions: tuple[RemoteInferenceSession, ...],
+        backend_state: Callable[[], InferenceBackendState],
         verifier_env: Mapping[str, str],
         judge_model: RunningModel | None,
     ) -> HarborRunResult:
+        _bind_harbor_results_root(output_dir, self.resume_identity)
         dataset = self.config.record_dataset
         identity: tuple[object, ...] = (self.config.digest, model.endpoint.model, self.task_limit)
         if judge_model is not None:
@@ -492,6 +516,10 @@ class HarborExecutor:
             self.task_limit,
             Path(dataset_path).name if dataset_path is not None else None,
         )
+        if self.retry_unscored_trials:
+            job_dir = _job_dir(output_dir, job_name)
+            logger.info("removing unscored Harbor trials before explicit recovery: %s", job_dir)
+            _remove_unscored_trials(job_dir, self.config.error_taxonomy)
         return _run_harbor_job(
             job_name=job_name,
             config=self.config,
@@ -500,7 +528,7 @@ class HarborExecutor:
             environment=self.config.environment,
             output_dir=output_dir,
             driver_env=driver_env,
-            inference_sessions=inference_sessions,
+            backend_state=backend_state,
             benchmark=benchmark,
             trials_per_task=self.config.trials_per_task,
         )
@@ -511,15 +539,15 @@ class HarborExecutor:
         output_dir: str,
         env_vars: Mapping[str, str],
         *,
+        backend_state: Callable[[], InferenceBackendState],
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
-        """Run Harbor while supervising the candidate and any hosted judge inference sessions."""
+        """Run Harbor with candidate inference and an optional hosted judge."""
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token
         verifier_env = {}
-        inference_sessions = (session,)
         judge_model = None
         if judge is not None:
             judge_model = judge.model
@@ -528,13 +556,12 @@ class HarborExecutor:
                 "OPENAI_BASE_URL": judge_model.endpoint.base_url,
                 "MODEL_NAME": judge_model.endpoint.model,
             }
-            inference_sessions += (judge,)
         return _evaluation_outcome(
             lambda: self._run(
                 session.model,
                 output_dir,
                 driver_env,
-                inference_sessions,
+                backend_state,
                 verifier_env,
                 judge_model,
             ),
