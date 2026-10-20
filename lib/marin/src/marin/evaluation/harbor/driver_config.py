@@ -36,6 +36,7 @@ _DRIVER_SYSTEM_ENV_KEYS = (
     "HOME",
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "IRIS_ATTEMPT_UID",
     "IRIS_UV_EXECUTABLE",
     "IRIS_WORKDIR",
     "NO_PROXY",
@@ -93,7 +94,7 @@ def harbor_runtime_descriptor(commit: str, runtime_project: str = HARBOR_RUNTIME
         requirements = tuple(
             f"{name}=={by_name[name]['version']}" for entry in direct_dependencies if (name := entry["name"]) != "harbor"
         )
-    return "; ".join((dependency.requirement(("archive",)), *requirements))
+    return "; ".join((dependency.requirement(("archive", "tau3")), *requirements))
 
 
 HARBOR_RUNTIME = harbor_runtime_descriptor(HARBOR.commit)

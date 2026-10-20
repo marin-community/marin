@@ -49,6 +49,8 @@ DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 _VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
 _VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
+_RUNAI_STREAMER_CONCURRENCY_ENV = "RUNAI_STREAMER_CONCURRENCY"
+_RUNAI_STREAMER_S3_REQUEST_TIMEOUT_ENV = "RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"
 _SPECULATIVE_METRIC_FAMILIES = frozenset(
     {
         "vllm:spec_decode_num_accepted_tokens",
@@ -205,10 +207,14 @@ def _vllm_engine_config(
 ) -> VllmEngineConfig:
     """Build the evaluation engine settings shared by GPU and TPU workers."""
     launcher = VllmLauncherType.CUDA if platform is Platform.GPU else VllmLauncherType.TPU
-    source = VllmSource.MARIN_FORK if platform is Platform.GPU else VllmSource.UPSTREAM
+    if platform is Platform.TPU and (serve.vllm_source is not None or serve.vllm_plugin_requirements):
+        raise ValueError("model-specific vLLM source and plugins require GPU serving")
+    source = serve.vllm_source or (VllmSource.MARIN_FORK if platform is Platform.GPU else VllmSource.UPSTREAM)
     return VllmEngineConfig(
         launcher=launcher,
         source=source,
+        version=serve.vllm_version,
+        extra_requirements=serve.vllm_plugin_requirements,
         startup_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
         max_num_batched_tokens=(
             serve.max_num_batched_tokens
@@ -224,7 +230,15 @@ def _vllm_engine_config(
 
 def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[str, str]:
     """Validate and render catalog-owned vLLM process settings."""
-    has_process_setting = serve.vllm_batch_invariant is not None or serve.vllm_use_flashinfer_sampler is not None
+    has_process_setting = any(
+        setting is not None
+        for setting in (
+            serve.vllm_batch_invariant,
+            serve.vllm_use_flashinfer_sampler,
+            serve.runai_streamer_concurrency,
+            serve.runai_streamer_s3_request_timeout_ms,
+        )
+    )
     if has_process_setting and (serve.backend is not ServeBackend.VLLM or platform is not Platform.GPU):
         raise ValueError("vLLM process settings require the vLLM backend on GPU")
 
@@ -233,6 +247,10 @@ def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[
         environment[_VLLM_BATCH_INVARIANT_ENV] = str(int(serve.vllm_batch_invariant))
     if serve.vllm_use_flashinfer_sampler is not None:
         environment[_VLLM_FLASHINFER_SAMPLER_ENV] = str(int(serve.vllm_use_flashinfer_sampler))
+    if serve.runai_streamer_concurrency is not None:
+        environment[_RUNAI_STREAMER_CONCURRENCY_ENV] = str(serve.runai_streamer_concurrency)
+    if serve.runai_streamer_s3_request_timeout_ms is not None:
+        environment[_RUNAI_STREAMER_S3_REQUEST_TIMEOUT_ENV] = str(serve.runai_streamer_s3_request_timeout_ms)
     return environment
 
 
@@ -244,13 +262,14 @@ def inference_config_for_model(
     priority: int,
     capability_origin: str | None = None,
     api_model: str | None = None,
-    instances: int = 1,
+    instances: int | None = None,
     broker: BrokerConfig | None = None,
     request_timeout_seconds: float = EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)
-    if instances > 1 and broker is None:
+    resolved_instances = serve.instances if instances is None else instances
+    if resolved_instances > 1 and broker is None:
         # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
         broker = BrokerConfig(
             worker=InferenceWorkerConfig(
@@ -258,7 +277,9 @@ def inference_config_for_model(
                 request_timeout_seconds=request_timeout_seconds + _BROKER_DEADLINE_MARGIN_SECONDS,
             ),
             proxy=InferenceProxyConfig(
-                max_pending_requests=max(_EVAL_PROXY_MIN_PENDING_REQUESTS, instances * _EVAL_WORKER_MAX_IN_FLIGHT),
+                max_pending_requests=max(
+                    _EVAL_PROXY_MIN_PENDING_REQUESTS, resolved_instances * _EVAL_WORKER_MAX_IN_FLIGHT
+                ),
                 request_timeout_seconds=request_timeout_seconds + 3 * _BROKER_DEADLINE_MARGIN_SECONDS,
                 readiness_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
             ),
@@ -268,6 +289,9 @@ def inference_config_for_model(
         raise ValueError("speculative serving requires the GPU vLLM backend")
     geometry = serving_geometry(serve, accelerator)
     vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
+    worker_env = dict(env_vars)
+    if serve.hf_hub_disable_xet:
+        worker_env["HF_HUB_DISABLE_XET"] = "1"
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
 
@@ -293,11 +317,11 @@ def inference_config_for_model(
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars={**env_vars, **vllm_environment_variables},
+                env_vars={**worker_env, **vllm_environment_variables},
             )
         else:
             engine = LevanterEngineConfig()
-            environment = create_environment(extras=["gpu"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["gpu"], env_vars=worker_env)
     else:
         if accelerator.tpu_type is None:
             raise ValueError("TPU accelerator choice requires tpu_type")
@@ -310,10 +334,10 @@ def inference_config_for_model(
         )
         if serve.backend is ServeBackend.VLLM:
             engine = _vllm_engine_config(serve, accelerator.platform, extra_args)
-            environment = create_environment(extras=["tpu"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["tpu"], env_vars=worker_env)
         else:
             engine = LevanterEngineConfig()
-            environment = create_environment(extras=["tpu"], env_vars=dict(env_vars))
+            environment = create_environment(extras=["tpu"], env_vars=worker_env)
 
     return RemoteInferenceConfig(
         model=ServedModelConfig(
@@ -325,6 +349,7 @@ def inference_config_for_model(
             max_model_len=max_model_len,
             tensor_parallel_size=serve.tensor_parallel_size,
             chat_template_content=serve.chat_template,
+            object_store_load_mode=serve.object_store_load_mode,
         ),
         engine=engine,
         iris=IrisConfig(
@@ -334,7 +359,7 @@ def inference_config_for_model(
             endpoint_ready_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
             priority=priority,
         ),
-        instances=instances,
+        instances=resolved_instances,
         broker=broker,
         capability_origin=capability_origin,
     )

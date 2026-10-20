@@ -1,0 +1,73 @@
+n_concurrent_trials: 16
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - AgentKilledBySignalError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+- name: acp
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    # Pinned ACP registry entry from agentclientprotocol/registry@993fab130b3475e9c1c745ca6820185219698f33.
+    # Resolving the shorthand remotely for every trial exhausts GitHub's rate limit.
+    registry_entry:
+      id: pi-acp
+      name: pi ACP
+      version: 0.0.33
+      description: ACP adapter for pi coding agent
+      repository: https://github.com/svkozak/pi-acp
+      authors:
+      - Sergii Kozak <svkozak@gmail.com>
+      license: MIT
+      license_url: https://github.com/svkozak/pi-acp/blob/main/LICENSE
+      distribution:
+        npx:
+          package: pi-acp@0.0.33
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 65536
+user_agent:
+  import_path: tau3_bench.acp_relay.harbor_agent:Tau3HarborACPRelay
+  mcp_servers:
+  - name: tau3-runtime
+    transport: streamable-http
+    url: http://tau3-runtime:8000/mcp
+  bridge:
+    kind: acp
+datasets:
+- name: tau3-bench
+  version: 1.0.1
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/a2adfd7e60c41be528c93f3c4672f8e2a9a0e770/registry.json
+verifier:
+  override_timeout_sec: 300
+  env:
+    OPENAI_API_KEY: ${OPENAI_API_KEY}
+    OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+    TAU2_USER_MODEL: ${TAU2_USER_MODEL}
+    TAU2_NL_ASSERTIONS_MODEL: ${TAU2_NL_ASSERTIONS_MODEL}

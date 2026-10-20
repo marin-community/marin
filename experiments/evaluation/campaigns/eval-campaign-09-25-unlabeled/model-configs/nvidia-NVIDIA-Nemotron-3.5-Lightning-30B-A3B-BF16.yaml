@@ -1,0 +1,23 @@
+# Nemotron 3.5 Lightning 30B-A3B: hybrid Mamba/attention MoE, 66 GB bf16, thinking on by default.
+# Parsers follow the model card's vLLM recipe; TP2 mirrors the Nemotron 3 Nano catalog entry. The
+# card was validated on vLLM 0.27.1; the Marin fork wheel is older, so the first serve is the test.
+name: nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+location: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+revision: a9904d24bcc1d289a1950fa9d2b978c47cf903b9
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 73728
+  tool_call_parser: qwen3_coder
+  reasoning_parser: nemotron_v3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
+# Benchmark configs select thinking mode explicitly. Model-default benchmarks retain the native
+# template behavior.

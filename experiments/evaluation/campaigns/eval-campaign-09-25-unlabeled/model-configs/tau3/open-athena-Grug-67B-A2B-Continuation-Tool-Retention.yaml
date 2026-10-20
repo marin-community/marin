@@ -1,0 +1,27 @@
+# Tau3 uses the campaign's 131072-token context and 32768-token output cap.
+name: open-athena-Grug-67B-A2B-Continuation-Tool-Retention
+location: open-athena/Grug-67B-A2B-Continuation-Tool-Retention
+revision: 9a9213cbb6c9ae80368bf9002176ae96546932f6
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 131072
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+generation:
+  max_gen_toks: 32768
