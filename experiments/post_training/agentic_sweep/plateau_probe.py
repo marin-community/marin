@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """How many tokens would plateau dropping drop at epoch 3 of the 1e-6 sweep run?
 
 Scores per-token cross-entropy on fixed rows with three models: v0 (the parent, the parameters of
@@ -23,8 +26,8 @@ from pathlib import Path
 
 import haliax as hax
 import jax
-import jmp
 import jax.numpy as jnp
+import jmp
 import numpy as np
 from fray.current_client import current_client, set_current_client
 from fray.iris_backend import FrayIrisClient

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Convert a retained sweep checkpoint without resuming training."""
 
 import logging
