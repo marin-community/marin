@@ -32,8 +32,8 @@ from taskforge.stage30_author import load_process
 from taskforge.stage30_author.author import Revision, RevisionKind, program_manifest
 from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
 from taskforge.stage30_author.loader import load_program_source
-from taskforge.stage40_build_with_agent import agentic_author as aa
-from taskforge.stage40_build_with_agent.agentic_author import (
+from taskforge.stage40_build_with_program import agentic_author as aa
+from taskforge.stage40_build_with_program.agentic_author import (
     AgenticAuthorConfig,
     AuthorOutcome,
     AuthorStatus,

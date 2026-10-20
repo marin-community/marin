@@ -28,9 +28,9 @@ src/taskforge/
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
-  stage40_build_with_agent/    agentic_author.py: `author_round`, the agent session that writes, loads,
-                               builds and grades a program through the program build
-  stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure,
+  stage40_build_with_program/  agentic_author.py: `author_round`, the agent session that writes, loads,
+                               builds and grades a build program;
+                               context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure,
                                BuildExpired;
                                services.py: RLEnvBuildServices, AgentLimits;
                                outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
@@ -53,9 +53,12 @@ Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pip
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
 modules (`child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and the shared
-modules import no stage. Build has two packages: `stage40_build_with_program` runs a build program's
-steps, and `stage40_build_with_agent` runs the agentic author, whose session builds through the
-program build, so it may import `stage40_build_with_program` and not the reverse. The coordinator
+modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
+builds a task today goes through a build program, so the SDK, the standard template, the build
+services, the program runner and the agentic author (an agent session that writes and iterates
+that program) all live there. The name leaves room for a `stage40_build_with_agent` package in
+which an agent produces the task draft directly, with no build program at all; that is a future
+surface, not a home for anything that writes a program, however the writer runs. The coordinator
 package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import any stage
 and shared module, and `tests/test_imports.py` refuses an import of it from any other package, along
 with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
@@ -309,7 +312,7 @@ refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `
 program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
 the author receives.
 
-`stage40_build_with_agent.agentic_author.author_round` is the agentic author: one agent session (`run_agent`,
+`stage40_build_with_program.agentic_author.author_round` is the agentic author: one agent session (`run_agent`,
 reasoning replay KEEP) per program round, working in a workspace that starts with the template as
 `program.py`, the proposal, the SDK reference and the template under the read-only `reference/`, and
 an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`, `read_reference`,

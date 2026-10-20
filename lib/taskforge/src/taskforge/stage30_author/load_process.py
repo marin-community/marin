@@ -12,7 +12,7 @@ reads back the program's manifest (``author.program_manifest``) or the loader's 
 A child that exits without a result, as when the kernel killed it for memory, raises
 ``LoaderProcessFailed``: the host's fault, not the program's. This stage cannot import the build's
 ``BuildInfrastructureFailure`` (stages import only lower stages), so the build's caller of the
-loader (``stage40_build_with_agent.agentic_author.load_in_child``) raises that in its place.
+loader (``stage40_build_with_program.agentic_author.load_in_child``) raises that in its place.
 """
 
 import asyncio
