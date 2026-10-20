@@ -19,7 +19,8 @@ from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.sandbox.factories import MachineHost
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, parse
-from taskforge.stage20_triage.verdict import accept
+from taskforge.stage20_triage.program import Repair
+from taskforge.stage20_triage.verdict import Verdict, accept
 from taskforge.stage30_author.author import static_author
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
@@ -103,10 +104,15 @@ async def review(summary: object) -> Decision:
     return Accept(band=BandOutcome.IN_BAND)
 
 
+async def no_repair(proposal: TaskProposal, verdict: Verdict) -> Repair:
+    raise AssertionError("accept never asks for a repair")
+
+
 async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_workpiece_id(tmp_path):
     proposal = catalog_proposal(load_capability_ideas(example_catalog_path())[CAPABILITY])
     stages = StageFunctions(
         triage=accept,
+        repair=no_repair,
         author=static_author(rl_env_build_program(sink=task)),
         load_program=load_program,
         build=run_build,
@@ -127,7 +133,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
     )
     coordinator = StageCoordinator(
         stages=stages,
-        budget=WorkpieceBudget(max_build_revisions=0, max_validation_retries=0),
+        budget=WorkpieceBudget(max_triage_repairs=0, max_build_revisions=0, max_validation_retries=0),
         root=tmp_path,
         event_store=JsonEventStore(tmp_path),
         model=model,
