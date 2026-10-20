@@ -60,6 +60,7 @@ from marin.evaluation.runner import (
     LaunchProvenance,
     SubmittedEvaluation,
     SubmittedEvaluationBatch,
+    judge_for_evaluation,
     run_evaluation_steps,
 )
 from marin.evaluation.serving_config import resolved_serve_config
@@ -141,6 +142,7 @@ class LaunchSpec:
     instances: int = 1
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
+    judge_evals: tuple[str, ...] = ()
     seed: int | None = None
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
@@ -230,7 +232,7 @@ def _resolve_definitions(
     seed: int | None,
     retry_unscored_harbor_trials: bool,
     version: str | None,
-    judge_model: ModelConfig | None,
+    judge: HostedJudge | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
     evalchemy_source_hash = evalchemy_runtime_source_hash() if evalchemy_definitions else ""
@@ -281,7 +283,7 @@ def _resolve_definitions(
                         model,
                         runtime_task_limit,
                         retry_unscored_harbor_trials,
-                        judge_model,
+                        judge.model if judge is not None and name in judge.eval_names else None,
                     ),
                     endpoint_route=EndpointRoute.CAPABILITY,
                     secret_env=dict(definition.secret_env_for(config)),
@@ -292,8 +294,8 @@ def _resolve_definitions(
 
 
 def _resolve_hosted_judge(spec: LaunchSpec, candidate_accelerator: AcceleratorChoice) -> HostedJudge | None:
-    if spec.judge_model is None and spec.judge_accelerator is not None:
-        raise ValueError("--judge-accelerator requires --judge-model or --judge-model-config")
+    if spec.judge_model is None and (spec.judge_accelerator is not None or spec.judge_evals):
+        raise ValueError("--judge-accelerator and --judge-eval require --judge-model or --judge-model-config")
     if spec.judge_model is None:
         return None
 
@@ -317,6 +319,7 @@ def _resolve_hosted_judge(spec: LaunchSpec, candidate_accelerator: AcceleratorCh
         model=spec.judge_model,
         accelerator=judge_accelerator,
         api_model=canonical_served_name(spec.judge_model.name),
+        eval_names=spec.judge_evals or tuple(name for name, _ in _evaluation_definitions(spec)),
     )
 
 
@@ -346,6 +349,10 @@ def build_evaluation_batch(
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
     judge = _resolve_hosted_judge(spec, accelerator)
     requested_definitions = _evaluation_definitions(spec)
+    if judge is not None:
+        unknown = set(judge.eval_names) - {name for name, _ in requested_definitions}
+        if unknown:
+            raise ValueError(f"--judge-eval names unselected evaluations: {sorted(unknown)}")
     if model.serve.max_model_len is not None and any(
         isinstance(definition, HarborDefinition) for _, definition in requested_definitions
     ):
@@ -357,7 +364,7 @@ def build_evaluation_batch(
         spec.seed,
         spec.retry_unscored_harbor_trials,
         spec.version,
-        judge.model if judge is not None else None,
+        judge,
     )
     if spec.retry_unscored_harbor_trials and spec.resume_results_path is None:
         raise ValueError("--retry-unscored-harbor-trials requires --resume-results-path")
@@ -381,7 +388,10 @@ def build_evaluation_batch(
         )
         if violations:
             raise ValueError(f"{spec.version} pre-submit check failed for {name}: {'; '.join(violations)}")
-    if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
+    if judge is not None and any(
+        isinstance(definition.executor, EvalchemyExecutor) and name in judge.eval_names
+        for name, definition in definitions
+    ):
         raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
     group_id = spec.run_id or _group_id(model.name, spec.cache_key)
@@ -402,7 +412,7 @@ def build_evaluation_batch(
                 "runtime": definition.cache_runtime_descriptor if spec.cache_key is not None else None,
                 "judge": (
                     ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
-                    if judge is not None
+                    if judge is not None and eval_key in judge.eval_names
                     else None
                 ),
                 "policy": spec.version,
@@ -450,7 +460,7 @@ def build_evaluation_batch(
 
 
 def build_evaluation_steps(batch: EvaluationBatch, execute: EvaluationStep) -> tuple[StepSpec, ...]:
-    """Build per-evaluation steps with the supplied execution function."""
+    """Build candidate-only steps before steps that also wait for a hosted judge."""
     return tuple(
         StepSpec(
             name=f"eval/{batch.model.name}/{evaluation.identity.eval_ref.name}",
@@ -458,7 +468,9 @@ def build_evaluation_steps(batch: EvaluationBatch, execute: EvaluationStep) -> t
             fn=lambda output_path, evaluation=evaluation: execute(evaluation, output_path),
             hash_attrs={"run_id": evaluation.identity.run_id},
         )
-        for evaluation in batch.evaluations
+        for evaluation in sorted(
+            batch.evaluations, key=lambda evaluation: judge_for_evaluation(batch, evaluation.identity) is not None
+        )
     )
 
 
@@ -482,7 +494,6 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             source_config=batch.source_model_config,
         )
     )
-    judge = None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model))
     records = sorted(
         (
             record
@@ -490,16 +501,25 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             if record.group_id == batch.group_id
             and record.version == batch.version
             and _model_identity(record.model) == model
-            and (record.judge.model.source_config or record.judge.model.config if record.judge is not None else None)
-            == judge
         ),
         key=lambda record: (record.status is RunStatus.SUCCEEDED, record.created_at),
         reverse=True,
     )
     evaluations = []
     for evaluation in batch.evaluations:
+        judge = (
+            ModelConfigRef.model_validate(asdict(batch.judge.model))
+            if batch.judge is not None and evaluation.identity.eval_ref.name in batch.judge.eval_names
+            else None
+        )
         prior = next(
-            (record for record in records if _same_evaluation(record.evaluation, evaluation.identity.eval_ref)),
+            (
+                record
+                for record in records
+                if _same_evaluation(record.evaluation, evaluation.identity.eval_ref)
+                and (record.judge.model.source_config or record.judge.model.config if record.judge is not None else None)
+                == judge
+            ),
             None,
         )
         if prior is not None:

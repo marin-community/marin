@@ -59,7 +59,8 @@ records and requires CoreWeave object-store credentials.
 
 Benchmarks with the same model config share a server within each suite. The launcher
 submits a separate group for a benchmark-specific model override, such as Tau³'s larger
-context window.
+context window. Each group runs up to four evaluations concurrently. BixBench alone uses
+the hosted MiniMax judge; the other evaluations can run while that judge starts.
 
 The launcher writes generated effective configs beneath
 `experiments/evaluation/campaigns/.launch-staging/` and local provenance snapshots beneath

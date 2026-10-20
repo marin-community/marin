@@ -274,8 +274,11 @@ documents how to register a Hugging Face model or object-store checkpoint.
   for multiple files.
 - `--harbor-config path.yaml` adds one Harbor policy. Repeat the option for multiple files.
 - `--limit N` overrides the configured instance cap for every selected evaluation.
-- `--max-concurrent N` caps simultaneous evaluators (default 1). All share one candidate and,
-  when configured, one judge. Server-wide inference metrics are omitted when this exceeds 1.
+- `--max-concurrent N` caps simultaneous evaluators (default 1). All share one candidate.
+  Server-wide inference metrics are omitted when this exceeds 1.
+- `--judge-eval NAME` restricts the hosted judge to named evaluations; repeat it for each dependent
+  evaluation. Without this option, all selected evaluations use the configured judge. Judge startup
+  runs alongside candidate-only evaluations. Only its dependents wait for it or retry when it is preempted.
 - `--instances N` starts candidate serving workers behind one request broker (default 1). Each
   worker gets the full selected accelerator allocation, so `--accelerator H100x1 --instances 8`
   uses eight H100s, while `H100x8` with eight instances uses 64 H100s.

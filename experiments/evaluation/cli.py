@@ -160,6 +160,12 @@ def cli() -> None:
 )
 @click.option("--judge-accelerator", default=None, help="Hosted judge slice override, e.g. 'H100x8'.")
 @click.option(
+    "--judge-eval",
+    "judge_evals",
+    multiple=True,
+    help="Evaluation requiring the hosted judge; repeatable. Defaults to all selected evaluations.",
+)
+@click.option(
     "--evals",
     "evals_arg",
     default=None,
@@ -250,6 +256,7 @@ def launch(
     judge_model: str | None,
     judge_model_config: Path | None,
     judge_accelerator: str | None,
+    judge_evals: tuple[str, ...],
     evals_arg: str | None,
     evalchemy_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
@@ -310,6 +317,7 @@ def launch(
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
         judge_model=selected_judge,
         judge_accelerator=judge_accelerator,
+        judge_evals=judge_evals,
         retry_unscored_harbor_trials=retry_unscored_harbor_trials,
         version=version,
         description=description,

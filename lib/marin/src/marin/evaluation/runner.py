@@ -5,7 +5,9 @@
 
 import logging
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from contextvars import copy_context
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from functools import partial
@@ -225,6 +227,7 @@ class HostedJudge:
     model: ModelConfig
     accelerator: AcceleratorChoice
     api_model: str | None
+    eval_names: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -264,6 +267,12 @@ class SubmittedEvaluationBatch:
     evaluations: tuple[SubmittedEvaluation, ...]
 
 
+def judge_for_evaluation(batch: EvaluationBatch, identity: EvaluationIdentity) -> HostedJudge | None:
+    """Return the hosted judge required by this evaluation, if any."""
+    judge = batch.judge
+    return judge if judge is not None and identity.eval_ref.name in judge.eval_names else None
+
+
 def _record(
     batch: EvaluationBatch,
     identity: EvaluationIdentity,
@@ -279,6 +288,7 @@ def _record(
     inference_metrics: InferenceMetrics | None = None,
 ) -> str:
     evaluation = identity.eval_ref
+    judge = judge_for_evaluation(batch, identity)
     if tasks is not None:
         evaluation = evaluation.model_copy(update={"tasks": tasks})
     if serving is None:
@@ -317,20 +327,18 @@ def _record(
         judge=(
             HostedJudgeRef(
                 model=ModelRef(
-                    name=batch.judge.model.name,
-                    location=batch.judge.model.location,
-                    backend=batch.judge.model.serve.backend.value,
-                    config=ModelConfigRef.model_validate(asdict(batch.judge.model)),
+                    name=judge.model.name,
+                    location=judge.model.location,
+                    backend=judge.model.serve.backend.value,
+                    config=ModelConfigRef.model_validate(asdict(judge.model)),
                 ),
                 hardware=HardwareRef(
-                    platform=batch.judge.accelerator.platform.value,
-                    accelerator=batch.judge.accelerator.label,
-                    region_or_cluster=(
-                        batch.judge.accelerator.target_cluster or batch.judge.accelerator.region or _UNCONSTRAINED
-                    ),
+                    platform=judge.accelerator.platform.value,
+                    accelerator=judge.accelerator.label,
+                    region_or_cluster=(judge.accelerator.target_cluster or judge.accelerator.region or _UNCONSTRAINED),
                 ),
             )
-            if batch.judge is not None
+            if judge is not None
             else None
         ),
         eval=evaluation,
@@ -650,40 +658,52 @@ def run_evaluation_steps(
                 )
             )
             return
-        judge = None
-        if batch.judge is not None:
-            judge_inference = inference_config_for_model(
-                batch.judge.model,
-                batch.judge.accelerator,
-                env_vars=runtime_env,
-                capability_origin=batch.capability_origin,
-                api_model=batch.judge.api_model,
-                priority=batch.priority_band,
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="judge-startup") as startup:
+            judge_config = batch.judge
+            needs_judge = any(
+                judge_for_evaluation(batch, evaluation.identity) is not None
+                and not check_cache(prefix_join(batch.records_prefix, evaluation.identity.run_id))
+                for evaluation in batch.evaluations
             )
-            try:
-                judge = stack.enter_context(remote_inference(judge_inference))
-            except RemoteInferenceStartupError as exc:
-                run(
-                    partial(
-                        _record_startup_failure,
-                        batch=batch,
-                        orchestrator_job_id=orchestrator_job_id,
-                        exc=exc,
-                        role=_JUDGE_ROLE,
-                        existing_jobs=_session_job_ids(session, _INFERENCE_ROLE),
-                    )
+            judge_future = None
+            if judge_config is not None and needs_judge:
+                judge_inference = inference_config_for_model(
+                    judge_config.model,
+                    judge_config.accelerator,
+                    env_vars=runtime_env,
+                    capability_origin=batch.capability_origin,
+                    api_model=judge_config.api_model,
+                    priority=batch.priority_band,
                 )
-                return
-        run(
-            partial(
-                run_evaluation_step,
-                batch=batch,
-                session=session,
-                judge=judge,
-                orchestrator_job_id=orchestrator_job_id,
-                evaluation_env=evaluation_env,
-            )
-        )
+                judge_future = startup.submit(copy_context().run, stack.enter_context, remote_inference(judge_inference))
+
+            def execute(evaluation: Evaluation, output_path: str) -> dict[str, str]:
+                judge = None
+                if judge_for_evaluation(batch, evaluation.identity) is not None:
+                    assert judge_future is not None
+                    try:
+                        judge = judge_future.result()
+                    except RemoteInferenceStartupError as exc:
+                        return _record_startup_failure(
+                            evaluation,
+                            output_path,
+                            batch=batch,
+                            orchestrator_job_id=orchestrator_job_id,
+                            exc=exc,
+                            role=_JUDGE_ROLE,
+                            existing_jobs=_session_job_ids(session, _INFERENCE_ROLE),
+                        )
+                return run_evaluation_step(
+                    evaluation,
+                    output_path,
+                    batch=batch,
+                    session=session,
+                    judge=judge,
+                    orchestrator_job_id=orchestrator_job_id,
+                    evaluation_env=evaluation_env,
+                )
+
+            run(execute)
 
 
 def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:

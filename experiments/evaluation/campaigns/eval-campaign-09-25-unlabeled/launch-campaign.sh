@@ -161,6 +161,7 @@ for model in "${models[@]}"; do
         --model-config "$STAGED_MODEL_CONFIG"
         --federated_cluster "$FEDERATED_CLUSTER"
         --priority "$PRIORITY"
+        --max-concurrent 4
         --version "$version"
       )
       if [ -n "$limit" ]; then
@@ -170,7 +171,7 @@ for model in "${models[@]}"; do
       for name in "${group_names[@]}"; do
         arguments+=("$config_flag" "$config_directory/$name.yaml")
         if [ "$mechanism" = agentic ] && [ "$name" = bixbench-pi ]; then
-          arguments+=(--judge-model-config "$JUDGE_MODEL_CONFIG" --judge-accelerator H100x8)
+          arguments+=(--judge-model-config "$JUDGE_MODEL_CONFIG" --judge-accelerator H100x8 --judge-eval "$name")
         fi
       done
       echo "== $model ($mechanism; $config; $([ "$submit" = 1 ] && echo submit || echo validate))"

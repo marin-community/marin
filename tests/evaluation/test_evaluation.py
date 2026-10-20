@@ -7,9 +7,12 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import asdict, replace
+from functools import partial
 from pathlib import Path
+from threading import Barrier, Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -293,6 +296,7 @@ def _hosted_judge_batch(tmp_path, evaluations: tuple[Evaluation, ...]) -> Evalua
             model=ModelConfig(name="judge", location="org/judge", resource_hint=ResourceHint(hbm_gb=3)),
             accelerator=accelerator,
             api_model="judge",
+            eval_names=tuple(evaluation.identity.eval_ref.name for evaluation in evaluations),
         ),
     )
 
@@ -508,6 +512,77 @@ def test_evaluation_steps_record_each_hosted_judge_startup_failure(tmp_path, mon
         record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
         assert record.status is RunStatus.SUCCEEDED
         assert _step_status(batch, index) == STATUS_SUCCESS
+
+
+@pytest.mark.parametrize("judge_fails", [False, True])
+@pytest.mark.parametrize("max_concurrent", [1, 2, 3])
+def test_unjudged_evaluations_run_while_judge_starts(tmp_path, monkeypatch, judge_fails, max_concurrent):
+    parallel = Barrier(min(2, max_concurrent))
+    completed = (Event(), Event())
+    inference_scope = ContextVar("inference_scope", default="missing")
+    inference_scope.set("campaign")
+
+    @contextmanager
+    def remote(config):
+        assert inference_scope.get() == "campaign"
+        if config.model.model_id == "judge":
+            assert all(event.wait(timeout=5) for event in completed)
+            if judge_fails:
+                raise RemoteInferenceStartupError("judge unavailable", jobs=())
+        yield _remote_session(f"https://{config.model.model_id}.example/v1")
+
+    def independent(index, _session, _output_dir, _env_vars, *, backend_state, judge=None):
+        assert judge is None
+        assert backend_state() is InferenceBackendState.READY
+        parallel.wait(timeout=5)
+        completed[index].set()
+        return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
+
+    evaluations = (
+        _evaluation(tmp_path, "judged", _successful_evaluation),
+        _evaluation(tmp_path, "first", partial(independent, 0)),
+        _evaluation(tmp_path, "second", partial(independent, 1)),
+    )
+    batch = _hosted_judge_batch(tmp_path, evaluations)
+    assert batch.judge is not None
+    batch = replace(batch, judge=replace(batch.judge, eval_names=("judged",)), max_concurrent=max_concurrent)
+    _patch_inference_runtime(monkeypatch, remote)
+
+    if judge_fails:
+        with pytest.raises(RuntimeError, match=r"1 step\(s\) failed"):
+            _run_test_batch(batch)
+    else:
+        _run_test_batch(batch)
+
+    for evaluation in evaluations:
+        record = read_record(record_path(batch.records_prefix, evaluation.identity.run_id))
+        if evaluation.identity.eval_ref.name == "judged":
+            assert record.status is (RunStatus.INFRA_FAILED if judge_fails else RunStatus.SUCCEEDED)
+            assert record.judge is not None
+        else:
+            assert record.status is RunStatus.SUCCEEDED
+            assert record.judge is None
+            assert not any(role.startswith("judge") for role in record.jobs)
+
+
+def test_cached_judged_evaluation_does_not_start_judge_for_pending_unjudged_eval(tmp_path, monkeypatch):
+    judged = _evaluation(tmp_path, "judged", _successful_evaluation)
+    pending = _evaluation(tmp_path, "pending", _successful_evaluation)
+    batch = _hosted_judge_batch(tmp_path, (judged, pending))
+    assert batch.judge is not None
+    batch = replace(batch, judge=replace(batch.judge, eval_names=("judged",)))
+    _evaluate_with_session(replace(batch, evaluations=(judged,)), _remote_session(), "/first")
+
+    def remote(config):
+        assert config.model.model_id == "candidate", "cached evaluation restarted its judge"
+        return nullcontext(_remote_session())
+
+    _patch_inference_runtime(monkeypatch, remote)
+    paths = _run_test_batch(batch)
+
+    assert read_record(paths[0]).jobs["orchestrator"] == "/first"
+    assert read_record(paths[1]).status is RunStatus.SUCCEEDED
+    assert read_record(paths[1]).judge is None
 
 
 def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -> dict:
@@ -1649,6 +1724,36 @@ def test_build_evaluation_batch_places_hosted_judge_with_candidate(monkeypatch):
     assert batch.judge.accelerator.label == "H100x8"
     assert batch.judge.accelerator.target_cluster == "cw-rno2a"
     assert batch.judge.api_model == "qwen3.5-122b-a10b-fp8"
+
+
+def test_changing_hosted_judge_preserves_unjudged_evaluation_identity(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    policy = tmp_path / "policy.yaml"
+    policy.write_text("datasets: [{name: aime}]\n")
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(),
+        harbor_definitions=tuple(HarborDefinition(name=name, config_path=policy) for name in ("judged", "unjudged")),
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=1,
+        records_prefix=str(tmp_path / "records"),
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a",
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+        run_id="stable-campaign",
+        judge_model=models()["qwen3-8b"],
+        judge_accelerator="H100x1",
+        judge_evals=("judged",),
+    )
+    provenance = LaunchProvenance(git_sha="abc", launch_host="host")
+    before = build_evaluation_batch(spec, provenance, "tester")
+    after = build_evaluation_batch(replace(spec, judge_model=models()["qwen3-0.6b"]), provenance, "tester")
+
+    assert before.evaluations[0].identity.run_id != after.evaluations[0].identity.run_id
+    assert before.evaluations[1].identity.run_id == after.evaluations[1].identity.run_id
 
 
 def test_build_evaluation_batch_rejects_hosted_judge_for_evalchemy_evaluations(monkeypatch):
