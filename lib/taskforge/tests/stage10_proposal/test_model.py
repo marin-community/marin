@@ -187,10 +187,23 @@ def test_strict_parse_names_the_offending_field(edit, field):
         parse(AUTHORED.replace(*edit))
 
 
+FENCED_EXAMPLE = "Find the kernel of the map.\nThe deliverable looks like:\n```markdown\n## Task\n## Build plan\n```\n"
+
+
 def test_headings_inside_code_fences_are_not_section_headings():
-    example = "Find the kernel of the map.\nThe deliverable looks like:\n```markdown\n## Task\n## Build plan\n```\n"
-    proposal = parse(AUTHORED.replace("Find the kernel of the map.\r\n", example))
+    proposal = parse(AUTHORED.replace("Find the kernel of the map.\r\n", FENCED_EXAMPLE))
     assert "## Build plan\n```" in proposal.body
+    assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), render(proposal))
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [("id: d01", "id: d02.other/1\nid: d01"), ("  hash: 9f3a12\n", "  hash: 9f3a12\n  ref: elsewhere\n")],
+    ids=["header", "nested"],
+)
+def test_a_repeated_front_matter_key_is_refused(edit):
+    with pytest.raises(ProposalFormatError, match="duplicate key"):
+        parse(AUTHORED.replace(*edit))
 
 
 def test_null_proposal_may_have_abbreviated_body():
@@ -272,6 +285,14 @@ def test_document_regex_rejects_drift(edit: tuple[str, str]):
     canonical = render(_proposal())
     assert old in canonical
     assert not re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), canonical.replace(old, new, 1))
+
+
+def test_document_regex_rejects_a_fence_that_swallows_the_next_heading():
+    canonical = render(_proposal())
+    unclosed = canonical.replace("Find the kernel of the map.\n", "Find the kernel of the map.\n```\n")
+    with pytest.raises(ProposalFormatError, match="missing required heading"):
+        parse(unclosed)
+    assert not re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), unclosed)
 
 
 def test_document_regex_rejects_headings_out_of_order():

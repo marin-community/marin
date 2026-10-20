@@ -7,9 +7,9 @@ import pytest
 from finelog.client import FlushResult, LogClient
 from finelog.embedded import is_available, require_embedded_server
 from iris.runtime import telemetry as runtime_telemetry
+from iris.runtime.telemetry import FinelogRuntime
 
-from taskforge.ledger.finelog import LEDGER_NAMESPACE, CompositeLedger, FinelogLedger, run_ledger
-from taskforge.ledger.jsonl import JsonlLedger, read_entries
+from taskforge.ledger.finelog import LEDGER_NAMESPACE, connect_finelog_ledger
 from taskforge.ledger.records import EntryKind, LedgerEntry, span
 
 ENTRY = LedgerEntry(
@@ -61,10 +61,12 @@ def embedded_server(tmp_path):
         server.stop()
 
 
-def test_rows_round_trip_through_finelog_server(embedded_server):
-    ledger = FinelogLedger(LogClient.connect(embedded_server.address), run_id="run-1")
-    ledger.record(ENTRY)
-    assert ledger.close() is FlushResult.SUCCEEDED
+def test_rows_round_trip_through_finelog_server(embedded_server, monkeypatch):
+    runtime = FinelogRuntime(endpoint=embedded_server.address, resolver=lambda address: address, attributes={})
+    monkeypatch.setattr(runtime_telemetry, "resolve", lambda run_id: runtime)
+    with connect_finelog_ledger("run-1") as ledger:
+        assert ledger is not None
+        ledger.record(ENTRY)
 
     reader = LogClient.connect(embedded_server.address)
     try:
@@ -78,27 +80,25 @@ def test_rows_round_trip_through_finelog_server(embedded_server):
     assert dict(row["attrs"]) == {"tier": "high"}
 
 
-def test_undelivered_rows_never_fail_the_run_and_are_logged_at_close(tmp_path, caplog):
+def test_undelivered_rows_never_fail_the_run_and_are_logged_at_exit(monkeypatch, caplog):
     client = FakeLogClient(UnconfirmedTable())
-    remote = FinelogLedger(client, run_id="run-1")
-    ledger = CompositeLedger(JsonlLedger(tmp_path), remote)
+    runtime = FinelogRuntime(endpoint="log-server", resolver=lambda name: name, attributes={})
+    monkeypatch.setattr(runtime_telemetry, "resolve", lambda run_id: runtime)
+    monkeypatch.setattr(LogClient, "connect", lambda endpoint, resolver: client)
 
     with caplog.at_level(logging.WARNING, logger="taskforge.ledger.finelog"):
-        for _ in range(3):
-            with span(ledger, EntryKind.STEP, workpiece_id="workpiece-1", round=0, step="build"):
-                pass
-        assert remote.close() is FlushResult.DROPPED
+        with connect_finelog_ledger("run-1") as ledger:
+            assert ledger is not None
+            for _ in range(3):
+                with span(ledger, EntryKind.STEP, workpiece_id="workpiece-1", round=0, step="build"):
+                    pass
+            assert not client.closed
 
-    assert len(list(read_entries(tmp_path / "workpiece-1.jsonl"))) == 3
     assert len(client.table.rows) == 3
     assert len(caplog.records) == 1 and client.closed
 
 
-def test_run_ledger_off_cluster_writes_jsonl_only(tmp_path, monkeypatch):
+def test_off_cluster_there_is_no_finelog_ledger(monkeypatch):
     monkeypatch.setattr(runtime_telemetry, "resolve", lambda run_id: None)
-    with run_ledger(tmp_path, run_id="run-1") as ledger:
-        with span(ledger, EntryKind.STAGE, workpiece_id="workpiece-1", round=0, step="propose"):
-            pass
-    assert isinstance(ledger, JsonlLedger)
-    (entry,) = read_entries(tmp_path / "workpiece-1.jsonl")
-    assert (entry.kind, entry.step) == (EntryKind.STAGE, "propose")
+    with connect_finelog_ledger("run-1") as ledger:
+        assert ledger is None

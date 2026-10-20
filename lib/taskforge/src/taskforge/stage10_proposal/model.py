@@ -37,7 +37,8 @@ so a proposal's identity does not depend on how its author formatted the header.
 
 ``document_regex`` constrains generation to that canonical layout: a ``structured_outputs.regex``
 that fully matches ``render(p)`` for every valid ``p`` whose string values hold no ``"``, backslash
-or newline.
+or newline and whose body, outside fenced code, starts with the first required heading, has no other
+level-two heading, and has a line under every required heading but the last.
 """
 
 import json
@@ -52,6 +53,8 @@ from taskforge.content_hash import sha256_hex
 
 FRONT_MATTER_DELIMITER = "---"
 CODE_FENCES = ("```", "~~~")
+# A fence marker may be indented by spaces and tabs only, which document_regex can express.
+FENCE_INDENT = " \t"
 
 REQUIRED_HEADINGS = (
     "Task",
@@ -154,6 +157,19 @@ class ProposalFormatError(ValueError):
     """The document does not match the proposal format; the message names the field."""
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """A safe loader that refuses a mapping that repeats a key, which ``safe_load`` resolves to the last value."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
+        seen = []
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in seen:
+                raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", key_node.start_mark)
+            seen.append(key)
+        return super().construct_mapping(node, deep=deep)
+
+
 @dataclass(frozen=True)
 class SourceRef:
     """Where the proposal came from: a catalog capability id or a repository, and its content hash."""
@@ -250,7 +266,7 @@ def parse(text: str) -> TaskProposal:
     if closing is None:
         raise ProposalFormatError(f"front matter has no closing '{FRONT_MATTER_DELIMITER}' line")
     try:
-        raw = yaml.safe_load("\n".join(lines[1:closing]))
+        raw = yaml.load("\n".join(lines[1:closing]), Loader=_UniqueKeyLoader)
     except yaml.YAMLError as error:
         raise ProposalFormatError(f"front matter is not valid YAML: {error}") from error
     header = _header(raw)
@@ -268,7 +284,7 @@ def _heading_lines(lines: list[str]) -> list[tuple[int, str]]:
     headings = []
     fence: str | None = None
     for i, line in enumerate(lines):
-        marker = line.lstrip()[:3]
+        marker = line.lstrip(FENCE_INDENT)[:3]
         if fence is None and marker in CODE_FENCES:
             fence = marker
         elif fence is not None and marker == fence:
@@ -425,11 +441,33 @@ def _build(value: object, field: str) -> BuildItem:
 # literals escape only REGEX_META rather than going through ``re.escape``.
 REGEX_META = frozenset("\\.+*?()|[]{}^$")
 QUOTED = r'"[^"\\\n]+"'
-# One body line that is not a level-two heading.
-TEXT = r"(?:[^#\n][^\n]*|#[^#\n][^\n]*|##[^ \n][^\n]*|##?)"
-LINE = rf"{TEXT}?\n"
-# The last section: EOS is reachable after any line, so decoding does not run on to max_tokens.
-END = rf"(?:{LINE})*{TEXT}?"
+
+
+def _not_fence(char: str) -> str:
+    """Text after a line's indent that does not start with three ``char``s, so it neither opens nor closes."""
+    return rf"(?:{char}(?:[^{char}\n][^\n]*)?|{char}{char}(?:[^{char}\n][^\n]*)?)"
+
+
+def _fence_patterns(char: str) -> tuple[str, str]:
+    """A closed fenced block of ``char`` without its final newline, and an unclosed one running to the end."""
+    marker = rf"[ \t]*{char * 3}[^\n]*"
+    inner = rf"[ \t]*(?:[^ \t\n{char}][^\n]*|{_not_fence(char)})?"
+    return rf"{marker}\n(?:{inner}\n)*{marker}", rf"{marker}(?:\n{inner})*"
+
+
+# One body line outside fenced code that is neither a level-two heading nor a fence marker.
+TEXT = (
+    r"(?:[^ \t\n#`~][^\n]*|#[^#\n][^\n]*|##[^ \n][^\n]*|##?"
+    rf"|{_not_fence('`')}|{_not_fence('~')}|[ \t]+(?:[^ \t\n`~][^\n]*|{_not_fence('`')}|{_not_fence('~')})?)"
+)
+_BACKTICK_BLOCK, _BACKTICK_OPEN = _fence_patterns("`")
+_TILDE_BLOCK, _TILDE_OPEN = _fence_patterns("~")
+# A body line, or a whole fenced block, inside which any line, a level-two heading included, is code.
+BODY_LINE = rf"(?:{TEXT}|{_BACKTICK_BLOCK}|{_TILDE_BLOCK})"
+LINE = rf"{BODY_LINE}?\n"
+# The last section: EOS is reachable after any line, inside an unclosed fence too, so decoding does not
+# run on to max_tokens.
+END = rf"(?:{LINE})*(?:{BODY_LINE}|{_BACKTICK_OPEN}|{_TILDE_OPEN})?"
 
 
 def _literal(text: str) -> str:
@@ -462,9 +500,9 @@ def document_regex(proposal_id: str, source: SourceRef) -> str:
 
     Front-matter keys, their order and enum values are pinned and the ``id`` and ``source`` lines are literal;
     ``solver_machine`` is ``null`` exactly for a container proposal, and ``none`` only for a reasoning proposal.
-    A proposed document (``null_reason: null``) has every required heading, in order, each with at least one
-    line under it; a null document has a free body. Bodies are free text and EOS is allowed after any line of
-    the last section.
+    A proposed document (``null_reason: null``) has every required heading, in order, each but the last with
+    at least one line under it; a null document has a free body. Bodies are free text in which a level-two
+    heading line appears only inside fenced code, and EOS is allowed after any line of the last section.
     """
     fixed = _literal(f"{FRONT_MATTER_DELIMITER}\nid: {_quoted(proposal_id)}\nsource: {source_text(source)}\n")
     sections = "".join(rf"## {_literal(h)}\n(?:{LINE})+" for h in REQUIRED_HEADINGS[:-1])
