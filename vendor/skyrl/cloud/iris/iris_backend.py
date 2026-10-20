@@ -323,8 +323,11 @@ class IrisBackend:
         args = _iris_submission_state(config_path, config)
         if config.run.submission == SubmissionMode.PREPARE:
             raise ValueError("Prepare mode validates a launch without submitting it")
-        with contextlib.redirect_stdout(sys.stderr):
-            return launch(args, config.runtime.source_digest)
+        with (
+            build_runtime_bundle(config.runtime.source_digest) as workspace,
+            contextlib.redirect_stdout(sys.stderr),
+        ):
+            return launch(args, workspace)
 
     def export_terminal_policy(self, config_path: Path) -> None:
         export_terminal_policy(config_path)
@@ -805,10 +808,8 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
     return _build_task_shell(args, controller_cmd, pythonpath)
 
 
-def launch(args: SimpleNamespace, expected_source_digest: str) -> LaunchOutcome:
+def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     """Submit a resolved launch config and, unless detached, wait for its terminal state."""
-    workspace = build_runtime_bundle(expected_source_digest)
-
     if not args.job_name:
         args.job_name = f"rl-iris-{time.strftime('%Y%m%d-%H%M%S')}"
 

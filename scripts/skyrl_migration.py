@@ -635,6 +635,9 @@ def refresh_candidate(previous: Path, current: Path, updated: Path, candidate: P
     git(updated / "source.git", "fetch", "--quiet", str(overlay), "+HEAD:refs/snapshot/local-base")
     shutil.rmtree(overlay / VENDOR)
     copy_source_files(current, overlay / VENDOR, list(local_files))
+    # copy2 preserves timestamps. Rebuild the disposable index so same-sized
+    # edits cannot disappear when Git trusts the copied files' stat metadata.
+    git(overlay, "read-tree", "--empty")
     git(overlay, "add", "--all")
     patch_name = LOCAL_CHANGES_PATCH
     patch_path = updated / "migration-patches" / patch_name

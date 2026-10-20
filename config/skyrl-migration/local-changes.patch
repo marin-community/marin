@@ -1,5 +1,5 @@
 diff --git a/cloud/iris/iris_backend.py b/cloud/iris/iris_backend.py
-index bcb3a1c9e0fc102893cfc01acd2ee0e5bbe18b78..c75c429db3729ad6f47215992f1bcea2781d5cce 100644
+index bcb3a1c9e0fc102893cfc01acd2ee0e5bbe18b78..68a57e513616bbd2679a9ab7602f154ecad9757e 100644
 --- a/cloud/iris/iris_backend.py
 +++ b/cloud/iris/iris_backend.py
 @@ -55,0 +56 @@ from cloud.iris.runtime_bundle import build_runtime_bundle
@@ -9,24 +9,29 @@ index bcb3a1c9e0fc102893cfc01acd2ee0e5bbe18b78..c75c429db3729ad6f47215992f1bcea2
 @@ -291 +291 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
 -        runtime_commit=runtime["launcher_commit"],
 +        source_digest=runtime["source_digest"],
-@@ -327 +327 @@ class IrisBackend:
+@@ -326,2 +326,5 @@ class IrisBackend:
+-        with contextlib.redirect_stdout(sys.stderr):
 -            return launch(args, config.runtime.launcher_commit)
-+            return launch(args, config.runtime.source_digest)
-@@ -808 +808 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
++        with (
++            build_runtime_bundle(config.runtime.source_digest) as workspace,
++            contextlib.redirect_stdout(sys.stderr),
++        ):
++            return launch(args, workspace)
+@@ -808 +811 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
 -def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcome:
-+def launch(args: SimpleNamespace, expected_source_digest: str) -> LaunchOutcome:
-@@ -810 +810 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
++def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
+@@ -810,2 +812,0 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
 -    workspace = build_runtime_bundle(expected_launcher_commit)
-+    workspace = build_runtime_bundle(expected_source_digest)
-@@ -842 +842 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+-
+@@ -842 +843 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
 -    print(f"[rl-iris] Runtime:    {args.runtime_commit} ({args.runtime_profile.value})", flush=True)
 +    print(f"[rl-iris] Runtime:    {args.source_digest} ({args.runtime_profile.value})", flush=True)
-@@ -964 +963,0 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+@@ -964 +964,0 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
 -    env_vars["OT_AGENT_IRIS_RAY_PORT"] = str(args.ray_port)
-@@ -1101 +1100 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+@@ -1101 +1101 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
 -                setup_scripts=[task_setup_script(args.runtime_commit, args.runtime_profile)],
 +                setup_scripts=[task_setup_script(args.source_digest, args.runtime_profile)],
-@@ -1105,0 +1105 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
+@@ -1105,0 +1106 @@ def launch(args: SimpleNamespace, expected_launcher_commit: str) -> LaunchOutcom
 +            ports=[port.value for port in RayPort],
 diff --git a/cloud/iris/launch.py b/cloud/iris/launch.py
 index 11d36573d6f39da75acbb9177d3b5c2e9d0bf071..d8db13992b94c515e842abeb792832a70fa74aef 100644
@@ -185,20 +190,22 @@ index b61d02b4c6a6c90f01702e02697f8ddb5ca46e89..2e2fe4080a9f0749ca632263652b6b22
 @@ -63 +61,0 @@ RL_ENTRYPOINTS = MappingProxyType(
 -        RLEntrypoint.MINI_SWE: "skyrl_train.entrypoints.mini_swe",
 diff --git a/cloud/iris/runtime_bundle.py b/cloud/iris/runtime_bundle.py
-index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..76dff3a6817cdbb2ae97b96c85f3bebd13c37388 100644
+index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..2c739b7eaa3ac46335f8922a849943201780b418 100644
 --- a/cloud/iris/runtime_bundle.py
 +++ b/cloud/iris/runtime_bundle.py
 @@ -6 +5,0 @@ import hashlib
 -import importlib.metadata
 @@ -9 +7,0 @@ import shutil
 -import subprocess
-@@ -11 +8,0 @@ import tempfile
+@@ -11 +9,2 @@ import tempfile
 -import tomllib
-@@ -13 +9,0 @@ from dataclasses import asdict, dataclass
++from collections.abc import Iterator
++from contextlib import contextmanager
+@@ -13 +11,0 @@ from dataclasses import asdict, dataclass
 -from enum import StrEnum
-@@ -15 +10,0 @@ from pathlib import Path
+@@ -15 +12,0 @@ from pathlib import Path
 -from urllib.parse import unquote, urlparse
-@@ -21,6 +16,9 @@ BUNDLE_IDENTITY_FILE = ".marinskyrl-runtime.json"
+@@ -21,6 +18,9 @@ BUNDLE_IDENTITY_FILE = ".marinskyrl-runtime.json"
 -DISTRIBUTION_NAME = "marinskyrl"
 -
 -
@@ -214,14 +221,14 @@ index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..76dff3a6817cdbb2ae97b96c85f3bebd
 +    "skyrl-gym/skyrl_gym/",
 +    "open_mopd_versions.py",
 +)
-@@ -34,2 +32 @@ class LauncherSource:
+@@ -34,2 +34 @@ class LauncherSource:
 -    commit: str
 -    kind: LauncherSourceKind = LauncherSourceKind.CHECKOUT
 +    digest: str
-@@ -46 +43 @@ class RuntimeBundleIdentity:
+@@ -46 +45 @@ class RuntimeBundleIdentity:
 -    launcher_commit: str
 +    source_digest: str
-@@ -50,61 +46,0 @@ class RuntimeBundleIdentity:
+@@ -50,61 +48,0 @@ class RuntimeBundleIdentity:
 -def _git_output(root: Path, *args: str) -> str:
 -    return subprocess.run(
 -        ["git", *args],
@@ -283,7 +290,7 @@ index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..76dff3a6817cdbb2ae97b96c85f3bebd
 -    return LauncherSource(root=root, commit=commit, kind=LauncherSourceKind.INSTALLED)
 -
 -
-@@ -112,5 +48,6 @@ def resolve_launcher_source() -> LauncherSource:
+@@ -112,5 +50,6 @@ def resolve_launcher_source() -> LauncherSource:
 -    """Resolve the immutable runtime bytes a launch will ship."""
 -    checkout = _checkout_root(Path.cwd())
 -    if checkout is not None:
@@ -295,7 +302,7 @@ index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..76dff3a6817cdbb2ae97b96c85f3bebd
 +        for path in _bundle_paths(PROJECT_ROOT)
 +    )
 +    return LauncherSource(root=PROJECT_ROOT, digest=_files_digest(files))
-@@ -134,9 +71,18 @@ def read_manifest_paths(root: Path) -> tuple[str, ...]:
+@@ -134,9 +73,18 @@ def read_manifest_paths(root: Path) -> tuple[str, ...]:
 -def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
 -    manifest = source.root / BUNDLE_FILE_MANIFEST
 -    paths: list[Path] = []
@@ -323,10 +330,10 @@ index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..76dff3a6817cdbb2ae97b96c85f3bebd
 +        original.resolve().relative_to(root.resolve())
 +        if not original.is_file():
 +            raise FileNotFoundError(f"Runtime source file is missing: {name}")
-@@ -144,2 +89,0 @@ def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
+@@ -144,2 +91,0 @@ def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
 -    if not paths:
 -        raise ValueError(f"Runtime bundle manifest is empty: {manifest}")
-@@ -149,10 +93,3 @@ def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
+@@ -149,10 +95,3 @@ def _bundle_paths(source: LauncherSource) -> tuple[Path, ...]:
 -def _reject_uncommitted_runtime(source: LauncherSource, paths: tuple[Path, ...]) -> None:
 -    if source.kind is LauncherSourceKind.INSTALLED:
 -        return
@@ -340,45 +347,67 @@ index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..76dff3a6817cdbb2ae97b96c85f3bebd
 +def _files_digest(files: tuple[RuntimeBundleFile, ...]) -> str:
 +    encoded = json.dumps([(entry.path, entry.sha256) for entry in files], separators=(",", ":")).encode()
 +    return hashlib.sha256(encoded).hexdigest()
-@@ -170 +107 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+@@ -170 +109 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
 -    """Verify the files synced into an Iris task and return their launcher commit."""
 +    """Verify the files synced into an Iris task and return their source digest."""
-@@ -178 +115 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+@@ -178 +117 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
 -    launcher_commit = value.get("launcher_commit")
 +    source_digest = value.get("source_digest")
-@@ -180 +117 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+@@ -180 +119 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
 -    if not isinstance(launcher_commit, str) or not isinstance(file_values, list):
 +    if not isinstance(source_digest, str) or not isinstance(file_values, list):
-@@ -196 +133,4 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+@@ -196 +135,4 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
 -    return launcher_commit
 +    actual = tuple(RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(root / path)) for path in _bundle_paths(root))
 +    if _files_digest(actual) != source_digest or _files_digest(tuple(files)) != source_digest:
 +        raise ValueError("Bundled source files do not match the selected runtime identity")
 +    return source_digest
-@@ -199 +139 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
+@@ -199 +141 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
 -def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource, tuple[Path, ...]]:
 +def runtime_bundle_inputs(expected_source_digest: str) -> tuple[LauncherSource, tuple[Path, ...]]:
-@@ -202 +142 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
+@@ -202 +144 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
 -    if source.commit != expected_launcher_commit:
 +    if source.digest != expected_source_digest:
-@@ -204 +144 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
+@@ -204 +146 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
 -            f"Selected launcher checkout commit {source.commit} does not match requested {expected_launcher_commit}"
 +            f"Selected runtime source identity {source.digest} does not match requested {expected_source_digest}"
-@@ -206,2 +146 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
+@@ -206,2 +148 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
 -    paths = _bundle_paths(source)
 -    _reject_uncommitted_runtime(source, paths)
 +    paths = _bundle_paths(source.root)
-@@ -211 +150 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
+@@ -211,14 +152,18 @@ def runtime_bundle_inputs(expected_launcher_commit: str) -> tuple[LauncherSource
 -def build_runtime_bundle(expected_launcher_commit: str) -> Path:
-+def build_runtime_bundle(expected_source_digest: str) -> Path:
-@@ -213 +152 @@ def build_runtime_bundle(expected_launcher_commit: str) -> Path:
+-    """Copy the selected runtime files into an Iris workspace."""
 -    source, paths = runtime_bundle_inputs(expected_launcher_commit)
-+    source, paths = runtime_bundle_inputs(expected_source_digest)
-@@ -222 +161,3 @@ def build_runtime_bundle(expected_launcher_commit: str) -> Path:
+-
+-    workspace = Path(tempfile.mkdtemp(prefix="marinskyrl-runtime-bundle-"))
+-    files: list[RuntimeBundleFile] = []
+-    for relative_path in paths:
+-        destination = workspace / relative_path
+-        destination.parent.mkdir(parents=True, exist_ok=True)
+-        shutil.copy2(source.root / relative_path, destination)
+-        files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
 -    identity = RuntimeBundleIdentity(launcher_commit=source.commit, files=tuple(files))
-+    identity = RuntimeBundleIdentity(source_digest=source.digest, files=tuple(files))
-+    if _files_digest(identity.files) != expected_source_digest:
-+        raise ValueError("Runtime source changed while building its bundle")
+-    (workspace / BUNDLE_IDENTITY_FILE).write_text(json.dumps(asdict(identity), indent=2, sort_keys=True) + "\n")
+-    return workspace
++@contextmanager
++def build_runtime_bundle(expected_source_digest: str) -> Iterator[Path]:
++    """Own the copied Iris workspace until submission and supervision finish."""
++    source, paths = runtime_bundle_inputs(expected_source_digest)
++
++    with tempfile.TemporaryDirectory(prefix="marinskyrl-runtime-bundle-") as directory:
++        workspace = Path(directory)
++        files: list[RuntimeBundleFile] = []
++        for relative_path in paths:
++            destination = workspace / relative_path
++            destination.parent.mkdir(parents=True, exist_ok=True)
++            shutil.copy2(source.root / relative_path, destination)
++            files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
++        identity = RuntimeBundleIdentity(source_digest=source.digest, files=tuple(files))
++        if _files_digest(identity.files) != expected_source_digest:
++            raise ValueError("Runtime source changed while building its bundle")
++        (workspace / BUNDLE_IDENTITY_FILE).write_text(json.dumps(asdict(identity), indent=2, sort_keys=True) + "\n")
++        yield workspace
 diff --git a/cloud/iris/runtime_environment.py b/cloud/iris/runtime_environment.py
 index 040e332390eb5ba18c7b3099b3f3f72609a3a588..2c1d14460ce824862bcbabfc645bd3d8bfeef5da 100644
 --- a/cloud/iris/runtime_environment.py
@@ -993,15 +1022,15 @@ index 8008dac314a36f9cf0fbf7256155d19b9ee8b8e3..00000000000000000000000000000000
 -    capsys.readouterr()
 diff --git a/cloud/iris/tests/test_vendored_runtime_bundle.py b/cloud/iris/tests/test_vendored_runtime_bundle.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..f9364dedb2fb757f71ca03b43cd2385b868c50ff
+index 0000000000000000000000000000000000000000..8c615e800cf0c0296bf182f1ab588d0b6c891ae1
 --- /dev/null
 +++ b/cloud/iris/tests/test_vendored_runtime_bundle.py
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,79 @@
 +# Copyright The Marin Authors
 +# SPDX-License-Identifier: Apache-2.0
 +
 +import json
-+import shutil
++from contextlib import nullcontext
 +from pathlib import Path
 +
 +import pytest
@@ -1030,9 +1059,8 @@ index 0000000000000000000000000000000000000000..f9364dedb2fb757f71ca03b43cd2385b
 +    provenance.write_text(json.dumps({"source_sha": "original-upstream-revision"}))
 +    monkeypatch.setattr(runtime_bundle, "PROJECT_ROOT", project)
 +    source = runtime_bundle.resolve_launcher_source()
-+    workspace = runtime_bundle.build_runtime_bundle(source.digest)
-+    yield source, workspace
-+    shutil.rmtree(workspace)
++    with runtime_bundle.build_runtime_bundle(source.digest) as workspace:
++        yield source, workspace
 +
 +
 +def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bundled_source):
@@ -1055,12 +1083,21 @@ index 0000000000000000000000000000000000000000..f9364dedb2fb757f71ca03b43cd2385b
 +    (source.root / path).write_text("updated = True\n")
 +    changed = runtime_bundle.resolve_launcher_source()
 +    assert changed.digest != source.digest
-+    workspace = runtime_bundle.build_runtime_bundle(changed.digest)
-+    try:
++    with runtime_bundle.build_runtime_bundle(changed.digest) as workspace:
 +        assert (workspace / path).read_text() == "updated = True\n"
 +        assert runtime_bundle.validate_bundled_runtime(workspace) == changed.digest
-+    finally:
-+        shutil.rmtree(workspace)
++
++
++@pytest.mark.parametrize("submission_succeeds", [True, False])
++def test_runtime_workspace_is_removed_after_submission(bundled_source, submission_succeeds):
++    source, _ = bundled_source
++    outcome = nullcontext() if submission_succeeds else pytest.raises(RuntimeError, match="submission failed")
++    with outcome, runtime_bundle.build_runtime_bundle(source.digest) as workspace:
++        assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
++        if not submission_succeeds:
++            raise RuntimeError("submission failed")
++    assert not workspace.exists()
++    assert (source.root / "uv.lock").is_file()
 +
 +
 +def test_unrecorded_file_added_to_a_built_bundle_is_rejected(bundled_source):

@@ -376,11 +376,22 @@ def refresh_checkout(snapshot_dir: Path, tmp_path: Path) -> tuple[Path, Path]:
     return source, manifest
 
 
+@pytest.mark.parametrize("git_stat_cache", ["default", "minimal"])
 def test_refresh_preserves_local_edits_deletions_and_new_files_across_upstream_updates(
-    snapshot_dir: Path, tmp_path: Path
+    snapshot_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, git_stat_cache: str
 ) -> None:
+    if git_stat_cache == "minimal":
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.checkstat")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", "minimal")
+        monkeypatch.setenv("GIT_CONFIG_KEY_1", "core.trustctime")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_1", "false")
+        os.utime(snapshot_dir / "source/skyrl-train/skyrl_train/relative.py", (1_700_000_000, 1_700_000_000))
     current, manifest = refresh_checkout(snapshot_dir, tmp_path)
     write(current, "skyrl-train/skyrl_train/relative.py", "value = 7\n")
+    if git_stat_cache == "minimal":
+        # Archive copies can preserve metadata while changing same-sized contents.
+        os.utime(current / "skyrl-train/skyrl_train/relative.py", (1_700_000_000, 1_700_000_000))
     write(current, "cloud/iris/local_extension.py", "local = True\n")
     write(current, "uv.lock", "version = 2\n")
     write_bytes(current, "skyrl-train/skyrl_train/assets/blob.bin", b"\0local\xff")

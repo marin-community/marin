@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import shutil
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -31,9 +31,8 @@ def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     provenance.write_text(json.dumps({"source_sha": "original-upstream-revision"}))
     monkeypatch.setattr(runtime_bundle, "PROJECT_ROOT", project)
     source = runtime_bundle.resolve_launcher_source()
-    workspace = runtime_bundle.build_runtime_bundle(source.digest)
-    yield source, workspace
-    shutil.rmtree(workspace)
+    with runtime_bundle.build_runtime_bundle(source.digest) as workspace:
+        yield source, workspace
 
 
 def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bundled_source):
@@ -56,12 +55,21 @@ def test_source_edits_get_a_new_identity_and_bundle_without_restaging(bundled_so
     (source.root / path).write_text("updated = True\n")
     changed = runtime_bundle.resolve_launcher_source()
     assert changed.digest != source.digest
-    workspace = runtime_bundle.build_runtime_bundle(changed.digest)
-    try:
+    with runtime_bundle.build_runtime_bundle(changed.digest) as workspace:
         assert (workspace / path).read_text() == "updated = True\n"
         assert runtime_bundle.validate_bundled_runtime(workspace) == changed.digest
-    finally:
-        shutil.rmtree(workspace)
+
+
+@pytest.mark.parametrize("submission_succeeds", [True, False])
+def test_runtime_workspace_is_removed_after_submission(bundled_source, submission_succeeds):
+    source, _ = bundled_source
+    outcome = nullcontext() if submission_succeeds else pytest.raises(RuntimeError, match="submission failed")
+    with outcome, runtime_bundle.build_runtime_bundle(source.digest) as workspace:
+        assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
+        if not submission_succeeds:
+            raise RuntimeError("submission failed")
+    assert not workspace.exists()
+    assert (source.root / "uv.lock").is_file()
 
 
 def test_unrecorded_file_added_to_a_built_bundle_is_rejected(bundled_source):

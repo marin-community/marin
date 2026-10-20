@@ -6,6 +6,8 @@ import hashlib
 import json
 import shutil
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -147,19 +149,21 @@ def runtime_bundle_inputs(expected_source_digest: str) -> tuple[LauncherSource, 
     return source, paths
 
 
-def build_runtime_bundle(expected_source_digest: str) -> Path:
-    """Copy the selected runtime files into an Iris workspace."""
+@contextmanager
+def build_runtime_bundle(expected_source_digest: str) -> Iterator[Path]:
+    """Own the copied Iris workspace until submission and supervision finish."""
     source, paths = runtime_bundle_inputs(expected_source_digest)
 
-    workspace = Path(tempfile.mkdtemp(prefix="marinskyrl-runtime-bundle-"))
-    files: list[RuntimeBundleFile] = []
-    for relative_path in paths:
-        destination = workspace / relative_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source.root / relative_path, destination)
-        files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
-    identity = RuntimeBundleIdentity(source_digest=source.digest, files=tuple(files))
-    if _files_digest(identity.files) != expected_source_digest:
-        raise ValueError("Runtime source changed while building its bundle")
-    (workspace / BUNDLE_IDENTITY_FILE).write_text(json.dumps(asdict(identity), indent=2, sort_keys=True) + "\n")
-    return workspace
+    with tempfile.TemporaryDirectory(prefix="marinskyrl-runtime-bundle-") as directory:
+        workspace = Path(directory)
+        files: list[RuntimeBundleFile] = []
+        for relative_path in paths:
+            destination = workspace / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source.root / relative_path, destination)
+            files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
+        identity = RuntimeBundleIdentity(source_digest=source.digest, files=tuple(files))
+        if _files_digest(identity.files) != expected_source_digest:
+            raise ValueError("Runtime source changed while building its bundle")
+        (workspace / BUNDLE_IDENTITY_FILE).write_text(json.dumps(asdict(identity), indent=2, sort_keys=True) + "\n")
+        yield workspace
