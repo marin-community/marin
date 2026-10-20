@@ -175,11 +175,11 @@ def test_no_registered_github_checks_is_a_missing_gate_not_a_cli_failure(monkeyp
 
 def test_changed_files_are_sorted_and_restricted_to_the_policy() -> None:
     changed = validate_changed_files(
-        ["uv.lock", "config/external/harbor/uv.lock", "uv.lock"],
+        ["uv.lock", "config/external/evalchemy/uv.lock", "uv.lock"],
         policy=EXTERNAL_RUNTIME_POLICY,
     )
 
-    assert changed == ("config/external/harbor/uv.lock", "uv.lock")
+    assert changed == ("config/external/evalchemy/uv.lock", "uv.lock")
     with pytest.raises(ValueError):
         validate_changed_files(["uv.lock", "src/backdoor.py"], policy=EXTERNAL_RUNTIME_POLICY)
 

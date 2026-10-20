@@ -14,9 +14,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from marin.evaluation.harbor.driver_config import HarborErrorTaxonomy
+from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME_PROJECT, HARBOR_SOURCE, HarborErrorTaxonomy
 from marin.evaluation.harbor.runner import HarborTrial, _aggregate, _job_benchmark, _read_trial, _read_trials
-from marin.external_dependencies import HARBOR
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -85,8 +84,13 @@ def runtime_taxonomy() -> HarborErrorTaxonomy:
     command = [
         "uv",
         "run",
+        "--isolated",
         "--project",
-        "config/external/harbor",
+        HARBOR_RUNTIME_PROJECT,
+        "--extra",
+        "runtime",
+        "--no-default-groups",
+        "--frozen",
         "python",
         "-c",
         "import json; from harbor_config.errors import ErrorCategory, errors_by_category; "
@@ -98,7 +102,7 @@ def runtime_taxonomy() -> HarborErrorTaxonomy:
         agent=frozenset(categories["agent"]),
         passthrough=frozenset(categories["passthrough"]),
         undecided=frozenset(categories["unknown"]),
-        commit=HARBOR.commit,
+        commit=HARBOR_SOURCE.commit,
     )
 
 

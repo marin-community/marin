@@ -154,9 +154,22 @@ DEFAULT_LEG_TIMEOUT = 15
 
 # Suites outside the import-selected Python matrix.
 # TaskCompendium, Shellbox, RolloutEngine and Taskforge use the root lock. Iris
-# smoke drives a browser. Levanter's accelerator lanes use its selected files below.
+# smoke drives a browser. Harbor uses its own lock and local Marin sources.
+# Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "harbor-unit": (
+        "vendor/harbor/",
+        "lib/finestore/",
+        "lib/rigging/",
+        "lib/marin/src/marin/evaluation/harbor/",
+        "experiments/post_training/task_curation/harbor_hub.py",
+        "experiments/post_training/task_curation/tests/test_harbor_hub.py",
+        "infra/ci/select_tests.py",
+        "infra/ci/run_harbor_tests.py",
+        "infra/ci/run_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ),
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
     "shellbox-unit": (
         "lib/shellbox/",

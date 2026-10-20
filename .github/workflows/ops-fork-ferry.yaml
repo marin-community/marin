@@ -37,8 +37,6 @@ jobs:
             forks: the vllm GPU pin
           - unit: evalchemy
             forks: evalchemy
-          - unit: harbor
-            forks: harbor
     permissions:
       contents: read
       id-token: write

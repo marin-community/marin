@@ -101,12 +101,6 @@ class VllmGpuRelease:
 
 EXTERNAL_PROJECTS = (
     ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
-    ExternalProject(
-        "harbor",
-        "harbor",
-        "HARBOR",
-        runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
-    ),
     ExternalProject(MARINSKYRL_CONFIG_NAME, "marinskyrl", "MARIN_SKYRL"),
 )
 
