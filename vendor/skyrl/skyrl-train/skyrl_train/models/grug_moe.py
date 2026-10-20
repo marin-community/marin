@@ -45,6 +45,7 @@ GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_STACKED_EXPERT_SCHEMA_VERSION = 1
 GRUG_SPLIT_EXPERT_SCHEMA_VERSION = 2
 GRUG_DEFAULT_GLOBAL_EVERY = 4
+GRUG_DEFAULT_ROPE_THETA = 10000.0
 GRUG_EAGER_ATTENTION_BACKEND = "eager"
 GRUG_FLASH_ATTENTION_BACKEND = "flash_attention_2"
 GRUG_SUPPORTED_ATTENTION_BACKENDS = frozenset({GRUG_EAGER_ATTENTION_BACKEND, GRUG_FLASH_ATTENTION_BACKEND})
@@ -129,15 +130,35 @@ def jax_top_k(values: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]
     return sorted_values[..., :k], sorted_indices[..., :k]
 
 
-def _resolve_aliases(*values: int | None, default: int, label: str) -> int:
+def _resolve_aliases(*values: int | None, default: int | None, label: str) -> int:
     specified = {int(value) for value in values if value is not None}
     if len(specified) > 1:
         raise ValueError(f"conflicting {label} aliases: {sorted(specified)}")
-    return specified.pop() if specified else default
+    if specified:
+        return specified.pop()
+    if default is None:
+        raise ValueError(f"Grug config must state the {label}")
+    return default
+
+
+def _resolve_rope_theta(
+    rope_theta: float | None, rope_parameters: dict[str, Any] | None, rope: dict[str, Any] | None
+) -> float:
+    """Resolve theta from the checkpoint keys in the sampler's precedence order."""
+    if rope_theta is not None:
+        return float(rope_theta)
+    for key in ("rope_theta", "theta"):
+        if rope_parameters is not None and key in rope_parameters:
+            return float(rope_parameters[key])
+    if rope is not None and "theta" in rope:
+        return float(rope["theta"])
+    return GRUG_DEFAULT_ROPE_THETA
 
 
 class GrugMoeConfig(PretrainedConfig):
     model_type = GRUG_MOE_MODEL_TYPE
+    # HF serialization must not instantiate this config without its required numerics.
+    has_no_defaults_at_init = True
 
     def __init__(
         self,
@@ -163,14 +184,16 @@ class GrugMoeConfig(PretrainedConfig):
         head_dim: int | None = 128,
         max_position_embeddings: int | None = None,
         max_seq_len: int | None = None,
-        sliding_window: int = 2048,
+        sliding_window: int,
         rms_norm_eps: float | None = None,
         layer_norm_eps: float | None = None,
         initializer_range: float | None = None,
         initializer_std: float | None = None,
-        qk_mult: float = 1.5703274004183786,
+        qk_mult: float,
         qk_mult_long_scale: float = 1.0,
-        rope_theta: float = 10000.0,
+        rope_theta: float | None = None,
+        rope_parameters: dict[str, Any] | None = None,
+        rope: dict[str, Any] | None = None,
         disable_pko: bool = True,
         disable_long_rope: bool = True,
         router_z_loss_coef: float = 0.0,
@@ -207,7 +230,7 @@ class GrugMoeConfig(PretrainedConfig):
         num_experts_per_tok = _resolve_aliases(
             num_experts_per_tok,
             num_experts_per_token,
-            default=4,
+            default=None,
             label="experts per token",
         )
         num_hidden_layers = _resolve_aliases(
@@ -231,9 +254,10 @@ class GrugMoeConfig(PretrainedConfig):
         max_position_embeddings = _resolve_aliases(
             max_position_embeddings,
             max_seq_len,
-            default=65536,
+            default=None,
             label="maximum sequence length",
         )
+        rope_theta = _resolve_rope_theta(rope_theta, rope_parameters, rope)
         rms_norm_eps = float(
             rms_norm_eps if rms_norm_eps is not None else layer_norm_eps if layer_norm_eps is not None else 1e-5
         )

@@ -8,7 +8,7 @@ root environment.
 | file | role |
 | --- | --- |
 | `run_opd_h100.sh` | run synchronous OPD with separate policy, rollout, and teacher roles |
-| `run_grug_megatron.sh` | run Grug parity, training, and serving gates on four H100s |
+| `run_grug_megatron.sh` | run Grug parity, sampler–trainer agreement, training, and serving gates on four H100s |
 | `run_cat_count_h100.sh` | submit the CatCount coordinator and gate sampled learning on four H100s |
 | `gate.py` | score a training run against its spec |
 | `specs/cat-count-canary-qwen2.5-0.5b-async.json` | CatCount sampled learning and per-step mechanism requirements |
@@ -100,7 +100,7 @@ python3 skyrl-train/ci/marin_nightly/gate.py \
     --wall-clock-seconds 900
 ```
 
-The Grug lane runs `tests/gpu/test_grug_megatron.py`, the Levanter parity oracle
-and the two-GPU CP2
+The Grug lane runs `tests/gpu/test_grug_megatron.py`, sampler–trainer agreement in
+`tests/gpu/test_grug_sampler_trainer.py`, the Levanter parity oracle and the two-GPU CP2
 FlashAttention forward/backward smoke with the frozen Megatron runtime closure;
 see `docs/grug-megatron-training.md` for the Grug tests.
