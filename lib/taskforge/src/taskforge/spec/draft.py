@@ -9,15 +9,19 @@ machine. ``assemble`` adds the checks TaskSpec itself does not make and returns
 a spec that survives a JSON round trip.
 
 A ``TaskSpec`` holds the semantic task only. How it runs (machine backend,
-limits, user, deadlines) is the ``LoweredTaskSpec`` RolloutEngine executes, and
+limits, user, deadlines, harness) is the ``TaskRolloutSpec`` RolloutEngine executes, and
 ``lower`` alone builds one, choosing each machine's backend for the host. A
 lowered spec is therefore bound to the host whose factories it names, and its
 task may name the software differently from the ``TaskSpec``: on a host with
 the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``; on one
 without it a package machine has no backend (``host_requirements``).
 
+Every Taskforge spec names ``SHELL_HARNESS``, RolloutEngine's shell harness, and every Taskforge engine
+comes from ``rollout_engine``, which registers that harness with its command timeout: the timeout of one
+shell command belongs to the harness, not to the spec.
+
 Only ``_presentation`` builds the presented context, concrete tools and answer
-format, and only ``lower`` builds a ``LoweredTaskSpec``, so moving either is a
+format, and only ``lower`` builds a ``TaskRolloutSpec``, so moving either is a
 single-site change.
 """
 
@@ -27,8 +31,9 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from pydantic import JsonValue
-from rolloutengine.lowering import SHELLBOX_SESSION, lower_task
-from rolloutengine.spec import LoweredTaskSpec, MachineRuntimeSpec, TaskRuntimeSpec, TaskSessionSpec
+from rolloutengine.engine import RolloutEngine
+from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.models import (
@@ -64,6 +69,9 @@ from taskforge.sandbox.factories import MachineHost, container_backend, grading_
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 
 SHELL_CAPABILITY = "shell"
+SHELL_HARNESS = "shellbox"
+"""The name every Taskforge ``TaskRolloutSpec`` selects its harness by, and ``rollout_engine`` registers
+RolloutEngine's ``ShellHarness`` under."""
 NO_MACHINE = EnvironmentRequirements()
 """The environment of a task without a machine: the solver answers in the conversation, with no tools."""
 FILESYSTEM_CAPABILITY = "filesystem"
@@ -241,32 +249,51 @@ def machine(
     )
 
 
-def session(
+def rollout_limits(
     *,
     max_turns: int,
     model_turn_timeout: float | None,
-    command_timeout: float | None,
     tool_turn_timeout: float | None,
     total_turn_timeout: float | None,
     attempt_timeout: float | None,
     verifier_timeout: float | None,
     cleanup_timeout: float,
-) -> TaskSessionSpec:
-    """The turn budget and deadlines of one attempt in RolloutEngine's shellbox session."""
-    return TaskSessionSpec(
-        task_session=SHELLBOX_SESSION,
+) -> RolloutLimits:
+    """The turn budget and deadlines of one attempt; the shell command timeout is the harness's (``rollout_engine``)."""
+    return RolloutLimits(
         max_turns=max_turns,
+        # No per-attempt token budget on trials: a trial is bounded by its deadlines and its turn budget,
+        # and a cap here would end an attempt the evidence needs whole.
+        max_total_tokens=None,
         model_turn_timeout=model_turn_timeout,
-        command_timeout=command_timeout,
         tool_turn_timeout=tool_turn_timeout,
         total_turn_timeout=total_turn_timeout,
         attempt_timeout=attempt_timeout,
         verifier_timeout=verifier_timeout,
         cleanup_timeout=cleanup_timeout,
-        # No per-attempt token budget on trials: a trial is bounded by its deadlines and its turn budget,
-        # and a cap here would end an attempt the evidence needs whole.
-        max_total_tokens=None,
     )
+
+
+def rollout_engine(factories: Mapping[str, MachineFactory], *, command_timeout: float | None) -> RolloutEngine:
+    """A ``RolloutEngine`` on ``factories`` with RolloutEngine's shell harness registered as ``SHELL_HARNESS``.
+
+    ``command_timeout`` bounds each shell command of a turn; ``None`` leaves it to the turn deadlines.
+    ``RolloutEngine.check`` requires it to be shorter than a spec's ``tool_turn_timeout`` when both are set.
+    """
+    return RolloutEngine(factories, {SHELL_HARNESS: ShellHarness(command_timeout=command_timeout)})
+
+
+def check(spec: TaskRolloutSpec, factories: Mapping[str, MachineFactory]) -> None:
+    """Reject ``spec`` as ``RolloutEngine.check`` does on ``factories`` under the shell harness.
+
+    The check is the engine's own, before any machine starts. The harness it checks against has no command
+    timeout; the engine that runs ``spec`` checks its own again.
+
+    Raises:
+        ValueError: RolloutEngine rejects the spec.
+        NotImplementedError: RolloutEngine cannot run the spec.
+    """
+    rollout_engine(factories, command_timeout=None).check(spec)
 
 
 def reward_file(
@@ -319,7 +346,7 @@ def script_grader(
     for a file or workspace-state answer. ``collect`` commands run as root in the task machine and
     ``artifacts`` are copied from it first; an artifact a control may delete needs an explicit
     kind, not ``AUTO``. ``argv`` runs in ``cwd`` as the verifier machine's user and must finish
-    within ``timeout`` and the session's ``verifier_timeout``.
+    within ``timeout`` and the attempt's ``RolloutLimits.verifier_timeout``.
     """
     grader = ScriptGrader(
         argv=tuple(argv),
@@ -380,10 +407,11 @@ def answer_grader(spec: Spec, *, environment: EnvironmentRequirements | None = N
 
     Without ``environment`` the mode must be one verifyit grades in process (exact, numeric, mcq,
     math, ifeval, json_schema, xml_elements, csv_columns, structured_exact, predicted_action). Any
-    other mode, the LLM judge (``JudgeSpec``) included, runs ``python -c 'import verifyit ...'`` in a
-    verifier machine built from ``environment``, whose image must contain verifyit.
-    ``GRADER_BASE_IMAGE`` does not, and ``grade_candidate`` calls no model, so a judge cannot be
-    prototyped at build time: grade with deterministic checks in ``python_grader`` instead.
+    other mode except the LLM judge runs ``python -c 'import verifyit ...'`` in a verifier machine
+    built from ``environment``, whose image must contain verifyit. ``GRADER_BASE_IMAGE`` does not.
+    RolloutEngine grades an LLM judge (``JudgeSpec``) on the host through the judge service whatever
+    ``environment`` says, and ``grade_candidate`` serves no judge, so a judge cannot be prototyped at
+    build time: grade with deterministic checks in ``python_grader`` instead.
 
     Raises:
         ValueError: the mode does not grade in process and no environment was given, or the
@@ -458,7 +486,7 @@ def assemble(
         tags=tuple(tags),
     )
     if spec.answer_type in CONVERSATION_ANSWERS:
-        # As the Shellbox session does at start: only an answer read from the conversation has a format to check.
+        # As the shell harness does at start: only an answer read from the conversation has a format to check.
         require_submission_compatibility(spec)
     # A private file whose bytes the solver can read is no longer private: the verifier machine
     # already sees the agent-visible files at their own paths, so the grader reads them there.
@@ -483,21 +511,22 @@ def lower(
     host: MachineHost,
     task_machine: MachineSettings | None,
     verifier_machine: MachineSettings | None,
-    session: TaskSessionSpec,
+    limits: RolloutLimits,
     factories: Mapping[str, MachineFactory],
-) -> LoweredTaskSpec:
-    """The ``LoweredTaskSpec`` that runs ``task`` on ``host``'s ``factories``.
+) -> TaskRolloutSpec:
+    """The ``TaskRolloutSpec`` that runs ``task`` on ``host``'s ``factories`` under ``SHELL_HARNESS``.
 
-    Every Taskforge ``LoweredTaskSpec`` is built here. Each machine runs the requirements
+    Every Taskforge ``TaskRolloutSpec`` is built here. Each machine runs the requirements
     ``host_requirements`` gives for ``factories``, the same rule for the task machine and the verifier
     machine, on the backend ``machine_backend`` picks for them; the lowered task carries those
     requirements and each machine's ``MachineRuntimeSpec.backend`` names its backend. A grader with an
-    environment (a script grader, or a verifyit grader that does not grade in process) takes a
-    verifier machine; no other grader does.
+    environment (a script grader, or a verifyit grader that is neither in process nor a judge) takes a
+    verifier machine; no other grader does. The spec keeps the engine's default exact-token trace; a
+    validation trial replaces it (``stage50_validate.trials.EngineSettings.apply``).
 
     Raises:
         ValueError: A machine is given where the task has none or missing where it has one, or
-            RolloutEngine rejects the lowered spec.
+            RolloutEngine rejects the lowered spec (``check``).
         NotImplementedError: RolloutEngine cannot run the lowered spec.
     """
     if (task_machine is None) != (SHELL_CAPABILITY not in task.environment_requirements.capabilities):
@@ -506,15 +535,19 @@ def lower(
         raise ValueError("A verifier machine is given exactly when the task's grader has an environment")
     task = _hosted_task(task, factories)
     grading = grading_environment(task)
-    runtime = TaskRuntimeSpec(
+    spec = TaskRolloutSpec(
+        task=task,
+        harness=SHELL_HARNESS,
         task_machine=(
             None if task_machine is None else machine_runtime(task_machine, task.environment_requirements, host)
         ),
         verifier_machine=(
             None if verifier_machine is None or grading is None else machine_runtime(verifier_machine, grading, host)
         ),
+        limits=limits,
     )
-    return lower_task(task, runtime, session, factories=factories, sessions={}, providers={})
+    check(spec, factories)
+    return spec
 
 
 def machine_runtime(
@@ -523,7 +556,7 @@ def machine_runtime(
     """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``.
 
     ``requirements`` are the machine's ``host_requirements``. ``lower`` builds every task and verifier
-    machine with it; a builder prototyping a machine outside a lowered task uses it too, so the
+    machine with it; a builder prototyping a machine outside a task rollout spec uses it too, so the
     backend choice stays in one place.
     """
     return MachineRuntimeSpec(
@@ -559,7 +592,7 @@ def host_requirements(
     machine) falls under ``LOCAL_READ_ONLY_ROOTS``, in which case it keeps the image on the host's container
     backend, as it does without a local factory. A package machine (``requirements(packages=...)``)
     runs on the local backend only, its packages installed into a uv venv at machine start; on a
-    host without a local factory, RolloutEngine's lowering rejects it as an unknown factory. Every
+    host without a local factory, ``RolloutEngine.check`` rejects it as an unknown factory. Every
     other requirement is unchanged.
     """
     if requirements.docker_image != GRADER_BASE_IMAGE or Backend.LOCAL.value not in factories:
