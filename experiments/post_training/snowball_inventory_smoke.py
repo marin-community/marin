@@ -178,7 +178,7 @@ def main(
             memory=SNOWBALL_RECIPE.host_memory,
             disk="2TB",
             priority="interactive",
-            max_retries=1,
+            max_retries=0,
             target_cluster=CLUSTER,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=12,

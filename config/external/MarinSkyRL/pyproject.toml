@@ -20,4 +20,4 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "d12370fdbaddf7a36d96138c126cbfe94d363ed7" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "b23bc74e3207e0f25458b341209bd26eb4942d5d" }
