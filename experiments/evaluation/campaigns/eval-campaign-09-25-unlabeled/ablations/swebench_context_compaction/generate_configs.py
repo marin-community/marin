@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent
 CAMPAIGN = ROOT.parent.parent
 MODEL_CONFIGS = CAMPAIGN / "model-configs"
 BASE_HARBOR_CONFIG = CAMPAIGN / "harbor-configs" / "swebench-verified.yaml"
-HARBOR_COMMIT = "9d099696a567f489a111dc7e3c61183c98f007f0"
+HARBOR_COMMIT = "f7a503e25dcd84a7ba621988d36895320db62aff"
 
 
 @dataclass(frozen=True)

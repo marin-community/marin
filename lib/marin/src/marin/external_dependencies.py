@@ -76,7 +76,7 @@ HARBOR = ExternalDependency(
     distribution="harbor",
     repository="https://github.com/marin-community/harbor.git",
     version="0.8.1",
-    commit="9d099696a567f489a111dc7e3c61183c98f007f0",
+    commit="f7a503e25dcd84a7ba621988d36895320db62aff",
     runtime_requirements=("daytona==0.200.2", "gcsfs==2026.7.0", "pydantic-settings==2.14.2", "s3fs==2026.7.0"),
 )
 
