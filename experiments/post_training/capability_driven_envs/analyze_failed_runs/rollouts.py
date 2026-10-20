@@ -15,16 +15,11 @@ MAX_TASK_CHARS = 300
 FAILURE_OPERATION = "operation"
 """The key of ``RolloutFailure.diagnostics`` that names the interrupted operation, as rolloutengine records it."""
 POLICY_INTERRUPTIONS = frozenset({RolloutOperation.ATTEMPT, RolloutOperation.ADVANCE})
-"""The interruptions that the policy can cause: a slow or looping policy runs past the attempt deadline, and a bad
-tool call can stop the harness after a model turn."""
+"""The interrupted operations this analysis treats as policy failures."""
 
 
 def policy_failed(graded: GradedRollout, pass_threshold: float) -> bool:
-    """A grade below ``pass_threshold``, no valid submission, or an interruption in ``POLICY_INTERRUPTIONS``.
-
-    A task, grader, or infrastructure failure, and an interruption by the model server or the machine, shows no gap
-    of the policy, so it does not become a training target.
-    """
+    """Treat attempt or advance interruptions, submission failures, and low grades as policy failures."""
     failure = graded.rollout.failure
     if failure is not None:
         return failure.diagnostics.get(FAILURE_OPERATION) in POLICY_INTERRUPTIONS

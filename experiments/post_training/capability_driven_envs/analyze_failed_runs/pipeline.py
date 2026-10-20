@@ -142,10 +142,7 @@ def merge_idea_lists(
 
 
 def to_ideas(ideas: list[MaybeIdea], *, catalog_version: str, min_tasks: int) -> list[CapabilityIdea]:
-    """The catalog idea of each merged idea that cites rollouts of at least ``min_tasks`` tasks.
-
-    The capability record holds the run IDs of the evidence.
-    """
+    """Keep merged ideas with evidence from at least ``min_tasks`` tasks."""
     return [_idea(candidate, catalog_version) for candidate in ideas if candidate.num_tasks >= min_tasks]
 
 
