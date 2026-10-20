@@ -125,6 +125,10 @@ def _kernel_benches(sweep: bool):
     _report("seg_decay_fwd", jax.jit(lambda a, p, b: prep_mod._seg_decay_fwd_call(a, (p, b), starts, pcfg)), a, *gate)
     _report("prep_fwd (primal, w4)", prep_fwd(pcfg, False), q, k, v, gseg, beta)
     _report("prep_fwd (save_t, w4)", prep_fwd(pcfg, True), q, k, v, gseg, beta)
+    unseg = jax.jit(
+        lambda q, k, v, a, beta, p, b: prep_mod._prep_fwd_call(q, k, v, a, beta, (p, b), None, None, pcfg, True)
+    )
+    _report("prep_fwd (save_t, unsegmented, on-chip gate + cumsum)", unseg, q, k, v, a, beta, *gate)
     for cpb, st in ((2, 2), (4, 2), (4, 3), (8, 2), (8, 3)):
         cfg = _prep_cfg(chunks=cpb, chunk_stages=st)
         _report(f"prep_fwd (save_t, w4, c{cpb} s{st})", prep_fwd(cfg, True), q, k, v, gseg, beta)
@@ -285,14 +289,37 @@ def _parity():
         print(f"PARITY {vname:18s} finite={finite} " + " ".join(parts), flush=True)
 
 
+def _seg_only():
+    q, k, v, a, beta, gate, segment_ids = _inputs()
+    starts = doc_starts(segment_ids)
+    pcfg = _prep_cfg()
+    gseg = jax.jit(lambda a, p, b: prep_mod._seg_decay_fwd_call(a, (p, b), starts, pcfg))(a, *gate)
+
+    def prep_fwd(save_t):
+        return jax.jit(
+            lambda q, k, v, g, beta: prep_mod._prep_fwd_call(q, k, v, g, beta, None, starts, None, pcfg, save_t)
+        )
+
+    _report("seg_decay_fwd", jax.jit(lambda a, p, b: prep_mod._seg_decay_fwd_call(a, (p, b), starts, pcfg)), a, *gate)
+    _report("prep_fwd (save_t, segmented: reads G)", prep_fwd(True), q, k, v, gseg, beta)
+    unseg = jax.jit(
+        lambda q, k, v, a, beta, p, b: prep_mod._prep_fwd_call(q, k, v, a, beta, (p, b), None, None, pcfg, True)
+    )
+    _report("prep_fwd (save_t, unsegmented, on-chip gate + cumsum)", unseg, q, k, v, a, beta, *gate)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--parity", action="store_true")
     parser.add_argument("--sweep", action="store_true")
     parser.add_argument("--skip-kernels", action="store_true")
     parser.add_argument("--skip-layer", action="store_true")
+    parser.add_argument("--seg-only", action="store_true")
     args = parser.parse_args()
     print("devices", jax.devices(), flush=True)
+    if args.seg_only:
+        _seg_only()
+        return
     if args.parity:
         _parity()
     if not args.skip_kernels:
