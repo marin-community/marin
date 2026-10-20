@@ -43,7 +43,11 @@ def _block_logits(x_block, w, dtype, precision) -> jax.Array:
 def _block_loss(logits, labels_block, logsumexp_weight):
     lse = _cross_entropy_logsumexp(logits)
     label_logits = jnp.take_along_axis(logits, labels_block[:, None], axis=1)[:, 0]
-    return lse, lse - label_logits + logsumexp_weight * lse**2
+    loss = lse - label_logits
+    # Skip a zero z-loss term outright: for huge logits lse**2 overflows and 0 * inf is NaN.
+    if logsumexp_weight:
+        loss = loss + logsumexp_weight * lse**2
+    return lse, loss
 
 
 def _blocked(x, labels, weight, token_block_size):
@@ -75,7 +79,8 @@ def _weighted_sum_fwd(x, labels, w, weight, logsumexp_weight, token_block_size, 
         # d(weight * loss) / d logits = weight * (softmax * (1 + 2 z lse) - onehot(label)).
         probs = _cross_entropy_exp(logits - lse[:, None])
         label_hit = jnp.arange(logits.shape[1], dtype=jnp.int32)[None, :] == labels_block[:, None]
-        dlogits = probs * (weight_f32 * (1.0 + 2.0 * logsumexp_weight * lse))[:, None]
+        softmax_scale = weight_f32 * (1.0 + 2.0 * logsumexp_weight * lse) if logsumexp_weight else weight_f32
+        dlogits = probs * softmax_scale[:, None]
         dlogits = (dlogits - jnp.where(label_hit, weight_f32[:, None], 0.0)).astype(gemm_dtype)
         grad_x = jax.lax.dot_general(
             dlogits, w, (((1,), (1,)), ((), ())), precision=precision, preferred_element_type=jnp.float32
