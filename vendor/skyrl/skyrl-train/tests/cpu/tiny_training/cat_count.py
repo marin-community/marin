@@ -12,7 +12,6 @@ from skyrl_train.utils.algorithm_registry import AdvantageEstimatorRegistry
 from tests.cpu.tiny_training.experiment import run_tiny_training
 
 FAST_STEPS = 10
-RUN_TIMEOUT_SECONDS = 300
 
 
 def flipped_grpo(**kwargs):
