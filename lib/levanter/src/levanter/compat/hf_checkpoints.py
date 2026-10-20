@@ -943,6 +943,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         axis_mapping: Optional[ResourceMapping] = None,
         resize_vocab_to_match_tokenizer: bool = False,
         dtype: Optional[jnp.dtype] = None,
+        state_dict_prefix: Optional[str] = None,
     ) -> ModelWithHfSerializationMixin:
         """
         Loads a levanter model from a huggingface checkpoint.
@@ -954,6 +955,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
             resize_vocab_to_match_tokenizer: If True, resize the model's vocab to match the tokenizer's vocab size.
                 Defaults to False because some models (e.g., Qwen) intentionally pad their embedding matrices
                 beyond the tokenizer vocab size for hardware efficiency (e.g., divisibility by 4).
+            state_dict_prefix: Prefix to add to checkpoint keys when loading base-model weights into
+                a Levanter causal-LM model. The tensors are not copied.
         """
 
         hf_config = self.hf_config_from_hf_checkpoint(ref)
@@ -968,6 +971,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.
         state_dict = self.load_state_dict(ref, dtype)
+        if state_dict_prefix is not None:
+            state_dict = {f"{state_dict_prefix}.{key}": value for key, value in state_dict.items()}
 
         ignore_prefix: Optional[str] = None
         if self.ignore_prefix:

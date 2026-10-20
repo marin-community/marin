@@ -99,6 +99,7 @@ nav:
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
       - Task Curation: references/task-curation.md
+      - Harrier inference: references/harrier-inference.md
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md
