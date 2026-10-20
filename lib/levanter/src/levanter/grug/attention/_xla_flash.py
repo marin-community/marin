@@ -12,7 +12,12 @@ from jax import numpy as jnp
 from jax.sharding import auto_axes
 from jaxtyping import Array, Bool, Float
 
-from levanter.grug.attention._core import AttentionMask, align_kv_heads, reference_attention
+from levanter.grug.attention._core import (
+    AttentionMask,
+    align_kv_heads,
+    reference_attention,
+    token_validity_from_attention_mask,
+)
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention_mask import AttentionMask as LevanterAttentionMask
 from levanter.layers.flash_attention import flash_attention
@@ -47,6 +52,11 @@ def _levanter_mask(
     """Translate a Grug mask into Levanter's mask type for ``levanter.layers.flash_attention``."""
     if mask is None:
         return None
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        # The layer scan varies the window through these bounds, while the static
+        # sliding_window field describes the long layers. Honor the selected bounds.
+        dense = mask.materialize_mask(QPos.size, KPos.size)
+        return hax.named(jnp.broadcast_to(dense, (Batch.size, QPos.size, KPos.size)), (Batch, QPos, KPos))
     if isinstance(mask, jax.Array):
         if mask.dtype != jnp.bool_:
             raise NotImplementedError("xla_flash attention supports boolean dense masks only, not additive biases")
@@ -97,7 +107,11 @@ def _xla_flash_attention_math(
         inference=True,
         block_size=block_size,
     )
-    return out.rearrange((Batch, QPos, Heads, Key)).array.astype(v.dtype)
+    result = out.rearrange((Batch, QPos, Heads, Key)).array.astype(v.dtype)
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        valid = token_validity_from_attention_mask(mask, batch_size=batch, sequence_length=q_len)
+        result = jnp.where(valid[:, :, None, None], result, 0)
+    return result
 
 
 def xla_flash_attention(
@@ -111,6 +125,7 @@ def xla_flash_attention(
     """Levanter's pure-JAX flash attention (blockwise, custom backward) on Grug's raw arrays and mask.
 
     Runs on any backend. The output sharding follows ``q``, as for ``reference_attention``.
+    Precomputed per-query bounds use a dense [batch, query, key] mask on this backend.
     """
     block_size = _flash_block_size(q.shape[1], k.shape[1], requested=block_size)
     if block_size is None:

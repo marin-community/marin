@@ -56,9 +56,9 @@ class AttentionMask(eqx.Module):
     segment_ids: tuple[jax.Array, jax.Array] | None = None
     sliding_window: int | None = eqx.field(default=None, static=True)
     # Optional precomputed FA4/CuTe per-token metadata (lower_bounds, valid), both [B, S] int32/bool.
-    # When set, ``gpu_fa4_cute_attention`` uses these directly instead of rebuilding from
-    # ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
-    # ``lax.scan`` and select a per-layer sliding window (a static field the scan body cannot vary).
+    # When set, these bounds replace ``segment_ids``/``sliding_window`` for supported backends.
+    # FA4 consumes them directly; reference/XLA paths materialize a dense mask. A caller can compute
+    # metadata outside ``lax.scan`` and select a per-layer window, which a static field cannot vary.
     fa4_bounds: tuple[jax.Array, jax.Array] | None = None
 
     @classmethod
@@ -104,9 +104,22 @@ class AttentionMask(eqx.Module):
         """Return a boolean mask (True = allowed) or None.
 
         Shapes:
-          - If `segment_ids` is unset, returns `(q_len, k_len)` (broadcastable across batch).
-          - If `segment_ids` is set with per-batch IDs, returns `(batch, q_len, k_len)`.
+          - Precomputed `fa4_bounds` return `(batch, q_len, k_len)`.
+          - Per-batch `segment_ids` also return `(batch, q_len, k_len)`.
+          - Otherwise, a materialized mask has shape `(q_len, k_len)` and broadcasts across batch.
         """
+        if self.fa4_bounds is not None:
+            if q_len != k_len:
+                raise NotImplementedError(
+                    "Materializing precomputed attention bounds requires equal query/key lengths."
+                )
+            lower_bounds, valid = self.fa4_bounds
+            if lower_bounds.ndim != 2 or lower_bounds.shape != valid.shape or lower_bounds.shape[1] != q_len:
+                raise ValueError("Precomputed attention bounds and validity must have matching [batch, query] shapes.")
+            query = jnp.arange(q_len)[None, :, None]
+            key = jnp.arange(k_len)[None, None, :]
+            return valid[..., None] & (key >= lower_bounds[..., None]) & (key <= query)
+
         mask = None
 
         if self.is_causal:
@@ -270,6 +283,10 @@ def _reference_attention_math(
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
+    if explicit is not None and explicit.dtype == jnp.bool_:
+        # Padding queries have no keys. The finite masking sentinel otherwise gives
+        # those rows a uniform distribution, including nonzero value gradients.
+        weights = jnp.where(jnp.any(explicit, axis=-1, keepdims=True), weights, 0)
     ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
     return ctx.astype(v.dtype)
 
@@ -301,6 +318,8 @@ def _tpu_splash_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
 ) -> Float[Array, "B Q Hq D"]:
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        raise NotImplementedError("Splash attention does not support precomputed per-query attention bounds.")
     # Splash attention expects BHSD.
     q_ = jnp.transpose(q, (0, 2, 1, 3))
     k_ = jnp.transpose(k, (0, 2, 1, 3))
