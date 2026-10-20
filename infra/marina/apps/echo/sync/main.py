@@ -92,13 +92,6 @@ def decode_embedding(blob: bytes | None) -> list[float] | None:
     return list(struct.unpack(f"<{count}f", blob))
 
 
-def chunk_record(row: tuple) -> dict:
-    record = dict(zip(MIRRORED_CHUNK_COLUMNS, row, strict=True))
-    record["date"] = datetime.fromisoformat(record["date"]) if record["date"] else None
-    record["embedding"] = decode_embedding(record["embedding"])
-    return record
-
-
 def corpus_chunk_cursor(database: sqlite3.Connection) -> sqlite3.Cursor:
     placeholders = ",".join("?" * len(SOURCES))
     return database.execute(

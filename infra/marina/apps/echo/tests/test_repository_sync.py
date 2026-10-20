@@ -98,7 +98,7 @@ def _current_activity_manifest(_token):
     return {"built_at_epoch": 1}
 
 
-def test_activity_corpus_reader_accepts_marinmirror_schema(tmp_path):
+def test_activity_corpus_reader_accepts_marinmirror_schema(activity_engine, tmp_path):
     corpus = tmp_path / "corpus.db"
     with sqlite3.connect(corpus) as database:
         database.execute(
@@ -140,10 +140,18 @@ def test_activity_corpus_reader_accepts_marinmirror_schema(tmp_path):
                 1,
             ),
         )
-        row = activity_sync.corpus_chunk_cursor(database).fetchone()
-
-    assert activity_sync.chunk_record(row) == {
-        "id": 7,
+    with activity_engine.begin() as conn:
+        assert activity_sync.upsert_chunks(conn, corpus) == (1, 0)
+        row = (
+            conn.execute(
+                sqlalchemy.select(
+                    *(schema.chunks.c[name] for name in activity_sync.MIRRORED_CHUNK_COLUMNS if name != "id")
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert dict(row) == {
         "source": "discord",
         "kind": "message",
         "ref": "ref",
