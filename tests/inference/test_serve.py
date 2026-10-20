@@ -1069,12 +1069,7 @@ def test_dashboard_html_is_self_contained():
     assert 'src="http' not in DASHBOARD_HTML
 
 
-@pytest.fixture
-def dashboard_ports(monkeypatch):
-    monkeypatch.setattr("marin.inference.dashboard_server.prepare_tool_runtime", lambda catalog: None)
-
-
-def test_dashboard_serves_ui_and_reverse_proxies_streaming(dashboard_ports):
+def test_dashboard_serves_ui_and_reverse_proxies_streaming_without_tool_catalog(tmp_path):
     upstream_sock = bind_serving_socket("127.0.0.1", 0)
     upstream_port = upstream_sock.getsockname()[1]
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
@@ -1091,7 +1086,10 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming(dashboard_ports):
 
     with serve_app_background(_fake_vllm_app(), upstream_sock):
         app = build_dashboard_app(
-            upstream_base_url=f"http://127.0.0.1:{upstream_port}", model_id="fake-model", info=info
+            upstream_base_url=f"http://127.0.0.1:{upstream_port}",
+            model_id="fake-model",
+            info=info,
+            shellsim_catalog=str(tmp_path / "missing-catalog.json"),
         )
         with serve_app_background(app, dashboard_sock):
             base = f"http://127.0.0.1:{dashboard_port}"
@@ -1123,7 +1121,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming(dashboard_ports):
 
 
 @pytest.mark.parametrize("topology", ["direct", "brokered"])
-def test_dashboard_tokenization_preserves_backend_payload_and_errors(dashboard_ports, topology):
+def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
     upstream_sock = bind_serving_socket("127.0.0.1", 0)
     upstream_port = upstream_sock.getsockname()[1]
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
@@ -1178,9 +1176,7 @@ def test_dashboard_tokenization_preserves_backend_payload_and_errors(dashboard_p
         assert rejected.json() == {"error": {"type": "NotFoundError"}}
 
 
-def test_dashboard_health_reports_loading_when_upstream_down(
-    dashboard_ports,
-):
+def test_dashboard_health_reports_loading_when_upstream_down():
     dashboard_sock = bind_serving_socket("127.0.0.1", 0)
     dashboard_port = dashboard_sock.getsockname()[1]
     info = ServingInfo(
