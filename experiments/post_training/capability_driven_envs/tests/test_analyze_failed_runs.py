@@ -21,13 +21,9 @@ from rolloutengine.models import (
 )
 from rolloutengine.test_support import arithmetic_task, rollout_limits, shell_call
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import AnswerCall
+from taskcompendium.models import AnswerCall, TaskSpec
 
-from experiments.post_training.capability_driven_envs.analyze_failed_runs import (
-    EvaluatedRollout,
-    analyze_failed_runs,
-    policy_failures,
-)
+from experiments.post_training.capability_driven_envs.analyze_failed_runs import analyze_failed_runs, policy_failures
 from experiments.post_training.capability_driven_envs.generate_tasks import task_workpieces
 
 LOOKUP_CALL = {"id": "call", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "six"}'}}
@@ -40,13 +36,15 @@ CAPABILITY = {
 }
 
 
-def evaluated(run_id: str, status: Outcome, reward: float | None, *turns: dict, failure=None) -> EvaluatedRollout:
+def evaluated(
+    run_id: str, status: Outcome, reward: float | None, *turns: dict, failure=None
+) -> tuple[TaskSpec, GradedRollout]:
     """A rollout of the arithmetic task whose policy produced ``turns``, graded with ``status`` and ``reward``."""
     steps = tuple(RolloutStep(ModelTurn(turn, (), (), None, "stop"), Transition(done=False), 0, ()) for turn in turns)
     prompt = {"role": "user", "content": "What is six plus six?"}
     conversation = ConversationRecord((prompt, *turns), (), (), (), None, steps)
     rollout = Rollout(run_id, (conversation,), "stop", failure=failure)
-    return EvaluatedRollout(arithmetic_task(id=f"task-{run_id}"), GradedRollout(rollout, GradeResult(status, reward)))
+    return arithmetic_task(id=f"task-{run_id}"), GradedRollout(rollout, GradeResult(status, reward))
 
 
 ROLLOUTS = [
@@ -87,10 +85,8 @@ def shell_output(request: ModelRequest) -> str:
 
 
 def test_only_the_rollouts_that_the_policy_failed_are_analyzed():
-    assert [rollout.result.rollout.run_id for rollout in policy_failures(ROLLOUTS, pass_threshold=1.0)] == [
-        "wrong",
-        "loop",
-    ]
+    failures = policy_failures(ROLLOUTS, pass_threshold=1.0)
+    assert [graded.rollout.run_id for _, graded in failures] == ["wrong", "loop"]
 
 
 async def test_the_agent_reads_the_failed_rollouts_as_files_and_returns_capability_ideas_for_generate_tasks():
@@ -119,15 +115,15 @@ async def test_the_agent_reads_the_failed_rollouts_as_files_and_returns_capabili
 
 async def test_a_rollout_file_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
     policy = {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function"}]}
-    result = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, policy).result
-    rollout = EvaluatedRollout(arithmetic_task(id="task-malformed", answer_format=AnswerCall()), result)
+    _, graded = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, policy)
+    task = arithmetic_task(id="task-malformed", answer_format=AnswerCall())
     model, requests = analyst(
         shell_call("cat malformed.txt"),
         {"role": "assistant", "content": json.dumps([{**CAPABILITY, "evidence": ["malformed"]}])},
     )
 
     await analyze_failed_runs(
-        [rollout], model, pass_threshold=1.0, limits=rollout_limits(max_turns=4), catalog_version="round-1"
+        [(task, graded)], model, pass_threshold=1.0, limits=rollout_limits(max_turns=4), catalog_version="round-1"
     )
 
     tools, *messages = shell_output(requests[1]).splitlines()
