@@ -2036,7 +2036,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?rev=69a4ad674a2d101146db7fbbfce0f7149c6abc9e#69a4ad674a2d101146db7fbbfce0f7149c6abc9e" }
+source = { git = "https://github.com/marin-community/harbor.git?rev=6e0eadf32b4413157dd066cb978f5161511bf049#6e0eadf32b4413157dd066cb978f5161511bf049" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -3114,7 +3114,7 @@ requires-dist = [
     { name = "flashinfer-python", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.6.18.post1" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "func-timeout" },
-    { name = "harbor", marker = "sys_platform == 'linux' and extra == 'megatron'", git = "https://github.com/marin-community/harbor.git?rev=69a4ad674a2d101146db7fbbfce0f7149c6abc9e" },
+    { name = "harbor", marker = "sys_platform == 'linux' and extra == 'megatron'", git = "https://github.com/marin-community/harbor.git?rev=6e0eadf32b4413157dd066cb978f5161511bf049" },
     { name = "hf-transfer" },
     { name = "hs-connectors", marker = "sys_platform == 'linux' and extra == 'vllm'", git = "https://github.com/lukedhlee/speculators.git?subdirectory=hs_connectors&rev=6496b4db007de00dd4741349643d23b23e29dce8" },
     { name = "huggingface-hub", specifier = ">=0.34.0" },
@@ -3229,7 +3229,7 @@ docs = [
     { name = "sphinx-copybutton", specifier = ">=0.5.0" },
     { name = "sphinx-rtd-theme", specifier = ">=2.0.0" },
 ]
-harbor-test = [{ name = "harbor", git = "https://github.com/marin-community/harbor.git?rev=69a4ad674a2d101146db7fbbfce0f7149c6abc9e" }]
+harbor-test = [{ name = "harbor", git = "https://github.com/marin-community/harbor.git?rev=6e0eadf32b4413157dd066cb978f5161511bf049" }]
 
 [[package]]
 name = "markdown"
