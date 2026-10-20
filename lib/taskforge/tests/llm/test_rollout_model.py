@@ -26,7 +26,7 @@ from rolloutengine.spec import TRACE_METRIC, LoweredTaskSpec, TraceMode
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
 
-from taskforge.ledger.records import EntryKind, LedgerEntry
+from taskforge.ledger.records import EntryKind
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
@@ -41,7 +41,7 @@ from taskforge.spec.draft import (
     requirements,
     session,
 )
-from tests.conftest import ScriptedStream, fake_source
+from tests.conftest import ListLedger, ScriptedStream, fake_source
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 
 POLICY = LLMPolicy(max_continuations=0)
@@ -133,14 +133,6 @@ VLLM_CHUNKS: list[dict | str] = [
 @pytest.fixture
 def evidence_dir(evidence_root: Path) -> Path:
     return evidence_root / "validate" / "rollout_model"
-
-
-class ListLedger:
-    def __init__(self) -> None:
-        self.entries: list[LedgerEntry] = []
-
-    def record(self, entry: LedgerEntry) -> None:
-        self.entries.append(entry)
 
 
 def call_ledger(ledger: ListLedger | None = None) -> CallLedger:

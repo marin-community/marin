@@ -33,6 +33,7 @@ from shellbox.machine import Backend, MachineFactory, NetworkPolicy, PackageSpec
 from taskcompendium.grader import GraderPackage, verifyit_package
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
+    GRADER_ROOTS,
     AnswerFormat,
     AnswerType,
     CommandSemantics,
@@ -52,6 +53,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierArtifact,
     VerifierCommand,
+    under_grader_root,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from taskcompendium.submission import require_submission_compatibility
@@ -93,6 +95,8 @@ A machine that must write under one of them, a task shipping files to ``/opt`` f
 run on the local backend, and ``host_requirements`` keeps its image. ``tests/spec/test_draft.py``
 holds this tuple equal to shellbox's on hosts where the local backend imports.
 """
+VERIFIER_RESOURCE_ROOT = "/tests"
+"""Where grading stages the verifier's private resources; agent-visible files are staged at ``/``."""
 """``GRADER_BASE_IMAGE``'s software on the local backend: a uv-managed CPython 3.12 and no PyPI packages.
 
 shellbox's local factory resolves the empty requirement list into an empty hash lock, then installs the
@@ -201,8 +205,16 @@ def requirements(
 
 
 def check_packages(packages: Sequence[str]) -> None:
-    """Raise ``ValueError`` unless each entry is one PyPI requirement without pip options."""
-    malformed = [entry for entry in packages if not entry.strip() or entry.startswith("-") or {"\n", "\r"} & set(entry)]
+    """Raise ``ValueError`` unless each entry is one PyPI requirement without pip options.
+
+    The entries become lines of a uv requirements file, where a word starting with ``-`` anywhere on
+    the line, as in ``" -r other.txt"``, is read as an option.
+    """
+    malformed = [
+        entry
+        for entry in packages
+        if not entry.strip() or any(word.startswith("-") for word in entry.split()) or {"\n", "\r"} & set(entry)
+    ]
     if malformed:
         raise ValueError(f"Packages are PyPI requirements, one per entry, without pip options: {malformed}")
 
@@ -450,10 +462,15 @@ def assemble(
         require_submission_compatibility(spec)
     # A private file whose bytes the solver can read is no longer private: the verifier machine
     # already sees the agent-visible files at their own paths, so the grader reads them there.
-    visible = {resource_bytes(item) for item in spec.resources.all + spec.resources.worker}
+    visible = {resource_bytes(item) for item in _agent_visible(spec)}
     leaked = sorted(item.path for item in spec.resources.verifier if resource_bytes(item) in visible)
     if leaked:
         raise ValueError(f"Private verifier file content is also agent-visible: {leaked}")
+    # Grading stages agent-visible files after the verifier's, so one under a grader root would replace a
+    # private grader file or plant a verdict.
+    reserved = sorted(item.path for item in _agent_visible(spec) if under_grader_root(f"/{item.path}"))
+    if reserved:
+        raise ValueError(f"Agent-visible files lie under the grader roots {GRADER_ROOTS}: {reserved}")
     restored = TaskSpec.model_validate_json(spec.model_dump_json())
     if restored != spec:
         raise ValueError(f"Task {task_id!r} does not survive a JSON round trip")
@@ -538,8 +555,8 @@ def host_requirements(
     """``requirements`` as a host with ``factories`` runs them.
 
     With a local factory, a machine on ``GRADER_BASE_IMAGE`` runs ``LOCAL_CPYTHON`` on the local
-    backend, unless one of the absolute paths in ``writes`` (its files and its working directory)
-    falls under ``LOCAL_READ_ONLY_ROOTS``, in which case it keeps the image on the host's container
+    backend, unless one of the absolute paths in ``writes`` (everything staged or written on the
+    machine) falls under ``LOCAL_READ_ONLY_ROOTS``, in which case it keeps the image on the host's container
     backend, as it does without a local factory. A package machine (``requirements(packages=...)``)
     runs on the local backend only, its packages installed into a uv venv at machine start; on a
     host without a local factory, RolloutEngine's lowering rejects it as an unknown factory. Every
@@ -557,18 +574,32 @@ def _under(path: str, roots: Sequence[str]) -> bool:
     return any(parts[: len(PurePosixPath(root).parts)] == PurePosixPath(root).parts for root in roots)
 
 
+def _agent_visible(task: TaskSpec) -> tuple[TaskResource, ...]:
+    return (*task.resources.all, *task.resources.worker)
+
+
 def _hosted_task(task: TaskSpec, factories: Mapping[str, MachineFactory]) -> TaskSpec:
-    """``task`` with its task machine's and its grader's requirements as ``host_requirements`` gives them."""
+    """``task`` with its task machine's and its grader's requirements as ``host_requirements`` gives them.
+
+    A machine's writes are every path something is staged at or written to on it: the task machine gets
+    the agent-visible files, its working directory and the output paths; the verifier also gets the
+    private resources, the captured outputs and, for a script grader, its working directory and artifacts.
+    """
     requirements = task.environment_requirements
-    task_writes = [f"/{resource.path}" for resource in (*task.resources.all, *task.resources.worker)]
+    visible_writes = [f"/{resource.path}" for resource in _agent_visible(task)]
+    task_writes = [*visible_writes, *task.output_paths]
     if requirements.working_directory is not None:
         task_writes.append(requirements.working_directory)
     update: dict[str, object] = {"environment_requirements": host_requirements(requirements, factories, task_writes)}
     grading = grading_environment(task)
     if grading is not None:
-        grader_writes = [f"/{resource.path}" for resource in task.resources.verifier]
+        grader_writes = [
+            *(f"{VERIFIER_RESOURCE_ROOT}/{resource.path}" for resource in task.resources.verifier),
+            *visible_writes,
+            *task.output_paths,
+        ]
         if isinstance(task.grader, ScriptGrader):
-            grader_writes.append(task.grader.cwd)
+            grader_writes += [task.grader.cwd, *(artifact.target for artifact in task.grader.artifacts)]
         update["grader"] = task.grader.model_copy(
             update={"environment": host_requirements(grading, factories, grader_writes)}
         )

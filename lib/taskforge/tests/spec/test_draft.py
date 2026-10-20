@@ -39,6 +39,7 @@ from taskcompendium.models import (
     RewardFileFormat,
     ScriptGrader,
     Source,
+    TaskResource,
     TaskSpec,
     VerifierArtifact,
     VerifierCommand,
@@ -665,7 +666,11 @@ def test_a_lock_only_grader_lowers_onto_the_local_backend():
     assert lowered.runtime.verifier_machine is not None and lowered.runtime.verifier_machine.backend == "local"
 
 
-def cpython_task(grader: GraderPackage | None = None) -> TaskSpec:
+def cpython_task(
+    grader: GraderPackage | None = None,
+    files: tuple[TaskResource, ...] = (file("workspace/numbers.txt", "5\n7\n"),),
+    output_paths: tuple[str, ...] = ("/workspace/answer",),
+) -> TaskSpec:
     return assemble(
         "sum-cpython",
         "Write the sum of the numbers in /workspace/numbers.txt to /workspace/answer.",
@@ -674,8 +679,8 @@ def cpython_task(grader: GraderPackage | None = None) -> TaskSpec:
         grader or sum_grader(),
         SOURCE,
         environment=requirements(image=GRADER_BASE_IMAGE),
-        files=(file("workspace/numbers.txt", "5\n7\n"),),
-        output_paths=("/workspace/answer",),
+        files=files,
+        output_paths=output_paths,
     )
 
 
@@ -748,17 +753,37 @@ def test_a_package_machine_takes_no_image_and_one_requirement_per_package():
         requirements(image=None, packages=("numpy pandas\nscipy",))
 
 
+@pytest.mark.parametrize("entry", ["-r other.txt", "  -r /definitely/missing", "numpy --index-url=https://evil.example"])
+def test_a_package_entry_cannot_carry_a_requirements_file_option(entry):
+    with pytest.raises(ValueError, match="without pip options"):
+        requirements(image=None, packages=(entry,))
+
+
+@pytest.mark.parametrize("path", ["tests/config.json", "logs/verifier/reward.json"])
+def test_agent_visible_files_cannot_lie_under_the_grader_roots(path):
+    with pytest.raises(ValueError, match="grader roots"):
+        cpython_task(files=(file("workspace/numbers.txt", "5\n7\n"), file(path, "{}")))
+
+
 def test_a_grader_base_task_writing_under_a_read_only_root_keeps_its_image_on_the_local_host():
-    """Files the task ships under /opt cannot land on the local backend, so the task machine stays a container."""
+    """Files the task ships under /opt cannot land on the local backend, and grading stages them on the verifier
+    too, so both machines stay containers."""
     shipped = cpython_task().model_copy(
         update={"resources": ResourceGroups(worker=(file("opt/audit/README.md", "audit"),))}
     )
     lowered = lower_on_iris(shipped, (Backend.GVISOR, Backend.LOCAL))
     plain = lower_on_iris(cpython_task(), (Backend.GVISOR, Backend.LOCAL))
 
-    assert machine_sources(lowered)[0] == ("gvisor", RegistryImage(GRADER_BASE_IMAGE))
-    assert machine_sources(lowered)[1] == ("local", LOCAL_CPYTHON)
-    assert machine_sources(plain)[0] == ("local", LOCAL_CPYTHON)
+    image = RegistryImage(GRADER_BASE_IMAGE)
+    assert machine_sources(lowered) == (("gvisor", image), ("gvisor", image))
+    assert machine_sources(plain) == (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))
+
+
+def test_a_grader_base_task_whose_output_lies_under_a_read_only_root_keeps_its_image():
+    lowered = lower_on_iris(cpython_task(output_paths=("/opt/answer",)), (Backend.GVISOR, Backend.LOCAL))
+
+    image = RegistryImage(GRADER_BASE_IMAGE)
+    assert machine_sources(lowered) == (("gvisor", image), ("gvisor", image))
 
 
 def test_the_local_read_only_roots_match_shellbox():
