@@ -3,13 +3,16 @@
 
 """GLM-5.3 as a RolloutEngine model for the messages trace: ``ModelRequest`` in, ``ModelTurn`` out.
 
-Every turn is one ``GlmClient.complete`` call with ``return_token_ids`` and ``logprobs``. The turn
-reports the token ids and logprobs the server sent in the raw stream events of the call's completed
-attempt (vLLM sends ``prompt_token_ids`` on the first chunk and ``choices[].token_ids`` plus
-``choices[].logprobs`` on every chunk that carries tokens), and the call's usage. Chat completions
-take text, so each prompt is the server's own rendering of the conversation and need not extend the
-ids of the turn before. Under ``TraceMode.MESSAGES`` the engine records these ids without checking
-them and never trains on them; a stream that carries none gives a turn with empty ids.
+Every turn is one ``GlmClient.complete`` call with ``return_token_ids``. The turn reports the token
+ids the server sent in the raw stream events of the call's completed attempt (vLLM sends
+``prompt_token_ids`` on the first chunk and ``choices[].token_ids`` on every chunk that carries
+tokens), and the call's usage; the ids are what the trial's token accounting counts. No logprobs are
+requested: nothing under the messages trace reads them, and asking for them costs the server and the
+client (the SDK's stream accumulator re-copies them on every chunk) for a field the record would only
+carry. Chat completions take text, so each prompt is the server's own rendering of the conversation
+and need not extend the ids of the turn before. Under ``TraceMode.MESSAGES`` the engine records these
+ids without checking them and never trains on them; a stream that carries none gives a turn with
+empty ids.
 
 The response ids include the stop token (``<|observation|>`` after tool calls, ``<|user|>`` after a
 reply), which is also the first token the chat template renders for the next turn.
@@ -41,24 +44,22 @@ from taskforge.llm.client import (
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger, complete_into, llm_call_span
 
-TOKEN_FIELDS: dict[str, object] = {"return_token_ids": True, "logprobs": True}
+TOKEN_FIELDS: dict[str, object] = {"return_token_ids": True}
 PROMPT_CACHE_KEY = "prompt_cache_key"
 
 
 @dataclass(frozen=True)
 class ServedTokens:
-    """The token ids and logprobs the server reported for one completed request, empty where it sent none."""
+    """The token ids the server reported for one completed request, empty where it sent none."""
 
     prompt: tuple[int, ...]
     response: tuple[int, ...]
-    logprobs: tuple[float, ...]
 
 
 def served_tokens(completion: Completion) -> ServedTokens:
-    """Read the token ids and logprobs from the raw events of ``completion``'s completed request."""
+    """Read the token ids from the raw events of ``completion``'s completed request."""
     prompt: tuple[int, ...] = ()
     response: list[int] = []
-    logprobs: list[float] = []
     completed = [attempt for attempt in completion.attempts if attempt.outcome is AttemptOutcome.COMPLETED]
     for raw in completed[-1].events if completed else ():
         event = json.loads(raw)
@@ -66,8 +67,7 @@ def served_tokens(completion: Completion) -> ServedTokens:
             prompt = tuple(event["prompt_token_ids"])
         for choice in event.get("choices", []):
             response.extend(choice.get("token_ids") or ())
-            logprobs.extend(item["logprob"] for item in (choice.get("logprobs") or {}).get("content") or ())
-    return ServedTokens(prompt, tuple(response), tuple(logprobs))
+    return ServedTokens(prompt, tuple(response))
 
 
 def routing_key(record: CallLedger) -> str:
@@ -123,7 +123,7 @@ def model_turn(completion: Completion) -> ModelTurn:
         message=assistant_wire_message(completion),
         prompt_token_ids=tokens.prompt,
         response_token_ids=tokens.response,
-        logprobs=tokens.logprobs,
+        logprobs=None,
         stop_reason=(
             LENGTH_STOP_REASON if completion.finish_reason is FinishReason.LENGTH else str(completion.finish_reason)
         ),
