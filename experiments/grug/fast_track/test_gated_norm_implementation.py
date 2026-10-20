@@ -57,6 +57,8 @@ _CASES = {
     for stack, kw in _STACKS.items()
     for impl in ("reference", "fused")
 }
+# GPU accuracy anchor: the stack's reference implementation in float32 without MXFP8.
+_CASES.update({f"{stack}_anchor": {k: v for k, v in kw.items() if k not in _MXFP8} for stack, kw in _STACKS.items()})
 
 
 def _on_gpu() -> bool:
@@ -103,7 +105,7 @@ def _run_case(case: str, out_path: str) -> None:
         axis_types=(AxisType.Explicit,) * 4,
     )
     cfg = _config(gpu, **_CASES[case])
-    dtype = jnp.bfloat16 if gpu else jnp.float32
+    dtype = jnp.bfloat16 if gpu and not case.endswith("_anchor") else jnp.float32
     with jax.set_mesh(mesh):
         model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
         model = jax.tree.map(lambda a: a.astype(dtype) if eqx.is_inexact_array(a) else a, model)
@@ -164,13 +166,32 @@ def test_fused_gated_norm_matches_reference_on_cpu(stack, tmp_path):
     _assert_close(stack, tmp_path, rtol=1e-6, grad_rtol=1e-4)
 
 
-@pytest.mark.timeout(1800)
+def _global_error(grads: list[np.ndarray], anchor: list[np.ndarray]) -> float:
+    diff = np.sqrt(sum(float(np.sum(np.square(g - a))) for g, a in zip(grads, anchor, strict=True)))
+    return diff / np.sqrt(sum(float(np.sum(np.square(a))) for a in anchor))
+
+
+@pytest.mark.timeout(2400)
 @pytest.mark.parametrize("stack", ["gpu_bridge", "gpu_mxfp8", "gpu_blocks_mxfp8"])
-def test_fused_gated_norm_tracks_reference_on_gpu(stack, tmp_path):
+def test_fused_gated_norm_is_no_less_accurate_on_gpu(stack, tmp_path):
+    """In bf16 (and MXFP8) the two paths round differently, so both are scored against a float32 anchor."""
     if not _on_gpu() or len(jax.devices()) < 2:
         pytest.skip("needs >= 2 GPUs for the ragged EP backend")
-    # bf16: the fused op keeps the normalized activation in fp32, so it differs from the reference by rounding.
-    _assert_close(stack, tmp_path, rtol=2e-3, grad_rtol=0.15)
+    anchor_loss, layout, anchor = _case(f"{stack}_anchor", tmp_path)
+    loss, ref_layout, ref = _case(f"{stack}_reference", tmp_path)
+    fused_loss, fused_layout, fused = _case(f"{stack}_fused", tmp_path)
+    assert fused_layout == ref_layout == layout
+    ref_err, fused_err = _global_error(ref, anchor), _global_error(fused, anchor)
+    leaf = lambda g: max(  # noqa: E731
+        float(np.linalg.norm(x - a) / max(np.linalg.norm(a), 1e-30)) for x, a in zip(g, anchor, strict=True)
+    )
+    print(
+        f"{stack}: loss anchor {anchor_loss:.7f} reference {loss:.7f} fused {fused_loss:.7f}; grad relative L2 vs "
+        f"anchor (all leaves) reference {ref_err:.3e} fused {fused_err:.3e}; worst leaf reference {leaf(ref):.3e} "
+        f"fused {leaf(fused):.3e}"
+    )
+    assert abs(fused_loss - anchor_loss) <= abs(loss - anchor_loss) + 1e-3 * abs(anchor_loss)
+    assert fused_err <= 1.1 * ref_err
 
 
 if __name__ == "__main__":
