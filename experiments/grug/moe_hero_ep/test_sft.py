@@ -9,8 +9,10 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
+from experiments.grug.moe_hero_ep.model import LoraProjection
 from experiments.grug.moe_hero_ep.sft import _local_cross_entropy
 from experiments.grug.moe_hero_ep.sft_launch import PilotInspection, PilotStop, sft_stop_reason
 
@@ -56,6 +58,40 @@ def test_chunked_vocab_delta_loss_and_activation_gradients_match_dense_reference
     reference_result = jax.value_and_grad(reference, argnums=(0, 1))(hidden, delta)
     for actual, expected in zip(jax.tree.leaves(tiled_result), jax.tree.leaves(reference_result), strict=True):
         np.testing.assert_allclose(actual, expected, atol=2e-6, rtol=2e-6)
+
+
+def test_scanned_lora_outputs_and_gradients_match_dense_reference():
+    keys = jax.random.split(jax.random.key(42), 5)
+    base = jax.random.normal(keys[0], (2, 8, 8)) * 0.2
+    a = jax.random.normal(keys[1], (2, 8, 2)) * 0.2
+    b = jax.random.normal(keys[2], (2, 2, 8)) * 0.2
+    inputs = jax.random.normal(keys[3], (3, 8))
+    targets = jax.random.normal(keys[4], (3, 8))
+    scale = 1.5
+
+    def scanned(x, adapter_a, adapter_b):
+        def layer(hidden, parameters):
+            weight, layer_a, layer_b = parameters
+            adapter = LoraProjection(layer_a, layer_b, scale)
+            return jnp.tanh(hidden @ weight + adapter(hidden)), None
+
+        output, _ = jax.lax.scan(layer, x, (base, adapter_a, adapter_b))
+        return jnp.mean(jnp.square(output - targets)), output
+
+    def dense(x, adapter_a, adapter_b):
+        for layer in range(2):
+            weight = base[layer] + scale * (adapter_a[layer] @ adapter_b[layer])
+            x = jnp.tanh(x @ weight)
+        return jnp.mean(jnp.square(x - targets)), x
+
+    with jax.set_mesh(compact_grug_mesh()):
+        actual = jax.jit(jax.value_and_grad(scanned, argnums=(0, 1, 2), has_aux=True))(inputs, a, b)
+        expected = jax.value_and_grad(dense, argnums=(0, 1, 2), has_aux=True)(inputs, a, b)
+    for value, reference in zip(jax.tree.leaves(actual), jax.tree.leaves(expected), strict=True):
+        np.testing.assert_allclose(value, reference, atol=1e-5, rtol=1e-5)
+    # Nonzero factors exercise gradients of both LoRA factors in every layer.
+    for gradient in actual[1][1:]:
+        assert np.all(np.linalg.norm(gradient, axis=(1, 2)) > 0)
 
 
 @pytest.mark.timeout(120)
