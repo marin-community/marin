@@ -395,7 +395,7 @@ async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, pr
     one_shot_workpiece, agentic_workpiece = tmp_path / "one_shot" / "workpiece", tmp_path / "agentic" / "workpiece"
     one_shot_model = ScriptedModel(answer(json.dumps({"notes": "n", "source": PROGRAM})))
     await GlmAuthor(one_shot_model, SAMPLING, one_shot_workpiece, CallLedger(ledger, WORKPIECE, 0, "author"))(
-        proposal, None
+        proposal, None, {}
     )
     await author(
         agentic_workpiece,
