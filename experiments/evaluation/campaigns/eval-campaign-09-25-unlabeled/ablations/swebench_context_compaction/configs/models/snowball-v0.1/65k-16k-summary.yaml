@@ -1,0 +1,26 @@
+name: open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-summary
+location: open-athena/Snowball-Smartie-RL-2026.10.15.32-step14
+revision: 6783e9743478bd25a9ce03ab3460e84d6a9814b0
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 65536
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+generation:
+  max_gen_toks: 16384
