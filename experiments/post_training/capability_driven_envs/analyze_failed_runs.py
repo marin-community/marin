@@ -14,7 +14,6 @@ answer.
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any
 
@@ -130,34 +129,28 @@ USER_PROMPT = """\
 """
 
 
-@dataclass(frozen=True)
-class EvaluatedRollout:
-    """One evaluated attempt: the task that it ran and its graded rollout."""
-
-    task: TaskSpec
-    result: GradedRollout
-
-
-def policy_failures(rollouts: Sequence[EvaluatedRollout], pass_threshold: float) -> list[EvaluatedRollout]:
+def policy_failures(
+    rollouts: Sequence[tuple[TaskSpec, GradedRollout]], pass_threshold: float
+) -> list[tuple[TaskSpec, GradedRollout]]:
     """The rollouts that the policy failed: graded below ``pass_threshold``, or with no valid submission.
 
     An interrupted attempt, and an infrastructure, task, or grader failure, is not a failure of the policy, so it
     does not become a training target.
     """
 
-    def failed(rollout: EvaluatedRollout) -> bool:
-        grade = rollout.result.grade
-        if rollout.result.rollout.failure is not None:
+    def failed(graded: GradedRollout) -> bool:
+        grade = graded.grade
+        if graded.rollout.failure is not None:
             return False
         if grade.status == Outcome.SUBMISSION_FAILURE:
             return True
         return grade.status == Outcome.GRADED and grade.reward is not None and grade.reward < pass_threshold
 
-    return [rollout for rollout in rollouts if failed(rollout)]
+    return [(task, graded) for task, graded in rollouts if failed(graded)]
 
 
 async def analyze_failed_runs(
-    rollouts: Sequence[EvaluatedRollout],
+    rollouts: Sequence[tuple[TaskSpec, GradedRollout]],
     model: Model,
     *,
     pass_threshold: float,
@@ -166,9 +159,10 @@ async def analyze_failed_runs(
 ) -> list[CapabilityIdea]:
     """The capabilities that the policy's failed rollouts lack, as ideas for ``generate_tasks``.
 
-    ``model`` drives the analysis agent under ``limits``, for example a ``rolloutengine.chat.ChatModel``. With no
-    policy failure, no agent runs. A failed analysis raises ``GradedRolloutInterrupted``, and an answer that is not a
-    valid list of capabilities raises ``ValueError``.
+    Each graded rollout comes with the task that it ran, because the record does not keep the tools that the task
+    gave. ``model`` drives the analysis agent under ``limits``, for example a ``rolloutengine.chat.ChatModel``. With
+    no policy failure, no agent runs. A failed analysis raises ``GradedRolloutInterrupted``, and an answer that is not
+    a valid list of capabilities raises ``ValueError``.
     """
     failures = policy_failures(rollouts, pass_threshold)
     if not failures:
@@ -186,7 +180,7 @@ async def analyze_failed_runs(
     )
     result = await engine.run_task(spec, model)
     capabilities = _answer(result.rollout)
-    run_ids = {failure.result.rollout.run_id for failure in failures}
+    run_ids = {graded.rollout.run_id for _, graded in failures}
     unknown = sorted({run_id for capability in capabilities for run_id in capability.evidence} - run_ids)
     if unknown:
         raise ValueError(f"The analysis cites rollouts that did not fail: {unknown}")
@@ -196,15 +190,17 @@ async def analyze_failed_runs(
     return [_idea(capability, catalog_version) for capability in capabilities]
 
 
-def _analysis_task(failures: Sequence[EvaluatedRollout], total: int, turns: int, catalog_version: str) -> TaskSpec:
+def _analysis_task(
+    failures: Sequence[tuple[TaskSpec, GradedRollout]], total: int, turns: int, catalog_version: str
+) -> TaskSpec:
     system = SYSTEM_PROMPT.format(index=INDEX, schema=json.dumps(CAPABILITIES.json_schema()))
     user = USER_PROMPT.format(failed=len(failures), total=total, turns=turns)
-    index = "".join(f"{json.dumps(_summary(failure))}\n" for failure in failures)
+    index = "".join(f"{json.dumps(_summary(task, graded))}\n" for task, graded in failures)
     files = (
         inline_resource(f"{WORKSPACE}/{INDEX}", index.encode()),
         *(
-            inline_resource(f"{WORKSPACE}/{failure.result.rollout.run_id}.txt", _rollout_file(failure).encode())
-            for failure in failures
+            inline_resource(f"{WORKSPACE}/{graded.rollout.run_id}.txt", _rollout_file(task, graded).encode())
+            for task, graded in failures
         ),
     )
     return TaskSpec(
@@ -225,38 +221,36 @@ def _analysis_task(failures: Sequence[EvaluatedRollout], total: int, turns: int,
     )
 
 
-def _summary(failure: EvaluatedRollout) -> dict[str, Any]:
+def _summary(task: TaskSpec, graded: GradedRollout) -> dict[str, Any]:
     """The rollout's line in the index: its grade, how it stopped, and its turns and tool calls."""
-    rollout, grade = failure.result.rollout, failure.result.grade
+    rollout, grade = graded.rollout, graded.grade
     turns = [step.turn.message for conversation in rollout.conversations for step in conversation.steps]
     calls = [_call_text(call) for message in turns for call in message.get("tool_calls") or ()]
-    events = failure.task.context.events
-    task = " ".join(event.content for event in events if isinstance(event, TextMessage) and event.role == "user")
+    events = task.context.events
+    text = " ".join(event.content for event in events if isinstance(event, TextMessage) and event.role == "user")
     return {
         "run_id": rollout.run_id,
-        "task_id": failure.task.id,
-        "tags": list(failure.task.tags),
+        "task_id": task.id,
+        "tags": list(task.tags),
         "outcome": grade.status.value,
         "reward": grade.reward,
         "stop_reason": rollout.stop_reason,
         "turns": len(turns),
         "tool_calls": len(calls),
         "repeated_calls": sum(previous == call for previous, call in pairwise(calls)),
-        "task": task[:MAX_TASK_CHARS],
+        "task": text[:MAX_TASK_CHARS],
     }
 
 
-def _rollout_file(failure: EvaluatedRollout) -> str:
+def _rollout_file(task: TaskSpec, graded: GradedRollout) -> str:
     """A line with the tools that the task gave, then each message from a new line that starts with its number."""
-    task = failure.task
     requirements = task.environment_requirements
     tools = {
         "tools": list(task_prompt(task, None, ()).options.get("tools", ())),
         "tool_providers": sorted(provider.action_interface for provider in requirements.tool_providers.values()),
         "environment_capabilities": list(requirements.capabilities),
     }
-    rollout = failure.result.rollout
-    messages = [message for conversation in rollout.conversations for message in conversation.messages]
+    messages = [message for conversation in graded.rollout.conversations for message in conversation.messages]
     return "".join([f"{json.dumps(tools)}\n", *(f"[{n}] {_render(message)}\n" for n, message in enumerate(messages))])
 
 
