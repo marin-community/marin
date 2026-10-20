@@ -204,6 +204,17 @@ def test_tmax_repeats_follow_v0s_measured_rates():
     assert repeats / pairs == recovery.TMAX_REPEAT["identical_text"] == 0
 
 
+def test_a_tmax_failure_is_labeled_with_the_parsers_error():
+    # Prose with braces in it is not "No valid JSON": the parser extracts "{3}" and calls it Invalid JSON.
+    trace = tmax_trace()
+    data = json.loads(trace["messages"][5]["content"])
+    data["analysis"] = "Match the code with the regex `PROD-[A-Z]{3}-[0-9]{4}`."
+    data["plan"] = "Write each match as `[TIMESTAMP] {json}`."
+    trace["messages"][5]["content"] = json.dumps(data, indent=2)
+    _, records = recovery.inject("tmax", trace["messages"], [recovery.Injection(2, failures("no_json"))])
+    assert [(r["style"], r["error"]) for r in records] == [("invalid_json", "Invalid JSON")]
+
+
 def test_a_repeat_failure_is_the_previous_text_word_for_word():
     trace = tmax_trace()
     first = recovery.Failure("invalid_json", 7)

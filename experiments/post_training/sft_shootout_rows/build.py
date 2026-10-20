@@ -177,6 +177,7 @@ CHANGELOG = (
     "parent_model and relay_student (Snowball v0.1) instead of student_model",
     "BASES --parent and --relay-student pick v0.1 (default) or v0; a relay build checks every round's driver_config "
     "student against --relay-student",
+    "STYLEFROMERROR recovery labels each TMax failure's style by the parser error it draws (rows unchanged)",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are

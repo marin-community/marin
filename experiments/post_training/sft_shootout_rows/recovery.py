@@ -355,13 +355,14 @@ def inject(
                         failed, variant = render_tmax_failure(
                             data, style, random.Random(failure.seed), previous[0] if previous else None
                         )
-                        if variant == "fallback_invalid_json":
-                            style = "invalid_json"
                     previous = (failed, variant)
                     feedback = terminus_feedback(failed)
                     out.append({"role": "assistant", "author": INJECTED, "content": failed})
                     out.append({"role": "user", "content": feedback})
                     error = feedback.split("ERROR: ", 1)[1].split("\n", 1)[0].split(":", 1)[0]
+                    # The style is the parser's error: a fallback render, or prose with braces in it ("{3}"), can
+                    # draw another error than the planned style's.
+                    style = next((s for s, e in TMAX_ERRORS.items() if error.startswith(e)), style)
                 else:
                     variant = None
                     if swe_mode == WITH_FAILED_REPLY:
