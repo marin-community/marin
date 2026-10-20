@@ -1,0 +1,227 @@
+{
+  "provenance": {
+    "what": "CatCount multi-teacher on-policy distillation (MOPD) from two synthetic experts with different skills: cat (repeat a word N times) and evens (the first N positive even numbers), through Megatron with pretrained Qwen2.5-0.5B-Instruct.",
+    "produced_by": "TEACHER_WORDS='cat evens' ci/marin_nightly/run_cat_count_opd_h100.sh on one Iris H100x4 task",
+    "recipe": "The OPD recipe (lr 5e-7, teacher-credit clip 5, jitter 0.5) with one cat row and one evens row for every count, teacher_route set to the row's route, and each route sent to its own expert. The evens rows use the sequence environment, whose shaped reward credits the longest correct prefix, so their step-0 sampled score is higher than cat's although their exact match (0.38) is in the same band.",
+    "learning_rate": 5e-07,
+    "advantage_clip": 5,
+    "teacher_jitter": 0.5,
+    "step_cap": 30,
+    "eval_interval": 5,
+    "calibration": {
+      "healthy_seeds": [
+        17,
+        23,
+        31,
+        47,
+        59
+      ],
+      "step0_sampled_train_score": {
+        "cat": [
+          0.26,
+          0.23,
+          0.27,
+          0.28,
+          0.22
+        ],
+        "evens": [
+          0.63,
+          0.62,
+          0.65,
+          0.63,
+          0.63
+        ]
+      },
+      "step30_sampled_train_score": {
+        "cat": [
+          0.76,
+          0.81,
+          0.79,
+          0.74,
+          0.74
+        ],
+        "evens": [
+          0.87,
+          0.85,
+          0.87,
+          0.89,
+          0.83
+        ]
+      },
+      "step30_greedy_exact": {
+        "cat": [
+          0.69,
+          0.69,
+          0.69,
+          0.62,
+          0.69
+        ],
+        "evens": [
+          0.75,
+          0.75,
+          0.75,
+          0.75,
+          0.75
+        ]
+      },
+      "swapped_routes_seed_17_step30": {
+        "cat": -0.09,
+        "evens": -0.25
+      },
+      "max_policy_entropy": [
+        0.59,
+        0.6,
+        0.65,
+        0.62,
+        0.54
+      ]
+    },
+    "sampled_score_thresholds": {
+      "cat": {
+        "step0": [
+          0.1,
+          0.45
+        ],
+        "step30": 0.65
+      },
+      "evens": {
+        "step0": [
+          0.45,
+          0.75
+        ],
+        "step30": 0.78
+      }
+    }
+  },
+  "min_train_steps": 30,
+  "max_wall_clock_seconds": 1800,
+  "required_log_patterns": {
+    "successful_head_completion": {
+      "pattern": "Training done!",
+      "minimum": 1
+    }
+  },
+  "finite_metrics": [
+    "policy/final_loss",
+    "distillation/teacher_advantage_mean",
+    "distillation/teacher_advantage_abs_mean",
+    "distillation/valid_tokens",
+    "distillation/scored_tokens",
+    "distillation/teacher_count",
+    "policy/raw_grad_norm",
+    "distillation/route_rows/cat",
+    "distillation/route_rows/evens"
+  ],
+  "metric_gates": [
+    {
+      "kind": "eval",
+      "metric": "eval/sampled/cat_train/avg_score",
+      "min_observations": 1,
+      "bounds": {
+        "minimum": 0.1,
+        "maximum": 0.45
+      },
+      "step": 0
+    },
+    {
+      "kind": "eval",
+      "metric": "eval/sampled/cat_train/avg_score",
+      "min_observations": 1,
+      "step": 30,
+      "bounds": {
+        "minimum": 0.65
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "distillation/route_rows/cat",
+      "min_observations": 30,
+      "bounds": {
+        "minimum": 1
+      }
+    },
+    {
+      "kind": "eval",
+      "metric": "eval/sampled/evens_train/avg_score",
+      "min_observations": 1,
+      "bounds": {
+        "minimum": 0.45,
+        "maximum": 0.75
+      },
+      "step": 0
+    },
+    {
+      "kind": "eval",
+      "metric": "eval/sampled/evens_train/avg_score",
+      "min_observations": 1,
+      "step": 30,
+      "bounds": {
+        "minimum": 0.78
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "distillation/route_rows/evens",
+      "min_observations": 30,
+      "bounds": {
+        "minimum": 1
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "distillation/teacher_count",
+      "min_observations": 30,
+      "bounds": {
+        "minimum": 2,
+        "maximum": 2
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "distillation/valid_tokens",
+      "min_observations": 30,
+      "bounds": {
+        "minimum": 1,
+        "maximum": 100000
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "distillation/teacher_advantage_abs_mean",
+      "min_observations": 30,
+      "bounds": {
+        "minimum": 0,
+        "inclusive_minimum": false,
+        "maximum": 5
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "policy/raw_grad_norm",
+      "min_observations": 30,
+      "bounds": {
+        "minimum": 0,
+        "inclusive_minimum": false
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "async/staleness_mean",
+      "min_observations": 30,
+      "bounds": {
+        "minimum_count": 1,
+        "minimum": 0,
+        "inclusive_minimum": false
+      }
+    },
+    {
+      "kind": "train",
+      "metric": "policy/dp_weight_checksum_mismatch",
+      "min_observations": 30,
+      "bounds": {
+        "minimum": 0,
+        "maximum": 0
+      }
+    }
+  ]
+}

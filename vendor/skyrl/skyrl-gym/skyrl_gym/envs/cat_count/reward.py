@@ -1,4 +1,4 @@
-"""Score exact and partial counts of space-separated cats in a decoded reply."""
+"""Score exact and partial counts of a space-separated target word (``cat`` by default) in a decoded reply."""
 
 from __future__ import annotations
 
@@ -46,12 +46,12 @@ def shaping_words(text: str) -> list[str]:
     return [w for w in words if w]
 
 
-def cat_ngram_count(words: Sequence[str], k: int) -> int:
+def cat_ngram_count(words: Sequence[str], k: int, word: str = TARGET_WORD) -> int:
     """Count positions containing k consecutive target words."""
     run = 0
     count = 0
     for w in words:
-        run = run + 1 if w == TARGET_WORD else 0
+        run = run + 1 if w == word else 0
         if run >= k:
             count += 1
     return count
@@ -62,19 +62,21 @@ def closeness(observed: int, target: int) -> float:
     return max(0.0, 1.0 - abs(observed - target) / target)
 
 
-def cat_count_score(completion: str, n: int, *, stop_reason: Optional[str] = None) -> CatCountScore:
-    """Score one assistant completion against its requested count and stop reason."""
+def cat_count_score(
+    completion: str, n: int, *, stop_reason: Optional[str] = None, word: str = TARGET_WORD
+) -> CatCountScore:
+    """Score one assistant completion against its requested word, count and stop reason."""
     if n < 1:
         raise ValueError(f"n must be >= 1, got {n}")
 
     words = shaping_words(completion)
-    counts = {k: cat_ngram_count(words, k) for k in NGRAM_WEIGHTS}
+    counts = {k: cat_ngram_count(words, k, word) for k in NGRAM_WEIGHTS}
     orders = [k for k in NGRAM_WEIGHTS if k <= n]
     weight_total = sum(NGRAM_WEIGHTS[k] for k in orders)
     shaped = sum(NGRAM_WEIGHTS[k] * closeness(counts[k], n - k + 1) for k in orders) / weight_total
 
-    exact = strip_completion(completion) == " ".join([TARGET_WORD] * n)
-    junk_words = sum(1 for w in words if w != TARGET_WORD)
+    exact = strip_completion(completion) == " ".join([word] * n)
+    junk_words = sum(1 for w in words if w != word)
     extra_cats = max(0, counts[1] - n)
     truncated = stop_reason == "length"
 
