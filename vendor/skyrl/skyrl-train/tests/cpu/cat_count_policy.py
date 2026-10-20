@@ -28,4 +28,3 @@ def download_policy(directory: Path) -> None:
             raise ValueError(f"CatCount policy SHA256 mismatch: {name}")
         path.write_bytes(data)
     (directory / "MANIFEST.json").write_bytes(manifest_bytes)
-
