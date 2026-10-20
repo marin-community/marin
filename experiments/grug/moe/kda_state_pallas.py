@@ -130,7 +130,7 @@ def _state_grads_kernel(
     c = vnew_ref.shape[-2]
 
     def chunk(i):
-        rows = pl.ds(pl.multiple_of(i * c, c), c)
+        rows = pl.ds(i * c if isinstance(i, int) else pl.multiple_of(i * c, c), c)
         dqi = jnp.zeros((c, dk), f32)
         dattn = jnp.zeros((c, c), f32)
         dkw = jnp.zeros((c, dk), f32)
