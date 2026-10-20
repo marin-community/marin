@@ -35,10 +35,8 @@ CAPABILITY = {
     "id": "failed-runs.tool-use.stop-repeating-calls",
     "name": "Stop repeating a tool call that does not help",
     "outcome": "Change the approach when a tool call returns the same result two times.",
-    "failure_pattern": "The agent called the same tool with the same arguments until its turns ran out.",
     "evidence": ["loop"],
     "includes": ["Notice a repeated tool result"],
-    "sample_tasks": [{"kind": "entry", "instruction": "Find the price of an item whose search tool is down."}],
 }
 
 

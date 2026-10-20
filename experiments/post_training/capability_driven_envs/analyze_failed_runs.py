@@ -4,17 +4,18 @@
 """Find the capabilities that the policy's failed runs lack, as catalog ideas for ``generate_tasks``.
 
 ``analyze_failed_runs`` gives the failed runs to one managed agent: a ``RolloutEngine`` attempt whose shell harness
-serves two read-only tools, ``read_run`` and ``search_runs``. The agent answers with the capabilities whose absence
-explains the failures, for example an answer format, the use of tools, a loop of repeated calls, or a careless
-reading of the task. Each capability becomes a ``CapabilityIdea``, so ``task_workpieces`` and ``generate_tasks`` make
-training tasks from it. The agent sees only what the policy saw and wrote, never a grader or its answer.
+serves two read-only tools, ``read_run`` and ``search_runs``. The agent answers with the general skills whose absence
+explains the failures, for example an answer format, the use of tools, a stop to loops of repeated calls, or a
+careful reading of the task. A capability describes the skill and not the failed tasks, so that ``generate_tasks``
+writes the details of its training tasks. Each capability becomes a ``CapabilityIdea`` for ``task_workpieces`` and
+``generate_tasks``. The agent sees only what the policy saw and wrote, never a grader or its answer.
 """
 
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 from rolloutengine.engine import RolloutEngine
@@ -77,34 +78,17 @@ SEARCH_RUNS = FunctionDefinition(
 )
 
 
-class SampleTask(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["entry", "representative"]
-    instruction: str = Field(min_length=1)
-
-
-class SamplingFacet(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    id: str = Field(min_length=1)
-    description: str = Field(min_length=1)
-
-
 class MissingCapability(BaseModel):
-    """A capability that the failed runs lack, with the catalog's capability fields and the runs that show it."""
+    """A general skill that the failed runs lack, with the catalog's capability fields and the runs that show the gap."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str = Field(description="A file-safe ID, for example failed-runs.tool-use.stop-repeating-calls.")
-    name: str = Field(min_length=1)
-    outcome: str = Field(min_length=1, description="What an agent with the capability can do.")
-    failure_pattern: str = Field(min_length=1, description="What the failed runs did, in general terms.")
+    name: str = Field(min_length=1, description="The skill in a few words, with no detail of a failed task.")
+    outcome: str = Field(min_length=1, description="What an agent with the skill can do, in any domain.")
     evidence: tuple[str, ...] = Field(min_length=1, description="The IDs of the failed runs that show the gap.")
-    includes: tuple[str, ...] = Field(min_length=1)
-    excludes: tuple[str, ...] = ()
-    sample_tasks: tuple[SampleTask, ...] = Field(min_length=1)
-    sampling_facets: tuple[SamplingFacet, ...] = ()
+    includes: tuple[str, ...] = Field(min_length=1, description="The parts of the skill.")
+    excludes: tuple[str, ...] = Field(default=(), description="Related skills that the capability does not cover.")
 
     @field_validator("id")
     @classmethod
@@ -120,15 +104,16 @@ SYSTEM_PROMPT = """\
 You analyze the failed runs of a language-model agent to decide what the agent must learn next. A run is one \
 attempt at a task: the task's messages, the agent's turns and tool calls, and the tool results.
 
-Find the capabilities whose absence explains the failures. A capability can be any behavior that would have \
-made a run succeed, for example: the answer format that the task asks for, the choice of tools and their \
-arguments, a stop to loops that repeat a call or a mistake, a careful reading of the task and its constraints, \
-a check of the work before the answer, or domain knowledge.
+Find the general capabilities whose absence explains the failures. A capability is a skill that transfers to \
+many tasks and domains, for example: obey the answer format that a task asks for, select tools and their \
+arguments, stop a loop that repeats a call or a mistake, read a task and its constraints carefully, do a check \
+of the work before the answer, or plan the work for the turns that are left.
 
-- Base each capability on runs that you read, and give their run IDs as evidence.
-- Prefer a few general capabilities to many narrow ones. Merge failures that have the same cause.
-- Write new sample tasks, each self-contained with one checkable answer. Do not copy the text, numbers, names, \
-or answers of the failed tasks: the generated tasks train the agent, and the failed tasks evaluate it.
+- Use the failed runs only as evidence. Read them, and give their run IDs as the evidence of each capability.
+- Write each capability as a catalog entry for the skill itself. Do not put the failed tasks, their domain, \
+their data, or their mistakes in it: a different step writes new tasks that train the skill, and the failed \
+tasks evaluate it.
+- Prefer a few general capabilities to many narrow ones. Merge failures that come from the same missing skill.
 
 Read a run with read_run, and find a text across runs with search_runs. When you are done, answer without a \
 tool call. The answer is one JSON array of capabilities that obeys this JSON schema:
