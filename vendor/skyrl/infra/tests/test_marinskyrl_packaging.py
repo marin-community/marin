@@ -45,6 +45,9 @@ def test_root_wheel_owns_launcher_and_training_packages(built_wheel: BuiltWheel)
     assert "skyrl_gym/__init__.py" in built_wheel.names
     assert "skyrl_train/__init__.py" in built_wheel.names
     assert "skyrl_train/config/ppo_base_config.yaml" in built_wheel.names
+    assert "skyrl_train/inline_harbor.py" in built_wheel.names
+    assert "skyrl_gym/envs/nemotron_ultra/abstention_prompt.txt" in built_wheel.names
+    assert "skyrl_gym/envs/nemotron_ultra/jailbreak_verifiers.yaml" in built_wheel.names
 
 
 def test_base_dependencies_are_cpu_only(built_wheel: BuiltWheel) -> None:

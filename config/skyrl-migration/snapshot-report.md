@@ -1,6 +1,6 @@
 # SkyRL migration dry run
 
-Source: `3a8e8a72681011012ebb59c0c1ed34688ad6fdea`. Retained 504 files; discarded 824.
+Source: `82396a73a31e776229f3240c3af2b50ad53c4336`. Retained 508 files; discarded 820.
 
 This is a source candidate. Runtime bootstrap and nightly acceptance remain required.
 
@@ -22,20 +22,21 @@ This is a source candidate. Runtime bootstrap and nightly acceptance remain requ
 | [#934](https://github.com/marin-community/MarinSkyRL/pull/934) |  | conflict | 6 |
 | [#944](https://github.com/marin-community/MarinSkyRL/pull/944) |  | conflict | 31 |
 | [#945](https://github.com/marin-community/MarinSkyRL/pull/945) |  | needs-decision | 2 |
-| [#968](https://github.com/marin-community/MarinSkyRL/pull/968) |  | needs-decision | 8 |
+| [#968](https://github.com/marin-community/MarinSkyRL/pull/968) |  | conflict | 8 |
 | [#986](https://github.com/marin-community/MarinSkyRL/pull/986) |  | conflict | 31 |
 | [#992](https://github.com/marin-community/MarinSkyRL/pull/992) |  | conflict | 4 |
 | [#998](https://github.com/marin-community/MarinSkyRL/pull/998) |  | unmapped-base | 0 |
 | [#1001](https://github.com/marin-community/MarinSkyRL/pull/1001) |  | conflict | 8 |
-| [#1008](https://github.com/marin-community/MarinSkyRL/pull/1008) |  | excluded | 2 |
-| [#1019](https://github.com/marin-community/MarinSkyRL/pull/1019) |  | excluded | 2 |
+| [#1008](https://github.com/marin-community/MarinSkyRL/pull/1008) |  | ready | 0 |
+| [#1019](https://github.com/marin-community/MarinSkyRL/pull/1019) |  | ready | 0 |
 | [#1022](https://github.com/marin-community/MarinSkyRL/pull/1022) |  | needs-decision | 2 |
 | [#1023](https://github.com/marin-community/MarinSkyRL/pull/1023) |  | needs-decision | 4 |
 | [#1026](https://github.com/marin-community/MarinSkyRL/pull/1026) |  | excluded | 7 |
 | [#1027](https://github.com/marin-community/MarinSkyRL/pull/1027) |  | needs-decision | 3 |
 | [#1029](https://github.com/marin-community/MarinSkyRL/pull/1029) |  | needs-decision | 1 |
-| [#1030](https://github.com/marin-community/MarinSkyRL/pull/1030) |  | conflict | 18 |
+| [#1030](https://github.com/marin-community/MarinSkyRL/pull/1030) |  | conflict | 16 |
 | [#1031](https://github.com/marin-community/MarinSkyRL/pull/1031) |  | needs-decision | 2 |
+| [#1032](https://github.com/marin-community/MarinSkyRL/pull/1032) |  | needs-decision | 4 |
 | [#907](https://github.com/marin-community/MarinSkyRL/pull/907) | 905 | needs-decision | 2 |
 | [#931](https://github.com/marin-community/MarinSkyRL/pull/931) | 916 | blocked-parent | 0 |
 | [#940](https://github.com/marin-community/MarinSkyRL/pull/940) | 934 | blocked-parent | 0 |
@@ -44,7 +45,7 @@ This is a source candidate. Runtime bootstrap and nightly acceptance remain requ
 | [#987](https://github.com/marin-community/MarinSkyRL/pull/987) | 986 | blocked-parent | 0 |
 | [#996](https://github.com/marin-community/MarinSkyRL/pull/996) | 968 | blocked-parent | 0 |
 | [#1003](https://github.com/marin-community/MarinSkyRL/pull/1003) | 998 | blocked-parent | 0 |
-| [#1020](https://github.com/marin-community/MarinSkyRL/pull/1020) | 1019 | blocked-parent | 0 |
+| [#1020](https://github.com/marin-community/MarinSkyRL/pull/1020) | 1019 | conflict | 0 |
 | [#1024](https://github.com/marin-community/MarinSkyRL/pull/1024) | 1023 | blocked-parent | 0 |
 | [#909](https://github.com/marin-community/MarinSkyRL/pull/909) | 907 | blocked-parent | 0 |
 | [#941](https://github.com/marin-community/MarinSkyRL/pull/941) | 931 | blocked-parent | 0 |
@@ -56,6 +57,6 @@ This is a source candidate. Runtime bootstrap and nightly acceptance remain requ
 | [#912](https://github.com/marin-community/MarinSkyRL/pull/912) | 911 | blocked-parent | 0 |
 | [#913](https://github.com/marin-community/MarinSkyRL/pull/913) | 912 | blocked-parent | 0 |
 
-Selected issues: 6. Complete source patches and review history remain in the snapshot.
+Selected issues: 7. Complete source patches and review history remain in the snapshot.
 
 See docs/dev-guide/skyrl-migration.md for cutover and archive requirements.

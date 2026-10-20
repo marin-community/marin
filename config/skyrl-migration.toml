@@ -8,6 +8,7 @@ roots = [
     "skyrl_train.entrypoints.terminal_bench",
     "skyrl_train.entrypoints.terminal_bench_generate",
     "skyrl_train.entrypoints.checkpoint_export",
+    "skyrl_train.inline_harbor",
 ]
 discard = ["skyrl-tx/**", "docs/**", "skyrl-train/docs/**", "skyrl-train/integrations/**"]
 
@@ -73,6 +74,12 @@ reason = "templates loaded by path and included in the wheel"
 glob = "skyrl-train/skyrl_train/config/**"
 reason = "Hydra composition loads config assets without Python imports"
 [[keep]]
+glob = "skyrl-gym/skyrl_gym/envs/nemotron_ultra/abstention_prompt.txt"
+reason = "Nemotron abstention graders read the packaged judge prompt"
+[[keep]]
+glob = "skyrl-gym/skyrl_gym/envs/nemotron_ultra/jailbreak_verifiers.yaml"
+reason = "Nemotron policy graders load verifier prompts and reward combinations"
+[[keep]]
 glob = "skyrl-train/skyrl_train/models/**"
 reason = "Grug and Qwen model registration for supported Megatron/vLLM runs"
 [[keep]]
@@ -96,6 +103,9 @@ reason = "nightly metric gate correctness"
 [[keep]]
 glob = "skyrl-train/tests/cpu/test_checkpoint_exporter.py"
 reason = "retained checkpoint-export behavior"
+[[keep]]
+glob = "skyrl-train/tests/cpu/test_inline_harbor.py"
+reason = "Harbor subprocess isolation and validation score accounting"
 [[keep]]
 glob = "skyrl-train/tests/fixtures/**"
 reason = "data fixtures for retained acceptance tests"

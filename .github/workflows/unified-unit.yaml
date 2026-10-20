@@ -506,7 +506,8 @@ jobs:
             cloud/iris/tests/test_checkpoint_export_config.py \
             cloud/iris/tests/test_open_mopd_fidelity.py \
             cloud/iris/tests/test_open_mopd_evaluation.py \
-            skyrl-gym/tests/test_aime_answer_normalization.py
+            skyrl-gym/tests/test_aime_answer_normalization.py \
+            skyrl-gym/tests/test_nemotron_judge_assets.py
 
   unit_tests:
     name: unit-tests

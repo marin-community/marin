@@ -1105,6 +1105,14 @@ index 0000000000000000000000000000000000000000..8c615e800cf0c0296bf182f1ab588d0b
 +    (workspace / "cloud/iris/injected.py").write_text("extra = True\n")
 +    with pytest.raises(ValueError, match="do not match the selected runtime identity"):
 +        runtime_bundle.validate_bundled_runtime(workspace)
+diff --git a/infra/tests/test_marinskyrl_packaging.py b/infra/tests/test_marinskyrl_packaging.py
+index d1d85c5e8b57e3e50f518c839113013bc3d5ad56..4cc097d59dc919cb2f23a3d2277bc82e45ac6ab6 100644
+--- a/infra/tests/test_marinskyrl_packaging.py
++++ b/infra/tests/test_marinskyrl_packaging.py
+@@ -47,0 +48,3 @@ def test_root_wheel_owns_launcher_and_training_packages(built_wheel: BuiltWheel)
++    assert "skyrl_train/inline_harbor.py" in built_wheel.names
++    assert "skyrl_gym/envs/nemotron_ultra/abstention_prompt.txt" in built_wheel.names
++    assert "skyrl_gym/envs/nemotron_ultra/jailbreak_verifiers.yaml" in built_wheel.names
 diff --git a/pyproject.toml b/pyproject.toml
 index af0e50ef9e2472fc374ceb018c7d7bfa44a696be..13b761d84e4eb960c4c11b74fbc36d04ecca71e4 100644
 --- a/pyproject.toml
@@ -1172,6 +1180,74 @@ index 0000000000000000000000000000000000000000..3da544653db86ad9fc799e376e96d355
 +    for answer, passed in [(correct, True), (wrong, False), ("", False)]:
 +        result = judge.verify(RolloutEvidence(response=f"Answer: \\boxed{{{answer}}}"))
 +        assert result.passed is passed
+diff --git a/skyrl-gym/tests/test_nemotron_judge_assets.py b/skyrl-gym/tests/test_nemotron_judge_assets.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a66f79c2dd9d222605094d408a4046655bc3b2b8
+--- /dev/null
++++ b/skyrl-gym/tests/test_nemotron_judge_assets.py
+@@ -0,0 +1,62 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++import json
++
++import pytest
++import requests
++
++from skyrl_gym.envs.nemotron_ultra.jailbreak import grade_jailbreak
++from skyrl_gym.envs.nemotron_ultra.judge import OpenAIJudge
++from skyrl_gym.envs.nemotron_ultra.judge_verifiers import grade_abstention
++
++
++def judge_response(verdict: str) -> requests.Response:
++    response = requests.Response()
++    response.status_code = 200
++    response._content = json.dumps({"choices": [{"message": {"content": verdict}, "finish_reason": "stop"}]}).encode()
++    return response
++
++
++@pytest.mark.parametrize(
++    "verdict,reward,label", [("A", 1.0, "correct"), ("B", 0.0, "incorrect"), ("C", 0.5, "abstain")]
++)
++def test_abstention_grades_with_packaged_prompt(monkeypatch, verdict, reward, label):
++    def post(url, *, json, **kwargs):
++        prompt = json["messages"][0]["content"]
++        assert "Question: capital?\nGold target: Paris\nPredicted answer: Paris" in prompt
++        return judge_response(verdict)
++
++    monkeypatch.setattr(requests, "post", post)
++    actual, details = grade_abstention(
++        r"\boxed{Paris}",
++        {"question": "capital?", "answer": "Paris"},
++        OpenAIJudge("https://judge.example/v1", "fixture"),
++    )
++    assert actual == reward
++    assert details["verdict"] == label
++
++
++@pytest.mark.parametrize(
++    "safety,quality,reward",
++    [("SAFE", "HAS_EXPLANATION", 1.0), ("SAFE", "NO_EXPLANATION", 0.3), ("UNSAFE", "HAS_EXPLANATION", 0.0)],
++)
++def test_jailbreak_combines_packaged_policy_verifiers(monkeypatch, safety, quality, reward):
++    def post(url, *, json, **kwargs):
++        prompt = json["messages"][0]["content"]
++        assert "ADVERSARIAL PROMPT:\nfixture request" in prompt
++        assert "MODEL RESPONSE:\nfixture refusal" in prompt
++        verdict = safety if prompt.startswith("You are a safety evaluation assistant.") else quality
++        return judge_response(f"[[{verdict}]]")
++
++    monkeypatch.setattr(requests, "post", post)
++    actual, details = grade_jailbreak(
++        "fixture refusal",
++        {"adversarial_prompt": "fixture request", "response_policy_mapped": "refusal_with_explanation"},
++        OpenAIJudge("https://judge.example/v1", "fixture"),
++    )
++    assert actual == reward
++    assert details["verifier_labels"] == {
++        "safety_check": f"[[{safety}]]",
++        "quality_explanation_check": f"[[{quality}]]",
++    }
 diff --git a/skyrl-train/skyrl_train/dataset/replay_buffer.py b/skyrl-train/skyrl_train/dataset/replay_buffer.py
 index 424f8e3bc9ad02f46ece2c25d56b54b3c505aa7f..08da9674ae0e314700de33c353d61c2c48d6df5f 100644
 --- a/skyrl-train/skyrl_train/dataset/replay_buffer.py
