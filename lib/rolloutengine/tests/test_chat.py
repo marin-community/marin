@@ -21,7 +21,7 @@ from taskcompendium.models import (
 
 from rolloutengine.chat import ChatModel
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
+from rolloutengine.harness.tools import ToolCallResult, ToolContext, ToolHarness
 from rolloutengine.models import (
     Continuation,
     GradedRolloutInterrupted,
@@ -158,7 +158,7 @@ async def test_a_managed_agent_runs_host_tools_against_a_chat_endpoint_with_no_m
         grader=NoGrader(reason="The agent's work has no grader"),
     )
     engine = RolloutEngine(
-        {}, {"agent": ShellHarness(command_timeout=None, tools={LOOKUP_INTERFACE: Lookup({"a": "12"})})}
+        {}, {"agent": ToolHarness(command_timeout=None, tools={LOOKUP_INTERFACE: Lookup({"a": "12"})})}
     )
 
     result = await engine.run_task(
@@ -175,7 +175,7 @@ async def test_a_managed_agent_runs_host_tools_against_a_chat_endpoint_with_no_m
 
 async def test_a_response_without_usage_is_a_model_failure():
     server = ChatServer([completion({"content": "12"}, usage=False)])
-    engine = RolloutEngine({}, {"agent": ShellHarness(command_timeout=None)})
+    engine = RolloutEngine({}, {"agent": ToolHarness(command_timeout=None)})
     spec = rollout_spec(arithmetic_task(), harness="agent", trace=TraceMode.MESSAGES, max_total_tokens=100)
 
     with pytest.raises(GradedRolloutInterrupted) as caught:
@@ -186,7 +186,7 @@ async def test_a_response_without_usage_is_a_model_failure():
     )
 
 
-async def test_shell_harness_prefill_reaches_chat_endpoint_as_text_without_pinned_tokens():
+async def test_tool_harness_prefill_reaches_chat_endpoint_as_text_without_pinned_tokens():
     server = ChatServer([completion({"content": "2"})])
     task = arithmetic_task(
         context=ConversationInput(
@@ -199,7 +199,7 @@ async def test_shell_harness_prefill_reaches_chat_endpoint_as_text_without_pinne
     )
     model = server.model()
     try:
-        result = await RolloutEngine({}, {"agent": ShellHarness(command_timeout=None)}).run_task(
+        result = await RolloutEngine({}, {"agent": ToolHarness(command_timeout=None)}).run_task(
             rollout_spec(task, harness="agent", trace=TraceMode.MESSAGES), model
         )
     finally:

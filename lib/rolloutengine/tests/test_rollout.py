@@ -71,8 +71,8 @@ from verifyit.spec import (
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness
-from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.harness.step import StepHarness
+from rolloutengine.harness.tools import WORKSPACE_INSTRUCTION, ToolCallResult, ToolContext, ToolHarness
 from rolloutengine.machines import task_machine
 from rolloutengine.models import (
     AttemptEnded,
@@ -297,7 +297,7 @@ def judge_url(judge_server) -> str:
 
 
 def shell_harnesses(**options) -> dict:
-    return {SHELL: ShellHarness(**{"command_timeout": None, **options})}
+    return {SHELL: ToolHarness(**{"command_timeout": None, **options})}
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
@@ -2792,7 +2792,7 @@ async def test_a_harness_runs_alone_on_a_local_machine():
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
     async with task_machine(task, FixtureImageFactory(), machine_runtime(), cleanup_timeout=5) as machine:
         rollout = await harness_rollout(
-            ShellHarness(command_timeout=None), task, model.complete, machine=machine, limits=rollout_limits()
+            ToolHarness(command_timeout=None), task, model.complete, machine=machine, limits=rollout_limits()
         )
         written = await machine.run(Command(("cat", "/workspace/answer")))
     assert written.stdout == b"12\n"
@@ -3644,7 +3644,7 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one()
     "prompt_tokens,response_tokens,text",
     [((10, 11), (20, 21), "1}"), ((40, 41, 42), (70, 71, 72), " 1 } trailing output")],
 )
-async def test_shell_harness_grades_prefill_with_the_models_own_tokenization(prompt_tokens, response_tokens, text):
+async def test_tool_harness_grades_prefill_with_the_models_own_tokenization(prompt_tokens, response_tokens, text):
     requests = []
 
     async def model(request):
@@ -3670,7 +3670,7 @@ async def test_shell_harness_grades_prefill_with_the_models_own_tokenization(pro
             StructureClosureSpec(prefix='{"x":', expected='{"x":1}', format=ClosureFormat.JSON, terminal_markers=())
         ).grader,
     )
-    engine = RolloutEngine({}, {"shell": ShellHarness(command_timeout=None)})
+    engine = RolloutEngine({}, {"shell": ToolHarness(command_timeout=None)})
     result = await engine.run_task(rollout_spec(task, harness="shell"), model)
     assert result.grade.reward == 1.0
     assert len(requests) == 1
