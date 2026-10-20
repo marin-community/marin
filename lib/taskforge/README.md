@@ -22,8 +22,8 @@ src/taskforge/
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/            model.py: the TaskProposal document and its generation regex;
                                source.py: ProposalBatch, SlotFailure, the ProposalSource protocol
-  stage20_triage/              checks.py: structural checks; program.py: the GLM rubric and the decision;
-                               verdict.py: Verdict, TriageDecision and `accept`
+  stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
+                               verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
@@ -81,7 +81,7 @@ non-null body cites every item, and only listed items, as `research[i]`. `solver
 solver's machine: `null` for a container proposal, which runs in the image its build publishes, and
 `none`, `shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one, where
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
-The proposer or triage writes it, and the build keeps it.
+The proposer writes it, and the build keeps it.
 `document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
 field that constrains a completion to the canonical layout for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
@@ -89,13 +89,26 @@ built from `DOCUMENT_REPAIR_PROMPT`.
 
 ## Triage
 
-`stage20_triage.program.evaluate(proposal, checks, rubric, ctx) -> Verdict` runs the structural
-checks first, and a fatal failure or a null proposal rejects without a model call. The rubric
-scores independent samples, each a structured call through `CallStore`, and the decision is ACCEPT
-or REJECT by strict majority, otherwise REPAIR. A sample whose structured output stays invalid is
-drawn once more and then dropped. `GlmRubric.repair` rewrites a REPAIR proposal under the document
-regex with continuations off and re-asks once if the rewrite fails `parse`. A Taskforge consumer
-may hand it to the stage coordinator as `StageFunctions.repair` (see the stage machine).
+The default triage is `stage20_triage.preflight.preflight(proposal) -> Verdict`, a deterministic
+preflight that makes no model call. It runs the checks in `stage20_triage.checks.CHECKS`: the
+canonical rendering parses back to the same header, the environment and verification pair is
+allowed, the declared solver machine fits the environment, the required sections have content, and
+a null proposal carries only its reason. A fatal failure rejects the proposal with each failing
+check as a reason, and so does a null proposal. Anything else is accepted and goes to build.
+Advisory failures are recorded on the verdict and decide nothing. Whether the host can provide the
+declared machine is checked by the build (`infrastructure.machine_available`) before any model
+call, and a host that cannot ends the workpiece as the host's failure.
+
+A consumer could add a model review to triage in one of two designs:
+
+- A panel with repair: several independent model reviews of the proposal, a majority vote that
+  accepts, rejects or asks for repair, one model rewrite of a repair proposal within a budget, and
+  a repair exit on the stage coordinator that sends the rewrite back to triage.
+- A bounded review with obligations: one model review that accepts the proposal and attaches
+  obligations its author must honour, carried to build as state on the accept event.
+
+Neither is implemented by default, because experiments found them not to be meaningful predictors
+of downstream quality.
 
 ## Task specs
 
@@ -192,9 +205,6 @@ Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage 
 token budget, which Taskforge leaves unset. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
-
-`llm.store.CallStore` caches `complete` and `complete_structured` calls on disk by the digest of
-the request and does not record to the ledger.
 
 ## The build DAG
 
@@ -381,7 +391,6 @@ relaunch never resumes a session mid-way: a session directory without an `author
 | stage    | event           | exit      | next     |
 |----------|-----------------|-----------|----------|
 | triage   | `TRIAGED`       | accept    | author   |
-| triage   | `TRIAGED`       | repair    | triage   |
 | triage   | `TRIAGED`       | reject    | done     |
 | author   | `AUTHORED`      | authored  | build    |
 | author   | `AUTHOR_FAILED` | revise    | author   |
@@ -397,27 +406,14 @@ relaunch never resumes a session mid-way: a session directory without an `author
 | review   | `DECIDED`       | modify    | author   |
 
 From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or abandoned. A stage
-raising an exception closes it as failed. `WorkpieceBudget` bounds the triage rewrites a workpiece
-may take, the build and author failures it may revise after, and the review retries it may
-follow. The coordinator spends the budget when it records the event, choosing repair or reject,
-revise or reject, retry or abandon.
-
-Triage returns a `Verdict`, and its default path exits accept or reject: `accept` admits every
-proposal, and a `max_triage_repairs` of zero sends any REPAIR verdict to reject. REPAIR is a
-surface a Taskforge consumer may use by setting `max_triage_repairs` to one. On a REPAIR verdict
-within the budget, the coordinator calls `StageFunctions.repair`, such as the triage stage's
-`GlmRubric.repair`, writes the rewrite to `repaired/<k>.md`, and records `TRIAGED` exiting repair
-with the rewrite's digest, the triaged proposal's digest, the file and the rewrites spent. Triage
-judges the rewrite, and every later stage runs it, read back from its file. A REPAIR verdict past
-the budget exits reject, and so does a rewrite that is not a valid proposal; the workpiece closes
-as rejected with the reason.
-
-A build error costs a revision, except `BuildInfrastructureFailure`, `BuildExpired`,
-`ModelUnavailable` and `OSError`, which fail the workpiece at the build stage. An author call
-raising `StructuredOutputError` costs a revision from the same budget. Its structured reply stayed
-invalid through the repair turns, as when the output limit cut it, and the next author call samples
-again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
-author stage.
+raising an exception closes it as failed. `WorkpieceBudget` bounds the build and author failures a
+workpiece may revise after and the review retries it may follow. The coordinator spends the budget
+when it records the event, choosing revise or reject, retry or abandon. A build error costs a
+revision, except `BuildInfrastructureFailure`, `BuildExpired`, `ModelUnavailable` and `OSError`,
+which fail the workpiece at the build stage. An author call raising `StructuredOutputError` costs a
+revision from the same budget. Its structured reply stayed invalid through the repair turns, as when
+the output limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE,
+...)`. Any other author error fails the workpiece at the author stage.
 
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
@@ -438,7 +434,6 @@ A run root holds:
 
 ```
 workpieces/<workpiece_id>/events.json
-workpieces/<workpiece_id>/repaired/<k>.md   the k-th rewrite answering a REPAIR verdict
 workpieces/<workpiece_id>/rounds/<n>/
     authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it
