@@ -56,7 +56,7 @@ def _int_or_none_list_arg_type(min_len: int, max_len: int, defaults: str, value:
             "Missing values will be filled with defaults."
         )
         default_items = [parse_value(v) for v in defaults.split(split_char)]
-        items.extend(default_items[num_items:])  # extend items list with missing defaults
+        items.extend(default_items[num_items:])
 
     return items
 

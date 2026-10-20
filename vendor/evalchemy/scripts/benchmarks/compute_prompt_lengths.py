@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Measure every benchmark's longest prompt and store it in prompt_lengths.json.
 
-Each benchmark's prompts are rendered by driving its own ``generate_responses``
-with a prompt-capturing LM stand-in (``eval/contracts/prompt_corpus.py``), so the
-measurement reflects the benchmark's real prompt shape, chat template, and
-few-shot configuration. Measuring needs the benchmark's dataset and its extra
+``eval/contracts/prompt_corpus.py`` reads requests directly from each benchmark's
+``iter_specs`` and renders them with the reference tokenizer, preserving the
+benchmark's prompt shape, chat template, and few-shot configuration.
+Measuring needs the benchmark's dataset and its extra
 installed, which is why this runs as a repo tool rather than at eval time.
 
 Usage:

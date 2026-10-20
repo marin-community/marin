@@ -376,10 +376,7 @@ def run(
 
 
 def _infer_call_target_from_completion(completion):
-    """Guess the first user-defined function name in a completion (best-effort).
-
-    Mirrors the logic the vendored stacks used before this route existed.
-    """
+    """Guess the first user-defined function name in a completion."""
     prefix = completion.split("(")[0].split()
     return prefix[-1] if prefix else None
 

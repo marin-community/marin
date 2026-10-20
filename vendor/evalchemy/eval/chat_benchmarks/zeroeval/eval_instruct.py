@@ -56,7 +56,6 @@ class ZeroEvalBenchmark(BaseBenchmark):
                 dataset = dataset.select(range(min(10, len(dataset))))
                 self.logger.info(f"Debug mode: using {len(dataset)} examples")
 
-            # Process each item
             prompt_generation_args = Namespace(run_name="")
             for ind, item in enumerate(dataset):
                 id_strs.append(item.get(id_name, f"{data_name}#{ind}"))

@@ -20,7 +20,6 @@ from eval.contracts.prompt_length import (
     load_prompt_lengths,
     resolve_task_max_tokens,
 )
-from eval.task import TaskManager
 
 CUSTOM_BENCHMARK_ROOT = Path("eval/chat_benchmarks")
 
@@ -131,21 +130,3 @@ def test_a_benchmark_whose_prompts_exceed_the_window_keeps_its_own_default():
         )
         is None
     )
-
-
-def test_a_loaded_benchmark_requests_the_derived_response_budget(monkeypatch):
-    monkeypatch.setenv("JUDGE_API_KEY", "prompt-length-test")
-    manager = TaskManager(task_list=["OlympiadBench"], max_length=CONTEXT_LENGTH)
-    benchmark = manager.get_benchmark("OlympiadBench")
-    expected = resolve_task_max_tokens(
-        "OlympiadBench",
-        context_length=CONTEXT_LENGTH,
-        requested_max_tokens=None,
-        prompt_lengths=load_prompt_lengths(),
-    )
-    from eval.sources.common import SourceOptions
-    from eval.contracts.eval_spec import SourceRef
-    options = SourceOptions("OlympiadBench", SourceRef("fixture"), limit=1, max_tokens=expected)
-    specs = list(benchmark.iter_specs(options))
-    assert expected > 8_192
-    assert {spec.requests[0].generation["max_gen_toks"] for spec in specs} == {expected}

@@ -14,8 +14,6 @@ from eval.contracts.preflight import (
 )
 from eval.task import BaseBenchmark
 
-# --- Prompt construction from Script 1 ---
-
 choices = [chr(ord("A") + i) for i in range(16)]
 
 
