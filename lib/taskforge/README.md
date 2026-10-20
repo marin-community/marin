@@ -98,13 +98,16 @@ call, and a host that cannot ends the workpiece as the host's failure.
 A consumer could add a model review to triage in one of two designs:
 
 - A panel with repair: several independent model reviews of the proposal, a majority vote that
-  accepts, rejects or asks for repair, one model rewrite of a repair proposal within a budget, and
-  a repair exit on the stage coordinator that sends the rewrite back to triage.
+  accepts, rejects or asks for repair, and one model rewrite of a repair proposal, sent back to
+  triage through the stage coordinator's repair edge.
 - A bounded review with obligations: one model review that accepts the proposal and attaches
   obligations its author must honour, carried to build as state on the accept event.
 
 Neither is implemented by default, because experiments found them not to be meaningful predictors
-of downstream quality.
+of downstream quality. The coordinator's repair edge is a surface the preflight or a consumer may
+use within `max_triage_repairs`: a REPAIR verdict has `StageFunctions.repair` rewrite the proposal,
+such as a deterministic rewrite of a fixable proposal header, and triage judges the rewrite (see the
+stage machine).
 
 ## Task specs
 
@@ -387,6 +390,7 @@ relaunch never resumes a session mid-way: a session directory without an `author
 | stage    | event           | exit      | next     |
 |----------|-----------------|-----------|----------|
 | triage   | `TRIAGED`       | accept    | author   |
+| triage   | `TRIAGED`       | repair    | triage   |
 | triage   | `TRIAGED`       | reject    | done     |
 | author   | `AUTHORED`      | authored  | build    |
 | author   | `AUTHOR_FAILED` | revise    | author   |
@@ -402,14 +406,26 @@ relaunch never resumes a session mid-way: a session directory without an `author
 | review   | `DECIDED`       | modify    | author   |
 
 From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or abandoned. A stage
-raising an exception closes it as failed. `WorkpieceBudget` bounds the build and author failures a
-workpiece may revise after and the review retries it may follow. The coordinator spends the budget
-when it records the event, choosing revise or reject, retry or abandon. A build error costs a
-revision, except `BuildInfrastructureFailure`, `BuildExpired`, `ModelUnavailable` and `OSError`,
-which fail the workpiece at the build stage. An author call raising `StructuredOutputError` costs a
-revision from the same budget. Its structured reply stayed invalid through the repair turns, as when
-the output limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE,
-...)`. Any other author error fails the workpiece at the author stage.
+raising an exception closes it as failed. `WorkpieceBudget` bounds the triage rewrites a workpiece
+may take, the build and author failures it may revise after, and the review retries it may
+follow. The coordinator spends the budget when it records the event, choosing repair or reject,
+revise or reject, retry or abandon.
+
+Triage returns a `Verdict`. The preflight's exits accept or reject, and a reject records the
+verdict's reasons. REPAIR is the surface described under Triage, and a `max_triage_repairs` of zero
+sends any REPAIR verdict to reject. On a REPAIR verdict within the budget, the coordinator calls
+`StageFunctions.repair`, writes the rewrite to `repaired/<k>.md`, and records `TRIAGED` exiting
+repair with the rewrite's digest, the triaged proposal's digest, the file and the rewrites spent.
+Triage judges the rewrite, and every later stage runs it, read back from its file. A REPAIR verdict
+past the budget exits reject, and so does a rewrite that is not a valid proposal; the workpiece
+closes as rejected with the reason.
+
+A build error costs a revision, except `BuildInfrastructureFailure`, `BuildExpired`,
+`ModelUnavailable` and `OSError`, which fail the workpiece at the build stage. An author call
+raising `StructuredOutputError` costs a revision from the same budget. Its structured reply stayed
+invalid through the repair turns, as when the output limit cut it, and the next author call samples
+again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
+author stage.
 
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
@@ -430,6 +446,7 @@ A run root holds:
 
 ```
 workpieces/<workpiece_id>/events.json
+workpieces/<workpiece_id>/repaired/<k>.md   the k-th rewrite answering a REPAIR verdict
 workpieces/<workpiece_id>/rounds/<n>/
     authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it

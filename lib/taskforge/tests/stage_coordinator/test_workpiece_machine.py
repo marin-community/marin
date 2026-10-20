@@ -11,7 +11,9 @@ from taskforge.stage30_author.author import RevisionKind
 from taskforge.stage60_review.decision import RejectKind
 from taskforge.stage_coordinator.workpiece_machine import (
     EXIT,
+    TRANSITIONS,
     EventKind,
+    Exit,
     Stage,
     Terminal,
     WorkpieceEvent,
@@ -48,6 +50,37 @@ def test_a_built_and_validated_workpiece_folds_to_review_with_its_digests():
     assert (state.stage, state.round, state.seq) == (Stage.REVIEW, 0, 5)
     assert (state.proposal_digest, state.program_digest, state.task_digest) == ("p1", "prog1", "task1")
     assert (state.revision, state.terminal, state.closing) == (RevisionKind.NONE, None, None)
+
+
+def triaged(digest: str, **attrs: str) -> WorkpieceEvent:
+    return WorkpieceEvent(EventKind.TRIAGED, 0, digest, attrs)
+
+
+REPAIRED = triaged(
+    "p2", exit="repair", decision="repair", repairs="1", triaged_digest="p1", proposal_file="repaired/1.md"
+)
+
+
+def test_a_repair_returns_to_triage_with_the_repaired_proposal_which_the_later_stages_record():
+    repaired = derive_state(numbered(OPENED, REPAIRED))
+    accepted = derive_state(numbered(OPENED, REPAIRED, triaged("p2", exit="accept", decision="accept", repairs="1")))
+
+    assert TRANSITIONS[(Stage.TRIAGE, Exit.REPAIR)] is Stage.TRIAGE
+    assert (repaired.stage, repaired.proposal_digest, repaired.triage_repairs) == (Stage.TRIAGE, "p2", 1)
+    assert (accepted.stage, accepted.proposal_digest, accepted.triage_repairs) == (Stage.AUTHOR, "p2", 1)
+
+
+def test_a_triage_reject_closes_rejected_as_a_task_with_the_events_reason():
+    reason = "triage returned REPAIR with 1 of 1 rewrites spent"
+    rejected = triaged("p2", exit="reject", decision="repair", repairs="1", reason=reason)
+
+    closing = derive_state(numbered(OPENED, REPAIRED, rejected)).closing
+
+    assert closing is not None and (closing.terminal, closing.reason, closing.kind) == (
+        Terminal.REJECTED,
+        reason,
+        RejectKind.TASK,
+    )
 
 
 def test_a_retry_past_the_budget_abandons_and_a_relaunch_re_enters_validation_with_no_retries():
