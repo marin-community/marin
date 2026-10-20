@@ -721,12 +721,12 @@ def test_evaluation_step_gates_transport_failure_coverage(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("recovered_before_result", [False, True])
-@pytest.mark.parametrize("failure_mode", ["none", "reported", "cached", "existing"])
+@pytest.mark.parametrize("failure_mode", ["none", "reported", "existing"])
 @pytest.mark.parametrize(
     ("entrypoint", "endpoint_route"),
     [("batch", EndpointRoute.DIRECT), ("batch", EndpointRoute.CAPABILITY), ("served", EndpointRoute.DIRECT)],
 )
-def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
+def test_evaluation_resumes_one_archive_and_retries_transport_failures(
     tmp_path, monkeypatch, recovered_before_result, failure_mode, entrypoint, endpoint_route
 ):
     controller = SimpleNamespace(ready=False, preemptions=0)
@@ -769,9 +769,6 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
             else session.model.endpoint.base_url
         )
         assert _model.endpoint.base_url == expected_url
-        if failure_mode == "existing" or (failure_mode == "cached" and controller.preemptions):
-            # Native resume restores the saved failure without making another model request.
-            return "/eval/child"
         interrupted = controller.preemptions < 3
         rows = [_lm_eval_generation(0, "accuracy", 1.0, "4")]
         if partial_result and interrupted:
@@ -839,20 +836,13 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
             "marin.evaluation.runner.iris_ctx",
             lambda: SimpleNamespace(client=client, job_id="/orchestrator"),
         )
-        if partial_result:
-            with pytest.raises(RuntimeError, match="1 step"):
-                _run_test_batch(batch)
-        else:
-            _run_test_batch(batch)
+        _run_test_batch(batch)
         assert [(row.run_id, row.status) for row in catalog_rows] == [
             ("run-before", "succeeded"),
-            ("run-interrupted", "infra_failed" if partial_result else "succeeded"),
+            ("run-interrupted", "succeeded"),
             ("run-after", "succeeded"),
         ]
         record = read_record(str(tmp_path / "records" / "run-interrupted" / "record.json"))
-        if partial_result:
-            assert record.coverage["task"].errors[EVALCHEMY_INFRASTRUCTURE_ERROR] == 1
-            return
         assert record.coverage["task"].n_scored == 2
         final_path = record.results_path
     else:
@@ -868,11 +858,6 @@ def test_evaluation_resumes_one_archive_and_rejects_saved_transport_failures(
             run=executor.config,
             out_path=evaluation.identity.output_dir,
         )
-        if partial_result:
-            with pytest.raises(EvaluationError) as exc_info:
-                run_served_evalchemy(config)
-            assert exc_info.value.status is RunStatus.INFRA_FAILED
-            return
         monkeypatch.setenv("MARIN_PREFIX", f"file://{tmp_path / 'pipeline'}")
         result = resolve(
             ArtifactStep(

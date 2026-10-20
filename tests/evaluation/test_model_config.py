@@ -326,7 +326,8 @@ def test_pipeline_catalog_lowers_a_gang_and_rejects_incompatible_overrides(tmp_p
         replace(config, engine=LevanterEngineConfig())
 
 
-def test_broker_deadlines_allow_the_configured_evaluation_request_timeout():
+@pytest.mark.parametrize("instances", [1, 8])
+def test_broker_deadlines_allow_the_configured_evaluation_request_timeout(instances):
     model = ModelConfig(
         name="test",
         location="test/model",
@@ -336,7 +337,7 @@ def test_broker_deadlines_allow_the_configured_evaluation_request_timeout():
     choice = MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x1")
 
     config = inference_config_for_model(
-        model, choice, env_vars={}, priority=0, instances=8, request_timeout_seconds=3600
+        model, choice, env_vars={}, priority=0, instances=instances, request_timeout_seconds=3600
     )
 
     assert config.broker is not None

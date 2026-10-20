@@ -7,7 +7,8 @@ an independent `StepSpec` with a durable `record.json`. Evaluations share one mo
 sequentially by default; `--max-concurrent` allows concurrent evaluators on that endpoint. A suite
 fills in as results finish. Each eval has its own record, child
 jobs, logs, and parquet; the launch shares a `group_id`. `--instances N` starts candidate serving
-workers behind one request broker, each using the selected accelerator. Evaldash scans those records and step
+workers behind one request broker, each using the selected accelerator. Single-instance evals use
+the same broker; pipeline-parallel gangs keep direct serving. Evaldash scans those records and step
 statuses into its Postgres query index.
 
 Each eval has its own `StepSpec` status and lock under `{records_prefix}/{run_id}/`.
@@ -16,20 +17,23 @@ Each eval has its own `StepSpec` status and lock under `{records_prefix}/{run_id
 one shared hosted-judge session. A group StepSpec locks ownership before either server starts.
 Evalchemy resolves the serving endpoint's direct address
 on its Iris cluster. Harbor keeps the minted capability URLs because its sandboxes reach the
-candidate and hosted judge from outside Iris. The orchestrator scrapes vLLM metrics through the
+candidate and hosted judge from outside Iris. The broker's `/health` reports proxy liveness;
+`/ready` reports live inference-worker availability. Evaluators use broker readiness without
+individually polling Iris workers. The orchestrator scrapes vLLM metrics through the
 direct address when evaluations run sequentially. Concurrent evaluations omit server-wide metrics
 because those cannot be attributed to one evaluator. Each step records its own evaluation failure;
 other steps continue. A server startup failure marks every pending evaluation as an infrastructure failure.
 This directory holds the model and suite catalogs, Marin fleet policy, and CLI choices.
 
 While Iris restarts preempted candidate or hosted-judge inference jobs, Marin stops running
-evaluators and waits for inference readiness. Both evaluators resume against the same output path.
+evaluators and waits for inference readiness. Harbor and Evalchemy each resume against their original output path.
 Harbor preserves completed trials; Evalchemy restores committed generation requests. Likelihood
-requests and uncommitted generation batches may run again. Saved Evalchemy transport failures
-reject a recovered run because native resume would replay those failures. To regenerate those
-requests, remove only the evaluation archive named in the error and retry. Keep sibling evaluation
-archives. Completed benchmark results remain unchanged. If either inference job reaches a terminal
-state, Marin records the current and remaining benchmarks as infrastructure failures.
+requests and uncommitted generation batches may run again. Evalchemy retries saved transport
+failures without discarding completed responses. Completed benchmark results remain unchanged.
+Brokered streaming forwards response bytes as they arrive. An interrupted stream fails visibly;
+once response headers are accepted, the broker never replays it into the same response.
+If candidate or judge inference finishes permanently, Marin records unfinished evaluations
+as infrastructure failures.
 
 The user-facing [evaluation guide](../../docs/tutorials/run-lm-evals.md) contains model-specific
 commands, suite constraints, launch controls, and result locations.

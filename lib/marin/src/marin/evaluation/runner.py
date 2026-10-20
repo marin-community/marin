@@ -11,7 +11,6 @@ from enum import StrEnum
 from functools import partial
 from typing import NoReturn, Protocol
 
-from finestore.reader import ReadView
 from fray.client import JobHandle
 from iris.client.client import Job, iris_ctx
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -398,26 +397,23 @@ def run_evaluation(
 ) -> EvaluationOutcome:
     """Retry evaluator attempts in the same output directory after inference outages."""
     sessions = (session,) if judge is None else (session, judge)
-    resuming_archive = bool(ReadView(output_dir).table_names())
 
-    def attempt(attempt_number: int) -> EvaluationOutcome:
+    def attempt(_attempt_number: int) -> EvaluationOutcome:
         before = tuple(inference.preemption_count() for inference in sessions)
         execution_session = _local_endpoint_session(session) if endpoint_route is EndpointRoute.DIRECT else session
-        # Only the adapter may authorize retry, after its child has stopped.
-        outcome = executor(execution_session, output_dir, env_vars, judge=judge)
+        # Adapters stop child work before returning or raising EvaluationError.
+        try:
+            outcome = executor(execution_session, output_dir, env_vars, judge=judge)
+        except EvaluationError as error:
+            if error.status is RunStatus.INFRA_FAILED:
+                check_inference_backend(inference_attempt_state(sessions, before))
+            raise
         transport_failures = any(
             entry.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for entry in outcome.coverage.values()
         )
         interrupted = inference_attempt_state(sessions, before) is InferenceBackendState.RECOVERING
-        if transport_failures and (resuming_archive or attempt_number > 0 or interrupted):
-            # Evalchemy restores saved transport failures; replay cannot repair those requests.
-            raise EvaluationError(
-                f"saved transport failures in {output_dir} cannot be safely resumed; "
-                "remove this evaluation archive and retry to regenerate its requests",
-                status=RunStatus.INFRA_FAILED,
-                jobs=outcome.jobs,
-                coverage=outcome.coverage,
-            )
+        if transport_failures and interrupted:
+            raise InferenceUnavailable("inference interrupted before evaluator completion")
         return outcome
 
     return run_with_inference_recovery(attempt, sessions)
