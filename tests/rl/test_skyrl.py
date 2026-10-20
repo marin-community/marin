@@ -36,6 +36,7 @@ from marin.rl.skyrl import (
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import cluster_config
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -45,6 +46,21 @@ def _model_step() -> ArtifactStep[LevanterCheckpoint]:
         "s3://test/iceball-sft",
         kind=LevanterCheckpoint,
     )
+
+
+@pytest.mark.parametrize("relative_path", [".", "hf/.", "hf/../policy"])
+def test_artifact_hf_model_rejects_literal_object_store_dot_segments(relative_path: str) -> None:
+    # A trailing '/.' caused a real export to appear empty during GPU startup.
+    with pytest.raises(ValueError, match="dot segments"):
+        ArtifactHfModel(_model_step(), "test/model", "revision", relative_path=relative_path)
+
+
+def test_artifact_hf_model_root_preserves_the_artifact_locator() -> None:
+    spec = dataclasses.replace(_spec(), model=dataclasses.replace(_spec().model, relative_path=""))
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["inputs"]["model"]["uri"] == "tests/iceball-sft@2026.08.01"
 
 
 def _data_step() -> ArtifactStep[Artifact]:
@@ -183,12 +199,13 @@ def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str
         dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe))
 
 
-def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
-    policy = SkyRLRetentionPolicy(resume_checkpoint_count=5)
+def test_skyrl_retention_allows_ten_checkpoint_recovery_window() -> None:
+    # The Smartie continuation failed preflight despite its requested ten-checkpoint window.
+    policy = SkyRLRetentionPolicy(resume_checkpoint_count=10)
 
-    assert policy.resume_checkpoint_count == 5
-    with pytest.raises(ValueError, match="between one and five"):
-        SkyRLRetentionPolicy(resume_checkpoint_count=6)
+    assert policy.resume_checkpoint_count == 10
+    with pytest.raises(ValueError, match="between one and ten"):
+        SkyRLRetentionPolicy(resume_checkpoint_count=11)
 
 
 def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> None:
@@ -329,6 +346,16 @@ def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
         )
 
 
+@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
+def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
+    # Evaluation previously passed preflight, then failed in the GPU engine factory.
+    spec = _spec()
+    recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
+    runtime = SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON)
+    with pytest.raises(ValueError, match="expert_block requires non-colocated"):
+        dataclasses.replace(spec, config_yaml=recipe, runtime=runtime)
+
+
 def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
     spec = _spec()
     base = skyrl_step(spec, _execution())
@@ -404,14 +431,21 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
 
 def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
-
-    assert (
-        skyrl_temporary_run_path(
-            "s3://marin-us-east-02a/marin/users/alice/run",
-            ttl_days=14,
-        )
-        == "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/alice/run"
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    monkeypatch.setattr(
+        cluster_config, "MARIN_CLUSTER_CONFIG_DIRS", (str(Path(__file__).resolve().parents[2] / "config"),)
     )
+    cluster_config.reset_data_config_cache()
+    try:
+        assert (
+            skyrl_temporary_run_path(
+                "s3://marin-us-east-02a/marin/users/alice/run",
+                ttl_days=14,
+            )
+            == "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/alice/run"
+        )
+    finally:
+        cluster_config.reset_data_config_cache()
 
 
 def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:

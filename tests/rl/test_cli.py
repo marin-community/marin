@@ -81,6 +81,17 @@ def test_coordinator_request_requires_a_skyrl_step() -> None:
         _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"), {})
 
 
+def test_coordinator_forwards_only_declared_secrets_and_requires_them():
+    execution = dataclasses.replace(_execution(), required_env_vars=("JUDGE_KEY",))
+    args = ([_step(execution)], "experiments.test_rl", ("--run",), 1, Path("/workspace/marin"))
+    _, request = _coordinator_request(*args, {"JUDGE_KEY": "test-key", "UNRELATED_SECRET": "not-forwarded"})
+    assert request.environment.env_vars["JUDGE_KEY"] == "test-key"
+    assert "UNRELATED_SECRET" not in request.environment.env_vars
+    assert "test-key" not in repr(execution)
+    with pytest.raises(KeyError, match="JUDGE_KEY"):
+        _coordinator_request(*args, {})
+
+
 def test_rl_launch_forwards_dedicated_daytona_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     client = MagicMock(spec=IrisClient)
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
