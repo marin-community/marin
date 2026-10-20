@@ -1,22 +1,21 @@
-from eval.sources.common import text_specs
-from eval.contracts.eval_spec import ReducerSpec, SourceRef
 import json
 import logging
 import os
 from typing import Any, Dict, Optional
+import warnings
 
+import fsspec
 
+from eval.contracts.eval_spec import ReducerSpec, SourceRef
+from eval.data_sources import fetch_hf
+from eval.sources.common import text_specs
 from eval.task import BaseBenchmark
 
 
-
-
-# suppress warnings
-import warnings
-
 warnings.filterwarnings("ignore")
 
-CruxEval_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+CRUXEVAL_REPO = "cruxeval-org/cruxeval"
+CRUXEVAL_REVISION = "b96af0450242eb4da433032b90998f25588a5d0f"
 
 
 
@@ -90,7 +89,7 @@ class CruxEvalBenchmark(BaseBenchmark):
 
     def __init__(
         self,
-        data_dir: str = CruxEval_PATH,
+        data_dir: str | None = None,
         max_tokens: int = 2048,
         timeout: float = 120,
         debug: bool = False,
@@ -101,7 +100,7 @@ class CruxEvalBenchmark(BaseBenchmark):
         Initialize CruxEval benchmark.
 
         Args:
-            data_dir: Directory containing CruxEval datasets
+            data_dir: Optional directory containing CruxEval JSON fixtures
             max_tokens: Maximum number of tokens for generation
             timeout: Timeout for code execution
             debug: If True, only evaluate the first 10 examples
@@ -127,13 +126,16 @@ class CruxEvalBenchmark(BaseBenchmark):
         return make_cot_output_prompt((example["code"], example["input"]))
 
 
-    SOURCE = SourceRef("cruxeval")
+    SOURCE = SourceRef(CRUXEVAL_REPO, revision=CRUXEVAL_REVISION)
     METRICS = ("pass@1",)
     PRIMARY_METRIC = "pass@1"
     REDUCER = ReducerSpec(accuracy="pass@1", groups={"direction": "{group}_{metric}"})
 
     def iter_specs(self, options):
-        with open(os.path.join(self.data_dir, "cruxeval.jsonl")) as data:
+        path = os.path.join(self.data_dir, "cruxeval.jsonl") if self.data_dir is not None else fetch_hf(
+            CRUXEVAL_REPO, "test.jsonl", revision=CRUXEVAL_REVISION, cache_prefix=self.dataset_cache,
+        )
+        with fsspec.open(path, "rt") as data:
             rows = [json.loads(line) for line in data if line.strip()]
         if self.debug:
             rows = rows[:10]

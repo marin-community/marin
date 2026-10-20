@@ -26,6 +26,7 @@ from marin.evaluation.evalchemy.client import build_command, build_model_args
 from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
+    EvalchemyRuntimeConfig,
     _run_config_json,
     _run_evalchemy_child,
 )
@@ -93,6 +94,7 @@ def test_file_config_fields_reach_the_evalchemy_command():
             seed=1234,
             extra_model_args={"timeout": 900},
             max_length=32768,
+            runtime=EvalchemyRuntimeConfig(dataset_cache="s3://eval-data/cache"),
         )
     )
 
@@ -100,9 +102,20 @@ def test_file_config_fields_reach_the_evalchemy_command():
 
     assert command[command.index("--batch_size") + 1] == "1"
     assert command[command.index("--seed") + 1] == "1234"
+    assert command[command.index("--dataset_cache") + 1] == "s3://eval-data/cache"
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
     assert model_args["max_length"] == "32768"
+
+
+def test_dataset_cache_follows_output_region_instead_of_launcher_region(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west1")
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    config = json.loads(_run_config_json(_MODEL, _config(), "gs://marin-us-central2/evals/run"))
+
+    command = build_command(config, config["tasks"][0], "/opt/py", 32768)
+
+    assert command[command.index("--dataset_cache") + 1].startswith("gs://marin-us-central2/")
 
 
 def test_explicit_thinking_mode_is_serialized_for_chat_endpoint():

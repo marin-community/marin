@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import fsspec
 
 from eval.chat_benchmarks.AIME24.eval_instruct import AIME24Benchmark
 from eval.chat_benchmarks.AIME25.eval_instruct import AIME25Benchmark
@@ -14,6 +15,7 @@ from eval.chat_benchmarks.HMMT.eval_instruct import HMMTBenchmark
 from eval.chat_benchmarks.HLE.testing_utils import get_multiple_choice_answer as extract_hle_answer
 from eval.chat_benchmarks.IFEval.eval_instruct import IFEvalBenchmark
 from eval.chat_benchmarks.JEEBench.eval_instruct import JEEBenchBenchmark
+from eval.chat_benchmarks.MATH500.eval_instruct import MATH500Benchmark
 from eval.contracts.eval_spec import SourceRef
 from eval.sources.common import SourceOptions
 from tests.contracts.source_harness import FixedEndpoint, evaluate_source
@@ -21,6 +23,23 @@ from tests.contracts.source_harness import FixedEndpoint, evaluate_source
 
 def _options(task):
     return SourceOptions(task, SourceRef("fixture"), seed=7)
+
+
+def test_math500_reads_fsspec_input_without_changing_math_targets():
+    fixture = Path(__file__).parent / "fixtures/hf-other/test.jsonl"
+    path = "memory://math500-source/questions.jsonl"
+    with fsspec.open(path, "wb") as data:
+        data.write(fixture.read_bytes())
+    source = MATH500Benchmark(data_file=path)
+
+    specs = list(source.iter_specs(_options("MATH500")))
+
+    assert len(specs) == 2
+    assert [spec.source_id for spec in specs] == [0, 1]
+    assert [spec.target for spec in specs] == [r"\left( 3, \frac{\pi}{2} \right)", "p - q"]
+    assert specs[0].requests[0].prompt[0]["content"].startswith("Problem: ")
+    assert specs[0].requests[0].prompt[0]["content"].endswith("Mark your solution with \\boxed\nAnswer:")
+    assert specs[0].grader.name == "boxed_math"
 
 
 def test_aiw_selects_target_ids_before_expanding_trials(tmp_path):
@@ -182,6 +201,17 @@ def test_jeebench_and_ifeval_specs_keep_source_selection(tmp_path, monkeypatch):
     ifeval_specs = list(IFEvalBenchmark(data_dir=str(tmp_path), start_idx=10, end_idx=12).iter_specs(_options("IFEval")))
     assert [spec.source_id for spec in ifeval_specs] == [10, 11]
     assert ifeval_specs[0].grader.reference == {"protocol": "ifeval"}
+
+
+def test_ifeval_pinned_input_preserves_placeholder_prompt_and_grading_arguments():
+    source = IFEvalBenchmark(start_idx=0, end_idx=1)
+    [spec] = source.iter_specs(_options("IFEval"))
+
+    assert spec.source_id == 2785
+    assert "at least 3 placeholders" in spec.requests[0].prompt[0]["content"]
+    assert spec.doc["instruction_id_list"] == ["detectable_format:number_highlighted_sections", "detectable_content:number_placeholders"]
+    assert spec.doc["kwargs"] == [{"num_highlights": 3}, {"num_placeholders": 3}]
+    assert spec.target == spec.doc["instruction_id_list"]
 
 
 def test_jeebench_scores_each_paper_when_local_question_indices_repeat(monkeypatch):

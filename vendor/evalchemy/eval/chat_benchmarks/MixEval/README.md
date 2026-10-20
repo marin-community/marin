@@ -1,5 +1,11 @@
 # MixEval usage
 
+The June 2024 datasets are fetched from
+[`MixEval/MixEval`](https://huggingface.co/datasets/MixEval/MixEval) at revision
+`66a05ec3821a2b5089ed1e32a5d65ab6ecdbf906` through Evalchemy's dataset cache.
+The August 2024 snapshot remains bundled because it differs from that source.
+Both versions preserve their original split order and sample identities.
+
 This is a fork of the MixEval project, which is a quick evaluation suite for Large Language Models (LLMs). MixEval provides a standardized way to evaluate and compare the performance of various LLMs across a wide range of tasks and benchmarks that should correlate with Arena Elo.
 
 To reproduce MixEval results, run `python -m eval.eval --model dummy --tasks MixEval --model_args 'pretrained=llama_3_8b_instruct'  --output_path logs/my-run` to evaluate the llama_3_8b_instruct model. By default, the model will be evaluated on all tasks in MixEval and use gpt-3.5-turbo-0125 as the judge.

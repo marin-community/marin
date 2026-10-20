@@ -3,20 +3,22 @@ from eval.sources.common import text_specs
 
 import json
 import logging
-import os
+import fsspec
 from typing import Any, Dict, List, Optional  # noqa: F401
 
 
 from eval.task import BaseBenchmark
+from eval.data_sources import fetch_hf
 from eval.generation_stops import END_OF_TURN_SEQUENCES
 
 # Modified version of hendrycks_math with additional instruction to mark the solution with \\boxed
 # https://github.com/mlfoundations/evalchemy/blob/e70a45e41cb2ada273d6bb98e75dba303ec31f8b/eval/chat_benchmarks/AMC23/eval_instruct.py#L15
 PROMPT = """Problem: {problem}\nMark your solution with \\boxed\nAnswer:"""
+HF_REVISION = "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
 
 
 class MATH500Benchmark(BaseBenchmark):
-    SOURCE = SourceRef("HuggingFaceH4/MATH-500", "test")
+    SOURCE = SourceRef("HuggingFaceH4/MATH-500", "test", HF_REVISION)
     """
     MATH500 Benchmark for evaluating the math reasoning of LLMs.
     Link: https://huggingface.co/datasets/HuggingFaceH4/MATH-500
@@ -33,7 +35,7 @@ class MATH500Benchmark(BaseBenchmark):
 
     def __init__(
         self,
-        data_file: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "math500.jsonl"),
+        data_file: str | None = None,
         debug: bool = False,
         seed: List[int] = [0, 1234, 1234, 1234],
         max_tokens: int = 32768,
@@ -79,12 +81,22 @@ class MATH500Benchmark(BaseBenchmark):
 
     def load_questions(self) -> List[Dict[str, str]]:
         """Load MATH500 questions from the data file."""
-        with open(self.data_file, "r") as f:
+        path = self.data_file or fetch_hf(
+            self.SOURCE.dataset, "test.jsonl", revision=HF_REVISION, cache_prefix=self.dataset_cache,
+        )
+        with fsspec.open(path, "rt", encoding="utf-8") as f:
             questions = [json.loads(x) for x in f]
 
         if self.debug:
             questions = questions[:2]
             self.logger.info(f"Debug mode enabled. Using only {len(questions)} questions.")
 
-        self.logger.info(f"Loaded {len(questions)} questions from {self.data_file}")
+        self.logger.info(f"Loaded {len(questions)} questions from {path}")
         return questions
+
+    def validate_prepared_data(self) -> None:
+        questions = self.load_questions()
+        if not questions or any(not row["problem"].strip() or not row["answer"].strip() for row in questions):
+            raise ValueError("MATH500 questions and answers must not be empty")
+        if self.data_file is None and len(questions) != (2 if self.debug else 500):
+            raise ValueError(f"MATH500 expected {2 if self.debug else 500} questions, found {len(questions)}")

@@ -739,8 +739,13 @@ def test_evaluation_driver_streams_lm_eval_samples_without_result_list(tmp_path)
 
 
 @pytest.mark.parametrize("task", ["AIME24", "MATH500"])
-def test_cli_output_cap_wins_over_math_benchmark_defaults(endpoint, tmp_path, task):
+def test_cli_output_cap_wins_over_math_benchmark_defaults(endpoint, tmp_path, task, math500_jsonl):
     root = Path(__file__).parents[2]
+    dataset_cache = tmp_path / "datasets"
+    staged_math = dataset_cache / MATH500Benchmark.SOURCE.dataset / MATH500Benchmark.SOURCE.revision / "test.jsonl"
+    staged_math.parent.mkdir(parents=True)
+    staged_math.write_bytes(math500_jsonl.read_bytes())
+    staged_math.with_name("test.jsonl.complete").touch()
     result = subprocess.run(
         [
             sys.executable,
@@ -752,6 +757,8 @@ def test_cli_output_cap_wins_over_math_benchmark_defaults(endpoint, tmp_path, ta
             f"model=served,base_url=http://127.0.0.1:{endpoint.server_port}/v1/chat/completions,tokenizer_backend=None,tokenized_requests=False",
             "--tasks",
             task,
+            "--dataset_cache",
+            str(dataset_cache),
             "--debug",
             "--limit",
             "1",

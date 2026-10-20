@@ -122,6 +122,12 @@ def setup_custom_parser():
     """
     parser = setup_parser()
     parser.add_argument(
+        "--dataset_cache",
+        type=str,
+        default=None,
+        help="Local directory or object-store prefix for pinned HF dataset files; defaults to the local HF cache.",
+    )
+    parser.add_argument(
         "--annotator_model",
         type=str,
         default=AUTO_ANNOTATOR_MODEL,
@@ -297,6 +303,7 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
         system_instruction=args.system_instruction,
         num_samples=getattr(args, "num_samples", 1),
         pass_at_k=getattr(args, "pass_at_k", None),
+        dataset_cache=getattr(args, "dataset_cache", None),
     )
     # Always scan the evalchemy-owned overrides first; a user --include_path is appended
     # last so it still wins (later include paths take precedence).

@@ -41,6 +41,7 @@ class BaseBenchmark(ABC):
         self.dataset_name = self.SOURCE.dataset
         self.dataset_split = self.SOURCE.split
         self.dataset_revision = self.SOURCE.revision
+        self.dataset_cache: str | None = None
         self.prompt_length = None
 
     @abstractmethod
@@ -128,6 +129,7 @@ class TaskManager:
                 parameters = inspect.signature(source_type).parameters
                 arguments = {key: value for key, value in benchmark_kwargs.items() if key in parameters and value is not None}
                 source = source_type(**arguments)
+                source.dataset_cache = benchmark_kwargs.get("dataset_cache")
                 source.num_samples = int(benchmark_kwargs.get("num_samples") or 1)
                 source.pass_at_k = parse_pass_at_k(benchmark_kwargs.get("pass_at_k"))
                 source._registered_task_name = name

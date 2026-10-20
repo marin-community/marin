@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from pathlib import Path
 
 import pytest
 import yaml
@@ -18,7 +17,7 @@ from eval.sources.common import SourceOptions
 from eval.contracts.eval_spec import SourceRef
 from eval.graders.specs import GRADERS
 from eval.execution.metrics import SourceMetrics
-from eval.chat_benchmarks.MultiPLE.eval_instruct import DATA_DIR, LANUGUAGES, LANGUAGE_MAP, MultipleBenchmark
+from eval.chat_benchmarks.MultiPLE.eval_instruct import LANUGUAGES, LANGUAGE_MAP, MultipleBenchmark
 from eval.chat_benchmarks.MBPP.eval_instruct import MBPPBenchmark
 from eval.graders.program_suites import program_suite
 
@@ -67,9 +66,11 @@ def test_mbpp_source_preserves_original_native_execution_budget(tmp_path, answer
 
 
 @pytest.mark.parametrize("language", LANUGUAGES)
-def test_multiple_bundled_rows_preserve_prompt_and_grader_reference(language):
-    row = json.loads((Path(DATA_DIR) / f"multipl-e-{language}.json").read_text())[0]
-    source = MultipleBenchmark(languages=[language], max_tokens=768, timeout=3)
+def test_multiple_rows_preserve_prompt_and_grader_reference(tmp_path, language):
+    row = {"task_id": "HumanEval_0", "prompt": "complete this function", "test": "assert(answer() == 2)",
+           "language": language}
+    (tmp_path / f"multipl-e-{language}.json").write_text(json.dumps([row]))
+    source = MultipleBenchmark(languages=[language], data_dir=str(tmp_path), max_tokens=768, timeout=3)
     options = SourceOptions("MultiPLE", source.SOURCE, limit=1)
 
     specs = list(source.iter_specs(options))

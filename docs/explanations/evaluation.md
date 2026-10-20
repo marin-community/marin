@@ -51,6 +51,26 @@ writes the normalized `samples` and `steps` tables consumed by Evaldash.
 After the evaluator seals those tables, Marin derives the shared `rollouts_v1` table from `samples` and
 `steps`, then records provenance and aggregate results.
 
+### Dataset caching
+
+Evalchemy's HF-backed sources pin each dataset file to a full commit SHA.
+`fetch_hf(repo_id, filename, revision=sha, cache_prefix=prefix)` returns a local path
+or an object-store URL that readers open through `fsspec.open`. Files are staged
+under `{prefix}/{repo_id}/{sha}/{filename}`. A lease and completion marker prevent
+readers from using interrupted uploads; completed entries need no HF request.
+
+Marin sets the prefix to its configured 30-day scratch store, using the evaluation
+output path to choose the existing scratch-storage routing. The existing
+`MARIN_TEMP_PREFIX` override applies. Set `EvalchemyRuntimeConfig(dataset_cache=...)`
+to choose a shared prefix or a local directory explicitly. The 30-day lifecycle
+applies to Marin's default scratch store; explicit destinations keep their own
+retention policies. Missing cache entries are fetched again from the pinned HF revision.
+
+The independent `evalchemy` CLI uses the native local HF cache by default. Pass
+`--dataset_cache s3://bucket/evalchemy-datasets` or
+`--dataset_cache /path/to/datasets` to stage files elsewhere. Existing HF cache and
+authentication settings still apply to downloads.
+
 ### Normalized rollout table
 
 The versioned `rollouts_v1` table stores one ordered conversation part per row. Its primary key is

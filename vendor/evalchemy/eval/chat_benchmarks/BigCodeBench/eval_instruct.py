@@ -1,25 +1,26 @@
-from eval.sources.common import text_specs
-from eval.contracts.eval_spec import ReducerSpec, SourceRef
+from dataclasses import replace
 import json
 import logging
 import os
 from typing import Optional
+import warnings
 
+import fsspec
+import pyarrow.parquet as pq
 
+from eval.contracts.eval_spec import ReducerSpec, SourceRef
+from eval.data_sources import fetch_hf
+from eval.sources.common import text_specs
 from eval.task import BaseBenchmark
 
-
-
-
-# suppress warnings
-import warnings
 
 warnings.filterwarnings("ignore")
 
 
-BIGCODEBENCH_PATH = os.environ.get("BIGCODEBENCH_PATH", "eval/chat_benchmarks/BigCodeBench/data")
 BIGCODEBENCH_HF = "bigcode/bigcodebench"
 BIGCODEBENCH_VERSION = "v0.1.3"
+BIGCODEBENCH_REVISION = "b74c0d0bf70d2c0bc459be537895cca163007f1a"
+BIGCODEBENCH_HARD_REVISION = "298d2cc7b96612e15e47313c3603ee124cee0c1f"
 
 
 
@@ -32,7 +33,7 @@ class BigCodeBenchBenchmark(BaseBenchmark):
     def __init__(
         self,
         language: str = "python",
-        data_dir: str = BIGCODEBENCH_PATH,
+        data_dir: str | None = None,
         max_tokens: int = 1280,
         timeout: float = 120,
         debug: bool = False,
@@ -46,7 +47,7 @@ class BigCodeBenchBenchmark(BaseBenchmark):
 
         Args:
             language: Programming language to evaluate
-            data_dir: Directory containing BigCodeBench datasets
+            data_dir: Optional directory containing BigCodeBench JSON fixtures
             max_tokens: Maximum number of tokens for generation
             timeout: Timeout for code execution
             debug: If True, only evaluate first 2 examples
@@ -66,15 +67,29 @@ class BigCodeBenchBenchmark(BaseBenchmark):
 
 
 
-    SOURCE = SourceRef(BIGCODEBENCH_HF, revision=BIGCODEBENCH_VERSION)
+    SOURCE = SourceRef(BIGCODEBENCH_HF, split=BIGCODEBENCH_VERSION, revision=BIGCODEBENCH_REVISION)
     METRICS = ("pass@1",)
     PRIMARY_METRIC = "pass@1"
     REDUCER = ReducerSpec(accuracy="pass@1", groups={"prompt_type": "{group}_{metric}"})
 
     def iter_specs(self, options):
         for prompt_type in self.prompt_types:
-            with open(os.path.join(self.data_dir, f"BigCodeBench-{prompt_type}.json")) as data:
-                rows = json.load(data)
+            source = self.SOURCE
+            if prompt_type.endswith("-hard"):
+                source = SourceRef("bigcode/bigcodebench-hard", split=BIGCODEBENCH_VERSION,
+                                   revision=BIGCODEBENCH_HARD_REVISION)
+            if self.data_dir is not None:
+                with fsspec.open(os.path.join(self.data_dir, f"BigCodeBench-{prompt_type}.json"), "rt") as data:
+                    rows = json.load(data)
+            else:
+                path = fetch_hf(source.dataset, "data/v0.1.3-00000-of-00001.parquet",
+                                revision=source.revision, cache_prefix=self.dataset_cache)
+                with fsspec.open(path, "rb") as data:
+                    raw_rows = pq.read_table(data).to_pylist()
+                prompt_field = "complete_prompt" if prompt_type.startswith("complete") else "instruct_prompt"
+                rows = [{**{key: row[key] for key in ("task_id", "test", "entry_point", "doc_struct",
+                                                     "code_prompt", "canonical_solution")},
+                         "prompt": row[prompt_field]} for row in raw_rows]
             if self.debug:
                 rows = rows[:2]
             def prompt(row):
@@ -83,7 +98,7 @@ class BigCodeBenchBenchmark(BaseBenchmark):
                     return f"                            {self.instruction_prefix}\n                            ```\n                            {code}\n                            ```\n                            "
                 return f"                            {self.instruction_prefix}\n                            {code}\n                            "
             yield from text_specs(
-                rows, options, prompt=prompt, namespace=prompt_type,
+                rows, replace(options, source=source), prompt=prompt, namespace=prompt_type,
                 target=lambda row: row["test"], grader="program_suite",
                 reference=lambda row: {"suite": "BigCodeBench", "language": self.language, "problem": row,
                                        "timeout": self.timeout, "safe_mode": self.safe_mode},

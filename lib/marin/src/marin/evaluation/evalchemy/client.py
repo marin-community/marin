@@ -203,6 +203,8 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
         cmd += ["--num_fewshot", str(task["num_fewshot"])]
     if config.get("batch_size") is not None:
         cmd += ["--batch_size", str(config["batch_size"])]
+    if config.get("dataset_cache") is not None:
+        cmd += ["--dataset_cache", config["dataset_cache"]]
     if config.get("seed") is not None:
         cmd += ["--seed", str(config["seed"])]
     if task["unsafe_code"]:

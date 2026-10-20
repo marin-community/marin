@@ -1,16 +1,22 @@
-from eval.sources.common import text_specs
-from eval.contracts.eval_spec import ReducerSpec, SourceRef
-from typing import Dict, List, Optional, Generator
 import json
-import os
 import logging
+import os
+from typing import Dict, Generator, List, Optional
 
+import fsspec
+import pyarrow.parquet as pq
+
+from eval.contracts.eval_spec import ReducerSpec, SourceRef
+from eval.data_sources import fetch_hf
+from eval.sources.common import text_specs
 from eval.task import BaseBenchmark
 
 
 SUITE = 'MBPPPlus'
+DATASET_REPO = 'evalplus/mbppplus'
+DATASET_REVISION = 'b2d74c91837c3f2a20c1299ae98133cbe7cfa077'
 DATA_FILE = 'mbppplus.jsonl'
-TEST_FILE = 'mbppplus.jsonl'
+
 
 
 class MBPPPlusBenchmark(BaseBenchmark):
@@ -18,17 +24,16 @@ class MBPPPlusBenchmark(BaseBenchmark):
     MBPPPlus benchmark for evaluating code generation capabilities across different languages.
     """
 
-    SOURCE = SourceRef("MBPPPlus")
+    SOURCE = SourceRef(DATASET_REPO, revision=DATASET_REVISION)
     METRICS = ("pass@1",)
     PRIMARY_METRIC = "pass@1"
 
     def benchmark_size(self) -> int:
-        problem_file = os.path.join(self.data_dir, "mbppplus.jsonl")
-        return sum(1 for _ in self.read_test_examples(problem_file))
+        return sum(1 for _ in self.read_test_examples(self.load_examples()))
 
     def __init__(
         self,
-        data_dir: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
+        data_dir: str | None = None,
         timeout: float = 3.0,
         debug: bool = False,
         max_tokens: int = 1024,
@@ -39,7 +44,7 @@ class MBPPPlusBenchmark(BaseBenchmark):
         Initialize MBPPPlus benchmark.
 
         Args:
-            data_dir: Directory containing MBPPPlus datasets
+            data_dir: Optional directory containing MBPPPlus JSONL fixtures
             max_tokens: Maximum number of tokens for generation
             timeout: Timeout for code execution
             debug: If True, only evaluate first 2 examples
@@ -63,39 +68,34 @@ class MBPPPlusBenchmark(BaseBenchmark):
             prompt += "\n>>> Code:\n```python\n{}\n```".format(code)
         return prompt
 
-    def read_test_examples(self, data_path: str) -> Generator[Dict[str, str], None, None]:
-        """
-        Read and format test examples from data file.
+    def load_examples(self):
+        if self.data_dir is not None:
+            with fsspec.open(os.path.join(self.data_dir, DATA_FILE), "rt") as data:
+                return [json.loads(line) for line in data if line.strip()]
+        path = fetch_hf(DATASET_REPO, "data/test-00000-of-00001-d5781c9c51e02795.parquet",
+                        revision=DATASET_REVISION, cache_prefix=self.dataset_cache)
+        with fsspec.open(path, "rb") as data:
+            return pq.read_table(data).to_pylist()
 
-        Args:
-            data_path: Path to the data file
+    def read_test_examples(self, examples: List[Dict]) -> Generator[Dict[str, str], None, None]:
+        examples_str = []
+        for i in range(1, self.num_examples + 1):
+            ex = examples[i]
+            example_prompt = "- Example {}:\n{}".format(
+                i, self.format_test_example(ex["prompt"], ex["test_list"], ex["code"])
+            )
+            examples_str.append(example_prompt)
 
-        Yields:
-            Dictionary containing task_id and formatted prompt
-        """
-        try:
-            with open(data_path, "r") as f:
-                examples = [json.loads(x) for x in f]
-            self.logger.info(f"Loaded {len(examples)} examples from {data_path}")
+        eval_range = range(self.start_idx, min(self.end_idx, len(examples)))
+        if self.debug:
+            eval_range = list(eval_range)[:2]
+            self.logger.info(f"Debug mode: using 2 examples")
 
-            examples_str = []
-            for i in range(1, self.num_examples + 1):
-                ex = examples[i]
-                example_prompt = "- Example {}:\n{}".format(
-                    i, self.format_test_example(ex["prompt"], ex["test_list"], ex["code"])
-                )
-                examples_str.append(example_prompt)
+        for i in eval_range:
+            ex = examples[i]
+            prompt = self.format_test_example(ex["prompt"], ex["test_list"])
 
-            eval_range = range(self.start_idx, min(self.end_idx, len(examples)))
-            if self.debug:
-                eval_range = list(eval_range)[:2]
-                self.logger.info(f"Debug mode: using 2 examples")
-
-            for i in eval_range:
-                ex = examples[i]
-                prompt = self.format_test_example(ex["prompt"], ex["test_list"])
-
-                prompt_with_shots = """
+            prompt_with_shots = """
 Please refer the given examples and generate a python function for my problem.
 Examples are listed as follows:
 {}
@@ -103,14 +103,10 @@ Examples are listed as follows:
 Here is my problem:
 {}
 """.strip().format(
-                    "\n\n".join(examples_str), prompt
-                )
+                "\n\n".join(examples_str), prompt
+            )
 
-                yield {"task_id": ex["task_id"], "prompt": prompt_with_shots}
-
-        except Exception as e:
-            self.logger.error(f"Error reading examples: {str(e)}")
-            raise
+            yield {"task_id": ex["task_id"], "prompt": prompt_with_shots}
 
 
 
@@ -119,10 +115,10 @@ Here is my problem:
     REDUCER = ReducerSpec(accuracy="pass@1")
 
     def iter_specs(self, options):
-        with open(os.path.join(self.data_dir, TEST_FILE)) as data:
-            problems = {row["task_id"]: row for line in data if line.strip() for row in [json.loads(line)]}
+        examples = self.load_examples()
+        problems = {row["task_id"]: row for row in examples}
         return text_specs(
-            self.read_test_examples(os.path.join(self.data_dir, DATA_FILE)), options,
+            self.read_test_examples(examples), options,
             prompt=lambda row: row["prompt"], target=lambda row: problems[row["task_id"]]["test"],
             grader="program_suite",
             reference=lambda row: {"suite": SUITE, "language": "python", "problem": problems[row["task_id"]],

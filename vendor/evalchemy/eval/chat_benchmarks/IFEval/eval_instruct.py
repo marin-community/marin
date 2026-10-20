@@ -1,20 +1,31 @@
 from eval.sources.common import text_specs
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
-from typing import Dict, Generator, Optional
+from typing import Any, Dict, Generator, Optional
 import json
 import logging
 import os
 
+import fsspec
+
+from eval.data_sources import fetch_hf
 from eval.task import BaseBenchmark
+
+HF_REVISION = "966cd89545d6b6acfd7638bc708b98261ca58e84"
+# The original asks for one placeholder but grades three. Preserve Evalchemy's corrected prompt.
+CORRECTED_PLACEHOLDER_PROMPT = (
+    "What is inside Shinto shrines? Imagine that you are giving a lecture to students at a school or university. "
+    "Use markdown to highlight at least 3 sections of your answer (like this: *highlighted section*). "
+    "Your answer must also contain at least 3 placeholders (an example of a placeholder is [address])."
+)
 
 
 class IFEvalBenchmark(BaseBenchmark):
-    SOURCE = SourceRef("google/IFEval", "input_data")
+    SOURCE = SourceRef("google/IFEval", "train", HF_REVISION)
     METRICS = ("prompt-level", "instruction-level", "prompt_level_strict", "instruction_level_strict", "prompt_level_loose", "instruction_level_loose")
     PRIMARY_METRIC = "prompt-level"
     def __init__(
         self,
-        data_dir: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
+        data_dir: str | None = None,
         num_examples: int = 3,
         start_idx: int = 10,
         end_idx: int = 510,
@@ -44,7 +55,34 @@ class IFEvalBenchmark(BaseBenchmark):
         self.end_idx = end_idx
         self.debug = debug
 
-    def read_test_examples(self, data_path: str) -> Generator[Dict[str, str], None, None]:
+    def load_questions(self, data_path: str | None = None) -> list[dict[str, Any]]:
+        """Load instruction inputs and retain the local placeholder correction."""
+        if data_path is None and self.data_dir is not None:
+            data_path = os.path.join(self.data_dir, "input_data.jsonl")
+        canonical = data_path is None
+        path = data_path or fetch_hf(
+            self.SOURCE.dataset, "ifeval_input_data.jsonl", revision=HF_REVISION, cache_prefix=self.dataset_cache,
+        )
+        with fsspec.open(path, "rt", encoding="utf-8") as data:
+            examples = [json.loads(line) for line in data]
+        if canonical:
+            for row in examples:
+                if row["key"] == 2785:
+                    row["prompt"] = CORRECTED_PLACEHOLDER_PROMPT
+        self.logger.info("Loaded %d examples from %s", len(examples), path)
+        return examples
+
+    def validate_prepared_data(self) -> None:
+        examples = self.load_questions()
+        if self.data_dir is None and len(examples) != 541:
+            raise ValueError(f"IFEval expected 541 questions, found {len(examples)}")
+        if not examples or any(
+            not row["prompt"].strip() or not row["instruction_id_list"]
+            or len(row["instruction_id_list"]) != len(row["kwargs"]) for row in examples
+        ):
+            raise ValueError("IFEval requires prompts, instruction IDs, and matching grading arguments")
+
+    def read_test_examples(self, data_path: str | None = None) -> Generator[Dict[str, Any], None, None]:
         """
         Read and get prompts from data file.
 
@@ -54,25 +92,13 @@ class IFEvalBenchmark(BaseBenchmark):
         Yields:
             Dictionary containing key, prompt and other properties required for evaluation
         """
-        try:
-            with open(data_path, "r") as f:
-                examples = [json.loads(x) for x in f]
-
-            self.logger.info(f"Loaded {len(examples)} examples from {data_path}")
-
-            eval_range = range(self.start_idx, min(self.end_idx, len(examples)))
-            if self.debug:
-                eval_range = list(eval_range)[:2]
-                self.logger.info(f"Debug mode: using 2 examples")
-
-            for i in eval_range:
-                ex = examples[i]
-
-                yield ex
-
-        except Exception as e:
-            self.logger.error(f"Error reading examples: {str(e)}")
-            raise
+        examples = self.load_questions(data_path)
+        eval_range = range(self.start_idx, min(self.end_idx, len(examples)))
+        if self.debug:
+            eval_range = list(eval_range)[:2]
+            self.logger.info("Debug mode: using 2 examples")
+        for i in eval_range:
+            yield examples[i]
 
 
 
@@ -81,7 +107,7 @@ class IFEvalBenchmark(BaseBenchmark):
 
     def iter_specs(self, options):
         return text_specs(
-            self.read_test_examples(os.path.join(self.data_dir, "input_data.jsonl")), options, prompt=lambda row: row["prompt"], target=lambda row: row["instruction_id_list"],
+            self.read_test_examples(), options, prompt=lambda row: row["prompt"], target=lambda row: row["instruction_id_list"],
             grader="instructions", reference=lambda row: {"protocol": 'ifeval'},
             generation_kwargs={"do_sample": False, "temperature": 0, "max_gen_toks": self.max_tokens},
         )

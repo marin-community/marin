@@ -6,14 +6,15 @@ from eval.contracts.eval_spec import SourceRef
 import ast
 import csv
 import logging
-import os
+import fsspec
 from typing import Any, Dict, List, Optional
 
 
 from eval.task import BaseBenchmark
+from eval.data_sources import fetch_hf
 
 DATASET_SIZE = 4_326
-DEFAULT_DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "simple_qa_test_set.csv")
+HF_REVISION = "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94"
 
 
 
@@ -23,12 +24,12 @@ class SimpleQABenchmark(BaseBenchmark):
 
     METRICS = ("accuracy", "accuracy_given_attempted", "f1")
     PRIMARY_METRIC = "accuracy"
-    SOURCE = SourceRef("openai/simple-evals", "simple_qa_test_set")
+    SOURCE = SourceRef("basicv8vc/SimpleQA", "train", HF_REVISION)
     REQUIRES_JUDGE = True
 
     def __init__(
         self,
-        data_file: str = DEFAULT_DATA_FILE,
+        data_file: str | None = None,
         debug: bool = False,
         seed: tuple[int, int, int, int] = (0, 1234, 1234, 1234),
         max_tokens: int = 512,
@@ -55,7 +56,10 @@ class SimpleQABenchmark(BaseBenchmark):
             raise ValueError("SimpleQA questions and answers must not be empty")
 
     def _load_source_questions(self) -> List[Dict[str, Any]]:
-        with open(self.data_file, newline="", encoding="utf-8") as data:
+        path = self.data_file or fetch_hf(
+            self.SOURCE.dataset, "simple_qa_test_set.csv", revision=HF_REVISION, cache_prefix=self.dataset_cache,
+        )
+        with fsspec.open(path, "rt", newline="", encoding="utf-8") as data:
             questions = []
             for source_index, row in enumerate(csv.DictReader(data)):
                 metadata = ast.literal_eval(row["metadata"])

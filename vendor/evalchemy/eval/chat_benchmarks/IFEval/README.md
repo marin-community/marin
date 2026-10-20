@@ -5,30 +5,15 @@ This is not an officially supported Google product.
 This repository contains source code and data for
 [Instruction Following Evaluation for Large Language Models](arxiv.org/abs/2311.07911)
 
-## Dependencies
+Evalchemy fetches `ifeval_input_data.jsonl` from
+[`google/IFEval`](https://huggingface.co/datasets/google/IFEval) at revision
+`966cd89545d6b6acfd7638bc708b98261ca58e84` through its dataset cache.
+The prompt for key `2785` retains the local correction requesting three
+placeholders, matching its grading arguments. The default evaluation slice
+remains rows `[10:510]`.
 
-Please make sure that all required python packages are installed via:
-
-```
-pip3 install -r requirements.txt
-```
-
-## How to run
-
-You need to create a jsonl file with two entries: prompt and response.
-Then, call `evaluation_main` from the parent folder of
-instruction_following_eval. For example:
-
-```bash
-# Content of `--input_response_data` should be like:
-# {"prompt": "Write a 300+ word summary ...", "response": "PUT YOUR MODEL RESPONSE HERE"}
-# {"prompt": "I am planning a trip to ...", "response": "PUT YOUR MODEL RESPONSE HERE"}
-# ...
-python3 -m instruction_following_eval.evaluation_main \
-  --input_data=./instruction_following_eval/data/input_data.jsonl \
-  --input_response_data=./instruction_following_eval/data/input_response_data_gpt4_20231107_145030.jsonl \
-  --output_dir=./instruction_following_eval/data/
-```
+Run the `IFEval` task through the standard Evalchemy CLI. Install the
+`ifeval` extra to include the instruction checkers' dependencies.
 
 ## Reference
 

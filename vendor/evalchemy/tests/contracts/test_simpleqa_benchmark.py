@@ -9,6 +9,7 @@ from eval.sources.common import SourceOptions
 from tests.contracts.source_harness import FixedEndpoint, evaluate_source
 
 
+@pytest.mark.data_integration
 def test_simpleqa_loads_the_canonical_full_dataset():
     questions = SimpleQABenchmark().load_questions()
 
@@ -18,6 +19,7 @@ def test_simpleqa_loads_the_canonical_full_dataset():
     assert questions[0]["answer"] == "Michio Sugeno"
 
 
+@pytest.mark.data_integration
 def test_simpleqa_mini_uses_the_reference_seeded_subset():
     questions = SimpleQAMiniBenchmark().load_questions()
 
@@ -35,7 +37,7 @@ def test_simpleqa_uses_candidate_and_judge_endpoints_for_the_limited_source(benc
 
     metrics, samples = evaluate_source(
         source,
-        SourceOptions(task, SourceRef(source.data_file), limit=1),
+        SourceOptions(task, source.SOURCE, limit=1),
         candidate,
         judges={task: judge},
     )
@@ -44,6 +46,16 @@ def test_simpleqa_uses_candidate_and_judge_endpoints_for_the_limited_source(benc
     assert samples[0]["judge_label"] == "correct"
     assert candidate.requests[0].prompt == [{"role": "user", "content": samples[0]["doc"]["question"]}]
     assert "Predicted answer: candidate answer" in judge.requests[0].prompt
+
+
+def test_simpleqa_csv_retains_metadata_and_seeded_source_identity():
+    full = SimpleQABenchmark().load_questions()
+    mini = SimpleQAMiniBenchmark().load_questions()
+
+    assert full[0] == {"source_index": 0, "question": "question 0", "answer": "answer 0", "metadata": {"topic": "fixture"}}
+    assert [row["source_index"] for row in mini[:10]] == [3155, 3445, 331, 2121, 4188, 3980, 3317, 2484, 3904, 2933]
+    assert all(row == full[row["source_index"]] for row in mini)
+    assert len({row["source_index"] for row in mini}) == MINI_DATASET_SIZE
 
 
 def test_simpleqa_reasoning_wrapped_label_is_an_unavailable_judgment(tmp_path):

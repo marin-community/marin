@@ -19,7 +19,7 @@ from tests.contracts.source_harness import FixedEndpoint, MemoryCheckpoints, eva
 
 def test_simpleqa_restores_candidate_and_judge_operations_without_repaying():
     source = SimpleQABenchmark(debug=True)
-    options = SourceOptions("SimpleQA", SourceRef(source.data_file), limit=1)
+    options = SourceOptions("SimpleQA", source.SOURCE, limit=1)
     candidate = FixedEndpoint("An answer")
     judge = FixedEndpoint("A")
     checkpoints = MemoryCheckpoints()
@@ -39,7 +39,7 @@ def test_simpleqa_restores_candidate_and_judge_operations_without_repaying():
 
 def test_failed_judge_retries_on_resume_without_regenerating_candidate():
     source = SimpleQABenchmark(debug=True)
-    options = SourceOptions("SimpleQA", SourceRef(source.data_file), limit=1)
+    options = SourceOptions("SimpleQA", source.SOURCE, limit=1)
     store = MemoryCheckpoints()
     first, _ = evaluate_source(
         source, options, FixedEndpoint("candidate"),

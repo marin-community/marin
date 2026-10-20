@@ -1,16 +1,22 @@
-from eval.sources.common import text_specs
-from eval.contracts.eval_spec import ReducerSpec, SourceRef
-from typing import Dict, List, Generator, Optional
 import json
-import os
 import logging
+import os
+from typing import Dict, Generator, List, Optional
 
+import fsspec
+import pyarrow.parquet as pq
+
+from eval.contracts.eval_spec import ReducerSpec, SourceRef
+from eval.data_sources import fetch_hf
+from eval.sources.common import text_specs
 from eval.task import BaseBenchmark
 
 
 SUITE = 'MBPP'
+DATASET_REPO = 'google-research-datasets/mbpp'
+DATASET_REVISION = '4bb6404fdc6cacfda99d4ac4205087b89d32030c'
 DATA_FILE = 'mbpp.jsonl'
-TEST_FILE = 'mbpp_test.jsonl'
+
 
 
 class MBPPBenchmark(BaseBenchmark):
@@ -21,7 +27,7 @@ class MBPPBenchmark(BaseBenchmark):
 
     def __init__(
         self,
-        data_dir: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
+        data_dir: str | None = None,
         num_examples: int = 3,
         start_idx: int = 10,
         end_idx: int = 510,
@@ -34,7 +40,7 @@ class MBPPBenchmark(BaseBenchmark):
         Initialize MBPP benchmark.
 
         Args:
-            data_dir: Directory containing MBPP datasets
+            data_dir: Optional directory containing MBPP JSONL fixtures
             max_tokens: Maximum number of tokens for generation
             num_examples: Number of examples to show in few-shot prompt
             start_idx: Start index for evaluation examples
@@ -59,39 +65,37 @@ class MBPPBenchmark(BaseBenchmark):
             prompt += "\n>>> Code:\n```python\n{}\n```".format(code)
         return prompt
 
-    def read_test_examples(self, data_path: str) -> Generator[Dict[str, str], None, None]:
-        """
-        Read and format test examples from data file.
+    def load_examples(self):
+        if self.data_dir is not None:
+            with fsspec.open(os.path.join(self.data_dir, DATA_FILE), "rt") as data:
+                return [json.loads(line) for line in data if line.strip()]
+        rows = []
+        for split in ("prompt", "train", "test", "validation"):
+            path = fetch_hf(DATASET_REPO, f"full/{split}-00000-of-00001.parquet",
+                            revision=DATASET_REVISION, cache_prefix=self.dataset_cache)
+            with fsspec.open(path, "rb") as data:
+                rows.extend(pq.read_table(data).to_pylist())
+        return sorted(rows, key=lambda row: row["task_id"])
 
-        Args:
-            data_path: Path to the data file
+    def read_test_examples(self, examples: List[Dict]) -> Generator[Dict[str, str], None, None]:
+        examples_str = []
+        for i in range(1, self.num_examples + 1):
+            ex = examples[i]
+            example_prompt = "- Example {}:\n{}".format(
+                i, self.format_test_example(ex["text"], ex["test_list"], ex["code"])
+            )
+            examples_str.append(example_prompt)
 
-        Yields:
-            Dictionary containing task_id and formatted prompt
-        """
-        try:
-            with open(data_path, "r") as f:
-                examples = [json.loads(x) for x in f]
-            self.logger.info(f"Loaded {len(examples)} examples from {data_path}")
+        eval_range = range(self.start_idx, min(self.end_idx, len(examples)))
+        if self.debug:
+            eval_range = list(eval_range)[:2]
+            self.logger.info(f"Debug mode: using 2 examples")
 
-            examples_str = []
-            for i in range(1, self.num_examples + 1):
-                ex = examples[i]
-                example_prompt = "- Example {}:\n{}".format(
-                    i, self.format_test_example(ex["text"], ex["test_list"], ex["code"])
-                )
-                examples_str.append(example_prompt)
+        for i in eval_range:
+            ex = examples[i]
+            prompt = self.format_test_example(ex["text"], ex["test_list"])
 
-            eval_range = range(self.start_idx, min(self.end_idx, len(examples)))
-            if self.debug:
-                eval_range = list(eval_range)[:2]
-                self.logger.info(f"Debug mode: using 2 examples")
-
-            for i in eval_range:
-                ex = examples[i]
-                prompt = self.format_test_example(ex["text"], ex["test_list"])
-
-                prompt_with_shots = """
+            prompt_with_shots = """
 Please refer the given examples and generate a python function for my problem.
 Examples are listed as follows:
 {}
@@ -99,29 +103,31 @@ Examples are listed as follows:
 Here is my problem:
 {}
 """.strip().format(
-                    "\n\n".join(examples_str), prompt
-                )
+                "\n\n".join(examples_str), prompt
+            )
 
-                yield {"task_id": ex["task_id"], "prompt": prompt_with_shots}
-
-        except Exception as e:
-            self.logger.error(f"Error reading examples: {str(e)}")
-            raise
+            yield {"task_id": ex["task_id"], "prompt": prompt_with_shots}
 
 
 
 
 
-    SOURCE = SourceRef("mbpp")
+    SOURCE = SourceRef(DATASET_REPO, revision=DATASET_REVISION)
     METRICS = ("pass@1",)
     PRIMARY_METRIC = "pass@1"
     REDUCER = ReducerSpec(accuracy="pass@1")
 
     def iter_specs(self, options):
-        with open(os.path.join(self.data_dir, TEST_FILE)) as data:
-            problems = {row["task_id"]: row for line in data if line.strip() for row in [json.loads(line)]}
+        examples = self.load_examples()
+        if self.data_dir is not None:
+            with fsspec.open(os.path.join(self.data_dir, "mbpp_test.jsonl"), "rt") as data:
+                problems = {row["task_id"]: row for line in data if line.strip() for row in [json.loads(line)]}
+        else:
+            problems = {row["task_id"]: {"task_id": row["task_id"], "prompt": row["text"],
+                                         "test": row["test_list"], "code": row["code"]}
+                        for row in examples[10:510]}
         return text_specs(
-            self.read_test_examples(os.path.join(self.data_dir, DATA_FILE)), options,
+            self.read_test_examples(examples), options,
             prompt=lambda row: row["prompt"], target=lambda row: problems[row["task_id"]]["test"],
             grader="program_suite",
             reference=lambda row: {"suite": SUITE, "language": "python", "problem": problems[row["task_id"]],

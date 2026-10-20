@@ -1,16 +1,20 @@
-from eval.sources.common import text_specs
-from eval.contracts.eval_spec import ReducerSpec, SourceRef
-from typing import Dict, List, Any, Optional
 import json
-import os
-from pathlib import Path
 import logging
+import os
+from typing import Any, Dict, List, Optional
 
-from .utils.utils import language_settings
+import fsspec
+
+from eval.contracts.eval_spec import ReducerSpec, SourceRef
+from eval.data_sources import fetch_hf
+from eval.sources.common import text_specs
 from eval.task import BaseBenchmark
+from .utils.utils import language_settings
 
 
 SUITE = 'HumanEvalPlus'
+HUMANEVALPLUS_REPO = "evalplus/humanevalplus"
+HUMANEVALPLUS_REVISION = "d32357cf319e50e9c8d8dab5ea876c72b0fd321b"
 
 
 class HumanEvalPlusBenchmark(BaseBenchmark):
@@ -18,7 +22,7 @@ class HumanEvalPlusBenchmark(BaseBenchmark):
     HumanEvalPlus benchmark for evaluating code generation capabilities across different languages.
     """
 
-    SOURCE = SourceRef("HumanEvalPlus")
+    SOURCE = SourceRef(HUMANEVALPLUS_REPO, revision=HUMANEVALPLUS_REVISION)
     METRICS = ("pass@1",)
     PRIMARY_METRIC = "pass@1"
 
@@ -26,17 +30,25 @@ class HumanEvalPlusBenchmark(BaseBenchmark):
         return sum(len(self.load_examples(language)) for language in self.languages)
 
     def load_examples(self, language: str) -> List[Dict[str, Any]]:
-        problem_file = Path(self.data_dir) / f"humanevalplus-{language}.jsonl"
-        if not problem_file.exists():
-            self.logger.warning(f"Dataset file not found: {problem_file}")
-            return []
-        examples = [json.loads(line) for line in problem_file.read_text().splitlines() if line.strip()]
+        if self.data_dir is not None:
+            path = os.path.join(self.data_dir, f"humanevalplus-{language}.jsonl")
+        else:
+            if language != "python":
+                raise ValueError(f"HumanEvalPlus has no upstream dataset for {language}")
+            path = fetch_hf(HUMANEVALPLUS_REPO, "test.jsonl", revision=HUMANEVALPLUS_REVISION,
+                            cache_prefix=self.dataset_cache)
+        with fsspec.open(path, "rt") as data:
+            examples = [json.loads(line) for line in data if line.strip()]
+        if self.data_dir is None:
+            # The bundled harness explicitly invoked check after defining it.
+            for example in examples:
+                example["test"] += f"\ncheck({example['entry_point']})"
         return examples[:2] if self.debug else examples
 
     def __init__(
         self,
         languages: List[str] = ["python"],
-        data_dir: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
+        data_dir: str | None = None,
         max_tokens: int = 1024,
         timeout: float = 3.0,
         debug: bool = False,
@@ -48,7 +60,7 @@ class HumanEvalPlusBenchmark(BaseBenchmark):
 
         Args:
             languages: List of programming languages to evaluate
-            data_dir: Directory containing HumanEvalPlus datasets
+            data_dir: Optional directory containing HumanEvalPlus JSON fixtures
             max_tokens: Maximum number of tokens for generation
             timeout: Timeout for code execution
             debug: If True, only evaluate first 2 examples

@@ -35,6 +35,27 @@ def test_mixeval_preserves_both_split_identities_and_judge_parsers():
     assert len(judge.requests) == 2
 
 
+def test_mixeval_pinned_jsonl_normalizes_docs_and_keeps_dates_distinct():
+    june = MixEvalBenchmark(debug=True)
+    specs = list(june.iter_specs(SourceOptions("MixEval", SourceRef("fixture"))))
+    freeform = specs[0]
+    multichoice = next(spec for spec in specs if spec.namespace == "multichoice")
+
+    assert freeform.doc["context"] is None
+    assert "options" not in freeform.doc
+    assert freeform.source_id == multichoice.source_id == "0"
+    assert freeform.target == ["JAMES ELROY"]
+    assert multichoice.target == [2]
+    assert freeform.requests[0].prompt == [{"role": "user", "content": "Question: Who wrote the book 'LA Confidential'?\nAnswer the question shortly."}]
+    assert multichoice.grader.reference == {"kind": "multichoice"}
+    assert freeform.source.dataset == "MixEval/MixEval"
+    assert freeform.source.revision == "66a05ec3821a2b5089ed1e32a5d65ab6ecdbf906"
+
+    august = next(MixEvalBenchmark(version="2024-08-11", debug=True).iter_specs(SourceOptions("MixEval", june.SOURCE)))
+    assert august.source.revision == "2024-08-11"
+    assert august.doc != freeform.doc
+
+
 def test_wildbench_preserves_published_truncation_and_weighted_tags(monkeypatch):
     row = {
         "session_id": "session-1",

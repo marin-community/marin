@@ -29,18 +29,10 @@ REPO_LOCAL_BENCHMARKS = (
     "AIME25",
     "AIW",
     "AMC23",
-    "CruxEval",
     "FinanceBench",
     "GSM8KPerturbed",
     "HumanEval",
-    "HumanEvalPlus",
-    "IFEval",
-    "MATH500",
-    "MBPP",
-    "MBPPPlus",
     "OlympiadBench",
-    "SimpleQA",
-    "SimpleQAMini",
 )
 """Benchmarks whose prompts are reproducible from checked-in data alone."""
 

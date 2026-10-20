@@ -15,6 +15,7 @@ from enum import StrEnum
 
 from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from rigging.filesystem.cluster_config import marin_temp_bucket
 
 from marin.evaluation.eval_measurements import task_item_count
 from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
@@ -95,6 +96,7 @@ class EvalchemyRuntimeConfig:
     cpu: float = 8.0
     memory: str = "32g"
     disk: str = "50g"
+    dataset_cache: str | None = None
 
 
 @dataclass(frozen=True)
@@ -199,6 +201,11 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             "seed": config.seed,
             "extra_model_args": dict(config.extra_model_args),
             "max_length": config.max_length,
+            "dataset_cache": (
+                config.runtime.dataset_cache
+                if config.runtime.dataset_cache is not None
+                else marin_temp_bucket(30, "evalchemy-datasets", source_prefix=output_dir)
+            ),
         }
     )
 

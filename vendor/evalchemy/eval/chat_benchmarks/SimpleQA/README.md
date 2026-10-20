@@ -7,8 +7,10 @@ graded as correct, incorrect, or not attempted with the canonical SimpleQA
 classifier prompt and Evalchemy's normalized `JUDGE_MODEL`, `JUDGE_BASE_URL`,
 and `JUDGE_API_KEY` configuration.
 
-The checked-in `simple_qa_test_set.csv` is the canonical OpenAI dataset also
-vendored by [Tavily's search evaluations](https://github.com/tavily-ai/tavily-search-evals).
+The canonical OpenAI `simple_qa_test_set.csv` is fetched from the
+[basicv8vc/SimpleQA mirror](https://huggingface.co/datasets/basicv8vc/SimpleQA)
+at revision `e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94` through Evalchemy's
+dataset cache. This mirror is byte-identical to the previously bundled CSV.
 Its SHA-256 digest is
 `feee3f7e7db3617e94e8fcf1977b756ec420ef8568f4e0fcbbe0e92e9d5fc032`.
 The benchmark and classifier are adapted from OpenAI's MIT-licensed

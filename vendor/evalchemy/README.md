@@ -22,6 +22,12 @@ environment. Marin calls the `evalchemy` CLI in a child process.
 Configuration validation requires the installed lm-eval task catalog; missing
 catalog dependencies fail validation instead of using an incomplete task list.
 
+Large canonical datasets are fetched from immutable Hugging Face revisions.
+`eval.data_sources.fetch_hf` returns a cached file path or object-store URL for
+the existing readers. Marin uses its configured scratch store; the standalone
+CLI uses the local HF cache, with `--dataset_cache` selecting an explicit S3
+prefix or local directory. Small datasets and custom snapshots remain bundled.
+
 ```bash
 uv run --project vendor/evalchemy --frozen --no-dev evalchemy --help
 uv run --project vendor/evalchemy --frozen --no-dev evalchemy validate-config experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml
