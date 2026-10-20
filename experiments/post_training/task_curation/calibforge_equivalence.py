@@ -49,7 +49,11 @@ def main() -> None:
         raise FileExistsError(args.output)
     records = {r["task_id"]: r for r in json.loads((args.bundles / "manifest.json").read_text())["tasks"]}
     outcomes = []
+    failed_references = []
     for case in json.loads(args.references.read_text())["tasks"]:
+        if case["status"] != "built":
+            failed_references.append(case)
+            continue
         record = records[case["task_id"]]
         reference = subprocess.check_output(
             ["docker", "create", "--platform", "linux/amd64", case["reference_image"], "sleep", "infinity"], text=True
@@ -100,7 +104,16 @@ def main() -> None:
                 ["docker", "rm", "-f", reference, *([candidate] if candidate else [])], check=True, capture_output=True
             )
     args.output.write_text(
-        json.dumps({"admission": "not_run", "normalizations": [], "tasks": outcomes}, indent=2) + "\n"
+        json.dumps(
+            {
+                "admission": "not_run",
+                "normalizations": [],
+                "tasks": outcomes,
+                "failed_native_references": failed_references,
+            },
+            indent=2,
+        )
+        + "\n"
     )
 
 

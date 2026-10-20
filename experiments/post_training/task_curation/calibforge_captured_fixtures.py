@@ -78,7 +78,12 @@ def main() -> None:
     references = json.loads(args.references.read_text())
     if references["build_network"] != "none":
         raise ValueError("Fixture capture requires offline native reference builds")
+    failed_references = []
+    captured = 0
     for reference in references["tasks"]:
+        if reference["status"] != "built":
+            failed_references.append(reference)
+            continue
         identity = reference["task_id"]
         record = generators[identity]
         if "@sha256:" not in record["base_image"] or record["workdir"] != "/app":
@@ -119,17 +124,15 @@ def main() -> None:
                 "reference_manifest_sha256": hashlib.sha256(args.references.read_bytes()).hexdigest(),
             },
         }
+        captured += 1
     manifest.update(
         tasks=list(records.values()),
+        failed_native_references=failed_references,
         compiled_count=sum(row["status"].startswith("compiled") for row in records.values()),
         previous_manifest_sha256=hashlib.sha256((args.previous / "manifest.json").read_bytes()).hexdigest(),
     )
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(
-        json.dumps(
-            {"captured": len(references["tasks"]), "compiled": manifest["compiled_count"], "admission": "not_run"}
-        )
-    )
+    print(json.dumps({"captured": captured, "compiled": manifest["compiled_count"], "admission": "not_run"}))
 
 
 if __name__ == "__main__":
