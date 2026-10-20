@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12, <3.14"
 resolution-markers = [
     "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-10-marin-root-pipeline' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu' and extra == 'group-10-marin-fray-fray-tpu-test' and extra == 'group-10-marin-iris-dev' and extra == 'group-10-marin-iris-test'",
@@ -6301,6 +6301,7 @@ dev = [
     { name = "black" },
     { name = "click" },
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
+    { name = "marin-rolloutengine" },
     { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "mkdocs" },
@@ -6348,6 +6349,7 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extra = ["pg8000"] },
+    { name = "marin-rolloutengine" },
     { name = "marin-taskcompendium", extra = ["pipeline"] },
     { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "plotly" },
@@ -6442,6 +6444,7 @@ dev = [
     { name = "black", specifier = ">=26.3.1" },
     { name = "click", specifier = ">=8.0" },
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "mkdocs", specifier = ">=1.5.0" },
@@ -6489,6 +6492,7 @@ lint = [
 ]
 test = [
     { name = "cloud-sql-python-connector", extras = ["pg8000"], specifier = ">=1.9" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
     { name = "marin-taskcompendium", extras = ["pipeline"], editable = "lib/taskcompendium" },
     { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "plotly" },
@@ -7571,6 +7575,7 @@ dependencies = [
     { name = "marin-levanter" },
     { name = "marin-marina" },
     { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-rolloutengine" },
     { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "marin-zephyr" },
     { name = "seaborn" },
@@ -7612,6 +7617,7 @@ requires-dist = [
     { name = "marin-levanter", marker = "extra == 'pipeline'", editable = "lib/levanter" },
     { name = "marin-marina", editable = "infra/marina" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
     { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "nvidia-cublas", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = ">=13.2.0.9" },

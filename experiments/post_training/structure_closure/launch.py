@@ -113,7 +113,9 @@ def build_run(
 @click.option(
     "--cohort", type=click.Choice([cohort.value for cohort in ClosureCohort]), default="copy-v1", show_default=True
 )
-@click.option("--parity-uri", required=True, help="Immutable native BFCL-Parity dataset directory.")
+@click.option(
+    "--parity-uri", required=True, help="Immutable BFCL-Parity directory with current task_rollout_spec Parquet rows."
+)
 @click.option("--parity-version", required=True)
 @click.option("--max-steps", type=click.IntRange(min=1), default=2, show_default=True)
 @click.option("--learning-rate", type=click.FloatRange(min=0, min_open=True), default=4e-6, show_default=True)

@@ -24,6 +24,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 
+from experiments.datasets.structure_closure import adopt_closure_dataset
 from experiments.post_training.structure_closure.launch import CLUSTER, MODEL_REPOSITORY, MODEL_REVISION, MODEL_URI
 from experiments.post_training.structure_closure.recipe import ROLE_PLAN, ClosureSupervision, training_config
 
@@ -121,7 +122,7 @@ def build_evaluation(*, name: str, data: ArtifactStep, model: ArtifactHfModel) -
 @click.command(help=__doc__)
 @rl_build_options
 def main() -> ArtifactStep:
-    data = ArtifactStep.adopt(
+    data = adopt_closure_dataset(
         user_owned_name("datasets/structure-closure-explicit"),
         "2026.10.12.3",
         DATA_URI,

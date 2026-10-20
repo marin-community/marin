@@ -5,8 +5,23 @@
 
 from enum import StrEnum
 
-from marin.execution.lazy import ArtifactStep
+from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.namespacing import user_owned_name
+
+from experiments.post_training.structure_closure.migrate_cohort import migrate_cohort
+
+
+def adopt_closure_dataset(name: str, version: str, source: str, *, config: dict[str, str]) -> ArtifactStep:
+    """Bind a hash-checked migration without changing the archived artifact identity."""
+    archived = ArtifactStep.adopt(name, version, source, config=config)
+    return apply(
+        name + "-rollout",
+        migrate_cohort,
+        version="2026.10.20",
+        source=archived,
+        output=OUT,
+        hashes={key.removesuffix("_sha256"): value for key, value in config.items()},
+    )
 
 
 class ClosureCohort(StrEnum):
@@ -18,7 +33,7 @@ class ClosureCohort(StrEnum):
 
 def tool_prompt_probe_dataset() -> ArtifactStep:
     """Adopt the paired declaration/serialization diagnostic, separate from policy scores."""
-    return ArtifactStep.adopt(
+    return adopt_closure_dataset(
         user_owned_name("datasets/structure-closure-tool-prompt-probe"),
         "2026.10.13.1",
         "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/tool-prompt-probe-tasks-v1",
@@ -29,7 +44,7 @@ def tool_prompt_probe_dataset() -> ArtifactStep:
 def structure_closure_dataset(cohort: ClosureCohort) -> ArtifactStep:
     """Adopt a verified native-task cohort with its immutable content hashes."""
     if cohort == ClosureCohort.COPY_V1:
-        return ArtifactStep.adopt(
+        return adopt_closure_dataset(
             user_owned_name("datasets/structure-closure"),
             "2026.10.12.1",
             "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-copy-tasks-v1",
@@ -39,7 +54,7 @@ def structure_closure_dataset(cohort: ClosureCohort) -> ArtifactStep:
             },
         )
     if cohort == ClosureCohort.VALUE_CONTROLS_V5:
-        return ArtifactStep.adopt(
+        return adopt_closure_dataset(
             user_owned_name("datasets/structure-closure-value-controls"),
             "2026.10.12.5",
             "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-value-controls-tasks-v5",
@@ -49,7 +64,7 @@ def structure_closure_dataset(cohort: ClosureCohort) -> ArtifactStep:
             },
         )
     if cohort == ClosureCohort.NATIVE_TOOLS_V6:
-        return ArtifactStep.adopt(
+        return adopt_closure_dataset(
             user_owned_name("datasets/structure-closure-native-tools"),
             "2026.10.13.6",
             "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-native-tool-tasks-v6",
@@ -59,7 +74,7 @@ def structure_closure_dataset(cohort: ClosureCohort) -> ArtifactStep:
             },
         )
     if cohort == ClosureCohort.NEAR_BOUNDARY_V7:
-        return ArtifactStep.adopt(
+        return adopt_closure_dataset(
             user_owned_name("datasets/structure-closure-near-boundary"),
             "2026.10.13.7",
             "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-near-boundary-tasks-v7",

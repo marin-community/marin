@@ -8,13 +8,14 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 
+from experiments.datasets.structure_closure import adopt_closure_dataset
 from experiments.post_training.structure_closure.evaluate import build_evaluation, initializer_model
 
 
 @click.command(help=__doc__)
 @rl_build_options
 def main() -> ArtifactStep:
-    data = ArtifactStep.adopt(
+    data = adopt_closure_dataset(
         user_owned_name("datasets/structure-closure-varied"),
         "2026.10.12.4",
         "s3://marin-us-east-02a/marin/users/benfeuer/structure-closure/data/closure-varied-tasks-v4",

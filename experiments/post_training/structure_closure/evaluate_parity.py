@@ -12,7 +12,9 @@ from experiments.post_training.structure_closure.evaluate import build_evaluatio
 
 
 @click.command(help=__doc__)
-@click.option("--parity-uri", required=True, help="Immutable native BFCL-Parity dataset directory.")
+@click.option(
+    "--parity-uri", required=True, help="Immutable BFCL-Parity directory with current task_rollout_spec Parquet rows."
+)
 @click.option("--parity-version", required=True)
 @rl_build_options
 def main(parity_uri: str, parity_version: str) -> ArtifactStep:

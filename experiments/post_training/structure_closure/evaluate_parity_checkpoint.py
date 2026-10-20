@@ -15,7 +15,9 @@ from experiments.post_training.structure_closure.evaluate import build_evaluatio
 @click.option("--checkpoint-uri", required=True, help="Immutable HF-format checkpoint directory.")
 @click.option("--checkpoint-version", required=True)
 @click.option("--manifest-identity", required=True, help="Identity recorded in the model manifest.")
-@click.option("--parity-uri", required=True, help="Immutable native BFCL-Parity dataset directory.")
+@click.option(
+    "--parity-uri", required=True, help="Immutable BFCL-Parity directory with current task_rollout_spec Parquet rows."
+)
 @click.option("--parity-version", required=True)
 @rl_build_options
 def main(
