@@ -111,12 +111,11 @@ A harness does not grade. After `run` returns, the engine grades the rollout wit
 [Grading](#grading)). A harness can attach its own reward to a step with `record(data=...)`. The engine does
 not read it.
 
-### Single-turn completion
+### Assistant prefills
 
-`CompletionHarness` from `rolloutengine.harness.completion` answers a conversation in one model turn.
-It uses the task's answer format and supports both ordinary conversations and assistant prefills. Task
-environments, interactive tools and workspace outputs require a harness that runs those operations.
-The grader can have its own verifier environment and private resources.
+`ShellHarness` supports ordinary conversations and assistant prefills through the same prompt renderer.
+When no interactive tools are available, it finishes after one response. Tasks with tools use its normal
+tool loop. The grader can have its own verifier environment and private resources.
 
 An assistant prefill is the final assistant text event in `ConversationInput.events`. The shared
 `completion_request(task)` renderer leaves it last and inserts any answer-format instruction before it.

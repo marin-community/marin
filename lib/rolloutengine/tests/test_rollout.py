@@ -55,9 +55,18 @@ from taskcompendium.models import (
 from taskcompendium.runtime.output_capture import MAX_OUTPUT_FILES
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
+from verifyit.closure_scoring import ClosureFormat
 from verifyit.grade import grade as verifyit_grade
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
-from verifyit.spec import RUBRIC_LABELS, FunctionCall, JudgeSpec, PredictedActionSpec, StructuredExactSpec, parse_spec
+from verifyit.spec import (
+    RUBRIC_LABELS,
+    FunctionCall,
+    JudgeSpec,
+    PredictedActionSpec,
+    StructureClosureSpec,
+    StructuredExactSpec,
+    parse_spec,
+)
 
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
@@ -3629,3 +3638,46 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one()
     first, unserved = record.rollout.conversations
     assert (len(first.steps), unserved.steps, unserved.prompt_token_ids) == (1, (), (70, 71))
     assert record.rollout.metrics == {"score": 1.0}
+
+
+@pytest.mark.parametrize(
+    "prompt_tokens,response_tokens,text",
+    [((10, 11), (20, 21), "1}"), ((40, 41, 42), (70, 71, 72), " 1 } trailing output")],
+)
+async def test_shell_harness_grades_prefill_with_the_models_own_tokenization(prompt_tokens, response_tokens, text):
+    requests = []
+
+    async def model(request):
+        requests.append(request)
+        return ModelTurn(
+            {"role": "assistant", "content": text},
+            prompt_tokens,
+            response_tokens,
+            tuple(-0.1 for _ in response_tokens),
+            "stop",
+            text="<think>private reasoning</think>" + text,
+        )
+
+    task = arithmetic_task(
+        answer_type=AnswerType.TEXT,
+        context=ConversationInput(
+            events=(
+                TextMessage(role="user", content="Complete the JSON prefix."),
+                TextMessage(role="assistant", content='{"x":'),
+            )
+        ),
+        grader=verifyit_package(
+            StructureClosureSpec(prefix='{"x":', expected='{"x":1}', format=ClosureFormat.JSON, terminal_markers=())
+        ).grader,
+    )
+    engine = RolloutEngine({}, {"shell": ShellHarness(command_timeout=None)})
+    result = await engine.run_task(rollout_spec(task, harness="shell"), model)
+    assert result.grade.reward == 1.0
+    assert len(requests) == 1
+    assert requests[0].messages[-1] == {"role": "assistant", "content": '{"x":'}
+    assert requests[0].prompt_token_ids is None
+    assert requests[0].options["extra_body"] == {"continue_final_message": True, "add_generation_prompt": False}
+    record = result.rollout.conversations[0]
+    assert record.prompt_token_ids == prompt_tokens
+    assert record.response_token_ids == response_tokens
+    assert record.loss_mask == tuple(1 for _ in response_tokens)

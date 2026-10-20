@@ -21,7 +21,6 @@ from taskcompendium.models import (
 
 from rolloutengine.chat import ChatModel
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.completion import CompletionHarness
 from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.models import (
     Continuation,
@@ -187,7 +186,7 @@ async def test_a_response_without_usage_is_a_model_failure():
     )
 
 
-async def test_completion_prefill_reaches_chat_endpoint_as_text_without_pinned_tokens():
+async def test_shell_harness_prefill_reaches_chat_endpoint_as_text_without_pinned_tokens():
     server = ChatServer([completion({"content": "2"})])
     task = arithmetic_task(
         context=ConversationInput(
@@ -200,8 +199,8 @@ async def test_completion_prefill_reaches_chat_endpoint_as_text_without_pinned_t
     )
     model = server.model()
     try:
-        result = await RolloutEngine({}, {"completion": CompletionHarness()}).run_task(
-            rollout_spec(task, harness="completion", trace=TraceMode.MESSAGES), model
+        result = await RolloutEngine({}, {"agent": ShellHarness(command_timeout=None)}).run_task(
+            rollout_spec(task, harness="agent", trace=TraceMode.MESSAGES), model
         )
     finally:
         await model.client.close()
