@@ -13,6 +13,7 @@ for ``taskcompendium.pipeline.source_processing.run_source_pipeline``. SAMPLE/FU
 import hashlib
 import json
 import re
+import subprocess
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -29,9 +30,14 @@ from marin.datakit.download.huggingface import (
     plan_download,
     stream_file_to_fsspec,
 )
+from marin.evaluation.harbor.driver_config import (
+    HARBOR_RUNTIME_PROJECT,
+    harbor_runtime_command,
+)
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.external_dependencies import HARBOR
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
@@ -95,6 +101,9 @@ URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4
 INPUT_OVERRIDES_REVISION = "2"
+
+HARBOR_EXPORTER = Path(__file__).with_name("harbor_hub.py")
+
 
 type RowSelector = Callable[[dict[str, Any], ConversionContext], bool]
 type RowDecoder = Callable[[dict[str, Any], ConversionContext], dict[str, Any]]
@@ -165,6 +174,34 @@ class UrlSource:
         return (self.filename,)
 
 
+@dataclass(frozen=True)
+class HarborHubSource:
+    """Native archives from a pinned Harbor Hub release, parsed by the recipe reader."""
+
+    name: str
+    revision: str
+    read: FileReader
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", self.revision) is None:
+            raise ValueError("Harbor Hub sources require a content digest")
+
+    @property
+    def url(self) -> str:
+        return f"https://hub.harborframework.com/datasets/{self.name}"
+
+    @property
+    def files(self) -> tuple[str, ...]:
+        return ("tasks/*.tar.gz",)
+
+    @property
+    def format(self) -> SourceFormat:
+        return SourceFormat.GENERATED
+
+
+type RecipeSource = HfSource | UrlSource | HarborHubSource
+
+
 def environment_requirements(
     environment: Environment, built: EnvironmentArtifact | None = None
 ) -> EnvironmentRequirements:
@@ -216,18 +253,18 @@ class CurationRecipe:
     """
 
     name: str
-    source: HfSource | UrlSource
+    source: RecipeSource
     convert: Converter
     version: str
     intended_use: IntendedUse
     rubric: str | None = None
     controls: Controls | None = None
-    inputs: Mapping[str, HfSource | UrlSource] = field(default_factory=dict)
+    inputs: Mapping[str, RecipeSource] = field(default_factory=dict)
     grader: Environment | None = None
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
 
     @property
-    def dataset(self) -> HfSource | UrlSource:
+    def dataset(self) -> RecipeSource:
         return self.source
 
     @property
@@ -467,7 +504,9 @@ def review_rubric(pipeline: CurationRecipe) -> ReviewRubric | None:
     return ReviewRubric(id=pipeline.name, version=pipeline.version, criteria=criteria)
 
 
-def source_files(source: HfSource | UrlSource) -> SourceFiles:
+def source_files(source: RecipeSource) -> SourceFiles:
+    if isinstance(source, HarborHubSource):
+        return SourceFiles(source.name, source.revision, source.files, source.format, read=source.read)
     if isinstance(source, HfSource):
         return SourceFiles(
             source.repo,
@@ -553,7 +592,7 @@ def _run_curation(
     )
 
 
-def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
+def download_identity(source: RecipeSource) -> dict[str, Any]:
     """The pinned bytes and shared preparation staged by a source download."""
     if isinstance(source, HfSource):
         return {
@@ -565,6 +604,13 @@ def download_identity(source: HfSource | UrlSource) -> dict[str, Any]:
                 if source.prepare is not None
                 else {}
             ),
+        }
+    if isinstance(source, HarborHubSource):
+        return {
+            "harbor_hub": source.name,
+            "revision": source.revision,
+            "exporter_sha256": hashlib.sha256(HARBOR_EXPORTER.read_bytes()).hexdigest(),
+            "harbor_commit": HARBOR.commit,
         }
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
 
@@ -609,7 +655,7 @@ def pipeline_identity(
 
 @dataclass(frozen=True)
 class DownloadRequest:
-    source: HfSource | UrlSource
+    source: RecipeSource
     output_path: str
 
 
@@ -635,6 +681,20 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
             for task in plan.tasks:
                 source.prepare(task.destination_path, campaign.context)
         return
+    if isinstance(source, HarborHubSource):
+        subprocess.run(
+            harbor_runtime_command(
+                HARBOR_RUNTIME_PROJECT,
+                HARBOR_EXPORTER,
+                "--release",
+                f"{source.name}@{source.revision}",
+                "--output",
+                request.output_path,
+                "--all",
+            ),
+            check=True,
+        )
+        return
     digest = hashlib.sha256()
     destination = StoragePath(request.output_path) / source.filename
     with requests.get(source.url, stream=True, timeout=URL_TIMEOUT) as response:
@@ -648,11 +708,11 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
         raise ValueError(f"{source.url} has SHA-256 {digest.hexdigest()}; expected {source.sha256}")
 
 
-def _download_request(source: HfSource | UrlSource, ctx: StepContext) -> DownloadRequest:
+def _download_request(source: RecipeSource, ctx: StepContext) -> DownloadRequest:
     return DownloadRequest(source, ctx.output_path)
 
 
-def download_step(source: HfSource | UrlSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
+def download_step(source: RecipeSource, campaign: CampaignRuntime) -> ArtifactStep[Artifact]:
     """One shared artifact per distinct set of pinned bytes."""
     identity = hashlib.sha256(canonical_json(download_identity(source)).encode()).hexdigest()[:16]
     return ArtifactStep(
@@ -691,7 +751,7 @@ def _staged_file_overrides(root: str, hashes: Mapping[str, str]) -> dict[str, So
     return {name: SourceFileOverride(str(StoragePath(root) / name), checksum) for name, checksum in hashes.items()}
 
 
-def _staged_input_identity(path: str, source: HfSource | UrlSource) -> dict[str, Any]:
+def _staged_input_identity(path: str, source: RecipeSource) -> dict[str, Any]:
     files = {}
     for logical in staged_files(path, source_files(source)):
         with (StoragePath(path) / logical).open("rb") as stream:
