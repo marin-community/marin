@@ -36,7 +36,7 @@ class DispatchCase:
 DISPATCH_CASES = {
     Mode.EXACT: DispatchCase({"expected": ["The Answer"]}, "the   answer", "other", {}),
     Mode.STRUCTURE_CLOSURE: DispatchCase(
-        {"prefix": '{"a":', "expected": '{"a":1}', "format": "json", "terminal_markers": ["<|eot_id|>"]},
+        {"prefix": '{"a":', "expected": '{"a":1}', "format": "json"},
         "1}",
         "}",
         {},

@@ -16,11 +16,7 @@ from taskcompendium.pipeline.models import ImportRejection, NormalizationChange,
 from taskcompendium.runtime.resources import resource_bytes
 
 
-def structure_closure_task(
-    row: RawRow,
-    *,
-    terminal_markers: tuple[str, ...],
-) -> NormalizedTask | ImportRejection:
+def structure_closure_task(row: RawRow) -> NormalizedTask | ImportRejection:
     """Convert a native row to a conversation with an unfinished assistant message.
 
     The raw row retains historical tokens and native identity for audit.
@@ -47,7 +43,6 @@ def structure_closure_task(
             prefix=extras["prefix"],
             expected=extras["expected"],
             format=ClosureFormat(extras["format"]),
-            terminal_markers=terminal_markers,
         )
     ).grader
     task = TaskSpec.model_validate(

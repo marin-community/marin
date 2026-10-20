@@ -6,7 +6,6 @@
 import json
 
 import pytest
-from verifyit.closure_scoring import ClosureFormat
 from verifyit.json_comparison import NumericTypePolicy
 from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import (
@@ -18,7 +17,6 @@ from verifyit.spec import (
     NumericSpec,
     ScriptSpec,
     Spec,
-    StructureClosureSpec,
     StructuredExactSpec,
 )
 
@@ -77,26 +75,6 @@ def _conversation(task: TaskSpec, content: str) -> ConversationTrace:
 
 def _attempt(task, content, state=None):
     return GradingAttempt(conversation=_conversation(task, content), state=state)
-
-
-@pytest.mark.parametrize("stop_reason,trailing", [("stop", False), ("length", True), (None, True)])
-def test_structure_closure_strips_one_terminal_marker_only_after_normal_stop(stop_reason, trailing):
-    spec = StructureClosureSpec(
-        prefix='{"a":',
-        expected='{"a":1}',
-        format=ClosureFormat.JSON,
-        terminal_markers=("<|eot_id|>", "<|end_of_text|>"),
-    )
-    task = _task(_grader(spec))
-    result = grade_answer(task, GradingAttempt(_conversation(task, "1}<|eot_id|>"), stop_reason=stop_reason))
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
-    assert result.detail["trailing_content"] is trailing
-    assert result.detail["whole_response_success"] is not trailing
-    repeated = grade_answer(task, GradingAttempt(_conversation(task, "1}<|eot_id|><|eot_id|>"), stop_reason=stop_reason))
-    assert repeated.reward == 1.0
-    assert repeated.detail["trailing_content"]
-    assert grade_answer(task, _attempt(task, "")).reward == 0.0
-    assert grade_answer(task, _attempt(task, "}")).reward == 0.0
 
 
 @pytest.mark.parametrize(

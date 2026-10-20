@@ -34,7 +34,7 @@ from verifyit.spec import StructureClosureSpec, parse_spec, render_spec
 def test_structure_closure_roundtrip_preserves_content_and_allows_trailing_output(
     structure_format, prefix, expected, correct, changed
 ):
-    spec = StructureClosureSpec(prefix, expected, structure_format, ("<|eot_id|>", "<|end_of_text|>"))
+    spec = StructureClosureSpec(prefix, expected, structure_format)
     restored = parse_spec(render_spec(spec))
     good = grade_candidate(restored, correct, {})
     trailing = grade_candidate(restored, correct + "\nextra text", {})
@@ -49,8 +49,8 @@ def test_structure_closure_roundtrip_preserves_content_and_allows_trailing_outpu
 
 
 def test_structure_closure_rejects_premature_completion_and_invalid_references():
-    spec = StructureClosureSpec('{"values":[1,', '{"values":[1,2]}', ClosureFormat.JSON, ())
+    spec = StructureClosureSpec('{"values":[1,', '{"values":[1,2]}', ClosureFormat.JSON)
     assert grade_candidate(spec, "2]}", {}).reward == 1.0
     assert grade_candidate(spec, "]}", {}).reward == 0.0
-    malformed = StructureClosureSpec('{"values":[', '{"values":[', ClosureFormat.JSON, ())
+    malformed = StructureClosureSpec('{"values":[', '{"values":[', ClosureFormat.JSON)
     assert grade_candidate(malformed, "1]}", {}).status == Status.INVALID_TASK

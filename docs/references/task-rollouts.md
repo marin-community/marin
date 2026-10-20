@@ -113,24 +113,33 @@ not read it.
 
 ### Assistant prefills
 
-`ShellHarness` supports ordinary conversations and assistant prefills through the same prompt renderer.
-When no interactive tools are available, it finishes after one response. Tasks with tools use its normal
-tool loop. The grader can have its own verifier environment and private resources.
+`PrefillHarness` continues the final assistant text in `ConversationInput.events` once. Register it
+and select it explicitly with `TaskRolloutSpec.harness`:
 
-An assistant prefill is the final assistant text event in `ConversationInput.events`. The shared
-`completion_request(task)` renderer leaves it last and inserts any answer-format instruction before it.
-It sets `extra_body.continue_final_message=True` and `extra_body.add_generation_prompt=False`; the
-transport must support these rendering options. The selected model tokenizes the conversation and
-prefill. No historical tokenizer identity or token sequence is imposed by the task.
+```python
+from rolloutengine.harness.prefill import PrefillHarness
 
-The model returns the generated continuation as its assistant message. Parsed response content can differ
-from raw transport text, for example when reasoning is reported separately. The task's answer format
-extracts the submission, and its grader defines correctness. Structural-closure grading concatenates its
-fixed text prefix with this continuation and scores the first completed outer structure.
+engine = RolloutEngine({}, {"prefill": PrefillHarness()})
+spec = TaskRolloutSpec(
+    task=task, harness="prefill", limits=limits, task_machine=None, verifier_machine=None
+)
+```
 
-Training still records the actual prompt and sampled response tokens with their logprobs through the
-normal model session. Those traces describe the serving model's generation, independently of source
-prompt tokenization. Backends can also use `TraceMode.MESSAGES` when only text and usage are available.
+The task must use a plain-text conversation answer. The harness keeps the assistant prefix last and
+sets `extra_body.continue_final_message=True` and `extra_body.add_generation_prompt=False`. The transport
+must support these rendering options. Ordinary chat rendering does not infer continuation from the last
+message's role.
+
+Final tool schemas can condition the continuation. Interactive tools, tool providers and agent
+capabilities are rejected during preflight. The grader can have its own verifier environment and private
+resources. The model must return the continuation as assistant text: parsed reasoning or tool-call
+channels make the attempt invalid, so parser behavior cannot silently turn a continuation into a normal
+zero reward. Structural-closure grading concatenates its fixed text prefix with this continuation and
+scores the first completed outer structure.
+
+The selected model tokenizes the conversation and prefill. Training records its actual prompt and sampled
+response tokens with their logprobs through the normal model session. Historical token IDs do not constrain
+the task. Backends can use `TraceMode.MESSAGES` when only text and usage are available.
 
 ### Model session
 
