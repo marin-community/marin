@@ -23,22 +23,18 @@ import argparse
 import hashlib
 import json
 import shutil
-from enum import StrEnum
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from huggingface_hub import snapshot_download
 from mlx_lm import load
 from mlx_lm.convert import convert
+from provenance import Recipe, validate_revision, write_manifest
 
 MODEL_FILE = Path(__file__).resolve().parent / "grug_moe_mlx.py"
 GROUP_SIZE = 64
 NON_EXPERT_BITS = 8
 TOOL_PARSER = "json_tools"
-
-
-class Recipe(StrEnum):
-    EIGHT_BIT = "8bit"
-    MIXED_4BIT = "mixed4"
 
 
 EXPERT_BITS = {Recipe.EIGHT_BIT: 8, Recipe.MIXED_4BIT: 4}
@@ -92,26 +88,32 @@ def main() -> None:
     parser.add_argument("--repo", required=True, help="Hugging Face repo of the Grug MoE export")
     parser.add_argument("--revision", required=True, help="commit SHA to convert")
     parser.add_argument("--recipe", required=True, type=Recipe, choices=list(Recipe))
-    parser.add_argument("--work-dir", required=True, type=Path, help="holds src/ and mlx-<recipe>/")
+    parser.add_argument(
+        "--work-dir", required=True, type=Path, help="holds temporary source downloads and mlx-<recipe>/"
+    )
     args = parser.parse_args()
 
-    src = args.work_dir / "src"
+    validate_revision(args.revision)
+    args.work_dir.mkdir(parents=True, exist_ok=True)
     dst = args.work_dir / f"mlx-{args.recipe}"
     assert not dst.exists(), f"{dst} exists; remove it to rebuild"
-    prepare_source(args.repo, args.revision, src)
-    convert(
-        hf_path=str(src),
-        mlx_path=str(dst),
-        quantize=True,
-        q_bits=EXPERT_BITS[args.recipe],
-        q_group_size=GROUP_SIZE,
-        quant_predicate=quant_params,
-        trust_remote_code=True,
-    )
+    with TemporaryDirectory(prefix="source-", dir=args.work_dir) as temporary:
+        src = Path(temporary)
+        prepare_source(args.repo, args.revision, src)
+        convert(
+            hf_path=str(src),
+            mlx_path=str(dst),
+            quantize=True,
+            q_bits=EXPERT_BITS[args.recipe],
+            q_group_size=GROUP_SIZE,
+            quant_predicate=quant_params,
+            trust_remote_code=True,
+        )
     finish_build(dst)
     check_build(dst, args.recipe)
     # Loading the build imports the model file; don't publish the bytecode.
     shutil.rmtree(dst / "__pycache__", ignore_errors=True)
+    write_manifest(dst, repo=args.repo, revision=args.revision, recipe=args.recipe)
 
 
 if __name__ == "__main__":

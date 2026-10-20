@@ -24,8 +24,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from convert import Recipe
-from dump_logprobs import token_id
+from provenance import Recipe, validate_dump
 
 DECISIVE_MARGIN = 0.2
 
@@ -62,7 +61,7 @@ class Summary:
 
 
 def _int_keys(lp_map: dict) -> dict[int, float]:
-    return {token_id(k): lp for k, lp in lp_map.items()}
+    return {int(str(k).removeprefix("token_id:")): lp for k, lp in lp_map.items()}
 
 
 def percentile(values: list[float], q: float) -> float:
@@ -144,10 +143,12 @@ def main() -> None:
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args()
 
+    dump = json.loads(args.dump.read_text())
+    build = validate_dump(dump, model=args.model, recipe=args.recipe, golden=args.golden)
     goldens_list = json.loads(args.golden.read_text())
     goldens = {g["id"]: g for g in goldens_list}
     sliding_window = json.loads((args.model / "config.json").read_text())["sliding_window"]
-    positions = scored_positions(json.loads(args.dump.read_text()), goldens, sliding_window)
+    positions = scored_positions(dump, goldens, sliding_window)
 
     long_ids = {g["id"] for g in goldens_list if len(g["prompt_token_ids"]) > sliding_window}
     groups = {
@@ -160,6 +161,7 @@ def main() -> None:
         f"(source revision {goldens_list[0]['source_revision']})"
     )
     lines, passed = report_lines(groups, cases, GATES[args.recipe], header)
+    lines.extend(["", f"Build SHA256: {build['build_sha256']}", f"Golden SHA256: {dump['golden_sha256']}"])
     args.report.write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
     print(f"\nresult: {'PASS' if passed else 'FAIL'} (report: {args.report})")

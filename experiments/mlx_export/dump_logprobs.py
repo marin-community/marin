@@ -19,6 +19,7 @@ from pathlib import Path
 import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm import load
+from provenance import file_digest, verified_build
 
 FREE_GREEDY_TOKENS = 64
 
@@ -66,7 +67,10 @@ def main() -> None:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
 
+    build = verified_build(Path(args.model))
     prompts = json.loads(args.prompts.read_text())
+    if (build["source_repo"], build["source_revision"]) != (prompts["source_repo"], prompts["source_revision"]):
+        raise ValueError("Prompt fixture belongs to a different source model")
     goldens = {g["id"]: g for g in json.loads(args.golden.read_text())}
     model, tokenizer = load(args.model, trust_remote_code=True)
 
@@ -76,6 +80,7 @@ def main() -> None:
         prompt_ids = list(case["prompt_token_ids"])
         assert golden["prompt_token_ids"] == prompt_ids, case["id"]
         assert golden["source_revision"] == prompts["source_revision"], case["id"]
+        assert golden["source_repo"] == prompts["source_repo"], case["id"]
 
         # vLLM's prompt entry j scores prompt token j (logits at j - 1); its
         # continuation entry k scores generated token k (logits at P - 1 + k).
@@ -100,7 +105,12 @@ def main() -> None:
         )
         print(f"{case['id']}: scored {len(scores)} positions, free greedy {len(free)} tokens")
 
-    dump = {"model": args.model, "source_revision": prompts["source_revision"], "cases": results}
+    dump = {
+        "build": build,
+        "prompts_sha256": file_digest(args.prompts),
+        "golden_sha256": file_digest(args.golden),
+        "cases": results,
+    }
     args.out.write_text(json.dumps(dump) + "\n")
     print(f"wrote {args.out}")
 

@@ -36,43 +36,51 @@ Publish `mixed4` as the `-MLX-4bit` repo. Routed experts hold almost all the par
 attention, the shared expert, embeddings and `lm_head` at 8 bits costs about 0.5 GB. A uniform 4-bit
 build of Snowball failed the short-case gate: p95 probability error 0.193 against a 0.15 limit.
 
-## Build a model
+## Build and qualify a model
 
-Set these once. `REVISION` must be a commit SHA.
+Run the graph from the repository root on a Mac. `MARIN_PREFIX` is the local artifact directory;
+allow about 2.5 times the bf16 model size in free space. The command prints the graph without
+running it. Add `--run` to download the source, submit the GPU reference job, convert the model,
+and gate the result.
 
 ```bash
-REPO=open-athena/Marin-Snowball-67B-A2B-v0.1
-REVISION=e4aa78c7c9729dea7238c2e7d1ac7fa57492e0a6
-WORK=~/mlx-work/snowball            # needs about 2.5x the bf16 size free
-cd experiments/mlx_export
-uv run pytest                       # Mac: the port's unit tests
+export MARIN_PREFIX="$HOME/mlx-work/artifacts"
+uv run python -m experiments.mlx_export.pipeline \
+  --repo open-athena/Marin-Snowball-67B-A2B-v0.1 \
+  --revision e4aa78c7c9729dea7238c2e7d1ac7fa57492e0a6 \
+  --recipe mixed4 --gpus 8 --version 2026.10.20 \
+  --remote-prefix s3://marin-us-east-02a/marin/evals/mlx-export
 ```
 
-1. **Prompts** (Mac, a minute): `uv run python prompts.py --repo $REPO --revision $REVISION --out $WORK/prompts.json`
-2. **Golden** (root env, 8×H100 for a 67B model): from the repo root,
-   ```bash
-   GOLDEN=s3://marin-us-east-02a/marin/evals/mlx-export/<model>/golden_vllm.json
-   uv run python -m experiments.mlx_export.golden_vllm submit --repo $REPO --revision $REVISION \
-     --prompts $WORK/prompts.json --gpus 8 --output $GOLDEN
-   # after the job succeeds; needs CW_KEY_ID and CW_KEY_SECRET
-   uv run python -m experiments.mlx_export.golden_vllm download --output $GOLDEN --dest $WORK/golden_vllm.json
-   ```
-   The job reads private repos with your `HF_TOKEN`. Size `--gpus` to fit the bf16 weights on one node.
-3. **Convert** (Mac, once per recipe):
-   `uv run python convert.py --repo $REPO --revision $REVISION --recipe mixed4 --work-dir $WORK`
-   writes `$WORK/mlx-mixed4` and prints the `grug_moe_mlx.py` SHA for the card.
-4. **Parity** (Mac):
-   ```bash
-   uv run python dump_logprobs.py --model $WORK/mlx-mixed4 --prompts $WORK/prompts.json \
-     --golden $WORK/golden_vllm.json --out $WORK/mlx_mixed4.json
-   uv run python compare_parity.py --dump $WORK/mlx_mixed4.json --golden $WORK/golden_vllm.json \
-     --model $WORK/mlx-mixed4 --recipe mixed4 --report $WORK/parity_mixed4.md
-   ```
-   Exits non-zero on a gate failure. Don't publish a failing build.
-5. **Server** (Mac): `./smoke_server.sh $WORK/mlx-mixed4 $WORK`
-6. **Publish**: fill in `model_card.md` with the report as `README.md` in the build directory, then
-   upload it with the `upload-hf-model` skill. That skill adds the license and the research-artifact
-   warning. Name the repos `<source>-MLX-8bit` and `<source>-MLX-4bit`.
+The graph binds prompts, the bf16 golden reference, the converted model, the MLX logprob dump,
+and the parity report. The golden stage waits for the Iris job to succeed before downloading its
+small JSON output. The remote prefix must be in the GPU cluster's bucket; private models need
+`HF_TOKEN`, and the download needs CoreWeave S3 credentials. Size `--gpus` to fit the bf16 weights
+on one node. Conversion and scoring use this directory's frozen Mac environment.
+
+Use a new `--version` after changing the code, prompt fixture, dependency lock, or vLLM release.
+The artifact fingerprint records these inputs. Conversion downloads into a fresh temporary
+source directory and refuses to overwrite an existing build. After an interrupted conversion,
+remove that failed model artifact directory before retrying.
+
+Each model carries `mlx-build.json`, which records the source repository, full commit SHA,
+recipe, and file hashes. Scoring checks this manifest; comparison rejects a dump from another
+build, recipe, source, or golden reference. The report includes the build and golden hashes.
+These checks establish which inputs were compared; they do not replace the numerical parity gates.
+
+Run the local tests from the repository root:
+
+```bash
+uv run --project experiments/mlx_export --frozen python -m pytest \
+  -c experiments/mlx_export/pyproject.toml --noconftest \
+  experiments/mlx_export/test_grug_moe_mlx.py experiments/mlx_export/test_provenance.py
+```
+
+After parity passes, run `experiments/mlx_export/smoke_server.sh <model-directory> <work-directory>`.
+Fill in `model_card.md` and use the `upload-hf-model` skill to publish the build with its report,
+license, and research-artifact warning. Name the repositories `<source>-MLX-8bit` and
+`<source>-MLX-4bit`. Add publication documents after qualification; changing model files requires
+rebuilding and rerunning parity.
 
 ## Parity gates
 

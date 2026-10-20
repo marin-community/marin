@@ -137,27 +137,30 @@ def run_golden_job(repo: str, revision: str, cases: list, gpus: int, release_tag
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as env:
             env.wait_until_ready()
             url = f"{env.server_url}/completions"
-            goldens = [golden_for_case(url, spec.api_model, case, release_tag, revision) for case in cases]
+            goldens = [
+                {"source_repo": repo, **golden_for_case(url, spec.api_model, case, release_tag, revision)}
+                for case in cases
+            ]
 
     configure_coreweave_s3()
     StoragePath(output).write_text(json.dumps(goldens))
     logger.info("wrote %d goldens to %s", len(goldens), output)
 
 
-def submit(args: argparse.Namespace) -> None:
-    fixture = json.loads(args.prompts.read_text())
+def submit_golden(repo: str, revision: str, prompts: Path, gpus: int, output: str, release_tag: str) -> None:
+    """Submit the reference job and wait for successful output publication."""
+    fixture = json.loads(prompts.read_text())
     assert (
-        fixture["source_repo"] == args.repo and fixture["source_revision"] == args.revision
-    ), f"{args.prompts} was built for {fixture['source_repo']}@{fixture['source_revision']}"
-    release_tag = tomllib.loads(VLLM_GPU_RELEASE.read_text())["release_tag"]
+        fixture["source_repo"] == repo and fixture["source_revision"] == revision
+    ), f"{prompts} was built for {fixture['source_repo']}@{fixture['source_revision']}"
     request = JobRequest(
         name=f"mlx-export-golden-{os.urandom(4).hex()}",
         entrypoint=Entrypoint.from_callable(
             run_golden_job,
-            args=[args.repo, args.revision, fixture["cases"], args.gpus, release_tag, args.output],
+            args=[repo, revision, fixture["cases"], gpus, release_tag, output],
         ),
         resources=ResourceConfig.with_gpu(
-            "H100", count=args.gpus, cpu=64, ram="512g", disk="128g", target_cluster=GPU_CLUSTER
+            "H100", count=gpus, cpu=64, ram="512g", disk="128g", target_cluster=GPU_CLUSTER
         ),
         environment=create_environment(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
@@ -168,7 +171,13 @@ def submit(args: argparse.Namespace) -> None:
     with connect_controller(cluster_name=HUB_CLUSTER) as endpoint:
         with IrisClient.remote(endpoint.url, workspace=MARIN_ROOT, credentials=endpoint.credentials) as client:
             job = FrayIrisClient.from_iris_client(client).submit(request, adopt_existing=False)
-    print(f"submitted {job.job_id} (vLLM {release_tag}); output: {args.output}")
+            job.wait(raise_on_failure=True, stream_logs=True)
+    print(f"completed {job.job_id} (vLLM {release_tag}); output: {output}")
+
+
+def submit(args: argparse.Namespace) -> None:
+    release_tag = tomllib.loads(VLLM_GPU_RELEASE.read_text())["release_tag"]
+    submit_golden(args.repo, args.revision, args.prompts, args.gpus, args.output, release_tag)
 
 
 def download(args: argparse.Namespace) -> None:
