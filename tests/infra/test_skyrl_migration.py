@@ -512,7 +512,7 @@ def test_wheel_audit_accepts_source_edits_and_rejects_different_packaged_content
 def github_fake(
     monkeypatch: pytest.MonkeyPatch, record: dict, cutover_sha: str, destination: Path | None = None
 ) -> dict:
-    remote: dict = {"pulls": [], "issues": {}, "transfers": 0, "interrupt": False}
+    remote: dict = {"pulls": [], "issues": {}, "transfers": 0, "interrupt": False, "rewrite_references": False}
     provenance = {"source": migration.SOURCE, "source_sha": record["source_sha"]}
 
     def api(endpoint: str, *, method: str = "GET", payload: dict | None = None):
@@ -567,6 +567,12 @@ def github_fake(
                 "url": f"https://github.com/{migration.TARGET}/issues/100",
                 "number": 100,
             }
+            if remote["rewrite_references"]:
+                remote["issues"]["body"] = (
+                    remote["issues"]["body"]
+                    .replace("#12", f"{migration.SOURCE}#12")
+                    .replace("#298", f"{migration.SOURCE}#298")
+                )
             remote["transfers"] += 1
             return {"transferIssue": {"issue": dict(remote["issues"])}}
         if "node(id:" in query:
@@ -579,8 +585,10 @@ def github_fake(
     return remote
 
 
-def test_issue_transfer_recovers_after_remote_success_and_lost_response(
-    snapshot_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("rewrite_references", [False, True])
+@pytest.mark.parametrize("human_edit", [False, True])
+def test_issue_transfer_recovers_after_remote_success_and_protects_edits(
+    snapshot_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rewrite_references: bool, human_edit: bool
 ) -> None:
     record = migration.read_json(snapshot_dir / "snapshot.json")
     issue = {
@@ -588,7 +596,11 @@ def test_issue_transfer_recovers_after_remote_success_and_lost_response(
         "node_id": "issue-node",
         "html_url": f"https://github.com/{migration.SOURCE}/issues/3",
         "updated_at": "2026-10-19T00:00:00Z",
-        "body": "Related to #12 and GH-13.",
+        "body": (
+            "Related to #12 and GH-13. Literal `#14`. "
+            f"Already qualified {migration.SOURCE}#15. "
+            "See [upstream #298](https://github.com/NovaSky-AI/SkyRL/pull/298)."
+        ),
     }
     record["issues"] = [issue]
     migration.write_json(snapshot_dir / "snapshot.json", record)
@@ -603,15 +615,26 @@ def test_issue_transfer_recovers_after_remote_success_and_lost_response(
         "repository": {"nameWithOwner": migration.SOURCE},
     }
     remote["interrupt"] = True
+    remote["rewrite_references"] = rewrite_references
     state = tmp_path / "transferred.json"
     with pytest.raises(RuntimeError, match="Lost response"):
         migration.transfer_issues(snapshot_dir, state, 99)
+    if human_edit:
+        remote["issues"]["body"] += "\nHuman clarification."
+        edited = remote["issues"]["body"]
+        with pytest.raises(ValueError, match="body changed"):
+            migration.transfer_issues(snapshot_dir, state, 99)
+        assert remote["issues"]["body"] == edited
+        assert remote["transfers"] == 1
+        return
     migration.transfer_issues(snapshot_dir, state, 99)
     migration.transfer_issues(snapshot_dir, state, 99)
     assert remote["transfers"] == 1
     assert migration.read_json(state)["issue-node"]["destination"].endswith("/issues/100")
     assert f"https://github.com/{migration.SOURCE}/issues/12" in remote["issues"]["body"]
     assert f"https://github.com/{migration.SOURCE}/issues/13" in remote["issues"]["body"]
+    assert "[upstream #298](https://github.com/NovaSky-AI/SkyRL/pull/298)" in remote["issues"]["body"]
+    assert f"Already qualified {migration.SOURCE}#15." in remote["issues"]["body"]
 
 
 @pytest.mark.parametrize("adapted", [False, True])

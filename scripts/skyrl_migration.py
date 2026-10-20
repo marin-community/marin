@@ -47,6 +47,7 @@ AGENT_LABEL = "agent-generated"
 PR_BRANCH_PREFIX = "skyrl-migration/pr-"
 DESTINATION_MARKER = "skyrl-destination"
 DESTINATION_PATTERN = re.compile(r"<!-- " + DESTINATION_MARKER + r": ([0-9a-f]{40}) -->")
+SOURCE_REFERENCE_PATTERN = re.compile(r"(?<![\w/])(?:#|GH-)(\d+)\b")
 LOCAL_CHANGES_PATCH = "skyrl-migration/local-changes.patch"
 WHEEL_RUNTIME_ROOTS = {"cloud", "marinskyrl", "skyrl_train", "skyrl_gym", "chat_templates", "open_mopd_versions.py"}
 
@@ -1015,10 +1016,23 @@ def validate_fresh(record: dict) -> None:
 
 def source_references(body: str) -> str:
     return re.sub(
-        r"(?<![\w/])(?:#|GH-)(\d+)\b",
-        lambda match: f"https://github.com/{SOURCE}/issues/{match[1]}",
+        r"\[[^\]\n]*\]\([^\n)]*\)|" + SOURCE_REFERENCE_PATTERN.pattern,
+        lambda match: match[0] if match[1] is None else f"https://github.com/{SOURCE}/issues/{match[1]}",
         body,
     )
+
+
+def transferred_issue_body_matches(original: str, transferred: str) -> bool:
+    """Accept GitHub's reference qualification while rejecting other body edits."""
+    parts = []
+    cursor = 0
+    for reference in SOURCE_REFERENCE_PATTERN.finditer(original):
+        parts.append(re.escape(original[cursor : reference.start()]))
+        qualified = f"{SOURCE}#{reference[1]}"
+        parts.append(f"(?:{re.escape(reference[0])}|{re.escape(qualified)})")
+        cursor = reference.end()
+    parts.append(re.escape(original[cursor:]))
+    return re.fullmatch("".join(parts), transferred) is not None
 
 
 def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
@@ -1052,7 +1066,7 @@ def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
         if node["repository"]["nameWithOwner"] != TARGET:
             raise ValueError(f"Issue moved to an unexpected repository: {origin}")
         if node["body"] != body:
-            if (node["body"] or "") != (issue["body"] or ""):
+            if not transferred_issue_body_matches(issue["body"] or "", node["body"] or ""):
                 raise ValueError(f"Transferred issue body changed; reconcile manually: {node['url']}")
             gh(f"repos/{TARGET}/issues/{node['number']}", method="PATCH", payload={"body": body})
         state[issue["node_id"]] = {"source": origin, "destination": node["url"]}
