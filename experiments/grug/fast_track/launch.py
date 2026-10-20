@@ -422,6 +422,7 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    temporary_checkpoints_only: bool = False,
     recipe: Recipe = Recipe.BASELINE,
     optimizer_kind: OptimizerKind = OptimizerKind.MUONH,
     attn_res_remat_attention: bool = False,
@@ -557,7 +558,7 @@ def build_h100_ladder_run(
         log_every=1,
         z_loss_weight=z_loss_weight,
         watch_mode=WatchMode.INLINE,
-        save_checkpoints=save_checkpoints,
+        save_checkpoints=save_checkpoints or temporary_checkpoints_only,
         expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
         offload_opt_state=rung.hero_memory,
@@ -599,8 +600,11 @@ def build_h100_ladder_run(
     ]
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
-        permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
+        # temporary_checkpoints_only: the forced final checkpoint also lands on TTL storage.
+        permanent_checkpoint_path = (
+            temporary_checkpoint_path if temporary_checkpoints_only else prefix_join(ctx.output_path, "checkpoints")
+        )
         trainer = TrainerConfig(
             id=run_id,
             seed=seed,
@@ -851,6 +855,12 @@ def _layer_skip_rule(
     help="Save a permanent final checkpoint to S3 (off by default; also enables recovery).",
 )
 @click.option(
+    "--temporary-checkpoints-only",
+    is_flag=True,
+    default=False,
+    help="Enable recovery checkpoints on region-local TTL storage only, final checkpoint included (no permanent copy).",
+)
+@click.option(
     "--optimizer",
     "optimizer_kind",
     type=click.Choice([o.value for o in OptimizerKind]),
@@ -1081,6 +1091,7 @@ def main(
     no_eval: bool,
     dense: bool,
     save_checkpoints: bool,
+    temporary_checkpoints_only: bool,
     recipe: str,
     optimizer_kind: str,
     attn_res_remat_attention: bool,
@@ -1137,6 +1148,7 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        temporary_checkpoints_only=temporary_checkpoints_only,
         recipe=Recipe(recipe),
         optimizer_kind=OptimizerKind(optimizer_kind),
         attn_res_remat_attention=attn_res_remat_attention,
