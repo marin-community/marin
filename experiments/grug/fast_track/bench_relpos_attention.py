@@ -10,15 +10,13 @@ Prints per-call fwd and fwd+bwd times and the max deviation of the native path f
     python -m experiments.grug.fast_track.bench_relpos_attention
 """
 
-import importlib
-import sys
 import time
 
 import jax
 import jax.numpy as jnp
 from levanter.grug.attention import AttentionMask, attention
 from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds
-from levanter.grug.attention._inkling_relpos import band_to_tiles, compact_to_band
+from levanter.grug.attention._inkling_relpos import compact_to_band
 
 BATCH, SEQ, Q_HEADS, HEAD_DIM, REL_EXTENT = 16, 4096, 48, 128, 512
 ITERATIONS = 20
@@ -76,31 +74,13 @@ def _max_deviation(name: str, actual, expected) -> None:
         print(f"DIFF {name} {label}: max-normalized {rel:.3e}", flush=True)
 
 
-def _variant(spec: str) -> None:
-    """Time one forward variant in this process: ``prefetch,load`` flags of the Inkling SM100 forward."""
-    # The CUDA-only kernel module imports cutlass at import time.
-    K = importlib.import_module("levanter.grug.attention._fa4_cute_inkling_fwd_sm100").InklingFlashAttentionForwardSm100
-
-    prefetch_runs, load, tiles = spec.split(",")
-    prefetch, load, tiles = int(prefetch_runs), load == "1", tiles == "1"
-    K.PREFETCH_RUNS, K.LOAD_BAND = prefetch, load
-    importlib.import_module("levanter.grug.attention._fa4_cute_backend").SM100_FORWARD_BAND_TILES = tiles
-    _run(f"MLA 48/48 sm100 band512 prefetch={prefetch} load={load} tiles={tiles}", "gpu_fa4_cute_sm100", Q_HEADS, True)
-
-
 def main() -> None:
-    if len(sys.argv) > 1:
-        _variant(sys.argv[1])
-        return
     print(jax.devices(), flush=True)
     _run("S6 GQA 48/6 sm100 noband", "gpu_fa4_cute_sm100", 6, False)
     _run("MHA 48/48 sm100 noband", "gpu_fa4_cute_sm100", Q_HEADS, False)
     _run("MHA 48/48 pallas noband", "gpu_pallas_fa4", Q_HEADS, False)
     pallas_out, pallas_grads = _run("MLA 48/48 pallas band512", "gpu_pallas_fa4", Q_HEADS, True)
     native_out, native_grads = _run("MLA 48/48 sm100 band512", "gpu_fa4_cute_sm100", Q_HEADS, True)
-    band = _inputs(Q_HEADS)[3]
-    tile = jax.jit(band_to_tiles)
-    print(f"TIME band_to_tiles copy: {_milliseconds(tile, band):.2f} ms", flush=True)
     _max_deviation("sm100 vs pallas", (native_out, *native_grads), (pallas_out, *pallas_grads))
 
 

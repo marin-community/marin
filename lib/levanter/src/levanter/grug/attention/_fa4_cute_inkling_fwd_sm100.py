@@ -7,17 +7,19 @@
 
 Imported only by the SM100 forward launcher, after the optional CUDA-only modules are available.
 
-``aux_tensors`` is ``(lower_bounds, valid, q_offset, band)`` with the band viewed as ``[S, W, Hq, B]`` over its tiled physical
-layout (``_inkling_relpos.band_to_tiles``). The forward S tile is ``Q @ K.T`` read from TMEM with 32x32b loads,
-so a thread holds one query row and its ``tile_n`` consecutive key columns; in the tiled layout a warp's rows
-of one 8-column run are contiguous, so the band slice is read with coalesced 128-bit loads.
+``aux_tensors`` is ``(lower_bounds, valid, q_offset, band)`` with the band in kernel layout ``[S, W, Hq, B]``.
+The forward S tile is ``Q @ K.T`` read from TMEM with 32x32b loads, so a thread holds one query row and its
+``tile_n`` consecutive key columns; the in-band slice of that row is one contiguous run of ``tile_n`` band
+entries, read with 128-bit loads.
 
-``softmax_step`` is upstream flash-attn-4 4.0.0b28's with the score-mod call replaced by the band:
+``softmax_step`` is upstream flash-attn-4 4.0.0b28's (SM100 path; the SM103 ``ld.red`` row-max branch is dropped)
+with the score-mod call replaced by the band:
 
-* The band slice is loaded into registers *before* the softmax warps wait for the S tile, so its global-memory
-  latency overlaps the QK^T MMA instead of stalling the softmax critical path.
 * ``score_mod`` stays ``None``, so the softmax keeps the upstream folded scale (``exp2(S * scale * log2 e)``)
   and tiles outside the band do no extra work; in-band tiles add ``band / scale`` to the raw scores.
+* The band row is held as packed bf16 pairs and added chunk by chunk as S comes out of TMEM, which keeps the
+  softmax warps inside their 192-register budget. Loading it before the S wait (to hide its latency) spills and
+  measured slower at every depth tried.
 """
 
 import math
@@ -30,19 +32,14 @@ from flash_attn.cute.flash_fwd_sm100 import FlashAttentionForwardSm100
 from flash_attn.cute.softmax import SoftmaxSm100
 from flash_attn.cute.utils import AuxData
 
-from levanter.grug.attention._inkling_relpos import BAND_TILE_COLUMNS, REL_BIAS_BLOCK
+from levanter.grug.attention._inkling_relpos import REL_BIAS_BLOCK
 
 _LOG2_E = math.log2(math.e)
+# bf16 band columns per 128-bit load.
+_RUN = 8
 
 
 class InklingFlashAttentionForwardSm100(FlashAttentionForwardSm100):
-    # Diagnosis switches (temporary).
-    # 8-column runs of the band row loaded before the S wait (the rest after it).
-    PREFETCH_RUNS = 0
-    LOAD_BAND = True
-    # Set by the launcher: the band arrives in band_to_tiles' layout (else the plain [S, W, Hq, B] band).
-    band_tiles = True
-
     @cute.jit
     def softmax_step(
         self,
@@ -91,44 +88,13 @@ class InklingFlashAttentionForwardSm100(FlashAttentionForwardSm100):
         rel_extent = width - REL_BIAS_BLOCK
         band_tile = n_block - m_block * (self.m_block_size // self.n_block_size) + rel_extent // self.n_block_size
         in_band = cute.elem_less(Int32(-1), band_tile) and cute.elem_less(band_tile, width // self.n_block_size)
-        # The band row as packed bf16 pairs: a bf16 register tensor would take one 32-bit register per element.
-        rBand = cute.make_rmem_tensor((self.n_block_size // 2,), cutlass.Uint32)
-        runs = self.n_block_size // BAND_TILE_COLUMNS
-        if const_expr(self.PREFETCH_RUNS > 0):
-            self._load_band(
-                rBand,
-                band,
-                in_band,
-                band_tile,
-                thr_tmem_load,
-                tScS,
-                batch_idx,
-                head_idx,
-                m_block,
-                0,
-                self.PREFETCH_RUNS,
-            )
-
         # Wait for Si
         pipeline_s_p_o.consumer_wait_w_index_phase(stage, mma_si_consumer_phase)
         tSrS_t2r = cute.make_rmem_tensor(thr_tmem_load.partition_D(tScS).shape, self.qk_acc_dtype)
-        if const_expr(self.PREFETCH_RUNS < runs):
-            self._load_band(
-                rBand,
-                band,
-                in_band,
-                band_tile,
-                thr_tmem_load,
-                tScS,
-                batch_idx,
-                head_idx,
-                m_block,
-                self.PREFETCH_RUNS,
-                runs,
-            )
         if in_band:
             # The softmax scales raw scores by scale * log2(e); adding band / scale yields S * scale + band.
             inv_scale = Float32(_LOG2_E) / softmax.scale_log2
+            rBand = self._load_band_row(band, band_tile, thr_tmem_load, tScS, batch_idx, head_idx, m_block)
             # Read S in its TMEM-load chunks and add each band chunk as it lands, so the band registers free up
             # while the S row fills (128 + 64 live registers would exceed the softmax warps' budget).
             num_chunks = cute.size(tStS_t2r.shape[2])
@@ -196,34 +162,22 @@ class InklingFlashAttentionForwardSm100(FlashAttentionForwardSm100):
         return mma_si_consumer_phase ^ 1, sm_stats_producer_phase ^ 1, s0_s1_sequence_phase ^ 1
 
     @cute.jit
-    def _load_band(
-        self, rBand, band, in_band, band_tile, thr_tmem_load, tScS, batch_idx, head_idx, m_block, first_run, end_run
-    ):
-        """Load runs ``[first_run, end_run)`` of this thread's query row of the in-band key tile into ``rBand``."""
-        if const_expr(self.LOAD_BAND):
-            if in_band:
-                query_idx = cutlass.min(
-                    m_block * self.m_block_size + thr_tmem_load.partition_D(tScS)[0][0],
-                    cute.size(band, mode=[0]) - 1,
-                )
-                # The band can exceed 2**31 elements: offset its (batch, head) plane in Int64.
-                band_bh = band[None, None, cutlass.Int64(head_idx), cutlass.Int64(batch_idx)]
-                # Column modes are (8-column run, run index): one run is 16 contiguous bytes, and the 32 lanes'
-                # rows of a run are adjacent (the tiled layout), so each load is one coalesced 512-byte access.
-                runs_per_tile = self.n_block_size // BAND_TILE_COLUMNS
-                pairs_per_run = BAND_TILE_COLUMNS // 2
-                for c in cutlass.range_constexpr(first_run, end_run):
-                    if const_expr(self.band_tiles):
-                        run = band_bh[query_idx, (None, band_tile * runs_per_tile + c)]
-                    else:
-                        run = cute.local_tile(
-                            band_bh[query_idx, None], (BAND_TILE_COLUMNS,), (band_tile * runs_per_tile + c,)
-                        )
-                    cute.autovec_copy(
-                        cute.make_tensor(
-                            cute.recast_ptr(run.iterator, dtype=cutlass.Uint32), cute.make_layout(pairs_per_run)
-                        ),
-                        cute.local_tile(rBand, (pairs_per_run,), (c,)),
-                    )
-        else:
-            rBand.fill(0)
+    def _load_band_row(self, band, band_tile, thr_tmem_load, tScS, batch_idx, head_idx, m_block):
+        """This thread's query row of the in-band key tile, as packed bf16 pairs (``tile_n / 2`` x u32).
+
+        A bf16 register tensor would take one 32-bit register per element and spill next to the fp32 S row.
+        """
+        query_idx = cutlass.min(
+            m_block * self.m_block_size + thr_tmem_load.partition_D(tScS)[0][0], cute.size(band, mode=[0]) - 1
+        )
+        # The band can exceed 2**31 elements: offset its (batch, head) plane in Int64.
+        band_row = band[None, None, cutlass.Int64(head_idx), cutlass.Int64(batch_idx)][query_idx, None]
+        rBand = cute.make_rmem_tensor((self.n_block_size // 2,), cutlass.Uint32)
+        runs_per_tile = self.n_block_size // _RUN
+        for c in cutlass.range_constexpr(runs_per_tile):
+            run = cute.local_tile(band_row, (_RUN,), (band_tile * runs_per_tile + c,))
+            cute.autovec_copy(
+                cute.make_tensor(cute.recast_ptr(run.iterator, dtype=cutlass.Uint32), cute.make_layout(_RUN // 2)),
+                cute.local_tile(rBand, (_RUN // 2,), (c,)),
+            )
+        return rBand
