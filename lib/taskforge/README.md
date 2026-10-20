@@ -106,9 +106,9 @@ regex with continuations off and re-asks once if the rewrite fails `parse`.
 
 ## Task specs
 
-A built task is a TaskCompendium `TaskSpec` and the `LoweredTaskSpec` that says how it runs.
-`spec.draft.assemble` builds the semantic task and `spec.draft.lower` alone builds the lowered
-record, so a move of either is a single-site change.
+A built task is a TaskCompendium `TaskSpec` and the RolloutEngine `TaskRolloutSpec` that says how it
+runs. `spec.draft.assemble` builds the semantic task and `spec.draft.lower` alone builds the rollout
+spec, so a move of either is a single-site change.
 
 - `spec.draft.assemble(task_id, instruction, answer_type, answer_format, grader, source, *,
   environment, files, output_paths, system, final_tools, tags) -> TaskSpec`. `environment` is
@@ -119,15 +119,24 @@ record, so a move of either is a single-site change.
   `grader` is a `GraderPackage` from `answer_grader(spec)` (a verifyit mode graded in process, or
   in a verifier machine given `environment=`), `python_grader(script, config, environment=,
   answer_path=, timeout=)` (`python3 /tests/grade.py` in a verifier machine) or
-  `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`.
+  `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`. RolloutEngine grades an
+  LLM judge (`judge_grader`) on the host through the judge service of `TaskRolloutSpec.judge_connection`
+  or `VERIFYIT_JUDGE_BASE_URL`, with no verifier machine, so its `RolloutEngine.check` fails on a host
+  that has neither.
   `grader_environment(task_image)` is the verifier machine's environment: the task image, or
   `sandbox.images.GRADER_BASE_IMAGE` for a task without one.
-- `spec.draft.lower(task, *, host, task_machine, verifier_machine, session, factories)` runs
+- `spec.draft.lower(task, *, host, task_machine, verifier_machine, limits, factories)` runs
   each machine on `host_requirements` for `factories`: with the local backend, the grader base image
   and package machines run there; without it, a package machine runs on the grader base image. It
   picks the host's container backend for an image, the local backend for Linux processes without
-  one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment
-  takes a verifier machine; no other grader does.
+  one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment,
+  other than a judge, takes a verifier machine; no other grader does. `limits` is a `RolloutLimits`
+  from `rollout_limits(...)`, which sets no token budget. The spec names the harness `SHELL_HARNESS`,
+  and `lower` rejects what `RolloutEngine.check` rejects (`draft.check`).
+- `spec.draft.rollout_engine(factories, *, command_timeout)` is the `RolloutEngine` every Taskforge
+  rollout runs on: the factories and RolloutEngine's `ShellHarness(command_timeout=...)` registered as
+  `SHELL_HARNESS`. The shell command timeout belongs to the harness registration, not to the spec, and
+  each run passes its model: `engine.run_task(spec, model)` returns a `GradedRollout`.
 - `spec.controls.Control` is one labeled candidate submission (`kind`, `category`, `concern`,
   `author`, a `Transcript` or `Workspace` payload, an `Expectation`). `concern` is `reference`,
   `acceptance`, `extraction` or `shortcut`, and the concern a control may carry follows its
@@ -137,8 +146,8 @@ record, so a move of either is a single-site change.
 - `sandbox.factories.machine_factories(where, controller_url)` returns the factories for
   `RolloutEngine`, keyed by shellbox `Backend` value: ShellSim plus Docker on a laptop,
   ShellSim plus gVisor on Iris, plus the local backend for lock-only graders when bubblewrap works
-  in the Iris task. Before a trial starts, `task_refusals(lowered, factories)` passes each machine of
-  a lowered task to its factory's `check_environment` and lists a typed refusal, with the factory's
+  in the Iris task. Before a trial starts, `task_refusals(spec, factories)` passes each machine of
+  a `TaskRolloutSpec` to its factory's `check_environment` and lists a typed refusal, with the factory's
   message, for each machine without a factory or rejected by one. `warm_local_python(factories)`
   builds the local backend's bare CPython environment in a background thread, so a coordinator that
   calls it once at start spares its first wave of local machines the five-second build; the build
@@ -184,9 +193,10 @@ own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each a
 
 `llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
 the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
-and the call's usage with empty token ids; the rollout model requests neither token ids nor logprobs.
-Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage against the session's
-token budget. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
+and the call's usage with empty token ids; the rollout model requests neither token ids nor logprobs,
+and refuses a request that carries them (a `ModelRequest.continuation` or pinned prompt ids).
+Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage against the attempt's
+token budget, which Taskforge leaves unset. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
 
@@ -248,7 +258,7 @@ with its key digest and cache status, and its model and tool calls carry its nam
 build without a ledger records nothing.
 
 A step uses the host through `sandbox_effects`: `build_machine` prepares a machine as a task attempt
-would, `grade_candidate` grades a candidate reply and workspace through `RolloutEngine.run`, and
+would, `grade_candidate` grades a candidate reply and workspace through `RolloutEngine.run_task`, and
 `publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
 first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
 cause chain, even one the program wrapped, so the caller retries or abandons the workpiece instead of
@@ -473,19 +483,26 @@ outcome keeps the first lowering, and the probe records no evidence. A verifier 
 back, and a package machine, which runs on the local backend alone, is not probed: the fallback only
 ever moves the grader-base CPython between the two backends that run it, never the declared machine.
 
-`stage50_validate.trials.run_trials(lowered, plan, settings, model)` runs k trials of a
-`LoweredTaskSpec` through `RolloutEngine`. Each attempt runs on
-`model.for_step("<kind>/<trial>/<attempt>")`, so a `GlmRolloutModel` records and routes every trial
-attempt under its own step. `TrialPlan.deadlines` and `EngineSettings`
-replace the builder's session limits, and `task_digest(lowered)` hashes what runs, answer format
-included. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
-`stage50_validate.classify.classify` is the only failure classifier. Every trial runs under the
-engine's messages trace (`EngineSettings.apply`): a trial is graded, never trained on, so the engine
-does not hold its turns to exact tokens, and an attempt's `TRIAL` span counts its tokens from each
-turn's `usage`. A trial is attempted again for a retryable cause;
+`stage50_validate.trials.run_trials(spec, plan, settings, model)` runs k trials of a
+`TaskRolloutSpec` through `EngineSettings.engine()`, the `RolloutEngine` whose shell harness has
+`EngineSettings.command_timeout`. Each attempt runs on `model.for_step("<kind>/<trial>/<attempt>")`, so
+a `GlmRolloutModel` records and routes every trial attempt under its own step. `TrialPlan.deadlines`
+and `EngineSettings` replace the builder's limits. The `TRIAL` span's `input_hash` is
+`task_digest(spec, command_timeout)`, the sha256 of Taskforge's own record of what the trial ran
+(`trial_record`): a JSON object of the task (answer format included), the task and verifier machine
+selections, the effective `RolloutLimits` and the command timeout, so it does not follow the shape of
+the engine's spec. Each trial is `Graded` or `Ungraded` with one typed `Cause`, and
+`stage50_validate.classify.classify` is the only failure classifier: an interruption maps by its
+operation (`start`, `prepare`, `model`, `advance`, `grade`) unless its original error names a cause, and
+an `attempt` interruption, the attempt deadline, is `ATTEMPT_TIMEOUT` even when the harness ended after
+the deadline. Every trial runs under the engine's messages trace (`EngineSettings.apply`) with no token
+budget: a trial is graded, never trained on, so the engine does not hold its turns to exact tokens, and
+an attempt's `TRIAL` span counts its tokens from each turn's `usage` across the rollout's conversations.
+The attempt file holds the outcome, its grade and the whole `Rollout`. A trial is attempted again for a
+retryable cause;
 `TrialPlan.first_attempt` numbers attempts after the ones on disk, so a re-entered trial continues
 where it stopped. `stage50_validate.evidence.Evidence(outcomes).reward_stats(kind)` totals the graded
-trials. `stage50_validate.controls.replay(lowered, controls, plan, settings)` replays each control as
+trials. `stage50_validate.controls.replay(spec, controls, plan, settings)` replays each control as
 one `CONTROL` trial named by its id.
 
 ## Testing
