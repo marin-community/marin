@@ -73,9 +73,10 @@ own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each a
 
 `llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
 the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
-and the call's usage with empty token ids; the rollout model requests neither token ids nor logprobs.
-Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage against the session's
-token budget. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
+and the call's usage with empty token ids; the rollout model requests neither token ids nor logprobs,
+and refuses a request that carries them (a `ModelRequest.continuation` or pinned prompt ids).
+Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage against the attempt's
+token budget, which Taskforge leaves unset. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
 
