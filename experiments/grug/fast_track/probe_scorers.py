@@ -84,7 +84,7 @@ DIRTY_WEB_SOURCES = frozenset({"nemotron_cc_v2/medium_quality", "nemotron_cc_v2_
 
 @dataclass(frozen=True)
 class _SourceSetScorer:
-    """Score 1 for a document from one of ``sources`` and 0 otherwise; the tie hash orders each group."""
+    """Score ``sign`` for a document from one of ``sources`` and 0 otherwise; the tie hash orders each group."""
 
     sources: frozenset[str]
     sign: float
