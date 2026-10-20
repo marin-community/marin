@@ -61,19 +61,22 @@ CUT_OFF = StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION
 
 
 def evaluated(
-    run_id: str, status: Outcome, reward: float | None, *turns: dict, failure=None
+    run_id: str, status: Outcome, reward: float | None, *turns: dict, failure=None, task_id: str | None = None
 ) -> tuple[TaskSpec, GradedRollout]:
-    """A rollout of the arithmetic task whose policy produced ``turns``, graded with ``status`` and ``reward``."""
+    """A rollout of an arithmetic task whose policy produced ``turns``, graded with ``status`` and ``reward``.
+
+    Each rollout has its own task unless ``task_id`` names a task that other rollouts share.
+    """
     steps = tuple(RolloutStep(ModelTurn(turn, (), (), None, "stop"), Transition(done=False), 0, ()) for turn in turns)
     prompt = {"role": "user", "content": "What is six plus six?"}
     conversation = ConversationRecord((prompt, *turns), (), (), (), None, steps)
     rollout = Rollout(run_id, (conversation,), "stop", failure=failure)
-    return arithmetic_task(id=f"task-{run_id}"), GradedRollout(rollout, GradeResult(status, reward))
+    return arithmetic_task(id=task_id or f"task-{run_id}"), GradedRollout(rollout, GradeResult(status, reward))
 
 
-def loop(run_id: str) -> tuple[TaskSpec, GradedRollout]:
+def loop(run_id: str, task_id: str | None = None) -> tuple[TaskSpec, GradedRollout]:
     turn = {"role": "assistant", "tool_calls": [LOOKUP_CALL]}
-    return evaluated(run_id, Outcome.SUBMISSION_FAILURE, None, turn, turn)
+    return evaluated(run_id, Outcome.SUBMISSION_FAILURE, None, turn, turn, task_id=task_id)
 
 
 def wrong(run_id: str, answer: str = "13") -> tuple[TaskSpec, GradedRollout]:
@@ -204,10 +207,19 @@ def test_the_ideas_of_several_shards_merge_again(ctx):
 
 
 def test_a_rollout_whose_reply_stays_invalid_gives_no_ideas_and_is_counted(ctx):
-    result = analyze(ctx, [loop("loop"), wrong("cut", "cut off")])
+    result = analyze(ctx, [loop("loop-1"), loop("loop-2"), wrong("cut", "cut off")])
 
-    assert names_and_evidence(result.results) == [(STOP_LOOPS.name, ["loop"])]
+    assert names_and_evidence(result.results) == [(STOP_LOOPS.name, ["loop-1", "loop-2"])]
     assert result.counters[ROLLOUTS_WITHOUT_IDEAS] == 1
+
+
+def test_an_idea_needs_rollouts_of_two_tasks_unless_one_task_failed(ctx):
+    samples = [loop(f"sample-{i}", task_id="task-a") for i in range(3)]
+
+    ideas = analyze(ctx, [*samples, wrong("wrong-b"), wrong("wrong-c")]).results
+
+    assert names_and_evidence(ideas) == [(CHECK_WORK.name, ["wrong-b", "wrong-c"])]
+    assert names_and_evidence(analyze(ctx, samples).results) == [(STOP_LOOPS.name, [f"sample-{i}" for i in range(3)])]
 
 
 def test_no_failed_rollout_needs_no_model_call(ctx):
@@ -230,11 +242,14 @@ def test_the_rollout_shows_the_tools_that_the_task_gave_and_a_malformed_tool_cal
 
 def test_a_merge_samples_again_after_a_cut_off_reply():
     analyst = Analyst(failed_merges=2)
-    ideas = [MaybeIdea(STOP_LOOPS, frozenset({"a"})), MaybeIdea(STOP_LOOPS, frozenset({"a", "b"}))]
+    ideas = [
+        MaybeIdea(STOP_LOOPS, frozenset({"a"}), frozenset({"task-a"})),
+        MaybeIdea(STOP_LOOPS, frozenset({"a", "b"}), frozenset({"task-a", "task-b"})),
+    ]
 
     [merged] = merge_ideas(ideas, make_client=lambda: analyst, max_new_ideas=8, policy=LLMPolicy())
 
-    assert (merged.idea.name, merged.num_rollouts, len(analyst.requests)) == (STOP_LOOPS.name, 2, 3)
+    assert (merged.idea.name, merged.num_rollouts, merged.num_tasks, len(analyst.requests)) == (STOP_LOOPS.name, 2, 2, 3)
 
 
 def test_a_merged_capability_cannot_give_its_member_ids_as_behaviors():
