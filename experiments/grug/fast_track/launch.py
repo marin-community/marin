@@ -439,6 +439,8 @@ def build_h100_ladder_run(
     grad_accum_microbatches: int = 1,
     checkpoint_keep: tuple[tuple[int, int | None], ...] = (),
     stop_after_steps: int | None = None,
+    nodes: int | None = None,
+    expert_axis_size: int | None = None,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -452,6 +454,9 @@ def build_h100_ladder_run(
     ``collective_overlap_limit`` overrides XLA's concurrent-collective limit (None: the mode default).
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
+    ``nodes`` overrides the rung's node count. ``expert_axis_size`` (default: every device) shards the experts over
+    that many devices and replicates them (data parallel, ``replica_dcn``) over the rest, e.g. 8 for expert
+    parallelism within each H100 node over NVLink and data parallelism across nodes.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -459,6 +464,8 @@ def build_h100_ladder_run(
         raise ValueError("wandb_project must not be empty")
 
     rung = _h100_ladder_rung(size)
+    if nodes is not None:
+        rung = dataclasses.replace(rung, nodes=nodes)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
     if recipe is Recipe.KMA:
         model = _kma_model(model)
@@ -474,12 +481,13 @@ def build_h100_ladder_run(
         if master_param_mode == MasterParamMode.FP32_PINNED_HOST
         else "params=float32,compute=bfloat16,output=bfloat16"
     )
-    expert_axis_size = 1 if dense else rung.global_device_count
-    if rung.global_device_count % (expert_axis_size * (1)) != 0:
+    if expert_axis_size is None:
+        expert_axis_size = 1 if dense else rung.global_device_count
+    if rung.global_device_count % expert_axis_size != 0:
         raise ValueError(
-            f"expert_axis ({expert_axis_size}) * replica_axis ({(1)}) must divide "
-            f"global_device_count ({rung.global_device_count})"
+            f"expert_axis_size ({expert_axis_size}) must divide global_device_count ({rung.global_device_count})"
         )
+    replica_axis_size = 1 if dense else rung.global_device_count // expert_axis_size
 
     # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
     # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
@@ -536,7 +544,7 @@ def build_h100_ladder_run(
         watch_mode=WatchMode.INLINE,
         save_checkpoints=save_checkpoints,
         expert_axis_size=expert_axis_size,
-        replica_axis_size=(1),
+        replica_axis_size=replica_axis_size,
         offload_opt_state=rung.hero_memory,
         master_param_mode=master_param_mode,
         ema_beta=ema_beta,
@@ -990,6 +998,19 @@ def _layer_skip_rule(
     help="Stop at this step without changing the schedule's length (e.g. a probe-only job resumed at that step).",
 )
 @click.option(
+    "--nodes",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Nodes for the run (default: the rung's; H100 rungs use one 8-GPU node).",
+)
+@click.option(
+    "--expert-axis-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Devices the experts are sharded over (default: all); the rest replicate them as data parallel "
+    "(8 with --nodes 2: expert parallel within each H100 node, data parallel across nodes).",
+)
+@click.option(
     "--grad-accum",
     "grad_accum_microbatches",
     default=1,
@@ -1072,6 +1093,8 @@ def main(
     grad_accum_microbatches: int,
     checkpoint_keep: str,
     stop_after_steps: int | None,
+    nodes: int | None,
+    expert_axis_size: int | None,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -1126,6 +1149,8 @@ def main(
         grad_accum_microbatches=grad_accum_microbatches,
         checkpoint_keep=tuple(_keep_policy(entry) for entry in checkpoint_keep.split(",") if entry),
         stop_after_steps=stop_after_steps,
+        nodes=nodes,
+        expert_axis_size=expert_axis_size,
     )
 
 
