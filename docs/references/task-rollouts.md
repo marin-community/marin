@@ -663,3 +663,24 @@ It uses the prepared repository environment (including Verifyit, pytest and type
 source images. It exercises conversion, tool bindings, capture and grading; it does not build
 images or test inference transport. The host must permit bubblewrap namespaces and the
 agent/grader user separation. It runs locally until that requirement is established in CI.
+
+## SkyRL group baselines and step-wise outcomes
+
+SkyRL group estimators compute each prompt group's baseline from its final,
+baseline-eligible responses. Rows marked `exclude_from_baseline` receive zero
+outcome advantage. Groups below the estimator's eligible minimum, or whose
+eligible reward range is at most `1e-6`, also receive zero outcome advantage.
+Group-estimator training requires at least two samples per prompt; generation
+can use one. `rloo_n` additionally enforces its configured eligible minimum.
+
+Step-wise training estimates the outcome on final responses, then applies that
+trajectory's outcome to every intermediate step's own response tokens. An
+intermediate six-token step receives its outcome on all six tokens even if the
+final step has two tokens. Token-varying estimators such as GAE are rejected for
+this mode. REINFORCE++ retains token whitening. Buffer pass rates and dynamic
+sampling count final trial rows; dynamic sampling omits baseline-excluded rows.
+
+PBS edit shaping and loop credit are added after outcome estimation and batch
+normalization. PBS contributes a bounded terminal bonus to the trained
+objective. Policy training with PBS credit requires token-level loss;
+teacher-only top-K training uses its teacher objective.

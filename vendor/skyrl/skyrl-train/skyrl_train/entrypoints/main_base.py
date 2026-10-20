@@ -46,6 +46,8 @@ from marinskyrl.runtime_options import (
 from marinskyrl.resource_locator import RolloutModelLoading
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
 
+from skyrl_train.group_admission import GroupAdvantageInvariant, validate_group_baseline
+
 if TYPE_CHECKING:
     from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
     from skyrl_train.trajectory_runners.base import TrajectoryRunner
@@ -735,6 +737,8 @@ def run_ray_driver(
     if cfg.get("terminal_bench_config") is not None:
         HarborTaskSettings.from_config(cfg.terminal_bench_config)
     validate_cfg(cfg)
+    if operation is EntrypointOperation.TRAIN:
+        validate_group_baseline(GroupAdvantageInvariant.from_config(cfg.trainer.algorithm.resolved_group_advantage))
     configure_progress(cfg.trainer.progress)
 
     initialize_ray(cfg)

@@ -23,6 +23,7 @@ from marinskyrl.runtime_options import (
     PREFERENCE_PAIR_ENV_CLASS,
     AdvantageEstimator,
     PolicyLossType,
+    pbs_token_credit_enabled,
 )
 
 
@@ -340,7 +341,8 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
     if spec is not None and spec.sequence_level:
         if reduction is not LossReduction.SEQUENCE_MEAN:
             raise ValueError(f"{algorithm.policy_loss_type} requires trainer.algorithm.loss_reduction=sequence_mean")
-        if loop_credit > 0 or (plan is not None and not topk):
+        pbs_credit = policy_trains and pbs_token_credit_enabled(cfg)
+        if loop_credit > 0 or pbs_credit or (plan is not None and not topk):
             raise ValueError(f"{algorithm.policy_loss_type} requires sequence-level advantages; use a token-level loss")
     if algorithm.think_token_weight != 1 and not algorithm.enable_token_reward_channel:
         raise ValueError("think_token_weight != 1 requires trainer.algorithm.enable_token_reward_channel=true")

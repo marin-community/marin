@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 import io as stdlib_io
@@ -10,7 +11,7 @@ import shutil
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from jaxtyping import Float
 from pathlib import Path
 import ray
@@ -61,8 +62,7 @@ from skyrl_train.env_vars import NCCL_BUFFER_SIZE_ENV_VAR
 from skyrl_train.tensor_math import masked_mean
 from skyrl_train.utils.policy_math import compute_approx_kl, normalize_advantages_dict
 from skyrl_train.utils.kl_controllers import get_kl_controller, FixedKLController, AdaptiveKLController
-from skyrl_train.utils.algorithm_registry import AdvantageEstimator
-from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE, compute_advantages_and_returns
+from skyrl_train.utils.advantage_estimators import compute_advantages_and_returns, flat_group_fraction
 from marinskyrl.runtime_options import PolicyLossType, reference_model_required
 from marinskyrl.distillation import (
     DistillationObjectiveKind,
@@ -101,6 +101,8 @@ from skyrl_train.draft_trainer import (
 )
 from skyrl_train.group_admission import (
     GroupAdvantageInvariant,
+    GroupAdvantageKind,
+    baseline_eligible_mask,
     admission_stall_timeout,
     assert_training_groups_eligible,
 )
@@ -311,17 +313,8 @@ def _token_staleness_metrics(
     return metrics
 
 
-def _zero_std_group_fraction(uids: Sequence[str], rewards: torch.Tensor) -> float:
-    group_rewards: dict[str, list[torch.Tensor]] = {}
-    for uid, reward in zip(uids, rewards, strict=True):
-        group_rewards.setdefault(uid, []).append(reward)
-    if not group_rewards:
-        return 0.0
-    flat_groups = sum(
-        len(group) > 1 and torch.std(torch.stack(group)).item() <= GRPO_FLAT_REWARD_STD_TOLERANCE
-        for group in group_rewards.values()
-    )
-    return flat_groups / len(group_rewards)
+# Per-token credit added after the outcome advantage and its batch normalization.
+TOKEN_CREDIT_KEYS = ("loop_advantages", "token_level_shaping")
 
 
 class RayPPOTrainer:
@@ -2269,14 +2262,8 @@ class RayPPOTrainer:
                 response_masks_tensor.bool(),
                 self.cfg.generator.sampling_params.logprobs,
             )
-            excluded = trajectory_batch.get("exclude_from_baseline")
-            final = trajectory_batch.get("is_last_step")
-            if excluded is None:
-                excluded = [False] * len(response_ids)
-            if final is None:
-                final = [True] * len(response_ids)
             loop = parse_trajectory_reward_shaping_config(self.cfg.generator.get("trajectory_reward_shaping")).loop
-            eligible = [last and not exclude for last, exclude in zip(final, excluded, strict=True)]
+            eligible = baseline_eligible_mask(trajectory_batch).tolist()
             verified_boundaries = None
             closure_targets = None
             if ftpo.boundary.uses_verified_boundaries:
@@ -2458,7 +2445,6 @@ class RayPPOTrainer:
         if loop_advantages_tensor is not None:
             training_input["loop_advantages"] = loop_advantages_tensor
         training_input.metadata = {"uids": uids}
-        # For RLOO-N: pass through exclude_from_baseline flags if present
         if trajectory_batch.get("exclude_from_baseline") is not None:
             training_input.metadata["exclude_from_baseline"] = np.array(
                 trajectory_batch["exclude_from_baseline"], dtype=bool
@@ -2625,77 +2611,68 @@ class RayPPOTrainer:
         """
         token_level_rewards = data["rewards"]
 
-        if self.cfg.trainer.step_wise_training:
-            is_last_step = data["is_last_step"].bool()
-            response_mask = data["response_mask"]
-            index = np.array(data.metadata["uids"])
-            adv_estimator = self.cfg.trainer.algorithm.advantage_estimator
-            config = self.cfg.trainer.algorithm
-            values = data["values"]
-            gamma = self.cfg.trainer.algorithm.gamma
-            lambd = self.cfg.trainer.algorithm.lambd
-            grpo_norm_by_std = self.cfg.trainer.algorithm.grpo_norm_by_std
-            last_step_rewards = token_level_rewards[is_last_step]
-            # compatible with any advantage estimator
-            last_step_advantages, last_step_returns = compute_advantages_and_returns(
-                token_level_rewards=last_step_rewards,
-                response_mask=response_mask[is_last_step],
-                index=index[is_last_step.cpu().numpy()],
-                adv_estimator=adv_estimator,
-                values=values[is_last_step] if values is not None else None,
-                config=config,
-                gamma=gamma,
-                lambd=lambd,
-                grpo_norm_by_std=grpo_norm_by_std,
-                group_advantage_invariant=self.group_advantage_invariant,
+        pad_size = data.metadata.get("pad_size", 0)
+        index = np.asarray(data.metadata["uids"])
+        exclude_from_baseline = data.metadata.get("exclude_from_baseline")
+        if exclude_from_baseline is not None:
+            exclude_from_baseline = np.asarray(exclude_from_baseline, dtype=bool)
+        outcome_rewards, outcome_mask = token_level_rewards, data["response_mask"]
+        outcome_values = data["values"]
+        step_wise = self.cfg.trainer.step_wise_training
+        if step_wise:
+            final = data["is_last_step"].bool()
+            final_rows = final.cpu().numpy()
+            outcome_rewards = token_level_rewards[final]
+            outcome_mask = data["response_mask"][final]
+            if outcome_values is not None:
+                outcome_values = outcome_values[final]
+            index = index[final_rows]
+            if exclude_from_baseline is not None:
+                exclude_from_baseline = exclude_from_baseline[final_rows]
+        advantages, returns = compute_advantages_and_returns(
+            token_level_rewards=outcome_rewards,
+            response_mask=outcome_mask,
+            index=index,
+            adv_estimator=self.cfg.trainer.algorithm.advantage_estimator,
+            config=self.cfg.trainer.algorithm,
+            values=outcome_values,
+            gamma=self.cfg.trainer.algorithm.gamma,
+            lambd=self.cfg.trainer.algorithm.lambd,
+            grpo_norm_by_std=self.cfg.trainer.algorithm.grpo_norm_by_std,
+            exclude_from_baseline=exclude_from_baseline,
+            group_advantage_invariant=self.group_advantage_invariant,
+        )
+        if self.group_advantage_invariant.kind is not GroupAdvantageKind.NONE:
+            real_outcomes = len(index) - pad_size
+            self.all_metrics["reward/zero_std_group_fraction"] = flat_group_fraction(
+                outcome_rewards[:real_outcomes],
+                index[:real_outcomes],
+                None if exclude_from_baseline is None else exclude_from_baseline[:real_outcomes],
             )
-            traj_ids = (
-                torch.cat([torch.tensor([False], device=is_last_step.device), is_last_step[:-1]]).int().cumsum(dim=0)
-            )
-            num_groups = traj_ids[-1].item() + 1
-            assert num_groups == len(last_step_advantages), (
-                f"number of groups {num_groups} doesn't match the number of trajectories as given by `is_last_step` {len(last_step_advantages)}. The `is_last_step` tensor is likely malformed"
-            )
-            advantages = last_step_advantages[traj_ids]
-            returns = last_step_returns[traj_ids]
-        else:
-            # For RLOO-N: pass exclude_from_baseline if present in metadata
-            exclude_from_baseline = data.metadata.get("exclude_from_baseline", None)
-            # Stage C (F6): thread the per-token PBS shaping channel into the
-            # advantage estimator when it is present. The dispatcher forwards it
-            # via **kwargs; only the rloo_n_pbs combiner consumes it (every other
-            # estimator ignores the extra kwarg), and when the key is absent
-            # (channel off) token_level_shaping is None -> byte-identical path.
-            token_level_shaping = data["token_level_shaping"] if "token_level_shaping" in data else None
-            advantages, returns = compute_advantages_and_returns(
-                token_level_rewards=token_level_rewards,
-                response_mask=data["response_mask"],
-                index=data.metadata["uids"],
-                adv_estimator=self.cfg.trainer.algorithm.advantage_estimator,
-                config=self.cfg.trainer.algorithm,
-                values=data["values"],
-                gamma=self.cfg.trainer.algorithm.gamma,
-                lambd=self.cfg.trainer.algorithm.lambd,
-                grpo_norm_by_std=self.cfg.trainer.algorithm.grpo_norm_by_std,
-                exclude_from_baseline=exclude_from_baseline,
-                token_level_shaping=token_level_shaping,
-                group_advantage_invariant=self.group_advantage_invariant,
-            )
+        if step_wise:
+            trajectory_outcomes = []
+            for estimates in (advantages, returns):
+                # Float64 reduction preserves constant float32 estimates exactly.
+                outcome = masked_mean(estimates.double(), outcome_mask, dim=-1).unsqueeze(-1)
+                if not torch.all((estimates - outcome).abs()[outcome_mask.bool()] <= 1e-6):
+                    raise ValueError("step-wise training requires an outcome advantage estimator")
+                trajectory_outcomes.append(outcome.to(estimates.dtype))
+            advantages, returns = trajectory_outcomes
+            traj_ids = torch.cat([torch.tensor([False], device=final.device), final[:-1]]).int().cumsum(dim=0)
+            trajectory_count = traj_ids[-1].item() + 1
+            if trajectory_count != len(advantages):
+                raise ValueError(
+                    f"is_last_step marks {len(advantages)} trajectories but its rows form {trajectory_count}"
+                )
+            advantages = advantages[traj_ids] * data["response_mask"]
+            returns = returns[traj_ids] * data["response_mask"]
         data["returns"] = returns
         data["advantages"] = advantages
 
         # remove padding while calculating metrics
-        pad_size = data.metadata.get("pad_size", 0)
         num_samples = len(token_level_rewards)
 
         return_sums = token_level_rewards.sum(dim=-1)[: num_samples - pad_size]
-        if (
-            self.cfg.trainer.algorithm.advantage_estimator == AdvantageEstimator.GRPO
-            and not self.cfg.trainer.step_wise_training
-        ):
-            self.all_metrics["reward/zero_std_group_fraction"] = _zero_std_group_fraction(
-                data.metadata["uids"][: num_samples - pad_size], return_sums
-            )
         if self.cfg.trainer.step_wise_training:
             avg_rewards: float = return_sums[data["is_last_step"][: num_samples - pad_size]].mean().item()
         else:
@@ -2732,23 +2709,25 @@ class RayPPOTrainer:
         return data
 
     @staticmethod
-    def apply_loop_advantages(data: TrainingInputBatch) -> TrainingInputBatch:
-        """Add loop credit after normalization, or return unchanged when the channel is absent."""
-        loop_advantages = data.get("loop_advantages")
-        if loop_advantages is None:
-            return data
+    def apply_token_credit(data: TrainingInputBatch) -> TrainingInputBatch:
+        """Add each present token-credit channel to the outcome advantages."""
         advantages = data["advantages"]
-        loop_advantages = loop_advantages.to(device=advantages.device, dtype=advantages.dtype)
-        data["advantages"] = advantages + loop_advantages * data["response_mask"]
+        for key in TOKEN_CREDIT_KEYS:
+            credit = data.get(key)
+            if credit is not None:
+                credit = credit.to(device=advantages.device, dtype=advantages.dtype)
+                advantages = advantages + credit * data["response_mask"]
+        data["advantages"] = advantages
         return data
 
     def finalize_advantages_for_training(self, data: TrainingInputBatch) -> TrainingInputBatch:
-        """Normalize environment credit, add loop credit, then apply teacher credit."""
+        """Normalize environment credit, add token credit, then apply teacher credit."""
         if "ftpo_chosen_mask" in data:
-            data.pop("loop_advantages", None)
+            for key in TOKEN_CREDIT_KEYS:
+                data.pop(key, None)
         if self.cfg.trainer.algorithm.advantage_batch_normalize:
             data = normalize_advantages_dict(data)
-        data = self.apply_loop_credit_and_drop_advantage_inputs(data)
+        data = self.apply_token_credit_and_drop_advantage_inputs(data)
         plan = self.distillation_plan
         if plan is None:
             return data
@@ -2769,11 +2748,12 @@ class RayPPOTrainer:
             data["advantages"] = torch.zeros_like(data["advantages"])
         return data
 
-    def apply_loop_credit_and_drop_advantage_inputs(self, data: TrainingInputBatch) -> TrainingInputBatch:
-        """Apply loop credit, then remove rewards, loop_advantages, and uids before worker dispatch."""
-        data = self.apply_loop_advantages(data)
+    def apply_token_credit_and_drop_advantage_inputs(self, data: TrainingInputBatch) -> TrainingInputBatch:
+        """Apply token credit, then clear advantage inputs before worker dispatch."""
+        data = self.apply_token_credit(data)
         data.pop("rewards")
-        data.pop("loop_advantages", None)
+        for key in TOKEN_CREDIT_KEYS:
+            data.pop(key, None)
         data.metadata.pop("uids")
         return data
 

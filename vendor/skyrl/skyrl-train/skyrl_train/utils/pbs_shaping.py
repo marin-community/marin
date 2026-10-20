@@ -1,36 +1,9 @@
-"""Potential-based shaping (PBS) on edit tokens (Stage C / F6).
+"""Potential-based shaping (PBS) on edit tokens.
 
-Mechanism 1 of the loop-behavior reward plan: credit the *edit* that moved the
-in-trajectory test suite toward green, densifying RLOO-N's single outcome scalar
-onto the specific edit tokens — **without** opening a reward-hacking optimum.
-
-Why potential-based shaping (Ng, Harada & Russell 1999): a shaping reward of the
-form ``F(s, s') = γ·Φ(s') − Φ(s)`` is **policy-invariant** — adding it to the
-environment reward leaves the set of optimal policies unchanged, so it provably
-**cannot** introduce a reward-hacking optimum. We therefore implement F as a true
-potential difference, NOT as an ad-hoc per-edit bonus.
-
-Construction (this module):
-  * Potential ``Φ(state) = f(fraction of tests passing so far)`` from the F2
-    parser's per-test-run ``(passed, total_runnable)`` counts. ``Φ(s_0) = 0``
-    (no test run has happened yet). ``f`` is configurable (linear or a sharper
-    "near-green" shape that rewards closing the *last* failing test more).
-  * Per-transition shaping ``F_k = γ·Φ(s_k) − Φ(s_{k-1})`` for the k-th observed
-    test run, credited to the **edit turn that preceded that test run** (the
-    action whose effect the test run revealed). Scattered uniformly across that
-    turn's ``EDIT``-tagged response tokens (``response_span_tags == SPAN_EDIT``).
-  * **Telescoping + bound.** With ``γ=1`` the per-token shaping sums to
-    ``Φ(s_final) − Φ(s_0) = Φ(s_final)`` over the trajectory (a true potential
-    difference). We additionally clamp the TOTAL shaping magnitude to ``±max_total
-    _shaping`` (default 0.3) so the hidden-test outcome reward stays dominant — a
-    policy cannot win by gaming shaping while failing the real grade.
-
-The result is a per-token ``token_level_shaping`` list (same length / layout as
-``response_ids``) that the generator writes into the Stage-B channel; the
-Stage-C advantage estimator (``rloo_n_pbs`` in ``advantage_estimators.py``) adds it,
-additively + separately, onto RLOO-N's outcome advantage.
-
-Pure / CPU-only; no torch dependency. Unit-testable in isolation.
+Each observed test run changes a potential based on the fraction of tests passing. The potential difference
+is spread over the preceding turn's EDIT tokens. With gamma=1, the total telescopes to the final potential.
+The total is clamped to ±max_total_shaping. This terminal bonus changes the trained objective; the trainer
+adds it after the outcome estimator and batch normalization as token credit without a baseline.
 """
 
 from __future__ import annotations
@@ -114,7 +87,7 @@ def compute_pbs_token_shaping(
 
     Returns:
         A list of floats len == len(response_span_tags). All-zero when there is
-        no usable test signal or no edit turn to credit (→ pure RLOO-N for that
+        no usable test signal or no edit turn to credit (→ no token credit for that
         trajectory). The non-zero entries land only on EDIT-tagged tokens.
     """
     n = len(response_span_tags)

@@ -1,0 +1,150 @@
+# One-off acceptance run for every generator in both released blends.
+# The sample and exact TaskTrove proxy sidechannel are immutable campaign artifacts.
+entrypoint: standard
+
+config_groups:
+  terminal_bench_config: terminal_bench
+
+context_budget:
+  request_window_tokens: 32768
+  max_new_tokens_per_turn: 256
+  max_turns: 2
+
+terminal_bench:
+  harbor:
+    override_timeout_sec: 240
+    verifier_override_timeout_sec: 120
+    override_cpus: 1
+    override_memory_mb: 4096
+    override_storage_mb: 4096
+    env_network_policy:
+      mode: unrestricted
+    max_retries: 1
+    min_wait_sec: 10.0
+    max_wait_sec: 60.0
+    wait_multiplier: 2.0
+    n_concurrent_trials: 4
+    enable_reward_shaping: false
+    enable_error_classification: true
+    mask_exceptions: []
+    zero_exceptions: []
+    default_error_treatment: zero
+trainer:
+  strategy: megatron
+  seed: 1729
+  algorithm:
+    advantage_estimator: reinforce++
+    use_kl_loss: false
+    kl_loss_coef: 0.0
+    loss_reduction: sequence_mean
+  epochs: 1
+  # From the second step, Adam state stays on the GPU and these sequences no longer fit an H100 at
+  # tensor parallel size 1. Training longer needs trainer.policy.megatron_config.tensor_model_parallel_size: 2.
+  max_steps: 1
+  update_epochs_per_batch: 1
+  train_batch_size: 48
+  policy_mini_batch_size: 48
+  micro_forward_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: 1
+  flash_attn: true
+  gradient_checkpointing: true
+  gradient_checkpointing_use_reentrant: false
+  use_sample_packing: false
+  eval_interval: 999999
+  eval_before_train: false
+  resume_mode: none
+  hf_hub_repo_id: null
+  enable_db_registration: false
+  project_name: nemotron-ultra-rlvr-acceptance
+  run_name: null
+  logger: console
+  tracker_commit_each_step: true
+  log_level: INFO
+  policy:
+    optimizer_config:
+      lr: 1.0e-6
+      weight_decay: 0.0
+      adam_betas: [0.9, 0.999]
+      max_grad_norm: 1.0
+    megatron_config:
+      # The default format gathers the full optimizer state into one rank's host memory,
+      # which pushes the colocated node past Ray's memory-kill threshold at the final save.
+      optimizer_checkpoint_sharding_type: dp_reshardable
+  ref: {}
+  placement:
+    colocate_all: true
+    policy_num_nodes: null
+    ref_num_nodes: null
+    policy_num_gpus_per_node: null
+    ref_num_gpus_per_node: null
+
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+  inference_engine_tensor_parallel_size: 1
+  num_inference_engines: null
+  n_samples_per_prompt: 2
+  eval_n_samples_per_prompt: 1
+  # Colocated Megatron keeps more than 25 GiB per H100 after an optimizer step even when
+  # offloaded, so vLLM must wake its KV cache into the remainder.
+  gpu_memory_utilization: 0.5
+  max_num_seqs: 32
+  max_num_batched_tokens: 8192
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  sampling_params:
+    temperature: 0.7
+    top_p: 1.0
+    top_k: -1
+  chat_template:
+    source: file
+    name_or_path: chat_templates/qwen3_thinking_acc.jinja2
+
+  engine_init_kwargs:
+    served_model_name: Qwen3-8B
+    enable_auto_tool_choice: true
+    tool_call_parser: hermes
+
+environment:
+  task_sessions:
+    nemotron_ultra:
+      judges:
+        general:
+          base_url: https://api.together.xyz/v1
+          model: openai/gpt-oss-120b
+          api_key_env: TOGETHER_API_KEY
+          reasoning_effort: low
+          timeout_seconds: 600.0
+        safety:
+          base_url: https://api.together.xyz/v1
+          model: openai/gpt-oss-120b
+          api_key_env: TOGETHER_API_KEY
+          reasoning_effort: low
+          timeout_seconds: 600.0
+      genrm:
+        judge:
+          base_url: https://api.together.xyz/v1
+          model: openai/gpt-oss-120b
+          api_key_env: TOGETHER_API_KEY
+          response_transport: chat_completions
+          reasoning_effort: low
+          timeout_seconds: 600.0
+        group_answer_length_penalty_coeff: 0.0
+        group_reasoning_length_penalty_coeff: 0.0
+        max_output_tokens: 512
+        temperature: 0.0
+        top_p: 1.0
+
+extra_env:
+  NCCL_DEBUG: WARN
+  RAY_DEDUP_LOGS: "0"
+
+data:
+  kind: parquet
+  train_data:
+    - s3://marin-us-east-02a/marin/users/benfeuer/datasets/snowball-ultra-rlvr/20260912-79f8eda15ea12e1adf7bb14dcb338a29d391b80e/acceptance-tasktrove-v1/sample.parquet
+  val_data: []
+  terminal_bench_data:
+    - s3://marin-us-east-02a/marin/users/benfeuer/datasets/snowball-ultra-rlvr/20260912-79f8eda15ea12e1adf7bb14dcb338a29d391b80e/tasktrove-swe-v1/tasks.parquet

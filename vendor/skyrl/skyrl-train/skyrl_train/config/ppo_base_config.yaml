@@ -213,7 +213,6 @@ trainer:
       label_smoothing: 0.0
     loss_reduction: "token_mean"
     grpo_norm_by_std: true
-    rloo_n_filter_zero_reward_groups: true
     lambd: 1.0
     gamma: 1.0
     eps_clip_low: 0.2
