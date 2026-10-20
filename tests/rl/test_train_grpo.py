@@ -12,7 +12,7 @@ import jmp
 import numpy as np
 import optax
 import pytest
-from levanter.checkpoint import CheckpointerConfig, save_checkpoint
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint, save_checkpoint
 from levanter.distributed import DistributedConfig
 from levanter.grpo import GrpoConfig, KlGradient
 from levanter.grpo_model import grpo_model_loss
@@ -20,6 +20,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
+from levanter.trainer_state import TrainerState
 from marin.rl.grpo_capture import CapturedRollout, write_captured_rollout
 from marin.rl.train_grpo import OfflineGrpoConfig, main, prepare_grpo_example, score_grpo_batch
 from tokenizers import Tokenizer
@@ -136,8 +137,8 @@ def test_offline_grpo_checkpoint_resume_reproduces_second_optimizer_step(tmp_pat
         np.testing.assert_array_equal(uninterrupted.loss, resumed.loss)
 
 
-@pytest.mark.timeout(180)
-def test_offline_grpo_main_rejects_rewritten_capture_on_continuation(tmp_path):
+@pytest.fixture
+def offline_config(tmp_path):
     model_path = str(tmp_path / "initial")
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(WordLevel({f"token{i}": i for i in range(16)}, unk_token="token0")),
@@ -160,7 +161,7 @@ def test_offline_grpo_main_rejects_rewritten_capture_on_continuation(tmp_path):
     captures = [str(tmp_path / f"capture{i}.npz") for i in range(2)]
     for uri in captures:
         write_captured_rollout(uri, _rollout(), {"tokenizer": model_path})
-    config = OfflineGrpoConfig(
+    return OfflineGrpoConfig(
         captures=captures,
         initial_model=model_path,
         tokenizer=model_path,
@@ -176,19 +177,75 @@ def test_offline_grpo_main_rejects_rewritten_capture_on_continuation(tmp_path):
             require_accelerator=False,
             distributed=DistributedConfig(initialize_jax_distributed=False),
             mp=jmp.get_policy("f32"),
-            log_dir=str(tmp_path / "logs"),
+            log_dir=tmp_path / "logs",
             log_jaxprs=False,
             log_xla_hlo=False,
             checkpointer=CheckpointerConfig(base_path=str(tmp_path / "checkpoints")),
         ),
         vocab_block_size=8,
     )
+
+
+@pytest.mark.timeout(180)
+def test_offline_grpo_main_rejects_rewritten_capture_on_continuation(tmp_path, offline_config):
+    config = offline_config
     main(config)
     with (tmp_path / "metrics" / "eval_results.json").open() as source:
         metrics = json.load(source)
     assert metrics["train/ppo_ratio_exact_unit_fraction"] == 1.0
     assert np.isfinite(metrics["train/log_ratio_abs_max"])
     changed = dataclasses.replace(_rollout(), rewards=_rollout().rewards + 0.25 * _rollout().response_mask)
-    write_captured_rollout(captures[1], changed, {"tokenizer": model_path})
+    write_captured_rollout(config.captures[1], changed, {"tokenizer": config.tokenizer})
     with pytest.raises(ValueError, match="same capture stream"):
         main(dataclasses.replace(config, stop_after=None))
+
+
+@pytest.mark.timeout(180)
+def test_offline_grpo_main_resume_preserves_state_and_rejects_disabled_restore(tmp_path, offline_config):
+    config = offline_config
+    main(config)
+    checkpoint_root = config.trainer.checkpointer.expanded_path(config.trainer.id)
+    exemplar = TrainerState.init(
+        config.optimizer.build(config.trainer.num_train_steps),
+        _model(),
+        key=jax.random.PRNGKey(0),
+        mp=config.trainer.mp,
+    )
+    restore = partial(
+        load_checkpoint,
+        exemplar,
+        mesh=config.trainer.device_mesh,
+        axis_mapping=config.trainer.parameter_axis_mapping,
+    )
+    first_step = _arrays(restore(f"{checkpoint_root}/step-1"))
+    with pytest.raises(ValueError, match="require restoration"):
+        main(
+            dataclasses.replace(
+                config,
+                stop_after=None,
+                trainer=dataclasses.replace(config.trainer, load_checkpoint=False),
+            )
+        )
+    after_rejection = _arrays(restore(f"{checkpoint_root}/step-1"))
+    for saved, restored in zip(first_step, after_rejection, strict=True):
+        np.testing.assert_array_equal(saved, restored)
+
+    main(dataclasses.replace(config, stop_after=None))
+    resumed = restore(f"{checkpoint_root}/step-2")
+    uninterrupted_config = dataclasses.replace(
+        config,
+        stop_after=None,
+        hf_save_path=str(tmp_path / "uninterrupted-export"),
+        trainer=dataclasses.replace(config.trainer, id="uninterrupted"),
+    )
+    main(uninterrupted_config)
+    uninterrupted_root = config.trainer.checkpointer.expanded_path(uninterrupted_config.trainer.id)
+    uninterrupted = restore(f"{uninterrupted_root}/step-2")
+    assert int(resumed.step) == int(uninterrupted.step) == 2
+    for split, direct in zip(_arrays(resumed), _arrays(uninterrupted), strict=True):
+        np.testing.assert_array_equal(split, direct)
+    resumed_export = LlamaForCausalLM.from_pretrained(config.hf_save_path).state_dict()
+    uninterrupted_export = LlamaForCausalLM.from_pretrained(uninterrupted_config.hf_save_path).state_dict()
+    assert resumed_export.keys() == uninterrupted_export.keys()
+    for name in resumed_export:
+        np.testing.assert_array_equal(resumed_export[name], uninterrupted_export[name])

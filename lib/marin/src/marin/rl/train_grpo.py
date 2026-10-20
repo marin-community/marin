@@ -28,6 +28,7 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
 from levanter.schedule import IntSchedule
 from levanter.trainer import Trainer, TrainerConfig, initialize
+from levanter.utils.jax_utils import multihost_broadcast_sync
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
@@ -171,6 +172,8 @@ class _ContinuationContract:
     normalize_by_std: bool
     num_train_steps: int
     model: dict[str, Any]
+    quantization: dict[str, Any] | None
+    model_averaging: dict[str, Any] | None
     mp: str
     seed: int
     train_batch_size: int | IntSchedule
@@ -207,6 +210,8 @@ def _continuation_contract(config: OfflineGrpoConfig, microbatch_size: int) -> _
         normalize_by_std=config.normalize_by_std,
         num_train_steps=config.trainer.num_train_steps,
         model=draccus.encode(config.model),
+        quantization=draccus.encode(config.trainer.quantization),
+        model_averaging=draccus.encode(config.trainer.model_averaging),
         mp=str(config.trainer.mp),
         seed=config.trainer.seed,
         train_batch_size=config.trainer.train_batch_size,
@@ -215,19 +220,36 @@ def _continuation_contract(config: OfflineGrpoConfig, microbatch_size: int) -> _
     )
 
 
-def _validate_or_write_continuation_contract(trainer: Trainer, contract: _ContinuationContract) -> None:
-    contract_path = StoragePath(trainer.checkpoint_path) / "offline-grpo.json"
-    payload = dataclasses.asdict(contract)
-    if contract_path.exists():
-        with contract_path.open("r") as source:
-            if json.load(source) != payload:
-                raise ValueError("Offline continuation requires the same capture stream and training recipe")
-    elif is_checkpoint_path(trainer.checkpoint_path):
-        raise ValueError("Existing checkpoints need their offline capture-stream contract")
-    elif jax.process_index() == 0:
-        contract_path.parent.mkdirs()
-        with contract_path.open("wt") as output:
-            json.dump(payload, output, indent=2)
+def _validate_or_write_continuation_contract(trainer: Trainer, config: OfflineGrpoConfig, microbatch_size: int) -> None:
+    error: Exception | None = None
+    error_message: str | None = None
+    if jax.process_index() == 0:
+        try:
+            contract_path = StoragePath(trainer.checkpoint_path) / "offline-grpo.json"
+            payload = dataclasses.asdict(_continuation_contract(config, microbatch_size))
+            has_checkpoint = any(is_checkpoint_path(path) for path in trainer.checkpoint_search_paths)
+            if has_checkpoint and trainer.config.load_checkpoint is False:
+                raise ValueError("Existing offline checkpoints require restoration; use a fresh run id to restart")
+            if contract_path.exists():
+                with contract_path.open("r") as source:
+                    if json.load(source) != payload:
+                        raise ValueError("Offline continuation requires the same capture stream and training recipe")
+            elif has_checkpoint:
+                raise ValueError("Existing checkpoints need their offline capture-stream contract")
+            else:
+                contract_path.parent.mkdirs()
+                with contract_path.open("wt") as output:
+                    json.dump(payload, output, indent=2)
+        except Exception as exc:
+            # Every host must reach the collective before propagating a source-host
+            # failure, or peers would hang while initializing the trainer state.
+            error = exc
+            error_message = f"Offline continuation contract failed: {type(exc).__name__}: {exc}"
+    error_message = multihost_broadcast_sync(error_message)
+    if error is not None:
+        raise error
+    if error_message is not None:
+        raise RuntimeError(error_message)
 
 
 def _initial_state(trainer: Trainer, config: OfflineGrpoConfig, context, tokenizer: AutoTokenizer):
@@ -296,7 +318,7 @@ def main(config: OfflineGrpoConfig):
     with Trainer(
         config.trainer, config.optimizer.build(config.trainer.num_train_steps), loss, add_default_hooks=False
     ) as trainer:
-        _validate_or_write_continuation_contract(trainer, _continuation_contract(config, microbatch_size))
+        _validate_or_write_continuation_contract(trainer, config, microbatch_size)
         state = _initial_state(trainer, config, context, tokenizer)
         state = _train_captures(trainer, state, config, tokenizer)
         if int(state.step) == config.trainer.num_train_steps:
