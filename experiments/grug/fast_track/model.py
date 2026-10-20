@@ -59,6 +59,7 @@ from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_lo
 from levanter.grug.mxfp8 import ExpertMxfp8, mx_dense
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.short_conv import short_conv
+from levanter.kernels.triton.gated_norm import gated_rms_norm
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -282,6 +283,17 @@ class SharedExpertPlacement(StrEnum):
     OVERLAP = "overlap"
     """The whole shared MLP is pinned under the first EP dispatch all-to-all by optimization barriers
     (``MoeOverlapWork``), forward and backward."""
+
+
+class GatedNormImplementation(StrEnum):
+    """How each ``GatedNorm(RMSNorm(x))`` pair runs (same function, same parameters)."""
+
+    REFERENCE = "reference"
+    """The two modules composed: the normalized activation is written to HBM and the backward is autodiff."""
+    FUSED = "fused"
+    """``levanter.kernels.triton.gated_norm.gated_rms_norm``: the RMSNorm gain is folded into the gate's down
+    projection, the backward saves only the rank-128 bottleneck and ``rstd``, and on GPU its two elementwise
+    passes run in Triton. Needs a learned RMSNorm (not DyT)."""
 
 
 class MoeDispatch(StrEnum):
@@ -901,6 +913,8 @@ class GrugModelConfig:
     so a block (and the MLP gate's in-layer partial) weights its attention and MLP outputs."""
     sublayer_gated_norm: bool = True
     """GatedNorm after the RMSNorm on every attention and MLP input (else the RMSNorm alone)."""
+    gated_norm_implementation: GatedNormImplementation = GatedNormImplementation.REFERENCE
+    """How every RMSNorm -> GatedNorm pair (sublayer inputs, embedding, final) runs."""
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
     scan_offload_partials: bool = False
     """With ``scan_layers``, keep the scan's backward residuals in pinned host memory: the per-layer incoming AttnRes
@@ -2333,6 +2347,26 @@ class GatedNorm(eqx.Module):
         return x * gate.astype(x.dtype)
 
 
+def _gated_rms_norm(
+    norm: "LearnedRMSNorm | DyT",
+    gated: GatedNorm | None,
+    x: Float[Array, "... D"],
+    implementation: GatedNormImplementation,
+) -> Float[Array, "... D"]:
+    """``gated(norm(x))`` (``norm(x)`` without a GatedNorm) on the configured implementation."""
+    if gated is None:
+        return norm(x)
+    if implementation == GatedNormImplementation.REFERENCE:
+        return gated(norm(x))
+    if isinstance(norm, RMSNorm):
+        gain = norm.gain()
+    elif isinstance(norm, ZeroCenteredRMSNorm):
+        gain = 1.0 + unshard(norm.gamma)
+    else:
+        raise ValueError(f"gated_norm_implementation=fused needs a learned RMSNorm, got {type(norm).__name__}")
+    return gated_rms_norm(x, gain, gated.w_down, gated.w_up, eps=norm.eps)
+
+
 class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
@@ -3542,12 +3576,10 @@ class Block(eqx.Module):
         )
 
     def _attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        x = self.rms_attn(x)
-        return x if self.attn_gated_norm is None else self.attn_gated_norm(x)
+        return _gated_rms_norm(self.rms_attn, self.attn_gated_norm, x, self.attn.cfg.gated_norm_implementation)
 
     def _mlp_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        x = self.rms_mlp(x)
-        return x if self.mlp_gated_norm is None else self.mlp_gated_norm(x)
+        return _gated_rms_norm(self.rms_mlp, self.mlp_gated_norm, x, self.attn.cfg.gated_norm_implementation)
 
     def attn_branch(
         self,
@@ -5766,9 +5798,7 @@ class Transformer(eqx.Module):
         cfg = self.config
         gather = _embedding_gather
         hidden = gather(self.token_embed, token_ids)
-        hidden = self.embed_norm(hidden)
-        if self.embed_gated_norm is not None:
-            hidden = self.embed_gated_norm(hidden)
+        hidden = _gated_rms_norm(self.embed_norm, self.embed_gated_norm, hidden, cfg.gated_norm_implementation)
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
         segment_ids = None
@@ -5918,9 +5948,7 @@ class Transformer(eqx.Module):
         router_metrics.update(final_gate_stats)
         router_metrics.update(bigram_gate_stats)
         router_metrics.pop(_LM_HEAD_EXTRA, None)
-        hidden = self.final_norm(hidden)
-        if self.final_gated_norm is not None:
-            hidden = self.final_gated_norm(hidden)
+        hidden = _gated_rms_norm(self.final_norm, self.final_gated_norm, hidden, cfg.gated_norm_implementation)
         return hidden, router_metrics
 
     def _attn_res_layers(
@@ -7105,6 +7133,7 @@ __all__ = [
     "CausalSelfAttention",
     "DenseMLP",
     "GatedNorm",
+    "GatedNormImplementation",
     "GrugModelConfig",
     "KimiDeltaAttention",
     "LocalMixer",
