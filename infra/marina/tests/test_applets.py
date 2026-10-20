@@ -9,13 +9,15 @@ import subprocess
 import tarfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from html.parser import HTMLParser
 from pathlib import Path
 from threading import Barrier
 from typing import cast
 
 import pytest
 from click.testing import CliRunner
-from marina.applets import AppletNotFound, AppletStore, applet_role, package_applet, read_applet_package
+from marina.applets import AppletManifest, AppletNotFound, AppletStore, applet_role, package_applet, read_applet_package
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import UrlDatabase, grant_read
@@ -29,6 +31,79 @@ from sqlalchemy.exc import DBAPIError
 from starlette.testclient import TestClient
 
 DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-applet"
+
+
+class PageLinks(HTMLParser):
+    def __init__(self, body: str):
+        super().__init__()
+        self.links: list[dict[str, str | None]] = []
+        self.feed(body)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a":
+            self.links.append(dict(attrs))
+
+
+def test_directory_lists_all_apps_and_paginates_sorted_releases(tmp_path: Path, database_url: str) -> None:
+    with isolated_database(database_url) as local_url:
+        client, store = applet_client_and_store(tmp_path, local_url)
+        package = read_applet_package(package_applet(DEMO_APPLET))
+        published = []
+        for index in range(53):
+            manifest = AppletManifest(title=f"App {52 - index:02}", description="A published app")
+            selected = store.publish(replace(package, manifest=manifest), "publisher")
+            published.append(selected)
+        paths = [f"/a/{selected.applet_id}/" for selected in published]
+
+        for endpoint, key in (("/api/marina/apps", "apps"), ("/api/marina/applets", "applets")):
+            response = client.get(endpoint)
+            assert {app["path"] for app in response.json()[key]} == set(paths)
+            assert response.headers["cache-control"] == "private, no-store"
+
+        first = client.get("/")
+        assert first.headers["cache-control"] == "private, no-store"
+        links = PageLinks(first.text).links
+        assert [link["href"] for link in links if link["href"] in paths] == paths[::-1][:50]
+        next_url = next(link["href"] for link in links if link.get("rel") == "next")
+        last = client.get(next_url)
+        last_links = PageLinks(last.text).links
+        assert [link["href"] for link in last_links if link["href"] in paths] == paths[::-1][50:]
+        assert not any(link.get("rel") == "next" for link in last_links)
+        previous = next(link["href"] for link in last_links if link.get("rel") == "prev")
+        assert client.get(previous).text == first.text
+        assert client.get("/?page=999").text == last.text
+
+        for sort, order, expected in (
+            ("name", "asc", paths[::-1]),
+            ("name", "desc", paths),
+            ("released", "asc", paths),
+        ):
+            actual = []
+            for page in (1, 2):
+                response = client.get("/", params={"sort": sort, "order": order, "page": page})
+                actual.extend(link["href"] for link in PageLinks(response.text).links if link["href"] in paths)
+            assert actual == expected
+
+        before = client.get("/api/marina/apps").json()["apps"]
+        selected = published[0]
+        store.publish(package, "new-publisher", selected.applet_id, base_version=1)
+        after = client.get("/api/marina/apps").json()["apps"]
+        old_release = next(app for app in before if app["path"] == paths[0])
+        new_release = next(app for app in after if app["path"] == paths[0])
+        assert new_release["published_at"] > old_release["published_at"]
+        assert new_release["published_by"] == "new-publisher"
+        first_link = next(link["href"] for link in PageLinks(client.get("/").text).links if link["href"] in paths)
+        assert first_link == paths[0]
+        store.rollback(selected.applet_id, 1, base_version=2)
+        restored = client.get("/api/marina/apps").json()["apps"]
+        restored_release = next(app for app in restored if app["path"] == paths[0])
+        assert restored_release["published_at"] == old_release["published_at"]
+        assert restored_release["published_by"] == old_release["published_by"]
+        assert restored_release["version"] == 1
+        store.archive(published[-1].applet_id)
+        listed = client.get("/api/marina/apps").json()["apps"]
+        assert {app["path"] for app in listed} == set(paths[:-1])
+        store.close()
 
 
 @pytest.mark.parametrize("invalid_graph", ["duplicate_id", "missing_parent", "cycle", "cooldown_mismatch"])
@@ -410,6 +485,7 @@ def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, d
     applet_id = published["id"]
 
     listed = client.get("/api/marina/apps").json()["apps"]
+    published_at = client.get(f"/api/marina/applets/{applet_id}").json()["versions"][0]["published_at"]
     assert listed == [
         {
             "name": applet_id,
@@ -418,6 +494,7 @@ def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, d
             "path": f"/a/{applet_id}/",
             "kind": "applet",
             "published_by": "anonymous",
+            "published_at": published_at,
             "version": 1,
             "mode": "private",
         }

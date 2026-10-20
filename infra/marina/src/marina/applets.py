@@ -158,6 +158,7 @@ class AppletSummary:
     published_by: str
     current_version: int
     mode: AppletMode
+    published_at: datetime
     name: str | None = None
 
     @property
@@ -835,7 +836,8 @@ class AppletStore:
         with self.engine.connect() as connection:
             rows = connection.execute(
                 text(
-                    "SELECT a.id, a.title, a.description, v.published_by, a.current_version, a.mode, a.name "
+                    "SELECT a.id, a.title, a.description, v.published_by, v.published_at, "
+                    "a.current_version, a.mode, a.name "
                     "FROM applets a JOIN applet_versions v ON v.applet_id = a.id AND v.version = a.current_version "
                     "WHERE a.archived_at IS NULL ORDER BY a.title, a.id"
                 )
@@ -848,6 +850,7 @@ class AppletStore:
                     published_by=row["published_by"],
                     current_version=row["current_version"],
                     mode=AppletMode(row["mode"]),
+                    published_at=row["published_at"],
                     name=row["name"],
                 )
                 for row in rows

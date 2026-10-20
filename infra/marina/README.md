@@ -88,6 +88,15 @@ The directory shows the selected revision's publisher. Publisher identity does
 not restrict access. The registry retains its original-publisher `owner` column
 as historical metadata, avoiding a destructive schema migration during rollout.
 
+The application directory on Marina's home page lists every active application in
+a compact table, with 50 apps per page and a visible range, total and Previous/Next
+links. Click Name or Released to sort in either direction; the default shows newest
+releases first. Release times are UTC and refer to the currently deployed revision,
+including after rollback.
+The directory APIs (`/api/marina/apps` and `/api/marina/applets`) return all active
+applications without pagination and include `published_at` for the currently
+deployed revision.
+
 Frontend builds start with empty `dist/`. The builder restores existing local
 output after packaging, including on failure. Production releases always build;
 there is no `--no-build` release path. Backend files and unbuilt static files must
