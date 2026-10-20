@@ -9,6 +9,7 @@ each tile once and write the e4m3 values and the biased e8m0 exponents, with the
 """
 
 import functools
+import logging
 
 import jax
 import jax.numpy as jnp
@@ -22,6 +23,8 @@ from levanter.grug.mxfp8 import (
     mx_quantize_row_blocks,
     mx_quantize_rows,
 )
+
+logger = logging.getLogger(__name__)
 
 _E4M3_MAX = 448.0
 ROW_TILE = 16
@@ -124,6 +127,8 @@ def quantize_rows(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     """``mx_quantize_rows`` of a local 2-D ``x``: the single-pass kernel when it fits, else XLA's."""
     m, k = x.shape
     if m % ROW_TILE or _col_blocks(k) is None or x.size > _MAX_CALL_ELEMENTS:
+        # Trace time only: names every shape that takes XLA's two-pass quantizer instead of the kernel.
+        logger.warning("MXFP8 quantize_rows: XLA quantizer for shape %s", x.shape)
         return mx_quantize_rows(x)
     return mx_quantize_rows_pallas(x)
 
@@ -132,6 +137,7 @@ def quantize_cols(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     """``mx_quantize_cols`` of a local 2-D ``x``: the single-pass kernel when it fits, else XLA's."""
     t, k = x.shape
     if t % MX_BLOCK or k % COL_TILE or x.size > _MAX_CALL_ELEMENTS:
+        logger.warning("MXFP8 quantize_cols: XLA quantizer for shape %s", x.shape)
         return mx_quantize_cols(x)
     return mx_quantize_cols_pallas(x)
 

@@ -74,6 +74,8 @@ H100_LADDER_SIZES = ("d512", "d768", "d1024", "d1280", "d1536")
 # Hero-shaped validation rung on one GB200 rack as the hero uses it: 16 nodes x 4 GPUs, expert parallel over all 64.
 GB200_SIZES = ("gb200-d6144",)
 LADDER_SIZES = H100_LADDER_SIZES + GB200_SIZES
+# GPUs per GB200 compute tray, the node of an H100 rung moved to GB200 (``--device GB200``).
+GB200_GPUS_PER_NODE = 4
 # GB200 runs load every CUDA module at startup: a run that loads the shared XLA autotune cache autotunes nothing at
 # compile time, so kernels (e.g. XLA's CUB sort) would first load lazily inside the first step while NCCL kernels spin,
 # and every rank hangs in the driver's module load (lc1-gb200-tp1..tp4). It must be set before the CUDA driver
@@ -278,6 +280,19 @@ def _h100_ladder_rung(size: str) -> H100LadderRung:
     raise ValueError(f"size must be one of {list(LADDER_SIZES)}, got {size!r}")
 
 
+def _resolved_rung(size: str, device: str | None, nodes: int | None) -> H100LadderRung:
+    """The rung for ``size``, moved to ``device`` (only an H100 rung to GB200 trays of ``GB200_GPUS_PER_NODE``) and
+    to ``nodes`` nodes when given."""
+    rung = _h100_ladder_rung(size)
+    if device is not None and device != rung.device:
+        if device != "GB200":
+            raise ValueError(f"only an H100 rung can move to another device (GB200), got {size!r} -> {device!r}")
+        rung = dataclasses.replace(rung, device="GB200", gpus_per_task=GB200_GPUS_PER_NODE)
+    if nodes is not None:
+        rung = dataclasses.replace(rung, nodes=nodes)
+    return rung
+
+
 def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelConfig:
     """Build the ladder model at the rung's width: MoE (384 experts, top-8, pooled-wave EP), or a
     dense baseline (``dense``) of one DenseMLP(hidden, 3*hidden) SwiGLU per block."""
@@ -441,6 +456,7 @@ def build_h100_ladder_run(
     stop_after_steps: int | None = None,
     nodes: int | None = None,
     expert_axis_size: int | None = None,
+    device: str | None = None,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -454,7 +470,8 @@ def build_h100_ladder_run(
     ``collective_overlap_limit`` overrides XLA's concurrent-collective limit (None: the mode default).
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
-    ``nodes`` overrides the rung's node count. ``expert_axis_size`` (default: every device) shards the experts over
+    ``device`` moves an H100 rung onto GB200 trays (4 GPUs per node) and ``nodes`` overrides the rung's node count.
+    ``expert_axis_size`` (default: every device) shards the experts over
     that many devices and replicates them (data parallel, ``replica_dcn``) over the rest, e.g. 8 for expert
     parallelism within each H100 node over NVLink and data parallelism across nodes.
     """
@@ -463,9 +480,7 @@ def build_h100_ladder_run(
     if not wandb_project.strip():
         raise ValueError("wandb_project must not be empty")
 
-    rung = _h100_ladder_rung(size)
-    if nodes is not None:
-        rung = dataclasses.replace(rung, nodes=nodes)
+    rung = _resolved_rung(size, device, nodes)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
     if recipe is Recipe.KMA:
         model = _kma_model(model)
@@ -605,7 +620,7 @@ def build_h100_ladder_run(
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
-                tags=["h100", "fasttrack", "vocab-16k"],
+                tags=[rung.device.lower(), "fasttrack", "vocab-16k"],
                 group="fasttrack-scaling-ladder",
                 name=run_id,
                 replicate_path=ctx.output_path,
@@ -1004,6 +1019,12 @@ def _layer_skip_rule(
     help="Nodes for the run (default: the rung's; H100 rungs use one 8-GPU node).",
 )
 @click.option(
+    "--device",
+    type=click.Choice(["H100", "GB200"]),
+    default=None,
+    help="GPU type (default: the rung's). GB200 runs an H100 rung on 4-GPU GB200 trays.",
+)
+@click.option(
     "--expert-axis-size",
     type=click.IntRange(min=1),
     default=None,
@@ -1095,6 +1116,7 @@ def main(
     stop_after_steps: int | None,
     nodes: int | None,
     expert_axis_size: int | None,
+    device: str | None,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -1103,7 +1125,7 @@ def main(
     target_cluster: str | None,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
-        if size in GB200_SIZES:
+        if _resolved_rung(size, device, nodes).device == "GB200":
             job_env = (*_with_xla_flag(job_env, GB200_TARGET_CONFIG_FLAG), GB200_CUDA_MODULE_LOADING)
         _submit_to_cluster(run_id, target_cluster, priority, job_env)  # re-execs iris; never returns
     return build_h100_ladder_run(
@@ -1151,6 +1173,7 @@ def main(
         stop_after_steps=stop_after_steps,
         nodes=nodes,
         expert_axis_size=expert_axis_size,
+        device=device,
     )
 
 
