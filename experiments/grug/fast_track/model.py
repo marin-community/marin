@@ -3904,8 +3904,8 @@ def _run_expert_bank(
             num_expert_waves=em.num_expert_waves,
             fp8_dispatch=em.fp8_dispatch,
             expert_mxfp8_sim=cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM,
-            ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
-            ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
+            ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg, em),
+            ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch and em.implementation == "ragged_all_to_all",
             expert_remat=em.expert_remat,
             overlap=overlap,
             overlap_param_gather=cfg.moe_overlap_param_gather,
@@ -3924,8 +3924,8 @@ def _run_expert_bank(
         overlap=overlap,
         overlap_param_gather=cfg.moe_overlap_param_gather,
         report_assignment_keep=cfg.moe_drop_renorm,
-        ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
-        ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
+        ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg, em),
+        ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch and em.implementation == "ragged_all_to_all",
     )
 
 
@@ -3999,8 +3999,10 @@ def _drop_renorm_factor(
     return factor, stats
 
 
-def _ragged_expert_mxfp8(cfg: "GrugModelConfig") -> ExpertMxfp8:
-    if cfg.fp8_recipe not in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8):
+def _ragged_expert_mxfp8(cfg: "GrugModelConfig", em: MoEExpertMlp) -> ExpertMxfp8:
+    """The MXFP8 expert GEMMs for ``em``'s backend. The dropless local backends that evals and probes swap in
+    (``_to_dropless_local``) have no MXFP8 kernel, so there the routed experts run in bf16."""
+    if cfg.fp8_recipe not in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8) or em.implementation != "ragged_all_to_all":
         return ExpertMxfp8.NONE
     return ExpertMxfp8.ALL if cfg.mxfp8_expert_wgrad else ExpertMxfp8.ACTIVATIONS
 
