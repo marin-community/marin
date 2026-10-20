@@ -434,11 +434,17 @@ class IssueReference:
     url: str
 
 
+@dataclass(frozen=True)
+class MigrationPatch:
+    path: str
+    sha256: str
+
+
 @dataclass
 class StageReport:
     snapshot: str
     source_sha: str
-    patches: list[dict]
+    patches: list[MigrationPatch]
     retained: int
     discarded: int
     pulls: list[PullOutcome]
@@ -449,6 +455,7 @@ class StageReport:
 
 def read_stage_report(path: Path) -> StageReport:
     value = read_json(path)
+    value["patches"] = [MigrationPatch(**item) for item in value["patches"]]
     value["pulls"] = [PullOutcome(**(item | {"status": PullStatus(item["status"])})) for item in value["pulls"]]
     value["issues"] = [IssueReference(**item) for item in value["issues"]]
     return StageReport(**value)
@@ -504,7 +511,7 @@ def stage(snapshot_dir: Path, output: Path) -> None:
     report = StageReport(
         snapshot=str(snapshot_dir),
         source_sha=record["source_sha"],
-        patches=chosen["patches"],
+        patches=[MigrationPatch(**patch) for patch in chosen["patches"]],
         retained=len(chosen["retained"]),
         discarded=len(chosen["discarded"]),
         pulls=pulls,
@@ -695,11 +702,11 @@ def apply_refresh(report: RefreshReport, current: Path, manifest: Path) -> None:
     copy_source_files(source, current, names)
     snapshot_dir = Path(staged.snapshot)
     for patch in staged.patches:
-        target = manifest.parent / relative_path(patch["path"])
+        target = manifest.parent / relative_path(patch.path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(snapshot_dir / "migration-patches" / patch["path"], target)
+        shutil.copyfile(snapshot_dir / "migration-patches" / patch.path, target)
     manifest.write_text((snapshot_dir / "retention.toml").read_text())
-    for name in set(previous_patches) - {patch["path"] for patch in staged.patches}:
+    for name in set(previous_patches) - {patch.path for patch in staged.patches}:
         (manifest.parent / relative_path(name)).unlink()
     report_path = manifest.parent / "skyrl-migration/snapshot-report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -976,7 +983,7 @@ def prepare_math500(candidate: Path, dataset: Path, output: Path) -> None:
     )
 
 
-def validate_cutover(number: int, source_sha: str, patches: list[dict]) -> dict:
+def validate_cutover(number: int, source_sha: str, patches: list[MigrationPatch]) -> dict:
     pull = gh(f"repos/{TARGET}/pulls/{number}")
     if not pull["merged"] or pull["base"]["repo"]["full_name"] != TARGET:
         raise ValueError("Publication requires a merged Marin cutover PR")
@@ -984,7 +991,7 @@ def validate_cutover(number: int, source_sha: str, patches: list[dict]) -> dict:
     identity = json.loads(base64.b64decode(provenance["content"]))
     if identity["source"] != SOURCE or identity["source_sha"] != source_sha:
         raise ValueError("Merged cutover provenance does not match the reviewed source snapshot")
-    if identity.get("patches", []) != patches:
+    if identity.get("patches", []) != [asdict(patch) for patch in patches]:
         raise ValueError("Merged cutover migration fixes do not match the reviewed candidate")
     return pull
 
@@ -1011,7 +1018,8 @@ def source_references(body: str) -> str:
 def transfer_issues(snapshot_dir: Path, state_path: Path, cutover: int) -> None:
     """Transfer selected issues, recovering destination identity after an interrupted transfer."""
     record = read_json(snapshot_dir / "snapshot.json")
-    validate_cutover(cutover, record["source_sha"], read_json(snapshot_dir / "selection.json")["patches"])
+    patches = [MigrationPatch(**patch) for patch in read_json(snapshot_dir / "selection.json")["patches"]]
+    validate_cutover(cutover, record["source_sha"], patches)
     validate_fresh(record)
     owner, name = TARGET.split("/")
     repository_id = graphql(

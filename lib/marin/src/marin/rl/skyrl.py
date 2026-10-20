@@ -659,7 +659,6 @@ def _project_command(*arguments: str) -> list[str]:
     return [
         "uv",
         "run",
-        "--isolated",
         "--project",
         str(workspace_root / SKYRL_PROJECT),
         "--frozen",

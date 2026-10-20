@@ -130,10 +130,10 @@ index db61c67acb9ded58ee4971499eafa1df9966c9fd..fd0b138f83e36aba811add9c510e3944
 +        "source_digest": args.source_digest,
 diff --git a/cloud/iris/ray_ports.py b/cloud/iris/ray_ports.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..5c517cbe1ba2462bbcba7886e2d5a3579ec6ca35
+index 0000000000000000000000000000000000000000..b812285b63b453a381fd01cf888f88d6af36771a
 --- /dev/null
 +++ b/cloud/iris/ray_ports.py
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,42 @@
 +# Copyright The Marin Authors
 +# SPDX-License-Identifier: Apache-2.0
 +
@@ -141,6 +141,8 @@ index 0000000000000000000000000000000000000000..5c517cbe1ba2462bbcba7886e2d5a357
 +
 +import os
 +from enum import StrEnum
++
++from iris.cluster.platforms.types import find_free_port
 +
 +
 +class RayPort(StrEnum):
@@ -158,6 +160,30 @@ index 0000000000000000000000000000000000000000..5c517cbe1ba2462bbcba7886e2d5a357
 +def allocated_ray_port(port: RayPort) -> int:
 +    """Return the task's required scheduler allocation for a Ray endpoint."""
 +    return int(os.environ[f"IRIS_PORT_{port.value.upper()}"])
++
++
++def resolve_ray_ports() -> None:
++    """Resolve Iris's task-allocated port placeholders before Ray bootstrap."""
++    ports = {port: allocated_ray_port(port) for port in RayPort}
++    reserved = set(ports.values()) - {0}
++    for port, value in ports.items():
++        if value:
++            continue
++        # Kubernetes supplies zero placeholders; worker-backed tasks supply
++        # concrete allocations. Use the same kernel selection as Iris's JAX launcher.
++        value = find_free_port()
++        while value in reserved:
++            value = find_free_port()
++        reserved.add(value)
++        os.environ[f"IRIS_PORT_{port.value.upper()}"] = str(value)
+diff --git a/cloud/iris/rl_config_translation.py b/cloud/iris/rl_config_translation.py
+index b61d02b4c6a6c90f01702e02697f8ddb5ca46e89..2e2fe4080a9f0749ca632263652b6b22ebecf652 100644
+--- a/cloud/iris/rl_config_translation.py
++++ b/cloud/iris/rl_config_translation.py
+@@ -53 +52,0 @@ class RLEntrypoint(StrEnum):
+-    MINI_SWE = "mini_swe"
+@@ -63 +61,0 @@ RL_ENTRYPOINTS = MappingProxyType(
+-        RLEntrypoint.MINI_SWE: "skyrl_train.entrypoints.mini_swe",
 diff --git a/cloud/iris/runtime_bundle.py b/cloud/iris/runtime_bundle.py
 index 93c987c4b66b607e128dfa2cfedf0c0ab12804b9..76dff3a6817cdbb2ae97b96c85f3bebd13c37388 100644
 --- a/cloud/iris/runtime_bundle.py
@@ -382,11 +408,11 @@ index 9fb5a71ffa4317ad024112dbcf508eedaa89b722..d3f6b9513bfc79975a0aa0a6b7a53b65
 -                "launcher_commit": str(config.runtime.launcher_commit),
 +                "source_digest": str(config.runtime.source_digest),
 diff --git a/cloud/iris/task_runtime.py b/cloud/iris/task_runtime.py
-index 5f7d72c486ca1e1cd327ff4149cdba1c784ba407..b937a6ef9ccbe90c78d40e937c39eaf848738c87 100644
+index 5f7d72c486ca1e1cd327ff4149cdba1c784ba407..606217487f868ce979c71088c4dd6ee30da6f0ec 100644
 --- a/cloud/iris/task_runtime.py
 +++ b/cloud/iris/task_runtime.py
 @@ -84,0 +85 @@ from cloud.iris.paths import resolve_repo_path
-+from cloud.iris.ray_ports import RayPort, allocated_ray_port
++from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
 @@ -1011,23 +1011,0 @@ def clear_rendezvous(rendezvous_dir: str) -> None:
 -# Ray port allocation on cw-us-east-02a — PIN every named system port OUTSIDE the
 -# worker_ports range so Ray's own randomized agent ports can never collide with it.
@@ -453,6 +479,8 @@ index 5f7d72c486ca1e1cd327ff4149cdba1c784ba407..b937a6ef9ccbe90c78d40e937c39eaf8
 +    with ray_metrics_telemetry(node_ip, allocated_ray_port(RayPort.METRICS), WORKER_ROLE):
 @@ -2069 +2046,0 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
 -        ray_port=int(config.ray.port),
+@@ -2249,0 +2227 @@ def main() -> None:
++    resolve_ray_ports()
 diff --git a/cloud/iris/tests/conftest.py b/cloud/iris/tests/conftest.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..a0b7f6b8b896dc2611b72f23921961d04f2badc9
@@ -512,53 +540,65 @@ index 6657534dd4f715b8d822fc9655fbf223555ce7f7..d6578df8fee2171a0efaad0b9bf67a8c
 -    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, commit="abc123"))
 +    monkeypatch.setattr(fidelity, "resolve_launcher_source", lambda: SimpleNamespace(root=root, digest="a" * 64))
 diff --git a/cloud/iris/tests/test_ray_spill_policy.py b/cloud/iris/tests/test_ray_spill_policy.py
-index e4b655e087325225d4873dd1f733afc22829f123..22626413443352afbbdef5814ae13d0428c338eb 100644
+index e4b655e087325225d4873dd1f733afc22829f123..4949e357801c8705fa016fa90c4b8a4bab0298d6 100644
 --- a/cloud/iris/tests/test_ray_spill_policy.py
 +++ b/cloud/iris/tests/test_ray_spill_policy.py
-@@ -5,0 +6 @@ import pytest
+@@ -1,0 +2 @@ import re
++import socket
+@@ -2,0 +4 @@ import sys
++from contextlib import ExitStack
+@@ -5,0 +8 @@ import pytest
 +from ray._private.parameter import RayParams
-@@ -11,0 +13 @@ from cloud.iris import task_runtime as runtime  # noqa: E402
-+from cloud.iris.ray_ports import RayPort  # noqa: E402
-@@ -20,0 +23,38 @@ from cloud.iris.ray_storage import (  # noqa: E402
+@@ -11,0 +15 @@ from cloud.iris import task_runtime as runtime  # noqa: E402
++from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports  # noqa: E402
+@@ -19,0 +24,46 @@ from cloud.iris.ray_storage import (  # noqa: E402
 +pytestmark = pytest.mark.usefixtures("iris_ray_ports")
 +
 +
-+def test_concurrent_ray_heads_use_disjoint_scheduler_ports(tmp_path, monkeypatch):
++@pytest.mark.parametrize("first_ports", [(12000, 12100), (0, 0)], ids=["worker", "kubernetes"])
++def test_concurrent_ray_heads_use_disjoint_ports(tmp_path, monkeypatch, first_ports):
 +    commands = []
 +    monkeypatch.setattr(runtime.subprocess, "run", lambda command, **_kwargs: commands.append(command))
 +    endpoints = []
-+    for first_port in (12000, 12100):
-+        allocated = {port: first_port + index for index, port in enumerate(RayPort)}
-+        for port, value in allocated.items():
-+            monkeypatch.setenv(f"IRIS_PORT_{port.value.upper()}", str(value))
-+        runtime.ray_start_head("127.0.0.1", LocalRaySpillTarget(str(tmp_path / str(first_port))))
-+        flags = dict(argument.split("=", 1) for argument in commands[-1] if "=" in argument)
-+        ports = {
-+            "gcs_server_port": int(flags["--port"]),
-+            "dashboard_port": int(flags["--dashboard-port"]),
-+            "ray_client_server_port": int(flags["--ray-client-server-port"]),
-+            "metrics_export_port": int(flags["--metrics-export-port"]),
-+            "runtime_env_agent_port": int(flags["--runtime-env-agent-port"]),
-+            "metrics_agent_port": int(flags["--dashboard-agent-grpc-port"]),
-+            "dashboard_agent_listen_port": int(flags["--dashboard-agent-listen-port"]),
-+            "node_manager_port": int(flags["--node-manager-port"]),
-+            "object_manager_port": int(flags["--object-manager-port"]),
-+        }
-+        # Iris allocates in Ray's old default worker range. Validate the actual
-+        # pinned Ray parameters so agents cannot conflict with worker ports.
-+        parameters = RayParams(
-+            **ports,
-+            min_worker_port=int(flags["--min-worker-port"]),
-+            max_worker_port=int(flags["--max-worker-port"]),
-+        )
-+        parameters.update_pre_selected_port()
-+        assert ports["gcs_server_port"] == allocated[RayPort.HEAD]
-+        assert set(ports.values()) == set(allocated.values())
-+        endpoints.append(set(ports.values()))
++    with ExitStack() as listeners:
++        for first_port in first_ports:
++            requested = {port: first_port + index if first_port else 0 for index, port in enumerate(RayPort)}
++            for port, value in requested.items():
++                monkeypatch.setenv(f"IRIS_PORT_{port.value.upper()}", str(value))
++            resolve_ray_ports()
++            allocated = {port: allocated_ray_port(port) for port in RayPort}
++            if not first_port:
++                # Hold the real kernel-selected ports while resolving the next task.
++                for value in allocated.values():
++                    listener = listeners.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
++                    listener.bind(("", value))
++            runtime.ray_start_head("127.0.0.1", LocalRaySpillTarget(str(tmp_path / str(first_port))))
++            flags = dict(argument.split("=", 1) for argument in commands[-1] if "=" in argument)
++            ports = {
++                "gcs_server_port": int(flags["--port"]),
++                "dashboard_port": int(flags["--dashboard-port"]),
++                "ray_client_server_port": int(flags["--ray-client-server-port"]),
++                "metrics_export_port": int(flags["--metrics-export-port"]),
++                "runtime_env_agent_port": int(flags["--runtime-env-agent-port"]),
++                "metrics_agent_port": int(flags["--dashboard-agent-grpc-port"]),
++                "dashboard_agent_listen_port": int(flags["--dashboard-agent-listen-port"]),
++                "node_manager_port": int(flags["--node-manager-port"]),
++                "object_manager_port": int(flags["--object-manager-port"]),
++            }
++            # Iris allocates in Ray's old default worker range. Validate the actual
++            # pinned Ray parameters so agents cannot conflict with worker ports.
++            parameters = RayParams(
++                **ports,
++                min_worker_port=int(flags["--min-worker-port"]),
++                max_worker_port=int(flags["--max-worker-port"]),
++            )
++            parameters.update_pre_selected_port()
++            assert ports["gcs_server_port"] == allocated[RayPort.HEAD]
++            assert set(ports.values()) == set(allocated.values())
++            endpoints.append(set(ports.values()))
 +    assert endpoints[0].isdisjoint(endpoints[1])
 +
-+
-@@ -66 +106 @@ def test_local_spill_directory_exists_before_ray_start(tmp_path, monkeypatch, ro
+@@ -66 +116 @@ def test_local_spill_directory_exists_before_ray_start(tmp_path, monkeypatch, ro
 -        runtime.ray_start_head("10.0.0.1", 6379, target)
 +        runtime.ray_start_head("10.0.0.1", target)
 diff --git a/cloud/iris/tests/test_task_runtime_debug_artifacts.py b/cloud/iris/tests/test_task_runtime_debug_artifacts.py
@@ -591,6 +631,366 @@ index 674543c7b6e35b4703eaf4a630a649ffc48fcfcf..69e2ac19f213a67182ff1e3cb98a2a53
 +
 @@ -90 +92,0 @@ def _runtime_args(
 -        ray_port=6379,
+diff --git a/cloud/iris/tests/test_tinker_opd_aime24_submission.py b/cloud/iris/tests/test_tinker_opd_aime24_submission.py
+deleted file mode 100644
+index c1dc549bf3fe0013872ef3c0b9d6408eae804a19..0000000000000000000000000000000000000000
+--- a/cloud/iris/tests/test_tinker_opd_aime24_submission.py
++++ /dev/null
+@@ -1,143 +0,0 @@
+-import importlib.util
+-import json
+-import sys
+-from collections.abc import Iterator
+-from contextlib import contextmanager
+-from pathlib import Path
+-from types import SimpleNamespace
+-from typing import Any
+-
+-import pytest
+-
+-SUBMITTER_PATH = Path(__file__).parents[3] / "skyrl-train" / "ci" / "opd" / "tinker_repro" / "submit_iris.py"
+-sys.path.insert(0, str(SUBMITTER_PATH.parent))
+-SPEC = importlib.util.spec_from_file_location("tinker_opd_aime24_submitter", SUBMITTER_PATH)
+-assert SPEC is not None and SPEC.loader is not None
+-submitter = importlib.util.module_from_spec(SPEC)
+-sys.modules[SPEC.name] = submitter
+-SPEC.loader.exec_module(submitter)
+-
+-
+-def test_submit_sends_secret_only_in_environment_and_requests_cpu_worker(monkeypatch) -> None:
+-    captured: dict[str, Any] = {}
+-
+-    class Client:
+-        def submit(self, **kwargs: Any) -> SimpleNamespace:
+-            captured["submit"] = kwargs
+-            return SimpleNamespace(job_id="/ben/tinker-opd-aime24")
+-
+-    @contextmanager
+-    def open_iris_client(*, cluster_name: str, workspace: Path) -> Iterator[Client]:
+-        yield Client()
+-
+-    monkeypatch.setattr(submitter, "open_iris_client", open_iris_client)
+-    api_key = "sentinel-tinker-api-key"
+-    job_id = submitter.submit(
+-        submitter.SubmissionConfig(
+-            checkpoint="tinker://released/sampler_weights/final",
+-            save_dir="s3://evaluation/results",
+-            max_examples=1,
+-        ),
+-        tinker_api_key=api_key,
+-    )
+-
+-    request = captured["submit"]
+-    assert job_id == "/ben/tinker-opd-aime24"
+-    assert request["environment"].env_vars == {"TINKER_API_KEY": api_key}
+-    assert api_key not in request["entrypoint"].command
+-    assert not request["resources"].to_proto().HasField("device")
+-    assert request["max_retries_failure"] == 0
+-    assert request["max_task_failures"] == 0
+-
+-
+-def test_cli_defaults_to_non_secret_dry_run(monkeypatch, capsys, tmp_path: Path) -> None:
+-    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+-    monkeypatch.setattr(submitter, "submit", lambda *args, **kwargs: pytest.fail("dry run submitted a job"))
+-    monkeypatch.setattr(
+-        submitter,
+-        "load_secrets_env_into_os_environ",
+-        lambda path: pytest.fail("dry run read the secrets file"),
+-    )
+-    secrets_env = tmp_path / "explicit-secrets.env"
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--checkpoint",
+-                "tinker://released/sampler_weights/final",
+-                "--save-dir",
+-                "s3://evaluation/unique-run",
+-                "--max-examples",
+-                "1",
+-                "--secrets-env",
+-                str(secrets_env),
+-            ]
+-        )
+-        == 0
+-    )
+-    output = capsys.readouterr().out
+-    plan = json.loads(output.split("\nDry run only.", 1)[0])
+-    assert plan["cluster"] == "cw-rno2a"
+-    assert plan["checkpoint"] == "tinker://released/sampler_weights/final"
+-    assert plan["save_dir"] == "s3://evaluation/unique-run"
+-    assert plan["max_examples"] == 1
+-    assert plan["secrets_env"] == str(secrets_env)
+-    assert "TINKER_API_KEY" not in output
+-
+-
+-def test_cli_submit_loads_export_assignment_before_key_lookup(monkeypatch, capsys, tmp_path: Path) -> None:
+-    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+-    secrets_env = tmp_path / "submit-secrets.env"
+-    secrets_env.write_text("export TINKER_API_KEY='sentinel-tinker'\n")
+-    captured: dict[str, Any] = {}
+-
+-    def submit(config: Any, *, tinker_api_key: str) -> str:
+-        captured["config"] = config
+-        captured["tinker_api_key"] = tinker_api_key
+-        return "/ben/tinker-opd-aime24"
+-
+-    monkeypatch.setattr(submitter, "submit", submit)
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--checkpoint",
+-                "tinker://released/sampler_weights/final",
+-                "--save-dir",
+-                "s3://evaluation/unique-submit",
+-                "--secrets-env",
+-                str(secrets_env),
+-                "--submit",
+-            ]
+-        )
+-        == 0
+-    )
+-
+-    assert captured == {
+-        "config": submitter.SubmissionConfig(
+-            checkpoint="tinker://released/sampler_weights/final",
+-            save_dir="s3://evaluation/unique-submit",
+-            max_examples=None,
+-            secrets_env=str(secrets_env),
+-        ),
+-        "tinker_api_key": "sentinel-tinker",
+-    }
+-    assert "/ben/tinker-opd-aime24" in capsys.readouterr().out
+-
+-
+-def test_cli_submission_requires_key(monkeypatch, capsys, tmp_path: Path) -> None:
+-    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+-
+-    with pytest.raises(SystemExit, match="TINKER_API_KEY must be set"):
+-        submitter.main(
+-            [
+-                "--checkpoint",
+-                "tinker://released/sampler_weights/final",
+-                "--save-dir",
+-                "s3://evaluation/unique-run",
+-                "--secrets-env",
+-                str(tmp_path / "missing.env"),
+-                "--submit",
+-            ]
+-        )
+-    capsys.readouterr()
+diff --git a/cloud/iris/tests/test_tinker_opd_training_submission.py b/cloud/iris/tests/test_tinker_opd_training_submission.py
+deleted file mode 100644
+index 8008dac314a36f9cf0fbf7256155d19b9ee8b8e3..0000000000000000000000000000000000000000
+--- a/cloud/iris/tests/test_tinker_opd_training_submission.py
++++ /dev/null
+@@ -1,205 +0,0 @@
+-import importlib.util
+-import json
+-import sys
+-from collections.abc import Iterator
+-from contextlib import contextmanager
+-from decimal import Decimal
+-from pathlib import Path
+-from types import SimpleNamespace
+-from typing import Any
+-
+-import pytest
+-
+-MODULE_DIR = Path(__file__).parents[3] / "skyrl-train" / "ci" / "opd" / "tinker_repro"
+-sys.path.insert(0, str(MODULE_DIR))
+-SUBMITTER_PATH = MODULE_DIR / "submit_training_iris.py"
+-SPEC = importlib.util.spec_from_file_location("tinker_opd_training_submitter", SUBMITTER_PATH)
+-assert SPEC is not None and SPEC.loader is not None
+-submitter = importlib.util.module_from_spec(SPEC)
+-sys.modules[SPEC.name] = submitter
+-SPEC.loader.exec_module(submitter)
+-
+-
+-def full_sft_config(acknowledgement: Decimal | None) -> Any:
+-    return submitter.SubmissionConfig(
+-        plan=submitter.build_training_plan(
+-            submitter.Stage.SFT_FULL,
+-            run_id="repro-20260914",
+-            output_uri="s3://marin-us-east-02a/experiments/repro-20260914/sft",
+-        ),
+-        cost_acknowledgement=acknowledgement,
+-    )
+-
+-
+-def test_submit_full_stage_keeps_credentials_out_of_argv_and_disables_retries(monkeypatch) -> None:
+-    captured: dict[str, Any] = {}
+-
+-    class Client:
+-        def submit(self, **kwargs: Any) -> SimpleNamespace:
+-            captured["submit"] = kwargs
+-            return SimpleNamespace(job_id="/ben/tinker-sft-full")
+-
+-    @contextmanager
+-    def open_iris_client(*, cluster_name: str, workspace: Path) -> Iterator[Client]:
+-        yield Client()
+-
+-    monkeypatch.setattr(submitter, "open_iris_client", open_iris_client)
+-    credentials = submitter.Credentials(
+-        tinker_api_key="sentinel-tinker-key",
+-        wandb_api_key="sentinel-wandb-key",
+-        hf_token="sentinel-hf-key",
+-    )
+-    job_id = submitter.submit(full_sft_config(Decimal("10000")), credentials=credentials)
+-
+-    assert job_id == "/ben/tinker-sft-full"
+-    request = captured["submit"]
+-    assert request["environment"].env_vars == {
+-        "TINKER_API_KEY": "sentinel-tinker-key",
+-        "WANDB_API_KEY": "sentinel-wandb-key",
+-        "HF_TOKEN": "sentinel-hf-key",
+-    }
+-    command = request["entrypoint"].command
+-    assert not any("sentinel" in argument for argument in command)
+-    # The in-task script re-checks the acknowledgement, so it must be forwarded.
+-    assert command[-2:] == ["--acknowledge-cost-usd", "10000"]
+-    assert not request["resources"].to_proto().HasField("device")
+-    assert request["max_retries_failure"] == 0
+-    assert request["max_task_failures"] == 0
+-
+-
+-def test_cli_defaults_to_dry_run_without_reading_credentials(monkeypatch, capsys, tmp_path: Path) -> None:
+-    monkeypatch.delenv("TINKER_API_KEY", raising=False)
+-    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+-    monkeypatch.setattr(submitter, "submit", lambda *args, **kwargs: pytest.fail("dry run submitted a job"))
+-    monkeypatch.setattr(
+-        submitter,
+-        "load_secrets_env_into_os_environ",
+-        lambda path: pytest.fail("dry run read the secrets file"),
+-    )
+-    secrets_env = tmp_path / "explicit-secrets.env"
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--stage",
+-                "sft_full",
+-                "--run-id",
+-                "repro-20260914",
+-                "--output-uri",
+-                "s3://marin-us-east-02a/experiments/repro-20260914/sft",
+-                "--secrets-env",
+-                str(secrets_env),
+-            ]
+-        )
+-        == 0
+-    )
+-    output = capsys.readouterr().out
+-    plan = json.loads(output.split("\nDry run only.", 1)[0])
+-    assert plan["training"]["stage"] == "sft_full"
+-    assert plan["required_cost_acknowledgement_usd"] == "10000"
+-    assert plan["priority"] == "interactive"
+-    assert plan["secrets_env"] == str(secrets_env)
+-    assert "TINKER_API_KEY" not in output
+-
+-
+-def test_cli_submit_loads_export_assignments_before_credential_lookup(monkeypatch, capsys, tmp_path: Path) -> None:
+-    for key in ("TINKER_API_KEY", "WANDB_API_KEY", "HF_TOKEN"):
+-        monkeypatch.delenv(key, raising=False)
+-    secrets_env = tmp_path / "submit-secrets.env"
+-    secrets_env.write_text(
+-        "export TINKER_API_KEY=sentinel-tinker\n"
+-        "export WANDB_API_KEY='sentinel-wandb'\n"
+-        'export HF_TOKEN="sentinel-hf"\n'
+-    )
+-    captured: dict[str, Any] = {}
+-
+-    def submit(config: Any, *, credentials: Any) -> str:
+-        captured["config"] = config
+-        captured["credentials"] = credentials
+-        return "/ben/tinker-sft-plumbing"
+-
+-    monkeypatch.setattr(submitter, "submit", submit)
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--stage",
+-                "sft_plumbing",
+-                "--run-id",
+-                "repro-20260914",
+-                "--output-uri",
+-                "s3://marin-us-east-02a/experiments/repro-20260914/sft-plumbing",
+-                "--secrets-env",
+-                str(secrets_env),
+-                "--submit",
+-            ]
+-        )
+-        == 0
+-    )
+-
+-    assert captured["config"].secrets_env == str(secrets_env)
+-    assert captured["credentials"] == submitter.Credentials(
+-        "sentinel-tinker",
+-        "sentinel-wandb",
+-        "sentinel-hf",
+-    )
+-    assert "/ben/tinker-sft-plumbing" in capsys.readouterr().out
+-
+-
+-def test_cli_defaults_secrets_env_to_configured_approved_file(monkeypatch, capsys, tmp_path: Path) -> None:
+-    secrets_env = tmp_path / "operator-secrets.env"
+-    secrets_env.touch()
+-    monkeypatch.setenv("OT_AGENT_SECRETS_ENV", str(secrets_env))
+-    monkeypatch.setattr(
+-        submitter,
+-        "load_secrets_env_into_os_environ",
+-        lambda path: pytest.fail("dry run read the secrets file"),
+-    )
+-
+-    assert (
+-        submitter.main(
+-            [
+-                "--stage",
+-                "sft_plumbing",
+-                "--run-id",
+-                "repro-20260914",
+-                "--output-uri",
+-                "s3://marin-us-east-02a/experiments/repro-20260914/sft-default",
+-            ]
+-        )
+-        == 0
+-    )
+-
+-    output = capsys.readouterr().out
+-    plan = json.loads(output.split("\nDry run only.", 1)[0])
+-    assert plan["secrets_env"] == str(secrets_env)
+-
+-
+-def test_default_secrets_env_falls_back_to_documents_file(monkeypatch, tmp_path: Path) -> None:
+-    secrets_env = tmp_path / "Documents" / "secrets.env"
+-    secrets_env.parent.mkdir()
+-    secrets_env.touch()
+-    monkeypatch.delenv("OT_AGENT_SECRETS_ENV", raising=False)
+-    monkeypatch.setenv("HOME", str(tmp_path))
+-
+-    assert submitter.default_secrets_env() == str(secrets_env)
+-
+-
+-def test_cli_submit_full_stage_without_acknowledgement_cannot_reach_submission(monkeypatch, capsys) -> None:
+-    monkeypatch.setenv("TINKER_API_KEY", "unused")
+-    monkeypatch.setenv("WANDB_API_KEY", "unused")
+-    monkeypatch.setattr(submitter, "submit", lambda *args, **kwargs: pytest.fail("unauthorized full run submitted"))
+-
+-    with pytest.raises(SystemExit, match="requires --acknowledge-cost-usd 10000"):
+-        submitter.main(
+-            [
+-                "--stage",
+-                "sft_full",
+-                "--run-id",
+-                "repro-20260914",
+-                "--output-uri",
+-                "s3://marin-us-east-02a/experiments/repro-20260914/sft",
+-                "--submit",
+-            ]
+-        )
+-    capsys.readouterr()
 diff --git a/cloud/iris/tests/test_vendored_runtime_bundle.py b/cloud/iris/tests/test_vendored_runtime_bundle.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..f9364dedb2fb757f71ca03b43cd2385b868c50ff
@@ -735,6 +1135,287 @@ index 0000000000000000000000000000000000000000..3da544653db86ad9fc799e376e96d355
 +    for answer, passed in [(correct, True), (wrong, False), ("", False)]:
 +        result = judge.verify(RolloutEvidence(response=f"Answer: \\boxed{{{answer}}}"))
 +        assert result.passed is passed
+diff --git a/skyrl-train/skyrl_train/dataset/replay_buffer.py b/skyrl-train/skyrl_train/dataset/replay_buffer.py
+index 424f8e3bc9ad02f46ece2c25d56b54b3c505aa7f..08da9674ae0e314700de33c353d61c2c48d6df5f 100644
+--- a/skyrl-train/skyrl_train/dataset/replay_buffer.py
++++ b/skyrl-train/skyrl_train/dataset/replay_buffer.py
+@@ -1,3 +1 @@
+-"""
+-Replay buffer utilities.
+-"""
++"""Experience tensors consumed by the training batch iterator and workers."""
+@@ -5,5 +2,0 @@ Replay buffer utilities.
+-# NOTE (sumanthrh): These are replay buffer utilities from OpenRLHF.
+-# While currently unused, we may need them in the future for more involved off-policy algorithms.
+-import copy
+-import random
+-from abc import ABC
+@@ -15 +7,0 @@ import torch
+-import torch.nn.functional as F
+@@ -153,263 +144,0 @@ class Experience:
+-
+-
+-@dataclass
+-class BufferItem:
+-    """BufferItem is an item of experience data.
+-
+-    Shapes of each tensor:
+-    sequences: (S)
+-    action_log_probs: (A)
+-    base_action_log_probs: (A)
+-    values: (1)
+-    returns: (1)
+-    advatanges: (1)
+-    attention_mask: (S)
+-    loss_mask: (A)
+-    action_mask: (A)
+-
+-    "A" is the number of actions.
+-    """
+-
+-    sequences: Integer[torch.Tensor, "seq_len"]  # noqa: F821
+-    action_log_probs: Float[torch.Tensor, "response_len"]  # noqa: F821
+-    base_action_log_probs: Optional[Float[torch.Tensor, "response_len"]]  # noqa: F821
+-    values: Optional[Float[torch.Tensor, "response_len"]]  # noqa: F821
+-    returns: Optional[Float[torch.Tensor, "response_len"]]  # noqa: F821
+-    advantages: Optional[Float[torch.Tensor, "response_len"]]  # noqa: F821
+-    attention_mask: Optional[Integer[torch.LongTensor, "seq_len"]]  # noqa: F821
+-    loss_mask: Optional[Integer[torch.LongTensor, "response_len"]]  # noqa: F821
+-    action_mask: Optional[Integer[torch.Tensor, "response_len"]]  # noqa: F821
+-    num_actions: int
+-    info: Optional[dict]
+-
+-    rollout_logprobs: Optional[Float[torch.Tensor, "response_len"]] = None  # noqa: F821
+-    correction_weights: Optional[Float[torch.Tensor, "response_len"]] = None  # noqa: F821
+-
+-    def to_json(self) -> dict:
+-        def _to_json(obj):
+-            if isinstance(obj, torch.Tensor):
+-                return obj.cpu().tolist()
+-            elif isinstance(obj, dict):
+-                return {k: _to_json(v) for k, v in obj.items()}
+-            elif isinstance(obj, (list, tuple)):
+-                return [_to_json(x) for x in obj]
+-            else:
+-                return obj
+-
+-        return {k: _to_json(v) for k, v in self.__dict__.items()}
+-
+-
+-def split_experience_batch(experience: Experience) -> List[BufferItem]:
+-    keys = (
+-        "sequences",
+-        "action_log_probs",
+-        "base_action_log_probs",
+-        "values",
+-        "returns",
+-        "advantages",
+-        "attention_mask",
+-        "loss_mask",
+-        "action_mask",
+-        "rollout_logprobs",
+-        "correction_weights",
+-        "num_actions",
+-    )
+-    if len(experience.sequences.shape) == 1:
+-        # no padding
+-        batch_size = 1
+-        for key in keys:
+-            value = getattr(experience, key)
+-            if value is not None:
+-                if isinstance(value, torch.Tensor):
+-                    value = value.unsqueeze(0)
+-                setattr(experience, key, value)
+-    else:
+-        batch_size = len(experience.sequences)
+-    batch_kwargs = [{} for _ in range(batch_size)]
+-
+-    for key in keys:
+-        value = getattr(experience, key)
+-        if value is None:
+-            for i in range(batch_size):
+-                batch_kwargs[i][key] = None
+-            continue
+-        vals = [value] * batch_size if isinstance(value, int) else value
+-        if isinstance(vals, torch.Tensor):
+-            vals = torch.unbind(vals)
+-        assert batch_size == len(vals)
+-        for i, v in enumerate(vals):
+-            if isinstance(v, torch.Tensor):
+-                v = v.clone()
+-            batch_kwargs[i][key] = v
+-
+-    for i in range(batch_size):
+-        batch_kwargs[i]["info"] = {}
+-    for k, v in experience.info.items():
+-        vals = torch.unbind(v)
+-        assert batch_size == len(vals)
+-        for i, vv in enumerate(vals):
+-            if isinstance(vv, torch.Tensor):
+-                assert vv.numel() == 1, f"info[{k}] must be a scalar tensor, but got {vv.shape}"
+-                vv = vv.item()
+-            batch_kwargs[i]["info"][k] = vv
+-
+-    items = [BufferItem(**kwargs) for kwargs in batch_kwargs]
+-    return items
+-
+-
+-def zero_pad_sequences(sequences: List[torch.Tensor], side: str = "left") -> torch.Tensor:
+-    assert side in ("left", "right")
+-    max_len = max(seq.size(0) for seq in sequences)
+-    padded_sequences = []
+-    for seq in sequences:
+-        pad_len = max_len - seq.size(0)
+-        padding = (pad_len, 0) if side == "left" else (0, pad_len)
+-        padded_sequences.append(F.pad(seq, padding))
+-    return torch.stack(padded_sequences, dim=0)
+-
+-
+-def make_experience_batch(items: List[BufferItem]) -> Experience:
+-    kwargs = {}
+-    keys = (
+-        "sequences",
+-        "action_log_probs",
+-        "base_action_log_probs",
+-        "values",
+-        "returns",
+-        "advantages",
+-        "attention_mask",
+-        "loss_mask",
+-        "action_mask",
+-        "rollout_logprobs",
+-        "correction_weights",
+-        "num_actions",
+-    )
+-    for key in keys:
+-        vals = [getattr(item, key) for item in items]
+-        # NOTE (sumanthrh): Assumes list of Tensors
+-        batch_data = vals if vals[0] is not None else None
+-        kwargs[key] = batch_data
+-
+-    kwargs["info"] = {}
+-    for key in items[0].info.keys():
+-        vals = torch.tensor([item.info[key] for item in items])
+-        kwargs["info"][key] = vals
+-    return Experience(**kwargs)
+-
+-
+-def remove_padding_in_sequences(items):
+-    for item in items:
+-        seq, act_log_prob, base_act_log_prob, value, ret, adv, att_mask, act_mask = (
+-            item.sequences,
+-            item.action_log_probs,
+-            item.base_action_log_probs,
+-            item.values,
+-            item.returns,
+-            item.advantages,
+-            item.attention_mask,
+-            item.action_mask,
+-        )
+-        right_pad = (1 - act_mask.long()).sum()
+-        right_pad = None if right_pad == 0 else -right_pad
+-
+-        # left_pad for seq and att_mask
+-        left_pad = att_mask.long().argmax()
+-        (
+-            item.sequences,
+-            item.action_log_probs,
+-            item.base_action_log_probs,
+-            item.values,
+-            item.returns,
+-            item.advantages,
+-            item.attention_mask,
+-            item.action_mask,
+-        ) = (
+-            seq[left_pad:right_pad],
+-            act_log_prob[:right_pad],
+-            base_act_log_prob[:right_pad] if base_act_log_prob is not None else None,
+-            value[:right_pad] if value is not None else None,
+-            ret[:right_pad] if ret is not None else None,
+-            adv[:right_pad] if adv is not None else None,
+-            att_mask[left_pad:right_pad] if att_mask is not None else None,
+-            act_mask[:right_pad] if act_mask is not None else None,
+-        )
+-        for key in ("loss_mask", "rollout_logprobs", "correction_weights"):
+-            value = getattr(item, key)
+-            if value is not None:
+-                setattr(item, key, value[:right_pad])
+-    return items
+-
+-
+-class NaiveReplayBuffer(ABC):
+-    """Naive replay buffer class. It stores experience.
+-
+-    Args:
+-        sample_batch_size (int): Batch size when sampling.
+-        limit (int, optional): Limit of number of experience samples. A number <= 0 means unlimited. Defaults to 0.
+-        cpu_offload (bool, optional): Whether to offload experience to cpu when sampling. Defaults to True.
+-    """
+-
+-    def __init__(
+-        self,
+-        sample_batch_size: int,
+-        limit: int = 0,
+-        cpu_offload: bool = True,
+-    ) -> None:
+-        super().__init__()
+-        self.sample_batch_size = sample_batch_size
+-        # limit <= 0 means unlimited
+-        self.limit = limit
+-        self.cpu_offload = cpu_offload
+-        self.target_device = (
+-            torch.device(f"cuda:{torch.cuda.current_device()}") if torch.cuda.is_available() else torch.device("cpu")
+-        )
+-        self.items: List[BufferItem] = []
+-
+-    @torch.no_grad()
+-    def split_to_n_batches(self, n_batches: int, drop_last: bool = False) -> List["NaiveReplayBuffer"]:
+-        assert n_batches > 0
+-        if not drop_last:
+-            batch_size = (len(self.items) + n_batches - 1) // n_batches
+-        else:
+-            batch_size = len(self.items) // n_batches
+-        if len(self.items) < batch_size * n_batches:
+-            # padding
+-            padding_size = batch_size * n_batches - len(self.items)
+-            padding_items = random.choices(self.items, k=padding_size)
+-            self.items.extend(padding_items)
+-        bfs = []
+-        items = copy.deepcopy(self.items)
+-        random.shuffle(items)
+-        for i in range(n_batches):
+-            bf = NaiveReplayBuffer(
+-                sample_batch_size=self.sample_batch_size,
+-                limit=self.limit,
+-                cpu_offload=self.cpu_offload,
+-            )
+-            bf.items = items[i * batch_size : (i + 1) * batch_size]
+-            bfs.append(bf)
+-        return bfs
+-
+-    @torch.no_grad()
+-    def append(self, experience: Experience) -> None:
+-        if self.cpu_offload:
+-            experience.to_device(torch.device("cpu"))
+-        items = split_experience_batch(experience)
+-        self.items.extend(items)
+-        if self.limit > 0:
+-            samples_to_remove = len(self.items) - self.limit
+-            if samples_to_remove > 0:
+-                self.items = self.items[samples_to_remove:]
+-
+-    def clear(self) -> None:
+-        self.items.clear()
+-
+-    def __len__(self) -> int:
+-        return len(self.items)
+-
+-    def __getitem__(self, idx: int) -> BufferItem:
+-        return self.items[idx]
+-
+-    def collate_fn(self, batch) -> Experience:
+-        experience = make_experience_batch(batch)
+-        return experience
 diff --git a/skyrl-train/skyrl_train/mismatch_probe/provenance.py b/skyrl-train/skyrl_train/mismatch_probe/provenance.py
 index d9fa4aa7cbda90cdde397159f4f2359f01e5076b..97554d2eec46c72d01d9dfe4df4d83473767b6e2 100644
 --- a/skyrl-train/skyrl_train/mismatch_probe/provenance.py

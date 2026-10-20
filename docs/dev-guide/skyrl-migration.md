@@ -10,11 +10,15 @@ supported inside that nested environment. SkyRL remains outside Marin's
 workspace and root dependency resolution.
 
 Marin's launcher uses this nested project. It passes the launch document to
-`uv run --isolated --project vendor/skyrl --frozen --no-group dev marinskyrl`
+`uv run --project vendor/skyrl --frozen --no-group dev marinskyrl`
 after clearing the parent's Python environment selection. The CPU launcher
 verifies source and asset hashes, then bundles the project and its lock for
 Iris. Workers install that source in editable mode with the frozen
 Megatron/vLLM profile. No task clones the SkyRL fork.
+
+The launcher reuses `vendor/skyrl/.venv` for its CPU dependencies. It clears
+Marin's Python environment selection before invoking uv, so that environment
+uses only SkyRL's project and lock. GPU workers have their own environments.
 
 The captured runtime supports Megatron training. Marin's curriculum arms use
 Megatron for both Qwen and Snowball. The Snowball recipes follow
@@ -22,9 +26,11 @@ Megatron for both Qwen and Snowball. The Snowball recipes follow
 including separate reference nodes, recomputation and optimizer offload.
 The obsolete FSDP profile and recipe fields are removed.
 
-Iris assigns each task's named Ray ports. This lets concurrent jobs share a GPU
-host without connecting to another job's Ray head or competing for fixed agent
-ports. The head publishes its assigned address through the launch rendezvous.
+SkyRL requests named Ray ports from Iris. Worker-backed tasks use the scheduler's
+allocations; Kubernetes tasks resolve Iris's zero placeholders through the kernel,
+as Iris's JAX launcher does. This lets concurrent jobs share a GPU host without
+connecting to another job's Ray head or competing for fixed agent ports. The head
+publishes its resolved address through the launch rendezvous.
 
 ```mermaid
 flowchart LR

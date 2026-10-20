@@ -296,7 +296,7 @@ def test_migration_fix_is_preserved_when_transplanting_open_work(
     assert (source / "skyrl-train/skyrl_train/relative.py").read_text() == "value = 1\n"
     github_fake(monkeypatch, migration.read_json(snapshot_dir / "snapshot.json"), "cutover")
     with pytest.raises(ValueError, match="migration fixes"):
-        migration.validate_cutover(99, base, provenance["patches"])
+        migration.validate_cutover(99, base, [migration.MigrationPatch(**patch) for patch in provenance["patches"]])
 
 
 def test_partial_pr_is_staged_but_blocks_its_child(snapshot_dir: Path, tmp_path: Path) -> None:

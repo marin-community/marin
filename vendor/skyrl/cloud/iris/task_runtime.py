@@ -82,7 +82,7 @@ from marinskyrl.process_diagnostics import (
     write_process_outcome,
 )
 from cloud.iris.paths import resolve_repo_path
-from cloud.iris.ray_ports import RayPort, allocated_ray_port
+from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -2224,6 +2224,7 @@ def main() -> None:
             else policy_local_path or policy_chat_template_model(args.prestage_model, args.model_local_path)
         )
         apply_policy_chat_template(model_path, args.policy_chat_template)
+    resolve_ray_ports()
     rank = _rank()
     debug_mode = DebugMode(str(launch_config.skyrl.get("trainer", {}).get("debug_mode", DebugMode.LIGHT.value)))
     if rank == 0:
