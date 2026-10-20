@@ -37,11 +37,7 @@ ROLLOUTS_WITHOUT_IDEAS = "failed_runs.rollouts_without_ideas"
 logger = logging.getLogger(__name__)
 
 MakeClient = Callable[[], AbstractAsyncContextManager[ModelClient]]
-"""Makes a model client, for example ``functools.partial(GlmClient, source, provider)``.
-
-Zephyr calls the functions of a pipeline on its workers, outside an event loop, so each model call makes its own
-client there and closes it after the call.
-"""
+"""Factory for an async context manager that yields a model client."""
 
 
 class Capability(BaseModel):
@@ -204,10 +200,9 @@ def yield_ideas(graded: GradedRollout, *, make_client: MakeClient, policy: LLMPo
 def merge_ideas(
     ideas: Iterable[MaybeIdea], *, make_client: MakeClient, max_new_ideas: int, policy: LLMPolicy
 ) -> list[MaybeIdea]:
-    """At most ``max_new_ideas`` ideas that one structured call merges from ``ideas``, with more rollouts first.
+    """Return at most ``max_new_ideas`` merged ideas, ordered by rollout count.
 
-    The merge reply lists the ID of each line, so it grows with the ideas, and GLM sometimes runs away to the output
-    limit in a long structured reply. Thus a merge makes up to ``MERGE_ATTEMPTS`` calls until a reply is valid.
+    Retry invalid model replies up to ``MERGE_ATTEMPTS`` times.
     """
     lines = {f"k{i}": candidate for i, candidate in enumerate(ideas)}
     if not lines:
@@ -239,7 +234,7 @@ def merge_ideas(
 def merge_idea_lists(
     lists: Iterable[list[MaybeIdea]], *, merge: Callable[[Iterable[MaybeIdea]], list[MaybeIdea]]
 ) -> list[MaybeIdea]:
-    """The global reducer: one more ``merge`` of the lists of the groups. One list needs no second merge."""
+    """Merge nonempty groups into one list of ideas."""
     full = [ideas for ideas in lists if ideas]
     return full[0] if len(full) == 1 else merge(chain.from_iterable(full))
 
