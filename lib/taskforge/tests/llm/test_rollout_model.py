@@ -26,6 +26,7 @@ from rolloutengine.models import (
     GenerationLimitReached,
     GradedRollout,
     ModelRequest,
+    RolloutContractError,
     RolloutStep,
     TaskRolloutSpec,
     TokenUsage,
@@ -226,7 +227,7 @@ async def test_request_with_token_ids_is_refused_before_any_call(fake_glm, fake_
     messages = ({"role": "user", "content": "x"}, {"role": "assistant", "content": "y"})
     request = ModelRequest(messages, {}, **request_ids)
 
-    with pytest.raises(ValueError, match="MESSAGES"):
+    with pytest.raises(RolloutContractError, match="MESSAGES"):
         await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
 
     assert fake_glm.requests == []

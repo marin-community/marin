@@ -10,7 +10,8 @@ reason, a span carries the call's attempt record: ``attempts`` (every HTTP reque
 ``attempts_<outcome>`` count per failed outcome (``retryable_status`` for 429 and 5xx,
 ``route_missing`` for a relay hold, and so on), the non-200 ``http_statuses`` in order, and
 ``wall_time``, which includes backoff and holds. A call that runs out of attempts or hold time
-raises ``ModelUnavailable``; its span keeps the same attempt fields and ``cause``.
+raises ``ModelUnavailable``, and one the server rejects raises ``ModelRequestRejected`` (or its
+``ContextExhausted``); either span keeps the same attempt fields and ``cause``.
 """
 
 import time
@@ -28,6 +29,7 @@ from taskforge.llm.client import (
     Completion,
     FinishReason,
     ModelClient,
+    ModelRequestRejected,
     ModelUnavailable,
     StructuredResult,
     Usage,
@@ -99,11 +101,11 @@ async def complete_into(
     policy: LLMPolicy,
     request_fields: Mapping[str, object],
 ) -> Completion:
-    """``client.complete`` with its tokens and attempt record written to ``fields``, also when it runs out."""
+    """``client.complete`` with its tokens and attempt record written to ``fields``, also when it fails."""
     started = time.monotonic()
     try:
         completion = await client.complete(messages, policy, request_fields)
-    except ModelUnavailable as error:
+    except (ModelUnavailable, ModelRequestRejected) as error:
         fields.attrs.update(attempt_attrs(error.attempts, time.monotonic() - started))
         raise
     record_completions(fields, (completion,))
@@ -138,7 +140,7 @@ async def recorded_structured[T: BaseModel](
 
     The span sums the first request and its repairs and records their count as ``requests``.
     Exceptions propagate. A ``StructuredOutputError`` span keeps every reply's usage and attempts,
-    and a ``ModelUnavailable`` span keeps the attempts of the request that ran out.
+    and a ``ModelUnavailable`` or ``ModelRequestRejected`` span keeps the attempts of the failed request.
     """
     with llm_call_span(record, client.model, attrs) as fields:
         started = time.monotonic()
@@ -148,7 +150,7 @@ async def recorded_structured[T: BaseModel](
             record_completions(fields, error.completions)
             fields.attrs["requests"] = str(len(error.completions))
             raise
-        except ModelUnavailable as error:
+        except (ModelUnavailable, ModelRequestRejected) as error:
             fields.attrs.update(attempt_attrs(error.attempts, time.monotonic() - started))
             raise
         record_completions(fields, result.completions)

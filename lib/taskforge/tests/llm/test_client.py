@@ -354,9 +354,34 @@ def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_p
         async with GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), provider) as client:
             before = client.http
             completion = await client.complete(MESSAGES, LLMPolicy())
-            return completion, client.http is not before and not before.is_closed
+            return completion, client.http is not before and before.is_closed
 
-    completion, replaced_and_retired = asyncio.run(call())
+    completion, replaced_and_closed = asyncio.run(call())
     assert completion.content == "second try"
     assert outcomes(completion) == [AttemptOutcome.STALLED, AttemptOutcome.COMPLETED]
-    assert replaced_and_retired
+    assert replaced_and_closed
+
+
+def test_a_replaced_pool_closes_once_the_calls_still_streaming_on_it_finish(fake_glm, fast_provider):
+    """A pool replaced after a stall must not hold its sockets until the client exits, nor cut a call streaming on it."""
+    fake_glm.stream(reasoning="slow but steady", content="first", interval=0.2)
+    fake_glm.stream(content="never finishes", stall_after_first=True)
+    fake_glm.stream(content="second try")
+
+    async def call() -> tuple[str, bool, bool, Completion]:
+        provider = replace(fast_provider, stall_timeout=0.4)
+        async with GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), provider) as client:
+            before = client.http
+            streaming = asyncio.create_task(client.complete(MESSAGES, LLMPolicy()))
+            while not fake_glm.requests:
+                await asyncio.sleep(0.01)
+            retried = await client.complete(MESSAGES, LLMPolicy())
+            open_while_streaming = not streaming.done() and not before.is_closed
+            slow = await streaming
+            return retried.content, open_while_streaming, before.is_closed, slow
+
+    retried, open_while_streaming, closed_after, slow = asyncio.run(call())
+    assert retried == "second try"
+    assert open_while_streaming
+    assert (slow.content, outcomes(slow)) == ("first", [AttemptOutcome.COMPLETED])
+    assert closed_after
