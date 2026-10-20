@@ -6,34 +6,42 @@ import pytest
 pytest.importorskip("taskforge")
 
 import json
+from collections.abc import Sequence
 
+from pydantic import BaseModel
 from rolloutengine.models import (
     ConversationRecord,
     GradedRollout,
-    Model,
-    ModelRequest,
     ModelTurn,
     Rollout,
     RolloutFailure,
     RolloutStep,
-    TokenUsage,
     Transition,
 )
-from rolloutengine.test_support import arithmetic_task, rollout_limits, shell_call
+from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import AnswerCall, TaskSpec
+from taskforge.llm.client import StructuredResult
+from taskforge.llm.policy import LLMPolicy, Message
+from taskforge.llm.structured import StructuredOutputError
 
-from experiments.post_training.capability_driven_envs.analyze_failed_runs import analyze_failed_runs, policy_failures
+from experiments.post_training.capability_driven_envs import analyze_failed_runs as module
+from experiments.post_training.capability_driven_envs.analyze_failed_runs import (
+    Group,
+    Groups,
+    RolloutSkills,
+    Skill,
+    analyze_failed_runs,
+    policy_failures,
+)
 from experiments.post_training.capability_driven_envs.generate_tasks import task_workpieces
+from experiments.post_training.capability_driven_envs.tests.test_generate_tasks import COMPLETION
 
 LOOKUP_CALL = {"id": "call", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "six"}'}}
-CAPABILITY = {
-    "id": "failed-runs.tool-use.stop-repeating-calls",
-    "name": "Stop repeating a tool call that does not help",
-    "outcome": "Change the approach when a tool call returns the same result two times.",
-    "evidence": ["loop"],
-    "includes": ["Notice a repeated tool result"],
-}
+STOP_LOOPS = Skill(
+    name="Stop repeating a call", outcome="Change the approach after a repeated result.", includes=("Notice it",)
+)
+CHECK_WORK = Skill(name="Check the work", outcome="Verify an answer before it is final.", includes=("Recompute",))
 
 
 def evaluated(
@@ -47,16 +55,19 @@ def evaluated(
     return arithmetic_task(id=f"task-{run_id}"), GradedRollout(rollout, GradeResult(status, reward))
 
 
+def loop(run_id: str) -> tuple[TaskSpec, GradedRollout]:
+    turn = {"role": "assistant", "tool_calls": [LOOKUP_CALL]}
+    return evaluated(run_id, Outcome.SUBMISSION_FAILURE, None, turn, turn)
+
+
+def wrong(run_id: str, answer: str = "13") -> tuple[TaskSpec, GradedRollout]:
+    return evaluated(run_id, Outcome.GRADED, 0.0, {"role": "assistant", "content": answer})
+
+
 ROLLOUTS = [
     evaluated("pass", Outcome.GRADED, 1.0, {"role": "assistant", "content": "12"}),
-    evaluated("wrong", Outcome.GRADED, 0.0, {"role": "assistant", "content": "six, " * 600 + "so the answer is 13"}),
-    evaluated(
-        "loop",
-        Outcome.SUBMISSION_FAILURE,
-        None,
-        {"role": "assistant", "tool_calls": [LOOKUP_CALL]},
-        {"role": "assistant", "tool_calls": [LOOKUP_CALL]},
-    ),
+    wrong("wrong"),
+    loop("loop"),
     evaluated("infra", Outcome.INFRA_ERROR, None, {"role": "assistant", "content": "12"}),
     evaluated(
         "interrupted",
@@ -68,20 +79,61 @@ ROLLOUTS = [
 ]
 
 
-def analyst(*messages: dict) -> tuple[Model, list[ModelRequest]]:
-    """A chat model that answers with ``messages`` in order, and the requests that it receives."""
-    requests: list[ModelRequest] = []
+class Analyst:
+    """Names the loop skill for a rollout with a lookup call and the check skill for the others, and merges the lines
+    with the same name. A rollout that says "cut off", and a merge of more than ``max_skills`` skills, fail as a reply
+    at the output limit does."""
 
-    async def model(request: ModelRequest) -> ModelTurn:
-        requests.append(request)
-        return ModelTurn(messages[len(requests) - 1], (), (), None, "stop", usage=TokenUsage(10, 5))
+    model = "fake"
 
-    return model, requests
+    def __init__(self, max_skills: int = 100):
+        self.max_skills = max_skills
+        self.rollouts: list[str] = []
+        self.merges: list[list[dict]] = []
+
+    async def complete(self, messages: Sequence[Message], policy: LLMPolicy):
+        raise AssertionError("the analysis asks only for structured output")
+
+    async def complete_structured[T: BaseModel](
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
+    ) -> StructuredResult[T]:
+        text = str(messages[-1]["content"])
+        if output_type is RolloutSkills:
+            self.rollouts.append(text)
+            if "cut off" in text:
+                raise StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION,))
+            value = RolloutSkills(skills=(STOP_LOOPS if "lookup" in text else CHECK_WORK,))
+        else:
+            lines = [json.loads(line) for line in text.splitlines()]
+            self.merges.append(lines)
+            if len(lines) > self.max_skills and "rollouts" not in lines[0]:
+                raise StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION,))
+            names = dict.fromkeys(line["name"] for line in lines)
+            groups = (
+                Group(
+                    id=f"failed-runs.general.skill-{i}",
+                    name=name,
+                    outcome="An outcome.",
+                    includes=("A behavior",),
+                    members=tuple(line["id"] for line in lines if line["name"] == name),
+                )
+                for i, name in enumerate(names)
+            )
+            value = Groups(capabilities=tuple(groups))
+        assert isinstance(value, output_type)
+        return StructuredResult(value, (COMPLETION,))
 
 
-def shell_output(request: ModelRequest) -> str:
-    """The output of the shell command that the agent sent before ``request``."""
-    return json.loads(request.messages[-1]["content"])["stdout"]
+def analyze(rollouts: Sequence[tuple[TaskSpec, GradedRollout]], analyst: Analyst):
+    return analyze_failed_runs(
+        rollouts,
+        analyst,
+        pass_threshold=1.0,
+        max_capabilities=8,
+        policy=LLMPolicy(),
+        merge_policy=LLMPolicy(),
+        catalog_version="round-1",
+    )
 
 
 def test_only_the_rollouts_that_the_policy_failed_are_analyzed():
@@ -89,70 +141,64 @@ def test_only_the_rollouts_that_the_policy_failed_are_analyzed():
     assert [graded.rollout.run_id for _, graded in failures] == ["wrong", "loop"]
 
 
-async def test_the_agent_reads_the_failed_rollouts_as_files_and_returns_capability_ideas_for_generate_tasks():
-    model, requests = analyst(
-        shell_call("jq -c '[.run_id, .repeated_calls]' index.jsonl", call_id="index"),
-        shell_call("grep -il 'answer is 13' *.txt", call_id="search"),
-        shell_call("sed -n 2p loop.txt", call_id="read"),
-        {"role": "assistant", "content": json.dumps([CAPABILITY])},
-    )
+async def test_each_capability_cites_the_failed_rollouts_of_its_skills_and_becomes_a_catalog_idea():
+    analyst = Analyst()
 
-    ideas = await analyze_failed_runs(
-        ROLLOUTS, model, pass_threshold=1.0, limits=rollout_limits(max_turns=5), catalog_version="round-1"
-    )
+    ideas = await analyze([*ROLLOUTS, loop("loop-2")], analyst)
 
-    assert requests[0].messages[1]["content"].startswith("2 of 5 rollouts failed.")
-    assert [shell_output(request) for request in requests[1:]] == [
-        '["wrong",0]\n["loop",1]\n',
-        "wrong.txt\n",
-        "[0] user: What is six plus six?\n",
+    assert [(idea.capability["name"], idea.capability["evidence"]) for idea in ideas] == [
+        (STOP_LOOPS.name, ["loop", "loop-2"]),
+        (CHECK_WORK.name, ["wrong"]),
     ]
-    [idea] = ideas
-    assert (idea.capability_id, idea.catalog_version) == (CAPABILITY["id"], "round-1")
-    assert idea.capability["kind"] == "capability" and idea.capability["evidence"] == ["loop"]
-    assert task_workpieces({idea.capability_id: idea}, 1) == [(f"{CAPABILITY['id']}--00", idea)]
+    assert '[1] assistant: <tool call> lookup({"key": "six"})' in analyst.rollouts[1]
+    idea = ideas[0]
+    assert (idea.catalog_version, idea.capability["kind"]) == ("round-1", "capability")
+    assert task_workpieces({idea.capability_id: idea}, 1) == [(f"{idea.capability_id}--00", idea)]
 
 
-async def test_a_rollout_file_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
+async def test_a_rollout_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
     policy = {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function"}]}
     _, graded = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, policy)
-    task = arithmetic_task(id="task-malformed", answer_format=AnswerCall())
-    model, requests = analyst(
-        shell_call("cat malformed.txt"),
-        {"role": "assistant", "content": json.dumps([{**CAPABILITY, "evidence": ["malformed"]}])},
-    )
+    analyst = Analyst()
 
-    await analyze_failed_runs(
-        [(task, graded)], model, pass_threshold=1.0, limits=rollout_limits(max_turns=4), catalog_version="round-1"
-    )
+    await analyze([(arithmetic_task(id="task-malformed", answer_format=AnswerCall()), graded)], analyst)
 
-    tools, *messages = shell_output(requests[1]).splitlines()
+    summary, tools, *messages = analyst.rollouts[0].splitlines()
+    assert json.loads(summary)["run_id"] == "malformed"
     assert [tool["function"]["name"] for tool in json.loads(tools)["tools"]] == ["submit_answer"]
     assert messages[-1] == '[1] assistant: <tool call> malformed {"id": "bad", "type": "function"}'
 
 
-async def test_no_failed_rollout_needs_no_analysis():
-    model, requests = analyst()
-    assert (
-        await analyze_failed_runs(
-            ROLLOUTS[:1], model, pass_threshold=1.0, limits=rollout_limits(), catalog_version="round-1"
-        )
-        == []
-    )
-    assert requests == []
+async def test_no_failed_rollout_needs_no_model_call():
+    analyst = Analyst()
+    assert await analyze(ROLLOUTS[:1], analyst) == []
+    assert analyst.rollouts == [] and analyst.merges == []
 
 
-@pytest.mark.parametrize(
-    "answer,message",
-    [
-        ("The agent must learn to stop.", "not a list of capabilities"),
-        (json.dumps([{**CAPABILITY, "evidence": ["pass"]}]), "did not fail"),
-    ],
-    ids=["not-json", "unknown-evidence"],
-)
-async def test_an_answer_that_is_not_grounded_capabilities_is_rejected(answer, message):
-    model, _ = analyst({"role": "assistant", "content": answer})
-    with pytest.raises(ValueError, match=message):
-        await analyze_failed_runs(
-            ROLLOUTS, model, pass_threshold=1.0, limits=rollout_limits(), catalog_version="round-1"
-        )
+async def test_a_rollout_whose_skill_call_fails_gives_no_skills_unless_too_many_fail():
+    loops = [loop(f"loop-{i}") for i in range(10)]
+
+    [idea] = await analyze([*loops, wrong("cut", "cut off")], Analyst())
+
+    assert idea.capability["evidence"] == [f"loop-{i}" for i in range(10)]
+    with pytest.raises(ValueError, match="failed for 1 of 2"):
+        await analyze([loops[0], wrong("cut", "cut off")], Analyst())
+
+
+async def test_a_merge_that_stays_invalid_merges_in_two_levels(monkeypatch):
+    monkeypatch.setattr(module, "CHUNK_ROLLOUTS", 2)
+    analyst = Analyst(max_skills=2)
+
+    ideas = await analyze([loop("loop-1"), loop("loop-2"), wrong("wrong-1"), wrong("wrong-2")], analyst)
+
+    assert [(idea.capability["name"], idea.capability["evidence"]) for idea in ideas] == [
+        (STOP_LOOPS.name, ["loop-1", "loop-2"]),
+        (CHECK_WORK.name, ["wrong-1", "wrong-2"]),
+    ]
+    # Three samples of the merge of all four skills, two chunk merges, and the merge of the four chunk capabilities.
+    assert [len(lines) for lines in analyst.merges] == [4, 4, 4, 2, 2, 4]
+
+
+def test_a_merged_capability_cannot_give_its_member_ids_as_behaviors():
+    with pytest.raises(ValueError, match="not the IDs of its members"):
+        Group(id="failed-runs.a", name="A", outcome="B.", includes=("k0", "k4"), members=("k0", "k4"))
