@@ -25,12 +25,14 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
-from urllib.parse import urlparse
+from typing import Literal
+from urllib.parse import urlencode, urlparse
 
 import httpx
 import sqlalchemy
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
@@ -73,6 +75,7 @@ from marina.mcp import marina_mcp
 from marina.runtime import RuntimeConfig, load_runtime_config
 
 INDEX_FILE = "index.html"
+DIRECTORY_PAGE_SIZE = 50
 # A file committed as `x.gz` is served at `x` with a Content-Encoding header, so a large
 # static asset can live in the repository compressed.
 PRECOMPRESSED_SUFFIX = ".gz"
@@ -337,6 +340,7 @@ def applet_directory(
             ),
             "kind": "applet",
             "published_by": applet.published_by,
+            "published_at": applet.published_at.isoformat(),
             "version": applet.current_version,
             "mode": applet.mode.value,
         }
@@ -380,17 +384,76 @@ async def request_json(request: Request) -> object:
         raise HTTPException(status_code=400, detail="request body is not valid JSON") from error
 
 
-def landing_page(entries: list[dict[str, object]]) -> str:
-    entries.sort(key=lambda entry: str(entry["title"]).casefold())
-    cards = "".join(
-        f'<li><a class="card" href="{html.escape(str(app["path"]))}">'
-        f'<span class="card-heading"><span class="app-name">{html.escape(str(app["title"]))}</span>'
-        '<span class="arrow" aria-hidden="true">↗</span></span>'
-        f'<span class="description">{html.escape(str(app["description"]))}</span>'
-        '<span class="open">Open app <span aria-hidden="true">→</span></span></a></li>'
-        for app in entries
+def directory_url(sort: str, order: str, page: int = 1) -> str:
+    return "/?" + html.escape(urlencode({"sort": sort, "order": order, "page": page}))
+
+
+def landing_page(
+    entries: list[dict[str, object]],
+    sort: Literal["name", "released"] = "released",
+    order: Literal["asc", "desc"] = "desc",
+    page: int = 1,
+) -> str:
+    sort_field = "title" if sort == "name" else "published_at"
+    entries = sorted(
+        entries,
+        key=lambda entry: (str(entry[sort_field]).casefold(), str(entry["name"])),
+        reverse=order == "desc",
     )
-    directory = f'<ul class="directory">{cards}</ul>' if entries else '<p class="empty">No apps published yet.</p>'
+    total = len(entries)
+    pages = max(1, (total + DIRECTORY_PAGE_SIZE - 1) // DIRECTORY_PAGE_SIZE)
+    page = min(page, pages)
+    start = (page - 1) * DIRECTORY_PAGE_SIZE
+    rows = []
+    for app in entries[start : start + DIRECTORY_PAGE_SIZE]:
+        released = datetime.fromisoformat(str(app["published_at"])).astimezone(UTC)
+        rows.append(
+            f'<tr><td><a class="app-name" href="{html.escape(str(app["path"]))}">'
+            f'{html.escape(str(app["title"]))}</a>'
+            f'<p class="description">{html.escape(str(app["description"]))}</p></td>'
+            f'<td class="released"><time datetime="{released.isoformat()}">'
+            f'{released.strftime("%Y-%m-%d %H:%M")}</time></td>'
+            f'<td class="version">v{app["version"]}</td>'
+            f'<td>{html.escape(str(app["mode"]))}</td>'
+            f'<td class="publisher">{html.escape(str(app["published_by"]))}</td></tr>'
+        )
+    headings = []
+    for column, label in (("name", "Name"), ("released", "Released (UTC)")):
+        active = sort == column
+        next_order = "desc" if active and order == "asc" else "asc"
+        if not active and column == "released":
+            next_order = "desc"
+        aria_sort = ("ascending" if order == "asc" else "descending") if active else "none"
+        arrow = (" ↑" if order == "asc" else " ↓") if active else " ↕"
+        headings.append(
+            f'<th scope="col" aria-sort="{aria_sort}"><a href="{directory_url(column, next_order)}">'
+            f'{label}<span aria-hidden="true">{arrow}</span></a></th>'
+        )
+    directory = (
+        '<div class="table-scroll" role="region" aria-label="Apps" tabindex="0">'
+        "<table><thead><tr>" + "".join(headings) + '<th scope="col">Version</th>'
+        '<th scope="col">Access</th><th scope="col">Published by</th></tr></thead>'
+        "<tbody>" + "".join(rows) + "</tbody></table></div>"
+        if entries
+        else '<p class="empty">No apps published yet.</p>'
+    )
+    previous = (
+        f'<a rel="prev" href="{directory_url(sort, order, page - 1)}">← Previous</a>'
+        if page > 1
+        else '<span aria-disabled="true">← Previous</span>'
+    )
+    next_link = (
+        f'<a rel="next" href="{directory_url(sort, order, page + 1)}">Next →</a>'
+        if page < pages
+        else '<span aria-disabled="true">Next →</span>'
+    )
+    pagination = (
+        f'<nav class="pagination" aria-label="App pages">{previous}'
+        f"<span>Page {page} of {pages} · {DIRECTORY_PAGE_SIZE} per page</span>{next_link}</nav>"
+        if total
+        else ""
+    )
+    count = f"Showing {start + 1}&ndash;{min(start + DIRECTORY_PAGE_SIZE, total)} of {total} apps" if total else "0 apps"
     return (
         """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -399,40 +462,46 @@ def landing_page(entries: list[dict[str, object]]) -> str:
 :root { color-scheme: light dark; --ink:#17181c; --paper:#fcfbf8; --panel:#fff;
   --edge:#e2ded2; --muted:#6d6a60; --mark:#1f5c4a; }
 * { box-sizing:border-box; }
-body { margin:0; font:16px/1.6 ui-sans-serif,system-ui,sans-serif; background:var(--paper); color:var(--ink); }
-header { padding:1rem max(1.5rem,calc((100% - 72rem)/2)); border-bottom:1px solid var(--edge); background:var(--panel); }
-.wordmark { color:var(--ink); text-decoration:none; font-weight:650; letter-spacing:.02em; }
-main { max-width:75rem; margin:0 auto; padding:4rem 1.5rem; }
-.eyebrow { color:var(--mark); text-transform:uppercase; letter-spacing:.14em; font-size:.75rem; font-weight:650; }
-h1 { font-size:clamp(2.25rem,5vw,3.5rem); line-height:1.15; letter-spacing:-.045em;
-  margin:.75rem 0 1rem; font-weight:600; }
-.intro { color:var(--muted); max-width:36rem; margin:0; font-size:1.1rem; }
-.list-heading { display:flex; align-items:baseline; gap:.75rem; margin:3rem 0 1rem; }
-h2 { font-size:1rem; margin:0; font-weight:600; }
-.count { font-size:.8rem; color:var(--muted); }
-.directory { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,20rem),1fr));
-  gap:1rem; padding:0; margin:0; list-style:none; }
-.card { display:flex; flex-direction:column; height:100%; padding:1.5rem; border:1px solid var(--edge);
-  border-radius:.85rem; background:var(--panel); text-decoration:none; color:inherit; }
-.card:hover { border-color:var(--mark); box-shadow:0 4px 18px rgb(0 0 0 / .04); }
-a:focus-visible { outline:3px solid var(--mark); outline-offset:4px; }
-.card-heading { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; }
-.app-name { font-size:1.2rem; font-weight:600; letter-spacing:-.02em; overflow-wrap:anywhere; }
-.arrow { color:var(--muted); }
-.description { color:var(--muted); font-size:.9rem; margin:.65rem 0 1.5rem; overflow-wrap:anywhere; }
-.open { margin-top:auto; color:var(--mark); font-size:.8rem; font-weight:600; }
+body { margin:0; font:14px/1.5 ui-sans-serif,system-ui,sans-serif; background:var(--paper); color:var(--ink); }
+header { padding:1rem max(1.5rem,calc((100% - 82rem)/2)); border-bottom:1px solid var(--edge); background:var(--panel); }
+.wordmark { color:var(--ink); text-decoration:none; font-size:1rem; font-weight:650; letter-spacing:.02em; }
+main { max-width:85rem; margin:0 auto; padding:2rem 1.5rem; }
+h1 { font-size:1.75rem; line-height:1.2; letter-spacing:-.03em; margin:0; font-weight:600; }
+.intro { color:var(--muted); margin:.5rem 0 1.5rem; }
+.list-heading { display:flex; align-items:baseline; justify-content:space-between; gap:1rem; flex-wrap:wrap; }
+.count { color:var(--muted); }
+.table-scroll { overflow-x:auto; border:1px solid var(--edge); border-radius:.5rem; background:var(--panel); }
+table { width:100%; border-collapse:collapse; text-align:left; }
+th { color:var(--muted); font-size:.75rem; font-weight:600; white-space:nowrap; }
+th, td { padding:.65rem .85rem; border-bottom:1px solid var(--edge); vertical-align:top; }
+th a { color:inherit; text-decoration:none; display:block; }
+th[aria-sort="ascending"] a, th[aria-sort="descending"] a { color:var(--mark); }
+tbody tr:last-child td { border-bottom:0; }
+tbody tr:hover { background:color-mix(in srgb,var(--mark) 4%,var(--panel)); }
+a { color:var(--mark); text-underline-offset:.2em; }
+a:hover { text-decoration:underline; }
+a:focus-visible, .table-scroll:focus-visible { outline:3px solid var(--mark); outline-offset:3px; }
+.app-name { font-weight:600; text-decoration:none; overflow-wrap:anywhere; }
+td:first-child { width:52%; min-width:16rem; }
+.description { color:var(--muted); font-size:.8rem; margin:.2rem 0 0; overflow-wrap:anywhere; }
+.released, .version { white-space:nowrap; font-variant-numeric:tabular-nums; }
+.publisher { overflow-wrap:anywhere; font-size:.8rem; }
+.pagination { display:flex; align-items:center; justify-content:space-between; gap:1rem;
+  margin-top:1rem; font-size:.8rem; }
+.pagination span { color:var(--muted); }
+.pagination a { text-decoration:none; }
+[aria-disabled="true"] { opacity:.5; }
 .empty { color:var(--muted); padding:2rem 0; }
 @media (prefers-color-scheme:dark) { :root { --ink:#ece9e1; --paper:#15171a; --panel:#1c1f22;
   --edge:#2f3336; --muted:#aaa79e; --mark:#6cc4a5; } }
-@media (max-width:40rem) { main { padding:2.5rem 1.25rem; } header { padding:1rem 1.25rem; } .card { padding:1.25rem; } }
+@media (max-width:40rem) { main { padding:1.5rem 1rem; } header { padding:1rem; }
+  .pagination { gap:.5rem; flex-wrap:wrap; } }
 </style></head><body><header><a class="wordmark" href="/">Marina</a></header>
-<main><p class="eyebrow">The Marin workspace</p><h1>A place for your work.</h1>
-<p class="intro">Explore data, follow experiments, and plan what comes next. Your team's tools, together in Marina.</p>
-<div class="list-heading"><h2>All apps</h2><span class="count">"""
-        + str(len(entries))
-        + """ available</span></div>
-"""
+<main><div class="list-heading"><h1>All apps</h1><span class="count">"""
+        + count
+        + '</span></div><p class="intro">Your team&#39;s tools, together in Marina.</p>'
         + directory
+        + pagination
         + "</main></body></html>"
     )
 
@@ -726,14 +795,16 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                 "apps": [
                     *applet_directory(applet_store, config.applet_origin, config.public_applet_origin),
                 ]
-            }
+            },
+            headers={"Cache-Control": "private, no-store"},
         )
 
     @api.get("/api/marina/applets")
     @requires_auth
     def list_applets() -> JSONResponse:
         return JSONResponse(
-            {"applets": applet_directory(applet_store, config.applet_origin, config.public_applet_origin)}
+            {"applets": applet_directory(applet_store, config.applet_origin, config.public_applet_origin)},
+            headers={"Cache-Control": "private, no-store"},
         )
 
     @api.get("/api/marina/me")
@@ -804,9 +875,16 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.get("/", include_in_schema=False)
     @requires_auth
-    def landing() -> HTMLResponse:
+    def landing(
+        sort: Literal["name", "released"] = "released",
+        order: Literal["asc", "desc"] = "desc",
+        page: int = Query(default=1, ge=1),
+    ) -> HTMLResponse:
         return HTMLResponse(
-            landing_page(applet_directory(applet_store, config.applet_origin, config.public_applet_origin))
+            landing_page(
+                applet_directory(applet_store, config.applet_origin, config.public_applet_origin), sort, order, page
+            ),
+            headers={"Cache-Control": "private, no-store"},
         )
 
     @api.post("/api/marina/applets")
