@@ -13,6 +13,7 @@ import math
 
 from openai import APIError
 from verifyit.candidate import Candidate, grade_candidate
+from verifyit.closure_scoring import closure_response_content
 from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, empty_output_policy
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
 from verifyit.spec import (
@@ -22,6 +23,7 @@ from verifyit.spec import (
     NumericSpec,
     PredictedActionSpec,
     Spec,
+    StructureClosureSpec,
     StructuredExactSpec,
 )
 from verifyit.spec import FunctionCall as CandidateCall
@@ -139,6 +141,11 @@ def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
         if not _gradeable_empty_text(task, attempt, verifier):
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         candidate = ""
+    if isinstance(verifier, StructureClosureSpec):
+        assert isinstance(candidate, str)
+        candidate = closure_response_content(
+            candidate, stop_reason=attempt.stop_reason or "", terminal_markers=verifier.terminal_markers
+        )
     resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     return grade_result(verifier, grade_candidate(verifier, candidate, resources))
 

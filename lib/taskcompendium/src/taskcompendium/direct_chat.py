@@ -3,7 +3,7 @@
 
 """Validate semantic requirements before presenting a task as chat."""
 
-from taskcompendium.models import AnswerType, ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import AnswerType, ScriptGrader, TaskSpec, TokenizedInput, VerifyitGrader
 
 
 def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]:
@@ -25,6 +25,8 @@ def unsupported_direct_chat_features(specification: TaskSpec) -> tuple[str, ...]
         )
         if value
     ]
+    if isinstance(specification.context, TokenizedInput):
+        features.append("tokenized_input")
     if specification.interaction_tools:
         features.append("interaction_tools")
     if specification.output_paths:

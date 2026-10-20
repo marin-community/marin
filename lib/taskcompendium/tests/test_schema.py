@@ -12,6 +12,7 @@ from verifyit.spec import ExactSpec
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading import grade_answer
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -26,7 +27,9 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
+    TokenizedInput,
 )
+from taskcompendium.pipeline.fingerprints import semantic_digest
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import chat_request
 
@@ -52,6 +55,49 @@ def specification():
         grader=EXACT_DONE,
         source=Source(dataset="org/project", revision="pinned-revision", row="0", importer_revision="1"),
     )
+
+
+def test_legacy_conversation_wire_and_public_identity_remain_unchanged(specification):
+    wire = specification.model_dump(mode="json")
+    wire["context"] = {"events": [{"type": "message", "role": "user", "content": "Repair the project."}]}
+    loaded = TaskSpec.model_validate_json(json.dumps(wire))
+    assert loaded.model_dump(mode="json") == wire
+    public = {key: value for key, value in wire.items() if key not in {"id", "source", "grader"}}
+    public["resources"]["oracle"] = []
+    public["resources"]["verifier"] = []
+    assert semantic_digest(loaded, include_reference=False) == canonical_sha256(public)
+
+
+def test_tokenized_input_survives_wire_and_changes_public_identity(specification):
+    context = TokenizedInput(
+        events=specification.context.events,
+        token_ids=(1, 2, 3),
+        tokenizer_model="org/tokenizer",
+        tokenizer_revision="a" * 40,
+    )
+    task = TaskSpec.model_validate({**specification.model_dump(), "context": context})
+    restored = TaskSpec.model_validate_json(task.model_dump_json())
+    assert isinstance(restored.context, TokenizedInput)
+    assert restored.context == context
+    for replacement in [
+        context.model_copy(update={"token_ids": (1, 2, 4)}),
+        context.model_copy(update={"tokenizer_revision": "b" * 40}),
+    ]:
+        changed = TaskSpec.model_validate({**task.model_dump(), "context": replacement})
+        assert semantic_digest(changed, include_reference=False) != semantic_digest(task, include_reference=False)
+    with pytest.raises(NotImplementedError, match="tokenized_input"):
+        chat_request(restored)
+
+
+@pytest.mark.parametrize("coerced_token", [True, "1", 1.0])
+def test_tokenized_input_rejects_token_coercion_that_changes_exact_input(specification, coerced_token):
+    with pytest.raises(ValidationError):
+        TokenizedInput(
+            events=specification.context.events,
+            token_ids=(coerced_token,),
+            tokenizer_model="org/tokenizer",
+            tokenizer_revision="a" * 40,
+        )
 
 
 @pytest.mark.parametrize(

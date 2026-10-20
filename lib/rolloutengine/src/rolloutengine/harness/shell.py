@@ -29,6 +29,7 @@ from taskcompendium.models import (
     FunctionDefinition,
     ProviderRequirement,
     TaskSpec,
+    TokenizedInput,
 )
 from taskcompendium.runtime.shell import BoundShellTool, ShellToolConfig, resolve_shell_tool, run_shell_call
 from taskcompendium.submission import (
@@ -102,6 +103,8 @@ def task_prompt(
 
     Provider tools that the task already declares as interaction tools are advertised once.
     """
+    if isinstance(task.context, TokenizedInput):
+        raise NotImplementedError("Tokenized inputs require a token-preserving harness")
     answer_format = task.answer_format
     messages = conversation_messages(task.context.events)
     options: dict[str, Any] = {}
@@ -187,6 +190,8 @@ class ShellHarness:
             raise ValueError(f"The command timeout must be a positive, finite number: {self.command_timeout!r}")
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
+        if isinstance(task.context, TokenizedInput):
+            raise NotImplementedError("Tokenized inputs require a token-preserving harness")
         shell_tool = resolve_shell_tool(task, self.shell_tool)
         turn_limit = limits.tool_turn_timeout
         if self.command_timeout is not None and turn_limit is not None and self.command_timeout >= turn_limit:

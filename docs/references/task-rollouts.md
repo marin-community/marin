@@ -111,6 +111,26 @@ A harness does not grade. After `run` returns, the engine grades the rollout wit
 [Grading](#grading)). A harness can attach its own reward to a step with `record(data=...)`. The engine does
 not read it.
 
+### Exact token prefixes
+
+`TokenPrefixHarness` from `rolloutengine.harness.token_prefix` completes a `TokenizedInput` in one model
+turn. Pass the tokenizer model and revision configured when starting the inference service as its required
+`tokenizer_model` and `tokenizer_revision`. Its preflight check rejects a task with a different model/revision
+pair. This checks configuration equality; it does not attest to a remote server's tokenizer.
+
+The harness sends `context.token_ids` unchanged as `Prompt.token_ids`, with `skip_special_tokens=False`.
+It uses `context.events` only for display and grading, and appends no answer-format instruction.
+The transport must report the exact served prompt token IDs; the model session rejects IDs that differ
+from `context.token_ids`. The harness also
+requires `ModelTurn.message` to be exactly `{"role": "assistant", "content": turn.text}`. Parsed tool calls
+or stripped reasoning markers fail before grading. Under `TraceMode.EXACT_TOKENS`, sampled continuation
+tokens have loss-mask value 1. Prefix IDs are stored separately in `prompt_token_ids` and have no entries
+in `ConversationRecord.loss_mask`, which covers `response_token_ids` only.
+
+Supported tasks use `answer_type=text`, `PlainText`, and no task environment, tools, public workspace
+resources, or output paths. The engine grades after the harness completes. `ShellHarness`, `AgentHarness`,
+`StepHarness`, and direct chat reject tokenized inputs, so they cannot silently retokenize the display view.
+
 ### Model session
 
 A harness calls the model through its `ModelSession`, which records the exact tokens and applies the turn

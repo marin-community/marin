@@ -25,7 +25,9 @@ result = await engine.run_task(spec, model)
   grader. A harness can attach its own step data, such as rewards for training, with `record(data=...)`.
 - Built-in harnesses: `ShellHarness` serves a shell tool on the task machine and host tools from registered
   providers; `AgentHarness` runs an agent that owns its prompts and tool loop, for example an installed agent
-  behind an HTTP proxy; `StepHarness` runs an `Episode` that returns the first prompt and handles each turn.
+  behind an HTTP proxy; `StepHarness` runs an `Episode` that returns the first prompt and handles each turn;
+  `TokenPrefixHarness` serves a `TokenizedInput` unchanged in one raw-text model turn, with an explicit
+  matching inference-tokenizer pin. The text-rendering harnesses reject tokenized inputs.
 - `harness_rollout` runs one harness on one task with one model, without grading. `task_machine` starts the
   task machine for it.
 - The engine owns the machines, the attempt deadline, grading, cleanup, and progress events for an optional
