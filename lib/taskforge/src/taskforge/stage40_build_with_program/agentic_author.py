@@ -104,6 +104,7 @@ from taskforge.stage40_build_with_program.infrastructure import (
     storage_fault,
 )
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
+from taskforge.stage40_build_with_program.program_sdk import sdk_exports
 from taskforge.stage40_build_with_program.run import TaskDraft, step_output
 from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate
 from taskforge.stage40_build_with_program.sdk import grade_diagnostics, grading_language
@@ -276,7 +277,7 @@ async def load_in_child(source: str) -> ProgramManifest:
         BuildInfrastructureFailure: the loader child exited without a result (``BUILD_PROCESS``).
     """
     try:
-        return await load_program_in_process(source, wall_timeout=LOAD_TIMEOUT)
+        return await load_program_in_process(source, sdk_exports(), wall_timeout=LOAD_TIMEOUT)
     except LoaderProcessFailed as error:
         raise BuildInfrastructureFailure(InfrastructureCause.BUILD_PROCESS, str(error)) from error
 

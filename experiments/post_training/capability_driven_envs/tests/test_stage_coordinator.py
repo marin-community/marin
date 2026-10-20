@@ -21,9 +21,9 @@ from taskforge.sandbox.factories import MachineHost
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, parse
 from taskforge.stage20_triage.verdict import accept
 from taskforge.stage30_author.author import static_author
-from taskforge.stage30_author.loader import SdkExports, load_program_source
-from taskforge.stage30_author.program import RLEnvBuildProgram, rl_env_build_program, rl_env_build_sink
+from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
+from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import (
     DRAFT_DIR,
     ResearchRequirement,
@@ -87,10 +87,6 @@ resources: []
 {body}
 """
     )
-
-
-def load_program(source: str) -> RLEnvBuildProgram:
-    return load_program_source(source, SdkExports(defining_modules={}))
 
 
 @rl_env_build_sink

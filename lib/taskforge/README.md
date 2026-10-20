@@ -36,6 +36,8 @@ src/taskforge/
                                outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
                                sandbox_effects.py: `build_machine`, `grade_candidate`, `publish_image`;
                                sdk.py: the functions, schemas and constants steps call;
+                               program_sdk.py: `sdk_exports`, the SDK's names for the loader, and
+                               `load_program`;
                                infrastructure.py: host failures told apart from program failures;
                                template/standard.py: the standard six-step program;
                                glm_author.py: GlmAuthor and its prompts;
@@ -298,7 +300,9 @@ the output limit cut off as one failed submission and asks for a shorter one.
 
 `stage40_build_with_program.glm_author.GlmAuthor` asks GLM for a program with the template as its example, and
 returns an `AuthoredProgram` holding the program and its source, which
-`stage30_author.loader.load_program_source` loads. The loader refuses a module whose top level
+`stage30_author.loader.load_program_source` loads. The build stage comes after the loader's, so the
+loader imports none of the SDK's modules: its callers here pass `program_sdk.sdk_exports()`, the
+names the SDK modules define, which the loader's refusals suggest from. The loader refuses a module whose top level
 holds anything but imports, classes, steps, the sink and a final
 `PROGRAM = rl_env_build_program(..., sink=...)`, because a step's key covers its own source and its
 output type alone, so an edit to a helper beside the steps would leave every key unchanged. It also
