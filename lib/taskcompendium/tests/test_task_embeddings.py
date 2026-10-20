@@ -16,7 +16,7 @@ from zephyr.readers import load_parquet
 from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import numeric_answer_task
-from taskcompendium.models import Source
+from taskcompendium.models import Source, TaskSpec, TokenizedInput
 from taskcompendium.pipeline.curriculum import embedding
 from taskcompendium.pipeline.curriculum.alignment import (
     AnchorKind,
@@ -41,6 +41,7 @@ from taskcompendium.pipeline.semantics import (
     TaskInputFile,
     bounded_task_text,
     describe_tasks,
+    instruction_text,
     prepare_semantic_inputs,
     task_semantic_input,
 )
@@ -69,7 +70,7 @@ def spec():
     )
 
 
-def task(identifier, prompt="Count two apples.", answer="817", dataset="private-source-label"):
+def task(identifier, prompt="Count two apples.", answer="817", dataset="private-source-label") -> TaskSpec:
     result = numeric_answer_task(
         RawRow(
             id=identifier,
@@ -82,6 +83,7 @@ def task(identifier, prompt="Count two apples.", answer="817", dataset="private-
         tolerance_rel=0,
         evidence={"private": "PRIVATE_EVIDENCE"},
     )
+    assert isinstance(result, TaskSpec)
     return result
 
 
@@ -245,6 +247,32 @@ def test_instruction_projection_excludes_private_contract_and_ignores_source_ide
     assert "817" not in first.public_input
 
 
+def test_tokenized_semantic_input_retains_effective_prompt_identity_and_renders_display_events():
+    original = task("tokenized")
+    tokenized = TokenizedInput(
+        events=original.context.events,
+        token_ids=(128000, 41, 128005),
+        tokenizer_model="org/pinned-tokenizer",
+        tokenizer_revision="a" * 40,
+    )
+    source = TaskInputFile("source-a", "key-a", "unused", "train", "admitted")
+    projected = task_semantic_input(original.model_copy(update={"context": tokenized}), source)
+    public_context = json.loads(projected.public_input)["context"]
+    assert public_context["token_ids"] == [128000, 41, 128005]
+    assert public_context["tokenizer_model"] == "org/pinned-tokenizer"
+    assert public_context["tokenizer_revision"] == "a" * 40
+    for context in (
+        tokenized.model_copy(update={"token_ids": (128000, 42, 128005)}),
+        tokenized.model_copy(update={"tokenizer_revision": "b" * 40}),
+    ):
+        changed = task_semantic_input(original.model_copy(update={"context": context}), source)
+        assert changed.content_hash != projected.content_hash
+    rendered = instruction_text(projected.model_dump(mode="json"))
+    assert "Count two apples." in rendered["description"]
+    assert rendered["content_hash"] == projected.content_hash
+    assert "PRIVATE_EVIDENCE" not in rendered["description"]
+
+
 def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reuse_cache(context, tmp_path, spec):
     raw = tmp_path / "tasks.parquet"
     long_prompt = "Public context details. " * 600 + "Count two apples."
@@ -254,6 +282,17 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         task("c", prompt="UNSPECIFIED_OPERATION"),
         task("d", prompt="Count three apples."),
     ]
+    for index in (0, 1):
+        tasks[index] = tasks[index].model_copy(
+            update={
+                "context": TokenizedInput(
+                    events=tasks[index].context.events,
+                    token_ids=(128000, 41, 128005),
+                    tokenizer_model="org/pinned-tokenizer",
+                    tokenizer_revision="a" * 40,
+                )
+            }
+        )
     pq.write_table(
         pa.Table.from_pylist([{"task_json": item.model_dump_json()} for item in tasks] + [{"task_json": None}]), raw
     )
