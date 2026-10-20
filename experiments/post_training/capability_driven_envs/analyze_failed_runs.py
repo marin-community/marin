@@ -5,12 +5,12 @@
 
 ``analyze_failed_runs`` is one Zephyr map-reduce pipeline:
 
-1. The source is the rollouts in batches, one shard for each batch. The rollouts of a batch need not be similar.
+1. The source is the rollouts in shards of ``shard_size``. The rollouts of a shard need not be similar.
 2. ``filter`` keeps the rollouts that the policy failed, with no model call.
 3. ``flat_map(yield_ideas)``: one structured model call for each failed rollout names the general skills whose
    absence explains the failure.
-4. ``reduce``: in each batch, one structured call (``merge_ideas``) merges the ideas, and one more call merges the
-   lists of the batches. Each merged idea names the ideas that it holds, and code joins their evidence.
+4. ``reduce``: in each shard, one structured call (``merge_ideas``) merges the ideas, and one more call merges the
+   lists of the shards. Each merged idea names the ideas that it holds, and code joins their evidence.
 5. ``flat_map(to_ideas)`` makes a ``CapabilityIdea`` of each merged idea, the ideas with more rollouts first.
 
 A capability describes the skill and not the failed tasks, so that ``generate_tasks`` writes the details of its
@@ -159,26 +159,26 @@ def analyze_failed_runs(
     *,
     pass_threshold: float,
     max_new_ideas: int,
-    batch_size: int,
-    policy: LLMPolicy,
-    merge_policy: LLMPolicy,
+    shard_size: int,
+    extract_ideas_llm_policy: LLMPolicy,
+    merge_ideas_llm_policy: LLMPolicy,
     catalog_version: str,
 ) -> Dataset[CapabilityIdea]:
     """The plan of a pipeline whose results are the capability ideas that the policy's failed rollouts lack.
 
     Each graded rollout comes with the task that it ran, because the record does not keep the tools that the task
-    gave. ``policy`` samples the call for each rollout, and ``merge_policy`` samples the merges, whose replies are
-    longer. Each batch of ``batch_size`` rollouts is one shard: the calls of its rollouts run one after another on one
-    worker, and its failed rollouts get one merge call. Batches run in parallel. Use at most about 1,000 rollouts in
-    a batch, because the merge prompt of a larger batch can be too long for the context window. Run the plan outside
-    an event loop, for example ``ctx.execute(plan).results``.
+    gave. ``extract_ideas_llm_policy`` samples the call for each rollout, and ``merge_ideas_llm_policy`` samples the
+    merges, whose replies are longer. Each shard has ``shard_size`` rollouts: the calls of its rollouts run one after
+    another on one worker, and its failed rollouts get one merge call. Shards run in parallel. Use at most about 1,000
+    rollouts in a shard, because the merge prompt of a larger shard can be too long for the context window. Run the
+    plan outside an event loop, for example ``ctx.execute(plan).results``.
     """
-    merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_policy)
+    merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_ideas_llm_policy)
     return (
-        Dataset.from_list(list(batched(rollouts, batch_size)))
-        .flat_map(lambda batch: batch)
+        Dataset.from_list(list(batched(rollouts, shard_size)))
+        .flat_map(lambda shard: shard)
         .filter(lambda pair: policy_failed(pair[1], pass_threshold))
-        .flat_map(partial(yield_ideas, make_client=make_client, policy=policy))
+        .flat_map(partial(yield_ideas, make_client=make_client, policy=extract_ideas_llm_policy))
         .reduce(merge, partial(merge_idea_lists, merge=merge))
         .flat_map(partial(to_ideas, catalog_version=catalog_version))
     )
@@ -261,7 +261,7 @@ def merge_ideas(
 def merge_idea_lists(
     lists: Iterable[list[MaybeIdea]], *, merge: Callable[[Iterable[MaybeIdea]], list[MaybeIdea]]
 ) -> list[MaybeIdea]:
-    """The global reducer: one more ``merge`` of the lists of the batches. One list needs no second merge."""
+    """The global reducer: one more ``merge`` of the lists of the shards. One list needs no second merge."""
     full = [ideas for ideas in lists if ideas]
     return full[0] if len(full) == 1 else merge(chain.from_iterable(full))
 

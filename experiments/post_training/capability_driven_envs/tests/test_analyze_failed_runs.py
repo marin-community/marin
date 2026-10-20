@@ -160,15 +160,15 @@ def ctx(tmp_path_factory):
         yield context
 
 
-def analyze(ctx: ZephyrContext, rollouts, batch_size: int = 100, make_client=Analyst) -> ZephyrExecutionResult:
+def analyze(ctx: ZephyrContext, rollouts, shard_size: int = 100, make_client=Analyst) -> ZephyrExecutionResult:
     plan = analyze_failed_runs(
         rollouts,
         make_client,
         pass_threshold=1.0,
         max_new_ideas=8,
-        batch_size=batch_size,
-        policy=LLMPolicy(),
-        merge_policy=LLMPolicy(),
+        shard_size=shard_size,
+        extract_ideas_llm_policy=LLMPolicy(),
+        merge_ideas_llm_policy=LLMPolicy(),
         catalog_version="round-1",
     )
     return ctx.execute(plan)
@@ -190,10 +190,10 @@ def test_each_idea_cites_the_failed_rollouts_of_its_skills_and_becomes_a_catalog
     assert task_workpieces({idea.capability_id: idea}, 1) == [(f"{idea.capability_id}--00", idea)]
 
 
-def test_the_ideas_of_several_batches_merge_again(ctx):
+def test_the_ideas_of_several_shards_merge_again(ctx):
     rollouts = [loop(f"loop-{i}") for i in range(4)] + [wrong(f"wrong-{i}") for i in range(2)]
 
-    ideas = analyze(ctx, rollouts, batch_size=3).results
+    ideas = analyze(ctx, rollouts, shard_size=3).results
 
     assert names_and_evidence(ideas) == [
         (STOP_LOOPS.name, [f"loop-{i}" for i in range(4)]),
