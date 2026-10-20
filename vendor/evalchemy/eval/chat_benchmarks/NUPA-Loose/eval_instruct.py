@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import ijson
-from huggingface_hub import hf_hub_download
+from rigging.filesystem.factory import open_url
 
+from eval.data_sources import fetch_hf
 from eval.task import BaseBenchmark
 
 from .scorer import length_bucket
@@ -97,6 +98,7 @@ class NUPALooseBenchmark(BaseBenchmark):
                 dataset_name=self.dataset_name,
                 dataset_revision=self.dataset_revision,
                 split=self.dataset_split,
+                cache_prefix=self.dataset_cache,
             )
             records = iter_nupa_source_records(
                 source,
@@ -119,20 +121,19 @@ class NUPALooseBenchmark(BaseBenchmark):
 
 
 
-def download_nupa_source(*, dataset_name: str, dataset_revision: str, split: str) -> Path:
+def download_nupa_source(
+    *,
+    dataset_name: str,
+    dataset_revision: str,
+    split: str,
+    cache_prefix: str | None = None,
+) -> str:
     """Download and return one pinned NUPA source split."""
-    return Path(
-        hf_hub_download(
-            repo_id=dataset_name,
-            filename=f"{split}.json",
-            repo_type="dataset",
-            revision=dataset_revision,
-        )
-    )
+    return fetch_hf(dataset_name, f"{split}.json", revision=dataset_revision, cache_prefix=cache_prefix)
 
 
 def iter_nupa_source_records(
-    source: Path,
+    source: str,
     *,
     split: str,
     num_each: int = DEFAULT_NUM_EACH,
@@ -142,7 +143,7 @@ def iter_nupa_source_records(
     if num_each <= 0:
         raise ValueError("num_each must be positive")
     random_generator = random.Random(random_seed)
-    with source.open("rb") as source_file:
+    with open_url(source, "rb") as source_file:
         for task_name, by_digit in ijson.kvitems(source_file, ""):
             digit_groups = validate_nupa_digit_groups(task_name, by_digit)
             sampled_by_digit = {}

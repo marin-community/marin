@@ -27,7 +27,7 @@ def main() -> None:
     parser.add_argument("--dataset-name", default=SOURCE_DATASET_NAME)
     parser.add_argument("--revision", default=SOURCE_DATASET_REVISION)
     parser.add_argument("--split", default=DEFAULT_SPLIT)
-    parser.add_argument("--source-file", type=Path)
+    parser.add_argument("--source-file")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--num-each", type=int, default=DEFAULT_NUM_EACH)
     parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
@@ -49,7 +49,7 @@ def main() -> None:
 
 
 def convert_file(
-    source: Path,
+    source: str,
     output: Path,
     *,
     split: str,

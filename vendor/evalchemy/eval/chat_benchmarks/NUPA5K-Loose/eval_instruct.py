@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from importlib import import_module
-from pathlib import Path
 from typing import Any
 
 from eval.contracts.eval_spec import SourceRef
@@ -49,12 +48,13 @@ class NUPA5KLooseBenchmark(nupa.NUPALooseBenchmark):
         if self.debug:
             return super()._load_records()
         source = (
-            Path(self.source_file)
+            self.source_file
             if self.source_file
             else nupa.download_nupa_source(
                 dataset_name=self.dataset_name,
                 dataset_revision=self.dataset_revision,
                 split=self.dataset_split,
+                cache_prefix=self.dataset_cache,
             )
         )
         records = load_panel_records(

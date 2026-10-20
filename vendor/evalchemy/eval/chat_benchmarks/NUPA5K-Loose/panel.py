@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import ijson
+from rigging.filesystem.factory import open_url
 
 nupa = import_module("eval.chat_benchmarks.NUPA-Loose.eval_instruct")
 
@@ -56,7 +57,7 @@ def source_text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def build_nupa5k_identities(source: Path, *, panel_size: int = NUPA5K_SIZE) -> tuple[SourceIdentity, ...]:
+def build_nupa5k_identities(source: str, *, panel_size: int = NUPA5K_SIZE) -> tuple[SourceIdentity, ...]:
     """Build ordered panel identities from nested source JSON."""
     unique_counts = {
         (stratum.task_name, stratum.digit): len({source_text_sha256(text) for text in stratum.texts})
@@ -120,7 +121,7 @@ def load_nupa5k_manifest(path: Path = MANIFEST_PATH) -> tuple[SourceIdentity, ..
 
 
 def load_panel_records(
-    source: Path,
+    source: str,
     *,
     split: str,
     identities: Sequence[SourceIdentity],
@@ -171,14 +172,14 @@ def load_panel_records(
     return [records_by_identity[identity] for identity in identities]
 
 
-def iter_source_tasks(source: Path) -> Iterator[tuple[str, dict[str, list[str]]]]:
+def iter_source_tasks(source: str) -> Iterator[tuple[str, dict[str, list[str]]]]:
     """Yield validated NUPA tasks from nested source JSON."""
-    with source.open("rb") as source_file:
+    with open_url(source, "rb") as source_file:
         for task_name, value in ijson.kvitems(source_file, ""):
             yield task_name, nupa.validate_nupa_digit_groups(task_name, value)
 
 
-def iter_source_strata(source: Path) -> Iterator[SourceStratum]:
+def iter_source_strata(source: str) -> Iterator[SourceStratum]:
     """Yield each nonempty task/digit stratum from nested source JSON."""
     for task_name, digit_groups in iter_source_tasks(source):
         for digit, texts in digit_groups.items():

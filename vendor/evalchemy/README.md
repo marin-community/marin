@@ -23,10 +23,17 @@ Configuration validation requires the installed lm-eval task catalog; missing
 catalog dependencies fail validation instead of using an incomplete task list.
 
 Large canonical datasets are fetched from immutable Hugging Face revisions.
-`eval.data_sources.fetch_hf` returns a cached file path or object-store URL for
-the existing readers. Marin uses its configured scratch store; the standalone
-CLI uses the local HF cache, with `--dataset_cache` selecting an explicit S3
-prefix or local directory. Small datasets and custom snapshots remain bundled.
+`eval.data_sources.fetch_hf` returns a cached file path or object-store URL.
+`fetch_url` caches direct HTTP(S) files by URL and an explicit immutable publisher
+version under a selected prefix. Both helpers reuse completed staged files without
+contacting the origin; Rigging's `open_url` opens their returned paths and does not itself
+cache HTTP URLs. Marin uses its configured scratch store; standalone HF reads
+use the native local HF cache, checking pinned snapshots before downloading.
+`--dataset_cache` selects an explicit S3 prefix or local directory; HTTP callers
+must pass a cache prefix to `fetch_url`. Small
+datasets and custom snapshots remain bundled. See the
+[dataset caching reference](../../docs/explanations/evaluation.md#dataset-caching)
+for both APIs.
 
 ```bash
 uv run --project vendor/evalchemy --frozen --no-dev evalchemy --help

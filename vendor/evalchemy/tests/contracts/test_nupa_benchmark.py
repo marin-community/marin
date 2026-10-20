@@ -3,8 +3,11 @@ from collections import Counter
 from importlib import import_module
 from pathlib import Path
 
+import huggingface_hub.constants
 import pytest
+from rigging.filesystem.factory import open_url
 
+from eval import data_sources
 from eval.contracts.eval_spec import RequestKind, SourceRef
 from eval.sources.common import SourceOptions
 from tests.contracts.source_harness import evaluate_source
@@ -38,7 +41,7 @@ def _source_file(path: Path) -> Path:
 def test_source_loader_reproduces_seeded_per_group_sampling(tmp_path):
     source = _source_file(tmp_path / "test.json")
 
-    records = list(nupa.iter_nupa_source_records(source, split="test", num_each=2, random_seed=7))
+    records = list(nupa.iter_nupa_source_records(str(source), split="test", num_each=2, random_seed=7))
 
     assert [(record["digit"], record["answer"]) for record in records] == [
         (3, "2"),
@@ -48,11 +51,48 @@ def test_source_loader_reproduces_seeded_per_group_sampling(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("storage", ["local", "memory"])
+def test_pinned_source_cache_preserves_selection_when_hub_is_unavailable(storage, tmp_path, monkeypatch):
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path / "hub"))
+    source = _source_file(tmp_path / "test.json")
+    cache_prefix = str(tmp_path / "cache") if storage == "local" else f"memory://{tmp_path.name}/cache"
+
+    def download(repo_id, filename, *, repo_type, revision):
+        assert (repo_id, filename, repo_type, revision) == (
+            "HaotongYang/NUPA_text", "test.json", "dataset", "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7",
+        )
+        return str(source)
+
+    monkeypatch.setattr(data_sources, "hf_hub_download", download)
+    benchmark = nupa.NUPALooseBenchmark(num_each=2, random_seed=7)
+    benchmark.dataset_cache = cache_prefix
+    options = SourceOptions("NUPA-Loose", benchmark.SOURCE)
+    cold = list(benchmark.iter_specs(options))
+
+    def offline(*args, **kwargs):
+        raise ConnectionError("Hugging Face unavailable")
+
+    monkeypatch.setattr(data_sources, "hf_hub_download", offline)
+    source.unlink()
+    warm = list(benchmark.iter_specs(options))
+
+    assert warm == cold
+    assert [(spec.doc["digit"], spec.target) for spec in warm] == [(3, "2"), (3, "1"), (4, "13"), (4, "10")]
+    assert [spec.source_id for spec in warm] == [
+        "test:add_Integer_Integer_Integer:3:000000",
+        "test:add_Integer_Integer_Integer:3:000001",
+        "test:add_Integer_Integer_Integer:4:000000",
+        "test:add_Integer_Integer_Integer:4:000001",
+    ]
+    assert warm[0].requests[0].prompt == [{"role": "user", "content": "Directly return an integer. Add: 2 + 0 ="}]
+    assert warm[0].grader.reference == {"format": "Integer"}
+
+
 def test_converter_materializes_the_same_selected_rows(tmp_path):
     source = _source_file(tmp_path / "test.json")
     output = tmp_path / "flattened.jsonl"
 
-    count = data_prep.convert_file(source, output, split="test", num_each=2, random_seed=7)
+    count = data_prep.convert_file(str(source), output, split="test", num_each=2, random_seed=7)
 
     records = [json.loads(line) for line in output.read_text().splitlines()]
     assert count == 4
@@ -140,9 +180,9 @@ def test_stratified_selection_is_stable_unique_and_round_robin(tmp_path):
         )
     )
 
-    selected = panel.build_nupa5k_identities(first, panel_size=6)
+    selected = panel.build_nupa5k_identities(str(first), panel_size=6)
 
-    assert selected == panel.build_nupa5k_identities(reordered, panel_size=6)
+    assert selected == panel.build_nupa5k_identities(str(reordered), panel_size=6)
     assert [(identity.task_name, identity.digit) for identity in selected] == [
         ("task_a", 1),
         ("task_a", 2),
@@ -162,10 +202,11 @@ def test_stratified_selection_rejects_a_panel_larger_than_unique_source_records(
     source.write_text(json.dumps({"task": {"1": ["same", "same"]}}))
 
     with pytest.raises(ValueError, match="unique source records"):
-        panel.build_nupa5k_identities(source, panel_size=2)
+        panel.build_nupa5k_identities(str(source), panel_size=2)
 
 
-def test_panel_loader_follows_manifest_order_and_skips_duplicate_identities(tmp_path):
+@pytest.mark.parametrize("storage", ["local", "memory"])
+def test_panel_loader_follows_manifest_order_and_skips_duplicate_identities(storage, tmp_path):
     source = tmp_path / "test.json"
     source.write_text(
         json.dumps(
@@ -177,9 +218,13 @@ def test_panel_loader_follows_manifest_order_and_skips_duplicate_identities(tmp_
             }
         )
     )
-    identities = panel.build_nupa5k_identities(source, panel_size=2)
+    source_url = str(source) if storage == "local" else f"memory://{tmp_path.name}/test.json"
+    if storage == "memory":
+        with open_url(source_url, "wb") as output:
+            output.write(source.read_bytes())
+    identities = panel.build_nupa5k_identities(source_url, panel_size=2)
 
-    records = panel.load_panel_records(source, split="test", identities=identities)
+    records = panel.load_panel_records(source_url, split="test", identities=identities)
 
     assert [record["source_sha256"] for record in records] == [identity.sha256 for identity in identities]
     assert len({record["id"] for record in records}) == 2

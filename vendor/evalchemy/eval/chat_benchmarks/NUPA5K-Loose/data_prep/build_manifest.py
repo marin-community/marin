@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument("--dataset-name", default=nupa.SOURCE_DATASET_NAME)
     parser.add_argument("--revision", default=nupa.SOURCE_DATASET_REVISION)
     parser.add_argument("--split", default=nupa.DEFAULT_SPLIT)
-    parser.add_argument("--source-file", type=Path)
+    parser.add_argument("--source-file")
     parser.add_argument("--output", type=Path, default=MANIFEST_PATH)
     parser.add_argument("--panel-size", type=int, default=NUPA5K_SIZE)
     args = parser.parse_args()
