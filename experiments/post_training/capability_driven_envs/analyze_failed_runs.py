@@ -107,13 +107,15 @@ attempt at a task: the task's messages, the agent's turns and tool calls, and th
 Find the general capabilities whose absence explains the failures. A capability is a skill that transfers to \
 many tasks and domains, for example: obey the answer format that a task asks for, select tools and their \
 arguments, stop a loop that repeats a call or a mistake, read a task and its constraints carefully, do a check \
-of the work before the answer, or plan the work for the turns that are left.
+of the work before the answer, or reach an answer without unneeded steps.
 
 - Use the failed runs only as evidence. Read them, and give their run IDs as the evidence of each capability.
 - Write each capability as a catalog entry for the skill itself. Do not put the failed tasks, their domain, \
 their data, or their mistakes in it: a different step writes new tasks that train the skill, and the failed \
 tasks evaluate it.
 - Prefer a few general capabilities to many narrow ones. Merge failures that come from the same missing skill.
+- A run that stopped at its turn limit shows a gap only if it used its turns on repeated or unneeded steps. \
+The agent does not see the limit unless its messages state it.
 
 Read a run with read_run, and find a text across runs with search_runs. When you are done, answer without a \
 tool call. The answer is one JSON array of capabilities that obeys this JSON schema:
