@@ -474,8 +474,11 @@ class RecordStore:
         ``archived: true`` so the UI can style them apart.
         """
         records, _by_id = self._snapshot()
+        # Comparison identities hash model configurations; skip that work for unrelated cohorts.
+        if request.cohort_version is not None:
+            records = [record for record in records if record.version == request.cohort_version]
         archived = self.archived_models()
-        if not include_archived:
+        if archived and not include_archived:
             records = [
                 record
                 for record in records
@@ -1408,7 +1411,7 @@ def _analysis_router(store: RecordStore) -> APIRouter:
 
     @router.get("/meta")
     async def api_meta() -> JSONResponse:
-        meta = store.meta()
+        meta = await asyncio.to_thread(store.meta)
         meta["current_user"] = _current_user()
         meta["store"] = store.backend
         return JSONResponse(meta)

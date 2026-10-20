@@ -12,7 +12,9 @@ are covered rather than assumed.
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from threading import Event
 
+import httpx
 import pytest
 import sqlalchemy
 from evaldash import app as evaldash_app
@@ -112,6 +114,47 @@ def test_snapshot_keeps_generation_and_records_consistent_when_writer_commits_be
     committed = results_db.fetch_snapshot(engine)
     assert committed.generation == catalog.generation + 1
     assert next(record for record in committed.records if record.run_id == changed.run_id) == changed
+
+
+def test_metadata_database_wait_does_not_block_other_requests(engine, catalog):
+    store = evaldash_app.PgRecordStore(engine)
+    config = evaldash_app.EvaldashConfig.from_env({"RECORDS_PREFIXES": " "})
+    api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
+    metadata_query = Event()
+
+    def bound_metadata_wait(_conn, cursor, _statement, _parameters, context, _many):
+        if context.compiled is None:
+            return
+        query = context.compiled.statement
+        if isinstance(query, sqlalchemy.sql.Select) and query.selected_columns.contains_column(
+            results_db.model_state.c.model_name
+        ):
+            cursor.execute("SET LOCAL statement_timeout = '3s'")
+            metadata_query.set()
+
+    async def request_while_metadata_waits():
+        transport = httpx.ASGITransport(app=api.app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            with engine.begin() as writer:
+                writer.exec_driver_sql("LOCK TABLE model_state IN ACCESS EXCLUSIVE MODE")
+                metadata = asyncio.create_task(client.get("/meta"))
+                try:
+                    assert await asyncio.to_thread(metadata_query.wait, 5)
+                    runs = await client.get("/runs?limit=1")
+                    assert runs.status_code == 200
+                    assert runs.json()[0]["run_id"] in {record.run_id for record in catalog.records}
+                    assert not metadata.done()
+                finally:
+                    writer.rollback()
+                    response = await metadata
+                assert response.status_code == 200
+                assert "run_facets" in response.json()
+
+    sqlalchemy.event.listen(engine, "before_cursor_execute", bound_metadata_wait)
+    try:
+        asyncio.run(request_while_metadata_waits())
+    finally:
+        sqlalchemy.event.remove(engine, "before_cursor_execute", bound_metadata_wait)
 
 
 def test_reconciliation_batches_verification_writes_and_preserves_last_valid_records(engine, records):
