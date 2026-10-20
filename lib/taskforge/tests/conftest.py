@@ -24,6 +24,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import uuid
 from collections import deque
 from collections.abc import Iterator
@@ -148,6 +149,7 @@ class ScriptedStream:
     events: list[dict | str]
     send_done: bool
     stall: threading.Event | None
+    interval: float
 
 
 @dataclass
@@ -179,10 +181,12 @@ class FakeGlm:
         send_done: bool = True,
         stall_after_first: bool = False,
         raw_payload: str | None = None,
+        interval: float = 0.0,
     ) -> None:
         """Queue one streamed reply; ``tool_calls`` holds ``(name, arguments)`` pairs.
 
         ``raw_payload`` is sent verbatim as the second ``data:`` line, for malformed-stream tests.
+        ``interval`` is the pause, in seconds, before each event after the first.
         """
         deltas: list[dict] = [{"role": "assistant", "content": ""}]
         deltas += [{"reasoning": part} for part in _halves(reasoning)]
@@ -211,7 +215,7 @@ class FakeGlm:
         if raw_payload is not None:
             payloads.insert(1, raw_payload)
         stall = self.released if stall_after_first else None
-        self.responses.append(ScriptedStream(payloads, send_done, stall))
+        self.responses.append(ScriptedStream(payloads, send_done, stall, interval))
 
     def status(self, code: int, body: str, headers: dict[str, str] | None = None) -> None:
         self.responses.append(ScriptedStatus(code, body, headers or {}))
@@ -255,6 +259,8 @@ def _handler(fake: FakeGlm) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
             for index, event in enumerate(response.events):
+                if index:
+                    time.sleep(response.interval)
                 payload = event if isinstance(event, str) else json.dumps(event)
                 self.wfile.write(f"data: {payload}\n\n".encode())
                 self.wfile.flush()

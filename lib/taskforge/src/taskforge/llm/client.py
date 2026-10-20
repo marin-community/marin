@@ -21,6 +21,9 @@ from pydantic import BaseModel
 
 from taskforge.llm.policy import LLMPolicy, Message
 
+RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+"""HTTP statuses a retry can cure: a timeout, rate limiting or a server-side failure."""
+
 
 class FinishReason(StrEnum):
     STOP = "stop"

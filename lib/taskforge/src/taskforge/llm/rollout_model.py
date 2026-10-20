@@ -8,7 +8,8 @@ call's usage, which is what the trial's token accounting counts; its token ids a
 ``logprobs`` ``None``. Under ``TraceMode.MESSAGES`` the engine accepts such a turn, charges its usage
 against the session's token budget, and never trains on it. The rollout model requests neither
 token ids nor logprobs. Chat completions take text, so each prompt is the server's own rendering of
-the conversation.
+the conversation, so the model cannot replay an exact token prefix: a request carrying
+``prompt_token_ids`` raises ``RolloutContractError`` before any call.
 
 A rollout turn never continues on ``finish_reason == "length"``: the policy must set
 ``max_continuations=0``, so a turn is one request and the engine grades a cut turn with stop reason
@@ -22,7 +23,14 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Self
 
-from rolloutengine.contracts import LENGTH_STOP_REASON, GenerationLimitReached, ModelRequest, ModelTurn, TokenUsage
+from rolloutengine.contracts import (
+    LENGTH_STOP_REASON,
+    GenerationLimitReached,
+    ModelRequest,
+    ModelTurn,
+    RolloutContractError,
+    TokenUsage,
+)
 
 from taskforge.llm.client import (
     Attempt,
@@ -130,6 +138,8 @@ class GlmRolloutModel:
         return replace(self, record=replace(self.record, step=step))
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
+        if request.prompt_token_ids is not None:
+            raise RolloutContractError("GlmRolloutModel sends chat messages and cannot replay prompt_token_ids")
         turn = sum(message.get("role") == "assistant" for message in request.messages)
         request_fields = {**request.options, PROMPT_CACHE_KEY: routing_key(self.record)}
         try:

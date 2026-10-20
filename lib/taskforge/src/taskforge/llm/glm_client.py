@@ -52,7 +52,9 @@ import json
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections import Counter
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import TracebackType
@@ -67,6 +69,7 @@ from pydantic import BaseModel
 from rigging.timing import ExponentialBackoff
 
 from taskforge.llm.client import (
+    RETRYABLE_STATUSES,
     Attempt,
     AttemptOutcome,
     Completion,
@@ -92,7 +95,6 @@ logger = logging.getLogger(__name__)
 
 API_ROOT = "/v1"
 """The path suffix of an OpenAI-compatible base URL. The router serves ``/health`` at the URL without it."""
-RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 CONTEXT_LIMIT_PATTERN = re.compile(r"maximum context length is (\d+) tokens")
 SDK_REQUEST_FIELDS = frozenset({"tools", "tool_choice", "response_format", "parallel_tool_calls"})
 """Fields the client passes to ``chat.completions.create`` as keyword arguments, putting the rest in ``extra_body``."""
@@ -101,7 +103,7 @@ CONNECT_TIMEOUT = 10.0
 WRITE_TIMEOUT = 30.0
 KEEPALIVE_EXPIRY = 30.0
 """Seconds an idle pooled connection may be reused, so a connection idle through a long author turn is not
-reused blindly; a stalled read also retires the whole pool (``_reset_pool``)."""
+reused blindly; a stalled read also replaces the whole pool (``_reset_pool``)."""
 POOL_RESET_INTERVAL = 30.0
 """Least seconds between two pool resets, so a burst of stalls on one bad path replaces the pool once."""
 HEALTH_TIMEOUT = 20.0
@@ -258,7 +260,8 @@ class GlmClient:
             initial=provider.backoff_initial, maximum=provider.backoff_maximum, factor=provider.backoff_factor
         )
         self._http = self._new_pool()
-        self._retired: list[httpx.AsyncClient] = []
+        self._in_flight: Counter[httpx.AsyncClient] = Counter()
+        self._retired: set[httpx.AsyncClient] = set()
         self._pool_reset_at = -POOL_RESET_INTERVAL
         self._endpoint = source.current()
         self._sdk = self._sdk_client(self._endpoint)
@@ -280,24 +283,46 @@ class GlmClient:
             )
         )
 
-    def _reset_pool(self) -> None:
+    async def _reset_pool(self) -> None:
         """Open a fresh connection pool after a stalled read, so the retry cannot reuse a connection that may be dead.
 
         A stall has other causes the reset does not touch, such as the relay refusing connections or this process's
         own event loop blocking for longer than the connect timeout; the bounded retry with backoff carries the call
         through those, and the reset interval keeps the two from compounding into a reconnect storm.
 
-        The old pool is retired, not closed: other calls may still be streaming on its live connections. Retired
-        pools close with the client.
+        Other calls may still be streaming on the old pool's connections, so the old pool is retired and closes when
+        the last request leased from it ends (``_leased``). httpx drops an expired idle connection only when a request
+        next uses its pool, so a retired pool left open would hold its sockets until the client exits.
         """
         now = time.monotonic()
         if now - self._pool_reset_at < POOL_RESET_INTERVAL:
             return
         self._pool_reset_at = now
-        logger.warning("GLM read stalled; replacing the connection pool (retired pools: %d)", len(self._retired) + 1)
-        self._retired.append(self._http)
+        old = self._http
+        logger.warning(
+            "GLM read stalled; replacing the connection pool (%d requests still on the old one)", self._in_flight[old]
+        )
         self._http = self._new_pool()
         self._sdk = self._sdk_client(self._endpoint)
+        if self._in_flight[old]:
+            self._retired.add(old)
+        else:
+            await old.aclose()
+
+    @asynccontextmanager
+    async def _leased(self) -> AsyncIterator[tuple[openai.AsyncOpenAI, httpx.AsyncClient]]:
+        """The current SDK client and its pool, which stays open until the request using them ends."""
+        sdk, pool = self._sdk, self._http
+        self._in_flight[pool] += 1
+        try:
+            yield sdk, pool
+        finally:
+            self._in_flight[pool] -= 1
+            if not self._in_flight[pool]:
+                del self._in_flight[pool]
+                if pool in self._retired:
+                    self._retired.remove(pool)
+                    await pool.aclose()
 
     async def __aenter__(self) -> Self:
         return self
@@ -465,7 +490,7 @@ class GlmClient:
                 if failure.outcome is AttemptOutcome.TRANSPORT_ERROR:
                     self._refresh_endpoint()
                 if failure.outcome is AttemptOutcome.STALLED:
-                    self._reset_pool()
+                    await self._reset_pool()
                 if failure.outcome is AttemptOutcome.ROUTE_MISSING or await self._pool_empty():
                     if hold_started is None:
                         hold_started = time.monotonic()
@@ -503,24 +528,25 @@ class GlmClient:
         started = time.monotonic()
         ttft: float | None = None
         try:
-            chunks = await self._sdk.chat.completions.create(**kwargs)
-            assert isinstance(chunks, openai.AsyncStream)
-            async with chunks:
-                last_token = time.monotonic()
-                while True:
-                    remaining = stall_timeout - (time.monotonic() - last_token)
-                    try:
-                        chunk = await asyncio.wait_for(anext(chunks), timeout=max(remaining, 0.0))
-                    except StopAsyncIteration:
-                        break
-                    events.append(chunk.model_dump_json())
-                    state.handle_chunk(chunk)
-                    if _carries_token(chunk):
-                        last_token = time.monotonic()
-                        if ttft is None:
-                            ttft = last_token - started
-                    if any(choice.finish_reason == FinishReason.ABORT for choice in chunk.choices):
-                        raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
+            async with self._leased() as (sdk, _):
+                chunks = await sdk.chat.completions.create(**kwargs)
+                assert isinstance(chunks, openai.AsyncStream)
+                async with chunks:
+                    last_token = time.monotonic()
+                    while True:
+                        remaining = stall_timeout - (time.monotonic() - last_token)
+                        try:
+                            chunk = await asyncio.wait_for(anext(chunks), timeout=max(remaining, 0.0))
+                        except StopAsyncIteration:
+                            break
+                        events.append(chunk.model_dump_json())
+                        state.handle_chunk(chunk)
+                        if _carries_token(chunk):
+                            last_token = time.monotonic()
+                            if ttft is None:
+                                ttft = last_token - started
+                        if any(choice.finish_reason == FinishReason.ABORT for choice in chunk.choices):
+                            raise _AttemptFailed(AttemptOutcome.ABORTED, "server aborted the request")
         except TimeoutError as error:
             raise _AttemptFailed(AttemptOutcome.STALLED, f"no token for {stall_timeout}s") from error
         except openai.APIStatusError as error:
@@ -569,11 +595,12 @@ class GlmClient:
         """
         endpoint = self._endpoint
         try:
-            response = await self._http.get(
-                f"{endpoint.base_url.removesuffix(API_ROOT)}/health",
-                headers={"Authorization": f"Bearer {endpoint.token}"},
-                timeout=HEALTH_TIMEOUT,
-            )
+            async with self._leased() as (_, pool):
+                response = await pool.get(
+                    f"{endpoint.base_url.removesuffix(API_ROOT)}/health",
+                    headers={"Authorization": f"Bearer {endpoint.token}"},
+                    timeout=HEALTH_TIMEOUT,
+                )
         except httpx.TransportError:
             return False
         if response.status_code != 200:
