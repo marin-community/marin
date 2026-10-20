@@ -309,20 +309,32 @@ def _git_tracked(directory: Path, pathspec: str) -> set[str]:
     return {path for path in listed.split("\0") if path}
 
 
-def _require_tracked(environment: Environment) -> None:
-    """The fragment the identity hashes must be a git-tracked file, and package files have no exec bits.
+def _inside_git_worktree(directory: Path) -> bool:
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        == "true"
+    )
 
-    Consumers recompute the identity from a workspace bundle that has no git metadata and no exec bits,
-    so an untracked or executable file here would give them a different identity.
-    """
+
+def _require_tracked(environment: Environment) -> None:
+    """Require tracked inputs inside Git worktrees and reject executable runtime files."""
     fragment = environment.dockerfile
-    if fragment is not None and fragment.name not in _git_tracked(fragment.parent, fragment.name):
+    if (
+        fragment is not None
+        and _inside_git_worktree(fragment.parent)
+        and fragment.name not in _git_tracked(fragment.parent, fragment.name)
+    ):
         raise ValueError(f"{fragment} must be tracked by git")
     for package in RUNTIME_PACKAGES:
         files = context_files(package)
         found = {file.path for file in files}
-        expected = _git_tracked(package, ".")
-        if found != expected:
+        if _inside_git_worktree(package) and found != (expected := _git_tracked(package, ".")):
             raise ValueError(
                 f"{package} must contain exactly its git-tracked files; "
                 f"untracked: {sorted(found - expected)}, missing: {sorted(expected - found)}"

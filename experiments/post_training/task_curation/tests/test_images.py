@@ -200,6 +200,18 @@ def test_build_refuses_a_dockerfile_fragment_git_does_not_track(repository, dock
         build_environment(environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out")))
 
 
+def test_build_from_a_gitless_source_bundle_records_the_environment(docker_log, tmp_path):
+    fragment = tmp_path / "bundle.Dockerfile"
+    fragment.write_text(TOOLCHAIN_FRAGMENT)
+    environment = Environment(requirements=REQUIREMENTS, dockerfile=fragment)
+    built = build_environment(
+        environment, EnvironmentBuild(identity_digest(environment), REPOSITORY, str(tmp_path / "out"))
+    )
+    assert StoragePath(built.lock_url).read_text() == COMPILED_LOCK
+    assert built.image is not None
+    assert built.identity == identity_digest(environment)
+
+
 def test_an_image_build_requires_repository_credentials(docker_log, tmp_path):
     (tmp_path / "docker-config" / "config.json").write_text(json.dumps({"auths": {}}))
     environment = Environment(requirements=REQUIREMENTS, apt=("jq",))
