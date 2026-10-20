@@ -21,6 +21,7 @@ from rolloutengine.models import (
 )
 from rolloutengine.test_support import arithmetic_task, rollout_limits
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import AnswerCall
 
 from experiments.post_training.capability_driven_envs.analyze_failed_runs import (
     EvaluatedRun,
@@ -113,6 +114,24 @@ async def test_the_agent_reads_the_failed_runs_and_returns_capability_ideas_for_
     assert (idea.capability_id, idea.catalog_version) == (CAPABILITY["id"], "round-1")
     assert idea.capability["kind"] == "capability" and idea.capability["evidence"] == ["loop"]
     assert task_workpieces({idea.capability_id: idea}, 1) == [(f"{CAPABILITY['id']}--00", idea)]
+
+
+async def test_read_run_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
+    policy = {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function"}]}
+    result = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, policy).result
+    run = EvaluatedRun(arithmetic_task(id="task-malformed", answer_format=AnswerCall()), result)
+    model, requests = analyst(
+        tool_call("read_run", run_id="malformed"),
+        {"role": "assistant", "content": json.dumps([{**CAPABILITY, "evidence": ["malformed"]}])},
+    )
+
+    await analyze_failed_runs(
+        [run], model, pass_threshold=1.0, limits=rollout_limits(max_turns=4), catalog_version="round-1"
+    )
+
+    read = requests[1].messages[-1]["content"]
+    assert '"name": "submit_answer"' in read
+    assert '<tool call> malformed {"id": "bad", "type": "function"}' in read
 
 
 async def test_no_failed_run_needs_no_analysis():

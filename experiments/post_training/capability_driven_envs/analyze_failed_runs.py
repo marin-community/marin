@@ -18,7 +18,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
+from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext, task_prompt
 from rolloutengine.models import GradedRollout, Model, Rollout, RolloutLimits, TaskRolloutSpec, TraceMode
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading_result import Outcome
@@ -54,7 +54,10 @@ MAX_MATCHES = 50
 
 READ_RUN = FunctionDefinition(
     name="read_run",
-    description="Read the task's tools and the messages of one failed run, from message first_message on.",
+    description=(
+        "Read the tools that the task gave, the task's tool providers, and the messages of one failed run, from "
+        "message first_message on. The policy's harness can also give a shell tool and the providers' functions."
+    ),
     parameters={
         "type": "object",
         "properties": {"run_id": {"type": "string"}, "first_message": {"type": "integer", "minimum": 0}},
@@ -232,11 +235,7 @@ def _summary(run: EvaluatedRun) -> dict[str, Any]:
     """The run's overview line: its grade, how it stopped, and its turns and tool calls."""
     rollout, grade = run.result.rollout, run.result.grade
     turns = [step.turn.message for conversation in rollout.conversations for step in conversation.steps]
-    calls = [
-        (call["function"]["name"], call["function"]["arguments"])
-        for message in turns
-        for call in message.get("tool_calls", ())
-    ]
+    calls = [_call_text(call) for message in turns for call in message.get("tool_calls") or ()]
     events = run.task.context.events
     task = " ".join(event.content for event in events if isinstance(event, TextMessage) and event.role == "user")
     return {
@@ -253,8 +252,16 @@ def _summary(run: EvaluatedRun) -> dict[str, Any]:
     }
 
 
+def _call_text(call: Any) -> str:
+    """A tool call as ``name(arguments)``. The record keeps the policy's message, so a malformed call stays raw JSON."""
+    function = call.get("function") if isinstance(call, Mapping) else None
+    if isinstance(function, Mapping) and isinstance(function.get("name"), str):
+        return f"{function['name']}({function.get('arguments', '')})"
+    return f"malformed {json.dumps(call, default=str)}"
+
+
 def _render(message: Mapping[str, Any]) -> str:
-    calls = [f"{call['function']['name']}({call['function']['arguments']})" for call in message.get("tool_calls", ())]
+    calls = [_call_text(call) for call in message.get("tool_calls") or ()]
     text = " ".join([str(message.get("content") or ""), *(f"<tool call> {call}" for call in calls)]).strip()
     return f"{message.get('role')}: {text}"
 
@@ -296,8 +303,13 @@ class _RunReader:
         if not 0 <= first < len(messages):
             raise ValueError(f"first_message must be from 0 to {len(messages) - 1}")
         task = run.task
-        tools = [tool.model_dump(exclude_none=True) for tool in (*task.final_tools, *task.interaction_tools)]
-        lines = [json.dumps({"tools": tools, "capabilities": list(task.environment_requirements.capabilities)})]
+        requirements = task.environment_requirements
+        overview = {
+            "tools": list(task_prompt(task, None, ()).options.get("tools", ())),
+            "tool_providers": sorted(provider.action_interface for provider in requirements.tool_providers.values()),
+            "capabilities": list(requirements.capabilities),
+        }
+        lines = [json.dumps(overview)]
         size, end = len(lines[0]), first
         for index in range(first, len(messages)):
             line = f"[{index}] {messages[index]}"
