@@ -558,6 +558,84 @@ def test_channel_axis_gate_reads_concrete_shardings_on_an_auto_mesh():
     run_on_cpu_devices(_AUTO_MESH_GATE_SCRIPT, device_count=8)
 
 
+_SHARDED_TRITON_VJP_SCRIPT = """
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+from levanter.kernels.triton.short_conv import api, short_conv, short_conv_reference
+
+# Substitute only the external accelerator kernels. The public dispatch, custom
+# VJP, JIT staging, padding and real multi-device halo exchange remain unchanged.
+api.triton_short_conv_available = lambda: True
+api.short_conv_triton_fwd_local = lambda w, x, seg, **kwargs: short_conv_reference(w, x, seg)
+
+
+def activation_backward(weight, segment_ids, dy, **kwargs):
+    return jax.grad(lambda x: jnp.sum(short_conv_reference(weight, x, segment_ids) * dy))(jnp.zeros_like(dy))
+
+
+def reject_weight_backward(*args, **kwargs):
+    raise AssertionError("Frozen weights must not request the joint accelerator backward")
+
+
+def joint_backward(weight, x, segment_ids, dy, **kwargs):
+    dw, dx = jax.grad(
+        lambda w, xx: jnp.sum(short_conv_reference(w, xx, segment_ids) * dy), argnums=(0, 1)
+    )(weight, x)
+    return dx, dw[None]
+
+
+api.short_conv_triton_dx_local = activation_backward
+api.short_conv_triton_bwd_local = reject_weight_backward
+rng = np.random.default_rng(123)
+weight = jnp.asarray(rng.normal(size=(4, 64)), jnp.float32)
+x = jnp.asarray(rng.normal(size=(2, 32, 64)), jnp.float32)
+dy = jnp.asarray(rng.normal(size=x.shape), jnp.float32)
+# A boundary inside the context=2 left halo leaves both live and masked taps.
+segment_ids = jnp.asarray(np.tile([0] * 15 + [1] * 17, (2, 1)), jnp.int32)
+mesh = Mesh(np.asarray(jax.devices()).reshape(2, 2), ("data", "context"), axis_types=(AxisType.Explicit,) * 2)
+want = short_conv_reference(weight, x, segment_ids)
+want_dw, want_dx = jax.grad(
+    lambda w, xx: jnp.sum(short_conv_reference(w, xx, segment_ids) * dy), argnums=(0, 1)
+)(weight, x)
+with jax.set_mesh(mesh):
+    sharded_x = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
+    sharded_seg = jax.device_put(segment_ids, NamedSharding(mesh, P("data", "context")))
+
+    def forward(w, xx):
+        return short_conv(w, xx, sharded_seg, implementation="triton_gpu", batch_axes=("data",))
+
+    # Eager forward used to fail in ShardMapTrace before reaching the kernel.
+    for call in (forward, jax.jit(forward)):
+        np.testing.assert_allclose(call(weight, sharded_x), want, rtol=1e-5, atol=1e-5)
+    for call in (forward, jax.checkpoint(forward)):
+        grad = jax.grad(lambda w, xx: jnp.sum(call(w, xx) * dy), argnums=1)
+        for transform in (lambda f: f, jax.jit):
+            activation_grad = transform(grad)
+            # Reuse one compiled call with changed runtime weights, including
+            # the first x-only trace while the joint accelerator kernel raises.
+            for scale in (1.0, 0.5):
+                np.testing.assert_allclose(
+                    activation_grad(weight * scale, sharded_x), want_dx * scale, rtol=1e-5, atol=1e-5
+                )
+    api.short_conv_triton_bwd_local = joint_backward
+    loss = lambda w, xx: jnp.sum(forward(w, xx) * dy)
+    for transform in (lambda f: f, jax.jit):
+        dw, dx = transform(jax.grad(loss, argnums=(0, 1)))(weight, sharded_x)
+        np.testing.assert_allclose(dw, want_dw, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(dx, want_dx, rtol=1e-5, atol=1e-5)
+        weight_only = transform(jax.grad(loss, argnums=0))(weight, sharded_x)
+        np.testing.assert_allclose(weight_only, want_dw, rtol=1e-5, atol=1e-5)
+"""
+
+
+def test_triton_vjp_staging_preserves_sharded_forward_and_gradients_on_cpu():
+    """Exercise the actual manual-axis trace with accelerator-boundary reference kernels."""
+    run_on_cpu_devices(_SHARDED_TRITON_VJP_SCRIPT, device_count=4)
+
+
 def test_context_parallel_kernel_matches_reference_on_gpu():
     if jax.default_backend() != "gpu" or jax.device_count() < 4:
         pytest.skip("requires four GPUs for the context-parallel kernel")

@@ -106,6 +106,9 @@ def _short_conv_triton_local_bwd(exact_reference_rounding, residuals, dy):
 _short_conv_triton_local.defvjp(_short_conv_triton_local_fwd, _short_conv_triton_local_bwd, symbolic_zeros=True)
 
 
+# Stage the perturbation-aware VJP before shard_map's eager manual-axis trace,
+# which cannot interpret custom_vjp calls with symbolic_zeros=True.
+@functools.partial(jax.jit, static_argnames=("exact_reference_rounding",))
 def _triton_local_call(
     weight: jax.Array,
     x: jax.Array,
