@@ -10,7 +10,8 @@ from levanter.grpo_model import GrpoExample
 from levanter.grpo_pipeline import packed_pipeline_batch, pipeline_batch
 
 
-def test_packing_preserves_response_objectives_positions_and_segment_boundaries():
+@pytest.mark.parametrize("with_reference", [False, True])
+def test_packing_preserves_response_objectives_positions_and_segment_boundaries(with_reference):
     Batch, Position, Response = hax.Axis("batch", 4), hax.Axis("position", 8), hax.Axis("response", 4)
     tokens = jnp.array(
         [
@@ -41,7 +42,7 @@ def test_packing_preserves_response_objectives_positions_and_segment_boundaries(
         resp(policy_weights),
         resp(policy_weights * 0.7),
         resp(jnp.full((4, 4), -3.2)),
-        resp(jnp.full((4, 4), -3.1)),
+        resp(jnp.full((4, 4), -3.1)) if with_reference else None,
     )
     unpacked = pipeline_batch(example, microbatches=2)
     packed = packed_pipeline_batch(
@@ -49,7 +50,13 @@ def test_packing_preserves_response_objectives_positions_and_segment_boundaries(
     )
     assert packed.tokens.shape == (3, 1, 10)
     assert np.all(np.asarray(packed.segment_ids[-1]) == -1)
-    for name in ("advantages", "policy_weights", "kl_weights", "old_logprobs", "reference_logprobs"):
+    response_names = ("advantages", "policy_weights", "kl_weights", "old_logprobs")
+    if with_reference:
+        response_names += ("reference_logprobs",)
+    else:
+        assert unpacked.reference_logprobs is None
+        assert packed.reference_logprobs is None
+    for name in response_names:
         before = np.asarray(getattr(unpacked, name))[np.asarray(unpacked.policy_weights) > 0]
         after = np.asarray(getattr(packed, name))[np.asarray(packed.policy_weights) > 0]
         np.testing.assert_array_equal(after, before)

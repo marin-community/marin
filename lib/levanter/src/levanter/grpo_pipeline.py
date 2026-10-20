@@ -5,12 +5,11 @@
 
 from dataclasses import dataclass
 
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from levanter.data.packing import SequencePacker, pack_documents
+from levanter.data.packing import pack_documents
 from levanter.grpo_model import GrpoExample
 from levanter.pipeline import reshape_batch_into_microbatches
 
@@ -26,7 +25,7 @@ class PipelineBatch:
     policy_weights: jax.Array
     kl_weights: jax.Array
     old_logprobs: jax.Array
-    reference_logprobs: jax.Array
+    reference_logprobs: jax.Array | None
 
 
 def pipeline_batch(example: GrpoExample, *, microbatches: int) -> PipelineBatch:
@@ -47,11 +46,7 @@ def pipeline_batch(example: GrpoExample, *, microbatches: int) -> PipelineBatch:
         response(example.policy_weights),
         response(example.kl_weights),
         response(example.old_logprobs),
-        (
-            jnp.zeros_like(response(example.old_logprobs))
-            if example.reference_logprobs is None
-            else response(example.reference_logprobs)
-        ),
+        None if example.reference_logprobs is None else response(example.reference_logprobs),
     )
     return reshape_batch_into_microbatches(batch, microbatches)
 
@@ -84,7 +79,9 @@ def packed_pipeline_batch(
     tokens = np.full((rows, sequence_length), pad_token_id, dtype=np.int32)
     segments = np.full((rows, sequence_length), -1, dtype=np.int32)
     positions = np.zeros((rows, sequence_length), dtype=np.int32)
-    response_names = ("advantages", "policy_weights", "kl_weights", "old_logprobs", "reference_logprobs")
+    response_names = ("advantages", "policy_weights", "kl_weights", "old_logprobs")
+    if source.reference_logprobs is not None:
+        response_names += ("reference_logprobs",)
     objective = {
         name: np.zeros((rows, sequence_length - 1), dtype=getattr(source, name).dtype) for name in response_names
     }
@@ -96,12 +93,12 @@ def packed_pipeline_batch(
     if np.any((response_mask == 0) & ((source.policy_weights != 0) | (source.kl_weights != 0))):
         raise ValueError("Objective weights must be zero outside the response mask")
     for row, documents in enumerate(packs):
-        packer = SequencePacker(hax.Axis("position", sequence_length), max(len(documents), 1), pad_token_id)
         offset = 0
         for document in documents:
             indices = np.flatnonzero(valid[document])
             count = len(indices)
-            packer.add_example(source.tokens[document, indices].tolist(), np.zeros(count), segment_id=document)
+            tokens[row, offset : offset + count] = source.tokens[document, indices]
+            segments[row, offset : offset + count] = document
             positions[row, offset : offset + count] = source.position_ids[document, indices]
             for compact_target, target in enumerate(indices):
                 if target < response_start or compact_target == 0 or not valid[document, target - 1]:
@@ -111,10 +108,15 @@ def packed_pipeline_batch(
                 for name in response_names:
                     objective[name][row, predictor] = getattr(source, name)[document, response_index]
             offset += count
-        packed = packer.pack()
-        tokens[row] = np.asarray(packed.tokens.array)
-        segments[row] = np.asarray(packed.attn_mask.segment_ids[0].array)
     batch = PipelineBatch(
-        tokens, (segments >= 0).astype(np.int32), segments, positions, *(objective[name] for name in response_names)
+        tokens,
+        (segments >= 0).astype(np.int32),
+        segments,
+        positions,
+        objective["advantages"],
+        objective["policy_weights"],
+        objective["kl_weights"],
+        objective["old_logprobs"],
+        objective.get("reference_logprobs"),
     )
     return reshape_batch_into_microbatches(jax.tree.map(jnp.asarray, batch), microbatches)
