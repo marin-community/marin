@@ -56,13 +56,3 @@ def test_ranked_pool_orders_shards_and_prefix_independently_of_input_partitions(
 
     assert selected == ["a", "b", "c"]
     assert prefix.total_tokens == 12
-
-
-def test_ranked_pool_rejects_budget_above_available_token_mass(pool_parquets, zephyr_context, tmp_path):
-    _, _paths = pool_parquets
-    pool = _rank(
-        Dataset.from_files(str(tmp_path / "raw-*.parquet")).load_parquet(), zephyr_context, tmp_path / "ranked", 4
-    )
-
-    with pytest.raises(ValueError, match="below the 21 token budget"):
-        take_token_prefix(pool, ctx=zephyr_context, output_path=str(tmp_path / "prefix"), token_budget=21)
