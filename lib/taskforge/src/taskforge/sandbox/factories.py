@@ -99,7 +99,8 @@ def docker_unavailable() -> str | None:
 
 @dataclass(frozen=True)
 class LocalSandbox:
-    """The Iris task's bubblewrap probe: a local factory for lock-only graders, or why there is none.
+    """The Iris task's bubblewrap probe: a local factory for lock-only machines, solver and verifier alike, or
+    why there is none.
 
     Exactly one of ``factory`` and ``unavailable`` is set.
     """
@@ -131,8 +132,9 @@ def machine_factories(where: MachineHost, controller_url: str | None) -> Mapping
     """The factories ``RolloutEngine`` takes, keyed by ``factory.backend.value``.
 
     On Iris the gVisor factory submits sandboxes to ``controller_url``, the controller of the task
-    Taskforge runs in; the local factory, which grades lock-only environments, is present when
-    bubblewrap can sandbox commands in the Iris task. On a laptop ``controller_url`` must be
+    Taskforge runs in; the local factory, which runs grader-base and package machines for solvers and
+    graders alike, is present when bubblewrap can sandbox commands in the Iris task. On a laptop
+    ``controller_url`` must be
     ``None``; the Docker factory, which pulls registry images through the Docker daemon, is absent
     when the laptop has no reachable daemon. Each absent factory is logged with the probe's reason.
 
