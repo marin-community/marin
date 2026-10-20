@@ -424,7 +424,7 @@ def main() -> None:
                 )
             # Agents in the sandbox (those with an agent-phase allow-list) reach the proxy only through the
             # capability URL. The rest run in this container's Harbor process and use the local address: every
-            # gateway round trip costs seconds when cw-us-east-02a endpoints are busy (v7-walltime-20261020.md).
+            # gateway round trip costs seconds when cw-us-east-02a endpoints are busy (marin-community/marin#10318).
             api_base = capability if in_sandbox(agent) else local
             config = job_config(args, agent, f"{api_base}/v1", work / "jobs")
         returncode = run_harbor(args, config, work)
