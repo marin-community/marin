@@ -13,16 +13,15 @@ limits, user, deadlines, harness) is the ``TaskRolloutSpec`` RolloutEngine execu
 ``lower`` alone builds one, choosing each machine's backend for the host. A
 lowered spec is therefore bound to the host whose factories it names, and its
 task may name the software differently from the ``TaskSpec``: on a host with
-the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``; on one
-without it a package machine has no backend (``host_requirements``).
+the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``. A package
+machine always lowers onto the local backend, so on a host without one ``check``
+rejects it (``host_requirements``).
 
 Every Taskforge spec names ``SHELL_HARNESS``, RolloutEngine's shell harness, and every Taskforge engine
 comes from ``rollout_engine``, which registers that harness with its command timeout: the timeout of one
 shell command belongs to the harness, not to the spec.
 
-Only ``_presentation`` builds the presented context, concrete tools and answer
-format, and only ``lower`` builds a ``TaskRolloutSpec``, so moving either is a
-single-site change.
+Only ``lower`` builds a ``TaskRolloutSpec``, so moving it is a single-site change.
 """
 
 import json
@@ -68,6 +67,7 @@ from verifyit.spec import Spec, mode_of
 
 from taskforge.sandbox.factories import MachineHost, container_backend, grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
+from taskforge.spec.verdict import VERDICT_REWARD
 
 SHELL_CAPABILITY = "shell"
 SHELL_HARNESS = "shellbox"
@@ -93,8 +93,6 @@ under the factory's package cache when the first such machine starts, and mounts
 the machine's ``HostImage``, the venv's ``bin`` first on ``PATH``. Later machines on the host reuse
 the build. ``sh``, ``setsid``, ``tar`` and the other commands come from the host's system directories.
 """
-VERIFIER_RESOURCE_ROOT = "/tests"
-"""Where grading stages the verifier's private resources; agent-visible files are staged at ``/``."""
 LOCAL_READ_ONLY = "read_only"
 """shellbox's ``SystemDirectories.READ_ONLY``, the local factory's default mode for system directories."""
 LOCAL_COPY_ON_WRITE = "copy_on_write"
@@ -131,18 +129,17 @@ type Reward = StdoutReward | ExitCodeReward | FileReward
 ANSWER_PATH = "/app/answer.txt"
 """Where a script grader finds the extracted answer of a text, number, JSON or native-action task."""
 GRADER_RESOURCE_ROOT = "/tests"
-"""Where RolloutEngine installs ``resources.verifier`` on the verifier machine."""
+"""Where RolloutEngine installs ``resources.verifier`` on the verifier machine; agent-visible files are staged
+at ``/``."""
 PYTHON_GRADER_ARGV = ("python3", f"{GRADER_RESOURCE_ROOT}/grade.py")
 PYTHON_GRADER_FILES = frozenset({"grade.py", "config.json"})
-GRADER_VERDICT_PATH = "/logs/verifier/reward.json"
-"""Where a Taskforge grader program writes its verdict (``spec.verdict``)."""
 MACHINE_ANSWERS = frozenset({AnswerType.FILE, AnswerType.WORKSPACE_STATE})
 """Answers the grader reads from the task machine's files rather than from the conversation."""
 
 
 @dataclass(frozen=True)
-class Resources:
-    """Machine limits. ``None`` leaves the limit to the machine factory."""
+class MachineLimits:
+    """A machine's CPU, memory, storage and GPU limits. ``None`` leaves the limit to the machine factory."""
 
     memory_mb: int | None = None
     cpus: int | None = None
@@ -155,19 +152,10 @@ class MachineSettings:
     """A ``MachineRuntimeSpec`` without its backend; ``lower`` picks the backend for this host."""
 
     network: NetworkPolicy
-    resources: Resources
+    limits: MachineLimits
     user: str | None
     startup_timeout: float | None
     cleanup_timeout: float | None
-
-
-@dataclass(frozen=True)
-class _Presentation:
-    """The TaskSpec fields that describe how the task is presented."""
-
-    context: ConversationInput
-    final_tools: tuple[FunctionDefinition, ...]
-    answer_format: AnswerFormat
 
 
 def file(path: str, content: str, mode: int = 0o644) -> TaskResource:
@@ -193,8 +181,8 @@ def requirements(
     run as Linux processes, or ``None`` for ShellSim's simulated shell and built-in filesystem with
     the catalog's CPython (``SHELLSIM_CPYTHON``). ``packages`` instead names PyPI requirements
     (``"numpy"``, ``"pandas==2.2.3"``) for a machine without an image: Linux processes with CPython
-    3.12 and those packages, installed from wheels when the machine starts, with no image to build
-    (``host_requirements`` says how each host provides them). ``setup`` commands run with
+    3.12 and those packages, installed from wheels when the machine starts, with no image to build.
+    Such a machine runs on the local backend only (``host_requirements``). ``setup`` commands run with
     ``sh -c`` as user ``0`` under the machine's startup timeout; a builder that
     needs a readiness check puts a wait loop there. Agent-visible files go to
     ``assemble(files=)``.
@@ -242,7 +230,7 @@ def machine(
     *,
     startup_timeout: float | None,
     network: bool = False,
-    resources: Resources = Resources(),
+    limits: MachineLimits = MachineLimits(),
     user: str | None = None,
     cleanup_timeout: float | None = None,
 ) -> MachineSettings:
@@ -253,7 +241,7 @@ def machine(
     """
     return MachineSettings(
         network=NetworkPolicy.ALLOW if network else NetworkPolicy.DENY,
-        resources=resources,
+        limits=limits,
         user=user,
         startup_timeout=startup_timeout,
         cleanup_timeout=cleanup_timeout,
@@ -312,12 +300,6 @@ def reward_file(
 ) -> FileReward:
     """Read the score from one reward file the grader writes."""
     return FileReward(files=(RewardFile(path=path, format=file_format, key=key),), pass_above=pass_above)
-
-
-VERDICT_REWARD = reward_file(GRADER_VERDICT_PATH, RewardFileFormat.JSON)
-"""How a Taskforge grader program reports: one JSON object ``{"reward": r, "detail": {"checks": [...]}}``
-at ``GRADER_VERDICT_PATH`` (``spec.verdict.verdict_json``). TaskCompendium's ``FileReward`` makes ``detail``
-the ``GradeResult.detail``."""
 
 
 def grader_environment(task_image: str | None, *, env: Mapping[str, str] | None = None) -> EnvironmentRequirements:
@@ -390,7 +372,7 @@ def python_grader(
     solver-visible files at their own paths, so the program reads them there. The program reads the extracted
     answer at ``answer_path`` (``ANSWER_PATH`` for a text answer, ``None`` for a file answer) and
     captured output files at their absolute paths, never stdin, and writes its verdict
-    (``spec.verdict.verdict_json``: the reward and one result per check) to ``GRADER_VERDICT_PATH``.
+    (``spec.verdict.verdict_json``: the reward and one result per check) to ``spec.verdict.GRADER_VERDICT_PATH``.
 
     Raises:
         ValueError: a file is named ``grade.py`` or ``config.json``, or two files share a path.
@@ -482,15 +464,14 @@ def assemble(
         raise ValueError(f"A task machine needs the {SHELL_CAPABILITY!r} capability")
     if answer_type in MACHINE_ANSWERS and not output_paths and not _reads_task_machine(grader):
         raise ValueError(f"A {answer_type.value!r} answer needs output paths or grader artifacts to reach the grader")
-    presentation = _presentation(instruction, system, final_tools, answer_format)
     spec = TaskSpec(
         id=task_id,
-        context=presentation.context,
+        context=_conversation(instruction, system),
         environment_requirements=environment or EnvironmentRequirements(),
-        final_tools=presentation.final_tools,
+        final_tools=tuple(final_tools),
         output_paths=tuple(output_paths),
         answer_type=answer_type,
-        answer_format=presentation.answer_format,
+        answer_format=answer_format,
         grader=grader.grader,
         source=source,
         resources=ResourceGroups(worker=tuple(files), verifier=grader.resources),
@@ -573,10 +554,10 @@ def machine_runtime(
     return MachineRuntimeSpec(
         backend=machine_backend(requirements, host).value,
         network=settings.network,
-        cpus=settings.resources.cpus,
-        memory_mb=settings.resources.memory_mb,
-        storage_mb=settings.resources.storage_mb,
-        gpus=settings.resources.gpus,
+        cpus=settings.limits.cpus,
+        memory_mb=settings.limits.memory_mb,
+        storage_mb=settings.limits.storage_mb,
+        gpus=settings.limits.gpus,
         user=settings.user,
         startup_timeout=settings.startup_timeout,
         cleanup_timeout=settings.cleanup_timeout,
@@ -639,7 +620,8 @@ def _hosted_task(task: TaskSpec, factories: Mapping[str, MachineFactory]) -> Tas
 
     A machine's writes are every path something is staged at or written to on it: the task machine gets
     the agent-visible files, its working directory and the output paths; the verifier also gets the
-    private resources, the captured outputs and, for a script grader, its working directory and artifacts.
+    private resources, the captured outputs and, for a script grader, its working directory, its artifacts and
+    the extracted answer at its ``answer_path``.
     """
     requirements = task.environment_requirements
     visible_writes = [f"/{resource.path}" for resource in _agent_visible(task)]
@@ -650,12 +632,14 @@ def _hosted_task(task: TaskSpec, factories: Mapping[str, MachineFactory]) -> Tas
     grading = grading_environment(task)
     if grading is not None:
         grader_writes = [
-            *(f"{VERIFIER_RESOURCE_ROOT}/{resource.path}" for resource in task.resources.verifier),
+            *(f"{GRADER_RESOURCE_ROOT}/{resource.path}" for resource in task.resources.verifier),
             *visible_writes,
             *task.output_paths,
         ]
         if isinstance(task.grader, ScriptGrader):
             grader_writes += [task.grader.cwd, *(artifact.target for artifact in task.grader.artifacts)]
+            if task.grader.answer_path is not None:
+                grader_writes.append(task.grader.answer_path)
         update["grader"] = task.grader.model_copy(
             update={"environment": host_requirements(grading, factories, grader_writes)}
         )
@@ -664,14 +648,6 @@ def _hosted_task(task: TaskSpec, factories: Mapping[str, MachineFactory]) -> Tas
 
 def _reads_task_machine(grader: GraderPackage) -> bool:
     return isinstance(grader.grader, ScriptGrader) and bool(grader.grader.artifacts or grader.grader.collect)
-
-
-def _presentation(
-    instruction: str, system: str | None, final_tools: Sequence[FunctionDefinition], answer_format: AnswerFormat
-) -> _Presentation:
-    return _Presentation(
-        context=_conversation(instruction, system), final_tools=tuple(final_tools), answer_format=answer_format
-    )
 
 
 def _conversation(instruction: str, system: str | None = None) -> ConversationInput:

@@ -60,15 +60,14 @@ from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec.draft import (
     ANSWER_PATH,
     FILESYSTEM_CAPABILITY,
-    GRADER_VERDICT_PATH,
     LOCAL_COPY_ON_WRITE,
     LOCAL_CPYTHON,
     LOCAL_READ_ONLY,
     LOCAL_UNWRITABLE_ROOTS,
     PYTHON_GRADER_ARGV,
     SHELL_CAPABILITY,
+    MachineLimits,
     MachineSettings,
-    Resources,
     answer_grader,
     assemble,
     file,
@@ -83,7 +82,7 @@ from taskforge.spec.draft import (
     rollout_limits,
     script_grader,
 )
-from taskforge.spec.verdict import GraderCheck, grader_checks, verdict_json
+from taskforge.spec.verdict import GRADER_VERDICT_PATH, GraderCheck, grader_checks, verdict_json
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
 
 SOURCE = Source(dataset="taskforge-test", revision="r1", row="0", importer_revision="test")
@@ -410,7 +409,7 @@ def test_docker_task_lowers_both_machines_onto_the_hosts_container_backend(host,
     task_machine = machine(
         startup_timeout=300,
         network=True,
-        resources=Resources(memory_mb=4096, cpus=4, storage_mb=10240),
+        limits=MachineLimits(memory_mb=4096, cpus=4, storage_mb=10240),
         user="root",
         cleanup_timeout=20,
     )
@@ -804,6 +803,25 @@ def test_a_grader_base_task_whose_output_lies_under_a_read_only_root_keeps_its_i
 
     image = RegistryImage(GRADER_BASE_IMAGE)
     assert machine_sources(lowered) == (("gvisor", image), ("gvisor", image))
+
+
+@pytest.mark.parametrize("answer_path,backend", [("/opt/answer.txt", "gvisor"), (ANSWER_PATH, "local")])
+def test_a_grader_base_verifier_staging_its_answer_under_a_read_only_root_keeps_its_image(answer_path, backend):
+    grader = python_grader(TEXT_GRADER, {}, environment=BASE, answer_path=answer_path, timeout=20)
+    factories = {
+        Backend.GVISOR.value: RecordingFactory(Backend.GVISOR),
+        Backend.LOCAL.value: LocalRecordingFactory(Backend.LOCAL, LOCAL_READ_ONLY),
+    }
+    lowered = lower(
+        answer_task(grader),
+        host=MachineHost.IRIS,
+        task_machine=None,
+        verifier_machine=VERIFIER,
+        limits=LIMITS,
+        factories=factories,
+    )
+
+    assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == backend
 
 
 def test_the_local_modes_and_unwritable_roots_match_shellbox():
