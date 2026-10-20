@@ -343,7 +343,7 @@ def test_continuations_stop_at_policy_limit(fake_glm, run):
 
 
 def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_provider):
-    """Ladder harness patch: a silently dead keep-alive socket reads nothing until the stall timeout, and so would
+    """A silently dead keep-alive socket reads nothing until the stall timeout, and so would
     every other idle connection the pool holds on that path, so the retry goes through a new pool. (The fake server
     speaks HTTP/1.0 and never keeps a connection alive, so the test checks the pool, not the socket.)"""
     fake_glm.stream(content="never finishes", stall_after_first=True)
