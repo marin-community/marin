@@ -267,9 +267,9 @@ async def test_two_turn_rollout_records_served_ids_and_replays_reasoning(fake_gl
     assert rollout.prompt_token_ids == (1, 2, 3)
     assert rollout.response_token_ids == (4, 5, 6, 7, 8, 9)
     assert (rollout.loss_mask, rollout.logprobs) == ((0,) * 6, None)
-    assert [step.turn.logprobs for step in rollout.steps] == [(-0.5, -0.5)] * 2
+    assert [step.turn.logprobs for step in rollout.steps] == [None] * 2
     first, second = fake_glm.requests
-    assert (first["return_token_ids"], first["logprobs"]) == (True, True)
+    assert first["return_token_ids"] is True and "logprobs" not in first
     assert [tool["function"]["name"] for tool in first["tools"]] == ["shell"]
     assert second["messages"][1]["reasoning_content"] == "plan"
     assert second["messages"][2]["role"] == "tool"
@@ -349,7 +349,6 @@ async def test_served_tokens_survive_the_sdks_reserialised_chunks(fake_glm, fake
 
     tokens = served_tokens(completion)
     assert (tokens.prompt, tokens.response) == ((151331, 151333, 2001), (34592, 1012, 151336))
-    assert tokens.logprobs == (-0.0123, -0.5, -1.25)
     stored = [json.loads(event) for event in completion.attempts[0].events]
     assert stored[2]["choices"][0]["logprobs"]["content"][0]["bytes"] == [111, 107]
 

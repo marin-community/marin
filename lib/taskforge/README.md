@@ -186,7 +186,7 @@ own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each a
 
 `llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
 the messages trace. Each turn is one streamed chat-completions call with `return_token_ids`, and
-the turn reports the ids and logprobs the server sent in its chunks, and the call's usage; under
+the turn reports the ids the server sent in its chunks (no logprobs are requested), and the call's usage; under
 `TraceMode.MESSAGES` the engine records them without checking them, and a stream without them gives
 a turn with empty ids. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
