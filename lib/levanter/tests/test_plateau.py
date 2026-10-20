@@ -99,7 +99,8 @@ def test_loss_is_the_mean_over_kept_tokens_and_dropped_tokens_get_no_gradient():
 
     def actual(values):
         model = _LogitsModel(hax.named(values, (Batch, Pos, Vocab)), Vocab)
-        loss, metrics = plateau_training_loss(model, example, history, config=CONFIG)
+        with jax.default_matmul_precision("float32"):
+            loss, metrics = plateau_training_loss(model, example, history, config=CONFIG)
         return loss, metrics
 
     def reference(values):
@@ -117,8 +118,9 @@ def test_loss_is_the_mean_over_kept_tokens_and_dropped_tokens_get_no_gradient():
         float(metrics["loss_sum"].value()), float(jnp.sum(reference_losses * supervised)), rtol=1e-5
     )
 
-    plain, plain_metrics = plateau_training_loss(
-        _LogitsModel(hax.named(logits, (Batch, Pos, Vocab)), Vocab), example, config=CONFIG
-    )
+    with jax.default_matmul_precision("float32"):
+        plain, plain_metrics = plateau_training_loss(
+            _LogitsModel(hax.named(logits, (Batch, Pos, Vocab)), Vocab), example, config=CONFIG
+        )
     np.testing.assert_allclose(plain, jnp.sum(reference_losses * supervised) / supervised.sum(), rtol=1e-5)
     assert float(plain_metrics["plateau_dropped_tokens"].value()) == 0
