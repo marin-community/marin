@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -20,21 +20,57 @@ import uvicorn
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+from starlette.types import Receive, Scope, Send
 
 from marin.inference.http_proxy import forwardable_request_headers
 from marin.inference.types import (
+    STREAM_BUFFER_BYTES,
+    InferenceBackendState,
     InferenceRequest,
     InferenceResponse,
     InferenceResponseProvider,
     OpenAIEndpoint,
     RunningModel,
+    StreamChunk,
+    StreamEnd,
+    StreamError,
+    StreamEvent,
+    StreamStart,
     format_request_ids,
 )
 
 logger = logging.getLogger(__name__)
 TOKEN_RATE_WINDOW_SECONDS = 60.0
+
+
+@dataclass
+class PendingStream:
+    headers: Future[StreamStart | InferenceResponse]
+    chunks: asyncio.Queue[StreamEvent]
+    loop: asyncio.AbstractEventLoop
+    buffered_bytes: int = 0
+    terminal: bool = False
+
+
+class BrokerStreamingResponse(StreamingResponse):
+    """Close the upstream request even if HTTP sending fails outside its iterator."""
+
+    def __init__(self, chunks: AsyncGenerator[bytes], start: StreamStart, cleanup: Callable[[], Awaitable[None]]):
+        super().__init__(chunks, status_code=start.status_code, headers=dict(start.headers))
+        self._chunks = chunks
+        self._cleanup = cleanup
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                try:
+                    await self._chunks.aclose()
+                finally:
+                    await self._cleanup()
 
 
 @dataclass
@@ -98,6 +134,7 @@ class InferenceProxy:
             backoff = ExponentialBackoff(initial=0.01, maximum=0.25, factor=2.0)
         self._backoff = backoff
         self._pending: dict[str, Future[InferenceResponse]] = {}
+        self._streams: dict[str, PendingStream] = {}
         self._lock = threading.Lock()
         self._poll_stop_event: threading.Event | None = None
         self._poll_thread: threading.Thread | None = None
@@ -107,7 +144,9 @@ class InferenceProxy:
                 Route("/", self._status),
                 Route("/status", self._status),
                 Route("/health", self._health),
+                Route("/ready", self._ready),
                 Route("/tokenize", self._forward, methods=["POST"]),
+                Route("/metrics", self._forward, methods=["GET"]),
                 Route("/v1/{path:path}", self._forward, methods=["GET", "POST", "OPTIONS"]),
             ],
         )
@@ -149,6 +188,13 @@ class InferenceProxy:
     def _health(self, _request: Request) -> Response:
         ready = self._poll_thread is not None and self._poll_thread.is_alive()
         return JSONResponse({"status": "ok" if ready else "stopped"}, status_code=200 if ready else 503)
+
+    async def _ready(self, _request: Request) -> Response:
+        snapshot = await anyio.to_thread.run_sync(self._broker.status)
+        return JSONResponse(
+            {"status": snapshot.readiness.value, "recovery_count": snapshot.recovery_count},
+            status_code=200 if snapshot.readiness is InferenceBackendState.READY else 503,
+        )
 
     async def _status(self, _request: Request) -> Response:
         snapshot = await anyio.to_thread.run_sync(self._broker.status)
@@ -216,6 +262,7 @@ class InferenceProxy:
 
     async def _forward(self, request: Request) -> Response:
         body = await request.body()
+        streaming = False
         timeout_seconds = (
             self._readiness_timeout_seconds if request.url.path == "/v1/models" else self._request_timeout_seconds
         )
@@ -227,21 +274,33 @@ class InferenceProxy:
                 return JSONResponse({"error": "request body must be valid JSON"}, status_code=400)
             if not isinstance(request_json, dict):
                 return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
-            if request_json.get("stream") is True:
-                return JSONResponse({"error": "brokered inference does not support streaming"}, status_code=400)
+            streaming = request_json.get("stream") is True
             if self._ignored_request_fields:
                 request_json = {
                     key: value for key, value in request_json.items() if key not in self._ignored_request_fields
                 }
                 body = json.dumps(request_json, separators=(",", ":")).encode()
-        return await self.forward_raw_request(
-            request.url.path,
-            body,
-            method=request.method,
-            query_string=request.url.query,
-            headers=forwardable_request_headers(request.headers),
-            timeout_seconds=timeout_seconds,
-        )
+        response: Response = JSONResponse({"error": "client disconnected"}, status_code=499)
+        async with anyio.create_task_group() as tasks:
+
+            async def disconnected() -> None:
+                while True:
+                    if (await request.receive())["type"] == "http.disconnect":
+                        tasks.cancel_scope.cancel()
+                        return
+
+            tasks.start_soon(disconnected)
+            response = await self.forward_raw_request(
+                request.url.path,
+                body,
+                method=request.method,
+                query_string=request.url.query,
+                headers=forwardable_request_headers(request.headers),
+                timeout_seconds=timeout_seconds,
+                streaming=streaming,
+            )
+            tasks.cancel_scope.cancel()
+        return response
 
     async def forward_raw_request(
         self,
@@ -252,13 +311,23 @@ class InferenceProxy:
         query_string: str = "",
         headers: Mapping[str, str] | None = None,
         timeout_seconds: float | None = None,
+        streaming: bool = False,
     ) -> Response:
+        if streaming:
+            return await self._forward_stream(
+                path,
+                body,
+                method=method,
+                query_string=query_string,
+                headers=headers,
+                timeout_seconds=self._request_timeout_seconds if timeout_seconds is None else timeout_seconds,
+            )
         request_id = str(uuid.uuid4())
         future: Future[InferenceResponse] = Future()
         pending_count = 0
         timeout_seconds = self._request_timeout_seconds if timeout_seconds is None else timeout_seconds
         with self._lock:
-            if len(self._pending) >= self._max_pending_requests:
+            if len(self._pending) + len(self._streams) >= self._max_pending_requests:
                 self.stats.rejected_requests += 1
                 logger.warning(
                     "InferenceProxy rejecting request method=%s path=%s pending=%d/%d",
@@ -310,6 +379,8 @@ class InferenceProxy:
                 self._pending.pop(request_id, None)
                 if not future.done():
                     future.cancel()
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(lambda: self._broker.cancel_request(request_id))
 
         logger.info(
             "InferenceProxy returning response request_id=%s method=%s path=%s status_code=%d",
@@ -332,6 +403,89 @@ class InferenceProxy:
                         self._token_samples.popleft()
                     self._token_samples.append((now, prompt, completion))
         return Response(content=response.payload, status_code=response.status_code, headers=dict(response.headers))
+
+    async def _forward_stream(
+        self,
+        path: str,
+        body: bytes,
+        *,
+        method: str,
+        query_string: str,
+        headers: Mapping[str, str] | None,
+        timeout_seconds: float,
+    ) -> Response:
+        request_id = str(uuid.uuid4())
+        stream = PendingStream(Future(), asyncio.Queue(), asyncio.get_running_loop())
+        with self._lock:
+            if len(self._pending) + len(self._streams) >= self._max_pending_requests:
+                return JSONResponse(
+                    {"error": "too many pending proxy requests"}, status_code=429, headers={"Retry-After": "1"}
+                )
+            self._streams[request_id] = stream
+        deadline = stream.loop.time() + timeout_seconds
+
+        async def cleanup() -> None:
+            with anyio.CancelScope(shield=True):
+                with self._lock:
+                    self._streams.pop(request_id, None)
+                await anyio.to_thread.run_sync(lambda: self._broker.cancel_request(request_id))
+
+        try:
+            await anyio.to_thread.run_sync(
+                lambda: self._broker.submit_request(
+                    InferenceRequest(
+                        request_id,
+                        method,
+                        path,
+                        body,
+                        query_string,
+                        tuple((headers or {}).items()),
+                        streaming=True,
+                    )
+                )
+            )
+            response = await asyncio.wait_for(
+                asyncio.wrap_future(stream.headers), timeout=max(0, deadline - stream.loop.time())
+            )
+        except TimeoutError:
+            await cleanup()
+            return JSONResponse({"error": "timed out waiting for inference"}, status_code=504)
+        except BaseException:
+            await cleanup()
+            raise
+        if isinstance(response, InferenceResponse):
+            await cleanup()
+            return Response(response.payload, status_code=response.status_code, headers=dict(response.headers))
+
+        async def chunks() -> AsyncGenerator[bytes]:
+            async with asyncio.timeout(max(0, deadline - stream.loop.time())):
+                while True:
+                    event = await stream.chunks.get()
+                    if isinstance(event, StreamEnd):
+                        return
+                    if isinstance(event, StreamError):
+                        raise RuntimeError(event.message)
+                    if isinstance(event, StreamChunk):
+                        with self._lock:
+                            stream.buffered_bytes -= len(event.payload)
+                        yield event.payload
+
+        return BrokerStreamingResponse(chunks(), response, cleanup)
+
+    def _stream_event(self, response: InferenceResponse | StreamEvent, stream: PendingStream) -> None:
+        if stream.terminal:
+            return
+        if isinstance(response, (StreamStart, InferenceResponse)):
+            if not stream.headers.done():
+                stream.headers.set_result(response)
+            return
+        if isinstance(response, StreamChunk):
+            stream.buffered_bytes += len(response.payload)
+            if stream.buffered_bytes > STREAM_BUFFER_BYTES:
+                response = StreamError(response.request_id, response.lease_id, response.sequence, "stream buffer full")
+        if isinstance(response, (StreamEnd, StreamError)):
+            stream.terminal = True
+        stream.loop.call_soon_threadsafe(stream.chunks.put_nowait, response)
 
     def run_forever(
         self,
@@ -356,6 +510,13 @@ class InferenceProxy:
         dropped_ids: list[str] = []
         with self._lock:
             for response in responses:
+                stream = self._streams.get(response.request_id)
+                if stream is not None:
+                    self._stream_event(response, stream)
+                    continue
+                if not isinstance(response, InferenceResponse):
+                    dropped_ids.append(response.request_id)
+                    continue
                 future = self._pending.pop(response.request_id, None)
                 if future is None or future.done():
                     dropped_ids.append(response.request_id)
