@@ -219,7 +219,8 @@ members = [
 #   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
 #   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
-exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
+# experiments/mlx_export is a Mac-only MLX project with its own lock.
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*", "experiments/mlx_export"]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
