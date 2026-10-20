@@ -10,8 +10,8 @@ import time
 
 import httpx
 import pytest
-from rolloutengine.contracts import RolloutInterrupted
-from rolloutengine.test_support import ReplayModel, engine, lowered
+from rolloutengine.models import GradedRolloutInterrupted
+from rolloutengine.test_support import ReplayModel, engine, rollout_spec
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, GradingAttempt, PlainText, Source, TaskSpec
@@ -194,7 +194,7 @@ async def graded(grader: decision.DecisionGrader, messages: list[dict], client: 
 
 async def trial():
     reply = {"role": "assistant", "content": REPLY}
-    return await engine(ReplayModel([reply])).run(trial_form(lowered(ledger_task(calibrated(None)))))
+    return await engine(ReplayModel([reply])).run_task(trial_form(rollout_spec(ledger_task(calibrated(None)))))
 
 
 @pytest.mark.parametrize(
@@ -210,7 +210,7 @@ async def test_a_transient_clef_failure_feeds_the_grade_retry(monkeypatch, unava
             result = await host_graded(rollout, ledger_task(calibrated(None)), clef, deadline=30)
             assert result.grade.passed is True
         else:
-            with pytest.raises(RolloutInterrupted) as interrupted:
+            with pytest.raises(GradedRolloutInterrupted) as interrupted:
                 await host_graded(rollout, ledger_task(calibrated(None)), clef, deadline=30)
             assert isinstance(interrupted.value.__cause__, DecisionUnavailable)
     assert fake.calls == calls
@@ -222,7 +222,7 @@ async def test_a_permanent_clef_failure_is_not_retried(monkeypatch):
     rollout = await trial()
 
     async with client(fake.handle) as clef:
-        with pytest.raises(RolloutInterrupted) as interrupted:
+        with pytest.raises(GradedRolloutInterrupted) as interrupted:
             await host_graded(rollout, ledger_task(calibrated(None)), clef, deadline=30)
 
     assert isinstance(interrupted.value.__cause__, DecisionRequestError) and fake.calls == 1

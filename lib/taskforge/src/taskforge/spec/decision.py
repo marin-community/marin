@@ -11,16 +11,17 @@ the rubric and the gold reference, plus the state the decision model reads, a te
 passing another template. Which model answers is the host's choice behind ``DecisionClient``.
 
 Grading stays out of the rollout. A trial runs with the grader swapped to ``NoGrader`` (``trial_form``), so
-nothing of the grader enters the engine, and the host grades the trial's final conversation,
-``RolloutData.messages``, afterwards (``host_graded``, through ``grade_decision_answer``).
-``run_decision_trial`` does both; validation and the build's ``grade_candidate`` grade through it.
+nothing of the grader enters the engine, and the host grades afterwards the conversation the engine would
+have graded: the last of ``Rollout.conversations`` with a model turn, which under the shell harness is the
+only one (``host_graded``, through ``grade_decision_answer``). ``run_decision_trial`` does both; validation
+and the build's ``grade_candidate`` grade through it.
 
 Every decision read is bounded by the trial's verifier deadline, which the caller passes to the client. A read
 that fails transiently (``DecisionUnavailable``: a connection error, the deadline, a 5xx, the service reporting
 itself unavailable) is read once more after ``DECISION_RETRY_BACKOFF`` seconds, on the same conversation, as a
 grader command that timed out is graded once more on fresh machines; the solver's rollout is kept, never re-run.
-A second transient failure, or any other error (a bad request, a schema mismatch), ends the grade as an
-interrupted ``GRADE``, with the error as its cause.
+A second transient failure, or any other error (a bad request, a schema mismatch), ends the grade as a
+``GradedRolloutInterrupted`` during ``GRADE``, with the error as its cause and the engine's grade.
 
 TaskSpec has no decision grader type yet (it is proposed upstream). Until it has, ``task_package`` is the thin
 adapter where a TaskSpec is built: the grader travels as a ``NoGrader`` whose ``contract`` holds it, and
@@ -36,12 +37,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Literal, Protocol, Self
+from typing import Any, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
-from rolloutengine.contracts import RolloutData, RolloutInterrupted, RolloutOperation
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.spec import LoweredTaskSpec
+from rolloutengine.models import (
+    GradedRollout,
+    GradedRolloutInterrupted,
+    Model,
+    Rollout,
+    RolloutFailure,
+    RolloutOperation,
+    TaskRolloutSpec,
+)
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -348,51 +356,76 @@ def task_decision_grader(task: TaskSpec) -> DecisionGrader | None:
     return DecisionGrader.model_validate(grader.contract)
 
 
-def trial_form(lowered: LoweredTaskSpec) -> LoweredTaskSpec:
-    """``lowered`` with its grader swapped to a bare ``NoGrader``: what a decision task's trial runs."""
-    task = lowered.task.model_copy(update={"grader": NoGrader(reason=TRIAL_GRADER_REASON)})
-    return lowered.model_copy(update={"task": task})
+def trial_form(spec: TaskRolloutSpec) -> TaskRolloutSpec:
+    """``spec`` with its grader swapped to a bare ``NoGrader``: what a decision task's trial runs."""
+    task = spec.task.model_copy(update={"grader": NoGrader(reason=TRIAL_GRADER_REASON)})
+    return spec.model_copy(update={"task": task})
 
 
-async def host_graded(rollout: RolloutData, task: TaskSpec, client: DecisionClient, *, deadline: float) -> RolloutData:
-    """``rollout``, a ``trial_form`` trial, with the host's grade of its final conversation.
+def _graded_messages(rollout: Rollout) -> tuple[dict[str, Any], ...]:
+    """The chat the engine grades: the last conversation with a model turn, through its last response.
+
+    Raises:
+        ValueError: no conversation has a model turn.
+    """
+    for conversation in reversed(rollout.conversations):
+        if conversation.steps:
+            return conversation.messages
+    raise ValueError("the rollout has no model turn to grade")
+
+
+async def host_graded(
+    result: GradedRollout, task: TaskSpec, client: DecisionClient, *, deadline: float
+) -> GradedRollout:
+    """``result``, a ``trial_form`` trial, with the host's grade of the chat the engine grades (``_graded_messages``).
 
     Each read is bounded by ``deadline`` seconds. A transient failure is read once more after
     ``DECISION_RETRY_BACKOFF``, on the same conversation. A rollout the engine ended before its grading step (a
     deadline or the generation limit before the first reply) keeps the engine's grade.
 
     Raises:
-        RolloutInterrupted: the second read failed transiently (its cause a ``DecisionUnavailable``), or a read
-            failed permanently; the rollout is kept.
+        GradedRolloutInterrupted: the second read failed transiently (its cause a ``DecisionUnavailable``), or a
+            read failed permanently; the rollout and the engine's grade are kept, and ``rollout.failure`` names
+            the error.
     """
-    if rollout.grade.status is not Outcome.UNAVAILABLE or rollout.grade.error != TRIAL_GRADER_REASON:
-        return rollout
+    rollout, grade = result.rollout, result.grade
+    if grade.status is not Outcome.UNAVAILABLE or grade.error != TRIAL_GRADER_REASON:
+        return result
     try:
-        attempt = GradingAttempt(chat_conversation(list(rollout.messages)), stop_reason=rollout.stop_reason)
+        conversation = chat_conversation(list(_graded_messages(rollout)))
     except ValueError as error:
-        raise RolloutInterrupted(rollout, RolloutOperation.GRADE) from error
+        raise _grade_interrupted(result, error) from error
+    attempt = GradingAttempt(conversation, stop_reason=rollout.stop_reason)
     for read in range(1, DECISION_ATTEMPTS + 1):
         try:
-            grade = await grade_decision_answer(task, attempt, client, timeout=deadline)
+            graded = await grade_decision_answer(task, attempt, client, timeout=deadline)
         except DecisionUnavailable as error:
             if read == DECISION_ATTEMPTS:
-                raise RolloutInterrupted(rollout, RolloutOperation.GRADE) from error
+                raise _grade_interrupted(result, error) from error
             await asyncio.sleep(DECISION_RETRY_BACKOFF)
         except Exception as error:
-            raise RolloutInterrupted(rollout, RolloutOperation.GRADE) from error
+            raise _grade_interrupted(result, error) from error
         else:
-            return replace(rollout, grade=grade)
+            return GradedRollout(rollout, graded)
     raise AssertionError("unreachable: the last read returns or raises")
 
 
-async def run_decision_trial(engine: RolloutEngine, lowered: LoweredTaskSpec, client: DecisionClient) -> RolloutData:
-    """One trial of a decision task: the engine runs ``trial_form(lowered)``, then the host grades it within the
-    session's verifier deadline.
+def _grade_interrupted(result: GradedRollout, error: Exception) -> GradedRolloutInterrupted:
+    """The host grade's failure as the engine reports one of its own: ``rollout.failure`` names the error."""
+    failure = RolloutFailure(type(error).__name__, {"operation": RolloutOperation.GRADE.value, "error": str(error)})
+    return GradedRolloutInterrupted(replace(result.rollout, failure=failure), RolloutOperation.GRADE, result.grade)
+
+
+async def run_decision_trial(
+    engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, client: DecisionClient
+) -> GradedRollout:
+    """One trial of a decision task: the engine runs ``trial_form(spec)`` with ``model``, then the host grades it
+    within the spec's verifier deadline.
 
     Raises:
-        ValueError: the session has no verifier deadline to bound the decision read with.
+        ValueError: the spec has no verifier deadline to bound the decision read with.
     """
-    deadline = lowered.session.verifier_timeout
+    deadline = spec.limits.verifier_timeout
     if deadline is None:
-        raise ValueError("a decision task's session needs a verifier_timeout: it bounds every decision read")
-    return await host_graded(await engine.run(trial_form(lowered)), lowered.task, client, deadline=deadline)
+        raise ValueError("a decision task's limits need a verifier_timeout: it bounds every decision read")
+    return await host_graded(await engine.run_task(trial_form(spec), model), spec.task, client, deadline=deadline)
