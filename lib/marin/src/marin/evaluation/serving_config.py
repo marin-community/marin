@@ -269,7 +269,8 @@ def inference_config_for_model(
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)
     resolved_instances = serve.instances if instances is None else instances
-    if resolved_instances > 1 and broker is None:
+    geometry = serving_geometry(serve, accelerator)
+    if broker is None and (geometry is None or geometry.task_count == 1):
         # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
         broker = BrokerConfig(
             worker=InferenceWorkerConfig(
@@ -287,7 +288,6 @@ def inference_config_for_model(
         )
     if serve.speculative is not None and accelerator.platform is not Platform.GPU:
         raise ValueError("speculative serving requires the GPU vLLM backend")
-    geometry = serving_geometry(serve, accelerator)
     vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
     worker_env = dict(env_vars)
     if serve.hf_hub_disable_xet:

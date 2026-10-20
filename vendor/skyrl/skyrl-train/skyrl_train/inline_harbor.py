@@ -8,10 +8,12 @@ import signal
 import socket
 import subprocess
 import traceback
+from pathlib import Path
 
 from harbor.job import Job
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult
+from harbor.models.trial.config import TaskConfig
 from skyrl_train.inline_harbor_client import CONTROL_MESSAGE_LIMIT
 
 
@@ -26,7 +28,11 @@ class HarborTaskCache:
         key = tuple(task.model_dump_json() for task in config.tasks)
         async with self._lock:
             if key not in self._prepared:
-                await Job._cache_tasks(config.tasks)
+                groups: dict[tuple[bool, Path | None], list[TaskConfig]] = {}
+                for task in config.tasks:
+                    groups.setdefault((task.overwrite, task.download_dir), []).append(task)
+                for tasks in groups.values():
+                    await Job._cache_tasks(tasks)
                 self._prepared.add(key)
         # Honor overwrite once for the cohort, then reuse the prepared inputs.
         return config.model_copy(
