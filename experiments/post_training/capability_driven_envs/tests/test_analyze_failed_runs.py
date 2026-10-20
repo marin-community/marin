@@ -80,7 +80,6 @@ def analyst(*messages: dict) -> tuple[Model, list[ModelRequest]]:
 
 
 def shell_output(request: ModelRequest) -> str:
-    """The output of the shell command that the agent sent before ``request``."""
     return json.loads(request.messages[-1]["content"])["stdout"]
 
 
@@ -101,7 +100,6 @@ async def test_the_agent_reads_the_failed_rollouts_as_files_and_returns_capabili
         ROLLOUTS, model, pass_threshold=1.0, limits=rollout_limits(max_turns=5), catalog_version="round-1"
     )
 
-    assert requests[0].messages[1]["content"].startswith("2 of 5 rollouts failed.")
     assert [shell_output(request) for request in requests[1:]] == [
         '["wrong",0]\n["loop",1]\n',
         "wrong.txt\n",

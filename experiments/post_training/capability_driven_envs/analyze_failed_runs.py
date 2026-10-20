@@ -1,15 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Find the capabilities that the policy's failed rollouts lack, as catalog ideas for ``generate_tasks``.
+"""Turn failed policy rollouts into capability ideas for task generation.
 
-``analyze_failed_runs`` gives the failed rollouts to one managed agent as files: a ``RolloutEngine`` attempt whose
-shell harness runs the agent's commands on a ShellSim machine that has the files. The agent answers with the general
-skills whose absence explains the failures, for example an answer format, the use of tools, a stop to loops of
-repeated calls, or a careful reading of the task. A capability describes the skill and not the failed tasks, so that
-``generate_tasks`` writes the details of its training tasks. Each capability becomes a ``CapabilityIdea`` for
-``task_workpieces`` and ``generate_tasks``. The files have only what the policy saw and wrote, never a grader or its
-answer.
+The analysis agent reads each failed run's recorded messages and model options, then proposes transferable skills
+backed by run IDs. ``task_workpieces`` and ``generate_tasks`` can consume the resulting ``CapabilityIdea`` values.
 """
 
 import json
