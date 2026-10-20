@@ -603,15 +603,12 @@ def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, m
     try:
         with set_current_client(client):
             first = run(download_step(source, runtime), max_concurrent=1)[0]
-            monkeypatch.setattr(
-                pipeline_module, "HARBOR", replace(pipeline_module.HARBOR, runtime_requirements=("daytona==99.0.0",))
-            )
             repeated = run(download_step(source, runtime), max_concurrent=1)[0]
             changed = replace(source, revision="sha256:" + "c" * 64)
             other = run(download_step(changed, runtime), max_concurrent=1)[0]
         assert first.path == repeated.path != other.path
         assert acquired == [f"{source.name}@{source.revision}", f"{changed.name}@{changed.revision}"]
-        for artifact, expected in ((first, acquired[0]), (other, acquired[1])):
+        for artifact, expected in zip((first, other), acquired, strict=True):
             assert (StoragePath(artifact.path) / "tasks/task.tar.gz").read_text() == expected
     finally:
         client.shutdown()

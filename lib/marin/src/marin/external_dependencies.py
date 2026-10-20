@@ -71,15 +71,6 @@ EVALCHEMY = ExternalDependency(
     runtime_requirements=(),
 )
 
-HARBOR = ExternalDependency(
-    config_name="harbor",
-    distribution="harbor",
-    repository="https://github.com/marin-community/harbor.git",
-    version="0.8.1",
-    commit="9d099696a567f489a111dc7e3c61183c98f007f0",
-    runtime_requirements=("daytona==0.200.2", "gcsfs==2026.7.0", "pydantic-settings==2.14.2", "s3fs==2026.7.0"),
-)
-
 MARIN_SKYRL = ExternalDependency(
     config_name="MarinSkyRL",
     distribution="marinskyrl",
@@ -126,6 +117,5 @@ TPU_INFERENCE_FORK_REQUIREMENT = (
 
 EXTERNAL_DEPENDENCIES = (
     EVALCHEMY,
-    HARBOR,
     MARIN_SKYRL,
 )

@@ -48,6 +48,8 @@ HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
 
 EXCLUDE_PATTERNS = [
+    # Harbor retains upstream formatting and license notices.
+    "vendor/harbor/**",
     # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
     "experiments/post_training/task_curation/datasets/*/scorers/**",
     ".git/**",

@@ -28,7 +28,6 @@ from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
-    HARBOR_RUNTIME_PROJECT,
     ValidatedHarborConfig,
     harbor_runtime_descriptor,
     preflight_harbor_configs,
@@ -234,11 +233,7 @@ def _resolve_definitions(
     model_agent_kwargs = harbor_model_agent_kwargs(model)
     requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
     runtime_commits = RUNTIME_COMMITS.get(version or "", {})
-    harbor_commit = runtime_commits.get("harbor")
-    harbor_project = (
-        f"{HARBOR_RUNTIME_PROJECT}/pins/{harbor_commit}" if harbor_commit is not None else HARBOR_RUNTIME_PROJECT
-    )
-    validated_configs = iter(preflight_harbor_configs(requests, runtime_project=harbor_project))
+    validated_configs = iter(preflight_harbor_configs(requests))
     evalchemy_commit = runtime_commits.get("evalchemy", EVALCHEMY.commit)
     evalchemy_dependency = replace(EVALCHEMY, commit=evalchemy_commit)
 
@@ -272,7 +267,7 @@ def _resolve_definitions(
                 name,
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
-                    runtime_descriptor=harbor_runtime_descriptor(config.error_taxonomy.commit, config.runtime_project),
+                    runtime_descriptor=harbor_runtime_descriptor(),
                     executor=definition.executor_for(
                         config,
                         model,

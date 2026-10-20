@@ -16,6 +16,10 @@ uv run pytest <test path>
 uv run --no-project infra/ci/run_tests.py
 ```
 
+The affected-test runner checks Harbor's standalone lock and runs its offline
+runtime suite when vendored Harbor or its local Rigging or FineStore dependencies
+change. Run those checks directly with `uv run --no-project infra/ci/run_harbor_tests.py`.
+
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
 partial marker expression such as `-m "not slow"`; pytest replaces the default
