@@ -49,6 +49,7 @@ from taskforge.stage40_build_with_program.glm_author import AUTHOR_DIR, GlmAutho
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft, run_build
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
+from taskforge.stage40_build_with_program.step_store import StoreCorruption
 from taskforge.stage40_build_with_program.template import standard
 from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE, declaring
 
@@ -592,6 +593,45 @@ async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_un
     assert len(model.replies) == 1, "the session ended at the build"
     assert not any("ran for more than" in text for text in tool_texts(model))
     assert not (authored(workpiece, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+
+
+async def test_a_storage_fault_in_a_build_ends_the_round_unseen_by_the_author(tmp_path, services, proposal, ledger):
+    async def corrupt_store(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
+        raise StoreCorruption("Blob sha256:00 of step grader does not match its digest")
+
+    workpiece = tmp_path / "workpiece"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+    build = replace(session_build(tmp_path, model, services, proposal, 0), builder=corrupt_store)
+
+    with pytest.raises(StoreCorruption):
+        await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
+
+    assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "storage"
+    assert len(model.replies) == 1, "the session ended at the build"
+    assert not any("does not match its digest" in text for text in tool_texts(model))
+    assert not (authored(workpiece, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+
+
+async def test_an_os_error_the_program_raises_reaches_the_author(tmp_path, author):
+    missing = PROGRAM.replace(
+        '    return Sources(notes="", findings=())', '    raise FileNotFoundError("fixtures/matrices.json")'
+    )
+    workpiece = tmp_path / "workpiece"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": missing})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+    await author(workpiece, model)
+
+    assert tool_outputs(model)[1].startswith("build failed (")
+    assert "fixtures/matrices.json" in tool_outputs(model)[1]
+    assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] != "storage"
 
 
 async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_reference(tmp_path, author):

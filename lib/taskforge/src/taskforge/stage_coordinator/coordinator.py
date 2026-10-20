@@ -80,6 +80,7 @@ from taskforge.stage30_author.author import (
 )
 from taskforge.stage30_author.program import RLEnvBuildProgram
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure
+from taskforge.stage40_build_with_program.infrastructure import exception_chain, storage_fault
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, load_draft
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
@@ -109,6 +110,7 @@ VALIDATION_FILE = "validation.json"
 DECISION_FILE = "decision.json"
 BUDGET_DIGEST = "budget_digest"
 MODEL_DIGEST = "model_digest"
+RESEARCH = "research"
 TRIAGE_EXITS: Mapping[TriageDecision, Exit] = {TriageDecision.ACCEPT: Exit.ACCEPT, TriageDecision.REJECT: Exit.REJECT}
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build or author failure for the author's revision."""
@@ -146,7 +148,8 @@ class StageCoordinator:
         sampling: The sampling policy build steps pass to ``model``.
         services: The build host's machines, images, web tools, ledger and agent-loop settings, passed
             to every build.
-        research: The research requirement of every build (``run_build``'s ``research``).
+        research: The research requirement of every build (``run_build``'s ``research``). ``OPENED``
+            records it.
         model_digest: The model part of every step key, usually
             ``run.build_model_digest(model, sampling, services)``. ``OPENED`` records it.
     """
@@ -201,7 +204,7 @@ async def run_workpiece(
 
     Raises:
         ValueError: ``workpiece_id`` is unsafe as a directory name, the workpiece was opened for another
-            proposal, budget or model digest, the build found a program other than the authored
+            proposal, budget, model digest or research requirement, the build found a program other than the authored
             one, or the log is inconsistent.
         Exception: whatever a stage raised, after the workpiece is saved as failed.
     """
@@ -238,7 +241,12 @@ async def _advance(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceSta
 
 def _open(workpiece: _Workpiece) -> None:
     proposal_digest = digest(workpiece.proposal)
-    attrs = {BUDGET_DIGEST: digest(workpiece.coordinator.budget), MODEL_DIGEST: workpiece.coordinator.model_digest}
+    coordinator = workpiece.coordinator
+    attrs = {
+        BUDGET_DIGEST: digest(coordinator.budget),
+        MODEL_DIGEST: coordinator.model_digest,
+        RESEARCH: str(coordinator.research),
+    }
     events = workpiece.log.events()
     if not events:
         workpiece.log.append(WorkpieceEvent(EventKind.OPENED, 0, proposal_digest, attrs))
@@ -254,6 +262,10 @@ def _open(workpiece: _Workpiece) -> None:
         raise ValueError(
             f"{workpiece.workpiece_id} was opened with model digest {first.attrs[MODEL_DIGEST]}, "
             f"not {attrs[MODEL_DIGEST]}"
+        )
+    if first.attrs[RESEARCH] != attrs[RESEARCH]:
+        raise ValueError(
+            f"{workpiece.workpiece_id} was opened with research {first.attrs[RESEARCH]}, not {attrs[RESEARCH]}"
         )
 
 
@@ -335,7 +347,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
     * ``BuildExpired``, raised when the build, a step or the grader ran past its clock, which is
       neither the program's fault nor the host's until someone reads the record;
     * ``ModelUnavailable``, raised when the model stays unreachable;
-    * ``OSError`` and its subclasses raised outside the program's frames (``_raised_in_program``): a
+    * ``OSError`` and its subclasses raised outside the program's frames (``infrastructure.storage_fault``): a
       storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``). An ``OSError``
       raised by the program's own code is a program bug and spends a revision.
     """
@@ -358,7 +370,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
     except (BuildInfrastructureFailure, BuildExpired, ModelUnavailable):
         raise
     except Exception as error:
-        if isinstance(error, OSError) and not _raised_in_program(error, program):
+        if storage_fault(error, _program_files(program)):
             raise
         attrs = {
             **_failure_attrs(workpiece, state, error, _build_failure_line(error, program)),
@@ -420,7 +432,7 @@ def _build_failure_line(error: Exception, program: RLEnvBuildProgram) -> str:
     files = _program_files(program)
     steps = {*program.steps, program.sink.name}
     named = error.step if isinstance(error, BuildFailure) else None
-    tracebacks = [traceback.extract_tb(link.__traceback__) for link in reversed(_exception_chain(error))]
+    tracebacks = [traceback.extract_tb(link.__traceback__) for link in reversed(exception_chain(error))]
     passing = [frames for frames in tracebacks if any(frame.filename in files for frame in frames)]
     frames = passing[0] if passing else next((frames for frames in tracebacks if frames), [])
     headline = _error_line(error)
@@ -445,29 +457,6 @@ def _build_failure_line(error: Exception, program: RLEnvBuildProgram) -> str:
 def _program_files(program: RLEnvBuildProgram) -> set[str]:
     """The files of the program's step functions, as the loader registers them in ``linecache``."""
     return {inspect.getfile(node.fn) for node in (*program.steps.values(), program.sink)}
-
-
-def _raised_in_program(error: BaseException, program: RLEnvBuildProgram) -> bool:
-    """Whether a traceback in ``error``'s chain passes through one of the program's own frames."""
-    files = _program_files(program)
-    return any(
-        frame.filename in files for link in _exception_chain(error) for frame in traceback.extract_tb(link.__traceback__)
-    )
-
-
-def _exception_chain(error: BaseException) -> list[BaseException]:
-    """List ``error`` and the exceptions it was raised from or during, outermost first."""
-    chain: list[BaseException] = []
-    link: BaseException | None = error
-    while link is not None and link not in chain:
-        chain.append(link)
-        if link.__cause__ is not None:
-            link = link.__cause__
-        elif link.__suppress_context__:
-            link = None
-        else:
-            link = link.__context__
-    return chain
 
 
 async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:

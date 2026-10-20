@@ -316,7 +316,9 @@ re-raise it like `ModelUnavailable`, so the round ends without a record and spen
 loader child the host killed raises it with cause `BUILD_PROCESS`. A `BuildExpired` from `run_build`
 never reaches the model either: the tool writes `run.json` with `status: "expired"`, the `clock`, the
 `step` and the message as `text`, and re-raises it at once, so the round ends the same way and the
-driver holds the workpiece as abandoned.
+driver holds the workpiece as abandoned. An `OSError` raised outside the program's frames, a storage
+fault, is written with `status: "storage"` and re-raised at once, as the coordinator's build stage
+re-raises it.
 `submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
 program that never built in the session is refused once and handed in untested when submitted again;
 an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
@@ -339,7 +341,7 @@ rounds/<n>/agentic/<k>/
   conversation.json  the messages as sent, read by a same-session revision
   workspace/         program.py, proposal.md, notes.md, reference/
   runs/<j>/          one per in-session build: draft/ and run.json (status built, build_failure,
-                     crash, infrastructure, or expired with its clock)
+                     crash, infrastructure, storage, or expired with its clock)
 ```
 
 Round 0 starts a fresh session. After a build failure, the session that submitted the program
@@ -395,8 +397,8 @@ Python, as `static_author` returns, has no source, and the build stage asks the 
 passes them to every build with its model, sampling policy and model digest.
 
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
-digest. A relaunch of the workpiece with another proposal, budget or model digest raises
-`ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
+digest and research requirement. A relaunch of the workpiece with another proposal, budget, model
+digest or research requirement raises `ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
 
 A run root holds:
 

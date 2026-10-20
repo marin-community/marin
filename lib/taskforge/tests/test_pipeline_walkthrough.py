@@ -284,10 +284,14 @@ class SaveFailsOnce(JsonEventStore):
 
 
 def coordinator(
-    root: Path, stages: StageFunctions = STAGES, budget: WorkpieceBudget = BUDGET, digest: str = UNUSED_MODEL_DIGEST
+    root: Path,
+    stages: StageFunctions = STAGES,
+    budget: WorkpieceBudget = BUDGET,
+    digest: str = UNUSED_MODEL_DIGEST,
+    research: ResearchRequirement = ResearchRequirement.OFF,
 ) -> StageCoordinator:
     return StageCoordinator(
-        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, ResearchRequirement.OFF, digest
+        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, research, digest
     )
 
 
@@ -363,28 +367,34 @@ async def test_an_author_returning_source_runs_once_and_the_build_loads_its_prog
     assert log.events()[2].digest == PROGRAM.digest
 
 
+OFF = ResearchRequirement.OFF
+
+
 @pytest.mark.parametrize(
-    ("proposal", "budget", "digest", "refusal"),
+    ("proposal", "budget", "digest", "research", "refusal"),
     [
         (
             replace(PROPOSAL, body=PROPOSAL.body.replace("Multiply", "Add")),
             BUDGET,
             UNUSED_MODEL_DIGEST,
+            OFF,
             "opened for proposal",
         ),
-        (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, "opened under budget"),
-        (PROPOSAL, BUDGET, "another-model", "opened with model digest"),
+        (PROPOSAL, replace(BUDGET, max_build_revisions=2), UNUSED_MODEL_DIGEST, OFF, "opened under budget"),
+        (PROPOSAL, BUDGET, "another-model", OFF, "opened with model digest"),
+        (PROPOSAL, BUDGET, UNUSED_MODEL_DIGEST, ResearchRequirement.ENFORCED, "opened with research off"),
     ],
-    ids=["proposal", "budget", "model digest"],
+    ids=["proposal", "budget", "model digest", "research"],
 )
-async def test_a_relaunch_with_another_proposal_budget_or_model_digest_is_refused(
-    tmp_path, proposal, budget, digest, refusal
+async def test_a_relaunch_with_another_proposal_budget_model_digest_or_research_is_refused(
+    tmp_path, proposal, budget, digest, research, refusal
 ):
     await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL, InMemoryEventLog())
     before = tree_bytes(tmp_path)
 
+    relaunch = coordinator(tmp_path, budget=budget, digest=digest, research=research)
     with pytest.raises(ValueError, match=f"{WORKPIECE} was {refusal}"):
-        await run_workpiece(coordinator(tmp_path, budget=budget, digest=digest), WORKPIECE, proposal, InMemoryEventLog())
+        await run_workpiece(relaunch, WORKPIECE, proposal, InMemoryEventLog())
     assert tree_bytes(tmp_path) == before
 
 
