@@ -17,10 +17,8 @@ dependencies = [
     # click for its CLI and marin-iris to resolve the GLM relay inside an Iris task.
     "click",
     "marin-iris",
-    # Its failed-run analysis runs a managed agent on a chat endpoint, with the rollouts as files on a ShellSim
-    # machine.
+    # Its failed-run analysis reads the rollout records of rolloutengine.
     "marin-rolloutengine",
-    "marin-shellbox[shellsim]",
 ]
 
 [dependency-groups]
