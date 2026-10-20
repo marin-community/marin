@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Turn failed policy rollouts into capability ideas for task generation.
-
-One model call names missing skills for each failed rollout. Merge calls group those skills into general capabilities
-backed by run IDs. ``task_workpieces`` and ``generate_tasks`` can consume the resulting ``CapabilityIdea`` values.
-"""
+"""Turn failed policy rollouts into capability ideas for task generation."""
 
 import asyncio
 import json
