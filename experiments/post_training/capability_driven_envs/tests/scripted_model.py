@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""An in-process ``ModelClient`` that answers each request with the next queued reply.
+"""An in-process ``ModelClient`` that answers each request with the next queued reply, or raises the next queued error.
 
 ``ScriptedModel.complete_structured`` runs ``taskforge.llm.structured.complete_structured`` over
 ``complete_schema``, as ``GlmClient`` does, with one repair. Every request, structured ones included,
@@ -46,17 +46,23 @@ class ScriptedModel:
     model = "scripted"
 
     def __init__(self) -> None:
-        self.replies: deque[Completion] = deque()
+        self.replies: deque[Completion | Exception] = deque()
         self.requests: list[ScriptedRequest] = []
 
     def reply(self, content: str, finish: FinishReason = FinishReason.STOP) -> None:
         self.replies.append(completion(content, finish))
 
+    def fail(self, error: Exception) -> None:
+        self.replies.append(error)
+
     async def complete(
         self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
     ) -> Completion:
         self.requests.append(ScriptedRequest(list(messages), policy, dict(request_fields or {})))
-        return self.replies.popleft()
+        reply = self.replies.popleft()
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
     async def complete_schema(
         self, messages: Sequence[Message], output_type: type[BaseModel], policy: LLMPolicy
