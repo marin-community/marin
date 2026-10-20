@@ -215,6 +215,8 @@ _K8S_EVENTS_CACHE_KEY = "events"
 _K8S_FINELOG_CACHE_KEY = "finelog"
 _DATASET_SOURCE_CACHE_BYTES = 128 * 1024 * 1024
 _DATASET_CONCURRENCY = 2
+_DATASET_WINDOW_BUCKET_MS = 15_000
+_DATASET_LIVE_WINDOW_TOLERANCE_MS = 60_000
 _FINELOG_FILTER_TOKEN = "finelog"
 _FINELOG_HUB_CLUSTER = "marin"
 
@@ -549,6 +551,15 @@ def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
     return sources[name]
 
 
+def _aligned_dataset_window(start_ms: int, end_ms: int) -> tuple[int, int]:
+    if (
+        abs(round(time.time() * 1000) - end_ms) <= _DATASET_LIVE_WINDOW_TOLERANCE_MS
+        and end_ms - start_ms >= _DATASET_WINDOW_BUCKET_MS
+    ):
+        return start_ms - start_ms % _DATASET_WINDOW_BUCKET_MS, end_ms - end_ms % _DATASET_WINDOW_BUCKET_MS
+    return start_ms, end_ms
+
+
 def _dataset_source(
     source: MetricSource,
     cluster: str,
@@ -613,9 +624,11 @@ def create_app(
         key = (target.name, dataset.name, *dataset.cache_key)
 
         def run() -> list[dict[str, object]]:
+            queued = time.monotonic()
             with dataset_execution_slots:
                 source_tables: dict[str, pa.Table] = {}
                 started = time.monotonic()
+                queue_ms = round((started - queued) * 1000)
                 for source_query in dataset.sources:
                     query_started = time.monotonic()
                     table = _dataset_source(
@@ -630,6 +643,7 @@ def create_app(
                         table.num_rows,
                         round((time.monotonic() - query_started) * 1000),
                     )
+                projection_started = time.monotonic()
                 rows = project_dataset(
                     dataset,
                     source_tables,
@@ -638,12 +652,15 @@ def create_app(
                     min(dataset.max_result_rows, config.max_rows),
                 )
                 logger.info(
-                    "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d cache_key=%s",
+                    "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d "
+                    "queue_ms=%d projection_ms=%d cache_key=%s",
                     dataset.name,
                     target.name,
                     len(dataset.sources),
                     len(rows),
                     round((time.monotonic() - started) * 1000),
+                    queue_ms,
+                    round((time.monotonic() - projection_started) * 1000),
                     dataset.cache_key,
                 )
                 return rows
@@ -663,6 +680,12 @@ def create_app(
             end_ms = round(_require_time(params, "to").timestamp() * 1000)
             try:
                 dataset = build(params, start_ms, end_ms)
+                # Validate the original bounds before aligning them. Grafana resolves
+                # each relative panel override separately; millisecond differences
+                # otherwise launch duplicate scans. Older ranges stay exact.
+                aligned_start, aligned_end = _aligned_dataset_window(start_ms, end_ms)
+                if (aligned_start, aligned_end) != (start_ms, end_ms):
+                    dataset = build(params, aligned_start, aligned_end)
             except ValueError as err:
                 raise _BadRequest(str(err)) from err
             if view and view not in dataset.views:
@@ -719,6 +742,7 @@ def create_app(
                 start_ms,
                 end_ms,
                 int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -727,7 +751,7 @@ def create_app(
             request,
             "Accelerator overview",
             lambda params, start_ms, end_ms: accelerator_overview_dataset(
-                _csv_values(params, "clusters"), start_ms, end_ms, int(_require(params, "bucket_ms"))
+                _csv_values(params, "clusters"), start_ms, end_ms, int(_require(params, "bucket_ms")), params.get("view")
             ),
         )
 
@@ -741,6 +765,7 @@ def create_app(
                 start_ms,
                 end_ms,
                 int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -754,6 +779,7 @@ def create_app(
                 start_ms,
                 end_ms,
                 int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -767,6 +793,7 @@ def create_app(
                 start_ms,
                 end_ms,
                 int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -789,6 +816,7 @@ def create_app(
                 start_ms,
                 end_ms,
                 int(_require(params, "bucket_ms")),
+                params.get("view"),
             ),
         )
 
@@ -819,6 +847,11 @@ def create_app(
                     round(end.timestamp() * 1000),
                     requested_bucket_ms,
                 )
+                aligned_start, aligned_end = _aligned_dataset_window(overview.start_ms, overview.end_ms)
+                if (aligned_start, aligned_end) != (overview.start_ms, overview.end_ms):
+                    overview = vllm_overview_query(
+                        identity_field, identity, aligned_start, aligned_end, requested_bucket_ms
+                    )
             except ValueError as err:
                 raise _BadRequest(str(err)) from err
 

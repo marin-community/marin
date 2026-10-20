@@ -35,6 +35,12 @@ class DispatchCase:
 
 DISPATCH_CASES = {
     Mode.EXACT: DispatchCase({"expected": ["The Answer"]}, "the   answer", "other", {}),
+    Mode.STRUCTURE_CLOSURE: DispatchCase(
+        {"prefix": '{"a":', "expected": '{"a":1}', "format": "json"},
+        "1}",
+        "}",
+        {},
+    ),
     Mode.NUMERIC: DispatchCase(
         {"expected": "10", "tolerance_abs": 0.01, "tolerance_rel": 0.0}, "The answer is 10.005", "10.02", {}
     ),
