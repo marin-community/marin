@@ -545,12 +545,7 @@ def main(
         max_workers,
         concurrent_sources,
         worker_resources=worker_resources,
-        coordinator_resources=ResourceConfig(
-            cpu=1,
-            ram=coordinator_memory or LOCAL_MEMORY,
-            preemptible=False,
-            container_profile=worker_resources.container_profile,
-        ),
+        coordinator_resources=ResourceConfig(cpu=1, ram=coordinator_memory or LOCAL_MEMORY, preemptible=False),
         chunk_storage_prefix=(
             str(cache_dir / ".zephyr")
             if cache_dir is not None

@@ -105,14 +105,6 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     assert "Unknown source: unknown" in unknown.output
 
 
-def test_iris_plan_propagates_worker_profile_to_coordinator(tmp_path, catalog):
-    result = CliRunner().invoke(main, arguments(tmp_path))
-    assert result.exit_code == 0, result.output
-    plan = json.loads(result.output)
-    assert plan["worker_resources"]["container_profile"] == "CONTAINER_PROFILE_PRIVILEGED"
-    assert plan["coordinator_resources"]["container_profile"] == "CONTAINER_PROFILE_PRIVILEGED"
-
-
 def test_local_canary_cannot_write_an_explicit_production_catalog(tmp_path, catalog):
     production = tmp_path / "production"
     result = CliRunner().invoke(
@@ -135,8 +127,7 @@ def test_local_canary_cannot_write_an_explicit_production_catalog(tmp_path, cata
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
-    # Test runtime mounts without depending on host bubblewrap discovery or execution.
-    monkeypatch.setattr("shellbox.backends.local.machine._bwrap_candidates", lambda bwrap: (Path("/usr/bin/bwrap"),))
+    # The factory probes for a working bubblewrap; CI hosts cannot build sandboxes.
     monkeypatch.setattr("shellbox.backends.local.machine._working_bwrap", lambda candidates: Path("/usr/bin/bwrap"))
     environment = Environment(
         requirements=REQUIREMENTS,
