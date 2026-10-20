@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from examples.cat_count.synthetic_teacher import TeacherNoise
 
-from tests.cpu.test_cat_count_cpu_canary import RUN_TIMEOUT_SECONDS, cat_count_policy, runs  # noqa: F401
+from tests.cpu.tiny_training.cat_count import RUN_TIMEOUT_SECONDS
 from tests.cpu.tiny_training.cat_count_opd import evaluation_scores, run_cat_count_opd
 from tests.cpu.tiny_training.experiment import read_metrics
 
@@ -17,7 +17,7 @@ GATE_STEPS = 20
 NOISY = TeacherNoise(jitter=0.5)
 
 
-def distill(runs, root: Path, model: Path, noise: TeacherNoise, *, steps: int, seed: int = 0) -> list[dict]:  # noqa: F811
+def distill(runs, root: Path, model: Path, noise: TeacherNoise, *, steps: int, seed: int = 0) -> list[dict]:
     start = time.perf_counter()
     process = runs.Process(target=run_cat_count_opd, args=(root, model, noise), kwargs={"steps": steps, "seed": seed})
     process.start()
@@ -36,7 +36,7 @@ def endpoints(records: list[dict]) -> tuple[dict, dict]:
     return evaluations[0], evaluations[-1]
 
 
-def test_cat_count_cpu_opd_learns_from_a_noisy_teacher(tmp_path, cat_count_policy, runs):  # noqa: F811
+def test_cat_count_cpu_opd_learns_from_a_noisy_teacher(tmp_path, cat_count_policy, runs):
     records = distill(runs, tmp_path / "opd", cat_count_policy, NOISY, steps=GATE_STEPS)
     before, after = endpoints(records)
     print(f"CAT_COUNT_CPU_OPD seed=0 before={before} after={after}")
@@ -57,7 +57,7 @@ def test_cat_count_cpu_opd_learns_from_a_noisy_teacher(tmp_path, cat_count_polic
 
 @pytest.mark.nightly
 @pytest.mark.parametrize("seed", [0, 1])
-def test_cat_count_cpu_opd_flipped_teacher_unlearns(tmp_path, cat_count_policy, runs, seed):  # noqa: F811
+def test_cat_count_cpu_opd_flipped_teacher_unlearns(tmp_path, cat_count_policy, runs, seed):
     flipped = TeacherNoise(jitter=NOISY.jitter, flipped=True)
     before, after = endpoints(distill(runs, tmp_path / "flipped", cat_count_policy, flipped, steps=10, seed=seed))
     print(f"CAT_COUNT_CPU_OPD seed={seed} flipped before={before} after={after}")

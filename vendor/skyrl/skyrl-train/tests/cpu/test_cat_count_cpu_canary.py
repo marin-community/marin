@@ -1,8 +1,6 @@
 import asyncio
-import hashlib
 import json
 import math
-import multiprocessing
 import os
 import threading
 import time
@@ -17,7 +15,6 @@ import skyrl_train
 import torch
 import zstandard
 from omegaconf import OmegaConf
-from marinskyrl.remote_io import create_s3_filesystem
 from skyrl_train.evaluate import evaluation_dump_dir
 from examples.cat_count.cpu_canary import PROMPT
 from skyrl_train.metric_names import CORRECTION_WEIGHT_MEAN_METRIC
@@ -25,55 +22,20 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 
-from tests.cpu.tiny_training.cat_count import FAST_STEPS, cat_count_config, run_cat_count
+from tests.cpu.cat_count_policy import POLICY_PREFIX, download_policy
+from tests.cpu.tiny_training.cat_count import FAST_STEPS, RUN_TIMEOUT_SECONDS, cat_count_config, run_cat_count
 from tests.cpu.tiny_training.cpu_backend import CPUInferenceEngine
 from tests.cpu.tiny_training.experiment import read_metrics
 
 pytestmark = pytest.mark.slow
-RUN_TIMEOUT_SECONDS = 300
-
-
-POLICY_PREFIX = "s3://marin-us-east-02a/marin/rl-canaries/cat-count/cpu/pretrained/llama-530k/v1"
-POLICY_MANIFEST_SHA256 = "7a5f1047648a90262514a663168580610b9f6bbe1522b2c38b7578bbc5eb82ae"
-
-
-def download_policy(directory: Path) -> None:
-    filesystem = create_s3_filesystem(
-        config_kwargs={"connect_timeout": 5, "read_timeout": 10, "retries": {"max_attempts": 1}}
-    )
-    manifest_path = directory / "MANIFEST.json"
-    manifest_bytes = (
-        manifest_path.read_bytes() if manifest_path.exists() else filesystem.cat(f"{POLICY_PREFIX}/MANIFEST.json")
-    )
-    if hashlib.sha256(manifest_bytes).hexdigest() != POLICY_MANIFEST_SHA256:
-        raise ValueError("CatCount policy manifest SHA256 differs from the calibrated artifact")
-    manifest = json.loads(manifest_bytes)
-    for name, receipt in manifest["files"].items():
-        path = directory / name
-        data = path.read_bytes() if path.exists() else filesystem.cat(f"{POLICY_PREFIX}/{name}")
-        if len(data) != receipt["bytes"] or hashlib.sha256(data).hexdigest() != receipt["sha256"]:
-            raise ValueError(f"CatCount policy SHA256 mismatch: {name}")
-        path.write_bytes(data)
-    (directory / "MANIFEST.json").write_bytes(manifest_bytes)
 
 
 def test_policy_download_rejects_a_corrupted_manifest(tmp_path, monkeypatch):
     filesystem = fsspec.filesystem("memory")
     filesystem.pipe(f"{POLICY_PREFIX}/MANIFEST.json", b'{"files": {}}')
-    monkeypatch.setattr("tests.cpu.test_cat_count_cpu_canary.create_s3_filesystem", lambda **_kwargs: filesystem)
+    monkeypatch.setattr("tests.cpu.cat_count_policy.create_s3_filesystem", lambda **_kwargs: filesystem)
     with pytest.raises(ValueError, match="manifest SHA256"):
         download_policy(tmp_path)
-
-
-@pytest.fixture(scope="session")
-def cat_count_policy(pytestconfig) -> Path:
-    if not os.environ.get("AWS_ACCESS_KEY_ID"):
-        pytest.skip("CatCount CPU canary: S3 credentials unavailable (e.g. fork PR); policy is not pretrained in CI")
-    directory = Path(pytestconfig.cache.mkdir("cat_count_policy")) / "llama-530k-v1"
-    directory.mkdir(exist_ok=True)
-    download_policy(directory)
-    print("CAT_COUNT_POLICY source=s3")
-    return directory
 
 
 @pytest.fixture
@@ -113,13 +75,6 @@ def cat_count_session(monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join()
-
-
-@pytest.fixture(scope="module")
-def runs() -> ForkServerContext:
-    context = multiprocessing.get_context("forkserver")
-    context.set_forkserver_preload(["tests.cpu.tiny_training.cat_count"])
-    return context
 
 
 def train(
