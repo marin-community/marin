@@ -94,7 +94,8 @@ checks first, and a fatal failure or a null proposal rejects without a model cal
 scores independent samples, each a structured call through `CallStore`, and the decision is ACCEPT
 or REJECT by strict majority, otherwise REPAIR. A sample whose structured output stays invalid is
 drawn once more and then dropped. `GlmRubric.repair` rewrites a REPAIR proposal under the document
-regex with continuations off and re-asks once if the rewrite fails `parse`.
+regex with continuations off and re-asks once if the rewrite fails `parse`. A Taskforge consumer
+may hand it to the stage coordinator as `StageFunctions.repair` (see the stage machine).
 
 ## Task specs
 
@@ -380,6 +381,7 @@ relaunch never resumes a session mid-way: a session directory without an `author
 | stage    | event           | exit      | next     |
 |----------|-----------------|-----------|----------|
 | triage   | `TRIAGED`       | accept    | author   |
+| triage   | `TRIAGED`       | repair    | triage   |
 | triage   | `TRIAGED`       | reject    | done     |
 | author   | `AUTHORED`      | authored  | build    |
 | author   | `AUTHOR_FAILED` | revise    | author   |
@@ -395,14 +397,27 @@ relaunch never resumes a session mid-way: a session directory without an `author
 | review   | `DECIDED`       | modify    | author   |
 
 From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or abandoned. A stage
-raising an exception closes it as failed. `WorkpieceBudget` bounds the build and author failures a
-workpiece may revise after and the review retries it may follow. The coordinator spends the budget
-when it records the event, choosing revise or reject, retry or abandon. A build error costs a
-revision, except `BuildInfrastructureFailure`, `BuildExpired`, `ModelUnavailable` and `OSError`,
-which fail the workpiece at the build stage. An author call raising `StructuredOutputError` costs a
-revision from the same budget. Its structured reply stayed invalid through the repair turns, as when
-the output limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE,
-...)`. Any other author error fails the workpiece at the author stage.
+raising an exception closes it as failed. `WorkpieceBudget` bounds the triage rewrites a workpiece
+may take, the build and author failures it may revise after, and the review retries it may
+follow. The coordinator spends the budget when it records the event, choosing repair or reject,
+revise or reject, retry or abandon.
+
+Triage returns a `Verdict`, and its default path exits accept or reject: `accept` admits every
+proposal, and a `max_triage_repairs` of zero sends any REPAIR verdict to reject. REPAIR is a
+surface a Taskforge consumer may use by setting `max_triage_repairs` to one. On a REPAIR verdict
+within the budget, the coordinator calls `StageFunctions.repair`, such as the triage stage's
+`GlmRubric.repair`, writes the rewrite to `repaired/<k>.md`, and records `TRIAGED` exiting repair
+with the rewrite's digest, the triaged proposal's digest, the file and the rewrites spent. Triage
+judges the rewrite, and every later stage runs it, read back from its file. A REPAIR verdict past
+the budget exits reject, and so does a rewrite that is not a valid proposal; the workpiece closes
+as rejected with the reason.
+
+A build error costs a revision, except `BuildInfrastructureFailure`, `BuildExpired`,
+`ModelUnavailable` and `OSError`, which fail the workpiece at the build stage. An author call
+raising `StructuredOutputError` costs a revision from the same budget. Its structured reply stayed
+invalid through the repair turns, as when the output limit cut it, and the next author call samples
+again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
+author stage.
 
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
@@ -423,6 +438,7 @@ A run root holds:
 
 ```
 workpieces/<workpiece_id>/events.json
+workpieces/<workpiece_id>/repaired/<k>.md   the k-th rewrite answering a REPAIR verdict
 workpieces/<workpiece_id>/rounds/<n>/
     authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it
