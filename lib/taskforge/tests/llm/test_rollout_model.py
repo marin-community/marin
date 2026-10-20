@@ -5,24 +5,33 @@
 messages trace.
 
 The live checks write ``<evidence_root>/validate/rollout_model/<check>-<utc>.json``: every rollout
-(messages, token ids, logprobs, per-turn usage) plus, per turn, how many prompt tokens the server
-reported cached. ``evidence_root`` is the fixture in ``tests/conftest.py``.
+(messages, per-turn usage) plus, per turn, how many prompt tokens the server reported cached.
+``evidence_root`` is the fixture in ``tests/conftest.py``.
 """
 
 import asyncio
 import json
 import time
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import JsonValue
-from rolloutengine.contracts import GenerationLimitReached, ModelRequest, RolloutData, TokenUsage
-from rolloutengine.engine import RolloutEngine
-from rolloutengine.spec import TRACE_METRIC, LoweredTaskSpec, TraceMode
+from rolloutengine.models import (
+    TRACE_METRIC,
+    Continuation,
+    GenerationLimitReached,
+    GradedRollout,
+    ModelRequest,
+    RolloutContractError,
+    RolloutStep,
+    TaskRolloutSpec,
+    TokenUsage,
+    TraceMode,
+)
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, PlainText, Source, TaskSpec
 
@@ -30,7 +39,7 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
-from taskforge.llm.rollout_model import TOKEN_FIELDS, GlmRolloutModel, served_tokens
+from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import (
     assemble,
@@ -39,9 +48,10 @@ from taskforge.spec.draft import (
     lower,
     machine,
     requirements,
-    session,
+    rollout_engine,
+    rollout_limits,
 )
-from tests.conftest import ListLedger, ScriptedStream, fake_source
+from tests.conftest import ListLedger, fake_source
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 
 POLICY = LLMPolicy(max_continuations=0)
@@ -69,65 +79,6 @@ PUZZLE_2 = (
 )
 PUZZLE_1_ANSWER = "5 11 17 41 101 107 191 227 311 347 461 641 821 857 881".split()
 LONG_REASONING_TOKENS = 1000
-# A chat-completions stream in vLLM's shape for ``return_token_ids`` with ``logprobs``: the prompt ids
-# on the first chunk, and each token-carrying chunk with its ids and full logprob entries.
-VLLM_CHUNKS: list[dict | str] = [
-    {
-        "id": "chatcmpl-1",
-        "object": "chat.completion.chunk",
-        "created": 1760000000,
-        "model": "glm-5.3",
-        "prompt_token_ids": [151331, 151333, 2001],
-        "choices": [
-            {"index": 0, "delta": {"role": "assistant", "content": ""}, "logprobs": None, "finish_reason": None}
-        ],
-    },
-    {
-        "id": "chatcmpl-1",
-        "object": "chat.completion.chunk",
-        "created": 1760000000,
-        "model": "glm-5.3",
-        "choices": [
-            {
-                "index": 0,
-                "delta": {"reasoning": "Plan"},
-                "logprobs": {
-                    "content": [{"token": "Plan", "logprob": -0.0123, "bytes": [80, 108, 97, 110], "top_logprobs": []}]
-                },
-                "finish_reason": None,
-                "token_ids": [34592],
-            }
-        ],
-    },
-    {
-        "id": "chatcmpl-1",
-        "object": "chat.completion.chunk",
-        "created": 1760000000,
-        "model": "glm-5.3",
-        "choices": [
-            {
-                "index": 0,
-                "delta": {"content": "ok"},
-                "logprobs": {
-                    "content": [
-                        {"token": "ok", "logprob": -0.5, "bytes": [111, 107], "top_logprobs": []},
-                        {"token": "<|user|>", "logprob": -1.25, "bytes": None, "top_logprobs": []},
-                    ]
-                },
-                "finish_reason": "stop",
-                "token_ids": [1012, 151336],
-            }
-        ],
-    },
-    {
-        "id": "chatcmpl-1",
-        "object": "chat.completion.chunk",
-        "created": 1760000000,
-        "model": "glm-5.3",
-        "choices": [],
-        "usage": {"prompt_tokens": 3, "completion_tokens": 3, "total_tokens": 6},
-    },
-]
 
 
 @pytest.fixture
@@ -137,50 +88,6 @@ def evidence_dir(evidence_root: Path) -> Path:
 
 def call_ledger(ledger: ListLedger | None = None) -> CallLedger:
     return CallLedger(ledger=ledger or ListLedger(), workpiece_id="rollout-model", round=0, step="solver")
-
-
-@dataclass
-class TokenStream:
-    """A scripted streamed reply carrying vLLM's ``return_token_ids`` fields; the fake server sends it as is."""
-
-    events: list[dict]
-    send_done: bool = True
-    stall: None = None
-
-
-def token_stream(
-    prompt: list[int],
-    response: list[int],
-    content: str = "",
-    reasoning: str = "",
-    tool_call: tuple[str, str] | None = None,
-    finish: str = "stop",
-) -> TokenStream:
-    delta: dict = {}
-    if content:
-        delta["content"] = content
-    if reasoning:
-        delta["reasoning"] = reasoning
-    if tool_call is not None:
-        name, arguments = tool_call
-        delta["tool_calls"] = [
-            {"index": 0, "id": "call-0", "type": "function", "function": {"name": name, "arguments": arguments}}
-        ]
-    logprobs = {"content": [{"token": str(t), "logprob": -0.5} for t in response]}
-    return TokenStream(
-        [
-            {
-                "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}],
-                "prompt_token_ids": prompt,
-            },
-            {
-                "choices": [
-                    {"index": 0, "delta": delta, "logprobs": logprobs, "token_ids": response, "finish_reason": finish}
-                ]
-            },
-            {"choices": [], "usage": {"prompt_tokens": len(prompt), "completion_tokens": len(response)}},
-        ]
-    )
 
 
 def shell_task():
@@ -208,30 +115,34 @@ def output_check(path: str, words: Sequence[str] | None):
     )
 
 
-def shellsim(task: TaskSpec, max_turns: int = 6) -> LoweredTaskSpec:
+def shellsim(task: TaskSpec, max_turns: int = 6) -> TaskRolloutSpec:
     """``task`` on ShellSim under the messages trace, as validation runs every trial."""
-    limits = session(
+    limits = rollout_limits(
         max_turns=max_turns,
         model_turn_timeout=None,
-        command_timeout=30,
         tool_turn_timeout=60,
         total_turn_timeout=None,
         attempt_timeout=None,
         verifier_timeout=30,
         cleanup_timeout=30,
-    ).model_copy(update={"trace": TraceMode.MESSAGES})
-    return lower(
+    )
+    spec = lower(
         task,
         host=MachineHost.LAPTOP,
         task_machine=machine(startup_timeout=30),
         verifier_machine=machine(startup_timeout=30),
-        session=limits,
+        limits=limits,
         factories=FACTORIES,
     )
+    return spec.model_copy(update={"trace": TraceMode.MESSAGES})
 
 
-def rollout_engine(model: GlmRolloutModel) -> RolloutEngine:
-    return RolloutEngine(model, FACTORIES)
+async def run(model: GlmRolloutModel, spec: TaskRolloutSpec) -> GradedRollout:
+    return await rollout_engine(FACTORIES, command_timeout=30).run_task(spec, model)
+
+
+def steps(result: GradedRollout) -> tuple[RolloutStep, ...]:
+    return tuple(step for conversation in result.rollout.conversations for step in conversation.steps)
 
 
 @pytest.fixture
@@ -240,110 +151,78 @@ async def fake_client(fake_glm, fast_provider):
         yield client
 
 
-async def test_two_turn_rollout_records_served_ids_and_replays_reasoning(fake_glm, fake_client):
-    fake_glm.responses.append(
-        token_stream(
-            [1, 2, 3],
-            [4, 5],
-            reasoning="plan",
-            tool_call=("shell", '{"command": "touch /workspace/done.txt"}'),
-            finish="tool_calls",
-        )
+async def test_two_turn_rollout_records_usage_and_replays_reasoning(fake_glm, fake_client):
+    fake_glm.stream(
+        reasoning="plan",
+        tool_calls=(("shell", '{"command": "touch /workspace/done.txt"}'),),
+        finish="tool_calls",
+        prompt_tokens=3,
+        completion_tokens=2,
     )
-    fake_glm.responses.append(token_stream([1, 2, 3, 4, 5, 6, 7], [8, 9], content="Done."))
+    fake_glm.stream(content="Done.", prompt_tokens=7, completion_tokens=2)
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shellsim(shell_task()))
+    result = await run(GlmRolloutModel(fake_client, POLICY, call_ledger()), shellsim(shell_task()))
 
-    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
-    assert rollout.metrics[TRACE_METRIC] == TraceMode.MESSAGES.value
-    assert rollout.prompt_token_ids == (1, 2, 3)
-    assert rollout.response_token_ids == (4, 5, 6, 7, 8, 9)
-    assert (rollout.loss_mask, rollout.logprobs) == ((0,) * 6, None)
-    assert [step.turn.logprobs for step in rollout.steps] == [(-0.5, -0.5)] * 2
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
+    assert result.rollout.metrics[TRACE_METRIC] == TraceMode.MESSAGES.value
+    assert [step.turn.usage for step in steps(result)] == [TokenUsage(3, 2), TokenUsage(7, 2)]
+    assert [(step.turn.prompt_token_ids, step.turn.response_token_ids) for step in steps(result)] == [((), ())] * 2
+    assert [step.turn.logprobs for step in steps(result)] == [None] * 2
     first, second = fake_glm.requests
-    assert (first["return_token_ids"], first["logprobs"]) == (True, True)
+    assert "return_token_ids" not in first and "logprobs" not in first
     assert [tool["function"]["name"] for tool in first["tools"]] == ["shell"]
     assert second["messages"][1]["reasoning_content"] == "plan"
     assert second["messages"][2]["role"] == "tool"
 
 
 async def test_length_cut_turn_is_graded_with_length_stop(fake_glm, fake_client):
-    fake_glm.responses.append(token_stream([1, 2], [3, 4], content="I will", finish="length"))
+    fake_glm.stream(content="I will", finish="length")
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shellsim(shell_task()))
+    result = await run(GlmRolloutModel(fake_client, POLICY, call_ledger()), shellsim(shell_task()))
 
-    assert rollout.stop_reason == "length"
-    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
+    assert result.rollout.stop_reason == "length"
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 0.0)
     assert len(fake_glm.requests) == 1
 
 
 async def test_tool_call_cut_at_the_budget_ends_the_rollout_with_length_unexecuted(fake_glm, fake_client):
     # vLLM's GLM tool parser reports a tool call cut by max_tokens as finish_reason "tool_calls".
     command = '{"command": "touch /workspace/done.txt"}'
-    fake_glm.responses.append(token_stream([1, 2], [3, 4, 5], tool_call=("shell", command), finish="tool_calls"))
+    fake_glm.stream(tool_calls=(("shell", command),), finish="tool_calls", completion_tokens=3)
     policy = LLMPolicy(max_tokens=3, max_continuations=0)
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, policy, call_ledger())).run(shellsim(shell_task()))
+    result = await run(GlmRolloutModel(fake_client, policy, call_ledger()), shellsim(shell_task()))
 
-    assert rollout.stop_reason == "length"
-    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 0.0)
+    assert result.rollout.stop_reason == "length"
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 0.0)
     assert len(fake_glm.requests) == 1
 
 
 async def test_prompt_filling_the_context_raises_generation_limit(fake_glm, fake_client):
     fake_glm.status(400, CONTEXT_ERROR)
     fake_glm.status(400, CONTEXT_ERROR)
-    request = ModelRequest(({"role": "user", "content": "x"},), {}, (1, 2), 1)
+    request = ModelRequest(({"role": "user", "content": "x"},), {})
 
     with pytest.raises(GenerationLimitReached) as raised:
         await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
 
-    assert raised.value.prompt_token_ids == (1, 2)
+    # The server rendered the prompt, so the messages trace keeps no prompt ids of it.
+    assert raised.value.prompt_token_ids == ()
 
 
-async def test_a_prompt_the_server_retokenized_is_graded_with_the_ids_it_served(fake_glm, fake_client):
-    # Recorded live from a GLM-5.3 rollout of the d01 task (turns 3-4): the model
-    # sampled "1" ")," "(" "1" inside smul(2**(n-1),(1,0)); the re-rendered prompt encodes the same
-    # text canonically as "1" "),(" "1".
-    sampled = [12, 16, 701, 7, 16, 11, 15]
-    canonical = [12, 16, 23482, 16, 11, 15]
-    observation = 154829  # <|observation|>
-    fake_glm.responses.append(
-        token_stream(
-            [1, 2, 3],
-            [*sampled, observation],
-            tool_call=("shell", '{"command": "touch /workspace/done.txt"}'),
-            finish="tool_calls",
-        )
-    )
-    fake_glm.responses.append(token_stream([1, 2, 3, *canonical, observation, 9], [10], content="Done."))
+@pytest.mark.parametrize(
+    "request_ids",
+    [{"continuation": Continuation((1, 2), 1)}, {"prompt_token_ids": (1, 2)}],
+    ids=["continuation", "pinned_prompt"],
+)
+async def test_request_with_token_ids_is_refused_before_any_call(fake_glm, fake_client, request_ids):
+    messages = ({"role": "user", "content": "x"}, {"role": "assistant", "content": "y"})
+    request = ModelRequest(messages, {}, **request_ids)
 
-    rollout = await rollout_engine(GlmRolloutModel(fake_client, POLICY, call_ledger())).run(shellsim(shell_task()))
+    with pytest.raises(RolloutContractError, match="MESSAGES"):
+        await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
 
-    assert (rollout.grade.status, rollout.grade.reward) == (Outcome.GRADED, 1.0)
-    assert rollout.steps[1].turn.prompt_token_ids == (1, 2, 3, *canonical, observation, 9)
-
-
-async def test_a_stream_without_token_ids_gives_a_turn_with_its_usage(fake_glm, fake_client):
-    fake_glm.stream(content="hi", prompt_tokens=7, completion_tokens=2)
-    request = ModelRequest(({"role": "user", "content": "x"},), {}, (), None)
-
-    turn = await GlmRolloutModel(fake_client, POLICY, call_ledger())(request)
-
-    assert (turn.text, turn.prompt_token_ids, turn.response_token_ids) == ("hi", (), ())
-    assert turn.usage == TokenUsage(prompt_tokens=7, completion_tokens=2)
-
-
-async def test_served_tokens_survive_the_sdks_reserialised_chunks(fake_glm, fake_client):
-    fake_glm.responses.append(ScriptedStream(VLLM_CHUNKS, send_done=True, stall=None))
-
-    completion = await fake_client.complete([{"role": "user", "content": "x"}], POLICY, TOKEN_FIELDS)
-
-    tokens = served_tokens(completion)
-    assert (tokens.prompt, tokens.response) == ((151331, 151333, 2001), (34592, 1012, 151336))
-    assert tokens.logprobs == (-0.0123, -0.5, -1.25)
-    stored = [json.loads(event) for event in completion.attempts[0].events]
-    assert stored[2]["choices"][0]["logprobs"]["content"][0]["bytes"] == [111, 107]
+    assert fake_glm.requests == []
 
 
 def live_task():
@@ -362,31 +241,28 @@ def live_task():
     )
 
 
-def turn_record(rollout: RolloutData) -> list[dict[str, Any]]:
+def turn_record(result: GradedRollout) -> list[dict[str, Any]]:
     return [
         {
-            "prompt_ids": len(step.turn.prompt_token_ids),
-            "response_ids": len(step.turn.response_token_ids),
-            "logprobs": None if step.turn.logprobs is None else len(step.turn.logprobs),
             "stop_reason": step.turn.stop_reason,
             "usage": step.turn.metadata["usage"],
             "reasoning_chars": len(step.turn.message.get("reasoning_content") or ""),
             "tool_calls": [call["function"]["arguments"] for call in step.turn.message.get("tool_calls") or []],
         }
-        for step in rollout.steps
+        for step in steps(result)
     ]
 
 
 def write_live_evidence(
-    evidence_dir: Path, check: str, purpose: str, wall_time: float, rollouts: list[RolloutData]
+    evidence_dir: Path, check: str, purpose: str, wall_time: float, results: list[GradedRollout]
 ) -> Path:
     record = {
         "purpose": purpose,
         "policy": repr(POLICY),
         "wall_time": wall_time,
-        "turns": [turn_record(rollout) for rollout in rollouts],
-        "grades": [asdict(rollout.grade) for rollout in rollouts],
-        "rollouts": [asdict(rollout) for rollout in rollouts],
+        "turns": [turn_record(result) for result in results],
+        "grades": [asdict(result.grade) for result in results],
+        "rollouts": [asdict(result.rollout) for result in results],
     }
     evidence_dir.mkdir(parents=True, exist_ok=True)
     path = evidence_dir / f"{check}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
@@ -396,7 +272,7 @@ def write_live_evidence(
 
 async def live_rollouts(
     glm_source, live_provider, task: TaskSpec, count: int, max_turns: int
-) -> tuple[list[RolloutData], float]:
+) -> tuple[list[GradedRollout], float]:
     """``count`` concurrent rollouts of ``task``, each under its own step, as trials run.
 
     Also asserts that the ledger holds one ``LLM_CALL`` per turn.
@@ -405,14 +281,12 @@ async def live_rollouts(
     started = time.monotonic()
     async with GlmClient(glm_source, live_provider) as client:
         model = GlmRolloutModel(client, POLICY, call_ledger(ledger))
-        lowered = shellsim(task, max_turns)
-        rollouts = await asyncio.gather(
-            *(rollout_engine(model.for_step(f"solver/{index}/0")).run(lowered) for index in range(count))
-        )
+        spec = shellsim(task, max_turns)
+        results = await asyncio.gather(*(run(model.for_step(f"solver/{index}/0"), spec) for index in range(count)))
     calls = [entry for entry in ledger.entries if entry.kind == EntryKind.LLM_CALL]
-    assert len(calls) == sum(len(rollout.steps) for rollout in rollouts)
+    assert len(calls) == sum(len(steps(result)) for result in results)
     assert all(entry.cause is None and entry.tokens_out for entry in calls)
-    return list(rollouts), time.monotonic() - started
+    return list(results), time.monotonic() - started
 
 
 @pytest.mark.live_glm
@@ -428,9 +302,9 @@ async def test_live_multi_turn_shellsim_rollout_is_graded(glm_source, live_provi
         rollouts,
     )
 
-    assert all(len(rollout.steps) >= 2 for rollout in rollouts), path
-    assert any(step.turn.metadata["usage"]["cached_tokens"] > 0 for rollout in rollouts for step in rollout.steps), path
-    assert all(rollout.grade.status == Outcome.GRADED for rollout in rollouts), path
+    assert all(len(steps(result)) >= 2 for result in rollouts), path
+    assert any(step.turn.metadata["usage"]["cached_tokens"] > 0 for result in rollouts for step in steps(result)), path
+    assert all(result.grade.status == Outcome.GRADED for result in rollouts), path
 
 
 def reasoning_task():
@@ -470,7 +344,7 @@ async def test_live_reasoning_heavy_rollout_replays_long_reasoning(glm_source, l
     )
 
     turns = [turn for rollout in rollouts for turn in turn_record(rollout)]
-    assert all(len(rollout.steps) >= 3 for rollout in rollouts), path
+    assert all(len(steps(result)) >= 3 for result in rollouts), path
     # Long reasoning is replayed only once a later turn follows it, so some turn before a rollout's
     # last must reason at length; how many do depends on the puzzles' luck.
     replayed = [turn for rollout in rollouts for turn in turn_record(rollout)[:-1]]
