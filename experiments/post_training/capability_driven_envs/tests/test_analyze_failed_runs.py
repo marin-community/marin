@@ -25,9 +25,11 @@ from taskforge.llm.client import StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 from zephyr.context import ZephyrContext
+from zephyr.coordinator import ZephyrExecutionResult
 from zephyr.dataset import Dataset
 
 from experiments.post_training.capability_driven_envs.analyze_failed_runs import (
+    ROLLOUTS_WITHOUT_IDEAS,
     Capability,
     Group,
     Groups,
@@ -151,7 +153,7 @@ def ctx(tmp_path_factory):
         yield context
 
 
-def analyze(ctx: ZephyrContext, rollouts, num_shards: int = 1, make_client=Analyst):
+def analyze(ctx: ZephyrContext, rollouts, num_shards: int = 1, make_client=Analyst) -> ZephyrExecutionResult:
     plan = analyze_failed_runs(
         Dataset.from_list(rollouts),
         make_client,
@@ -162,7 +164,7 @@ def analyze(ctx: ZephyrContext, rollouts, num_shards: int = 1, make_client=Analy
         merge_policy=LLMPolicy(),
         catalog_version="round-1",
     )
-    return ctx.execute(plan).results
+    return ctx.execute(plan)
 
 
 def names_and_evidence(ideas) -> list[tuple[str, list[str]]]:
@@ -170,7 +172,7 @@ def names_and_evidence(ideas) -> list[tuple[str, list[str]]]:
 
 
 def test_each_idea_cites_the_failed_rollouts_of_its_skills_and_becomes_a_catalog_idea(ctx):
-    ideas = analyze(ctx, [*ROLLOUTS, loop("loop-2")])
+    ideas = analyze(ctx, [*ROLLOUTS, loop("loop-2")]).results
 
     assert names_and_evidence(ideas) == [(STOP_LOOPS.name, ["loop", "loop-2"]), (CHECK_WORK.name, ["wrong"])]
     idea = ideas[0]
@@ -181,7 +183,7 @@ def test_each_idea_cites_the_failed_rollouts_of_its_skills_and_becomes_a_catalog
 def test_the_ideas_of_several_shards_merge_again(ctx):
     rollouts = [loop(f"loop-{i}") for i in range(4)] + [wrong(f"wrong-{i}") for i in range(2)]
 
-    ideas = analyze(ctx, rollouts, num_shards=2)
+    ideas = analyze(ctx, rollouts, num_shards=2).results
 
     assert names_and_evidence(ideas) == [
         (STOP_LOOPS.name, [f"loop-{i}" for i in range(4)]),
@@ -189,17 +191,20 @@ def test_the_ideas_of_several_shards_merge_again(ctx):
     ]
 
 
-def test_a_rollout_whose_reply_stays_invalid_gives_no_ideas(ctx):
-    assert names_and_evidence(analyze(ctx, [loop("loop"), wrong("cut", "cut off")])) == [(STOP_LOOPS.name, ["loop"])]
+def test_a_rollout_whose_reply_stays_invalid_gives_no_ideas_and_is_counted(ctx):
+    result = analyze(ctx, [loop("loop"), wrong("cut", "cut off")])
+
+    assert names_and_evidence(result.results) == [(STOP_LOOPS.name, ["loop"])]
+    assert result.counters[ROLLOUTS_WITHOUT_IDEAS] == 1
 
 
 def test_no_failed_rollout_needs_no_model_call(ctx):
-    assert analyze(ctx, ROLLOUTS[:1], make_client=no_client) == []
+    assert analyze(ctx, ROLLOUTS[:1], make_client=no_client).results == []
 
 
 def test_the_rollout_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
-    policy = {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function"}]}
-    _, graded = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, policy)
+    turn = {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function"}]}
+    _, graded = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, turn)
     analyst = Analyst()
 
     rollout = (arithmetic_task(id="task-malformed", answer_format=AnswerCall()), graded)

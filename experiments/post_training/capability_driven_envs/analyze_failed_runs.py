@@ -36,6 +36,7 @@ from taskforge.content_hash import digest
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from zephyr import counters
 from zephyr.dataset import Dataset
 
 from experiments.post_training.capability_driven_envs.catalog import CAPABILITY_KIND, CapabilityIdea
@@ -46,6 +47,8 @@ SUBJECT_NAME = "Capabilities that failed runs lack"
 MAX_TASK_CHARS = 300
 IDEAS_PER_ROLLOUT = 3
 MERGE_ATTEMPTS = 3
+ROLLOUTS_WITHOUT_IDEAS = "failed_runs.rollouts_without_ideas"
+"""The pipeline counter of the failed rollouts whose reply stayed invalid."""
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +60,8 @@ client there and closes it after the call.
 """
 
 
-class Skill(BaseModel):
-    """A general skill that failed rollouts lack."""
+class Capability(BaseModel):
+    """A general skill that failed rollouts lack, with a catalog ID."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -66,11 +69,6 @@ class Skill(BaseModel):
     outcome: str = Field(min_length=1, description="What an agent with the skill can do, in any domain.")
     includes: tuple[str, ...] = Field(min_length=1, description="The parts of the skill.")
     excludes: tuple[str, ...] = Field(default=(), description="Related skills that the capability does not cover.")
-
-
-class Capability(Skill):
-    """A skill with a catalog ID."""
-
     id: str = Field(description="A file-safe ID, for example failed-runs.tool-use.stop-repeating-calls.")
 
     @field_validator("id")
@@ -171,8 +169,9 @@ def analyze_failed_runs(
 
     Each graded rollout comes with the task that it ran, because the record does not keep the tools that the task
     gave. ``policy`` samples the call for each rollout, and ``merge_policy`` samples the merges, whose replies are
-    longer. Each of the ``num_shards`` groups gets one merge call, and one merge call reads the ideas of about 1,000
-    rollouts at most. Run the plan outside an event loop, for example ``ctx.execute(plan).results``.
+    longer. Each of the ``num_shards`` groups gets one merge call. Choose it so that a group has at most about 1,000
+    failed rollouts, because the merge prompt of a larger group can be too long for the context window. Run the plan
+    outside an event loop, for example ``ctx.execute(plan).results``.
     """
     merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_policy)
     return (
@@ -201,7 +200,11 @@ def policy_failed(graded: GradedRollout, pass_threshold: float) -> bool:
 def yield_ideas(
     rollout: tuple[TaskSpec, GradedRollout], *, make_client: MakeClient, policy: LLMPolicy
 ) -> Iterator[MaybeIdea]:
-    """The ideas that one structured call finds in one failed rollout. A reply that stays invalid gives no ideas."""
+    """The ideas that one structured call finds in one failed rollout.
+
+    A reply that stays invalid gives no ideas and adds 1 to the pipeline counter ``ROLLOUTS_WITHOUT_IDEAS``, which the
+    execution result reports.
+    """
     task, graded = rollout
     messages: list[Message] = [
         {"role": "system", "content": EXTRACT_PROMPT},
@@ -212,6 +215,7 @@ def yield_ideas(
     except StructuredOutputError as error:
         # One rollout that the model cannot answer for, for example at the output limit, does not stop the others.
         logger.warning("No ideas for rollout %s: %s", graded.rollout.run_id, error)
+        counters.pipeline.update_counter(ROLLOUTS_WITHOUT_IDEAS, 1)
         return
     for idea in reply.ideas:
         yield MaybeIdea(idea, frozenset({graded.rollout.run_id}))
@@ -223,14 +227,21 @@ def merge_ideas(
     """At most ``max_new_ideas`` ideas that one structured call merges from ``ideas``, with more rollouts first.
 
     The merge reply lists the ID of each line, so it grows with the ideas, and GLM sometimes runs away to the output
-    limit in a long structured reply. Thus a merge is sampled again up to ``MERGE_ATTEMPTS`` times.
+    limit in a long structured reply. Thus a merge makes up to ``MERGE_ATTEMPTS`` calls until a reply is valid.
     """
-    lines = {f"k{i}": maybe for i, maybe in enumerate(ideas)}
+    lines = {f"k{i}": candidate for i, candidate in enumerate(ideas)}
     if not lines:
         return []
     listing = "\n".join(
-        json.dumps({"id": key, "name": maybe.idea.name, "outcome": maybe.idea.outcome, "rollouts": maybe.num_rollouts})
-        for key, maybe in lines.items()
+        json.dumps(
+            {
+                "id": key,
+                "name": candidate.idea.name,
+                "outcome": candidate.idea.outcome,
+                "rollouts": candidate.num_rollouts,
+            }
+        )
+        for key, candidate in lines.items()
     )
     messages: list[Message] = [
         {"role": "system", "content": MERGE_PROMPT.format(count=max_new_ideas)},
@@ -242,7 +253,7 @@ def merge_ideas(
         evidence = frozenset().union(*(lines[key].evidence for key in group.members if key in lines))
         if evidence and group.id not in merged:
             merged[group.id] = MaybeIdea(Capability(**group.model_dump(exclude={"members"})), evidence)
-    return sorted(merged.values(), key=lambda maybe: -maybe.num_rollouts)[:max_new_ideas]
+    return sorted(merged.values(), key=lambda candidate: -candidate.num_rollouts)[:max_new_ideas]
 
 
 def merge_idea_lists(
@@ -254,7 +265,10 @@ def merge_idea_lists(
 
 
 def to_ideas(ideas: list[MaybeIdea], *, catalog_version: str) -> list[CapabilityIdea]:
-    records = (MissingCapability(**maybe.idea.model_dump(), evidence=tuple(sorted(maybe.evidence))) for maybe in ideas)
+    records = (
+        MissingCapability(**candidate.idea.model_dump(), evidence=tuple(sorted(candidate.evidence)))
+        for candidate in ideas
+    )
     return [_idea(record, catalog_version) for record in records]
 
 
