@@ -66,7 +66,7 @@ def test_loader_rejects_empty_finite_dataset():
             DataLoader(dataset, 1, max_buffered_batches=0, mesh=mesh, axis_resources=None)
 
 
-@pytest.mark.parametrize("buffered_batches", [0, 2])
+@pytest.mark.parametrize("buffered_batches", [-1, 0, 2])
 @pytest.mark.parametrize("training_fails", [False, True])
 def test_loader_close_releases_prefetch_iterator_and_preserves_resume(buffered_batches, training_fails):
     with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):

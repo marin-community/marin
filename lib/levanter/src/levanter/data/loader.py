@@ -93,7 +93,7 @@ class DataLoader(Iterable[Ex]):
             batch_size (int | IntSchedule | None): The size of the batch or a schedule for the size of the batch
             data (AsyncDataset[Ex]): The dataset to load from
             max_buffered_batches (Optional[int]): The maximum number of batches to buffer. If None, the buffer is unbounded.
-             If <0, the buffer is disabled and single threaded operation is used.
+             If <=0, batches are fetched on demand without prefetching.
             axis_resources (Optional[ResourceMapping]): axis mapping
             fetch_batch_size (int): The number of batches to retrieve in each background storage request
             mesh (Mesh): The mesh to use
@@ -244,7 +244,7 @@ class DataLoaderIterator(Iterator[Ex]):
 
         buffered_batches = self.dl.max_buffered_batches
         self._batches: AsyncIteratorWrapper | BackgroundIterator[Ex] | None
-        if buffered_batches == 0:
+        if buffered_batches is not None and buffered_batches <= 0:
             self._batches = AsyncIteratorWrapper(self._produce_batches())
         else:
             self._batches = _JaxCpuBackgroundIterator(self._produce_batches, max_capacity=buffered_batches)
