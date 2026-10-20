@@ -23,7 +23,6 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
-    TokenizedInput,
 )
 from taskcompendium.pipeline.conversion import convert_row
 from taskcompendium.pipeline.fingerprints import deduplication_key, semantic_digest
@@ -31,13 +30,9 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
 
-TOKENIZER = "org/replay-tokenizer"
-TOKENIZER_REVISION = "a" * 40
 TOKENS = (128000, 42, 128005)
 CONVERT = partial(
     structure_closure_task,
-    tokenizer_model=TOKENIZER,
-    tokenizer_revision=TOKENIZER_REVISION,
     terminal_markers=("<|eot_id|>", "<|end_of_text|>"),
 )
 
@@ -82,19 +77,15 @@ def native_row():
     return row
 
 
-def test_native_converter_preserves_pinned_input_private_resources_and_pipeline_audit(native_row):
+def test_native_converter_uses_text_prefill_and_preserves_private_resources_and_pipeline_audit(native_row):
     row = native_row()
     # Exercise the standard conversion boundary, which enforces supplied row identity.
     converted = convert_row(row, lambda raw, _context: CONVERT(raw), ConversionContext({}, None))
     assert isinstance(converted, NormalizedTask)
     task = converted.task
     assert task.id == row.id and task.source == row.source
-    assert isinstance(task.context, TokenizedInput)
-    assert (task.context.token_ids, task.context.tokenizer_model, task.context.tokenizer_revision) == (
-        TOKENS,
-        TOKENIZER,
-        TOKENIZER_REVISION,
-    )
+    assert task.context.events[-1] == TextMessage(role="assistant", content='{"a":[1')
+    assert "token_ids" not in task.context.model_dump()
     native = json.loads(row.data["lowered_task_spec"])["task"]
     assert task.resources.model_dump(mode="json") == native["resources"]
     audit = {change.field: change.original for change in converted.changes}

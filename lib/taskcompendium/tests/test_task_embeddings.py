@@ -16,7 +16,7 @@ from zephyr.readers import load_parquet
 from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import numeric_answer_task
-from taskcompendium.models import Source, TaskSpec, TokenizedInput
+from taskcompendium.models import ConversationInput, Source, TaskSpec, TextMessage
 from taskcompendium.pipeline.curriculum import embedding
 from taskcompendium.pipeline.curriculum.alignment import (
     AnchorKind,
@@ -247,29 +247,22 @@ def test_instruction_projection_excludes_private_contract_and_ignores_source_ide
     assert "817" not in first.public_input
 
 
-def test_tokenized_semantic_input_retains_effective_prompt_identity_and_renders_display_events():
-    original = task("tokenized")
-    tokenized = TokenizedInput(
-        events=original.context.events,
-        token_ids=(128000, 41, 128005),
-        tokenizer_model="org/pinned-tokenizer",
-        tokenizer_revision="a" * 40,
-    )
+def test_prefilled_semantic_input_preserves_text_identity_and_excludes_private_contract():
+    original = task("prefilled")
+    context = ConversationInput(events=(*original.context.events, TextMessage(role="assistant", content='{"count":')))
     source = TaskInputFile("source-a", "key-a", "unused", "train", "admitted")
-    projected = task_semantic_input(original.model_copy(update={"context": tokenized}), source)
-    public_context = json.loads(projected.public_input)["context"]
-    assert public_context["token_ids"] == [128000, 41, 128005]
-    assert public_context["tokenizer_model"] == "org/pinned-tokenizer"
-    assert public_context["tokenizer_revision"] == "a" * 40
-    for context in (
-        tokenized.model_copy(update={"token_ids": (128000, 42, 128005)}),
-        tokenized.model_copy(update={"tokenizer_revision": "b" * 40}),
-    ):
-        changed = task_semantic_input(original.model_copy(update={"context": context}), source)
-        assert changed.content_hash != projected.content_hash
+    projected = task_semantic_input(original.model_copy(update={"context": context}), source)
+    assert json.loads(projected.public_input)["context"]["events"][-1]["content"] == '{"count":'
+    changed = context.model_copy(
+        update={"events": (*context.events[:-1], TextMessage(role="assistant", content='{"total":'))}
+    )
+    assert (
+        task_semantic_input(original.model_copy(update={"context": changed}), source).content_hash
+        != projected.content_hash
+    )
     rendered = instruction_text(projected.model_dump(mode="json"))
     assert "Count two apples." in rendered["description"]
-    assert rendered["content_hash"] == projected.content_hash
+    assert '{"count":' in rendered["description"]
     assert "PRIVATE_EVIDENCE" not in rendered["description"]
 
 
@@ -282,17 +275,6 @@ def test_zephyr_descriptions_embeddings_and_alignment_preserve_instances_and_reu
         task("c", prompt="UNSPECIFIED_OPERATION"),
         task("d", prompt="Count three apples."),
     ]
-    for index in (0, 1):
-        tasks[index] = tasks[index].model_copy(
-            update={
-                "context": TokenizedInput(
-                    events=tasks[index].context.events,
-                    token_ids=(128000, 41, 128005),
-                    tokenizer_model="org/pinned-tokenizer",
-                    tokenizer_revision="a" * 40,
-                )
-            }
-        )
     pq.write_table(
         pa.Table.from_pylist([{"task_json": item.model_dump_json()} for item in tasks] + [{"task_json": None}]), raw
     )

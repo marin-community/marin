@@ -26,8 +26,7 @@ result = await engine.run_task(spec, model)
 - Built-in harnesses: `ShellHarness` serves a shell tool on the task machine and host tools from registered
   providers; `AgentHarness` runs an agent that owns its prompts and tool loop, for example an installed agent
   behind an HTTP proxy; `StepHarness` runs an `Episode` that returns the first prompt and handles each turn;
-  `TokenPrefixHarness` serves a `TokenizedInput` unchanged in one raw-text model turn, with an explicit
-  matching inference-tokenizer pin. The text-rendering harnesses reject tokenized inputs.
+  `CompletionHarness` answers an ordinary conversation or continues an assistant prefill in one model turn.
 - `harness_rollout` runs one harness on one task with one model, without grading. `task_machine` starts the
   task machine for it.
 - The engine owns the machines, the attempt deadline, grading, cleanup, and progress events for an optional

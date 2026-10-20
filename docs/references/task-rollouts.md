@@ -111,25 +111,27 @@ A harness does not grade. After `run` returns, the engine grades the rollout wit
 [Grading](#grading)). A harness can attach its own reward to a step with `record(data=...)`. The engine does
 not read it.
 
-### Exact token prefixes
+### Single-turn completion
 
-`TokenPrefixHarness` from `rolloutengine.harness.token_prefix` completes a `TokenizedInput` in one model
-turn. Pass the tokenizer model and revision configured when starting the inference service as its required
-`tokenizer_model` and `tokenizer_revision`. Its preflight check rejects a task with a different model/revision
-pair. This checks configuration equality; it does not attest to a remote server's tokenizer.
+`CompletionHarness` from `rolloutengine.harness.completion` answers a conversation in one model turn.
+It uses the task's answer format and supports both ordinary conversations and assistant prefills. Task
+environments, interactive tools and workspace outputs require a harness that runs those operations.
+The grader can have its own verifier environment and private resources.
 
-The harness sends `context.token_ids` unchanged as `Prompt.token_ids`, with `skip_special_tokens=False`.
-It uses `context.events` only for display and grading, and appends no answer-format instruction.
-The transport must report the exact served prompt token IDs; the model session rejects IDs that differ
-from `context.token_ids`. The harness also
-requires `ModelTurn.message` to be exactly `{"role": "assistant", "content": turn.text}`. Parsed tool calls
-or stripped reasoning markers fail before grading. Under `TraceMode.EXACT_TOKENS`, sampled continuation
-tokens have loss-mask value 1. Prefix IDs are stored separately in `prompt_token_ids` and have no entries
-in `ConversationRecord.loss_mask`, which covers `response_token_ids` only.
+An assistant prefill is the final assistant text event in `ConversationInput.events`. The shared
+`completion_request(task)` renderer leaves it last and inserts any answer-format instruction before it.
+It sets `extra_body.continue_final_message=True` and `extra_body.add_generation_prompt=False`; the
+transport must support these rendering options. The selected model tokenizes the conversation and
+prefill. No historical tokenizer identity or token sequence is imposed by the task.
 
-Supported tasks use `answer_type=text`, `PlainText`, and no task environment, tools, public workspace
-resources, or output paths. The engine grades after the harness completes. `ShellHarness`, `AgentHarness`,
-`StepHarness`, and direct chat reject tokenized inputs, so they cannot silently retokenize the display view.
+The model returns the generated continuation as its assistant message. Parsed response content can differ
+from raw transport text, for example when reasoning is reported separately. The task's answer format
+extracts the submission, and its grader defines correctness. Structural-closure grading concatenates its
+fixed text prefix with this continuation and scores the first completed outer structure.
+
+Training still records the actual prompt and sampled response tokens with their logprobs through the
+normal model session. Those traces describe the serving model's generation, independently of source
+prompt tokenization. Backends can also use `TraceMode.MESSAGES` when only text and usage are available.
 
 ### Model session
 

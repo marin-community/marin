@@ -20,7 +20,7 @@ from zephyr.dataset import Dataset, ShardInfo
 from zephyr.readers import load_parquet
 from zephyr.worker_context import zephyr_worker_ctx
 
-from taskcompendium.models import format_conversation
+from taskcompendium.models import ConversationInput, format_conversation
 from taskcompendium.pipeline.curriculum.alignment import (
     CurriculumVectors,
     TaskMatches,
@@ -28,7 +28,7 @@ from taskcompendium.pipeline.curriculum.alignment import (
 )
 from taskcompendium.pipeline.curriculum.embedding import text_record
 from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
-from taskcompendium.pipeline.semantics import TASK_CONTEXT_ADAPTER, DescriptionStatus, TaskDescription
+from taskcompendium.pipeline.semantics import DescriptionStatus, TaskDescription
 
 PREVIEW_CHARACTERS = 8192
 
@@ -153,7 +153,7 @@ def _matched_descriptions(embedding_key: str, records: Iterator[dict]) -> Iterat
 
 def _task_alignment(row: dict) -> dict:
     public = json.loads(row["public_input"])
-    instructions = format_conversation(TASK_CONTEXT_ADAPTER.validate_python(public["context"]).events)
+    instructions = format_conversation(ConversationInput.model_validate(public["context"]).events)
     result = TaskAlignment(
         **{
             name: row[name]

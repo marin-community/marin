@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from taskcompendium.models import TaskSpec, TokenizedInput
+from taskcompendium.models import TaskSpec
 
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.models import ModelTurn, Prompt, RolloutLimits, Transition
@@ -27,7 +27,7 @@ class Episode(Protocol):
 class StepHarness:
     """A harness for an ``Episode``: ``prepare`` gives the first prompt, and ``advance`` answers each model turn.
 
-    The episode closes in the attempt's cleanup. Tokenized inputs require a token-preserving harness.
+    The episode closes in the attempt's cleanup.
     A harness that must reject a task before any machine starts implements ``Harness`` itself,
     and its ``run`` can call this harness's ``run``.
     """
@@ -36,8 +36,7 @@ class StepHarness:
     """Starts one episode per attempt, for example an episode class."""
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
-        if isinstance(task.context, TokenizedInput):
-            raise NotImplementedError("Tokenized inputs require a token-preserving harness")
+        pass
 
     async def run(self, context: HarnessContext, session: ModelSession) -> None:
         episode = self.open_episode(context)

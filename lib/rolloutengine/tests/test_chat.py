@@ -10,10 +10,18 @@ import httpx
 import openai
 import pytest
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import EnvironmentRequirements, FunctionDefinition, NoGrader, ProviderRequirement
+from taskcompendium.models import (
+    ConversationInput,
+    EnvironmentRequirements,
+    FunctionDefinition,
+    NoGrader,
+    ProviderRequirement,
+    TextMessage,
+)
 
 from rolloutengine.chat import ChatModel
 from rolloutengine.engine import RolloutEngine
+from rolloutengine.harness.completion import CompletionHarness
 from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.models import (
     Continuation,
@@ -177,3 +185,28 @@ async def test_a_response_without_usage_is_a_model_failure():
     assert caught.value.rollout.failure == RolloutFailure(
         "ValueError", {"operation": "model", "error": "The chat endpoint reported no token usage"}
     )
+
+
+async def test_completion_prefill_reaches_chat_endpoint_as_text_without_pinned_tokens():
+    server = ChatServer([completion({"content": "2"})])
+    task = arithmetic_task(
+        context=ConversationInput(
+            events=(
+                TextMessage(role="user", content="What is six plus six?"),
+                TextMessage(role="assistant", content="1"),
+            )
+        ),
+        grader=NoGrader(reason="Inspect continuation transport"),
+    )
+    model = server.model()
+    try:
+        result = await RolloutEngine({}, {"completion": CompletionHarness()}).run_task(
+            rollout_spec(task, harness="completion", trace=TraceMode.MESSAGES), model
+        )
+    finally:
+        await model.client.close()
+    assert server.requests[0]["messages"][-1] == {"role": "assistant", "content": "1"}
+    assert server.requests[0]["continue_final_message"] is True
+    assert server.requests[0]["add_generation_prompt"] is False
+    assert "prompt_token_ids" not in server.requests[0]
+    assert result.rollout.conversations[0].messages[-1] == {"role": "assistant", "content": "2"}

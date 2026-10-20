@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Native Snowball structural tasks, ingested with exact pinned token prompts."""
+"""Native Snowball structural tasks with ordinary assistant prefills."""
 
 import json
 
@@ -17,13 +17,11 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 
 REPOSITORY = "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data"
 REVISION = "cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
-TOKENIZER_MODEL = "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14"
-TOKENIZER_REVISION = "6783e9743478bd25a9ce03ab3460e84d6a9814b0"
 TERMINAL_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 
 RUBRIC = """
-These tasks complete a fixed assistant prefix. Its exact token IDs and pinned tokenizer are authoritative;
-context.events is a display view and must not be rendered into a replacement prompt.
+These tasks complete an unfinished assistant message. Present its text as an assistant prefill and
+grade the generated continuation. Historical prompt tokens are provenance, not a model requirement.
 
 The native config.json extras.prefix is the supplied assistant prefix, and extras.expected is the required
 completed reference. Check that the reference extends the prefix, preserves required content and closes one
@@ -43,8 +41,6 @@ def structural_row(row: dict, _context: ConversionContext) -> bool:
 def convert(row: RawRow, _context: ConversionContext) -> NormalizedTask | ImportRejection:
     return structure_closure_task(
         row,
-        tokenizer_model=TOKENIZER_MODEL,
-        tokenizer_revision=TOKENIZER_REVISION,
         terminal_markers=TERMINAL_MARKERS,
     )
 
@@ -64,13 +60,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 title=f"Snowball v0.1 structural closure · {split}",
                 origin="SnowballV01",
                 family="structural",
-                tags=("rlvr", "single-turn", "structural-closure", "token-prefix"),
+                tags=("rlvr", "single-turn", "structural-closure", "assistant-prefill"),
                 count=count,
-                notes="Exact native token prefixes; validation is a reused development panel.",
+                notes="Text assistant prefills; validation is a reused development panel.",
             ),
             config=CurationRecipe(
                 name=f"snowball-v01-structure-closure-{split}",
-                version="1",
+                version="2",
                 source=HfSource(
                     REPOSITORY, REVISION, (f"{split}.parquet",), SourceFormat.PARQUET, select=structural_row
                 ),

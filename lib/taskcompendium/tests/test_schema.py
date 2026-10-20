@@ -27,7 +27,6 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
-    TokenizedInput,
 )
 from taskcompendium.pipeline.fingerprints import semantic_digest
 from taskcompendium.runtime.resources import inline_resource
@@ -68,36 +67,23 @@ def test_legacy_conversation_wire_and_public_identity_remain_unchanged(specifica
     assert semantic_digest(loaded, include_reference=False) == canonical_sha256(public)
 
 
-def test_tokenized_input_survives_wire_and_changes_public_identity(specification):
-    context = TokenizedInput(
-        events=specification.context.events,
-        token_ids=(1, 2, 3),
-        tokenizer_model="org/tokenizer",
-        tokenizer_revision="a" * 40,
-    )
+def test_assistant_prefill_survives_wire_and_remains_last_in_model_request(specification):
+    context = ConversationInput(events=(*specification.context.events, TextMessage(role="assistant", content='{"x":')))
     task = TaskSpec.model_validate({**specification.model_dump(), "context": context})
     restored = TaskSpec.model_validate_json(task.model_dump_json())
-    assert isinstance(restored.context, TokenizedInput)
     assert restored.context == context
-    for replacement in [
-        context.model_copy(update={"token_ids": (1, 2, 4)}),
-        context.model_copy(update={"tokenizer_revision": "b" * 40}),
-    ]:
-        changed = TaskSpec.model_validate({**task.model_dump(), "context": replacement})
-        assert semantic_digest(changed, include_reference=False) != semantic_digest(task, include_reference=False)
-    with pytest.raises(NotImplementedError, match="tokenized_input"):
-        chat_request(restored)
-
-
-@pytest.mark.parametrize("coerced_token", [True, "1", 1.0])
-def test_tokenized_input_rejects_token_coercion_that_changes_exact_input(specification, coerced_token):
-    with pytest.raises(ValidationError):
-        TokenizedInput(
-            events=specification.context.events,
-            token_ids=(coerced_token,),
-            tokenizer_model="org/tokenizer",
-            tokenizer_revision="a" * 40,
-        )
+    request = chat_request(restored)
+    assert request["messages"][-1] == {"role": "assistant", "content": '{"x":'}
+    assert request["messages"][-2] == {"role": "user", "content": "Give your answer as plain text."}
+    assert request["extra_body"] == {"continue_final_message": True, "add_generation_prompt": False}
+    changed = task.model_copy(
+        update={
+            "context": context.model_copy(
+                update={"events": (*context.events[:-1], TextMessage(role="assistant", content='{"y":'))}
+            )
+        }
+    )
+    assert semantic_digest(changed, include_reference=False) != semantic_digest(task, include_reference=False)
 
 
 @pytest.mark.parametrize(

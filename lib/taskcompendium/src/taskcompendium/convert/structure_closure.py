@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Import native structure-closure rows as token-preserving current TaskSpecs."""
+"""Import native structure-closure rows as text-completion TaskSpecs."""
 
 import json
 
@@ -11,7 +11,7 @@ from verifyit.spec import StructureClosureSpec
 
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import Source, TaskResource, TaskSpec, TokenizedInput
+from taskcompendium.models import ConversationInput, Source, TaskResource, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import ImportRejection, NormalizationChange, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -19,16 +19,13 @@ from taskcompendium.runtime.resources import resource_bytes
 def structure_closure_task(
     row: RawRow,
     *,
-    tokenizer_model: str,
-    tokenizer_revision: str,
     terminal_markers: tuple[str, ...],
 ) -> NormalizedTask | ImportRejection:
-    """Convert a lowered native row without re-tokenizing or exposing its grader.
+    """Convert a native row to a conversation with an unfinished assistant message.
 
-    The caller supplies the pinned tokenizer and source-row identity. Native
-    identity changes remain audit metadata; the raw row retains the original
-    serialized contract. Neither enters the semantic resources used to deduplicate
-    aliases. Original verifier resources remain private and unchanged.
+    The raw row retains historical tokens and native identity for audit.
+    The model receives the text prefix using its own tokenizer. Original
+    verifier resources remain private and unchanged.
     """
     document = json.loads(row.data["lowered_task_spec"], object_pairs_hook=unique_object)
     native = document["task"]
@@ -58,11 +55,11 @@ def structure_closure_task(
             **{key: value for key, value in native.items() if key != "schema_version"},
             "id": row.id,
             "source": row.source,
-            "context": TokenizedInput(
-                events=native["context"]["events"],
-                token_ids=extras["prompt_token_ids"],
-                tokenizer_model=tokenizer_model,
-                tokenizer_revision=tokenizer_revision,
+            "context": ConversationInput(
+                events=(
+                    *ConversationInput.model_validate(native["context"]).events,
+                    TextMessage(role="assistant", content=extras["prefix"]),
+                ),
             ),
             "grader": grader,
         }

@@ -177,18 +177,19 @@ def conversation_messages(events: tuple[ConversationEvent, ...]) -> list[dict[st
     return messages
 
 
-def chat_request(task: TaskSpec) -> dict[str, Any]:
-    """Prepare the conversation and tools for the task's answer format."""
-    unsupported = unsupported_direct_chat_features(task)
-    if unsupported:
-        raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
+def completion_request(task: TaskSpec) -> dict[str, Any]:
+    """Render the public conversation, assistant prefill, and answer-format tools."""
     require_submission_compatibility(task)
     answer_format = task.answer_format
     messages = conversation_messages(task.context.events)
     instruction = submission_instruction(answer_format)
+    prefilled = messages[-1]["role"] == "assistant" and "tool_calls" not in messages[-1]
     if instruction:
-        messages.append({"role": "user", "content": instruction})
+        position = len(messages) - 1 if prefilled else len(messages)
+        messages.insert(position, {"role": "user", "content": instruction})
     request: dict[str, Any] = {"messages": messages}
+    if prefilled:
+        request["extra_body"] = {"continue_final_message": True, "add_generation_prompt": False}
     tools: list[dict[str, object]] = [
         {"type": "function", "function": function.model_dump(exclude_none=True)} for function in task.final_tools
     ]
@@ -203,3 +204,11 @@ def chat_request(task: TaskSpec) -> dict[str, Any]:
         if answer_format.max_calls == 1:
             request["parallel_tool_calls"] = False
     return request
+
+
+def chat_request(task: TaskSpec) -> dict[str, Any]:
+    """Prepare a direct-chat request after checking unsupported runtime requirements."""
+    unsupported = unsupported_direct_chat_features(task)
+    if unsupported:
+        raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
+    return completion_request(task)

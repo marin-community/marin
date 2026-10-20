@@ -33,7 +33,7 @@ flowchart LR
 | Field | Meaning |
 | --- | --- |
 | `id` | Stable identity for this task. |
-| `context` | An ordered conversation or an exact token prefix with a pinned tokenizer and display conversation. |
+| `context` | An ordered conversation, optionally ending in an unfinished assistant text message. |
 | `environment_requirements` | Required capabilities, pinned initial workspace, and named tool-provider contracts. |
 | `final_tools` | An ordered list of functions that terminate a chat. They are not backed by a tool provider. |
 | `interaction_tools` | Task-owned function definitions advertised to the agent. |
@@ -58,7 +58,7 @@ budget. Overflow fails the whole transfer. Selections cannot overlap `/tests`,
 
 `ConversationInput.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; a runtime preserves this history when presenting the task to the model. `answer_type` does not prescribe a wrapper such as JSON; `answer_format` does.
 
-`TokenizedInput` stores authoritative `token_ids`, a `tokenizer_model`, and an immutable 40-hex `tokenizer_revision`. Its `events` provide a display and grading view. Token IDs are nonempty strict nonnegative integers. A runtime must serve those IDs unchanged with the pinned tokenizer, without rendering the events or appending answer-format instructions. Direct chat rejects this input. RolloutEngine's `TokenPrefixHarness` sends it as one raw-text completion and checks that the configured inference tokenizer matches its pin. Existing conversation inputs retain their serialized form.
+A final assistant text event is an unfinished response to continue. Completion requests leave this prefill last, insert answer-format instructions before it, and ask the transport to continue that message without adding another assistant header. The serving model chooses its tokenizer; historical token IDs are source provenance. The recorded response contains only the generated continuation.
 
 `ConversationInput` is not a lossless Responses API transcript. It excludes provider reasoning items. The NeMo importer omits an unencrypted historical reasoning summary only when a visible assistant message or function call follows it. It rejects encrypted reasoning and reasoning left at the decision point. Exact provider continuation from reasoning state is outside this contract.
 

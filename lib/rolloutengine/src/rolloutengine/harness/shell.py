@@ -12,7 +12,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Protocol
+from typing import Protocol
 
 from pydantic import JsonValue
 from shellbox.machine import Machine
@@ -24,20 +24,13 @@ from taskcompendium.models import (
     AnswerCall,
     AnswerType,
     AssistantToolCalls,
-    FinalAction,
     FunctionCall,
     FunctionDefinition,
     ProviderRequirement,
     TaskSpec,
-    TokenizedInput,
 )
 from taskcompendium.runtime.shell import BoundShellTool, ShellToolConfig, resolve_shell_tool, run_shell_call
-from taskcompendium.submission import (
-    answer_call_tool,
-    conversation_messages,
-    require_submission_compatibility,
-    submission_instruction,
-)
+from taskcompendium.submission import completion_request, conversation_messages
 
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.models import (
@@ -103,29 +96,23 @@ def task_prompt(
 
     Provider tools that the task already declares as interaction tools are advertised once.
     """
-    if isinstance(task.context, TokenizedInput):
-        raise NotImplementedError("Tokenized inputs require a token-preserving harness")
-    answer_format = task.answer_format
-    messages = conversation_messages(task.context.events)
-    options: dict[str, Any] = {}
-    tools: list[dict[str, Any]] = [
-        {"type": "function", "function": function.model_dump(exclude_none=True)}
-        for function in (*task.final_tools, *task.interaction_tools)
-    ]
     if task.answer_type in CONVERSATION_ANSWERS:
-        require_submission_compatibility(task)
-        instruction = submission_instruction(answer_format)
-        if instruction:
-            messages.append({"role": "user", "content": instruction})
-        if isinstance(answer_format, AnswerCall):
-            tools.append(answer_call_tool())
-            if not task.final_tools:
-                options.update(tool_choice="required", parallel_tool_calls=False)
-        if isinstance(answer_format, FinalAction):
-            if answer_format.require_call:
-                options["tool_choice"] = "required"
-            if answer_format.max_calls == 1:
-                options["parallel_tool_calls"] = False
+        request = completion_request(task)
+        messages = request.pop("messages")
+        tools = request.pop("tools", [])
+        options = request
+        if isinstance(task.answer_format, AnswerCall) and task.final_tools:
+            options.pop("tool_choice", None)
+            options.pop("parallel_tool_calls", None)
+    else:
+        messages = conversation_messages(task.context.events)
+        tools = [
+            {"type": "function", "function": function.model_dump(exclude_none=True)} for function in task.final_tools
+        ]
+        options = {}
+    tools.extend(
+        {"type": "function", "function": function.model_dump(exclude_none=True)} for function in task.interaction_tools
+    )
     if shell_tool is not None:
         if not task.tool_bindings:
             tools.append({"type": "function", "function": shell_tool.definition.model_dump(exclude_none=True)})
@@ -190,8 +177,6 @@ class ShellHarness:
             raise ValueError(f"The command timeout must be a positive, finite number: {self.command_timeout!r}")
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
-        if isinstance(task.context, TokenizedInput):
-            raise NotImplementedError("Tokenized inputs require a token-preserving harness")
         shell_tool = resolve_shell_tool(task, self.shell_tool)
         turn_limit = limits.tool_turn_timeout
         if self.command_timeout is not None and turn_limit is not None and self.command_timeout >= turn_limit:

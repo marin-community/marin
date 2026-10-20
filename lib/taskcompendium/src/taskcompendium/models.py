@@ -216,19 +216,6 @@ class ConversationInput(BaseModel):
         return self
 
 
-class TokenizedInput(ConversationInput):
-    """An authoritative token prefix with display and grading conversation events.
-
-    Runtimes serve ``token_ids`` unchanged using the pinned tokenizer. ``events``
-    describe that input for readers and graders; they must not be retokenized.
-    """
-
-    kind: Literal["tokenized"] = "tokenized"
-    token_ids: tuple[Annotated[int, Field(strict=True, ge=0)], ...] = Field(min_length=1)
-    tokenizer_model: str = Field(min_length=1, pattern=r"^\S+$")
-    tokenizer_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-
-
 class ConversationTrace(BaseModel):
     """Complete model-visible conversation ending in an assistant submission."""
 
@@ -867,7 +854,7 @@ class TaskSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
-    context: TokenizedInput | ConversationInput
+    context: ConversationInput
     environment_requirements: EnvironmentRequirements
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
