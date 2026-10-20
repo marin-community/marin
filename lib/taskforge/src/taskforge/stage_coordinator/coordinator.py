@@ -17,9 +17,24 @@ event store, and the model with its sampling policy. ``run_workpiece`` runs a wo
 5. It saves the log to the event store, after every other file of the workpiece.
 
 Each stage runs through an adapter in this module. The adapter calls the caller's function, writes
-the round's files, and returns the stage's event. The triage stage exits accept or reject on the
-verdict's decision, and a reject records the verdict's reasons. The coordinator spends a build
-revision on:
+the round's files, and returns the stage's event.
+
+The triage stage exits accept or reject on the verdict's decision, and a reject records the
+verdict's reasons. An accept records the verdict's ``author_state``, a JSON mapping the workpiece
+state folds and every author call receives; the preflight's is empty, and nothing in the package
+writes one, so it is a surface for a consumer's triage to hand findings or obligations to the
+author.
+
+A REPAIR verdict is a surface the preflight or a Taskforge consumer may use, for a deterministic
+rewrite such as fixing a proposal header, by setting ``max_triage_repairs``. The edge may later
+retry a proposal on the findings of the deterministic preflight, which returns no REPAIR verdict
+today. While the budget lasts, the stage calls ``StageFunctions.repair``, writes the rewritten
+proposal to ``repaired/<k>.md`` in the workpiece directory, ``k`` counting the rewrites, and exits
+repair, so triage judges the rewrite next. A REPAIR verdict past the budget, which is every one
+under a budget of zero, or a rewrite raising ``ProposalFormatError``, exits reject. Every stage
+after a rewrite runs it, read back from its file and checked against the digest its event records.
+
+The coordinator spends a build revision on:
 
 * a build raising ``BuildFailure`` or any other error, recorded as ``BUILD_FAILED``, unless the
   error is a ``BuildInfrastructureFailure``, a ``BuildExpired``, ``ModelUnavailable``, or an
@@ -66,12 +81,12 @@ from pathlib import Path
 from pydantic import TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
 
-from taskforge.content_hash import digest, pretty_json
+from taskforge.content_hash import canonical_json, digest, pretty_json
 from taskforge.ledger.records import check_workpiece_id
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
-from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage10_proposal.model import ProposalFormatError, TaskProposal, parse, render
 from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
@@ -90,6 +105,7 @@ from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, 
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import (
+    AUTHOR_STATE_ATTR,
     EXIT,
     FINAL,
     REASON_ATTR,
@@ -108,13 +124,13 @@ from taskforge.stage_coordinator.workpiece_machine import (
 STORE_DIR = "store"
 ROUNDS_DIR = "rounds"
 AUTHORED_DIR = "authored"
+REPAIRED_DIR = "repaired"
 FAILURES_DIR = "build-failures"
 VALIDATION_FILE = "validation.json"
 DECISION_FILE = "decision.json"
 BUDGET_DIGEST = "budget_digest"
 MODEL_DIGEST = "model_digest"
 RESEARCH = "research"
-TRIAGE_EXITS: Mapping[TriageDecision, Exit] = {TriageDecision.ACCEPT: Exit.ACCEPT, TriageDecision.REJECT: Exit.REJECT}
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build or author failure for the author's revision."""
 ATTR_CHARS = 500
@@ -126,14 +142,17 @@ The failure file keeps the rest.
 
 @dataclass(frozen=True)
 class WorkpieceBudget:
-    """The revisions and retries each workpiece may spend.
+    """The triage rewrites, build revisions and validation retries each workpiece may spend.
 
     Attributes:
+        max_triage_repairs: The REPAIR verdicts a workpiece may answer with a rewrite that triage judges
+            again. Zero sends every REPAIR verdict to reject; a consumer using the surface sets one.
         max_build_revisions: The build and author failures a workpiece may revise after. The next failure
             rejects it.
         max_validation_retries: The review ``Retry`` decisions a workpiece may follow before it is abandoned.
     """
 
+    max_triage_repairs: int
     max_build_revisions: int
     max_validation_retries: int
 
@@ -186,6 +205,25 @@ class _Workpiece:
         """The directory of the author call made at ``state``, keyed by the build and author failures so far."""
         return self.round_dir(state.round) / AUTHORED_DIR / str(state.build_revisions)
 
+    def proposal_at(self, state: WorkpieceState) -> TaskProposal:
+        """The proposal the stages run at ``state``: the opened one, or the last repair read back from its file.
+
+        Raises:
+            ValueError: the repaired proposal's file holds a proposal other than the one its event records.
+        """
+        if state.triage_repairs == 0:
+            return self.proposal
+        path = self.directory / _repaired_file(state.triage_repairs)
+        proposal = parse(path.read_text())
+        if digest(proposal) != state.proposal_digest:
+            raise ValueError(f"{path} holds proposal {digest(proposal)}, not the repaired {state.proposal_digest}")
+        return proposal
+
+
+def _repaired_file(repairs: int) -> Path:
+    """The path, in the workpiece directory, of the proposal after ``repairs`` triage repairs."""
+    return Path(REPAIRED_DIR) / f"{repairs}.md"
+
 
 async def run_workpiece(
     coordinator: StageCoordinator, workpiece_id: str, proposal: TaskProposal, log: WorkpieceEventLog
@@ -196,6 +234,10 @@ async def run_workpiece(
     final log, as after a failed save and a retry with the same ``log``, ``run_workpiece`` saves it first.
     Otherwise it writes nothing. An ``ABANDONED`` workpiece re-enters validation with its retries reset,
     and a ``FAILED`` one resumes at the stage that raised.
+
+    A REPAIR verdict within ``max_triage_repairs`` has ``StageFunctions.repair`` rewrite the proposal,
+    triage judges the rewrite, and every later stage runs it. A REPAIR verdict past the budget rejects
+    the workpiece.
 
     A build failure, or an author raising ``StructuredOutputError``, spends one of the workpiece's build
     revisions and sends the workpiece back to the author. When the build raises
@@ -208,7 +250,7 @@ async def run_workpiece(
     Raises:
         ValueError: ``workpiece_id`` is unsafe as a directory name, the workpiece was opened for another
             proposal, budget, model digest or research requirement, the build found a program other than the authored
-            one, or the log is inconsistent.
+            one, a repaired proposal's file changed, or the log is inconsistent.
         Exception: whatever a stage raised, after the workpiece is saved as failed.
     """
     check_workpiece_id(workpiece_id)
@@ -279,11 +321,49 @@ def _write(path: Path, content: bytes) -> None:
 
 
 async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
-    verdict = await workpiece.coordinator.stages.triage(workpiece.proposal)
-    attrs: dict[str, str] = {EXIT: TRIAGE_EXITS[verdict.decision]}
-    if verdict.decision is TriageDecision.REJECT:
-        attrs[REASON_ATTR] = f"{TRIAGE_REJECTED}: {'; '.join(verdict.reasons)}"[:ATTR_CHARS]
+    """Triage the workpiece's proposal and exit on the verdict's decision.
+
+    An ACCEPT records the verdict's ``author_state`` as canonical JSON on the event, and a REJECT the
+    verdict's reasons. A REPAIR verdict within ``max_triage_repairs`` has ``StageFunctions.repair``
+    rewrite the proposal, writes the rewrite to ``repaired/<k>.md``, ``k`` counting the rewrites, and
+    exits repair with the rewrite's digest. A REPAIR verdict past the budget, or a rewrite raising
+    ``ProposalFormatError``, exits reject with the reason.
+    """
+    stages = workpiece.coordinator.stages
+    proposal = workpiece.proposal_at(state)
+    verdict = await stages.triage(proposal)
+    spent = {"decision": verdict.decision.value, "repairs": str(state.triage_repairs)}
+    if verdict.decision is TriageDecision.ACCEPT:
+        attrs = {EXIT: Exit.ACCEPT, **spent, AUTHOR_STATE_ATTR: canonical_json(verdict.author_state)}
+        return WorkpieceEvent(EventKind.TRIAGED, state.round, state.proposal_digest, attrs)
+    reason = f"{TRIAGE_REJECTED}: {'; '.join(verdict.reasons)}"
+    budget = workpiece.coordinator.budget.max_triage_repairs
+    if verdict.decision is TriageDecision.REPAIR and state.triage_repairs >= budget:
+        reason = f"triage returned REPAIR with {state.triage_repairs} of {budget} rewrites spent"
+    elif verdict.decision is TriageDecision.REPAIR:
+        try:
+            rewrite = await stages.repair(proposal, verdict)
+        except ProposalFormatError as error:
+            reason = f"the rewrite for the REPAIR verdict is not a valid proposal: {error}"
+        else:
+            return _repaired(workpiece, state, rewrite)
+    attrs = {EXIT: Exit.REJECT, **spent, REASON_ATTR: reason[:ATTR_CHARS]}
     return WorkpieceEvent(EventKind.TRIAGED, state.round, state.proposal_digest, attrs)
+
+
+def _repaired(workpiece: _Workpiece, state: WorkpieceState, proposal: TaskProposal) -> WorkpieceEvent:
+    """Write the rewritten ``proposal`` to ``repaired/<k>.md`` and return the ``TRIAGED`` event exiting repair."""
+    repairs = state.triage_repairs + 1
+    relative = _repaired_file(repairs)
+    _write(workpiece.directory / relative, render(proposal).encode())
+    attrs = {
+        EXIT: Exit.REPAIR,
+        "decision": TriageDecision.REPAIR.value,
+        "repairs": str(repairs),
+        "triaged_digest": state.proposal_digest,
+        "proposal_file": str(relative),
+    }
+    return WorkpieceEvent(EventKind.TRIAGED, state.round, digest(proposal), attrs)
 
 
 def _revision(workpiece: _Workpiece, state: WorkpieceState) -> Revision | None:
@@ -311,7 +391,9 @@ async def _author(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
     place at the author stage.
     """
     try:
-        authored = await workpiece.coordinator.stages.author(workpiece.proposal, _revision(workpiece, state))
+        authored = await workpiece.coordinator.stages.author(
+            workpiece.proposal_at(state), _revision(workpiece, state), state.author_state
+        )
     except StructuredOutputError as error:
         attrs = _failure_attrs(workpiece, state, error, _error_line(error))
         return WorkpieceEvent(EventKind.AUTHOR_FAILED, state.round, state.proposal_digest, attrs)
@@ -334,7 +416,10 @@ async def _authored_program(workpiece: _Workpiece, state: WorkpieceState) -> RLE
         program = workpiece.coordinator.stages.load_program(source.read_text())
         found = f"{source} holds program {program.digest}"
     else:
-        program = (await workpiece.coordinator.stages.author(workpiece.proposal, _revision(workpiece, state))).program
+        revision = _revision(workpiece, state)
+        program = (
+            await workpiece.coordinator.stages.author(workpiece.proposal_at(state), revision, state.author_state)
+        ).program
         found = f"the author now returns program {program.digest}"
     if program.digest != state.program_digest:
         raise ValueError(f"{workpiece.workpiece_id}: {found}, not the authored {state.program_digest}")
@@ -362,7 +447,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
     try:
         draft = await coordinator.stages.build(
             program,
-            workpiece.proposal,
+            workpiece.proposal_at(state),
             workpiece.workpiece_id,
             workpiece.round_dir(state.round),
             str(coordinator.root / STORE_DIR),

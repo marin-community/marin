@@ -16,21 +16,30 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
 from verifyit.spec import NumericSpec
 
+from taskforge import content_hash
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.draft import assemble, requirements
-from taskforge.stage10_proposal.model import Environment, SolverMachine, TaskProposal, parse
+from taskforge.stage10_proposal.model import (
+    Environment,
+    ProposalFormatError,
+    SolverMachine,
+    TaskProposal,
+    parse,
+    render,
+)
 from taskforge.stage20_triage.preflight import preflight
+from taskforge.stage20_triage.verdict import TriageDecision, Verdict
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
 from taskforge.stage30_author.loader import SdkExports, load_program_source
 from taskforge.stage30_author.program import (
@@ -62,6 +71,7 @@ from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
     DECISION_FILE,
     FAILURES_DIR,
+    REPAIRED_DIR,
     STORE_DIR,
     VALIDATION_FILE,
     StageCoordinator,
@@ -121,7 +131,9 @@ unambiguous. A solver that guesses cannot reach the product by chance often, and
 no hint of the answer. No condition makes this task impossible to build in ShellSim.
 """
 )
-BUDGET = WorkpieceBudget(max_build_revisions=1, max_validation_retries=1)
+BUDGET = WorkpieceBudget(max_triage_repairs=0, max_build_revisions=1, max_validation_retries=1)
+REPAIRING = replace(BUDGET, max_triage_repairs=1)
+"""``BUDGET`` for a consumer using the REPAIR surface: one rewrite, then a REPAIR verdict rejects."""
 SAMPLING = LLMPolicy()
 SERVICES = RLEnvBuildServices(
     host=MachineHost.LAPTOP,
@@ -239,6 +251,7 @@ def no_call(*args: object, **kwargs: object) -> NoReturn:
 
 STAGES = StageFunctions(
     triage=preflight,
+    repair=no_call,
     author=static_author(PROGRAM),
     load_program=load_toy_program,
     build=run_build,
@@ -249,14 +262,18 @@ UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
 
 class RecordingAuthor:
-    """Returns ``programs`` in turn, the last one from then on, and records each revision asked for."""
+    """Returns ``programs`` in turn, the last one from then on, and records each revision and author state."""
 
     def __init__(self, *programs: RLEnvBuildProgram):
         self.programs = list(programs)
         self.revisions: list[Revision | None] = []
+        self.states: list[Mapping[str, JsonValue]] = []
 
-    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(
+        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    ) -> AuthoredProgram:
         self.revisions.append(revision)
+        self.states.append(author_state)
         return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
 
 
@@ -267,7 +284,9 @@ class SourceAuthor:
         self.source = source
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(
+        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    ) -> AuthoredProgram:
         self.revisions.append(revision)
         return AuthoredProgram(load_toy_program(self.source), self.source)
 
@@ -347,7 +366,7 @@ async def test_run_workpiece_records_an_event_per_stage_and_a_relaunch_changes_n
     assert (tmp_path / STORE_DIR / "workpieces" / WORKPIECE / "steps" / "task").is_dir()
 
     before = tree_bytes(tmp_path)
-    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call)
+    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call, no_call)
     relaunch = await run_workpiece(coordinator(tmp_path, untouched), WORKPIECE, PROPOSAL, InMemoryEventLog())
     assert relaunch is Terminal.ACCEPTED
     assert tree_bytes(tmp_path) == before
@@ -391,7 +410,7 @@ async def test_a_retry_after_a_failed_save_of_a_finished_workpiece_writes_its_ev
         await run_workpiece(replace(coordinator(tmp_path), event_store=store), WORKPIECE, PROPOSAL, log)
     assert store.load(WORKPIECE) is None
 
-    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call)
+    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call, no_call)
     retried = replace(coordinator(tmp_path, untouched), event_store=store)
     assert await run_workpiece(retried, WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     assert store.load(WORKPIECE) == log.events()
@@ -591,7 +610,9 @@ class CutAuthor:
         self.cuts = cuts
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(
+        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    ) -> AuthoredProgram:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
             raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
@@ -636,7 +657,9 @@ async def test_author_replies_cut_past_the_budget_reject_the_workpiece_on_its_bu
     ]
 
 
-async def unavailable_author(proposal: TaskProposal, revision: Revision | None) -> AuthoredProgram:
+async def unavailable_author(
+    proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+) -> AuthoredProgram:
     raise ModelUnavailable("the hold ran out", ())
 
 
@@ -759,3 +782,171 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
     assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
+
+
+class TriageInTurn:
+    """A triage function returning a verdict of each of ``decisions`` in turn, recording each proposal triaged.
+
+    Each ACCEPT verdict carries ``author_state``.
+    """
+
+    def __init__(self, *decisions: TriageDecision, author_state: Mapping[str, JsonValue] | None = None) -> None:
+        self.decisions = list(decisions)
+        self.author_state = author_state or {}
+        self.proposals: list[TaskProposal] = []
+
+    async def __call__(self, proposal: TaskProposal) -> Verdict:
+        self.proposals.append(proposal)
+        decision = self.decisions.pop(0)
+        state = self.author_state if decision is TriageDecision.ACCEPT else {}
+        return Verdict(proposal.header.id, proposal.digest, decision, (), (f"triage says {decision}",), state)
+
+
+class MachineRepair:
+    """A deterministic repair of one header defect, recording each call.
+
+    A shellsim proposal declaring no solver machine, which the preflight's ``solver_machine_fits``
+    rejects, is rewritten to declare ShellSim. Any other proposal has no rewrite here and raises
+    ``ProposalFormatError``.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, proposal: TaskProposal, verdict: Verdict) -> TaskProposal:
+        self.calls += 1
+        header = proposal.header
+        if header.environment is not Environment.SHELLSIM or header.solver_machine is not SolverMachine.NONE:
+            raise ProposalFormatError(f"no header fix applies to {header.id}")
+        return replace(proposal, header=replace(header, solver_machine=SolverMachine.SHELLSIM))
+
+
+async def test_a_repair_verdict_triages_the_repaired_proposal_and_the_later_stages_run_it_across_a_relaunch(
+    tmp_path,
+):
+    triage, repair = TriageInTurn(TriageDecision.REPAIR, TriageDecision.ACCEPT), MachineRepair()
+    stages = replace(STAGES, triage=triage, repair=repair)
+    failing = coordinator(tmp_path, replace(stages, author=unavailable_author), REPAIRING)
+    with pytest.raises(ModelUnavailable):
+        await run_workpiece(failing, WORKPIECE, MACHINELESS_SHELLSIM, InMemoryEventLog())
+
+    author = RecordingAuthor(PROGRAM)
+    proposals: list[TaskProposal] = []
+
+    async def build(program: RLEnvBuildProgram, proposal: TaskProposal, *args: Any, **kwargs: Any) -> TaskDraft:
+        proposals.append(proposal)
+        return await run_build(program, proposal, *args, **kwargs)
+
+    log = InMemoryEventLog()
+    resumed = replace(stages, triage=no_call, repair=no_call, author=author, build=build)
+    resumed_coordinator = coordinator(tmp_path, resumed, REPAIRING)
+    assert await run_workpiece(resumed_coordinator, WORKPIECE, MACHINELESS_SHELLSIM, log) is Terminal.ACCEPTED
+
+    assert exits(log) == [
+        *ACCEPTED_EXITS[:1],
+        ("triaged", "repair"),
+        ("triaged", "accept"),
+        ("terminal", "failed"),
+        *ACCEPTED_EXITS[2:],
+    ]
+    repaired, accepted = log.events()[1:3]
+    assert (repaired.digest, repaired.attrs["triaged_digest"]) == (
+        content_hash.digest(PROPOSAL),
+        content_hash.digest(MACHINELESS_SHELLSIM),
+    )
+    assert (repaired.attrs["decision"], repaired.attrs["repairs"]) == ("repair", "1")
+    assert (accepted.digest, accepted.attrs["repairs"]) == (content_hash.digest(PROPOSAL), "1")
+    assert (tmp_path / "workpieces" / WORKPIECE / repaired.attrs["proposal_file"]).read_text() == render(PROPOSAL)
+    assert repaired.attrs["proposal_file"] == f"{REPAIRED_DIR}/1.md"
+    assert (triage.proposals, repair.calls, proposals) == ([MACHINELESS_SHELLSIM, PROPOSAL], 1, [PROPOSAL])
+    assert derive_state(log.events()).triage_repairs == 1
+
+
+async def test_a_second_repair_verdict_rejects_the_workpiece_without_a_second_repair(tmp_path):
+    triage, repair = TriageInTurn(TriageDecision.REPAIR, TriageDecision.REPAIR), MachineRepair()
+    stages = replace(STAGES, triage=triage, repair=repair, author=no_call)
+    log = InMemoryEventLog()
+
+    assert (
+        await run_workpiece(coordinator(tmp_path, stages, REPAIRING), WORKPIECE, MACHINELESS_SHELLSIM, log)
+        is Terminal.REJECTED
+    )
+    assert exits(log) == [("opened", None), ("triaged", "repair"), ("triaged", "reject"), ("terminal", "rejected")]
+    rejected, closed = log.events()[2:]
+    assert (rejected.digest, rejected.attrs["decision"], rejected.attrs["repairs"]) == (
+        content_hash.digest(PROPOSAL),
+        "repair",
+        "1",
+    )
+    assert closed.attrs == {
+        "terminal": "rejected",
+        "reason": "triage returned REPAIR with 1 of 1 rewrites spent",
+        "kind": RejectKind.TASK,
+    }
+    assert (triage.proposals, repair.calls) == ([MACHINELESS_SHELLSIM, PROPOSAL], 1)
+
+
+async def test_a_rewrite_that_is_not_a_valid_proposal_rejects_the_workpiece_with_its_error(tmp_path):
+    repair = MachineRepair()
+    stages = replace(STAGES, triage=TriageInTurn(TriageDecision.REPAIR), repair=repair, author=no_call)
+    log = InMemoryEventLog()
+
+    assert await run_workpiece(coordinator(tmp_path, stages, REPAIRING), WORKPIECE, PROPOSAL, log) is Terminal.REJECTED
+    assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
+    assert log.events()[-1].attrs["reason"] == (
+        f"the rewrite for the REPAIR verdict is not a valid proposal: no header fix applies to {PROPOSAL.header.id}"
+    )
+    assert repair.calls == 1
+    assert not (tmp_path / "workpieces" / WORKPIECE / REPAIRED_DIR).exists()
+
+
+async def test_under_the_default_budget_a_repair_verdict_rejects_without_a_rewrite(tmp_path):
+    log = InMemoryEventLog()
+    stages = replace(STAGES, triage=TriageInTurn(TriageDecision.REPAIR), repair=no_call)
+
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.REJECTED
+    assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
+    assert log.events()[-1].attrs["reason"] == "triage returned REPAIR with 0 of 0 rewrites spent"
+    assert not (tmp_path / "workpieces" / WORKPIECE / REPAIRED_DIR).exists()
+
+
+AUTHOR_STATE: Mapping[str, JsonValue] = {"obligations": ["derive 42 in the grader design"], "checked": 3}
+"""Author state a consumer's triage could attach on accept; the package's triage attaches none."""
+
+
+async def test_a_verdicts_author_state_reaches_every_author_call_through_the_event_log_across_a_relaunch(tmp_path):
+    triage = TriageInTurn(TriageDecision.ACCEPT, author_state=AUTHOR_STATE)
+    with pytest.raises(ModelUnavailable):
+        await run_workpiece(
+            coordinator(tmp_path, replace(STAGES, triage=triage, author=unavailable_author)),
+            WORKPIECE,
+            PROPOSAL,
+            InMemoryEventLog(),
+        )
+    triaged = (JsonEventStore(tmp_path).load(WORKPIECE) or ())[1]
+    assert triaged.attrs["author_state"] == content_hash.canonical_json(AUTHOR_STATE)
+
+    author = RecordingAuthor(PROGRAM)
+    resumed = replace(STAGES, triage=no_call, author=author, build=FailsOnce(BuildFailure("wrong product", "task")))
+    log = InMemoryEventLog()
+    assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+
+    assert [None if revision is None else revision.kind for revision in author.revisions] == [
+        None,
+        None,
+        RevisionKind.BUILD_FAILURE,
+        RevisionKind.BUILD_FAILURE,
+    ]
+    assert author.states == [AUTHOR_STATE] * 4
+    assert derive_state(log.events()).author_state == AUTHOR_STATE
+
+
+async def test_the_default_triage_records_an_empty_author_state(tmp_path):
+    author = RecordingAuthor(PROGRAM)
+    log = InMemoryEventLog()
+
+    assert await run_workpiece(coordinator(tmp_path, replace(STAGES, author=author)), WORKPIECE, PROPOSAL, log) is (
+        Terminal.ACCEPTED
+    )
+    assert log.events()[1].attrs["author_state"] == "{}"
+    assert (author.states, derive_state(log.events()).author_state) == ([{}, {}], {})
