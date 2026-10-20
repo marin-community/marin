@@ -41,4 +41,3 @@ print(json.dumps(sorted(name for name in blocked if name in sys.modules)))
     )
 
     assert json.loads(result.stdout) == []
-
