@@ -92,11 +92,14 @@ TRACE_FAMILIES = ("swesmith", "tmax")
 # moved aside to round-N.failed-<id>/, is not a finished shard.
 SHARD_PATH = re.compile(r"/(?:swesmith|tmax)(?:-relay)?/shard-[0-9a-z]+/(?:round-[0-9]+/)?rebuilt\.jsonl$")
 DRY_RUN_MARKER = "DRY_RUN_NOT_FOR_TRAINING"
-# The base each arm fine-tunes and the relay student (v7, decided 2026-10-19): Snowball v0.1 at its weights revision
-# (later commits change only the README).
-PARENT_MODEL = {
-    "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
-    "revision": "6783e9743478bd25a9ce03ab3460e84d6a9814b0",
+# Bases an arm can fine-tune (--parent) and relay students (--relay-student). v7 uses Snowball v0.1 at its weights
+# revision (later commits change only the README); v0 is kept so relay and the arm set can be built for either.
+BASES = {
+    "v0.1": {
+        "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+        "revision": "6783e9743478bd25a9ce03ab3460e84d6a9814b0",
+    },
+    "v0": {"model": STUDENT_MODEL, "revision": STUDENT_REVISION},
 }
 TOKENIZER_NOTE = (
     "rows are rendered with v0's hash-checked tokenizer files; v0.1's tokenizer.json, tokenizer_config.json, "
@@ -172,6 +175,8 @@ CHANGELOG = (
     "TRACEPREFIX inputs default to every finished shard of the arm's run type under --trace-prefix (traces-v7/); "
     "--dry-run builds with production pins, a DRY_RUN marker and no _SUCCESS; manifests name tokenizer_source (v0), "
     "parent_model and relay_student (Snowball v0.1) instead of student_model",
+    "BASES --parent and --relay-student pick v0.1 (default) or v0; a relay build checks every round's driver_config "
+    "student against --relay-student",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
@@ -241,6 +246,28 @@ def finished_shards(prefix: str, relay: bool) -> list[str]:
             if SHARD_PATH.search(str(rebuilt)) and (rebuilt.parent / "_SUCCESS").exists():
                 found.append(str(rebuilt))
     return sorted(found)
+
+
+def check_relay_student(uris: list[str], student: str) -> dict:
+    """Every relay trace file's round must have served `student`, per the driver_config.json beside it.
+
+    Rounds from before v7 record no student_model; every one of them served v0."""
+    expected, served = BASES[student], collections.Counter()
+    for uri in uris:
+        config = json.loads((StoragePath(uri).parent / "driver_config.json").read_text())
+        provenance = config.get("student_model")
+        if provenance is None:
+            name = "v0 (pre-v7 round, no student_model recorded)"
+            matches = student == "v0"
+        else:
+            name = f"{provenance.get('location')} @ {provenance.get('revision') or provenance.get('tokenizer_revision')}"
+            matches = expected["model"] in (provenance.get("location"), provenance.get("tokenizer")) and expected[
+                "revision"
+            ] in (provenance.get("revision"), provenance.get("tokenizer_revision"))
+        if not matches:
+            raise ValueError(f"{uri}: round served {name}, not the relay student {student}")
+        served[name] += 1
+    return {"student": student, "files_by_served_student": dict(served)}
 
 
 def load_traces(uris: list[str], files: list[dict] | None = None) -> list[dict]:
@@ -579,6 +606,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokenizer-dir", help="local v0 tokenizer files (hash-checked); default: the regional copy")
     parser.add_argument(
         "--test-inputs", action="store_true", help="skip the pool and replay pins (local validation only)"
+    )
+    parser.add_argument("--parent", choices=sorted(BASES), default="v0.1", help="the base the arm fine-tunes")
+    parser.add_argument(
+        "--relay-student",
+        choices=sorted(BASES),
+        default="v0.1",
+        help="relay only: the student every relay round must have served (checked in each round's driver_config.json)",
     )
     parser.add_argument(
         "--dry-run",
@@ -984,8 +1018,8 @@ def build_manifest(
         "task": 211,
         "arm": args.arm,
         "tokenizer_source": {"model": STUDENT_MODEL, "revision": STUDENT_REVISION, "note": TOKENIZER_NOTE},
-        "parent_model": PARENT_MODEL,
-        "relay_student": PARENT_MODEL,
+        "parent_model": {"name": args.parent} | BASES[args.parent],
+        "relay_student": None if args.arm != "relay" else {"name": args.relay_student} | BASES[args.relay_student],
         "pad_token_id": PAD_TOKEN,
         "max_sequence_tokens": CONTEXT,
         "batch_size": BATCH,
@@ -1108,6 +1142,7 @@ def main() -> None:
         trace_files: list[dict] = []
         traces = load_traces(args.traces, trace_files)
         gate = token_gate(trace_files)
+        student_check = check_relay_student(args.traces, args.relay_student) if args.arm == "relay" else None
         kept, dropped = candidates(
             args.arm, traces, pool, tokenizer, require_clean_completion=args.require_clean_completion
         )
@@ -1138,6 +1173,8 @@ def main() -> None:
         if recovery_stats is not None:
             manifest["recovery"] = recovery_stats
         manifest["require_clean_completion"] = args.require_clean_completion
+        if student_check is not None:
+            manifest["relay_student_check"] = student_check
         upload(out, output, manifest, production=not (args.test_inputs or args.dry_run))
         print(
             "ARM_BUILT " + json.dumps({k: v for k, v in manifest.items() if k not in ("task_slots", "traces")}),

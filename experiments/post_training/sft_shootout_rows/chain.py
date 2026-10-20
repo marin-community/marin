@@ -11,11 +11,16 @@ it, the flagged fallback also builds plain-matched-relay/ (plain cut to relay's 
 says so; which plain the relay comparison uses is a decision this tool does not make. verify_arms then checks plain,
 RS-multi, relay and recovery together, and the matched plain on its own.
 
+--relay-trace-prefix reads relay rounds from a different prefix than plain (e.g. traces-v7-v0/ for v0-student relay);
+--parent names the base every arm fine-tunes and --relay-student the student the relay rounds must have served
+(default: both Snowball v0.1). Plain, RS-multi, recovery and validation rows do not depend on either.
+
 --dry-run passes --dry-run to every build and to verify_arms: same pins and checks, DRY_RUN_NOT_FOR_TRAINING markers,
 no _SUCCESS.
 
     python -m experiments.post_training.sft_shootout_rows.chain --builder-commit <sha> --output <fresh prefix> \\
-        [--trace-prefix <s3 .../traces-v7/>] [--dry-run]
+        [--trace-prefix <s3 .../traces-v7/>] [--relay-trace-prefix <s3 .../traces-v7-v0/>] [--parent v0.1|v0] \\
+        [--relay-student v0.1|v0] [--dry-run]
 """
 
 import argparse
@@ -26,7 +31,7 @@ import sys
 
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.sft_shootout_rows.build import REPLAY_URI, TRACE_PREFIX, family_supervised
+from experiments.post_training.sft_shootout_rows.build import BASES, REPLAY_URI, TRACE_PREFIX, family_supervised
 
 POOL = "s3://marin-us-east-02a/marin/experiments/sft-shootout/pool/tasks.jsonl"
 POOL_MANIFEST = "s3://marin-us-east-02a/marin/experiments/sft-shootout/pool/manifest.json"
@@ -41,6 +46,9 @@ def run(module: str, *arguments: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trace-prefix", default=TRACE_PREFIX)
+    parser.add_argument("--relay-trace-prefix", help="relay rounds' prefix (default: --trace-prefix)")
+    parser.add_argument("--parent", choices=sorted(BASES), default="v0.1")
+    parser.add_argument("--relay-student", choices=sorted(BASES), help="default: --parent")
     parser.add_argument("--pool", default=POOL)
     parser.add_argument("--pool-manifest", default=POOL_MANIFEST)
     parser.add_argument("--replay", default=REPLAY_URI)
@@ -49,13 +57,15 @@ def main() -> None:
     parser.add_argument("--tokenizer-dir")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    args.relay_trace_prefix = args.relay_trace_prefix or args.trace_prefix
+    args.relay_student = args.relay_student or args.parent
     root = StoragePath(args.output)
     if root.exists():
         raise ValueError("Use a fresh output prefix")
     prefix = {arm: str(root / arm) for arm in ("validation", "plain", "rs-multi", "relay", "recovery")}
     common = [
-        "--trace-prefix",
-        args.trace_prefix,
+        "--parent",
+        args.parent,
         "--pool",
         args.pool,
         "--pool-manifest",
@@ -70,7 +80,12 @@ def main() -> None:
     common += ["--dry-run"] if args.dry_run else []
 
     def build(arm: str, output: str, *extra: str) -> dict:
-        run("build", "--arm", arm, *common, *extra, "--output", output)
+        traces = (
+            ["--trace-prefix", args.relay_trace_prefix, "--relay-student", args.relay_student]
+            if arm == "relay"
+            else ["--trace-prefix", args.trace_prefix]
+        )
+        run("build", "--arm", arm, *traces, *common, *extra, "--output", output)
         return json.loads((StoragePath(output) / "manifest.json").read_text())
 
     manifests = {"validation": build("validation", prefix["validation"])}
@@ -90,6 +105,9 @@ def main() -> None:
     summary = {
         "dry_run": args.dry_run,
         "trace_prefix": args.trace_prefix,
+        "relay_trace_prefix": args.relay_trace_prefix,
+        "parent": args.parent,
+        "relay_student": args.relay_student,
         "builder_commit": args.builder_commit,
         "arms": {
             arm: {
