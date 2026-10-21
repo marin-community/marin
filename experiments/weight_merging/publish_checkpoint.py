@@ -21,6 +21,11 @@ WARNING = (
     "Research artifact. This model has not been properly tested or evaluated and is not necessarily secure. "
     "Use at your own risk in production settings."
 )
+RESPONSIBLE_USE = (
+    "We release our tools to the public with the intent that they are used safely, ethically, and responsibly. "
+    "They are meant to contribute to the public's understanding of science, and aid in its advancement. "
+    "By using this Marin model, you agree to comply with all applicable law."
+)
 
 
 def main() -> None:
@@ -35,6 +40,8 @@ def main() -> None:
     args = parser.parse_args()
     card = args.model_card.read_bytes()
     license_text = args.license.read_bytes()
+    if RESPONSIBLE_USE not in card.decode():
+        raise ValueError("Model card must include the required responsible-use paragraph.")
     assert WARNING in card.decode()
     assert yaml.safe_load(card.decode().split("---", 2)[1])["license"] == "openmdw-1.1"
     assert hashlib.sha256(license_text).hexdigest() == args.license_sha256
