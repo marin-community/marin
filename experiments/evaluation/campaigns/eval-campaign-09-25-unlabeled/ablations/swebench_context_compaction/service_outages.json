@@ -1,5 +1,68 @@
 [
   {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195526-Qwen-Qwen3.6-35B-A3B-swebench-32k-8k-summary-c7803e1e44884c96ae48f55f67eec1fa-32k-8k-summary-38fb91f20481579f9c591e0190f9928c/results",
+    "started_at": "2026-10-21T06:46:04.563000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 7eda2b5d-58eb-4acd-880c-ff7957bfc64d.",
+    "arm": "32k/8k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195646-Qwen-Qwen3.6-35B-A3B-swebench-65k-16k-summary-1c54924de79046249ff367dc660388d2-65k-16k-summary-e7cbd26c69425cbbb4d3f4f0c662cc72/results",
+    "started_at": "2026-10-21T06:46:04.563000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 7eda2b5d-58eb-4acd-880c-ff7957bfc64d.",
+    "arm": "65k/16k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211609-google-gemma-4-26B-A4B-it-swebench-131k-16k-no-summary-b932337c1f2a43f8aeec48855e0604e1-harbor-e4709bcd7ab85767a3b9128e711608ed/results",
+    "started_at": "2026-10-21T06:46:04.564000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 7eda2b5d-58eb-4acd-880c-ff7957bfc64d.",
+    "arm": "131k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-233954-google-gemma-4-26B-A4B-it-swebench-32k-8k-summary-24b2a6f377404a6484fa9a47792e2717-harbor-11108a402840502da3594328368a514c/results",
+    "started_at": "2026-10-21T06:46:04.564000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 7eda2b5d-58eb-4acd-880c-ff7957bfc64d.",
+    "arm": "32k/8k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200532-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-summary-0e5acf1bd86c43ce91c4c864aa7b5518-65k-16k-summary-9d8f8f35df805226abe49ab91bd96d34/results",
+    "started_at": "2026-10-21T06:46:04.564000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 7eda2b5d-58eb-4acd-880c-ff7957bfc64d.",
+    "arm": "65k/16k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200324-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-32k-8k-summary-99b6b05cd4ab4bb4aef42f8cf76fbb3e-32k-8k-summary-8e3161346e6d56a2a16f9cc120867f13/results",
+    "started_at": "2026-10-21T06:40:46.956000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: inference-de6c5d20c4c64f5ba2c8e0599ca2a102/0 attempt 6 WorkloadEvictedDueToPreempted; attempt 7 SchedulingGated. Preemptor workload UID 34783837-8bc0-4fd8-bcb8-242bb787b6bc.",
+    "arm": "32k/8k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261021-045837-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-no-summary-33f0a442956d4d5280c5370305804fc9-harbor-bf6a9adedbe55739a9e380316fad6274/results",
+    "started_at": "2026-10-21T06:40:46.956000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: inference-a6f3f263caaa47bb8b290e884ee46e39/0 attempt 0 WorkloadEvictedDueToPreempted; attempt 1 SchedulingGated. Preemptor workload UID 34783837-8bc0-4fd8-bcb8-242bb787b6bc.",
+    "arm": "65k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-212113-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-131k-16k-no-summary-656bb1d55ea64f1891f0d97c6a431138-harbor-0f63a464cee25ab19b1c7a27505b1794/results",
+    "started_at": "2026-10-21T06:40:46.956000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: inference-c5cdfaf4a8fc4b979a919792bfeeddb1/0 attempt 5 WorkloadEvictedDueToPreempted; attempt 6 SchedulingGated. Preemptor workload UID 34783837-8bc0-4fd8-bcb8-242bb787b6bc.",
+    "arm": "131k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261021-044722-google-gemma-4-26B-A4B-it-swebench-65k-16k-no-summary-d6118f24d23c46d28d127a62f296889e-harbor-7b6a1231f6c2516fb6b1e535c559bd2b/results",
+    "started_at": "2026-10-21T06:40:46.956000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: inference-94e75dd8a0ed4557ac32751817441c7a/0 attempt 0 WorkloadEvictedDueToPreempted; attempt 1 SchedulingGated. Preemptor workload UID 34783837-8bc0-4fd8-bcb8-242bb787b6bc.",
+    "arm": "65k/16k, no summary"
+  },
+  {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261021-021415-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-32k-8k-summary-gb200-a46073f6866c45ebb4bb3b7019e6bc07-harbor-1a9f7e80452e5bd89a0f133b3606de42/results",
     "started_at": "2026-10-21T05:19:53.571000+00:00",
     "finished_at": "2026-10-21T05:47:06.620616+00:00",
