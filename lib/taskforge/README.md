@@ -47,16 +47,19 @@ other wrong-way imports.
 with taskcompendium and verifyit and no network. Bubblewrap needs namespaces, which an Iris task has
 only under the privileged container profile. The agent writes, runs and validates its build programs
 in that shell. The tools do only what the shell cannot: `grade` grades a control answer; `rollout`
-runs solver or adversary rollouts on new ShellSim machines; `web_search` and `web_fetch` use Parallel;
-`submit` is the gate; and `finish` ends the session with a report.
+runs solver or adversary rollouts for one or more task files at the same time, on new ShellSim
+machines, and tells the agent what an in-band version still needs; `web_search` and `web_fetch` use
+Parallel; `submit` is the gate; and `finish` ends the session with a report.
 
-`submit` refuses a task that the tools cannot run, that leaks its reference answer, or that has a
-malformed CSV or JSON file. Then the evidence of that exact `TaskSpec` (by content digest) must satisfy
-the `Gate`: a correct control that passes, a wrong control that fails, and no wrong control that
-passes; a solver pass rate in the band over the graded answers; few answer-format failures; and
-adversary rollouts. Last, an independent reviewer reads the task and its evidence and decides, also
-whether an adversary pass used a shortcut. After three calls on an empty budget, the tools stop the
-session. The experiment driver is
+`submit` refuses a task that the tools cannot run, that leaks its reference answer (also as a quoted
+format example), that has a malformed CSV or JSON file, or whose numeric tolerance also accepts the next
+values at the precision of the reference. Then the evidence of that exact `TaskSpec` (by content digest)
+must satisfy the `Gate`: a correct control that passes, a wrong control that fails, and no wrong control
+that passes; a solver pass rate in the band over the graded answers; few answer-format failures; and
+adversary rollouts. Last, an independent reviewer reads the task and its evidence and decides. Before it
+decides, it names the reading or the mistake behind each failed solver answer, and the statement that
+this reading breaks, so that a failed answer from another reasonable reading refuses the task as
+ambiguous. After three calls on an empty budget, the tools stop the session. The experiment driver is
 `experiments/post_training/capability_driven_envs/generate_tasks_agentic.py`.
 
 ## The build DAG

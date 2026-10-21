@@ -6,7 +6,7 @@
 import itertools
 import json
 import shlex
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -64,8 +64,8 @@ SCRIPT = (
     call("grade", path=TASK, answer="1", expect="pass"),  # A wrong control of the agent's own does not block.
     call("grade", path=TASK, answer=EXPECTED, expect="pass"),
     call("grade", path=TASK, answer="999999", expect="fail"),
-    call("rollout", path=TASK, n=8, role="solver"),
-    call("rollout", path=TASK, n=4, role="adversary"),
+    call("rollout", paths=[TASK], n=8, role="solver"),
+    call("rollout", paths=[TASK], n=4, role="adversary"),
     call("shell", command=f"sed 's/Reply with the number alone/Reply with a number/' {TASK} > {CHANGED}"),
     call("submit", path=CHANGED),
     call("submit", path=TASK),
@@ -74,12 +74,13 @@ SCRIPT = (
 
 @dataclass
 class ScriptedAgent:
-    """Calls the tools of ``SCRIPT`` in order, one call in each turn."""
+    """Calls the tools of ``script`` in order, one call in each turn."""
 
+    script: Sequence[tuple[str, dict[str, object]]] = SCRIPT
     turns: int = 0
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
-        name, arguments = SCRIPT[self.turns]
+        name, arguments = self.script[self.turns]
         self.turns += 1
         tool_call = {
             "id": f"call-{self.turns}",
@@ -112,25 +113,31 @@ class AcceptingJudge:
         self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
         assert output_type is TaskReview
-        return StructuredResult(output_type.model_validate({"accept": True, "problems": [], "summary": "ok"}), ())
+        return StructuredResult(
+            output_type.model_validate({"failure_causes": [], "problems": [], "summary": "ok", "accept": True}), ()
+        )
+
+
+def agentic_config(agent_model: Callable[[ModelRequest], Awaitable[ModelTurn]], budget: ToolBudget, web: ParallelWeb):
+    return AgenticConfig(
+        agent_model=agent_model,
+        workspace_factory=ShellSimMachineFactory(),
+        solver_model=Solver(),
+        judge=AcceptingJudge(),
+        judge_policy=LLMPolicy(),
+        web=web,
+        agent_limits=LIMITS,
+        solver_limits=LIMITS,
+        gate=Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4),
+        budget=budget,
+        command_timeout=10,
+        max_concurrent_rollouts=4,
+    )
 
 
 async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     async with ParallelWeb("unused") as web:
-        config = AgenticConfig(
-            agent_model=ScriptedAgent(),
-            workspace_factory=ShellSimMachineFactory(),
-            solver_model=Solver(),
-            judge=AcceptingJudge(),
-            judge_policy=LLMPolicy(),
-            web=web,
-            agent_limits=LIMITS,
-            solver_limits=LIMITS,
-            gate=Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4),
-            budget=ToolBudget(solver_rollouts=20, judge_calls=1, web_calls=0),
-            command_timeout=10,
-            max_concurrent_rollouts=4,
-        )
+        config = agentic_config(ScriptedAgent(), ToolBudget(solver_rollouts=20, judge_calls=1, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
 
     assert result.failure is None
@@ -140,6 +147,9 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
         if message["role"] == "tool"
     }
     assert replies["call-2"]["missing"] == ["controls", "solver band", "adversary"]
+    # The rollout results tell the agent what an in-band version still needs.
+    assert "adversary rollouts" in replies["call-6"]["results"][TASK]["next"]
+    assert replies["call-7"]["results"][TASK]["next"] == "This version has its evidence: submit it now."
     assert replies["call-9"]["missing"] == ["controls", "solver band", "adversary"]
     [accepted] = result.tasks
     assert accepted.task == example_build.task_spec(TASK_ID)
@@ -171,22 +181,29 @@ class LoopingAgent:
 async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
     agent = LoopingAgent()
     async with ParallelWeb("unused") as web:
-        config = AgenticConfig(
-            agent_model=agent,
-            workspace_factory=ShellSimMachineFactory(),
-            solver_model=Solver(),
-            judge=AcceptingJudge(),
-            judge_policy=LLMPolicy(),
-            web=web,
-            agent_limits=LIMITS,
-            solver_limits=LIMITS,
-            gate=Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4),
-            budget=ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0),
-            command_timeout=10,
-            max_concurrent_rollouts=1,
-        )
+        config = agentic_config(agent, ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
 
     assert agent.turns == MAX_EMPTY_BUDGET_CALLS
     assert result.tasks == ()
     assert result.report is not None and "empty budget" in result.report
+
+
+async def test_submit_refuses_a_numeric_tolerance_that_accepts_the_next_values():
+    # The reference is an integer, so a tolerance of 1 also accepts the reference plus or minus 1.
+    loose = GRADER.model_copy(update={"parameters": {**GRADER.parameters, "tolerance_abs": 1.0}})
+    task = example_build.task_spec(TASK_ID).model_copy(update={"grader": loose})
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
+        call("submit", path=TASK),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [submit] = [
+        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-2"
+    ]
+    assert not submit["accepted"]
+    assert any("also accepts" in problem for problem in submit["problems"])
