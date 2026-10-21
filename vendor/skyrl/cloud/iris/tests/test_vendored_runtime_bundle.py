@@ -2,9 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
-import subprocess
-import sys
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -80,32 +77,3 @@ def test_unrecorded_file_added_to_a_built_bundle_is_rejected(bundled_source):
     (workspace / "cloud/iris/injected.py").write_text("extra = True\n")
     with pytest.raises(ValueError, match="do not match the selected runtime identity"):
         runtime_bundle.validate_bundled_runtime(workspace)
-
-
-def test_bundle_supplies_the_configured_task_factory_before_an_older_launcher(tmp_path):
-    source = runtime_bundle.resolve_launcher_source()
-    with runtime_bundle.build_runtime_bundle(source.digest) as workspace:
-        environment = dict(os.environ)
-        environment["PYTHONPATH"] = os.pathsep.join(
-            [str(workspace), str(source.root), environment.get("PYTHONPATH", "")]
-        )
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import json; from pathlib import Path; from omegaconf import OmegaConf; "
-                "import marinskyrl.task_machine_factories as module; "
-                "factories = module.task_machine_factories(OmegaConf.create({})); "
-                "print(json.dumps({'module': str(Path(module.__file__).resolve()), 'backends': sorted(factories)}))",
-            ],
-            cwd=tmp_path,
-            env=environment,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-        )
-        observed = json.loads(completed.stdout)
-        assert observed["module"] == str((workspace / "marinskyrl/task_machine_factories.py").resolve())
-        assert "shellsim" in observed["backends"]
-        assert "local" not in observed["backends"]

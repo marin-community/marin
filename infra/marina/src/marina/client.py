@@ -3,8 +3,6 @@
 
 """Authenticated HTTP client helpers for Marina's command line."""
 
-from collections.abc import Callable
-from typing import Any
 from urllib.parse import urlparse
 
 import requests
@@ -21,7 +19,6 @@ from rigging.credentials import iap_edge_provider
 DEFAULT_MARINA_URL = "https://marina.oa.dev"
 DEFAULT_TIMEOUT = 60
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost"})
-AppletQuery = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
 class MarinaRequestError(RuntimeError):
@@ -97,40 +94,6 @@ def marina_request(
     if response.status_code == 204:
         return None
     return response.json()
-
-
-def applet_query(
-    service_url: str,
-    applet_id: str,
-    *,
-    session: requests.Session | None = None,
-    token_provider: TokenProvider | None = None,
-) -> AppletQuery:
-    """Return a SQL client for an applet, sharing caller-owned transport and refreshing tokens."""
-    details = marina_request(
-        service_url,
-        "GET",
-        f"/api/marina/applets/{applet_id}",
-        session=session,
-        token_provider=token_provider,
-    )
-    assert isinstance(details, dict)
-    parsed = urlparse(details["authenticated_url"])
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
-
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        result = marina_request(
-            origin,
-            "POST",
-            f"/a/{applet_id}/query",
-            json_body={"sql": sql, "parameters": parameters},
-            session=session,
-            token_provider=token_provider,
-        )
-        assert isinstance(result, dict)
-        return result
-
-    return query
 
 
 def publish_applet(

@@ -22,7 +22,6 @@ from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.utils.trainer_utils import build_eval_dataloader
-from skyrl_train.dataset.tasks import TaskDataset
 
 
 class PolicyAdapterClient(Protocol):
@@ -48,16 +47,6 @@ class EvalOnlyEntrypoint(BasePPOExp):
     def get_train_dataset(self):
         """Override to avoid requiring a train dataset for eval-only runs."""
         return None
-
-    def get_eval_dataset(self):
-        if EvaluationRunner(self.cfg.trainer.evaluation_runner) is EvaluationRunner.TASK:
-            return TaskDataset(
-                self.cfg.data.val_data,
-                self.tokenizer,
-                self.cfg.trainer.max_prompt_length,
-                chat_template_kwargs=dict(self.cfg.generator.chat_template_kwargs),
-            )
-        return super().get_eval_dataset()
 
     def _run(self) -> dict[str, Any]:
         return asyncio.run(self._evaluate())

@@ -664,8 +664,6 @@ def _project_command(*arguments: str) -> list[str]:
         "--project",
         str(workspace_root / SKYRL_PROJECT),
         "--frozen",
-        "--extra",
-        "cpu",
         "--no-group",
         "dev",
         "marinskyrl",

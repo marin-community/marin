@@ -67,6 +67,7 @@ restores the previous lock. Edit the nested `pyproject.toml` first when changing
 an explicit version constraint. Runtime acceptance must also exercise the
 harness; an import check alone cannot validate its execution contract.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
+Regenerate it with `uv 0.13.1`, matching the `skyrl-wheel` lane.
 The pinned Ray release has no Intel macOS wheel.
 
 Features under review can require exact Git sources before their Marin library
@@ -82,15 +83,6 @@ retains structural delimiters and exact engine tokens/log probabilities.
 Parsed reasoning or tool-call channels interrupt the attempt without a score.
 Ordinary tasks retain the production `shellbox:{settings}` discriminator and
 restore `ToolHarness` with its serialized command timeout and shell tool.
-
-`environment.task_sessions.local: {}` enables the local machine factory,
-which probes Linux bubblewrap before task admission. Omission or `null`
-disables it. The launcher forwards the explicit Iris container profile to
-the coordinator and trainer; enabling the backend does not bypass its sandbox.
-`trajectory_runner.eval_max_concurrent_tasks` optionally bounds the shared
-evaluation pool independently of training. `trainer.eval_required_score_coverage`
-can require complete grading before training continues. Failed coverage keeps
-the diagnostic dump; a valid scored zero satisfies the gate.
 
 The `skyrl-wheel` lane exercises these CPU contracts in the independent nested
 environment. This does not establish sandbox isolation or serving/GPU correctness.
