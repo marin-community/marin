@@ -119,6 +119,10 @@ MAX_EMPTY_BUDGET_CALLS = 3
 EARLY_FINISH_BUDGET_SHARE = 0.5
 """``finish`` refuses once when fewer than n tasks are accepted and more than this share of the solver rollouts are
 left: an agent can stop after a few too-easy versions, when a harder version would get into the band."""
+MAX_VERSION_SOLVER_RUNS_FACTOR = 2
+"""A version gets at most this many times the solver rollouts that the gate needs. Its pass rate is then known well
+enough, and more rollouts do not move a version near a limit of the band: without a cap, an agent spent half of a
+budget on one such version."""
 MIN_PATTERN_LISTS = 4
 """Option lists of an idea's tasks that ``submit`` pools before it refuses a place that all correct options share:
 with fewer, a shared place often comes by chance."""
@@ -388,6 +392,8 @@ class ToolSession:
         if not paths or len(set(paths)) < len(paths):
             raise ToolError("Give one or more different paths")
         tasks = [await self._load(path) for path in paths]
+        if role == "solver":
+            self._check_version_cap(paths, tasks, n)
         specs = [_solver_spec(_adversary_task(task) if role == "adversary" else task, self.config) for task in tasks]
         for path, spec in zip(paths, specs, strict=True):
             try:
@@ -400,6 +406,18 @@ class ToolSession:
         )
         left = self.config.budget.solver_rollouts - self.tools.spend.solver_rollouts
         return _result({"results": dict(zip(paths, results, strict=True)), "solver_rollouts_left": left})
+
+    def _check_version_cap(self, paths: list[str], tasks: list[TaskSpec], n: int) -> None:
+        cap = MAX_VERSION_SOLVER_RUNS_FACTOR * self.config.gate.min_solver_runs
+        for path, task in zip(paths, tasks, strict=True):
+            evidence = self.tools.evidence[_task_digest(task)]
+            done = evidence.solver_runs + evidence.solver_format_failures
+            if done + n > cap:
+                raise ToolError(
+                    f"A version gets at most {cap} solver rollouts, and {path} has {done}, at pass rate "
+                    f"{evidence.solver_pass_rate:.2f}. More rollouts do not move a version near a limit of the band: "
+                    "submit it if it is in the band, or change the task."
+                )
 
     async def _rollouts(
         self, task: TaskSpec, spec: TaskRolloutSpec, n: int, role: Literal["solver", "adversary"]

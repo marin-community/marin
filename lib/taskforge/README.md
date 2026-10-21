@@ -49,7 +49,9 @@ only under the privileged container profile. The agent writes, runs and validate
 in that shell. A shell command returns at most 32 KiB of output, so that one large output cannot fill
 the agent's context. The tools do only what the shell cannot: `grade` grades a control answer; `rollout`
 runs solver or adversary rollouts for one or more task files at the same time, on new ShellSim
-machines, and tells the agent what an in-band version still needs; `web_search` and `web_fetch` use
+machines, and tells the agent what an in-band version still needs. It gives one version at most twice the
+solver rollouts that the gate needs, because more rollouts do not move a version near a limit of the band.
+`web_search` and `web_fetch` use
 Parallel; `submit` is the gate; and `finish` ends the session with a report. While fewer than n tasks are accepted and more than half of the solver rollouts are
 left, `finish` refuses once.
 

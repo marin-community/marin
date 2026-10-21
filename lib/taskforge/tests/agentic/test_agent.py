@@ -290,6 +290,28 @@ async def test_rollout_runs_a_task_whose_id_is_too_long_for_a_file_name():
     assert (result.failure, result.report) == (None, "done")
 
 
+async def test_rollout_refuses_solver_rollouts_past_the_cap_of_a_version():
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("rollout", paths=[TASK], n=12, role="solver"),
+        call("rollout", paths=[TASK], n=8, role="solver"),
+        call("rollout", paths=[TASK], n=4, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=24, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    replies = {
+        m["tool_call_id"]: json.loads(m["content"])
+        for m in result.rollout.conversations[-1].messages
+        if m.get("tool_call_id") in ("call-3", "call-4")
+    }
+    assert "A version gets at most 16 solver rollouts, and tasks/ledger--00.json has 12" in replies["call-3"]["error"]
+    assert replies["call-4"]["results"][TASK]["evidence"]["solver_runs"] == 16
+    assert result.spend.solver_rollouts == 16
+
+
 async def test_finish_refuses_once_while_most_of_the_budget_is_left():
     script = (call("finish", report="too easy"), call("finish", report="too easy"))
     async with ParallelWeb("unused") as web:
