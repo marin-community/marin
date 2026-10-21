@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import shutil
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -20,6 +21,7 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rolloutengine.models import ModelTurn, Prompt, TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
@@ -325,6 +327,16 @@ class InstalledAgentRuntime:
         (evidence / "identity.json").write_text(
             json.dumps({"session_id": session_id, "attempt_id": attempt_id, "task_id": lowered.task.id})
         )
+        spool = (
+            DiagnosticSpool(
+                evidence / "engine" / "diagnostics.jsonl",
+                join_resource_path(destination, "engine", "diagnostics.jsonl"),
+            )
+            if config.agent.pi is not None and io.is_cloud_path(destination)
+            else None
+        )
+        stop_spool = asyncio.Event()
+        spool_task = asyncio.create_task(spool.run(stop_spool)) if spool is not None else None
         try:
             task_dir = evidence / "task"
             restore_harbor_trial_task(lowered.task, task_dir)
@@ -377,17 +389,36 @@ class InstalledAgentRuntime:
                         if result.agent_result
                         else None
                     )
-                    if trajectory is not None:
+                    if spool is not None:
+                        spool.record("trial:agent_present" if result.agent_result is not None else "trial:agent_missing")
+                        spool.record("trial:capture_present" if trajectory is not None else "trial:capture_missing")
+                        spool.record("trial:verifier_present" if result.verifier_result is not None else "trial:verifier_missing")
+                    if trajectory is None:
+                        exception_type = result.exception_info.exception_type if result.exception_info else "none"
+                        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", exception_type):
+                            exception_type = "unclassified"
+                        logger.warning(
+                            "Pi Harbor trial has no capture: agent_present={} verifier_present={} exception_type={}",
+                            result.agent_result is not None,
+                            result.verifier_result is not None,
+                            exception_type,
+                        )
+                    else:
                         validated = PiCollatedTrajectory.model_validate(trajectory)
                         if validated.trial_id != session_id or validated.policy_step != policy_step:
                             raise ValueError("Pi capture differs from the leased trial identity")
                         self.completed_pi_trajectories[session_id] = validated.model_dump(mode="json")
                 return result.model_copy(update={"trial_uri": join_resource_path(destination, "trials", attempt_id)})
         finally:
-            if self.settings.agent.pi is None:
-                await publish_attempt(evidence, destination)
-            else:
-                shutil.rmtree(evidence)
+            try:
+                if spool_task is not None:
+                    stop_spool.set()
+                    await spool_task
+            finally:
+                if self.settings.agent.pi is None:
+                    await publish_attempt(evidence, destination)
+                else:
+                    shutil.rmtree(evidence)
 
     @asynccontextmanager
     async def _served_agent(
