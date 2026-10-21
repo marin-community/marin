@@ -282,7 +282,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211609-google-gemma-4-26B-A4B-it-swebench-131k-16k-no-summary-b932337c1f2a43f8aeec48855e0604e1-harbor-e4709bcd7ab85767a3b9128e711608ed/results",
     "started_at": "2026-10-20T23:37:07.302264Z",
-    "finished_at": null,
+    "finished_at": "2026-10-21T02:03:14.200290+00:00",
     "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-211609-fa521cfe-1-2378b9a5732908b2-6821a",
     "arm": "131k/16k, no summary"
   },
