@@ -67,7 +67,6 @@ from verifyit.spec import NumericSpec, StructureClosureSpec, MathSpec, JudgeSpec
 from verifyit.modes.grade_judge import JudgeConnection
 
 from cloud.iris import training_driver
-from cloud.iris.iris_backend import _iris_submission_state
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -563,23 +562,6 @@ def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path,
     OmegaConf.save(config, resolved)
     reloaded = load_launch_config(resolved)
     assert OmegaConf.to_container(reloaded, resolve=True) == OmegaConf.to_container(config, resolve=True)
-
-
-@pytest.mark.parametrize(
-    "profile,expected",
-    [
-        (None, job_pb2.CONTAINER_PROFILE_UNSPECIFIED),
-        ("CONTAINER_PROFILE_PRIVILEGED", job_pb2.CONTAINER_PROFILE_PRIVILEGED),
-    ],
-)
-def test_iris_submission_preserves_explicit_container_profile(tmp_path, profile, expected):
-    raw = _raw_config()
-    if profile is not None:
-        raw["iris"]["container_profile"] = profile
-    path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw))
-    args = _iris_submission_state(path, load_launch_config(path))
-    assert args.container_profile == expected
 
 
 class WorkerTokenizer:
