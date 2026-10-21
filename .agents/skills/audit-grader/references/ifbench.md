@@ -109,6 +109,12 @@ them against their labels, and they do not enter the error rate. Round 2 was
 frozen after the fixes that round 1 prompted. Its responses were not used to
 develop the checkers, and no reviewer had seen them.
 
+Counting only the cases where both verdicts are definite (279 in round 1 and
+134 in round 2), Marin strict contradicts the consensus on 6.3% and 6.8%,
+fixes only on 2.4% and 2.9%, and the paired difference is +3.9 points in both
+rounds, [+3.3, +4.4] in round 2. These come from the dataset's `blind_review`
+records.
+
 Each reviewer batch was a separate agent run on Claude Opus 5.5 at max effort.
 Parts of four round-1 batches ran on earlier Claude models
 (`results/blind_audit/README.md` lists them). Reviewer B read the cases in a
