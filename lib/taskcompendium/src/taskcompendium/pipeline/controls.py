@@ -12,7 +12,7 @@ from typing import Any, Protocol
 from shellbox.machine import Command, MachineFactory, MachineSpec
 from verifyit.grade import positive_candidate
 from verifyit.modes.grade_judge import JudgeConnection
-from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec
+from verifyit.spec import ExactSpec, MathSpec, McqSpec, NumericSpec, StructureClosureSpec
 
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -48,7 +48,7 @@ from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "17"
+CONTROLS_REVISION = "18"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -86,6 +86,8 @@ def reference_reply(task: TaskSpec) -> Reply | None:
         return answer_reply(task, rf"\boxed{{{spec.expected}}}")
     if isinstance(spec, NumericSpec | McqSpec):
         return answer_reply(task, spec.expected)
+    if isinstance(spec, StructureClosureSpec):
+        return answer_reply(task, spec.expected[len(spec.prefix) :])
     if isinstance(spec, ExactSpec):
         candidate = positive_candidate(spec)
         return answer_reply(task, candidate) if candidate is not None else None

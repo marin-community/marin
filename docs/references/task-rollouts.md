@@ -111,6 +111,36 @@ A harness does not grade. After `run` returns, the engine grades the rollout wit
 [Grading](#grading)). A harness can attach its own reward to a step with `record(data=...)`. The engine does
 not read it.
 
+### Assistant prefills
+
+`PrefillHarness` continues the final assistant text in `ConversationInput.events` once. Register it
+and select it explicitly with `TaskRolloutSpec.harness`:
+
+```python
+from rolloutengine.harness.prefill import PrefillHarness
+
+engine = RolloutEngine({}, {"prefill": PrefillHarness()})
+spec = TaskRolloutSpec(
+    task=task, harness="prefill", limits=limits, task_machine=None, verifier_machine=None
+)
+```
+
+The task must use a plain-text conversation answer. The harness keeps the assistant prefix last and
+sets `extra_body.continue_final_message=True` and `extra_body.add_generation_prompt=False`. The transport
+must support these rendering options. Ordinary chat rendering does not infer continuation from the last
+message's role.
+
+Final tool schemas can condition the continuation. Interactive tools, tool providers and agent
+capabilities are rejected during preflight. The grader can have its own verifier environment and private
+resources. The model must return the continuation as assistant text: parsed reasoning or tool-call
+channels make the attempt invalid, so parser behavior cannot silently turn a continuation into a normal
+zero reward. Structural-closure grading concatenates its fixed text prefix with this continuation and
+scores the first completed outer structure.
+
+The selected model tokenizes the conversation and prefill. Training records its actual prompt and sampled
+response tokens with their logprobs through the normal model session. Historical token IDs do not constrain
+the task. Backends can use `TraceMode.MESSAGES` when only text and usage are available.
+
 ### Model session
 
 A harness calls the model through its `ModelSession`, which records the exact tokens and applies the turn

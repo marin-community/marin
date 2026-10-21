@@ -6321,6 +6321,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "scikit-learn" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "universal-pathlib" },
@@ -6355,6 +6356,7 @@ test = [
     { name = "pytest-json-report" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "scikit-learn" },
     { name = "universal-pathlib" },
 ]
 
@@ -6460,6 +6462,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", specifier = "==0.14.3" },
+    { name = "scikit-learn" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "universal-pathlib" },
@@ -6494,6 +6497,7 @@ test = [
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "scikit-learn" },
     { name = "universal-pathlib" },
 ]
 
