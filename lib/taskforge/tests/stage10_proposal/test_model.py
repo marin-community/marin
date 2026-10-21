@@ -165,11 +165,31 @@ def test_only_a_reasoning_proposal_declares_no_machine():
         (("solver_machine: null\n", ""), "missing key(s) ['solver_machine']"),
         (("solver_machine: null", "solver_machine: cpython"), "a container proposal runs in its own image"),
         (("environment: container", "environment: reasoning"), "a reasoning proposal declares one of"),
-        (("solver_machine: null", "solver_machine: container"), "a container proposal runs in its own image"),
+        (("solver_machine: null", "solver_machine: container"), "solver_machine: 'container' is not one of"),
     ],
     ids=["missing", "container-with-a-machine", "imageless-without-one", "container-as-a-machine"],
 )
 def test_the_solver_machine_must_match_the_environment(edit, message):
+    with pytest.raises(ProposalFormatError, match=re.escape(message)):
+        parse(AUTHORED.replace(*edit))
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (
+            ("fixtures/data.json, ", "../x, "),
+            "resources: must be relative paths inside the build root: ['../x']",
+        ),
+        (
+            ("fixtures/data.json, ", "/abs/data.json, "),
+            "resources: must be relative paths inside the build root: ['/abs/data.json']",
+        ),
+        (("  - grader: 'check.py", "  - fixtures: 'check.py"), "build: names repeat: ['fixtures']"),
+    ],
+    ids=["parent-dir", "absolute", "repeated-build-name"],
+)
+def test_parse_refuses_resources_outside_the_build_root_and_repeated_build_names(edit, message):
     with pytest.raises(ProposalFormatError, match=re.escape(message)):
         parse(AUTHORED.replace(*edit))
 

@@ -9,7 +9,7 @@ comes from its source tree):
     uv run iris --cluster=marin job run --no-wait --job-name taskforge-iris-machine-probe \
       --zone us-west4-a --sync-package marin-iris --cpu 1 --memory 2GB \
       -e HF_TOKEN probe-not-a-secret -e WANDB_API_KEY "" -- \
-      env PYTHONPATH=lib/shellbox/src python lib/taskforge/scripts/iris_machine_probe.py
+      env PYTHONPATH=lib/shellbox/src python lib/shellbox/benchmarks/iris_machine_probe.py
 
 Sandboxes are child jobs and inherit the probe job's zone, so the probe job itself is placed with
 ``job run --zone``: a sandbox-level zone constraint that disagrees with the parent's zone is

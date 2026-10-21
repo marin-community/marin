@@ -3,14 +3,11 @@
 
 """Live proposal runs against GLM-5.3's high pool on capabilities of the full catalog.
 
-``test_every_proposed_slot_parses_on_its_first_request`` runs ``CapabilitySource.propose`` with
+``test_every_proposed_slot_parses_on_its_first_request`` runs ``propose_tasks.propose_tasks`` with
 ``SLOTS`` slots on a host that runs every environment, once per capability in ``LIVE_CAPABILITIES``.
-It writes to ``<evidence_root>/proposal/<run name>/``:
-
-* the planning request and completions;
-* per slot, the request, the completions and the rendered ``.md``, or the raw replies of a failed slot;
-* ``summary.json``, with parse and repair counts, pairings, each slot's planned and written research
-  decision, wall time, and tokens per slot.
+``propose_tasks.write_outputs`` writes its files to ``<evidence_root>/proposal/<run name>/``, and
+the test adds ``live_summary.json`` there, with parse and repair counts, pairings, each slot's
+planned and written research decision, wall time, and tokens per slot.
 """
 
 import pytest
@@ -31,31 +28,21 @@ from pathlib import Path
 from taskforge.llm.client import Completion
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient
 from taskforge.llm.policy import LLMPolicy
-from taskforge.stage10_proposal.model import Environment, render
+from taskforge.stage10_proposal.model import Environment
 from taskforge.stage10_proposal.source import SlotFailure, SlotProposal
 
 from experiments.post_training.capability_driven_envs.catalog import load_capability_ideas
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER
-from experiments.post_training.capability_driven_envs.proposal_source import CapabilitySource
+from experiments.post_training.capability_driven_envs.propose_tasks import propose_tasks, write_outputs
 
 SLOTS = 4
 LIVE_CAPABILITIES = ("d01.algebra.linear-transformations", "d27.reporting.close_measurement")
+LIVE_SUMMARY_FILE = "live_summary.json"
 
 
 def unique_run_name(prefix: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"{prefix}-{stamp}-{os.environ.get('PYTEST_XDIST_WORKER', 'main')}-{uuid.uuid4().hex[:8]}"
-
-
-def completion_record(completion: Completion) -> dict[str, object]:
-    """Record ``completion`` without its attempts' raw stream events, which are bulky and repeat the content."""
-    return {
-        **{key: value for key, value in asdict(completion).items() if key != "attempts"},
-        "attempts": [
-            {"segment": a.segment, "outcome": a.outcome, "max_tokens": a.max_tokens, "http_status": a.http_status}
-            for a in completion.attempts
-        ],
-    }
 
 
 def tokens(completions: Sequence[Completion]) -> dict[str, int]:
@@ -64,10 +51,6 @@ def tokens(completions: Sequence[Completion]) -> dict[str, int]:
         "completion_tokens": sum(c.usage.completion_tokens for c in completions),
         "reasoning_tokens": sum(c.usage.reasoning_tokens for c in completions),
     }
-
-
-def write_json(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False, default=str) + "\n")
 
 
 @pytest.mark.live_glm
@@ -83,23 +66,21 @@ def test_every_proposed_slot_parses_on_its_first_request(
 
     async def go():
         async with GlmClient(live_endpoint, GLM_PROVIDER) as client:
-            return await CapabilitySource(client, policy, frozenset(Environment)).propose(idea, SLOTS)
+            return await propose_tasks(client, {capability_id: idea}, SLOTS, frozenset(Environment), policy)
 
     started = time.monotonic()
-    batch = asyncio.run(go())
+    proposed = asyncio.run(go())
     total_wall = time.monotonic() - started
+    write_outputs(out, proposed)
+    (capability,) = proposed
+    assert capability.failure is None, capability.failure
+    batch = capability.batch
+    assert batch is not None
     planned = {s["slot"]: s for s in json.loads(batch.planning[-1].content)["slots"]}
-    write_json(out / "plan.request.json", list(batch.planning_request))
-    write_json(out / "plan.completions.json", [completion_record(c) for c in batch.planning])
     slots = []
     for outcome in batch.slots:
-        name = f"slot-{outcome.slot:02d}"
-        if outcome.request:
-            write_json(out / f"{name}.request.json", list(outcome.request))
-        write_json(out / f"{name}.completions.json", [completion_record(c) for c in outcome.completions])
         entry: dict[str, object] = {"slot": outcome.slot, "calls": len(outcome.completions)}
         if isinstance(outcome, SlotProposal):
-            (out / f"{name}.md").write_text(render(outcome.proposal))
             header = outcome.proposal.header
             entry |= {
                 "parsed": True,
@@ -114,8 +95,6 @@ def test_every_proposed_slot_parses_on_its_first_request(
             }
         else:
             assert isinstance(outcome, SlotFailure)
-            for index, completion in enumerate(outcome.completions):
-                (out / f"{name}.failed-{index}.txt").write_text(completion.content)
             entry |= {"parsed": False, "error": outcome.error}
         entry |= {
             "wall_time": sum(c.wall_time for c in outcome.completions),
@@ -138,7 +117,7 @@ def test_every_proposed_slot_parses_on_its_first_request(
         "total_wall_time": total_wall,
         "slots": slots,
     }
-    write_json(out / "summary.json", summary)
+    (out / LIVE_SUMMARY_FILE).write_text(json.dumps(summary, indent=2, ensure_ascii=False, default=str) + "\n")
 
     proposed = [s for s in slots if s.get("planned_null") is not True]
     assert [s for s in proposed if not s["parsed"] or s["repair_error"] is not None] == []
