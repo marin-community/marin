@@ -24,7 +24,8 @@ taskcompendium.grader.verifyit_package. The solver never sees the grader or its 
 # How to build a task
 
 - Your shell runs in a Linux sandbox with no network. It has Python 3 with taskcompendium and verifyit, and the \
-usual command-line tools, but no jq: use Python for JSON. Use the shell to inspect and validate your files.
+usual command-line tools, but no jq: use Python for JSON. Use the shell to inspect and validate your files. A \
+command returns at most {shell_output_kib} KiB of output: send long output to a file, and read parts of it.
 - Write a build program and run it, for example `python3 build.py <task id> tasks/<task id>.json`. \
 /workspace/example_build.py is a complete example. /workspace/reference/verifyit_specs.md lists the graders that you \
 can use, and /workspace/reference/taskspec.schema.json is the TaskSpec JSON schema. The other tools take the path of \

@@ -191,6 +191,19 @@ async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
     assert result.report is not None and "empty budget" in result.report
 
 
+async def test_finish_refuses_once_while_most_of_the_budget_is_left():
+    script = (call("finish", report="too easy"), call("finish", report="too easy"))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [refusal] = [
+        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-1"
+    ]
+    assert "20 of 20 solver rollouts are left" in refusal["error"]
+    assert result.report == "too easy"
+
+
 async def test_submit_refuses_a_numeric_tolerance_that_accepts_the_next_values():
     # The reference is an integer, so a tolerance of 1 also accepts the reference plus or minus 1.
     loose = GRADER.model_copy(update={"parameters": {**GRADER.parameters, "tolerance_abs": 1.0}})
