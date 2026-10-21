@@ -539,15 +539,10 @@ class _ReplayModel:
 
 
 def _next_step(evidence: Evidence, gate: Gate) -> dict[str, str]:
-    """The next step for a version, from its pass rate so far: change a version above the band, finish one in it.
-
-    More rollouts of a version above the band seldom bring it into the band, so a harder version costs less.
-    """
+    """What a version whose pass rate is in the band so far still needs before ``submit``, as a nudge to finish it."""
     low, high = gate.solver_band
-    if evidence.solver_runs == 0 or evidence.solver_pass_rate < low:
+    if evidence.solver_runs == 0 or not low <= evidence.solver_pass_rate <= high:
         return {}
-    if evidence.solver_pass_rate > high:
-        return {"next": "This version is above the band so far: write a harder version to a new file."}
     needs = {
         "controls": "a correct control that passes and a wrong control that fails",
         "solver band": f"{gate.min_solver_runs} graded solver rollouts in the band",
@@ -575,7 +570,7 @@ def review_content(
     blind: BlindSolution,
 ) -> dict[str, Any]:
     """What the reviewer of ``submit`` reads: the public task, the grader, the evidence, the blind solution of the
-    task, and the accepted prompts.
+    task, and the accepted tasks with the start of each file, where a copied story or table shows.
 
     ``shared_failed_answers`` counts the failed answers that repeat, because a repeated wrong answer usually comes
     from one other reading of the task.
@@ -594,7 +589,7 @@ def review_content(
             "shared_failed_answers": {answer: count for answer, count in shared.most_common() if count > 1},
         },
         "adversary_runs": adversary_runs[:REVIEW_ANSWERS],
-        "accepted_tasks": [_public_task(other)["prompt"] for other in accepted],
+        "accepted_tasks": [_public_task(other) for other in accepted],
     }
 
 
