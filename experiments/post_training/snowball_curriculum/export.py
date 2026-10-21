@@ -10,7 +10,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -212,7 +212,11 @@ def derived_record(row: dict, change: DerivedDeployment) -> tuple[dict, dict]:
     grader = task.grader
     semantic_changes = []
     old_lock = None
-    if isinstance(grader, ScriptGrader | VerifyitGrader) and grader.environment is not None:
+    if (
+        isinstance(grader, ScriptGrader | VerifyitGrader)
+        and grader.environment is not None
+        and not grades_with_judge(grader)
+    ):
         lock = grader.environment.packages_lock
         if lock in change.packages_locks:
             if len(change.environment_provenance_sha256) != 64:
@@ -274,6 +278,7 @@ def _write_runtime_bundle(
     configuration: dict,
     source_uri: str,
     source_manifest_sha256: str,
+    output_filename: Literal["train.parquet", "validation.parquet"],
 ) -> dict:
     source_path = StoragePath(str(source))
     if not source_uri:
@@ -286,7 +291,7 @@ def _write_runtime_bundle(
     counts: Counter[str] = Counter()
     seen = set()
     with (
-        pq.ParquetWriter(output / "train.parquet", schema, compression="zstd") as writer,
+        pq.ParquetWriter(output / output_filename, schema, compression="zstd") as writer,
         (output / "deployment-contract-mapping.jsonl").open("w") as audit,
     ):
         for batch in parquet.iter_batches(batch_size=128):
@@ -315,6 +320,7 @@ def _write_runtime_bundle(
         "format": 1,
         "source_parquet_sha256": expected_sha256,
         "source_file": source.name,
+        "output_file": output_filename,
         "source_uri": source_uri,
         "source_artifact_manifest_sha256": source_manifest_sha256,
         "selected_rows": len(seen),
@@ -344,6 +350,7 @@ def export_pool(
     *,
     source_uri: str,
     source_manifest_sha256: str,
+    output_filename: Literal["train.parquet", "validation.parquet"] = "train.parquet",
 ) -> dict:
     """Create a new runtime artifact without editing or filtering the selected inventory."""
     return _write_runtime_bundle(
@@ -355,6 +362,7 @@ def export_pool(
         deployment.model_dump(mode="json"),
         source_uri,
         source_manifest_sha256,
+        output_filename,
     )
 
 
@@ -366,6 +374,7 @@ def derive_deployment(
     *,
     source_uri: str,
     source_manifest_sha256: str,
+    output_filename: Literal["train.parquet", "validation.parquet"] = "train.parquet",
 ) -> dict:
     """Version dependency/timeout changes while preserving source and logical task identities."""
     return _write_runtime_bundle(
@@ -377,6 +386,7 @@ def derive_deployment(
         change.model_dump(mode="json"),
         source_uri,
         source_manifest_sha256,
+        output_filename,
     )
 
 
@@ -389,6 +399,7 @@ def main() -> None:
     parser.add_argument("--source-manifest-sha256", required=True)
     parser.add_argument("--configuration", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output-filename", choices=("train.parquet", "validation.parquet"), default="train.parquet")
     args = parser.parse_args()
     if args.operation == "export":
         result = export_pool(
@@ -398,6 +409,7 @@ def main() -> None:
             Deployment.model_validate_json(args.configuration.read_text()),
             source_uri=args.source_uri,
             source_manifest_sha256=args.source_manifest_sha256,
+            output_filename=args.output_filename,
         )
     else:
         result = derive_deployment(
@@ -407,6 +419,7 @@ def main() -> None:
             DerivedDeployment.model_validate_json(args.configuration.read_text()),
             source_uri=args.source_uri,
             source_manifest_sha256=args.source_manifest_sha256,
+            output_filename=args.output_filename,
         )
     print(json.dumps(result, sort_keys=True))
 

@@ -31,7 +31,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.json_objects import unique_object
 
-from experiments.post_training.snowball_curriculum.bundle import file_sha256
+from experiments.post_training.snowball_curriculum.bundle import file_sha256, write_manifest
 from experiments.post_training.snowball_curriculum.export import Deployment, rollout_record
 from experiments.post_training.snowball_curriculum.native import native_closure_task
 from experiments.post_training.snowball_inventory_panel import FAMILY_COUNTS
@@ -144,7 +144,7 @@ def freeze_panel(
         raise ValueError("Frozen panel or training source differs from its declared SHA256")
     if output.exists():
         raise FileExistsError(output)
-    train = pq.read_table(training_pool, columns=IDENTITY_COLUMNS).to_pylist()
+    train = pq.read_table(training_pool, columns=list(IDENTITY_COLUMNS)).to_pylist()
     if len(train) != 100000:
         raise ValueError("Expected the complete 100000-task training pool")
     train_ids = {column: {row[column] for row in train} for column in IDENTITY_COLUMNS}
@@ -221,10 +221,7 @@ def freeze_panel(
     (output / "deployment-contract-mapping.jsonl").write_text(
         "".join(json.dumps(r, sort_keys=True) + "\n" for r in mappings)
     )
-    manifest = {
-        p.name: {"sha256": file_sha256(StoragePath(str(p))), "bytes": p.stat().st_size} for p in sorted(output.iterdir())
-    }
-    (output / "artifact-manifest.json").write_text(json.dumps({"files": manifest}, indent=2, sort_keys=True) + "\n")
+    write_manifest(StoragePath(str(output)))
     return report
 
 
