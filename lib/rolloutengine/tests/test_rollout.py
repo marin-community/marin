@@ -349,6 +349,19 @@ async def test_shell_rejects_nonobject_arguments_and_grades_repaired_file(argume
     }
 
 
+async def test_shell_harness_cuts_each_command_output_at_its_limit():
+    model = ReplayModel(
+        [shell_call("seq 1 1000; echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done"}]
+    )
+    harnesses = shell_harnesses(output_limit_bytes=100)
+    record = await engine(model, {"local": RecordingShellSimFactory()}, harnesses=harnesses).run_task(
+        rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
+    )
+    observation = json.loads(record.rollout.conversations[-1].messages[2]["content"])
+    assert (len(observation["stdout"]), observation["stdout_truncated"]) == (100, True)
+    assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
+
+
 async def test_declared_outputs_return_in_the_record_and_reach_the_grader():
     task = file_task(
         b"""test "$(cat /workspace/out/task.json)" = '{"id": 1}' && echo 1 || echo 0""",
