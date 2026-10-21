@@ -387,8 +387,19 @@ The nightly dashboard points at Marin's workflow.
 
 `marin-skyrl-cpu-nightly.yaml` runs the CPU CatCount learning, reversed-reward,
 and checkpoint/resume cases in the independently locked nested CPU environment.
-The `skyrl-wheel` unit lane covers the launcher, bundle, wheel and verifier
-boundary. The artifact smoke above covers the production train/export/resume
+The `skyrl-wheel` unit lane validates launcher configuration and lifecycle,
+runtime bundles, built-wheel contents, and verifier results. It discovers
+`test_*.py` files directly in `cloud/iris/tests` and `skyrl-gym/tests`; new tests
+in these directories need no workflow edit. These suites use `vendor/skyrl/uv.lock`
+without training extras. The pytest configuration in `vendor/skyrl/pyproject.toml`
+excludes the `docker` marker. Run them locally from `vendor/skyrl`:
+
+```bash
+uv run --isolated --frozen --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 \
+  pytest -q cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py
+```
+
+The artifact smoke above covers the production train/export/resume
 and downstream evaluation handoffs.
 
 Run CPU and GPU acceptance with the exact nested runtime, each independently
