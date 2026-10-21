@@ -1,7 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""JAX entry points for the vendored cudnn-frontend fused MXFP8 MoE grouped kernels (SM100 only).
+"""JAX entry points for the cudnn-frontend fused MXFP8 MoE grouped kernels (SM100 only).
+
+The kernels come from the nvidia-cudnn-frontend package (``cudnn.gemm.cutedsl.grouped``). Two are
+subclassed in :mod:`levanter.grug._moe.mxfp8.kernels`: the dSwiGLU kernel writes its routing-weight
+gradient as per-tile partials instead of with float32 atomics, so it is deterministic, and the
+SwiGLU kernel gains the forward-only variant.
 
 Four calls cover one gated expert MLP, forward and backward:
 
@@ -47,18 +52,14 @@ import cutlass.cute as cute
 import cutlass.jax as cjax
 import jax
 import jax.numpy as jnp
+from cudnn.gemm.cutedsl.grouped.moe_utils import MoEWeightMode, WGradInputOrder, WgradSfTensormapConstructor
+from cudnn.gemm.cutedsl.grouped.quant.grouped_gemm_quant import BlockScaledMoEGroupedGemmQuantKernel
+from cudnn.gemm.cutedsl.grouped.wgrad.moe_blockscaled_grouped_gemm_wgrad import BlockScaledMoEGroupedGemmWgradKernel
 from quack.cute_dsl_utils import get_max_active_clusters
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call, gpu_compute_capability
-from levanter.grug._moe.mxfp8.kernels.grouped_gemm_dswiglu_quant import (
-    BlockScaledContiguousGroupedGemmKernel as DSwigluKernel,
-)
-from levanter.grug._moe.mxfp8.kernels.grouped_gemm_quant import BlockScaledMoEGroupedGemmQuantKernel
-from levanter.grug._moe.mxfp8.kernels.grouped_gemm_swiglu_quant import (
-    BlockScaledContiguousGroupedGemmKernel as SwigluKernel,
-)
-from levanter.grug._moe.mxfp8.kernels.moe_blockscaled_grouped_gemm_wgrad import BlockScaledMoEGroupedGemmWgradKernel
-from levanter.grug._moe.mxfp8.kernels.moe_utils import MoEWeightMode, WGradInputOrder
+from levanter.grug._moe.mxfp8.kernels.dswiglu_deterministic import DSwigluKernel
+from levanter.grug._moe.mxfp8.kernels.swiglu_forward_only import SwigluKernel
 from levanter.grug._moe.mxfp8.layout import _GATE_UP_BLOCK, _SF_TILE, GROUP_PAD
 from levanter.grug._moe.mxfp8.quantize import MXFP8_BLOCK_SIZE
 
@@ -74,9 +75,9 @@ _WGRAD_TILING = ((256, 256), (2, 2))
 # Its rounding differs, so dc13 bytes differ from the packed epilogue's.
 _DSWIGLU_VECTORIZED_F32 = False
 
-# The wgrad kernel builds two online TMA descriptors (SFA, SFB) per expert in this workspace.
-_WGRAD_DESCRIPTORS_PER_EXPERT = 2
-_TMA_DESCRIPTOR_BYTES = 128
+# The wgrad operands: both token-major 2D tensors, one dense (E, K, N) output.
+_WGRAD_INPUT_ORDER = WGradInputOrder.Tensor2D
+_WGRAD_WEIGHT_MODE = MoEWeightMode.DENSE
 # The dense, statically scheduled quant GEMM ignores its workspace but still takes a pointer.
 _GEMM_WORKSPACE_BYTES = 16
 
@@ -592,8 +593,8 @@ def _wgrad_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, max_active_
             cluster_shape_mn=cluster_shape_mn,
             accumulate_on_output=False,
             expert_cnt=expert_count,
-            weight_mode=MoEWeightMode.DENSE,
-            input_order=WGradInputOrder.Tensor2D,
+            weight_mode=_WGRAD_WEIGHT_MODE,
+            input_order=_WGRAD_INPUT_ORDER,
         )
         kernel(mA, mB, mSFA, mSFB, mOut, mOffs, mWorkspace, max_active_clusters, stream)
 
@@ -633,7 +634,9 @@ def mxfp8_fused_wgrad(x_q, x_sf, g_q, g_sf, offs):
         cluster_shape_mn=cluster_shape_mn,
         max_active_clusters=_max_active_clusters(cluster_shape_mn),
     )
-    workspace_bytes = _WGRAD_DESCRIPTORS_PER_EXPERT * experts * _TMA_DESCRIPTOR_BYTES
+    # The kernel's helper launch writes one online TMA descriptor per expert for each of A, B, SFA
+    # and SFB here: the size BlockScaledMoEGroupedGemmWgradKernel.get_workspace_bytes reports.
+    workspace_bytes = WgradSfTensormapConstructor.get_workspace_size(_WGRAD_INPUT_ORDER, _WGRAD_WEIGHT_MODE, experts)
     call = cutlass_call(
         launcher,
         output_shape_dtype=(
