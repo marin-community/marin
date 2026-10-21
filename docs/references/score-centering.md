@@ -115,7 +115,7 @@ microbatch samples across ranks, rather than pooling tokens.
 
 ## Evidence and limits
 
-The [port validation record](../../config/skyrl-migration/score-centering-port.json)
+The [port validation record](https://github.com/yonromai/marin/blob/8fcdf1aabf17ebff51785cee03f6ab5da149f827/config/skyrl-migration/score-centering-port.json)
 records fresh CPU, packaging and installed-code checks plus a two-update Qwen
 SC smoke. The smoke uses uniform advantages and measures runtime acceptance.
 
