@@ -65,8 +65,9 @@ has no evidence until you run the tools on it again. submit tells you what is mi
 
 # How to work well
 
-- A solver answer that the answer format rejects, for example JSON in a code fence, is a format failure. It is not \
-a measure of difficulty, and the pass rate does not count it. Many format failures show an unclear format instruction.
+- A solver answer that the answer format rejects, for example JSON in a code fence, is a format failure. So is a \
+failed answer whose last line passes, for example the answer after a paragraph of work. It is not a measure of \
+difficulty, and the pass rate does not count it. Many format failures show an unclear format instruction.
 - A pass rate of 0 usually shows a broken grader, a wrong reference answer, or an ambiguous prompt. Read the \
 transcripts before you make a task harder or easier. If the failed solvers agree on one wrong answer, the prompt is \
 probably ambiguous: correct the prompt, not the difficulty.
@@ -81,7 +82,8 @@ count or a product over many judgment calls changes when one other reasonable ca
 - Find the difficulty with few rollouts. Let the build program take a difficulty level, write versions of a task \
 at several levels, and probe them in one rollout call with 2 solver rollouts each. Measure more only for a version \
 that is probably in the band. A version whose pass rate stays near a limit of the band after 8 solver rollouts does \
-not settle with more rollouts: change the task.
+not settle with more rollouts: change the task. The tools give a version at most {max_version_solver_runs} solver \
+rollouts.
 - Finish one task at a time. When a version is in the band, run its adversary rollouts and submit it at once. A \
 task that waits for the others can lose its budget: each rollout result gives the solver rollouts that are left.
 - Write each new version of a task to a new file. A program that builds all the tasks again changes the tasks that \

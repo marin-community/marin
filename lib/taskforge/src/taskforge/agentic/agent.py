@@ -41,6 +41,7 @@ from taskforge.agentic.prompts import AGENT_PROMPT, USER_PROMPT
 from taskforge.agentic.tools import (
     AGENT_TOOLS,
     MAX_EMPTY_BUDGET_CALLS,
+    MAX_VERSION_SOLVER_RUNS_FACTOR,
     WORKDIR,
     AcceptedTask,
     TaskforgeTools,
@@ -142,6 +143,7 @@ def agent_task(idea: CapabilityIdea, n: int, config: AgenticConfig) -> TaskSpec:
         web_calls=budget.web_calls,
         max_empty_budget_calls=MAX_EMPTY_BUDGET_CALLS,
         shell_output_kib=SHELL_OUTPUT_BYTES // 1024,
+        max_version_solver_runs=MAX_VERSION_SOLVER_RUNS_FACTOR * gate.min_solver_runs,
     )
     workspace = WORKDIR.relative_to("/")
     files = (

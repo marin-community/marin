@@ -19,7 +19,8 @@ class Gate:
     solver_band: tuple[float, float]
     """The lowest and the highest permitted solver pass rate: a task outside it is broken, too hard or too easy."""
     max_format_failure_rate: float
-    """The highest permitted share of solver attempts whose answer the answer format rejects."""
+    """The highest permitted share of solver attempts that are format failures: the answer format rejects the
+    answer, or a failed answer passes with its last line alone."""
     min_adversary_runs: int
     """Adversary rollouts that a task needs. The review decides whether an adversary pass used a shortcut."""
 
@@ -31,7 +32,8 @@ class Evidence:
     controls: list[tuple[bool, bool]] = field(default_factory=list)
     """For each graded control answer: whether it must pass, and whether it passed."""
     solver_runs: int = 0
-    """Solver rollouts with a graded answer. An answer that the answer format rejects is a format failure instead."""
+    """Solver rollouts with a graded answer. A format failure, for example an answer that the answer format
+    rejects, is not one."""
     solver_passes: int = 0
     solver_format_failures: int = 0
     adversary_runs: int = 0

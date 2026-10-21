@@ -120,6 +120,10 @@ MAX_EMPTY_BUDGET_CALLS = 3
 EARLY_FINISH_BUDGET_SHARE = 0.5
 """``finish`` refuses once when fewer than n tasks are accepted and more than this share of the solver rollouts are
 left: an agent can stop after a few too-easy versions, when a harder version would get into the band."""
+MAX_VERSION_SOLVER_RUNS_FACTOR = 2
+"""A version gets at most this many times the solver rollouts that the gate needs. Its pass rate is then known well
+enough, and more rollouts do not move a version near a limit of the band: without a cap, an agent spent half of a
+budget on one such version."""
 MIN_PATTERN_LISTS = 4
 """Option lists of an idea's tasks that ``submit`` pools before it refuses a place that all correct options share:
 with fewer, a shared place often comes by chance."""
@@ -134,6 +138,8 @@ MAX_GUESS_PASSES = 2
 stands out. Random guesses among four options pass three of four times in 5% of tasks."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
+MARKUP = re.compile(r"[*`]")
+"""Markdown emphasis and code marks, which a solver often puts around its answer."""
 
 
 class ToolError(Exception):
@@ -405,6 +411,8 @@ class ToolSession:
             raise ToolError("Give one or more different paths")
         self._check_waves(n * len(paths))
         tasks = [await self._load(path) for path in paths]
+        if role == "solver":
+            self._check_version_cap(paths, tasks, n)
         specs = [_solver_spec(_adversary_task(task) if role == "adversary" else task, self.config) for task in tasks]
         for path, spec in zip(paths, specs, strict=True):
             try:
@@ -432,6 +440,18 @@ class ToolSession:
                 f"one tool call has {turn:g} s. Split the call."
             )
 
+    def _check_version_cap(self, paths: list[str], tasks: list[TaskSpec], n: int) -> None:
+        cap = MAX_VERSION_SOLVER_RUNS_FACTOR * self.config.gate.min_solver_runs
+        for path, task in zip(paths, tasks, strict=True):
+            evidence = self.tools.evidence[_task_digest(task)]
+            done = evidence.solver_runs + evidence.solver_format_failures
+            if done + n > cap:
+                raise ToolError(
+                    f"A version gets at most {cap} solver rollouts, and {path} has {done}, at pass rate "
+                    f"{evidence.solver_pass_rate:.2f}. More rollouts do not move a version near a limit of the band: "
+                    "submit it if it is in the band, or change the task."
+                )
+
     async def _rollouts(
         self, task: TaskSpec, spec: TaskRolloutSpec, n: int, role: Literal["solver", "adversary"]
     ) -> dict[str, Any]:
@@ -454,7 +474,9 @@ class ToolSession:
                 continue
             passed = _passed(grade)
             answer = _final_answer(rollout)
-            format_failure = grade.status == Outcome.SUBMISSION_FAILURE
+            format_failure = grade.status == Outcome.SUBMISSION_FAILURE or (
+                role == "solver" and not passed and await self._passes_as_last_line(spec, answer)
+            )
             answers.append({"passed": passed, "format_failure": format_failure, "answer": _clip(answer, limit=200)})
             if role == "solver" and format_failure:
                 evidence.solver_format_failures += 1
@@ -480,6 +502,21 @@ class ToolSession:
             "evidence": asdict(evidence),
             **_next_step(evidence, self.config.gate),
         }
+
+    async def _passes_as_last_line(self, spec: TaskRolloutSpec, answer: str) -> bool:
+        """Whether the last line of a failed answer, with no markup, passes. Such an answer is correct in a form
+        that the grader rejects, so it is a format failure: it tells nothing about the skill, as when the answer
+        format rejects an answer."""
+        lines = [line.strip() for line in answer.strip().splitlines() if line.strip()]
+        last = MARKUP.sub("", lines[-1]).strip() if lines else ""
+        if not last or last == answer.strip():
+            return False
+        try:
+            result = await self.tools.solver_engine.run_task(spec, _ReplayModel(last))
+        except RolloutInterrupted as error:
+            logger.warning("The grade of a last line was interrupted, so the answer stays failed: %s", error)
+            return False
+        return _passed(result.grade)
 
     async def submit(self, path: str) -> ToolCallResult:
         task = await self._load(path)
