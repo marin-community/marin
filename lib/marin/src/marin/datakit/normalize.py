@@ -215,7 +215,7 @@ def _discover_files(
     """Walk *input_path* recursively and return ``{data file: byte size}``, ordered by path.
 
     Only files with matching extensions are included; dotfiles and hidden
-    directories are skipped. Sizes come from the walk's own ``detail=True``
+    directories are pruned before traversal. Sizes come from the walk's own ``detail=True``
     listing, so sizing the input for sharding costs no per-file stat call. When
     the ``FERRY_TEST_MAX_FILES`` env var is set to a positive integer, the
     sorted list is truncated to that many entries — a smoke/test-only knob that
@@ -230,11 +230,10 @@ def _discover_files(
         return f"{protocol}://{p}" if protocol else p
 
     discovered: list[tuple[str, int]] = []
-    for root, _dirs, files in fs.walk(resolved, detail=True):
-        rel_root = os.path.relpath(root, resolved)
-        parts = [] if rel_root == "." else rel_root.split(os.sep)
-        if any(p.startswith(".") for p in parts):
-            continue
+    for root, dirs, files in fs.walk(resolved, detail=True):
+        for dirname in list(dirs):
+            if dirname.startswith("."):
+                del dirs[dirname]
         for fname, info in files.items():
             if fname.startswith("."):
                 continue
