@@ -1,0 +1,18 @@
+n_concurrent_trials: 1
+n_attempts: 1
+retry:
+  max_retries: 0
+environment:
+  type: daytona
+agents:
+- name: oracle
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+datasets:
+- name: swebench-verified
+  version: '1.0'
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/2993c283f2111467b8d072485a7ca336be6f4473/registry.json
+  task_names:
+  - scikit-learn__scikit-learn-25232
+verifier:
+  override_timeout_sec: 300
