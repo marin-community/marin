@@ -25,7 +25,7 @@ from shellbox.machine import Command, ExitReason, Machine, MachineFactory, Machi
 from verifyit.spec import Spec, render_spec
 
 from taskcompendium.grading import answer_submission, parse_grade_result
-from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, GradingPhase, GradingProgress, Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     ActionSubmission,
@@ -111,13 +111,22 @@ def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, .
 
 
 async def _run_checked(machine: Machine, command: Command, failure: str) -> None:
+    await _run_step(machine, command, failure, timed_out=GradingFailure.TIMEOUT, failed=GradingFailure.EXECUTION)
+
+
+async def _run_staging(machine: Machine, command: Command, failure: str) -> None:
+    """Run one of the runtime's own preparation commands, failing the grading as ``STAGING`` when it fails."""
+    await _run_step(machine, command, failure, timed_out=GradingFailure.STAGING, failed=GradingFailure.STAGING)
+
+
+async def _run_step(
+    machine: Machine, command: Command, failure: str, *, timed_out: GradingFailure, failed: GradingFailure
+) -> None:
     result = await machine.run(command)
     if result.reason == ExitReason.TIMED_OUT:
-        raise _StepFailed(_infra_error(f"{failure}: timed out", GradingFailure.TIMEOUT, _diagnostics(result)))
+        raise _StepFailed(_infra_error(f"{failure}: timed out", timed_out, _diagnostics(result)))
     if result.exit_code != 0:
-        raise _StepFailed(
-            _infra_error(f"{failure}: exit={result.exit_code}", GradingFailure.EXECUTION, _diagnostics(result))
-        )
+        raise _StepFailed(_infra_error(f"{failure}: exit={result.exit_code}", failed, _diagnostics(result)))
 
 
 async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float) -> bool:
@@ -170,8 +179,9 @@ async def _download_artifact(machine: Machine, artifact: VerifierArtifact, targe
     remote_archive = f"{remote_directory}/archive.tar"
     primary_error = None
     try:
-        # The agent can write this file, but the root-owned parent prevents pathname replacement.
-        await _run_checked(
+        # The agent can write this file, but the root-owned parent prevents pathname replacement. Making
+        # the directory is the runtime's own preparation; everything else here reads what the candidate wrote.
+        await _run_staging(
             machine,
             Command(
                 (
@@ -314,12 +324,15 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
     return _infra_error("Grader did not write a reward file", GradingFailure.MISSING_REWARD, diagnostics)
 
 
+async def _prepare_reward_files(machine: Machine, reward: FileReward, timeout: float) -> None:
+    """Make the reward files' directories and remove any earlier reward before the grader runs."""
+    paths = tuple(file.path for file in reward.files)
+    directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
+    for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
+        await _run_staging(machine, Command(argv, timeout=timeout), "Cannot prepare reward files")
+
+
 async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float) -> GradeResult:
-    if isinstance(grader.reward, FileReward):
-        paths = tuple(file.path for file in grader.reward.files)
-        directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
-        for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
-            await _run_checked(machine, Command(argv, timeout=timeout), "Cannot prepare reward files")
     result = await machine.run(
         Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
     )
@@ -441,13 +454,18 @@ async def grade_in_sandbox(
     *,
     task_machine: Machine | None = None,
     timeout: float | None = None,
+    progress: GradingProgress | None = None,
 ) -> GradeResult:
     """Grade with a verifyit grader that has an environment, or with a script grader.
 
     The grading machine comes from ``factory`` with ``machine_spec``, applying the environment's
     working directory and variables. ``task_machine`` is the agent's
     machine; graders that collect inputs or copy artifacts require it. Machine failures propagate.
+    ``progress`` exposes the current phase to a caller whose deadline covers grading preparation.
     """
+    if progress is None:
+        progress = GradingProgress()
+    progress.phase = GradingPhase.STAGING
     grading = _sandbox_grading(task, task_machine, timeout)
     validate_machine_spec(grading.environment, factory, machine_spec)
     answer_file = None if grading.spec is None else verifyit_answer_file(grading.spec)
@@ -469,7 +487,15 @@ async def grade_in_sandbox(
     ):
         return GradeResult(Outcome.GRADED, 0.0, "Missing submission")
     return await _grade_staged(
-        task, attempt, grading, submissions, factory, machine_spec, task_machine, dict(os.environ)
+        task,
+        attempt,
+        grading,
+        submissions,
+        factory,
+        machine_spec,
+        task_machine,
+        dict(os.environ),
+        progress,
     )
 
 
@@ -493,7 +519,9 @@ async def grade_empty_in_sandbox(
         answer_file = verifyit_answer_file(grading.spec)
     attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))))
     submissions = [] if answer_file is None else [StagedFile(answer_file, b"")]
-    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, None, dict(os.environ))
+    return await _grade_staged(
+        task, attempt, grading, submissions, factory, machine_spec, None, dict(os.environ), GradingProgress()
+    )
 
 
 async def _grade_staged(
@@ -505,10 +533,14 @@ async def _grade_staged(
     machine_spec: MachineSpec,
     task_machine: Machine | None,
     host_environment: Mapping[str, str],
+    progress: GradingProgress,
 ) -> GradeResult:
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
     files = _grading_files(task, attempt, grading, submissions)
     try:
+        # The collect commands are the task author's, and the artifacts are what the candidate wrote, so a
+        # deadline that expires while either runs is the task's, like one in the grader's own command.
+        progress.phase = GradingPhase.GRADER
         for command in grading.collect:
             assert task_machine is not None
             await _run_checked(
@@ -530,6 +562,7 @@ async def _grade_staged(
                 local = root / f"artifact-{index}"
                 if await _download_artifact(task_machine, artifact, local, grading.limit):
                     downloaded.append((local, artifact.target))
+            progress.phase = GradingPhase.STAGING
             archive_path = root / "grading.tar"
             write_archive(archive_path, files, downloaded)
             async with asyncio.timeout(machine_spec.startup_timeout):
@@ -553,6 +586,7 @@ async def _grade_staged(
                     grading.grader,
                     grading.limit,
                     user=setup_user(factory.backend),
+                    progress=progress,
                 )
             finally:
                 await machine.close()
@@ -572,24 +606,29 @@ async def _grade_on(
     timeout: float,
     *,
     user: str | None,
+    progress: GradingProgress,
 ) -> GradeResult:
     await machine.upload(archive_path, STAGING_ARCHIVE)
-    await _run_checked(
+    await _run_staging(
         machine,
         Command(("tar", "-xf", STAGING_ARCHIVE, "-C", "/"), cwd="/", timeout=timeout, user=user),
         "Could not unpack grading inputs",
     )
     # The archive holds references and tests; protecting /tests does not protect a copy in /tmp.
-    await _run_checked(
+    await _run_staging(
         machine,
         Command(("rm", "-f", STAGING_ARCHIVE), cwd="/", timeout=timeout, user=user),
         "Could not remove the grading archive",
     )
-    await _run_checked(
+    await _run_staging(
         machine,
         Command(("mkdir", "-p", workspace), cwd="/", timeout=timeout),
         "Could not initialize the grading workspace",
     )
+    if isinstance(grader, ScriptGrader) and isinstance(grader.reward, FileReward):
+        await _prepare_reward_files(machine, grader.reward, timeout)
+    # The environment's setup commands are the task author's, like the grader's own command.
+    progress.phase = GradingPhase.GRADER
     for setup in environment.setup_commands:
         await _run_checked(
             machine,

@@ -17,11 +17,26 @@ class Outcome(StrEnum):
 
 
 class GradingFailure(StrEnum):
+    """Why a grading ended as ``Outcome.INFRA_ERROR``; ``STAGING`` identifies verifier preparation failures."""
+
     TIMEOUT = "timeout"
     MISSING_REWARD = "missing_reward"
     EMPTY_REWARD = "empty_reward"
     INVALID_REWARD = "invalid_reward"
     EXECUTION = "execution"
+    STAGING = "staging"
+
+
+class GradingPhase(StrEnum):
+    STAGING = "staging"
+    GRADER = "grader"
+
+
+@dataclass
+class GradingProgress:
+    """Current phase used to classify an expired verifier deadline."""
+
+    phase: GradingPhase = GradingPhase.GRADER
 
 
 @dataclass(frozen=True)

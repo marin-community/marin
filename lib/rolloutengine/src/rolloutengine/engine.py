@@ -11,7 +11,7 @@ from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
-from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
+from taskcompendium.grading_result import GradeResult, GradingFailure, GradingPhase, GradingProgress, Outcome
 from taskcompendium.runtime.output_capture import captured_output_files
 
 from rolloutengine.cleanup import _Cleanup
@@ -53,6 +53,22 @@ async def _captured_outputs(spec: TaskRolloutSpec, machine: Machine | None) -> d
         timeout=spec.limits.verifier_timeout,
         limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     )
+
+
+def _expired_verifier_grade(progress: GradingProgress) -> GradeResult:
+    """The grade of an attempt whose verifier deadline expired.
+
+    The deadline covers the verifier machine's preparation as well as the grader's command; which
+    of the two ran out of time decides whether the host or the grader is reported.
+    """
+    if progress.phase is GradingPhase.STAGING:
+        return GradeResult(
+            Outcome.INFRA_ERROR,
+            None,
+            "Verifier deadline expired while preparing the verifier machine",
+            failure=GradingFailure.STAGING,
+        )
+    return GradeResult(Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT)
 
 
 @dataclass
@@ -199,10 +215,14 @@ class RolloutEngine:
         spec, recorder = attempt.spec, attempt.recorder
         messages = recorder.graded_messages()
         assert messages is not None
+        # Capturing the agent's output files is the runtime's work, like preparing the verifier machine;
+        # the grading that follows reports its own phases.
+        progress = GradingProgress(GradingPhase.STAGING)
         started = time.monotonic()
         try:
             async with asyncio.timeout(spec.limits.verifier_timeout):
                 attempt.outputs = await _captured_outputs(spec, machine)
+                progress.phase = GradingPhase.GRADER
                 grade = await _grade_rollout(
                     spec,
                     messages,
@@ -212,11 +232,10 @@ class RolloutEngine:
                     attempt.cleanup,
                     resources,
                     stop_reason=recorder.stop_reason,
+                    progress=progress,
                 )
         except TimeoutError as error:
-            attempt.grade = GradeResult(
-                Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
-            )
+            attempt.grade = _expired_verifier_grade(progress)
             raise _Interrupted(RolloutOperation.GRADE) from error
         except Exception as error:
             raise _Interrupted(RolloutOperation.GRADE) from error

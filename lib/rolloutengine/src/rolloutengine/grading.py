@@ -12,7 +12,7 @@ from typing import Any
 from shellbox.machine import Machine, MachineFactory
 from taskcompendium.chat import chat_conversation
 from taskcompendium.grading import grade_answer, grade_remote_judge_answer
-from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.grading_result import GradeResult, GradingProgress, Outcome
 from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
@@ -61,10 +61,12 @@ async def _grade_rollout(
     resources: AsyncExitStack,
     *,
     stop_reason: str,
+    progress: GradingProgress,
 ) -> GradeResult:
     """Grade in process, through the judge service, or in a fresh verifier machine that the attempt owns.
 
-    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended.
+    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended;
+    ``progress`` follows the sandbox path.
     """
     task = spec.task
     grader = task.grader
@@ -87,4 +89,5 @@ async def _grade_rollout(
         _machine_spec(grader.environment, selection),
         task_machine=machine,
         timeout=spec.limits.verifier_timeout,
+        progress=progress,
     )
