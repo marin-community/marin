@@ -535,7 +535,7 @@ def _custom_backward_v_block_size(
         return gb10_tuned
     if w.shape[1] >= _LARGE_VOCAB_THRESHOLD and "amd instinct" in _device_kind():
         # Each vocab block adds one full pass over the f32 [B, H] input-gradient accumulator, so the backward
-        # takes fewer, larger blocks than the forward, whose autotuned block is 1024 on MI350X.
+        # takes fewer, larger blocks than the forward, whose autotuned block is 1024 on MI350X and MI355X.
         forward_v_block = block_sizes.v_block_size if block_sizes is not None else 0
         return max(forward_v_block, _AMD_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB)
     if block_sizes is not None:
