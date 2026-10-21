@@ -536,7 +536,7 @@ trajectory_runner:
   command_timeout: 120
   cleanup_timeout: 30
   shutdown_timeout: 45
-  max_concurrent_tasks: 32
+  max_concurrent_tasks: 1024
   # One worker pool executes all task families on the trainer's node.
   rollout_workers:
     num_workers: 4
