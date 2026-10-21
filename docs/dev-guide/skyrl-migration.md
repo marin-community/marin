@@ -26,6 +26,26 @@ Megatron for both Qwen and Snowball. The Snowball recipes follow
 including separate reference nodes, recomputation and optimizer offload.
 The obsolete FSDP profile and recipe fields are removed.
 
+## Grug checkpoint numerics
+
+A Grug checkpoint must explicitly state `qk_mult`, `sliding_window`, its maximum
+sequence length (`max_position_embeddings` or `max_seq_len`) and experts per
+token (`num_experts_per_tok` or `num_experts_per_token`). Missing values fail
+loading because trainer and sampler defaults can differ. RoPE theta resolves
+from `rope_theta`, then `rope_parameters`, then `rope`, matching the sampler;
+when all are absent, both use 10000.
+
+The Grug nightly gate serves a tiny checkpoint, captures expert routes and
+checks sampler/trainer log probabilities at each position predicting a response
+token. Earlier prompt positions route natively. It also compares replayed and
+native experts and checks that correction weights scale the worker's policy
+loss and gradient norm. The fixtures and gate live under
+`vendor/skyrl/skyrl-train/tests/gpu/`; the nightly runner invokes
+`test_grug_sampler_trainer.py`. CPU configuration checks do not replace the
+four-Hopper qualification of the frozen Megatron/vLLM runtime.
+
+## Ray network allocation
+
 SkyRL requests named Ray ports from Iris. Worker-backed tasks use the scheduler's
 allocations; Kubernetes tasks resolve Iris's zero placeholders through the kernel,
 as Iris's JAX launcher does. This lets concurrent jobs share a GPU host without

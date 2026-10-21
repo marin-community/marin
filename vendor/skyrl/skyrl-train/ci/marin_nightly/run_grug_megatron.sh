@@ -15,6 +15,7 @@ cd "$REPOSITORY_ROOT"
 JUNIT_XML="$REPOSITORY_ROOT/grug-megatron-junit.xml"
 test_targets=(
   skyrl-train/tests/gpu/test_grug_megatron.py
+  skyrl-train/tests/gpu/test_grug_sampler_trainer.py
   skyrl-train/tests/gpu/test_grug_levanter_parity.py
   skyrl-train/tests/gpu/test_megatron_worker.py::test_megatron_flash_attention_cp2_forward_backward
 )
