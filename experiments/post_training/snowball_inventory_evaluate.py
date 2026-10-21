@@ -12,6 +12,7 @@ original panel and pass the derived artifact's URI and hash to this normal main.
 import hashlib
 import json
 import math
+import os
 import subprocess
 from collections import Counter
 from dataclasses import asdict, dataclass, fields, replace
@@ -184,12 +185,19 @@ def summarize_panel(tasks: list[PanelTask], outcomes: list[EvaluationOutcome]) -
     }
 
 
-def runtime_operation(action: str, request: dict) -> dict:
+def runtime_operation(
+    action: str, request: dict, *, worker_module: str = WORKER_MODULE, timeout: float = 30 * 60
+) -> dict:
     """Run optional runtime code in its frozen dependency environment."""
     with TemporaryDirectory(prefix="snowball-evaluation-") as directory:
         source = Path(directory) / "request.json"
         result = Path(directory) / "result.json"
         source.write_text(json.dumps(request))
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"}
+        }
         subprocess.run(
             [
                 "uv",
@@ -200,7 +208,7 @@ def runtime_operation(action: str, request: dict) -> dict:
                 "--no-dev",
                 "python",
                 "-m",
-                WORKER_MODULE,
+                worker_module,
                 action,
                 "--request",
                 str(source),
@@ -209,7 +217,8 @@ def runtime_operation(action: str, request: dict) -> dict:
             ],
             cwd=Path(__file__).resolve().parents[2],
             check=True,
-            timeout=30 * 60,
+            timeout=timeout,
+            env=environment,
         )
         return json.loads(result.read_text())
 
