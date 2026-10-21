@@ -26,6 +26,7 @@ import numpy as np
 
 from levanter.grug._moe.common import _interleave_gate_up
 from levanter.grug._moe.quack_mxfp8 import (
+    GemmSchedule,
     expert_mlp_mxfp8_wgrads,
     mxfp8_token_grouped_gemm,
     quantize_token_blocks,
@@ -123,7 +124,7 @@ def main() -> None:
         tile_mn, cluster_mnk = config
 
         def run(qx, qd, qa, qdy):
-            kw = dict(out_dtype=jnp.bfloat16, tile_mn=tile_mn, cluster_mnk=cluster_mnk)
+            kw = dict(out_dtype=jnp.bfloat16, schedule=GemmSchedule(tile_mn=tile_mn, cluster_mnk=cluster_mnk))
             return mxfp8_token_grouped_gemm(qx, qd, cu, **kw), mxfp8_token_grouped_gemm(qa, qdy, cu, **kw)
 
         return run

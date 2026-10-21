@@ -74,6 +74,7 @@ from experiments.grug.fast_track.key_offset import (
     shifted_channels,
 )
 from experiments.grug.fast_track.qb_balancing import qb_beta_hist
+from experiments.grug.fast_track.quack_schedules import QuackA2aPersistence, QuackGemmTable
 from experiments.grug.fast_track.router_metrics import (
     local_routing_stats,
     reduce_router_stats,
@@ -1021,6 +1022,12 @@ class GrugModelConfig:
     mxfp8_expert_wgrad: bool = False
     """With MXFP8 experts (``fp8_recipe``), run the routed experts' weight-gradient GEMMs block-scaled too (operands
     quantized along the token axis per expert) instead of bf16 (``ExpertMxfp8.ALL``)."""
+    quack_gemm_table: QuackGemmTable = QuackGemmTable.DEFAULT
+    """Tile/cluster schedule table of the QuACK MXFP8 GEMMs (``quack_schedules``). Same math."""
+    quack_a2a_persistence: QuackA2aPersistence = QuackA2aPersistence.STATIC
+    """Persistence of the QuACK MXFP8 GEMMs that overlap the ragged all-to-all (``quack_schedules``). Same math."""
+    quack_a2a_sm_reserve: int = 0
+    """``quack_a2a_persistence=reserve``: SMs those GEMMs leave to the all-to-all."""
     moe_serial_pair: bool = False  # ragged experts: neuron halves in series, y1 + mlp_b(x + y1)
     """Sequential local-expert chunks of the ``ragged_all_to_all`` backend (each a dispatch, expert MLP and
     return); fewer chunks mean fewer, larger collectives at more transport-buffer memory."""
