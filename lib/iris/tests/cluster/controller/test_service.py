@@ -1414,13 +1414,13 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         assert len(resp.running_buckets) == 1
         bucket = resp.running_buckets[0]
         assert bucket.job_id == job_id.to_wire()
-        assert bucket.user_id == email
+        assert bucket.user_id == "alice"
         assert bucket.worker_id == "w1"
         assert bucket.count == 1
-        # The email has no explicit user_budgets row but has an active task. The
-        # scheduler state must apply UserBudgetDefaults to that principal.
-        alice_budget = next((b for b in resp.user_budgets if b.user_id == email), None)
+        # An active owner without a configured budget gets the default limit.
+        alice_budget = next((b for b in resp.user_budgets if b.user_id == "alice"), None)
         assert alice_budget is not None
+        assert all(b.user_id != email for b in resp.user_budgets)
         assert alice_budget.budget_spent > 0
         assert alice_budget.budget_limit == UserBudgetDefaults().budget_limit
     finally:
