@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.models import VerifyitGrader
+from taskcompendium.models import TextMessage, VerifyitGrader
 
 from taskforge.agentic import example_build
 from taskforge.agentic.agent import generate_tasks
@@ -29,19 +29,18 @@ from taskforge.llm.policy import LLMPolicy, Message
 TASK_ID = "ledger--00"
 TASK = f"tasks/{TASK_ID}.json"
 TASK_JSON = example_build.task_spec(TASK_ID).model_dump_json()
-EXPECTED_ANSWER = example_build.task_spec(TASK_ID).grader.parameters["expected"]
+GRADER = example_build.task_spec(TASK_ID).grader
+assert isinstance(GRADER, VerifyitGrader)
+EXPECTED = str(GRADER.parameters["expected"])
 CHANGED = "tasks/changed.json"
 # The test workspace is ShellSim, which has no Python, so the build program is a shell script. Other task ids give
 # another prompt and another reference answer: the expected answer followed by the text after the id's last hyphen.
 BUILD = (
     f'if [ "$1" = {TASK_ID} ]; then cat task.json; '
     f'else n=${{1##*-}}; sed "s/alone/alone, please/; s/{TASK_ID}/$1/g; '
-    f's/\\"expected\\":\\"{EXPECTED_ANSWER}\\"/\\"expected\\":\\"{EXPECTED_ANSWER}$n\\"/" task.json; fi > "$2"'
+    f's/\\"expected\\":\\"{EXPECTED}\\"/\\"expected\\":\\"{EXPECTED}$n\\"/" task.json; fi > "$2"'
 )
 
-GRADER = example_build.task_spec(TASK_ID).grader
-assert isinstance(GRADER, VerifyitGrader)
-EXPECTED = str(GRADER.parameters["expected"])
 IDEA = CapabilityIdea(
     capability_id="example.stock-ledger",
     subject_id="example",
@@ -179,8 +178,9 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
 
     [instance] = await task_instances(accepted, ["ledger--07"], ShellSimMachineFactory(), timeout=10)
     assert instance.id == "ledger--07"
-    assert instance.context.events[0].content.endswith("Reply with the number alone, please.")
-    assert instance.grader.parameters["expected"] == f"{EXPECTED}07"
+    prompt, grader = instance.context.events[0], instance.grader
+    assert isinstance(prompt, TextMessage) and prompt.content.endswith("Reply with the number alone, please.")
+    assert isinstance(grader, VerifyitGrader) and grader.parameters["expected"] == f"{EXPECTED}07"
 
 
 @dataclass
