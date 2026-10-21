@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from itertools import pairwise
 from typing import Any
 
-from rolloutengine.harness.shell import task_prompt
+from rolloutengine.harness.tools import task_prompt
 from rolloutengine.models import GradedRollout, RolloutOperation
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec, TextMessage
