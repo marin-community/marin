@@ -94,6 +94,10 @@ nav:
       - Internal Onboarding: dev-guide/guidelines-internal.md
       - Forking Policy: dev-guide/forking-policy.md
       - SkyRL Migration: dev-guide/skyrl-migration.md
+      - SkyRL Performance:
+          - Planning: dev-guide/skyrl-performance.md
+          - Megatron and RL: dev-guide/skyrl-performance-megatron.md
+          - vLLM Serving: dev-guide/skyrl-performance-vllm.md
       - Building Docs: dev-guide/building-docs.md
       - Releasing to PyPI: dev-guide/releasing.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
