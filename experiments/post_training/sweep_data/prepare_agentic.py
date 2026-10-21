@@ -8,16 +8,18 @@ plus the held-out task ids, a per-row token audit and a manifest with file hashe
 """
 
 import argparse
+import contextlib
 import glob
 import gzip
 import hashlib
+import io
 import json
 import random
 import tempfile
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TextIO
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -93,10 +95,21 @@ def padding_row() -> str:
     return json.dumps({"input_ids": [PAD_TOKEN] * CONTEXT, "loss_weights": [0] * CONTEXT}, separators=(",", ":"))
 
 
+@contextlib.contextmanager
+def open_prebuilt(path: Path) -> Iterator[TextIO]:
+    """A text stream into a gzip file whose bytes depend only on its content: header mtime 0 and no file name."""
+    with (
+        open(path, "wb") as raw,
+        gzip.GzipFile(filename="", mode="wb", compresslevel=6, fileobj=raw, mtime=0) as compressed,
+        io.TextIOWrapper(compressed, encoding="utf-8") as stream,
+    ):
+        yield stream
+
+
 def write_prebuilt(path: Path, lines: Iterable[str]) -> tuple[int, int]:
     """Write row lines, then zero-loss padding rows up to a multiple of the batch size; return (rows, padding)."""
     rows = 0
-    with gzip.open(path, "wt", compresslevel=6) as stream:
+    with open_prebuilt(path) as stream:
         for line in lines:
             stream.write(line + "\n")
             rows += 1
