@@ -46,7 +46,7 @@ overrides = [
     { name = "marin-rolloutengine", git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], specifier = "==0.2.202.dev39324959133" },
     { name = "marin-taskcompendium", git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
-    { name = "marin-verifyit", git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
+    { name = "marin-verifyit", extras = ["math", "schema", "reasoning-gym", "judge"], git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
     { name = "nvidia-resiliency-ext", marker = "sys_platform == 'never'" },
     { name = "opentelemetry-api", marker = "sys_platform != 'linux'" },
     { name = "opentelemetry-api", marker = "sys_platform == 'linux'", specifier = "==1.44.0" },
@@ -2894,7 +2894,7 @@ source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%
 dependencies = [
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
-    { name = "marin-verifyit" },
+    { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
     { name = "pydantic" },
     { name = "tomlkit" },
 ]
@@ -2905,6 +2905,22 @@ version = "0.1.0"
 source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=de5507111c2672a564cff96cbef54ffd2eb194aa#de5507111c2672a564cff96cbef54ffd2eb194aa" }
 dependencies = [
     { name = "tomli-w" },
+]
+
+[package.optional-dependencies]
+judge = [
+    { name = "openai" },
+]
+math = [
+    { name = "math-verify" },
+    { name = "sympy" },
+]
+reasoning-gym = [
+    { name = "reasoning-gym" },
+]
+schema = [
+    { name = "jsonschema" },
+    { name = "pyyaml" },
 ]
 
 [[package]]
@@ -2938,7 +2954,7 @@ dependencies = [
     { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "marin-taskcompendium" },
-    { name = "marin-verifyit" },
+    { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
     { name = "math-verify" },
     { name = "ninja" },
     { name = "nvidia-ml-py" },
