@@ -398,7 +398,7 @@ When the selected set does not change, the run gives no new treatment. Use the m
 Do not gate a selection on one held-out loss: a selection moves the domain mix, and Paloma rewards web text and long context.
 In the [validation study](https://claude.ai/artifact/46KvN5W9qp7rMnMPCdcNc9), Paloma macro ordered selection pairs like the downstream target on 11–40% of pairs, and no single held-out loss passed at every rung.
 
-Train the candidate and the random control with `--dense --save-checkpoints` and three matched seeds each.
+Train the candidate and the random control with `--dense --save-checkpoints` and matched seeds.
 Score each checkpoint on one H100, then judge:
 
 ```bash
@@ -423,12 +423,24 @@ Confirm a quality head on a second raw pool (`corpus_sample_cli --seed`), becaus
 
 The judge accepts a known good classifier. `probe_scorers:dclm_fasttext_web` ranks the raw web documents by the public
 [DCLM fastText classifier](https://huggingface.co/mlfoundations/fasttext-oh-eli5) and takes 60% of the web tokens.
-Against a random 60% of the web tokens (`probe_scorers:web_only`, three seeds each), the judge gave `better` at d768:
-G +4.0% [+3.1%, +4.7%], and each group went up. On the same pair, Paloma macro loss became 0.2% worse and c4_en loss 1.2% worse,
-so a Paloma gate rejects this classifier. G is gold-answer BPB. The English accuracy macro went up by only 0.2 points.
-At d1280, G was +4.1% [+3.0%, +5.1%], but the English intervals were wider than their harm limits, so the judge gave `inconclusive`.
-In the full pool, web is 17% of the tokens. There, the same classifier on the web sources gave G +0.4%, which the judge cannot resolve at d768.
+Against a random 60% of the web tokens (`probe_scorers:web_only`), with 12 seeds each at d512, the judge gave `better`:
+G +2.2% [+1.7%, +2.7%], and the English, code, and math groups went up.
+With three seeds at d768, G was +4.0% [+2.6%, +5.4%], but the English intervals were wider than their harm limits,
+so the judge gave `inconclusive`. The result at d1280 was the same.
+On the d768 pair, Paloma macro loss became 0.2% worse and c4_en loss 1.2% worse, so a Paloma gate rejects this classifier.
+G is gold-answer BPB. The English accuracy macro went up by only 0.2 points.
+With 12 seeds, the judge rejected the public FineWeb-Edu classifier on the same arena: G was +1.5% [+0.9%, +2.1%],
+but commonsense lost 2.1% [1.2%, 3.0%].
+In the full pool, web is 17% of the tokens. There, the DCLM classifier on the web sources gave G +0.4%, which the judge cannot resolve at d768.
 To improve a scorer for some sources, compare it against random on those sources only. Then confirm it on the full pool at a larger rung.
-With three seeds, the 95% intervals are 4–7 points wide for knowledge and 1–4 points for commonsense, so a small gain is `inconclusive`.
-For the confirmation, use new seeds and set the seed count before the runs. 12 seeds for each arm make the intervals about half as wide, at four times the cost.
+
+The bounds are Welch t intervals. In an A/A test on 12 random-control runs, the judge gave `better` for 0.6% of the
+3-seed pairs and 1.4% of the 6-seed pairs. A percentile bootstrap over runs gave `better` for 5.5% of the 3-seed pairs.
+With three seeds, the intervals are about 11 points wide for knowledge, so use three seeds only to rank search candidates.
+For the confirmation, use new seeds and set the seed count before the runs.
+For a group with a relative seed SD `s` for one run, an expected gain `g`, and a harm limit `h`,
+about `16 s² / (g + h)²` seeds for each arm give 80% power for that group (normal approximation).
+On the d512 web arena, `s` was 2.3% for knowledge, 0.9% for commonsense, 1.1% for code, 0.5% for math, and 0.4% for long context.
+Thus knowledge sets the count: for a 0.9% knowledge gain, use about 24 seeds for each arm, and for no knowledge gain, about 85.
+More evaluation examples do not help, because the knowledge variance comes from the model seed. SciQ has the largest seed SD.
 The intervals do not include the effect of a search over many candidates, so do not accept a candidate from the search runs alone.
