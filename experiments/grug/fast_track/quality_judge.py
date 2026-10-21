@@ -8,7 +8,7 @@ move the domain mix, and each loss suite rewards a different mix: Paloma rewards
 Uncheatable rewards code and arXiv. So the judge reads the ``downstream_eval`` outputs and
 compares these groups against the matched random selection:
 
-- K: English knowledge (correct-answer BPB of ARC, MMLU, SciQ, OpenBookQA)
+- K: English knowledge (correct-answer BPB of ARC, MMLU, SciQ, OpenBookQA, with inverse-variance weights)
 - S: English commonsense and narrative (HellaSwag, PIQA, SIQA, Winogrande, CSQA, LAMBADA)
 - C: code (gold-solution BPB of HumanEval and MBPP)
 - M: math (gold-solution BPB of GSM8K and MATH-500)
@@ -42,6 +42,11 @@ GROUP_TASKS = {
     "C": ("humaneval", "mbpp"),
     "M": ("gsm8k", "math500"),
 }
+# Knowledge task weights on the BPB scale, in GROUP_TASKS order. On the relative task gains, they are the
+# inverse relative seed variances of 12 d512 web-arena random runs (0.116, 0.219, 0.457, 0.037, 0.172), each
+# divided by the task's mean BPB in those runs. With equal weights, SciQ, the task with the largest seed SD,
+# sets much of the knowledge interval. The other groups use equal weights.
+GROUP_WEIGHTS = {"K": (0.124, 0.241, 0.443, 0.041, 0.152)}
 # The largest relative loss in each group that a better candidate may have at the 95% lower bound.
 HARM_LIMITS = {"K": 0.01, "S": 0.01, "C": 0.02, "M": 0.02, "L": 0.02}
 LONG_CONTEXT_MIN_DOCUMENTS = 5
@@ -93,13 +98,14 @@ def read_run_scores(downstream_dir: str) -> RunScores:
     return RunScores(gold_bpb, example_ids, float(np.mean(long_sets)), version)
 
 
-def _group_value(run: RunScores, tasks: Sequence[str], index: dict[str, np.ndarray] | None) -> float:
+def _group_value(run: RunScores, group: str, index: dict[str, np.ndarray] | None) -> float:
+    tasks = GROUP_TASKS[group]
     per_task = [run.gold_bpb[task] if index is None else run.gold_bpb[task][index[task]] for task in tasks]
-    return float(np.mean([values.mean() for values in per_task]))
+    return float(np.average([values.mean() for values in per_task], weights=GROUP_WEIGHTS.get(group)))
 
 
 def _run_values(run: RunScores) -> dict[str, float]:
-    values = {group: _group_value(run, tasks, None) for group, tasks in GROUP_TASKS.items()}
+    values = {group: _group_value(run, group, None) for group in GROUP_TASKS}
     values["L"] = run.long_context_loss
     return values
 
@@ -131,9 +137,9 @@ def relative_gains(
 ) -> dict[str, float]:
     """Relative decrease of each group's mean score against the control; ``G`` is the weighted gain."""
     gains = {}
-    for group, tasks in GROUP_TASKS.items():
-        candidate_value = np.mean([_group_value(run, tasks, index) for run in candidate])
-        control_value = np.mean([_group_value(run, tasks, index) for run in control])
+    for group in GROUP_TASKS:
+        candidate_value = np.mean([_group_value(run, group, index) for run in candidate])
+        control_value = np.mean([_group_value(run, group, index) for run in control])
         gains[group] = float((control_value - candidate_value) / control_value)
     candidate_long = np.mean([run.long_context_loss for run in candidate])
     control_long = np.mean([run.long_context_loss for run in control])

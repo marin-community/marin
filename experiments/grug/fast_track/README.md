@@ -416,6 +416,12 @@ The judge gives the gain against random for English knowledge (ARC, MMLU, SciQ, 
 and long context (fixed-target loss at 3968 tokens). Quality classifiers trade commonsense for knowledge, so the two English groups are separate.
 It accepts a candidate when the mean of English, code, and math is above zero at the 95% lower bound and no group loses more than its limit
 (1% for each English group, 2% for the others).
+Knowledge is a weighted mean of its tasks. The weights are inverse to the seed variance of each task in 12 random runs
+on the d512 web arena: MMLU has 46% of the weight and SciQ, the noisiest task, 4%. Thus the knowledge limit gives little protection to SciQ alone.
+For a different arena, set the weights from separate random runs, and freeze them before the judge runs.
+The same weights apply at every rung. On 43 three-seed comparisons against random, no decision changed with the weights.
+The median knowledge interval was 22% narrower at d512, 7% wider at d768, and 1% narrower at d1280
+(the comparisons at a rung share their random runs). Thus expect fewer seeds only at d512.
 The gold answers do not contain format tokens: MBPP code has `\n` line ends and no spaces at line ends, and GSM8K has no calculator annotations.
 With the original `\r\n` line ends, `\r` tokens carried 25–56% of the MBPP bits of web-only models, and at d1280 they made the DCLM selection below look 22% worse on code.
 A rung that passes goes to the next rung with the same gate.
@@ -424,33 +430,33 @@ Confirm a quality head on a second raw pool (`corpus_sample_cli --seed`), becaus
 The judge accepts a known good classifier. `probe_scorers:dclm_fasttext_web` ranks the raw web documents by the public
 [DCLM fastText classifier](https://huggingface.co/mlfoundations/fasttext-oh-eli5) and takes 60% of the web tokens.
 Against a random 60% of the web tokens (`probe_scorers:web_only`), with 12 seeds each at d512, the judge gave `better`:
-G +2.2% [+1.7%, +2.7%], and the English, code, and math groups went up.
-On 12 new seeds for each arm, G was +2.0% [+1.5%, +2.6%], but knowledge was +0.2% [−1.5%, +1.8%],
-so the judge gave `inconclusive`. Against 24 new random runs, it gave `better`.
-With three seeds at d768, G was +4.0% [+2.6%, +5.4%], but the English intervals were wider than their harm limits,
+G +2.2% [+1.8%, +2.6%], and the English, code, and math groups went up.
+On 12 new seeds for each arm, G was +2.1% [+1.6%, +2.6%] and knowledge +0.5% [−0.8%, +1.8%], so the judge gave `better` again.
+With equal knowledge weights, knowledge on the new seeds was +0.2% [−1.5%, +1.8%], and the judge gave `inconclusive`.
+With three seeds at d768, G was +4.1% [+2.9%, +5.4%], but the commonsense interval was wider than its harm limit,
 so the judge gave `inconclusive`. The result at d1280 was the same.
 On the d768 pair, Paloma macro loss became 0.2% worse and c4_en loss 1.2% worse, so a Paloma gate rejects this classifier.
 G is gold-answer BPB. The English accuracy macro went up by only 0.2 points.
-With 12 seeds, the judge rejected the public FineWeb-Edu classifier on the same arena: G was +1.5% [+0.9%, +2.1%],
+With 12 seeds, the judge rejected the public FineWeb-Edu classifier on the same arena: G was +1.5% [+1.0%, +2.1%],
 but commonsense lost 2.1% [1.2%, 3.0%].
 On 12 new seeds, commonsense lost 1.9% [1.1%, 2.7%], and the judge gave `worse` again.
 Against 24 new random runs, commonsense lost 1.6% [0.9%, 2.3%], so the judge gave `inconclusive`.
 In the full pool, web is 17% of the tokens. There, the DCLM classifier on the web sources gave G +0.4%, which the judge cannot resolve at d768.
 To improve a scorer for some sources, compare it against random on those sources only. Then confirm it on the full pool at a larger rung.
 
-The bounds are Welch t intervals. In an A/A test on 12 random-control runs, the judge gave `better` for 0.6% of the
-3-seed pairs and 1.4% of the 6-seed pairs. A percentile bootstrap over runs gave `better` for 5.5% of the 3-seed pairs.
-On 24 later random-control runs, the judge gave `better` for 2.0% of the 12-seed pairs.
-With three seeds, the intervals are about 11 points wide for knowledge, so use three seeds only to rank search candidates.
+The bounds are Welch t intervals. In an A/A test on 24 random-control runs that did not set the weights, the judge gave `better`
+for 0.1% of the 3-seed pairs, 1.4% of the 6-seed pairs, and 2.9% of the 12-seed pairs.
+With equal weights on 12 earlier runs, a percentile bootstrap over runs gave `better` for 5.5% of the 3-seed pairs.
+With three seeds, the knowledge interval is about 6 to 8 points wide, so use three seeds only to rank search candidates.
 For the confirmation, use new seeds and set the seed count before the runs.
 Do not add seeds after you read the result: more seeds until the interval passes is not a valid test.
 An `inconclusive` confirmation does not accept the candidate.
 For a group with a relative seed SD `s` for one run, an expected gain `g`, and a harm limit `h`,
 about `16 s² / (g + h)²` seeds for each arm give 80% power for that group (normal approximation).
-On the d512 web arena, `s` was 2.3% for knowledge, 0.9% for commonsense, 1.1% for code, 0.5% for math, and 0.4% for long context.
-On 24 later runs, `s` for knowledge was 1.6%. The counts below use 2.3%, because a low estimate gives too few seeds.
-Thus knowledge sets the count: for a 0.9% knowledge gain, use about 24 seeds for each arm, and for no knowledge gain, about 86.
-The 12-seed DCLM confirmation above had fewer seeds than this rule gives, so its knowledge result can change with new seeds.
-More evaluation examples do not help, because the knowledge variance comes from the model seed. SciQ has the largest seed SD.
+On the d512 web arena, `s` was 1.7% for knowledge, 0.9% for commonsense, 1.1% for code, 0.5% for math, and 0.4% for long context.
+On 24 later runs, `s` for knowledge was 1.3%. The counts below use 1.7%, because a low estimate gives too few seeds.
+Thus knowledge sets the count: for a 0.9% knowledge gain, use about 13 seeds for each arm, and for no knowledge gain, about 48.
+With equal weights, `s` for knowledge was 2.3%, and the counts were 24 and 86.
+More evaluation examples do not help, because the knowledge variance comes from the model seed.
 A larger rung does not help either: with three seeds, the knowledge intervals are about as wide at d768 and wider at d1280.
 The intervals do not include the effect of a search over many candidates, so do not accept a candidate from the search runs alone.
