@@ -328,8 +328,8 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str, 
     finally:
         _reset_current_actor(token)
 
-    # Long-running actor methods occupy executor threads. Honor Fray's actor
-    # concurrency contract so control-plane calls still have a thread available.
+    # Size the method executor from ActorConfig.max_concurrency, as the Fray
+    # contract says. An actor that serves calls during a long method must set it.
     server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"), max_concurrency=max_concurrency)
     server.register(actor_name, instance)
     actual_port = server.serve_background()
