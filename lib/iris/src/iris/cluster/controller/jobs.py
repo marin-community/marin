@@ -29,7 +29,6 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_owner_if_configured
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import BackendCapability, BackendObservation, JobFeasibilityRequest, TaskBackend
-from iris.cluster.controller.budget import budget_user_id
 from iris.cluster.controller.codec import reconstruct_launch_job_request, resource_spec_from_job_row
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
@@ -549,7 +548,7 @@ def _launch_identity(
         job_id=job_id,
         received_handoff=received_handoff,
         submitting_user=submitting_user,
-        budget_user=budget_user_id(job_id, submitting_user),
+        budget_user=job_id.user,
     )
 
 
