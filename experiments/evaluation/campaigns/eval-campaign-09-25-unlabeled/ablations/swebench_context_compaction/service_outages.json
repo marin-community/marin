@@ -44,8 +44,8 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200532-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-summary-0e5acf1bd86c43ce91c4c864aa7b5518-65k-16k-summary-9d8f8f35df805226abe49ab91bd96d34/results",
     "started_at": "2026-10-21T06:46:04.564000+00:00",
-    "finished_at": null,
-    "evidence": "Iris task events: WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 7eda2b5d-58eb-4acd-880c-ff7957bfc64d.",
+    "finished_at": "2026-10-21T08:13:51.143539+00:00",
+    "evidence": "Iris task events: WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 7eda2b5d-58eb-4acd-880c-ff7957bfc64d. Recovery probe matched the configured model alias and returned a one-token chat completion with HTTP 200.",
     "arm": "65k/16k, summary"
   },
   {
