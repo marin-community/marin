@@ -253,6 +253,44 @@ async def test_a_task_cannot_take_the_id_of_an_accepted_task():
     assert len(result.tasks) == 1
 
 
+async def test_a_control_that_the_answer_format_rejects_is_no_control():
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("grade", path=TASK, answer="", expect="fail"),
+        call("grade", path=TASK, answer=EXPECTED, expect="pass"),
+        call("submit", path=TASK),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [empty], [submit] = tool_replies(result, "call-2"), tool_replies(result, "call-4")
+    assert empty["control"] is False
+    assert "controls" in submit["missing"]
+
+
+async def test_rollout_refuses_a_call_that_can_outlast_the_tool_turn():
+    # 4 rollouts run at a time and each can take 40 s, so 3 waves would outlast the 100 s tool turn.
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("rollout", paths=[TASK], n=9, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=9, judge_calls=0, web_calls=0), web)
+        limits = dataclasses.replace(
+            config,
+            agent_limits=LIMITS.model_copy(update={"tool_turn_timeout": 100}),
+            solver_limits=LIMITS.model_copy(update={"attempt_timeout": 40}),
+        )
+        result = await generate_tasks(IDEA, 1, limits)
+
+    [refusal] = tool_replies(result, "call-2")
+    assert "One call can run at most 8 rollouts" in refusal["error"]
+    assert result.spend.solver_rollouts == 0
+
+
 async def test_finish_refuses_once_while_most_of_the_budget_is_left():
     script = (call("finish", report="too easy"), call("finish", report="too easy"))
     async with ParallelWeb("unused") as web:

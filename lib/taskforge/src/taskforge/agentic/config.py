@@ -45,4 +45,13 @@ class AgenticConfig:
     command_timeout: float
     """Seconds that one shell command can run, in the agent's workspace and in a solver's."""
     max_concurrent_rollouts: int
-    """Solver rollouts that one ``rollout`` call runs at the same time."""
+    """Solver rollouts that the tools of one session run at the same time."""
+
+    def __post_init__(self) -> None:
+        # A rollout call waits for its solver attempts, so an attempt that outlasts the agent's tool turn ends the
+        # whole session.
+        attempt, turn = self.solver_limits.attempt_timeout, self.agent_limits.tool_turn_timeout
+        if turn is not None and (attempt is None or attempt >= turn):
+            raise ValueError(
+                f"solver_limits.attempt_timeout ({attempt}) must be less than agent_limits.tool_turn_timeout ({turn})"
+            )

@@ -46,7 +46,8 @@ the other candidates.
 - web_search, web_fetch: search the web and read pages, when the idea needs real facts, formats or data. The \
 tools save the full results under /workspace/web/.
 - grade: grade an answer of yours with the task's grader, with no model. Grade a correct answer with expect \
-"pass", and wrong or empty answers with expect "fail". If a correct answer fails or a wrong answer passes, the \
+"pass", and wrong answers in the answer format with expect "fail": an answer that the format rejects is no control. \
+If a correct answer fails or a wrong answer passes, the \
 grader, the reference answer or the answer format is wrong.
 - rollout: run a solver model n times on each task of paths, all at the same time. Role "solver" measures the \
 difficulty. Role "adversary" tells the \

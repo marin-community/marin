@@ -31,7 +31,7 @@ import os
 import sys
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -41,7 +41,7 @@ import openai
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rolloutengine.chat import ChatModel
-from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits
+from rolloutengine.models import Model, ModelRequest, ModelTurn, RolloutLimits
 from shellbox.backends.local.machine import LocalMachineFactory
 from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
@@ -78,7 +78,7 @@ SOLVER_LIMITS = RolloutLimits(
     model_turn_timeout=900,
     tool_turn_timeout=120,
     total_turn_timeout=None,
-    attempt_timeout=3600,
+    attempt_timeout=900,
     verifier_timeout=120,
     cleanup_timeout=60,
 )
@@ -131,9 +131,6 @@ def chat_model(endpoint: GlmEndpoint, *, model: str, reasoning_effort: str, cach
     if cache_key is not None:
         extra_body["prompt_cache_key"] = cache_key
     return ChatModel(client, model, MAX_OUTPUT_TOKENS, extra_body=extra_body)
-
-
-Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
 
 
 @dataclass

@@ -8,10 +8,10 @@ pytest.importorskip("taskforge")
 
 import httpx
 import openai
-from rolloutengine.models import ModelRequest, ModelTurn, TokenUsage
+from rolloutengine.models import Model, ModelRequest, ModelTurn, TokenUsage
 from taskforge.llm.glm_client import GlmEndpoint, Pool
 
-from experiments.post_training.capability_driven_envs.generate_tasks_agentic import Model, RelayModel
+from experiments.post_training.capability_driven_envs.generate_tasks_agentic import RelayModel
 
 OLD = GlmEndpoint("http://old-relay/v1", "token", Pool.BULK)
 NEW = GlmEndpoint("http://new-relay/v1", "token", Pool.BULK)
