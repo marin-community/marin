@@ -3,9 +3,11 @@
 
 """Generate TaskSpecs for catalog capabilities with the agentic Taskforge: one GLM agent for each capability.
 
-The agent and its reviewer use GLM, and the solver rollouts use DeepSeek by default. The agent's shell runs in a
-bubblewrap sandbox, so the Iris job needs ``--container-profile container_profile_privileged``. ``--pool`` selects
-the GLM bearer token as in ``generate_tasks``, and ``PARALLEL_API_KEY`` holds the key of the agent's web tools.
+The agent and its reviewer use GLM, and the solver rollouts use DeepSeek without thinking by default. With thinking,
+DeepSeek passed 69% of the agent's task versions every time, and the agent spent its rollout budget on the search for
+a difficulty in the band. The agent's shell runs in a bubblewrap sandbox, so the Iris job needs
+``--container-profile container_profile_privileged``. ``--pool`` selects the GLM bearer token as in
+``generate_tasks``, and ``PARALLEL_API_KEY`` holds the key of the agent's web tools.
 Inside an Iris task::
 
     uv run --package marin-taskforge --frozen python -m \\
@@ -26,6 +28,7 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import asdict
@@ -61,6 +64,8 @@ PARALLEL_API_KEY_ENV = "PARALLEL_API_KEY"
 DEEPSEEK_MODEL = "deepseek-v4.1-flash"
 """Served beside GLM on the same relay and tokens; a model of another family makes the solver rollouts independent."""
 SUMMARY_FILE = "summary.json"
+NO_REASONING = "none"
+"""The solver reasoning effort that switches the thinking of DeepSeek off."""
 MAX_OUTPUT_TOKENS = 32768
 GATE = Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4)
 COMMAND_TIMEOUT = 30.0
@@ -109,9 +114,12 @@ def workspace_factory() -> LocalMachineFactory:
 
 
 def chat_model(base_url: str, token: str, model: str, reasoning_effort: str) -> ChatModel:
-    """A chat model on the relay. DeepSeek switches its reasoning on with ``thinking``, GLM sets an effort."""
+    """A chat model on the relay. GLM sets an effort, and DeepSeek thinks unless the effort is ``NO_REASONING``."""
     client = openai.AsyncOpenAI(base_url=base_url, api_key=token, timeout=1800, max_retries=5)
-    template = {"thinking": True} if model == DEEPSEEK_MODEL else {"reasoning_effort": reasoning_effort}
+    if model == DEEPSEEK_MODEL:
+        template: dict[str, object] = {"thinking": reasoning_effort != NO_REASONING}
+    else:
+        template = {"reasoning_effort": reasoning_effort}
     return ChatModel(client, model, MAX_OUTPUT_TOKENS, extra_body={"chat_template_kwargs": template})
 
 
@@ -154,9 +162,11 @@ async def generate_all(
             cache_key = {"prompt_cache_key": f"taskforge-agentic-{idea.capability_id}-{uuid.uuid4().hex[:8]}"}
             model = dataclasses.replace(agent, extra_body={**agent.extra_body, **cache_key})
             async with slots:
+                started = time.monotonic()
                 result = await generate_tasks(idea, tasks, dataclasses.replace(config, agent_model=model))
+                seconds = time.monotonic() - started
             logger.info("%s: %d tasks, failure %s", idea.capability_id, len(result.tasks), result.failure)
-            return write_result(output, result)
+            return write_result(output, result, seconds)
 
         return await asyncio.gather(*(one(idea) for idea in ideas))
 
@@ -167,7 +177,7 @@ def read_ideas(url: str) -> list[CapabilityIdea]:
     return [CapabilityIdea.model_validate_json(line) for line in lines if line.strip()]
 
 
-def write_result(output: StoragePath, result: AgentResult) -> dict[str, Any]:
+def write_result(output: StoragePath, result: AgentResult, seconds: float) -> dict[str, Any]:
     """Write the files of one idea under ``output`` and return its line of the summary."""
     directory = output / result.idea.capability_id
     for accepted in result.tasks:
@@ -185,6 +195,7 @@ def write_result(output: StoragePath, result: AgentResult) -> dict[str, Any]:
         "stop_reason": result.rollout.stop_reason,
         "agent_tokens": result.agent_tokens,
         "spend": asdict(result.spend),
+        "seconds": round(seconds),
     }
     _write(directory / "result.json", json.dumps(summary, indent=2))
     return summary
@@ -220,7 +231,12 @@ def _write(path: StoragePath, text: str) -> None:
     show_default=True,
     help="The model of the solver and adversary rollouts.",
 )
-@click.option("--solver-reasoning-effort", default="medium", show_default=True, help="GLM reasoning effort of solvers.")
+@click.option(
+    "--solver-reasoning-effort",
+    default=NO_REASONING,
+    show_default=True,
+    help=f"The reasoning effort of the solvers. {NO_REASONING!r} switches the thinking of DeepSeek off.",
+)
 @click.option("--concurrency", type=click.IntRange(min=1), default=4, show_default=True, help="Ideas at once.")
 def main(
     output_dir: str,

@@ -13,7 +13,9 @@ A task is a TaskSpec: a prompt, optional files for the solver, an answer format,
 answer.
 - A solver model gets the prompt. If the task declares the capabilities "shell" and "filesystem", the solver also \
 gets a shell and the task's files in /workspace on a ShellSim machine: a simulated shell with ls, cat, grep, sed, \
-awk, jq, sort, wc, find and similar tools, but with no Python and no network.
+awk, jq, sort, wc, find and similar tools, but with no Python and no network. Its arithmetic is limited: awk has \
+log but no exp, sqrt or ^, and bc has no -l math library. Do not make a task hard only because the solver must \
+compute such functions by hand.
 - The solver answers with its final message. The answer type is "text", "number" or "json". The grader is a \
 verifyit spec that grades the answer in process, for example a NumericSpec or an ExactSpec, made with \
 taskcompendium.grader.verifyit_package. The solver never sees the grader or its reference answer.
@@ -27,9 +29,12 @@ usual command-line tools, but no jq: use Python for JSON. Use the shell to inspe
 /workspace/example_build.py is a complete example. /workspace/reference/verifyit_specs.md lists the graders that you \
 can use, and /workspace/reference/taskspec.schema.json is the TaskSpec JSON schema. The other tools take the path of \
 the TaskSpec file.
-- Compute the reference answer in the program, never by hand. Derive all randomness from the task id. Never put \
-the answer, or a file or a command that gives it, in the prompt or in the solver's files. Check the data files \
-yourself, for example that each CSV row has as many fields as the header.
+- Compute the reference answer in the program, never by hand. Give a numeric reference with the precision that \
+the prompt asks for, and a tolerance smaller than its last digit, so that the grader rejects the next values. \
+Derive all randomness from the task id. Never put the answer, or a file or a command that gives it, in the prompt \
+or in the solver's files. Put every rule that the answer needs in the prompt, or in a file that the prompt tells the \
+solver to read. Check the data files yourself, for example that each CSV row has as many fields as the \
+header.
 
 # Tools
 
@@ -38,7 +43,8 @@ tools save the full results under /workspace/web/.
 - grade: grade an answer of yours with the task's grader, with no model. Grade a correct answer with expect \
 "pass", and wrong or empty answers with expect "fail". If a correct answer fails or a wrong answer passes, the \
 grader, the reference answer or the answer format is wrong.
-- rollout: run a solver model on the task. Role "solver" measures the difficulty. Role "adversary" tells the \
+- rollout: run a solver model n times on each task of paths, all at the same time. Role "solver" measures the \
+difficulty. Role "adversary" tells the \
 solver to get credit without solving the task, for example by finding the answer or exploiting the grader. An \
 adversary can also pass by doing the work, so the reviewer of submit judges its passes. The tool saves the \
 transcripts under /workspace/rollouts/.
@@ -58,10 +64,20 @@ a measure of difficulty, and the pass rate does not count it. Many format failur
 - A pass rate of 0 usually shows a broken grader, a wrong reference answer, or an ambiguous prompt. Read the \
 transcripts before you make a task harder or easier. If the failed solvers agree on one wrong answer, the prompt is \
 probably ambiguous: correct the prompt, not the difficulty.
-- Prefer one final value, a number or a short text, graded with a NumericSpec or an ExactSpec. A JSON answer with \
-many fields fails as a whole on one slip, so its pass rate jumps between 0 and 1 and is hard to bring into the band.
-- Measure the difficulty of a new version first with 2 or 3 solver rollouts. Run the full evidence only for a \
-version that is probably in the band, so that the rollout budget is enough for the adversary rollouts too.
+- Prefer one computed value, a number or a short text, graded with a NumericSpec or an ExactSpec without substring \
+matching. Do not grade free text by its keywords. Avoid multiple \
+choice: a model can often find the correct option by its form. If you give options, make them similar in length and \
+detail. A JSON answer with many fields fails as a whole on one slip, so its pass rate jumps between 0 and 1 and is \
+hard to bring into the band.
+- Find the difficulty with few rollouts. Let the build program take a difficulty level, write versions of a task \
+at several levels, and probe them in one rollout call with 2 solver rollouts each. Measure more only for a version \
+that is probably in the band. A version whose pass rate stays near a limit of the band after 8 solver rollouts does \
+not settle with more rollouts: change the task.
+- Finish one task at a time. When a version is in the band, run its adversary rollouts and submit it at once. A \
+task that waits for the others can lose its budget: each rollout result gives the solver rollouts that are left.
+- Write each new version of a task to a new file. A program that builds all the tasks again changes the tasks that \
+have evidence, and a changed task loses its evidence.
+- Make a task harder with more reasoning steps or more data to work through, not with traps or unclear wording.
 - Make the tasks different from each other: different situations, data and reasoning, not only new numbers.
 - Keep notes in /workspace/notes.md, and use your research again for the next task.
 - The tools have a budget for this idea: {solver_rollouts} solver rollouts, {judge_calls} reviews and {web_calls} \
@@ -82,14 +98,25 @@ You review a task that trains a language-model agent on a capability. You get th
 and files, its grader with the reference answer, the solver evidence with the failed answers, the adversary \
 rollouts with their answers and commands, and the prompts of the tasks that are already accepted for the \
 capability. Accept the task only if all of these are true:
-- The task tests the capability.
-- The prompt is unambiguous, and it has one correct answer, which the grader accepts.
+- The task tests the capability, and its difficulty comes from the capability, not from tools that the solver's \
+shell does not have, for example an exp function.
+- The prompt is unambiguous, and it has one correct answer, which the grader accepts. An exact answer that depends \
+on a judgment, for example how many readings of a text are accurate, is ambiguous.
+- Every rule that the answer needs is in the prompt, or in a file that the prompt tells the solver to read. A rule \
+that only an unnamed file gives is hidden.
 - The prompt, the files and the reference answer do not contradict each other, for example in a definition. A \
 word of the prompt that a file or the reference answer overrides is a contradiction, for example a prompt that \
 asks for a mean when the reference answer is a median.
-- The grader rejects wrong answers, and the solver cannot get the answer without the work.
-- The failed answers do not show an ambiguity, for example many failed answers that agree on one other value.
+- The grader rejects wrong answers, and the solver cannot get the answer without the work. A numeric tolerance \
+must be smaller than the precision that the prompt asks for.
+- Each failed answer comes from a mistake. For each distinct failed answer, find the reading or the mistake that \
+gives it, and the statement of the prompt or the files that it breaks. A failed answer from a reasonable reading \
+that no statement excludes shows an ambiguity. A repeated failed answer, in shared_failed_answers, usually comes \
+from one other reading of the task.
 - No adversary got credit with a shortcut: an answer that it found, guessed, or that a weak grader accepts. An \
-adversary that passed by doing the work, as its commands show, is not a problem.
+adversary that passed by doing the work, as its commands show, is not a problem. An adversary that passed on a task \
+with files without reading them got the answer from the prompt alone.
+- In a multiple-choice question, the correct option does not stand out, for example by its length or detail, and \
+one question does not give away the answer of another.
 - The task is different from the accepted tasks.
 Give each problem that you find."""

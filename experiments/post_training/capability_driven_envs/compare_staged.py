@@ -24,6 +24,7 @@ import dataclasses
 import json
 import logging
 import shlex
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -86,8 +87,8 @@ def tool_calls(task_files: dict[str, TaskSpec]) -> list[tuple[str, dict[str, obj
         if right is not None:
             calls.append(("grade", {"path": path, "answer": right, "expect": "pass"}))
         calls.append(("grade", {"path": path, "answer": wrong, "expect": "fail"}))
-        calls.append(("rollout", {"path": path, "n": GATE.min_solver_runs, "role": "solver"}))
-        calls.append(("rollout", {"path": path, "n": GATE.min_adversary_runs, "role": "adversary"}))
+        calls.append(("rollout", {"paths": [path], "n": GATE.min_solver_runs, "role": "solver"}))
+        calls.append(("rollout", {"paths": [path], "n": GATE.min_adversary_runs, "role": "adversary"}))
         calls.append(("submit", {"path": path}))
     calls.append(("finish", {"report": "The scripted session submitted every task that the staged programs wrote."}))
     return calls
@@ -134,6 +135,7 @@ async def compare_idea(
     idea: CapabilityIdea, tasks: int, glm: GlmClient, config: AgenticConfig, output: StoragePath
 ) -> dict[str, Any]:
     """Generate ``tasks`` staged tasks for ``idea``, validate them in one scripted session, and write the results."""
+    started = time.monotonic()
     workpieces = [f"{idea.capability_id}--{sample:02d}" for sample in range(tasks)]
     generated = await asyncio.gather(
         *(generate_task(glm, idea, workpiece, LLMPolicy(), PROGRAM_TIMEOUT) for workpiece in workpieces)
@@ -156,7 +158,7 @@ async def compare_idea(
     # The session ends at its last call, or earlier when ``tasks`` tasks are accepted.
     script_config = dataclasses.replace(config, agent_model=session, agent_limits=agent_limits(len(calls) + 1))
     result = await generate_tasks(idea, tasks, script_config)
-    summary = write_result(output, result)
+    summary = write_result(output, result, time.monotonic() - started)
     summary.update(
         staged_tasks=len(task_files),
         staged_failures={workpiece.workpiece_id: workpiece.failure for workpiece in generated if workpiece.failure},

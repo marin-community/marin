@@ -24,6 +24,7 @@ import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, replace
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -57,9 +58,10 @@ from taskcompendium.models import (
     grades_with_judge,
 )
 from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import ExactSpec, IfevalSpec, NumericSpec, spec_from_table
 
 from taskforge.agentic.config import AgenticConfig
-from taskforge.agentic.gate import Evidence, missing_evidence
+from taskforge.agentic.gate import Evidence, Gate, missing_evidence
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, REVIEW_TASK_PROMPT
 from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
@@ -98,6 +100,10 @@ ANSWER_KEYS = frozenset({"expected", "answer", "answers", "reference", "solution
 """Grader parameters that hold a reference answer, which the prompt and the solver's files must not contain."""
 MIN_LEAK_CHARS = 4
 """Shorter reference answers, for example small numbers, occur in prompts and data by chance."""
+MIN_QUOTED_LEAK_CHARS = 2
+"""Shorter reference answers, single letters or digits, are guessable anyway."""
+PLAIN_DECIMAL = re.compile(r"[+-]?\d+(\.\d+)?")
+"""A reference answer whose last digit gives its precision, unlike a fraction or scientific notation."""
 OUTPUT_CHARS = 2000
 """The most characters of a program output, an answer, a page or a file that one tool result shows."""
 REVIEW_ANSWERS = 20
@@ -116,13 +122,20 @@ class BudgetExhausted(ToolError):
 
 
 class TaskReview(BaseModel):
-    """The review of one task."""
+    """The review of one task. The decision comes last, so that the judge writes its analysis first."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    accept: bool
+    failure_causes: tuple[str, ...] = Field(
+        description=(
+            "For each distinct failed answer: the answer, the reading or the mistake that gives it, and the "
+            "statement of the prompt or the files that this reading breaks, quoted. Write 'no statement' when "
+            "no statement excludes the reading."
+        )
+    )
     problems: tuple[str, ...] = Field(description="Each problem that you found, or none.")
     summary: str = Field(min_length=1)
+    accept: bool
 
 
 @dataclass(frozen=True)
@@ -175,9 +188,9 @@ TOOL_DEFINITIONS = (
     ),
     _tool(
         "rollout",
-        "Run a solver model on the task n times.",
+        "Run a solver model n times on each task, all at the same time.",
         {
-            "path": PATH,
+            "paths": {"type": "array", "items": PATH, "minItems": 1},
             "n": {"type": "integer", "minimum": 1},
             "role": {"type": "string", "enum": ["solver", "adversary"]},
         },
@@ -314,21 +327,35 @@ class ToolSession:
             }
         )
 
-    async def rollout(self, path: str, n: int, role: Literal["solver", "adversary"]) -> ToolCallResult:
+    async def rollout(self, paths: list[str], n: int, role: Literal["solver", "adversary"]) -> ToolCallResult:
         if n < 1:
             raise ToolError("n must be at least 1")
-        task = await self._load(path)
+        if not paths or len(set(paths)) < len(paths):
+            raise ToolError("Give one or more different paths")
+        tasks = [await self._load(path) for path in paths]
+        specs = [_solver_spec(_adversary_task(task) if role == "adversary" else task, self.config) for task in tasks]
+        for path, spec in zip(paths, specs, strict=True):
+            try:
+                self.tools.solver_engine.check(spec)
+            except (ValueError, NotImplementedError) as error:
+                raise ToolError(f"The rollout engine rejects {path}: {error}") from error
+        self._spend("solver_rollouts", self.config.budget.solver_rollouts, n * len(paths))
+        results = await asyncio.gather(
+            *(self._rollouts(task, spec, n, role) for task, spec in zip(tasks, specs, strict=True))
+        )
+        left = self.config.budget.solver_rollouts - self.tools.spend.solver_rollouts
+        return _result({"results": dict(zip(paths, results, strict=True)), "solver_rollouts_left": left})
+
+    async def _rollouts(
+        self, task: TaskSpec, spec: TaskRolloutSpec, n: int, role: Literal["solver", "adversary"]
+    ) -> dict[str, Any]:
+        """Run ``n`` rollouts of ``spec``, record their evidence for ``task``, and save their transcripts."""
         key = _task_digest(task)
-        spec = _solver_spec(_adversary_task(task) if role == "adversary" else task, self.config)
-        try:
-            self.tools.solver_engine.check(spec)
-        except (ValueError, NotImplementedError) as error:
-            raise ToolError(f"The rollout engine rejects the task: {error}") from error
-        self._spend("solver_rollouts", self.config.budget.solver_rollouts, n)
-        outcomes = await asyncio.gather(*(self._solve(spec) for _ in range(n)))
         directory = _absolute(f"{ROLLOUTS_DIR}/{task.id}/{key[:12]}")
+        # Take the transcript numbers before the rollouts, so that concurrent calls for one task do not share them.
         first = self.tools.transcripts[f"{directory}/{role}"]
         self.tools.transcripts[f"{directory}/{role}"] += n
+        outcomes = await asyncio.gather(*(self._solve(spec) for _ in range(n)))
         answers, ungraded = [], Counter()
         evidence = self.tools.evidence[key]
         for index, outcome in enumerate(outcomes):
@@ -362,17 +389,16 @@ class ToolSession:
                 self.tools.adversary_runs[key].append(record)
         graded = len(answers)
         passes = sum(answer["passed"] for answer in answers)
-        return _result(
-            {
-                "graded": graded,
-                "passes": passes,
-                "pass_rate": passes / graded if graded else None,
-                "not_graded": dict(ungraded),
-                "answers": answers,
-                "transcripts": directory,
-                "evidence": asdict(evidence),
-            }
-        )
+        return {
+            "graded": graded,
+            "passes": passes,
+            "pass_rate": passes / graded if graded else None,
+            "not_graded": dict(ungraded),
+            "answers": answers,
+            "transcripts": directory,
+            "evidence": asdict(evidence),
+            **_next_step(evidence, self.config.gate),
+        }
 
     async def submit(self, path: str) -> ToolCallResult:
         task = await self._load(path)
@@ -397,21 +423,14 @@ class ToolSession:
         return _result(reply, done=count >= self.tools.n)
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
-        content = {
-            "capability": capability_idea_record(self.tools.idea),
-            "task": _public_task(task),
-            "grader": task.grader.model_dump(mode="json"),
-            "solver_evidence": {
-                "runs": evidence.solver_runs,
-                "passes": evidence.solver_passes,
-                "format_failures": evidence.solver_format_failures,
-                "failed_answers": [_clip(answer, limit=300) for answer in self.tools.failed_answers[key]][
-                    :REVIEW_ANSWERS
-                ],
-            },
-            "adversary_runs": self.tools.adversary_runs[key][:REVIEW_ANSWERS],
-            "accepted_tasks": [_public_task(accepted.task)["prompt"] for accepted in self.tools.accepted],
-        }
+        content = review_content(
+            self.tools.idea,
+            task,
+            evidence,
+            self.tools.failed_answers[key],
+            self.tools.adversary_runs[key],
+            [accepted.task for accepted in self.tools.accepted],
+        )
         return await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
 
     async def finish(self, report: str) -> ToolCallResult:
@@ -488,6 +507,62 @@ class _ReplayModel:
         return ModelTurn(message, (), (), None, "stop", text=self.answer, usage=TokenUsage(0, 0))
 
 
+def _next_step(evidence: Evidence, gate: Gate) -> dict[str, str]:
+    """What a version whose pass rate is in the band so far still needs before ``submit``, as a nudge to finish it."""
+    low, high = gate.solver_band
+    if evidence.solver_runs == 0 or not low <= evidence.solver_pass_rate <= high:
+        return {}
+    needs = {
+        "controls": "a correct control that passes and a wrong control that fails",
+        "solver band": f"{gate.min_solver_runs} graded solver rollouts in the band",
+        "answer format": "fewer format failures",
+        "adversary": f"{gate.min_adversary_runs} adversary rollouts",
+    }
+    missing = [needs[name] for name in missing_evidence(evidence, gate)]
+    if not missing:
+        return {"next": "This version has its evidence: submit it now."}
+    return {"next": f"This version is in the band so far. Get {'; '.join(missing)}, then submit it."}
+
+
+def review_content(
+    idea: CapabilityIdea,
+    task: TaskSpec,
+    evidence: Evidence,
+    failed_answers: list[str],
+    adversary_runs: list[dict[str, Any]],
+    accepted: list[TaskSpec],
+) -> dict[str, Any]:
+    """What the reviewer of ``submit`` reads: the public task, the grader, the evidence and the accepted prompts.
+
+    ``shared_failed_answers`` counts the failed answers that repeat, because a repeated wrong answer usually comes
+    from one other reading of the task.
+    """
+    shared = Counter(_normal_answer(answer) for answer in failed_answers)
+    return {
+        "capability": capability_idea_record(idea),
+        "task": _public_task(task),
+        "grader": task.grader.model_dump(mode="json"),
+        "solver_evidence": {
+            "runs": evidence.solver_runs,
+            "passes": evidence.solver_passes,
+            "format_failures": evidence.solver_format_failures,
+            "failed_answers": [_clip(answer, limit=300) for answer in failed_answers][:REVIEW_ANSWERS],
+            "shared_failed_answers": {answer: count for answer, count in shared.most_common() if count > 1},
+        },
+        "adversary_runs": adversary_runs[:REVIEW_ANSWERS],
+        "accepted_tasks": [_public_task(other)["prompt"] for other in accepted],
+    }
+
+
+def _normal_answer(answer: str) -> str:
+    """``answer`` without emphasis, case and a final period, and as a number when it is one."""
+    text = answer.strip().strip("*`").strip().rstrip(".").lower()
+    try:
+        return str(float(text.replace(",", "")))
+    except ValueError:
+        return _clip(text, limit=100)
+
+
 def rollout_tokens(rollout: Rollout) -> int:
     """The tokens of all the model requests of ``rollout``, from the usage that the transport reports."""
     return sum(step.turn.request_tokens for conversation in rollout.conversations for step in conversation.steps)
@@ -548,7 +623,7 @@ def _problems(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -> l
             engine.check(_solver_spec(task, config))
         except (ValueError, NotImplementedError) as error:
             problems.append(f"The rollout engine rejects the task: {error}")
-    return problems + _malformed_files(task) + _leaks(task)
+    return problems + _malformed_files(task) + _leaks(task) + _weak_grader(task)
 
 
 def _malformed_files(task: TaskSpec) -> list[str]:
@@ -574,21 +649,64 @@ def _malformed_files(task: TaskSpec) -> list[str]:
     return problems
 
 
-def _leaks(task: TaskSpec) -> list[str]:
+def _weak_grader(task: TaskSpec) -> list[str]:
+    """A grader that accepts wrong answers by their form: a substring match, a keyword check of free text, or a
+    numeric tolerance that also accepts the next values at the precision of the reference answer."""
     grader = task.grader
     if not isinstance(grader, VerifyitGrader):
         return []
-    answers = {value for value in _answer_values(grader.parameters) if len(value) >= MIN_LEAK_CHARS}
-    texts = {"the prompt": "\n".join(_public_task(task)["prompt"])}
+    try:
+        spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    except (TypeError, ValueError):
+        return []
+    if isinstance(spec, ExactSpec) and spec.substring:
+        return ["A substring grader accepts an answer that lists several candidates. Set substring to false"]
+    if isinstance(spec, IfevalSpec) and any(constraint.name.startswith("keywords:") for constraint in spec.constraints):
+        return [
+            "A keyword grader checks words, not the content of the answer: a correct paraphrase fails and an answer "
+            "that only repeats the words passes. Ask for a value that a NumericSpec or an ExactSpec can grade"
+        ]
+    if not isinstance(spec, NumericSpec) or PLAIN_DECIMAL.fullmatch(spec.expected.strip()) is None:
+        return []
+    text = spec.expected.strip()
+    expected = Decimal(text)
+    unit = Decimal(1).scaleb(-len(text.partition(".")[2]))
+    tolerance = max(Decimal(str(spec.tolerance_abs)), Decimal(str(spec.tolerance_rel)) * abs(expected))
+    if tolerance < unit:
+        return []
+    return [
+        f"The tolerance {tolerance:f} also accepts {expected - unit} and {expected + unit}, which are wrong answers "
+        f"at the precision of the reference {expected}. Write the reference with the precision that the prompt "
+        f"asks for, and a tolerance below {unit:f}"
+    ]
+
+
+def _leaks(task: TaskSpec) -> list[str]:
+    """The reference answers in the prompt or the solver's files, and in a quoted example of the prompt."""
+    grader = task.grader
+    if not isinstance(grader, VerifyitGrader):
+        return []
+    answers = {value.strip() for value in _answer_values(grader.parameters)}
+    prompt = "\n".join(_public_task(task)["prompt"])
+    texts = {"the prompt": prompt}
     for resource in task.resources.worker:
         if isinstance(resource.source, InlineFile):
             texts[resource.path] = resource_bytes(resource).decode(errors="replace")
-    return [
+    leaks = [
         f"The reference answer {answer!r} is in {where}"
         for answer in sorted(answers)
+        if len(answer) >= MIN_LEAK_CHARS
         for where, text in texts.items()
         if re.search(rf"(?<!\w){re.escape(answer)}(?!\w)", text)
     ]
+    # A short answer occurs in a prompt by chance, but not as a quoted example of the answer format.
+    leaks += [
+        f"The prompt gives the reference answer {answer!r} as a quoted example"
+        for answer in sorted(answers)
+        if MIN_QUOTED_LEAK_CHARS <= len(answer) < MIN_LEAK_CHARS
+        and re.search(rf"[\"'`]\s*{re.escape(answer)}\s*[\"'`]", prompt, re.IGNORECASE)
+    ]
+    return leaks
 
 
 def _answer_values(value: Any, key: str | None = None) -> list[str]:
