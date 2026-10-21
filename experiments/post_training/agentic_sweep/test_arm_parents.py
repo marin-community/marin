@@ -102,6 +102,9 @@ def test_parent_and_plateau_outputs_are_disjoint_and_use_the_selected_weights():
             assert (config.plateau_dropping is not None) == (method == "plateau")
             assert trained.name == f"checkpoints/karan/{method}-{parent_name}-v7-20261020-lr1e-06-3ep"
             assert trained.version == "2026.10.20"
+            parent_artifact = trained.deps[-1]
+            assert parent_artifact.version == ("2026.10.20.2" if parent_name == "v0" else "2026.10.20")
+            assert parent_artifact.path("/outputs") == config.initialize_from_hf
             outputs.add(output)
             tracker_ids.add(config.trainer.id)
             fingerprints.add(trained.fingerprint())
