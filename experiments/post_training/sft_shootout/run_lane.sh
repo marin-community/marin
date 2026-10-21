@@ -13,6 +13,10 @@
 #          is met) and moves to its next shard once <out>/shard-NN/STOP exists (that shard's target is met).
 #
 # Needs GLM_BULK_TOKEN and DAYTONA_API_KEY in the environment, and for relay STUDENT_BASE_URL (serve_student.py).
+# Optional: STUDENT (harbor_glm --student, default v0; recorded in every run) and REASONING_EFFORT (low or high; unset
+# sends none, so GLM's template uses Max), BUDGET_FRACTION (relay handoff trigger as a fraction of the window;
+# unset keeps harbor_glm's default 0.75) and WINDOW_TOKENS (SWE-smith generation window; unset keeps harbor_glm's
+# 30,000).
 #   bash experiments/post_training/sft_shootout/run_lane.sh <plain|relay> <family> <agent> <k> <concurrency> \
 #     <tasks parquet> <package revision> <shards dir> <out> <shard numbers...>
 set -uo pipefail
@@ -26,9 +30,15 @@ exists() {  # <remote path>
   uv run python -c "import sys; from rigging.filesystem.storage_path import StoragePath; sys.exit(not StoragePath('$1').exists())"
 }
 
+# Which credentials this lane holds, as fingerprints (sha256 prefix), so a secret rotation can be checked from the log.
+fingerprint() { { set +x; } 2>/dev/null; printf %s "${!1:-}" | sha256sum | cut -c1-12; }
+echo "credential fingerprints: GLM_BULK_TOKEN=$(fingerprint GLM_BULK_TOKEN) DAYTONA_API_KEY=$(fingerprint DAYTONA_API_KEY)"
+
 generate() {  # <task list> <name> <attempts> <output> [--relay]
   uv run python $dir/harbor_glm.py --agent "$agent" --family "$family" --package-revision "$revision" --tasks "$tasks" \
-    --task-list "$1" --name "$2" --n-attempts "$3" --n-concurrent "$concurrency" --skip-if-done --output "$4" "${@:5}"
+    --task-list "$1" --name "$2" --n-attempts "$3" --n-concurrent "$concurrency" --skip-if-done --output "$4" \
+    --student "${STUDENT:-v0}" ${REASONING_EFFORT:+--reasoning-effort "$REASONING_EFFORT"} \
+    ${BUDGET_FRACTION:+--budget-fraction "$BUDGET_FRACTION"} ${WINDOW_TOKENS:+--window-tokens "$WINDOW_TOKENS"} "${@:5}"
 }
 
 finish() {  # <output>

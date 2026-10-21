@@ -39,6 +39,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import tomllib
 import uuid
 from collections.abc import Iterator
 from dataclasses import replace
@@ -61,7 +62,7 @@ from marin.evaluation.harbor.agent_context import (
     served_model_info,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
-from marin.evaluation.model_config import load_model_config
+from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.serving_config import inference_config_for_model, resolved_serve_config
 from marin.inference.config import RemoteInferenceConfig
 from marin.inference.dashboard_server import bind_serving_socket
@@ -94,13 +95,19 @@ AGENT_DOMAIN_ALLOW_LIST = "iris.oa.dev"
 HARBOR_PROJECT = "config/external/harbor"
 AGENTS_PATH = Path(__file__).parent / "harbor_agents"
 MINI_SWE_CONSTRAINTS = AGENTS_PATH / "mini-swe-agent-2.1.0-constraints.txt"
-# v0: the policy's serving config for Snowball v0, at the revision pinned for the sweep (4eeb756b has
-# the same weights as the config's 271c4b3c; the later commit only corrects the model card).
-STUDENT_CONFIG = Path(
-    "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/"
-    "open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.yaml"
-)
-STUDENT_REVISION = "4eeb756b404db25bc04e4daf49dfb9817bceb741"
+# Relay students: each one's serving config (a regional bucket copy; see its YAML) and the Hub revision the copy
+# matches, recorded in driver_config. v0's 4eeb756b has the same weights as the eval config's 271c4b3c; the later
+# commit only corrects the model card.
+STUDENTS = {
+    "v0": (
+        Path("experiments/post_training/sft_shootout/students/snowball-v0.yaml"),
+        "4eeb756b404db25bc04e4daf49dfb9817bceb741",
+    ),
+    "v0.1": (
+        Path("experiments/post_training/sft_shootout/students/snowball-v0.1.yaml"),
+        "6783e9743478bd25a9ce03ab3460e84d6a9814b0",
+    ),
+}
 # The relay student's OpenAI base URL: a capability URL (a bearer credential) for serve_student.py's endpoint,
 # passed only through the environment.
 STUDENT_URL_ENV = "STUDENT_BASE_URL"
@@ -113,7 +120,8 @@ POLICIES = {"tmax": POLICY_DIR / "tb2-recovery.yaml", "swesmith": POLICY_DIR / "
 # Generation-only change to the policy: a smaller context window (model_info max_input_tokens, the total window in
 # Harbor) so a trajectory that fits it also fits 32,768 tokens in v0's chat template, the SFT row length. In the
 # SWE-smith pilot, v0-template / GLM tokens for passing traces was median 1.038, p99 1.073, max 1.089, so
-# 30,000 x 1.089 = 32,670. TMax keeps the policy window (the ratio there is not stable).
+# 30,000 x 1.089 = 32,670. TMax keeps the policy window (the ratio there is not stable). --window-tokens sets a
+# different SWE-smith window; above 30,000 most traces that use the window no longer fit a 32,768-token row.
 GENERATION_WINDOW = {"swesmith": 30_000}
 AGENTS = {
     # Runs each task's solution/solve.sh with no model; used for task and visibility probes.
@@ -173,9 +181,24 @@ def capability_endpoint(app: Starlette, name: str) -> Iterator[tuple[str, str]]:
         yield capability.rstrip("/"), f"http://{host}:{port}"
 
 
-def student_inference_config(cluster: str) -> RemoteInferenceConfig:
-    """v0 served exactly as the eval policy does: 8xH100 vLLM in ``cluster`` (see serve_student.py)."""
-    model = replace(load_model_config(STUDENT_CONFIG), revision=STUDENT_REVISION)
+def student_model(student: str) -> ModelConfig:
+    return load_model_config(STUDENTS[student][0])
+
+
+def student_provenance(student: str) -> dict:
+    model = student_model(student)
+    return {
+        "config": str(STUDENTS[student][0]),
+        "location": model.location,
+        "hub_revision": STUDENTS[student][1],
+        "tokenizer": model.tokenizer or model.location,
+        "tokenizer_revision": model.effective_tokenizer_revision,
+    }
+
+
+def student_inference_config(student: str, cluster: str) -> RemoteInferenceConfig:
+    """The student served exactly as the eval policy does: 8xH100 vLLM in ``cluster`` (see serve_student.py)."""
+    model = student_model(student)
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster=cluster)
     accelerator = replace(accelerator, geometry=serving_geometry(resolved_serve_config(model), accelerator))
     # Iris defaults GPU jobs to NCCL_DEBUG=INFO, which floods the log forwarder; this vLLM path gets no
@@ -185,8 +208,13 @@ def student_inference_config(cluster: str) -> RemoteInferenceConfig:
     )
 
 
-def served_student(base_url: str) -> Backend:
-    """v0 behind ``base_url``, a capability URL for serve_student.py's endpoint, once it answers."""
+def teacher_overrides(reasoning_effort: str | None) -> dict:
+    """Fields the proxy adds to every GLM request: the chat template's reasoning effort, when one is chosen."""
+    return {} if reasoning_effort is None else {"chat_template_kwargs": {"reasoning_effort": reasoning_effort}}
+
+
+def served_student(student: str, base_url: str) -> Backend:
+    """The student behind ``base_url``, a capability URL for serve_student.py's endpoint, once it answers."""
     base_url = base_url.rstrip("/")
     while True:
         try:
@@ -197,16 +225,16 @@ def served_student(base_url: str) -> Backend:
         except httpx.HTTPError as error:
             # The type only: an httpx error message can carry the request URL, which is a credential.
             reason = type(error).__name__
-        logger.info("waiting for v0 to serve (%s)", reason)
+        logger.info("waiting for the student to serve (%s)", reason)
         time.sleep(STUDENT_POLL_INTERVAL)
     (served,) = response.json()["data"]
-    model = load_model_config(STUDENT_CONFIG)
-    logger.info("v0 is serving %s", served["id"])
+    model = student_model(student)
+    logger.info("the student is serving %s", served["id"])
     return Backend(
         author=Author.STUDENT,
         base_url=base_url,
         model=served["id"],
-        tokenizer=load_tokenizer(model.tokenizer or model.location, STUDENT_REVISION),
+        tokenizer=load_tokenizer(model.tokenizer or model.location, model.effective_tokenizer_revision),
         headers={},
         # The URL names the endpoint, not a host, so it works again once a preempted v0 re-registers.
         can_move=True,
@@ -257,8 +285,13 @@ def policy_agent(args: argparse.Namespace, served_info: dict | None) -> dict:
         raise ValueError(f"the {args.family} policy runs {agent['name']}, not {args.agent}")
     kwargs = {**agent.get("kwargs", {}), **AGENTS[args.agent].get("kwargs", {})}
     kwargs[MODEL_INFO_KEY] = reconciled_model_info(served_info, kwargs.get(MODEL_INFO_KEY))
-    if args.family in GENERATION_WINDOW:
-        kwargs[MODEL_INFO_KEY][MAX_INPUT_TOKENS_KEY] = GENERATION_WINDOW[args.family]
+    if args.window_tokens is not None:
+        if served_info is not None and args.window_tokens > served_info[MAX_INPUT_TOKENS_KEY]:
+            raise ValueError(
+                f"--window-tokens {args.window_tokens} exceeds the student's max_model_len "
+                f"{served_info[MAX_INPUT_TOKENS_KEY]}"
+            )
+        kwargs[MODEL_INFO_KEY][MAX_INPUT_TOKENS_KEY] = args.window_tokens
     if args.agent == "terminus-2":
         kwargs["llm_call_kwargs"] = {
             **kwargs.get("llm_call_kwargs", {}),
@@ -334,13 +367,30 @@ def main() -> None:
     parser.add_argument(
         "--budget-fraction", type=float, default=0.75, help="Relay context-budget trigger, as a fraction of the window."
     )
+    parser.add_argument(
+        "--window-tokens",
+        type=int,
+        help="Generation window (model_info max_input_tokens) for SWE-smith; default 30,000. TMax keeps its policy's.",
+    )
     parser.add_argument("--glm-relay-job", default=DEFAULT_GLM_RELAY_JOB)
+    parser.add_argument(
+        "--student", choices=sorted(STUDENTS), default="v0", help="Relay student (recorded in every run)."
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=["low", "high"],
+        help="GLM 5.3 template reasoning effort for every teacher request (default: none sent, so the template's Max).",
+    )
     parser.add_argument("--skip-if-done", action="store_true", help=f"Exit if --output holds {SUCCESS_MARKER}.")
     parser.add_argument("--family", choices=["tmax", "swesmith"], required=True)
     parser.add_argument(
         "--package-revision", required=True, help="Source and revision of the task packages, for provenance."
     )
     args = parser.parse_args()
+    if args.family not in GENERATION_WINDOW and args.window_tokens is not None:
+        parser.error(f"--window-tokens applies only to {sorted(GENERATION_WINDOW)}")
+    if args.window_tokens is None:
+        args.window_tokens = GENERATION_WINDOW.get(args.family)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     # httpx logs every request URL at INFO, and the student's URL is a capability URL.
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -366,11 +416,9 @@ def main() -> None:
             agent = AGENTS[args.agent]
             config = job_config(args, agent, None, work / "jobs")
         else:
-            student_model = load_model_config(STUDENT_CONFIG)
+            student = student_model(args.student)
             served_info = (
-                served_model_info(student_model.serve.max_model_len, student_model.generation.max_gen_toks)
-                if args.relay
-                else None
+                served_model_info(student.serve.max_model_len, student.generation.max_gen_toks) if args.relay else None
             )
             agent = policy_agent(args, served_info)
             window = agent["kwargs"][MODEL_INFO_KEY][MAX_INPUT_TOKENS_KEY]
@@ -380,11 +428,13 @@ def main() -> None:
                 model=GLM_MODEL,
                 tokenizer=load_tokenizer(GLM_TOKENIZER, GLM_TOKENIZER_REVISION),
                 headers={"Authorization": f"Bearer {os.environ[GLM_BULK_TOKEN_ENV]}"},
+                overrides=teacher_overrides(args.reasoning_effort),
             )
             relay = None
             if args.relay:
                 relay = RelayPolicy(
-                    student=served_student(os.environ[STUDENT_URL_ENV]), budget_tokens=int(window * args.budget_fraction)
+                    student=served_student(args.student, os.environ[STUDENT_URL_ENV]),
+                    budget_tokens=int(window * args.budget_fraction),
                 )
             app = build_proxy(teacher, window, RequestLog(work / "requests.jsonl"), relay)
             capability, local = stack.enter_context(capability_endpoint(app, args.name))
@@ -403,18 +453,23 @@ def main() -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
     provenance = {
         "args": vars(args),
+        "harbor_source": tomllib.loads((Path(HARBOR_PROJECT) / "pyproject.toml").read_text())["tool"]["uv"]["sources"][
+            "harbor"
+        ],
+        # The shootout base and relay student, recorded for plain runs too.
+        "student_model": student_provenance(args.student),
         "harbor": config,
         "policy": str(POLICIES[args.family]),
         "policy_changes": (
             None
-            if args.family not in GENERATION_WINDOW
+            if args.window_tokens is None
             else {
                 "model_info.max_input_tokens": {
                     "policy": reconciled_model_info(
                         None, policy(args.family)["agents"][0].get("kwargs", {}).get(MODEL_INFO_KEY)
                     )[MAX_INPUT_TOKENS_KEY],
-                    "generation": GENERATION_WINDOW[args.family],
-                    "why": "generation only: keep trajectories within 32,768 tokens in v0's chat template",
+                    "generation": args.window_tokens,
+                    "why": "generation only: 30,000 keeps trajectories within 32,768 tokens in v0's chat template",
                 }
             }
         ),
@@ -422,9 +477,13 @@ def main() -> None:
             "model": GLM_MODEL,
             "relay_job": args.glm_relay_job,
             "tokenizer": f"{GLM_TOKENIZER}@{GLM_TOKENIZER_REVISION}",
-            # Clients send only model and max_tokens (see requests.jsonl), so the service defaults apply;
-            # GLM 5.3's chat template then renders "Reasoning Effort: Max".
-            "effective_settings": "service defaults; template reasoning effort Max",
+            # Clients send only model and max_tokens (see requests.jsonl), so the service defaults apply. GLM 5.3's
+            # chat template renders "Reasoning Effort: Low" or "High" for those values of its reasoning_effort
+            # variable and "Max" for anything else or nothing.
+            "request_overrides": teacher_overrides(args.reasoning_effort),
+            "effective_settings": (
+                f"service defaults; template reasoning effort {(args.reasoning_effort or 'max').capitalize()}"
+            ),
         },
         "mini_swe_agent_install": (
             None
@@ -469,7 +528,7 @@ def main() -> None:
             None
             if not args.relay
             else {
-                "student": f"{STUDENT_CONFIG}@{STUDENT_REVISION}",
+                "student": args.student,
                 "student_serving": "serve_student.py root job, reached through its capability URL",
                 "budget_fraction": args.budget_fraction,
                 "budget_tokens": int(window * args.budget_fraction),

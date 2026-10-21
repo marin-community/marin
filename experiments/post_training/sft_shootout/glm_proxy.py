@@ -28,7 +28,7 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -61,6 +61,8 @@ class Backend:
     headers: dict[str, str]
     # Iris may move it while the proxy runs: refused connections and gateway errors are retried for MOVE_RETRY_WINDOW.
     can_move: bool = False
+    # Request fields the proxy sets on every request to this backend, over the agent's (e.g. the reasoning effort).
+    overrides: dict = field(default_factory=dict, compare=False)
 
 
 @dataclass(frozen=True)
@@ -160,7 +162,7 @@ def build_proxy(
             try:
                 response = await client.post(
                     f"{backend.base_url}/chat/completions",
-                    json={**body, "model": backend.model},
+                    json={**body, **backend.overrides, "model": backend.model},
                     headers=backend.headers,
                 )
                 if response.status_code not in GATEWAY_STATUSES or not retry:
@@ -179,6 +181,8 @@ def build_proxy(
             "status": response.status_code,
             "latency_s": latency,
         }
+        if backend.overrides:
+            record["overrides"] = backend.overrides
         if response.status_code != 200:
             record["error"] = response.text[:2000]
             return record

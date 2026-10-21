@@ -7,6 +7,7 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
+from experiments.post_training.sft_shootout import harbor_glm
 from experiments.post_training.sft_shootout.glm_proxy import Backend, RelayPolicy, RequestLog, build_proxy
 from experiments.post_training.sft_shootout.rebuild_traces import rebuild
 from experiments.post_training.sft_shootout.relay import (
@@ -227,3 +228,29 @@ def test_a_moving_student_is_retried_until_it_answers(tmp_path, monkeypatch, fai
     assert response.status_code == 200 and replies == []
     (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert record["status"] == 200 and record["author"] == Author.STUDENT.value
+
+
+def test_teacher_overrides_are_sent_on_every_request_and_logged(tmp_path):
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json=reply("ls"))
+
+    overrides = harbor_glm.teacher_overrides("low")
+    teacher = Backend(
+        author=Author.TEACHER,
+        base_url="http://teacher/v1",
+        model="glm",
+        tokenizer=WordTokenizer(),
+        headers={},
+        overrides=overrides,
+    )
+    log_path = tmp_path / "requests.jsonl"
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = build_proxy(teacher, 100, RequestLog(log_path), None, client=client)
+    response = post(TestClient(app), [{"role": "user", "content": "fix the bug"}])
+    assert response.status_code == 200
+    assert sent[0]["chat_template_kwargs"] == {"reasoning_effort": "low"} and sent[0]["model"] == "glm"
+    (record,) = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert record["overrides"] == overrides
