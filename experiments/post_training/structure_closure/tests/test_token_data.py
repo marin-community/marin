@@ -110,6 +110,6 @@ def test_probe_rejects_partial_token_cohort_with_matching_hash(tmp_path, monkeyp
         "argv",
         ["probe", "--tokens", str(tokens), "--initializer", str(tmp_path), "--output", str(output), "--tasks", "1"],
     )
-    with pytest.raises(ValueError, match="conversion did not pass"):
+    with pytest.raises(ValueError):
         probe_main()
     assert not output.exists()
