@@ -21,8 +21,9 @@ mapping, and aggregation.
 Record the audit in the benchmark's issue: the pinned inputs, the decision
 entries, the findings, and the hash of each frozen sample. Keep fixtures as
 regression tests in the repository's grader test directory, and mark the ones
-that the current grader fails as expected failures. Keep the frozen samples,
-the keys (each case's source model and grader verdicts), and the reviews in an
+that the current grader fails with `pytest.mark.xfail(strict=True)`, so the
+change that fixes the grader must remove the mark. Keep the frozen samples, the
+keys (each case's source model and grader verdicts), and the reviews in an
 immutable artifact, such as a pinned Hugging Face dataset revision, and link it
 from the issue.
 
@@ -167,8 +168,10 @@ grader's, with a paired interval that excludes zero.
    any review starts.
 3. Render the cases into batch files. Each case shows an opaque case id, the
    check's name and text, the prompt, and the response between explicit begin
-   and end markers. Do not show the model, a grader verdict, or another
-   reviewer's labels.
+   and end markers. For an agent task, the response is what the verifier
+   reads, frozen from the trial: the answer file or other graded state, and
+   any execution result the verifier uses. Do not show the model, a grader
+   verdict, or another reviewer's labels.
 4. Have two reviewers label every case, in separate runs and in different
    orders. Each label has a verdict (one of the grader's labels, or
    `ambiguous`), a lean (the label under the reading that the reviewer finds
@@ -183,10 +186,13 @@ grader's, with a paired interval that excludes zero.
    verdict that differs from the consensus. A grader's error rate is the share
    of population verdicts with an error. Estimate it per stratum from the cases
    with a consensus, weight it by stratum size, and give 95% bootstrap
-   intervals that resample within strata. Report the paired difference between
-   graders, Cohen's kappa between the reviewers' leans, and the disputed cases.
-   For a grader with more than two labels, also report the confusion matrix
-   against the consensus. Do not resolve disputed cases yourself.
+   intervals that resample within strata. A lean on an `ambiguous` verdict
+   only prefers one of the readings that the text allows, so also report each
+   rate over the cases where both verdicts are definite and agree. Report the
+   paired difference between graders, Cohen's kappa between the reviewers'
+   leans, and the disputed cases. For a grader with more than two labels, also
+   report the confusion matrix against the consensus. Do not resolve disputed
+   cases yourself.
 
 ## 7. Report
 
