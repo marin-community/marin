@@ -9,8 +9,11 @@ from huggingface_hub.errors import BucketNotFoundError
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import TransferError
 
+_HF_BUCKET_KIND = "buckets"
+_HF_REPO_TYPES = {"models": "model", "datasets": "dataset", "spaces": "space"}
 
-def ensure_private_hf_destination(url: str) -> None:
+
+def prepare_hf_destination(url: str) -> None:
     """Create a missing HF bucket or repository privately before writing into it.
 
     Existing destinations retain their visibility.
@@ -19,7 +22,7 @@ def ensure_private_hf_destination(url: str) -> None:
     if path.scheme != "hf":
         return
 
-    if path.netloc in {"buckets", "datasets", "models", "spaces"}:
+    if path.netloc == _HF_BUCKET_KIND or path.netloc in _HF_REPO_TYPES:
         if len(path.segments) < 2:
             raise TransferError(f"HF destination must name an owner and bucket or repository: {url}")
         owner, name = path.segments[:2]
@@ -30,16 +33,16 @@ def ensure_private_hf_destination(url: str) -> None:
         owner, name = path.netloc, path.segments[0]
         kind = "models"
 
-    if kind != "buckets":
+    if kind != _HF_BUCKET_KIND:
         name = name.split("@", 1)[0]
     identifier = f"{owner}/{name}"
-    if kind == "buckets":
+    if kind == _HF_BUCKET_KIND:
         try:
             bucket_info(identifier)
         except BucketNotFoundError:
             create_bucket(identifier, private=True, exist_ok=True)
         return
 
-    repo_type = {"models": "model", "datasets": "dataset", "spaces": "space"}[kind]
+    repo_type = _HF_REPO_TYPES[kind]
     if not repo_exists(identifier, repo_type=repo_type):
         create_repo(identifier, repo_type=repo_type, private=True, exist_ok=True)

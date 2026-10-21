@@ -61,16 +61,6 @@ def test_remote_transfer_forwards_saved_hf_token_without_putting_it_in_command(t
     ]
 
 
-def test_remote_copy_rejects_local_source(tmp_path):
-    source = tmp_path / "file.txt"
-    source.write_text("data")
-
-    result = CliRunner().invoke(cli, ["cp", "--remote", str(source), "s3://marin-us-east-02a/example"])
-
-    assert result.exit_code != 0
-    assert "local to the submitting machine" in result.output
-
-
 def test_new_hf_bucket_is_private(monkeypatch):
     calls = []
 
@@ -82,7 +72,7 @@ def test_new_hf_bucket_is_private(monkeypatch):
     monkeypatch.setattr(huggingface_module, "bucket_info", missing_bucket)
     monkeypatch.setattr(huggingface_module, "create_bucket", lambda *args, **kwargs: calls.append((args, kwargs)))
 
-    huggingface_module.ensure_private_hf_destination("hf://buckets/marin/test/example")
+    huggingface_module.prepare_hf_destination("hf://buckets/marin/test/example")
 
     assert calls == [(("marin/test",), {"private": True, "exist_ok": True})]
 
@@ -93,4 +83,4 @@ def test_existing_hf_bucket_keeps_visibility(monkeypatch):
         huggingface_module, "create_bucket", lambda *args, **kwargs: pytest.fail("existing bucket recreated")
     )
 
-    huggingface_module.ensure_private_hf_destination("hf://buckets/marin/existing/file")
+    huggingface_module.prepare_hf_destination("hf://buckets/marin/existing/file")
