@@ -18,6 +18,7 @@ from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
+from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
@@ -46,7 +47,7 @@ class _IrisSubmissionRoute:
     target_cluster: str | None
     priority: str
     timeout_hours: int
-    container_profile: str | None
+    container_profile: job_pb2.ContainerProfile | None
 
 
 def _module_name(module: ModuleType) -> str:
@@ -117,7 +118,9 @@ def _coordinator_request(
             ram=_COORDINATOR_MEMORY,
             disk=_COORDINATOR_DISK,
             target_cluster=route.target_cluster,
-            container_profile=route.container_profile,
+            container_profile=(
+                job_pb2.ContainerProfile.Name(route.container_profile) if route.container_profile is not None else None
+            ),
         ),
         environment=create_environment(workspace=str(workspace), env_vars=dict(env_vars), extras=["cpu"]),
         priority=priority_band_value(route.priority),

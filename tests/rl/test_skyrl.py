@@ -14,6 +14,7 @@ from typing import IO
 
 import pytest
 import yaml
+from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import (
@@ -222,8 +223,8 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
 
 
-@pytest.mark.parametrize("profile", [None, "CONTAINER_PROFILE_PRIVILEGED"])
-def test_skyrl_launch_document_preserves_the_job_container_profile(profile: str | None) -> None:
+@pytest.mark.parametrize("profile", [None, job_pb2.CONTAINER_PROFILE_PRIVILEGED])
+def test_skyrl_launch_document_preserves_the_job_container_profile(profile: job_pb2.ContainerProfile | None) -> None:
     execution = dataclasses.replace(_execution(), container_profile=profile)
     step = skyrl_step(_spec(), execution)
     config = step.build_config(
@@ -238,7 +239,7 @@ def test_skyrl_launch_document_preserves_the_job_container_profile(profile: str 
     if profile is None:
         assert "container_profile" not in iris
     else:
-        assert iris["container_profile"] == profile
+        assert iris["container_profile"] == "CONTAINER_PROFILE_PRIVILEGED"
 
 
 def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
