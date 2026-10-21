@@ -9,15 +9,20 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
-from rolloutengine.machines import _machine_spec
-from rolloutengine.models import ModelRequest, ModelTurn, TaskRolloutSpec
+from rolloutengine.engine import RolloutEngine
+from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.models import GradedRolloutInterrupted, ModelRequest, ModelTurn, RolloutOperation, TaskRolloutSpec
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.chat import chat_conversation
-from taskcompendium.grading import grade_answer, grade_remote_judge_answer
-from taskcompendium.models import CONVERSATION_ANSWERS, GradingAttempt, ScriptGrader, VerifyitGrader, grades_with_judge
-from taskcompendium.runtime.grading import grade_in_sandbox
-from verifyit.modes.grade_judge import JudgeConnection
+from taskcompendium.models import (
+    CONVERSATION_ANSWERS,
+    ScriptGrader,
+    VerifyitGrader,
+    grades_with_judge,
+    verifyit_spec,
+)
+from verifyit.spec import StructureClosureSpec
+from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 
 
 def json_bytes(value: Any) -> bytes:
@@ -33,11 +38,21 @@ def require_regradable(spec: TaskRolloutSpec) -> None:
     grader = spec.task.grader
     if (
         spec.limits.max_turns != 1
+        or spec.task_machine is not None
+        or not (spec.harness == "prefill" or is_shell_harness(spec.harness))
+        or spec.task.interaction_tools
+        or spec.task.tool_bindings
+        or spec.task.environment_requirements.tool_providers
         or spec.task.output_paths
         or spec.task.answer_type not in CONVERSATION_ANSWERS
         or not isinstance(grader, ScriptGrader | VerifyitGrader)
     ):
         raise ValueError("Saved-answer grading requires one turn and no captured output files")
+    if isinstance(grader, VerifyitGrader) and (
+        grades_with_judge(grader)
+        or (grader.environment is None and not isinstance(verifyit_spec(grader), StructureClosureSpec))
+    ):
+        raise ValueError("Saved-answer recovery supports sandbox graders and host structure_closure only")
     if isinstance(grader, ScriptGrader) and (grader.collect or grader.artifacts):
         raise ValueError("Saved-answer grading cannot recapture the original agent machine")
 
@@ -50,6 +65,9 @@ class SavedAnswer(BaseModel):
     instance_id: str
     repetition_id: int
     messages: tuple[dict[str, Any], ...]
+    request_options: dict[str, Any]
+    response_text: str
+    response_logprobs: tuple[float, ...] | None
     prompt_token_ids: tuple[int, ...]
     response_token_ids: tuple[int, ...]
     stop_reason: str
@@ -89,6 +107,9 @@ def save_answer(
         instance_id=instance_id,
         repetition_id=repetition_id,
         messages=(*request.messages, turn.message),
+        request_options=request.options,
+        response_text=turn.text,
+        response_logprobs=turn.logprobs,
         prompt_token_ids=turn.prompt_token_ids,
         response_token_ids=turn.response_token_ids,
         stop_reason=turn.stop_reason,
@@ -126,7 +147,6 @@ async def regrade_answer(
     record: SavedAnswer,
     original_spec: TaskRolloutSpec,
     factories: dict[str, MachineFactory],
-    judge_connection: JudgeConnection | None,
     *,
     timeout: float,
 ) -> GradeResult:
@@ -134,23 +154,38 @@ async def regrade_answer(
     require_regradable(original_spec)
     if record.spec_sha256 != spec_digest(original_spec) or spec_digest(record.spec) != record.spec_sha256:
         raise ValueError("Saved answer differs from the original complete task rollout specification")
-    task = original_spec.task
-    attempt = GradingAttempt(chat_conversation(list(record.messages)), stop_reason=record.stop_reason)
-    async with asyncio.timeout(timeout):
-        if grades_with_judge(task.grader):
-            return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection)
-        if isinstance(task.grader, VerifyitGrader) and task.grader.environment is None:
-            return await asyncio.to_thread(grade_answer, task, attempt)
-        assert isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None
-        selection = original_spec.verifier_machine
-        assert selection is not None
-        return await grade_in_sandbox(
-            task,
-            attempt,
-            factories[selection.backend],
-            _machine_spec(task.grader.environment, selection),
-            timeout=timeout,
+    calls = 0
+
+    async def saved_turn(request: ModelRequest) -> ModelTurn:
+        nonlocal calls
+        calls += 1
+        if calls != 1 or request.messages != record.messages[:-1] or request.options != record.request_options:
+            raise ValueError("Original harness requested a different conversation or another model turn")
+        return ModelTurn(
+            record.messages[-1],
+            record.prompt_token_ids,
+            record.response_token_ids,
+            record.response_logprobs,
+            record.stop_reason,
+            text=record.response_text,
         )
+
+    harness = PrefillHarness() if original_spec.harness == "prefill" else shell_harness(original_spec.harness)
+    engine = RolloutEngine(factories, {original_spec.harness: harness})
+    try:
+        async with asyncio.timeout(timeout):
+            result = await engine.run_task(original_spec, saved_turn)
+    except GradedRolloutInterrupted as error:
+        if error.operation != RolloutOperation.GRADE:
+            return GradeResult(Outcome.INFRA_ERROR, None, f"Saved-answer replay failed during {error.operation}")
+        return GradeResult(Outcome.INFRA_ERROR, None, type(error.__cause__).__name__)
+    if (
+        calls != 1
+        or len(result.rollout.conversations) != 1
+        or result.rollout.conversations[0].messages != record.messages
+    ):
+        raise ValueError("Original harness replay did not preserve the one saved conversation")
+    return result.grade
 
 
 async def regrade_once(
@@ -158,7 +193,6 @@ async def regrade_once(
     admission: AnswerAdmission,
     original_spec: TaskRolloutSpec,
     factories: dict[str, MachineFactory],
-    judge_connection: JudgeConnection | None,
     receipt_root: str,
     *,
     timeout: float,
@@ -197,7 +231,7 @@ async def regrade_once(
         return {"status": Outcome.UNAVAILABLE, "reward": None, "error": "Previous saved-answer attempt is incomplete"}
     conditional_object(started).write(json_bytes(proof), expected_version=None)
     try:
-        grade = await regrade_answer(record, original_spec, factories, judge_connection, timeout=timeout)
+        grade = await regrade_answer(record, original_spec, factories, timeout=timeout)
     except (TimeoutError, OSError, RuntimeError) as error:
         # A bounded infrastructure failure remains an unscored attempt in the receipt.
         grade = GradeResult(Outcome.INFRA_ERROR, None, type(error).__name__)
