@@ -31,10 +31,13 @@ can use, and /workspace/reference/taskspec.schema.json is the TaskSpec JSON sche
 the TaskSpec file.
 - Compute the reference answer in the program, never by hand. Give a numeric reference with the precision that \
 the prompt asks for, and a tolerance smaller than its last digit, so that the grader rejects the next values. \
-Derive all randomness from the task id. Never put the answer, or a file or a command that gives it, in the prompt \
-or in the solver's files. Put every rule that the answer needs in the prompt, or in a file that the prompt tells the \
-solver to read. Check the data files yourself, for example that each CSV row has as many fields as the \
-header.
+Derive all randomness from the task id. Never put the answer, a part of it, or a file or a command that gives it, \
+in the prompt or in the solver's files. A format example uses values that are not in the task. Put every rule that \
+the answer needs in the prompt, or in a file that the prompt tells the solver to read. Check the data files \
+yourself, for example that each CSV row has as many fields as the header.
+- When a task gives code with its output, for example a log, make the output by running the code in your shell. \
+Test each claim of the prompt that an answer is the only one, for example "only one line causes the error", with \
+the other candidates.
 
 # Tools
 
@@ -93,11 +96,17 @@ Try to get full credit with a shortcut only, for example: find the answer in the
 the task text, use a weakness of the answer format or of the grader, or give an answer that a weak grader accepts. \
 Give your final answer in the format that the task asks for."""
 
+BLIND_SOLVE_PROMPT = """\
+You check a task that trains a language-model agent on a capability. You get the task's prompt and files, but not \
+its reference answer. Solve the task as an expert would. Note each place where the prompt or the files allow more \
+than one reasonable reading, and the answer that each reading gives."""
+
 REVIEW_TASK_PROMPT = """\
 You review a task that trains a language-model agent on a capability. You get the capability, the task's prompt \
-and files, its grader with the reference answer, the solver evidence with the failed answers, the adversary \
-rollouts with their answers and commands, and the prompts of the tasks that are already accepted for the \
-capability. Accept the task only if all of these are true:
+and files, the blind solution of an expert who solved the task without its reference answer, its grader with the \
+reference answer, the solver evidence with the failed answers, the adversary rollouts with their answers and \
+commands, and the prompts of the tasks that are already accepted for the capability. Accept the task only if all \
+of these are true:
 - The task tests the capability, and its difficulty comes from the capability, not from tools that the solver's \
 shell does not have, for example an exp function.
 - The prompt is unambiguous, and it has one correct answer, which the grader accepts. An exact answer that depends \
@@ -109,6 +118,8 @@ word of the prompt that a file or the reference answer overrides is a contradict
 asks for a mean when the reference answer is a median.
 - The grader rejects wrong answers, and the solver cannot get the answer without the work. A numeric tolerance \
 must be smaller than the precision that the prompt asks for.
+- The blind solution agrees with the reference answer, or it has a mistake that you can show. A reading in the \
+blind solution that no statement excludes, and that gives another answer, shows an ambiguity.
 - Each failed answer comes from a mistake. For each distinct failed answer, find the reading or the mistake that \
 gives it, and the statement of the prompt or the files that it breaks. A failed answer from a reasonable reading \
 that no statement excludes shows an ambiguity. A repeated failed answer, in shared_failed_answers, usually comes \
@@ -116,6 +127,7 @@ from one other reading of the task.
 - No adversary got credit with a shortcut: an answer that it found, guessed, or that a weak grader accepts. An \
 adversary that passed by doing the work, as its commands show, is not a problem. An adversary that passed on a task \
 with files without reading them got the answer from the prompt alone.
+- A format example in the prompt contains no part of the answer.
 - In a multiple-choice question, the correct option does not stand out, for example by its length or detail, and \
 one question does not give away the answer of another.
 - The task is different from the accepted tasks.

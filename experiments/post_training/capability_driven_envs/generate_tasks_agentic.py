@@ -85,7 +85,8 @@ def tool_budget(tasks: int) -> ToolBudget:
     """A budget that permits about five rounds of evidence for each task, and research for the idea."""
     return ToolBudget(
         solver_rollouts=64 * tasks,
-        judge_calls=4 * tasks + 2,
+        # Each review is two judge calls: a blind solve and the review.
+        judge_calls=8 * tasks + 4,
         web_calls=10 + 2 * tasks,
     )
 
