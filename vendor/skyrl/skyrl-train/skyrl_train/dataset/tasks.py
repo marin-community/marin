@@ -25,7 +25,7 @@ from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count
 from skyrl_train.inference_engines.prefill import prefill_token_ids
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
-from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
+from skyrl_train.task_inputs import PREFILL_HARNESS, TaskInput, TrajectoryMetadata, task_messages
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
 TASK_ROLLOUT_COLUMN = "task_rollout_spec"
@@ -112,7 +112,7 @@ def task_prompt_token_count(
 ) -> int:
     """Include native task tools in the initial prompt's length budget."""
     lowered = TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
-    if lowered.harness == "prefill":
+    if lowered.harness == PREFILL_HARNESS:
         prompt = prefill_prompt(lowered.task)
         options = {**prompt.options, "chat_template_kwargs": chat_template_kwargs or {}}
         return len(prefill_token_ids(tokenizer, list(prompt.messages), options))

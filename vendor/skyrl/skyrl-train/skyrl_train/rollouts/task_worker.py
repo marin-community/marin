@@ -73,6 +73,7 @@ from skyrl_train.rollouts.task_projections import (
 )
 from skyrl_train.rollouts.training_record import TrainingRollout, training_rollout
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
+from skyrl_train.task_inputs import PREFILL_HARNESS
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -124,7 +125,6 @@ class InstalledAgentWorker(Protocol):
 
 
 SKYRL_AGENT_HARNESS = "skyrl_agent"
-PREFILL_HARNESS = "prefill"
 
 
 async def _model_turn(
