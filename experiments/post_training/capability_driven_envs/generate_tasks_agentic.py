@@ -18,8 +18,8 @@ Inside an Iris task::
 output of ``analyze_failed_runs``.
 
 For each capability the driver writes ``<capability id>/result.json`` (the agent's report, failure, tokens and tool
-spend), ``<capability id>/agent.json`` (the agent's conversations), and ``<capability id>/tasks/<task id>/task.json``
-and ``evidence.json`` for each accepted task. ``summary.json`` lists the results of all capabilities.
+spend), ``<capability id>/agent.json`` (the agent's conversations), and ``<capability id>/tasks/<task id>/task.json``,
+``evidence.json`` and ``review.json`` for each accepted task. ``summary.json`` lists the results of all capabilities.
 """
 
 import asyncio
@@ -69,6 +69,8 @@ NO_REASONING = "none"
 MAX_OUTPUT_TOKENS = 32768
 GATE = Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4)
 COMMAND_TIMEOUT = 30.0
+MAX_CONCURRENT_ROLLOUTS = 8
+"""Solver rollouts of one session at a time."""
 SOLVER_LIMITS = RolloutLimits(
     max_turns=30,
     max_total_tokens=None,
@@ -135,13 +137,14 @@ async def generate_all(
     solver_reasoning_effort: str,
     concurrency: int,
     output: StoragePath,
+    parallel_api_key: str,
 ) -> list[dict[str, Any]]:
     """Run one agent for each idea, at most ``concurrency`` at a time, and write each result when it finishes."""
     endpoint = source.current()
     agent = chat_model(endpoint.base_url, endpoint.token, GLM_MODEL, agent_reasoning_effort)
     solver = chat_model(endpoint.base_url, endpoint.token, solver_model, solver_reasoning_effort)
     slots = asyncio.Semaphore(concurrency)
-    async with GlmClient(source, GLM_PROVIDER) as judge, ParallelWeb(os.environ[PARALLEL_API_KEY_ENV]) as web:
+    async with GlmClient(source, GLM_PROVIDER) as judge, ParallelWeb(parallel_api_key) as web:
         config = AgenticConfig(
             agent_model=agent,
             workspace_factory=workspace_factory(),
@@ -154,7 +157,7 @@ async def generate_all(
             gate=GATE,
             budget=tool_budget(tasks),
             command_timeout=COMMAND_TIMEOUT,
-            max_concurrent_rollouts=8,
+            max_concurrent_rollouts=MAX_CONCURRENT_ROLLOUTS,
         )
 
         async def one(idea: CapabilityIdea) -> dict[str, Any]:
@@ -277,6 +280,7 @@ def main(
             solver_reasoning_effort=solver_reasoning_effort,
             concurrency=concurrency,
             output=output,
+            parallel_api_key=os.environ[PARALLEL_API_KEY_ENV],
         )
     )
     _write(output / SUMMARY_FILE, json.dumps(summary, indent=2))

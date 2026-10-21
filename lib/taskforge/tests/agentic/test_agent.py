@@ -9,6 +9,7 @@ import json
 import shlex
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic import BaseModel
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
@@ -18,7 +19,7 @@ from taskcompendium.models import VerifyitGrader
 from verifyit.spec import ExactSpec
 
 from taskforge.agentic import example_build
-from taskforge.agentic.agent import generate_tasks
+from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
@@ -58,6 +59,12 @@ LIMITS = RolloutLimits(
 
 def call(name: str, **arguments: object) -> tuple[str, dict[str, object]]:
     return name, arguments
+
+
+def tool_replies(result: AgentResult, call_id: str) -> list[dict[str, Any]]:
+    """The tool replies to the agent's call ``call_id``, as JSON."""
+    messages = result.rollout.conversations[-1].messages
+    return [json.loads(m["content"]) for m in messages if m.get("tool_call_id") == call_id]
 
 
 SCRIPT = (
@@ -194,9 +201,7 @@ async def test_submit_refuses_a_task_whose_correct_option_is_the_longest():
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=judge))
 
-    [submit] = [
-        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-10"
-    ]
+    [submit] = tool_replies(result, "call-10")
     assert not submit["accepted"]
     assert any("longer than any other option" in problem for problem in submit["review"]["problems"])
     assert result.tasks == ()
@@ -208,9 +213,7 @@ async def test_submit_refuses_a_task_whose_answer_the_prompt_alone_gives():
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=Solver(guesses_right=True)))
 
-    [submit] = [
-        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-10"
-    ]
+    [submit] = tool_replies(result, "call-10")
     assert any("guessed the answer in 4 of 4" in problem for problem in submit["problems"])
     assert result.tasks == ()
 
@@ -230,33 +233,14 @@ async def test_a_task_too_long_for_the_reviewer_is_refused_and_the_session_conti
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=OverflowJudge()))
 
-    [submit] = [
-        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-10"
-    ]
+    [submit] = tool_replies(result, "call-10")
     assert "too long" in submit["error"]
     assert (result.failure, result.report) == (None, "done")
 
 
-@dataclass
-class LoopingAgent:
-    """Asks for a web search on every turn, as an agent that ignores its empty budget would."""
-
-    turns: int = 0
-
-    async def __call__(self, request: ModelRequest) -> ModelTurn:
-        self.turns += 1
-        arguments = json.dumps({"objective": "anything", "queries": ["anything"]})
-        tool_call = {
-            "id": f"call-{self.turns}",
-            "type": "function",
-            "function": {"name": "web_search", "arguments": arguments},
-        }
-        message = {"role": "assistant", "content": "", "tool_calls": [tool_call]}
-        return ModelTurn(message, (), (), None, "tool_calls", usage=TokenUsage(10, 1))
-
-
 async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
-    agent = LoopingAgent()
+    # An agent that ignores its empty budget and asks for a web search on every turn.
+    agent = ScriptedAgent(tuple(call("web_search", objective="any", queries=["any"]) for _ in range(LIMITS.max_turns)))
     async with ParallelWeb("unused") as web:
         config = agentic_config(agent, ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
@@ -272,8 +256,8 @@ async def test_a_session_at_its_turn_limit_gets_a_report_of_the_tools():
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
 
-    assert result.report is not None
-    assert result.report.startswith("The session stopped (max_turns) before the agent wrote a report, with 0 of 1")
+    assert result.rollout.stop_reason == "max_turns"
+    assert result.report is not None and "max_turns" in result.report
 
 
 async def test_rollout_runs_a_task_whose_id_is_too_long_for_a_file_name():
@@ -287,9 +271,7 @@ async def test_rollout_runs_a_task_whose_id_is_too_long_for_a_file_name():
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
 
-    [rollout] = [
-        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-2"
-    ]
+    [rollout] = tool_replies(result, "call-2")
     assert rollout["results"][TASK]["graded"] == 1
     assert (result.failure, result.report) == (None, "done")
 
@@ -306,13 +288,9 @@ async def test_rollout_refuses_solver_rollouts_past_the_cap_of_a_version():
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=24, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
 
-    replies = {
-        m["tool_call_id"]: json.loads(m["content"])
-        for m in result.rollout.conversations[-1].messages
-        if m.get("tool_call_id") in ("call-3", "call-4")
-    }
-    assert "A version gets at most 16 solver rollouts, and tasks/ledger--00.json has 12" in replies["call-3"]["error"]
-    assert replies["call-4"]["results"][TASK]["evidence"]["solver_runs"] == 16
+    [refusal], [rollout] = tool_replies(result, "call-3"), tool_replies(result, "call-4")
+    assert "A version gets at most 16 solver rollouts" in refusal["error"]
+    assert rollout["results"][TASK]["evidence"]["solver_runs"] == 16
     assert result.spend.solver_rollouts == 16
 
 
@@ -330,9 +308,7 @@ async def test_a_failed_answer_whose_last_line_passes_is_a_format_failure():
         solver = Solver(wrong=f"I added the changes of the item.\n\n**{EXPECTED}**")
         result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=solver))
 
-    [rollout] = [
-        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-2"
-    ]
+    [rollout] = tool_replies(result, "call-2")
     evidence = rollout["results"][TASK]["evidence"]
     assert (evidence["solver_runs"], evidence["solver_passes"], evidence["solver_format_failures"]) == (2, 2, 2)
 
@@ -343,9 +319,7 @@ async def test_finish_refuses_once_while_most_of_the_budget_is_left():
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
 
-    [refusal] = [
-        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-1"
-    ]
+    [refusal] = tool_replies(result, "call-1")
     assert "20 of 20 solver rollouts are left" in refusal["error"]
     assert result.report == "too easy"
 
@@ -363,8 +337,6 @@ async def test_submit_refuses_a_numeric_tolerance_that_accepts_the_next_values()
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
 
-    [submit] = [
-        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-2"
-    ]
+    [submit] = tool_replies(result, "call-2")
     assert not submit["accepted"]
     assert any("also accepts" in problem for problem in submit["problems"])

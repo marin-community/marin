@@ -483,7 +483,8 @@ class ToolSession:
             return False
         try:
             result = await self.tools.solver_engine.run_task(spec, _ReplayModel(last))
-        except RolloutInterrupted:
+        except RolloutInterrupted as error:
+            logger.warning("The grade of a last line was interrupted, so the answer stays failed: %s", error)
             return False
         return _passed(result.grade)
 
@@ -765,7 +766,8 @@ def _solver_spec(task: TaskSpec, config: AgenticConfig) -> TaskRolloutSpec:
 
 
 def _problems(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -> list[str]:
-    """What keeps the agent's tools from running ``task``, and the reference answers that the solver can read."""
+    """What keeps the agent's tools from running ``task``, malformed CSV or JSON files, a grader that accepts wrong
+    answers, and the reference answers that the solver can read."""
     problems = []
     if task.answer_type not in ANSWER_TYPES:
         problems.append(f"The answer type must be one of {sorted(ANSWER_TYPES)}, not {task.answer_type}")
@@ -971,10 +973,8 @@ def _transcript(rollout: Rollout, grade: GradeResult | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _clip(text: str, *, limit: int = OUTPUT_CHARS, tail: bool = False) -> str:
-    if len(text) <= limit:
-        return text
-    return f"...{text[-limit:]}" if tail else f"{text[:limit]}..."
+def _clip(text: str, *, limit: int = OUTPUT_CHARS) -> str:
+    return text if len(text) <= limit else f"{text[:limit]}..."
 
 
 def _result(value: Mapping[str, Any], *, done: bool = False) -> ToolCallResult:

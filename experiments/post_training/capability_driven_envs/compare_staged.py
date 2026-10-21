@@ -56,6 +56,7 @@ from experiments.post_training.capability_driven_envs.generate_tasks_agentic imp
     COMMAND_TIMEOUT,
     DEEPSEEK_MODEL,
     GATE,
+    MAX_CONCURRENT_ROLLOUTS,
     SOLVER_LIMITS,
     SUMMARY_FILE,
     _write,
@@ -192,7 +193,7 @@ async def compare_all(
                 web_calls=0,
             ),
             command_timeout=COMMAND_TIMEOUT,
-            max_concurrent_rollouts=8,
+            max_concurrent_rollouts=MAX_CONCURRENT_ROLLOUTS,
         )
 
         async def one(idea: CapabilityIdea) -> dict[str, Any]:

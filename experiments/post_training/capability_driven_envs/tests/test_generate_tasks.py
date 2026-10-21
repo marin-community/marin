@@ -28,6 +28,7 @@ from taskforge.llm.client import (
 from taskforge.llm.glm_client import Pool
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
+from taskforge.task_program import run_program
 
 from experiments.post_training.capability_driven_envs.catalog import example_catalog_path
 from experiments.post_training.capability_driven_envs.generate_tasks import (
@@ -37,7 +38,6 @@ from experiments.post_training.capability_driven_envs.generate_tasks import (
     generate_tasks,
     main,
     pool_token,
-    run_program,
     selected_ideas,
     task_workpieces,
     write_outputs,
