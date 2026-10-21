@@ -78,8 +78,9 @@ incomplete multipart uploads after seven days.
 
 The shared scratch bucket for every CoreWeave cluster is declared as
 `data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`, separately from the region
-mirror set. Permanent east-region artifacts remain in `marin-us-east-02a`; `hero-checkpoints`
-is reserved for hero checkpoints.
+mirror set. `data.stores.coreweave.checkpoint_bucket` selects the durable destination for
+SkyRL outputs. Both currently point to `marin-us-east-08a`. Other permanent east-region
+artifacts remain in `marin-us-east-02a`; `hero-checkpoints` is reserved for hero checkpoints.
 
 CoreWeave bucket access policies preserve S3 access for principals in the Open Athena organization.
 Only `marin-us-east-02a` denies every principal the `s3:DeleteObject` and

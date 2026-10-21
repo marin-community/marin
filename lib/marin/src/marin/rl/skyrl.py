@@ -22,7 +22,7 @@ import yaml
 from iris.cluster.client.job_info import get_job_info
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
-from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.cluster_config import checkpoint_output_path, marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.utils import discover_hf_checkpoints
@@ -872,20 +872,21 @@ def skyrl_step(
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
         attempt_id = "<attempt_id>" if ctx.is_fingerprint else uuid.uuid4().hex[:12]
+        output_root = ctx.output_path if ctx.is_fingerprint else checkpoint_output_path(ctx.output_path)
         if ctx.is_fingerprint:
             temporary_root = "<temporary_output_path>"
         else:
             temporary_root = skyrl_temporary_run_path(
-                ctx.output_path,
+                output_root,
                 ttl_days=spec.retention.temporary_storage_ttl_days,
             )
         attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(
             checkpoint_root=prefix_join(temporary_root, "checkpoints"),
-            export_root=prefix_join(ctx.output_path, "exports"),
+            export_root=prefix_join(output_root, "exports"),
             attempts_root=attempts_root,
-            resolved_config_uri=prefix_join(ctx.output_path, "resolved-launch.yaml"),
-            terminal_manifest_uri=prefix_join(ctx.output_path, "terminal.json"),
+            resolved_config_uri=prefix_join(output_root, "resolved-launch.yaml"),
+            terminal_manifest_uri=prefix_join(output_root, "terminal.json"),
         )
         draft_training = _declared_config_value(
             _parsed_config(spec.config_yaml), "generator.speculative_decoding.training"
@@ -930,4 +931,5 @@ def skyrl_step(
         build_config=build_config,
         deps=deps,
         runtime_args={_EXECUTION: execution},
+        output_path_route=checkpoint_output_path,
     )

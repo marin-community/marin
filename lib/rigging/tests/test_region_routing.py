@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rigging.filesystem.cluster_config import (
     check_gcs_paths_same_region,
+    checkpoint_output_path,
     collect_gcs_paths,
     marin_region,
     marin_temp_bucket,
@@ -155,6 +156,19 @@ def test_marin_temp_bucket_coreweave_uses_shared_scratch():
     ):
         assert marin_temp_bucket(ttl_days=1, prefix="zephyr") == "s3://marin-us-east-08a/tmp/ttl=1d/zephyr"
         assert marin_temp_bucket(ttl_days=14) == "s3://marin-us-east-08a/tmp/ttl=14d"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("s3://marin-us-east-02a/marin/users/alice/run", "s3://marin-us-east-08a/marin/users/alice/run"),
+        ("s3://marin-us-east-08a/marin/users/alice/run", "s3://marin-us-east-08a/marin/users/alice/run"),
+        ("s3://marin-na/marin/users/alice/run", "s3://marin-na/marin/users/alice/run"),
+        ("gs://marin-us-east5/marin/users/alice/run", "gs://marin-us-east5/marin/users/alice/run"),
+    ],
+)
+def test_checkpoint_output_path_routes_coreweave_runs(source: str, expected: str) -> None:
+    assert checkpoint_output_path(source) == expected
 
 
 def test_marin_temp_bucket_coreweave_source_uses_shared_scratch():

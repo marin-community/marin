@@ -35,6 +35,7 @@ from marin.rl.skyrl import (
     run_skyrl,
     skyrl_step,
 )
+from rigging.filesystem.cluster_config import checkpoint_output_path
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.models import qwen2_5_0_5b, qwen2_5_0_5b_instruct, qwen3_0_6b
@@ -461,7 +462,8 @@ def build_run(
         ),
         export_hf=export,
     )
-    return replace(run, run=run_canary, override_path=f"{CANARY_ROOT}/runs/{user_owned_name(identity)}/{run.version}")
+    output_path = checkpoint_output_path(f"{CANARY_ROOT}/runs/{user_owned_name(identity)}/{run.version}")
+    return replace(run, run=run_canary, override_path=output_path)
 
 
 @click.command(help=__doc__)

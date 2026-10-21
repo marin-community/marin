@@ -374,6 +374,33 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
     )
 
 
+def test_skyrl_step_routes_coreweave_outputs_to_checkpoint_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    step = skyrl_step(_spec(), _execution())
+    root = "s3://marin-us-east-08a/marin/users/tester/tests/iceball-rl/2026.08.01"
+    assert step.path() == root
+    lowered = step.lower()
+    assert lowered.output_path == root
+    assert lowered.writes_record
+    config = step.build_config(
+        StepContext.for_run(
+            output_path=lowered.output_path,
+            prefix="s3://marin-us-east-02a/marin",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+
+    output = config.output
+    scratch = "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/tester/tests/iceball-rl/2026.08.01"
+    assert output.checkpoint_root == f"{scratch}/checkpoints"
+    assert output.attempts_root == f"{scratch}/attempts"
+    assert output.export_root == f"{root}/exports"
+    assert output.resolved_config_uri == f"{root}/resolved-launch.yaml"
+    assert output.terminal_manifest_uri == f"{root}/terminal.json"
+    assert yaml.safe_load(config.launch_config_yaml)["artifacts"]["checkpoint_root"] == output.checkpoint_root
+
+
 def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
     expected_source_digest = skyrl_runtime_digest()
     step = skyrl_step(_spec(), _execution(), export_hf=True)

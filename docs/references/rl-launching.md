@@ -174,6 +174,12 @@ can point at an incomplete export. Keep resume behavior and terminal export expl
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
 
+CoreWeave SkyRL runs route their output paths to the configured checkpoint bucket
+(`data.stores.coreweave.checkpoint_bucket`), currently `s3://marin-us-east-08a`.
+Exports, launch documents, and terminal manifests retain the artifact's path within that
+bucket. Checkpoints and attempt data use its TTL-managed temporary prefix. The artifact
+graph's bookkeeping follows the same routed output path.
+
 The temporary checkpoint root is derived from the RL artifact name and version, not only from the
 runtime source digest. When `SkyRLRuntime.source_digest` changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
