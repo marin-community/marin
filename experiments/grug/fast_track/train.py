@@ -1838,9 +1838,11 @@ def _use_xla_autotune_cache(path: str, *, require_complete: bool) -> bool:
     Multi-process GB200 compiles hang in sharded autotuning's cross-process key-value exchange (every rank waits in
     ``ConfigAssigner::AssignConfigs`` for keys that never arrive), and loading results alone does not skip it. With a
     cache, every rank takes its configs from the same file with sharding off, so nothing is exchanged and all ranks
-    pick identical kernels. ``require_complete`` makes a fusion missing from the cache a compile error; without it
-    (a run with evals: the seed covers only the train step) each rank autotunes the eval program's fusions itself,
-    still without an exchange. Must run before the backend is created; returns whether a cache was loaded."""
+    pick identical kernels. ``require_complete`` makes a fusion missing from the cache a compile error. Without it (a
+    run with evals: the seed covers only the train step) a missing fusion takes XLA's default kernel instead of being
+    autotuned: per-rank autotuning of the eval program picks different kernels on different ranks, which hung some
+    GB200 evals and returned wrong losses and BPB in others. Must run before the backend is created; returns whether
+    a cache was loaded."""
     fs = fsspec.core.url_to_fs(path)[0]
     flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}"]
     loaded = fs.exists(path)
@@ -1852,6 +1854,8 @@ def _use_xla_autotune_cache(path: str, *, require_complete: bool) -> bool:
             f"--xla_gpu_require_complete_aot_autotune_results={str(require_complete).lower()}",
             "--xla_gpu_shard_autotuning=false",
         ]
+        if not require_complete:
+            flags.append("--xla_gpu_autotune_level=0")
     os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
     logger.info("XLA autotune cache %s: %s", "loaded" if loaded else "empty, will publish", path)
     return loaded
