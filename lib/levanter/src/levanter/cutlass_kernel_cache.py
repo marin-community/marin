@@ -101,7 +101,9 @@ def cutlass_call(launcher: Any, *, input_output_aliases: tuple[tuple[int, int], 
     arguments stay hashable.
     """
     cjax = importlib.import_module("cutlass.jax")
-    return cjax.cutlass_call(launcher, input_output_aliases=dict(input_output_aliases), **kwargs)
+    if input_output_aliases:
+        kwargs["input_output_aliases"] = dict(input_output_aliases)
+    return cjax.cutlass_call(launcher, **kwargs)
 
 
 def cutlass_kernel_cache() -> PersistentKvCache:
