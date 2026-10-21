@@ -197,7 +197,7 @@ def training_options(function):
             click.option("--steps", type=int, default=150, show_default=True),
             click.option("--tasks-per-step", type=int, default=32, show_default=True),
             click.option("--samples-per-task", type=int, default=8, show_default=True),
-            click.option("--learning-rate", type=float, default=5e-5, show_default=True),
+            click.option("--learning-rate", type=float, default=4e-5, show_default=True),
             click.option("--lora-rank", type=int, default=32, show_default=True),
             click.option("--micro-batch-tokens", type=int, default=32768, show_default=True),
             click.option("--seed", type=int, default=0, show_default=True),
@@ -243,7 +243,7 @@ def control(**arguments) -> None:
 @click.option("--instances-per-task", type=int, default=32, show_default=True)
 @click.option("--probes-per-task", type=int, default=8, show_default=True)
 @click.option("--sessions", type=int, default=6, show_default=True, help="Agent sessions at a time.")
-@click.option("--agent-turns", type=int, default=200, show_default=True)
+@click.option("--agent-turns", type=int, default=300, show_default=True)
 def rsi(
     relay_job: str,
     pool: str,
