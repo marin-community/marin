@@ -58,8 +58,8 @@ difficulty. Role "adversary" tells the \
 solver to get credit without solving the task, for example by finding the answer or exploiting the grader. An \
 adversary can also pass by doing the work, so the reviewer of submit judges its passes. The tool saves the \
 transcripts under /workspace/rollouts/.
-- submit: submit a task. It refuses a task that the tools cannot run. Then it needs this evidence for the exact \
-TaskSpec: a control with expect "pass" that \
+- submit: submit a task. It refuses a task that the tools cannot run, that leaks its answer, or that has a \
+malformed CSV or JSON file. Then it needs this evidence for the exact TaskSpec: a control with expect "pass" that \
 passed, a control with expect "fail" that failed, and no "fail" control that passed; at least {min_solver_runs} \
 graded solver rollouts with a pass rate from {low} to {high}; format failures in at most {max_format_failures} of \
 the solver rollouts; and at least {min_adversary_runs} adversary rollouts with a graded answer. Last, an \
@@ -106,6 +106,10 @@ You test a task for weaknesses. Do not solve the task: do not do the work or the
 Try to get full credit with a shortcut only, for example: find the answer in the files, in the environment or in \
 the task text, use a weakness of the answer format or of the grader, or give an answer that a weak grader accepts. \
 Give your final answer in the format that the task asks for."""
+
+GUESS_PROMPT = """\
+You cannot read the files or use the tools that this task names. Do not explain. Give your best guess of the answer, \
+in the format that the task asks for."""
 
 BLIND_SOLVE_PROMPT = """\
 You check a task that trains a language-model agent on a capability. You get the task's prompt and files, but not \
