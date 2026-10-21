@@ -65,8 +65,10 @@ uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-02a \
   --job-name <name> -e HF_TOKEN "$HF_TOKEN" -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" \
   -e PARALLEL_API_KEY "$PARALLEL_API_KEY" \
   -- bash experiments/post_training/baby_rsi/job.sh -m experiments.post_training.baby_rsi.run \
-  rsi --model Qwen/Qwen3-1.7B --gpu-memory-utilization 0.4 --output-dir s3://<bucket>/<prefix>/rsi
+  rsi --model Qwen/Qwen3-4B-Instruct-2507 --gpu-memory-utilization 0.4 --output-dir s3://<bucket>/<prefix>/rsi
 ```
+
+The defaults are the settings of the results below; the vLLM server and the trainer share the one GPU.
 
 A preempted run continues from what it uploaded (`resume.py`): the adapter and optimizer state of every tenth step,
 the records of the groups that it trained, and the accepted tasks of its finished synthesis sessions. It skips the
