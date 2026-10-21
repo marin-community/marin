@@ -54,6 +54,10 @@ def test_context_management_infrastructure_error_is_infrastructure() -> None:
     )
 
 
+def test_daytona_sdk_error_is_infrastructure() -> None:
+    assert error_category("DaytonaError") is ErrorCategory.INFRASTRUCTURE
+
+
 def test_llm_request_timeout_is_retryable_infrastructure() -> None:
     assert error_category("LLMRequestTimeoutError") is ErrorCategory.INFRASTRUCTURE
     assert is_resume_retryable("LLMRequestTimeoutError")
