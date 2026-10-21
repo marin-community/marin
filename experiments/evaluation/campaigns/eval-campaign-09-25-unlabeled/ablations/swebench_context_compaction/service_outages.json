@@ -2,8 +2,8 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195526-Qwen-Qwen3.6-35B-A3B-swebench-32k-8k-summary-c7803e1e44884c96ae48f55f67eec1fa-32k-8k-summary-38fb91f20481579f9c591e0190f9928c/results",
     "started_at": "2026-10-21T07:27:30.557000+00:00",
-    "finished_at": null,
-    "evidence": "Iris task events: inference-9ddff1427af347388512198c78b36ac2/0 attempt 6 WorkloadEvictedDueToPreempted; attempt 7 SchedulingGated. Preemptor workload UID 28b7561d-6884-450d-8892-b071778b6e34.",
+    "finished_at": "2026-10-21T08:08:03.196975+00:00",
+    "evidence": "Iris task events: inference-9ddff1427af347388512198c78b36ac2/0 attempt 6 WorkloadEvictedDueToPreempted; attempt 7 SchedulingGated. Preemptor workload UID 28b7561d-6884-450d-8892-b071778b6e34. Recovery probe matched the configured model alias and returned a one-token chat completion with HTTP 200.",
     "arm": "32k/8k, summary"
   },
   {
