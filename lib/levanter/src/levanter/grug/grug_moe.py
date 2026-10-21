@@ -55,9 +55,13 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     MoeOverlapWork,
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
 )
-from levanter.grug._moe.ep_ragged_all_to_all import DEFAULT_RAGGED_EXPERT_CHUNKS, _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import (
+    DEFAULT_RAGGED_EXPERT_CHUNKS,
+    RoutingSort,
+    _moe_mlp_ep_ragged_a2a_local,
+)
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
-from levanter.grug.mxfp8 import ExpertMxfp8
+from levanter.grug.mxfp8 import ExpertMxfp8, MxWeightQuant
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
     _axis_names,
@@ -440,8 +444,11 @@ class MoEExpertMlp(eqx.Module):
         report_assignment_keep: bool = False,
         ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
         ragged_expert_mxfp8_dispatch: bool = False,
+        ragged_routing_sort: RoutingSort = RoutingSort.ARGSORT,
+        ragged_expert_mxfp8_weight_quant: MxWeightQuant = MxWeightQuant.BLOCKS,
     ) -> Float[Array, "T O"] | tuple[Any, ...]:
-        """See ``moe_mlp`` for ``ragged_expert_mxfp8`` and ``ragged_expert_mxfp8_dispatch``."""
+        """See ``moe_mlp`` for ``ragged_expert_mxfp8``, ``ragged_expert_mxfp8_dispatch``, ``ragged_routing_sort``
+        and ``ragged_expert_mxfp8_weight_quant``."""
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
@@ -465,6 +472,8 @@ class MoEExpertMlp(eqx.Module):
             overlap_param_gather=overlap_param_gather,
             ragged_expert_mxfp8=ragged_expert_mxfp8,
             ragged_expert_mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
+            ragged_routing_sort=ragged_routing_sort,
+            ragged_expert_mxfp8_weight_quant=ragged_expert_mxfp8_weight_quant,
         )
 
 
@@ -537,6 +546,8 @@ def moe_mlp(
     ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     ragged_expert_mxfp8_dispatch: bool = False,
     expert_serial_pair: bool = False,
+    ragged_routing_sort: RoutingSort = RoutingSort.ARGSORT,
+    ragged_expert_mxfp8_weight_quant: MxWeightQuant = MxWeightQuant.BLOCKS,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -573,12 +584,15 @@ def moe_mlp(
     `ragged_expert_mxfp8` (``ragged_all_to_all``, ungated ReLU^2 or gated SwiGLU on SM100) runs the expert MLP's
     activation-path GEMMs block-scaled on QuACK, and with ``ExpertMxfp8.ALL`` the weight gradients too
     (``ACTIVATIONS``: they stay bf16); `ragged_expert_mxfp8_dispatch` also sends the dispatched rows as MXFP8 bytes
-    instead of quantizing them on arrival.
+    instead of quantizing them on arrival. `ragged_expert_mxfp8_weight_quant` picks how those GEMMs quantize the
+    expert weights (``MxWeightQuant``; ``TILES`` shares one quantization between the forward and input gradient).
     `overlap_param_gather` places the all-gather of the FSDP-sharded overlap parameters (``OverlapParamGather``).
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
     `ragged_overlap_weight_grads` (``ragged_all_to_all``) pins each round's expert weight gradients under its
     input cotangent's return all-to-all (same math).
+    `ragged_routing_sort` (``ragged_all_to_all``) picks the kernels that sort the assignments by expert and invert
+    that permutation (``RoutingSort``); every choice computes the same permutation.
     `expert_serial_pair` (``ragged_all_to_all`` ungated experts only) runs each expert's two neuron halves
     in series: ``y1 = mlp_a(x)``, ``y = y1 + mlp_b(x + y1)``.
 
@@ -762,6 +776,8 @@ def moe_mlp(
                 overlap_weight_grads=ragged_overlap_weight_grads,
                 mxfp8=ragged_expert_mxfp8,
                 mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
+                routing_sort=ragged_routing_sort,
+                mxfp8_weight_quant=ragged_expert_mxfp8_weight_quant,
             )
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local

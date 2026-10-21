@@ -25,7 +25,7 @@ import functools
 import logging
 import math
 from collections.abc import Callable
-from enum import auto, IntEnum
+from enum import auto, IntEnum, StrEnum
 from typing import Any, NamedTuple, Protocol
 
 import jax
@@ -53,7 +53,7 @@ from levanter.grug._moe.ep_common import (
     _expert_granular_a2a_params,
     _sort_activations,
 )
-from levanter.grug.mxfp8 import ExpertMxfp8, mx_pack_rows
+from levanter.grug.mxfp8 import ExpertMxfp8, MxWeightQuant, mx_pack_rows
 from levanter.kernels.pallas.relu2_mlp import fused_relu2
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.kernels.pallas.relu2_ragged_mlp import (
@@ -90,6 +90,64 @@ RAGGED_NCCL_SEND_RECV_XLA_FLAGS = (
     "--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false",
     "--xla_gpu_allow_ragged_all_to_all_nccl_send_recv_fallback=true",
 )
+
+
+class RoutingSort(StrEnum):
+    """The kernels that order the ragged EP dispatch's assignments by expert, invert that order and count each
+    expert's assignments. Both modes compute the same permutation (a stable sort by expert id) and the same counts,
+    so outputs and gradients are bitwise equal."""
+
+    ARGSORT = "argsort"
+    """A stable ``argsort`` of the int32 expert ids, a second ``argsort`` to invert it, and ``bincount``."""
+    SCATTER = "scatter"
+    """The ``argsort`` of the ids as uint16 (half the radix passes), the inverse as one scatter of ``arange``, and
+    the counts from per-block histograms (``_ROUTING_HISTOGRAM_BLOCK`` rows each) instead of ``bincount``'s single
+    contended histogram. GB200 at 524288 assignments x 384 experts: 32 + 4 + 6 us vs 57 + 57 + 87 us."""
+
+
+# Assignments per partial histogram of ``RoutingSort.SCATTER``'s counts: each block's adds land in its own row.
+_ROUTING_HISTOGRAM_BLOCK = 128
+_UINT16_KEYS = 2**16
+
+
+def _inverse_permutation(permutation: Int[Array, "N"]) -> Int[Array, "N"]:
+    """``argsort(permutation)`` for a permutation of ``arange(N)``, as one scatter."""
+    n = permutation.shape[0]
+    return (
+        jnp.zeros((n,), jnp.int32)
+        .at[permutation]
+        .set(jnp.arange(n, dtype=jnp.int32), unique_indices=True, mode="promise_in_bounds")
+    )
+
+
+def _blocked_bincount(keys: Int[Array, "N"], length: int) -> Int[Array, "length"]:
+    """``bincount(keys, length=length)`` for keys in ``[0, length]`` (``length`` itself is not counted), summed from
+    per-block histograms."""
+    n = keys.shape[0]
+    block = min(_ROUTING_HISTOGRAM_BLOCK, n)
+    # Padding takes the uncounted key ``length``.
+    padded = jnp.concatenate([keys.astype(jnp.int32), jnp.full((-n % block,), length, jnp.int32)]).reshape(-1, block)
+    block_of = jnp.broadcast_to(jnp.arange(padded.shape[0], dtype=jnp.int32)[:, None], padded.shape)
+    histograms = jnp.zeros((padded.shape[0], length + 1), jnp.int32).at[block_of, padded].add(1)
+    return jnp.sum(histograms, axis=0)[:length]
+
+
+def _expert_sort(
+    flat_selected: Int[Array, "TK"], num_experts: int, routing_sort: RoutingSort
+) -> tuple[Int[Array, "TK"], Int[Array, "TK"], Int[Array, "E"]]:
+    """``(sorted_indices, positions, group_sizes)``: the stable sort of the assignments by expert id (invalid ones
+    carry ``num_experts`` and sort last), its inverse (each assignment's row in the sorted buffer) and the number of
+    valid assignments per expert."""
+    if routing_sort == RoutingSort.ARGSORT:
+        sorted_indices = jnp.argsort(flat_selected)
+        group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
+        return sorted_indices, jnp.argsort(sorted_indices), group_sizes
+    if routing_sort == RoutingSort.SCATTER:
+        if num_experts >= _UINT16_KEYS:
+            raise ValueError(f"RoutingSort.SCATTER sorts uint16 expert ids, got {num_experts} experts")
+        sorted_indices = jnp.argsort(flat_selected.astype(jnp.uint16)).astype(jnp.int32)
+        return sorted_indices, _inverse_permutation(sorted_indices), _blocked_bincount(flat_selected, num_experts)
+    raise ValueError(f"unknown routing_sort {routing_sort!r}")
 
 
 class _ExpertMlp(Protocol):
@@ -323,6 +381,8 @@ class _CuteRelu2Mxfp8ExpertMlp:
     gradients stay bf16 (``relu2_expert_mlp_mxfp8_backward_input``).
     """
 
+    weight_quant: MxWeightQuant = MxWeightQuant.BLOCKS
+
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
         from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_fwd  # noqa: PLC0415
@@ -330,7 +390,9 @@ class _CuteRelu2Mxfp8ExpertMlp:
         cumulative_group_sizes = jnp.concatenate(
             [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
         )
-        return relu2_expert_mlp_mxfp8_fwd(x_dispatch, moe_w13_local, moe_w2_local, cumulative_group_sizes)
+        return relu2_expert_mlp_mxfp8_fwd(
+            x_dispatch, moe_w13_local, moe_w2_local, cumulative_group_sizes, weight_quant=self.weight_quant
+        )
 
     def backward(self, residuals, cotangent):
         dx, output_dot, wgrad_args, wgrad = self.backward_parts(residuals, cotangent)
@@ -341,7 +403,9 @@ class _CuteRelu2Mxfp8ExpertMlp:
         from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_backward_input  # noqa: PLC0415
         from levanter.grug._moe.sonic_cute import _relu2_expert_mlp_quack_wgrads  # noqa: PLC0415
 
-        dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_input(residuals, cotangent)
+        dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_input(
+            residuals, cotangent, weight_quant=self.weight_quant
+        )
         return dx, output_dot, wgrad_args, _relu2_expert_mlp_quack_wgrads
 
 
@@ -355,6 +419,8 @@ class _CuteSwigluMxfp8ExpertMlp:
     (``swiglu_expert_mlp_mxfp8_backward_input``).
     """
 
+    weight_quant: MxWeightQuant = MxWeightQuant.BLOCKS
+
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
         from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_fwd  # noqa: PLC0415
@@ -363,7 +429,9 @@ class _CuteSwigluMxfp8ExpertMlp:
         cumulative_group_sizes = jnp.concatenate(
             [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
         )
-        return swiglu_expert_mlp_mxfp8_fwd(x_dispatch, w13_interleaved, moe_w2_local, cumulative_group_sizes)
+        return swiglu_expert_mlp_mxfp8_fwd(
+            x_dispatch, w13_interleaved, moe_w2_local, cumulative_group_sizes, weight_quant=self.weight_quant
+        )
 
     def backward(self, residuals, cotangent):
         dx, output_dot, wgrad_args, wgrad = self.backward_parts(residuals, cotangent)
@@ -373,7 +441,9 @@ class _CuteSwigluMxfp8ExpertMlp:
     def backward_parts(self, residuals, cotangent):
         from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_backward_input  # noqa: PLC0415
 
-        dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_input(residuals, cotangent)
+        dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_input(
+            residuals, cotangent, weight_quant=self.weight_quant
+        )
         return dx, output_dot, wgrad_args, _swiglu_mxfp8_wgrads
 
 
@@ -390,12 +460,18 @@ class _CuteRelu2Mxfp8WgradExpertMlp:
     quantizes the dispatched rows along the token axis per expert and keeps that copy as the residual, and the
     backward quantizes ``dy``, ``d pre`` and ``post`` along it for the two weight-gradient GEMMs."""
 
+    weight_quant: MxWeightQuant = MxWeightQuant.BLOCKS
+
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
         from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_wgrad_fwd  # noqa: PLC0415
 
         return relu2_expert_mlp_mxfp8_wgrad_fwd(
-            x_dispatch, moe_w13_local, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+            x_dispatch,
+            moe_w13_local,
+            moe_w2_local,
+            _cumulative_group_sizes(active_group_sizes),
+            weight_quant=self.weight_quant,
         )
 
     def backward(self, residuals, cotangent):
@@ -409,7 +485,9 @@ class _CuteRelu2Mxfp8WgradExpertMlp:
             relu2_expert_mlp_mxfp8_backward_parts,
         )
 
-        dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_parts(residuals, cotangent)
+        dx, output_dot, wgrad_args = relu2_expert_mlp_mxfp8_backward_parts(
+            residuals, cotangent, weight_quant=self.weight_quant
+        )
         return dx, output_dot, wgrad_args, functools.partial(expert_mlp_mxfp8_token_wgrads, out_dtype=cotangent.dtype)
 
 
@@ -418,13 +496,19 @@ class _CuteSwigluMxfp8WgradExpertMlp:
     """``_CuteSwigluMxfp8ExpertMlp`` with block-scaled weight gradients too (``ExpertMxfp8.ALL``), as
     ``_CuteRelu2Mxfp8WgradExpertMlp``."""
 
+    weight_quant: MxWeightQuant = MxWeightQuant.BLOCKS
+
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
         from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_wgrad_fwd  # noqa: PLC0415
 
         w13_interleaved = _interleave_gate_up(moe_w13_local, moe_w2_local.shape[1])
         return swiglu_expert_mlp_mxfp8_wgrad_fwd(
-            x_dispatch, w13_interleaved, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+            x_dispatch,
+            w13_interleaved,
+            moe_w2_local,
+            _cumulative_group_sizes(active_group_sizes),
+            weight_quant=self.weight_quant,
         )
 
     def backward(self, residuals, cotangent):
@@ -435,7 +519,9 @@ class _CuteSwigluMxfp8WgradExpertMlp:
     def backward_parts(self, residuals, cotangent):
         from levanter.grug._moe.quack_mxfp8 import swiglu_expert_mlp_mxfp8_backward_parts  # noqa: PLC0415
 
-        dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_parts(residuals, cotangent)
+        dx, output_dot, wgrad_args = swiglu_expert_mlp_mxfp8_backward_parts(
+            residuals, cotangent, weight_quant=self.weight_quant
+        )
         return dx, output_dot, wgrad_args, functools.partial(_swiglu_mxfp8_token_wgrads, out_dtype=cotangent.dtype)
 
 
@@ -494,21 +580,21 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungat
     return _RaggedDotExpertMlp(activation_fn)
 
 
-def _mxfp8_expert_mlp(expert_mlp: _ExpertMlp, mxfp8: ExpertMxfp8) -> _ExpertMlp:
+def _mxfp8_expert_mlp(expert_mlp: _ExpertMlp, mxfp8: ExpertMxfp8, weight_quant: MxWeightQuant) -> _ExpertMlp:
     """The MXFP8 variant (``ACTIVATIONS`` or ``ALL``) of a QuACK expert MLP: ungated ReLU^2 or gated SwiGLU.
     Anything else (the portable ``ragged_dot`` fallback, another activation, serial pairs) has no MXFP8 kernel and
     raises."""
     wgrads = mxfp8 == ExpertMxfp8.ALL
     if type(expert_mlp) is _CuteRelu2ExpertMlp:
-        return _CuteRelu2Mxfp8WgradExpertMlp() if wgrads else _CuteRelu2Mxfp8ExpertMlp()
+        return (_CuteRelu2Mxfp8WgradExpertMlp if wgrads else _CuteRelu2Mxfp8ExpertMlp)(weight_quant)
     if type(expert_mlp) is _CuteExpertMlp:
-        return _CuteSwigluMxfp8WgradExpertMlp() if wgrads else _CuteSwigluMxfp8ExpertMlp()
+        return (_CuteSwigluMxfp8WgradExpertMlp if wgrads else _CuteSwigluMxfp8ExpertMlp)(weight_quant)
     raise ValueError(f"mxfp8 experts need ungated ReLU^2 or gated SwiGLU on QuACK's SM100 kernels, got {expert_mlp}")
 
 
 def _unpermute_from_global_expert(
     intermediate: Float[Array, "TK H"],
-    sorted_indices: Int[Array, "TK"],
+    positions: Int[Array, "TK"],
     combine_weights_local: Float[Array, "Tlocal K"],
     accepted: Bool[Array, "Tlocal K"],
     *,
@@ -520,9 +606,9 @@ def _unpermute_from_global_expert(
     Dropped assignments, whose ``accepted`` is false, must have weight zero. Their rows may hold
     unspecified values: the sum never reads them, but the weight gradient may, so a caller zeroes
     their weights with ``jnp.where``, whose transpose discards those gradients. An accepted row's
-    weight gets its gradient ``<dout, y>`` even at weight zero.
+    weight gets its gradient ``<dout, y>`` even at weight zero. ``positions`` is each assignment's row in
+    ``intermediate`` (the inverse of the expert sort).
     """
-    positions = jnp.argsort(sorted_indices)
     if sonic_gather_sum_available():
         # One kernel for the gather and the sum, materializing neither the unpermuted
         # ``[TK, H]`` buffer nor the ``[T, K, H]`` view -- at top-8 that view is eight times
@@ -537,10 +623,11 @@ def _unpermute_from_global_expert(
     )
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(3,))
+@functools.partial(jax.custom_vjp, nondiff_argnums=(4,))
 def _gather_dispatch_rows(
     x_local: Float[Array, "Tlocal H"],
     sorted_indices: Int[Array, "TK"],
+    positions: Int[Array, "TK"],
     accepted: Float[Array, "Tlocal K"],
     topk: int,
 ) -> Float[Array, "TK H"]:
@@ -550,37 +637,40 @@ def _gather_dispatch_rows(
     reads only the accepted slots, so on GPU a kernel reads each token's row once and writes it to
     its accepted slots alone, leaving the others unspecified; elsewhere one gather fills every
     slot. The backward pass is the transpose: each token sums the cotangent rows of its accepted
-    sorted slots, and the transport never writes the other slots' cotangent rows.
+    sorted slots, and the transport never writes the other slots' cotangent rows. ``positions`` is the
+    inverse permutation of ``sorted_indices``.
     """
     if sonic_gather_sum_available():
         tokens_per_shard = sorted_indices.shape[0] // topk
-        positions = jnp.argsort(sorted_indices).reshape(tokens_per_shard, topk)
-        return sonic_scatter_rows(x_local, positions, accepted != 0, rows=sorted_indices.shape[0])
+        return sonic_scatter_rows(
+            x_local, positions.reshape(tokens_per_shard, topk), accepted != 0, rows=sorted_indices.shape[0]
+        )
     return x_local[sorted_indices // topk]
 
 
 def _gather_dispatch_rows_fwd(
     x_local: Float[Array, "Tlocal H"],
     sorted_indices: Int[Array, "TK"],
+    positions: Int[Array, "TK"],
     accepted: Float[Array, "Tlocal K"],
     topk: int,
 ) -> tuple[Float[Array, "TK H"], tuple[Int[Array, "TK"], Float[Array, "Tlocal K"]]]:
-    return _gather_dispatch_rows(x_local, sorted_indices, accepted, topk), (sorted_indices, accepted)
+    return _gather_dispatch_rows(x_local, sorted_indices, positions, accepted, topk), (positions, accepted)
 
 
 def _gather_dispatch_rows_bwd(
     topk: int,
     residuals: tuple[Int[Array, "TK"], Float[Array, "Tlocal K"]],
     cotangent: Float[Array, "TK H"],
-) -> tuple[Float[Array, "Tlocal H"], None, None]:
-    sorted_indices, accepted = residuals
-    tokens_per_shard = sorted_indices.shape[0] // topk
-    positions = jnp.argsort(sorted_indices).reshape(tokens_per_shard, topk)
+) -> tuple[Float[Array, "Tlocal H"], None, None, None]:
+    positions, accepted = residuals
+    tokens_per_shard = positions.shape[0] // topk
+    positions = positions.reshape(tokens_per_shard, topk)
     if sonic_gather_sum_available():
         grad_x = sonic_gather_sum(cotangent, positions, accepted)
     else:
         grad_x = jnp.sum(jnp.where(accepted[..., None] != 0, cotangent[positions], 0), axis=1, dtype=jnp.float32)
-    return grad_x.astype(cotangent.dtype), None, None
+    return grad_x.astype(cotangent.dtype), None, None, None
 
 
 _gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bwd)
@@ -646,6 +736,8 @@ class _ExpertRouting(NamedTuple):
     """This shard's routing, all integer or boolean, shared by the forward and the backward."""
 
     sorted_indices: Int[Array, "TK"]
+    # The inverse of ``sorted_indices``: each assignment's row in the sorted buffer.
+    positions: Int[Array, "TK"]
     accepted: Bool[Array, "Tlocal K"]
     group_sizes: Int[Array, "E"]
     all_group_sizes: Int[Array, "S E"]
@@ -800,7 +892,7 @@ def _routed_experts_forward(
     with jax.named_scope("combine"):
         out = _unpermute_from_global_expert(
             returned,
-            routing.sorted_indices,
+            routing.positions,
             weights,
             routing.accepted,
             tokens_per_shard=layout.tokens_per_shard,
@@ -899,7 +991,7 @@ def _routed_experts_backward(
     assignments = routing.sorted_indices.shape[0]
     out_dim = out_cotangent.shape[1]
     weights_f32 = weights.astype(jnp.float32)
-    positions = jnp.argsort(routing.sorted_indices)
+    positions = routing.positions
     with jax.named_scope("combine"):
         # The combine's transpose: every accepted row's cotangent is its token's output cotangent
         # times its routing weight, rounded once, as the fused gather-sum's backward rounds it.
@@ -1022,6 +1114,8 @@ def _moe_mlp_ep_ragged_a2a_local(
     mxfp8_dispatch: bool = False,
     serial_pair: bool = False,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
+    routing_sort: RoutingSort = RoutingSort.ARGSORT,
+    mxfp8_weight_quant: MxWeightQuant = MxWeightQuant.BLOCKS,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
     """``overlap_fn`` (with ``overlap_tokens`` / ``overlap_params``, see ``MoeOverlapWork``) runs under the first
     dispatch all-to-all and its backward under the first return-cotangent all-to-all; its output is appended."""
@@ -1054,8 +1148,8 @@ def _moe_mlp_ep_ragged_a2a_local(
     with jax.named_scope("dispatch"):
         assignment_valid = _assignment_validity(token_valid_local, tokens=tokens_per_shard, topk=topk)
         flat_selected = jnp.where(assignment_valid, selected_experts_local.reshape(-1), num_experts)  # [TK]
-        sorted_indices = jnp.argsort(flat_selected)  # [TK]
-        group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)  # [E]
+        # [TK], [TK], [E]
+        sorted_indices, positions, group_sizes = _expert_sort(flat_selected, num_experts, routing_sort)
         all_group_sizes = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
         valid_assignments = jnp.sum(all_group_sizes, dtype=jnp.int32)
         logical_capacity = _scaled_capacity(
@@ -1083,10 +1177,13 @@ def _moe_mlp_ep_ragged_a2a_local(
         accepted_group_sizes = sum(clipped[shard_id] for clipped in chunk_clipped_group_sizes)  # [E]
         accepted = _accepted_assignments(flat_selected, sorted_indices, group_sizes, accepted_group_sizes)  # [TK]
         accepted = accepted.reshape(tokens_per_shard, topk)
-        sorted_x = _gather_dispatch_rows(x_local, sorted_indices, accepted.astype(jnp.float32), topk)  # [TK, H]
+        sorted_x = _gather_dispatch_rows(  # [TK, H]
+            x_local, sorted_indices, positions, accepted.astype(jnp.float32), topk
+        )
 
     routing = _ExpertRouting(
         sorted_indices=sorted_indices,
+        positions=positions,
         accepted=accepted,
         group_sizes=group_sizes,
         all_group_sizes=all_group_sizes,
@@ -1103,7 +1200,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             raise ValueError("serial_pair needs experts that write the width they read (x + y1)")
         expert_mlp = _SerialPairExpertMlp(expert_mlp)
     if mxfp8 != ExpertMxfp8.NONE:
-        expert_mlp = _mxfp8_expert_mlp(expert_mlp, mxfp8)
+        expert_mlp = _mxfp8_expert_mlp(expert_mlp, mxfp8, mxfp8_weight_quant)
     layout = _ExpertLayout(
         tokens_per_shard=tokens_per_shard,
         topk=topk,

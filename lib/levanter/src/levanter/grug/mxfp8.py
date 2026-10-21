@@ -35,6 +35,17 @@ class ExpertMxfp8(StrEnum):
     """The activation-path GEMMs and the weight gradients, quantized along the token axis per expert."""
 
 
+class MxWeightQuant(StrEnum):
+    """How the block-scaled expert GEMMs quantize their weights."""
+
+    BLOCKS = "blocks"
+    """Per use, one scale per 32 elements along that GEMM's contraction axis (OCP MX): the forward and the input
+    gradient quantize the weight separately."""
+    TILES = "tiles"
+    """One scale per 32 x 32 tile (``mx_quantize_tiles``), valid along both axes: the forward and the input gradient
+    share one quantization. Coarser scales than ``BLOCKS`` (a numerics change)."""
+
+
 def mx_quantize_dequantize(x: jax.Array, axis: int) -> jax.Array:
     """Round ``x`` to MXFP8 with 32-element blocks along ``axis`` and return it in ``x.dtype``."""
     axis = axis % x.ndim
@@ -86,6 +97,23 @@ def mx_quantize_cols(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     exponent = _e8m0_exponent(jnp.max(jnp.abs(blocks), axis=-2))
     scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
     values = (blocks / scale[..., None, :]).astype(_E4M3).reshape(*lead, t, k)
+    return values, exponent.astype(jnp.uint8)
+
+
+def mx_quantize_tiles(x: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """MXFP8 ``x[..., R, C]`` with one scale per 32 x 32 tile: e4m3 values ``[..., R, C]`` and biased e8m0
+    exponents ``[..., R / 32, C / 32]``.
+
+    A tile's scale is valid for 32-element blocks along either axis, so the same values feed a block-scaled GEMM
+    that contracts over ``R`` and one that contracts over ``C`` (a weight's forward and input-gradient GEMMs). The
+    scale is the tile's amax, at least every 1 x 32 block's, so values round as coarsely or more."""
+    *lead, r, c = x.shape
+    if r % MX_BLOCK or c % MX_BLOCK:
+        raise ValueError(f"both trailing dims must divide {MX_BLOCK}, got {x.shape}")
+    blocks = x.astype(jnp.float32).reshape(*lead, r // MX_BLOCK, MX_BLOCK, c // MX_BLOCK, MX_BLOCK)
+    exponent = _e8m0_exponent(jnp.max(jnp.abs(blocks), axis=(-3, -1)))
+    scale = jax.lax.bitcast_convert_type(exponent << 23, jnp.float32)
+    values = (blocks / scale[..., :, None, :, None]).astype(_E4M3).reshape(x.shape)
     return values, exponent.astype(jnp.uint8)
 
 

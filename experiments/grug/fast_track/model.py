@@ -38,6 +38,7 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
+from levanter.grug._moe.ep_ragged_all_to_all import RoutingSort
 from levanter.grug.attention import (
     AttentionMask,
     RotaryConfig,
@@ -56,7 +57,7 @@ from levanter.grug.grug_moe import (
     moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
-from levanter.grug.mxfp8 import ExpertMxfp8, mx_dense
+from levanter.grug.mxfp8 import ExpertMxfp8, MxWeightQuant, mx_dense
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.short_conv import short_conv
 from levanter.kernels.triton.gated_norm import gated_rms_norm
@@ -1003,8 +1004,14 @@ class GrugModelConfig:
     """Low-precision recipe for attention/KDA projections, the fused router-latent-shared projection (router
     columns excluded), the latent up-projection, the shared expert and the routed experts; see ``Fp8Recipe``."""
     mxfp8_fused_grad_quant: bool = False
+    mxfp8_expert_weight_quant: MxWeightQuant = MxWeightQuant.BLOCKS
+    """Real-MXFP8 routed experts: quantize the expert weights per GEMM along its contraction axis (``blocks``), or once
+    per 32 x 32 tile for both the forward and the input gradient (``tiles``, coarser scales: a numerics change)."""
     """Real-MXFP8 dense projections quantize the output gradient along rows and columns in one Pallas pass."""
     moe_ragged_chunks: int = 2
+    moe_routing_sort: RoutingSort = RoutingSort.ARGSORT
+    """``ragged_all_to_all``: the kernels that sort the assignments by expert, invert that permutation and count
+    each expert's assignments (``RoutingSort``). Same math, bitwise."""
     moe_overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK
     """``moe_shared_placement=overlap``: where the EP shard all-gathers the shared experts' FSDP-sharded weights,
     which places their gradients' reduce-scatter (``OverlapParamGather``). Same math."""
@@ -3912,6 +3919,8 @@ def _run_expert_bank(
             ragged_expert_chunks=cfg.moe_ragged_chunks,
             expert_serial_pair=cfg.moe_serial_pair,
             ragged_overlap_weight_grads=cfg.moe_overlap_weight_grads,
+            ragged_routing_sort=cfg.moe_routing_sort,
+            ragged_expert_mxfp8_weight_quant=cfg.mxfp8_expert_weight_quant,
         )
     if cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM:
         raise ValueError("fp8_recipe=mxfp8_sim simulates ungated ReLU^2 expert banks only")
@@ -3926,6 +3935,8 @@ def _run_expert_bank(
         report_assignment_keep=cfg.moe_drop_renorm,
         ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
         ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
+        ragged_routing_sort=cfg.moe_routing_sort,
+        ragged_expert_mxfp8_weight_quant=cfg.mxfp8_expert_weight_quant,
     )
 
 

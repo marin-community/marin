@@ -42,8 +42,10 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
 from levanter.grug._moe.ep_ragged_all_to_all import (
     _accepted_assignments,
     _FusedRelu2ExpertMlp,
+    _expert_sort,
     _gather_dispatch_rows,
     _RaggedDotExpertMlp,
+    RoutingSort,
     _transport_buffer,
     _TransportBufferSite,
     _unpermute_from_global_expert,
@@ -598,7 +600,13 @@ def test_dispatch_gradient_sums_each_tokens_accepted_assignments(topk, dtype, dr
     @jax.jit
     def evaluate(x, cotangent):
         output, backward = jax.vjp(
-            lambda value: _gather_dispatch_rows(value, jnp.asarray(indices), jnp.asarray(accepted, jnp.float32), topk),
+            lambda value: _gather_dispatch_rows(
+                value,
+                jnp.asarray(indices),
+                jnp.asarray(positions, jnp.int32),
+                jnp.asarray(accepted, jnp.float32),
+                topk,
+            ),
             x,
         )
         return output, backward(cotangent)[0]
@@ -610,6 +618,24 @@ def test_dispatch_gradient_sums_each_tokens_accepted_assignments(topk, dtype, dr
     # Only the accepted slots are specified; the GPU path never writes the others.
     np.testing.assert_array_equal(np.asarray(actual_output)[kept], np.asarray(x)[indices // topk][kept])
     np.testing.assert_array_equal(np.asarray(actual_gradient), np.asarray(expected_gradient, dtype=dtype))
+
+
+@pytest.mark.parametrize("routing_sort", list(RoutingSort))
+@pytest.mark.parametrize("assignments", [1, 96, 1000], ids=["one", "whole_blocks", "partial_block"])
+def test_expert_sort_is_the_stable_argsort_its_inverse_and_the_counts(routing_sort, assignments):
+    num_experts = 37
+    rng = np.random.default_rng(assignments)
+    selected = rng.integers(0, num_experts, size=assignments).astype(np.int32)
+    selected[rng.random(assignments) < 0.1] = num_experts  # invalid assignments sort last
+    expected_sorted = np.argsort(selected, kind="stable")
+
+    sorted_indices, positions, group_sizes = jax.jit(_expert_sort, static_argnums=(1, 2))(
+        jnp.asarray(selected), num_experts, routing_sort
+    )
+
+    np.testing.assert_array_equal(np.asarray(sorted_indices), expected_sorted)
+    np.testing.assert_array_equal(np.asarray(positions), np.argsort(expected_sorted))
+    np.testing.assert_array_equal(np.asarray(group_sizes), np.bincount(selected, minlength=num_experts + 1)[:-1])
 
 
 def test_accepted_assignments_keep_each_groups_accepted_prefix():
@@ -654,7 +680,7 @@ def test_combine_skips_dropped_rows_and_differentiates_accepted_zero_weights():
         # As in the ragged MoE, the `where` zeroes the dropped weights and discards their gradients.
         return _unpermute_from_global_expert(
             jnp.asarray(rows),
-            jnp.asarray(sorted_indices),
+            jnp.asarray(positions.reshape(-1), jnp.int32),
             jnp.where(accepted, weights, 0),
             jnp.asarray(accepted),
             tokens_per_shard=tokens,
@@ -1874,6 +1900,7 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(
         import numpy as np
         from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
+        from levanter.grug._moe.ep_ragged_all_to_all import RoutingSort
         from levanter.grug.grug_moe import moe_mlp
         from levanter.kernels.pallas.relu2_mlp import fused_relu2
         from levanter.utils.activation import ActivationFunctionEnum
@@ -1923,7 +1950,7 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(
 
         dropped = {}
 
-        def backend(implementation):
+        def backend(implementation, routing_sort=RoutingSort.ARGSORT):
             def output(x, w_up, w_down, combine_weights):
                 out, counts = moe_mlp(
                     x,
@@ -1939,6 +1966,7 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(
                     pooled_transport_capacity_factor=4.0,
                     report_capacity_overflow=True,
                     ragged_expert_chunks=__CHUNKS__,
+                    ragged_routing_sort=routing_sort,
                 )
                 dropped[implementation] = counts.dropped
                 return out
@@ -1948,6 +1976,15 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(
         with jax.set_mesh(mesh):
             ragged = value_and_grads(backend("ragged_all_to_all"))
             assert int(dropped["ragged_all_to_all"]) == 0
+            # Every routing sort computes the same permutation, so outputs and gradients are bitwise equal.
+            for routing_sort in (RoutingSort.SCATTER,):
+                for name, a, b in zip(
+                    ["out", "dx", "dw_up", "dw_down", "dcombine_weights"],
+                    ragged,
+                    value_and_grads(backend("ragged_all_to_all", routing_sort)),
+                    strict=True,
+                ):
+                    np.testing.assert_array_equal(a, b, err_msg=f"{routing_sort} vs argsort {name}")
             pooled = value_and_grads(backend("fixed_pooled_wave_all_to_all"))
             assert int(dropped["fixed_pooled_wave_all_to_all"]) == 0
 
