@@ -215,7 +215,7 @@ def _discover_files(
     """Walk *input_path* recursively and return ``{data file: byte size}``, ordered by path.
 
     Only files with matching extensions are included; dotfiles and hidden
-    directories are pruned before traversal. Sizes come from the walk's own ``detail=True``
+    directories are skipped. Sizes come from the walk's own ``detail=True``
     listing, so sizing the input for sharding costs no per-file stat call. When
     the ``FERRY_TEST_MAX_FILES`` env var is set to a positive integer, the
     sorted list is truncated to that many entries — a smoke/test-only knob that
@@ -231,6 +231,7 @@ def _discover_files(
 
     discovered: list[tuple[str, int]] = []
     for root, dirs, files in fs.walk(resolved, detail=True):
+        # Prune before walk recurses to avoid listing hidden subtrees.
         for dirname in list(dirs):
             if dirname.startswith("."):
                 del dirs[dirname]
