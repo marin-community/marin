@@ -363,9 +363,10 @@ class GrugTrainerConfig:
     layer_skip: LayerSkipRule | None = None
     # When the extra_mlp_layers MLPs switch on, as a fraction of training (0: from the start).
     extra_mlp_start_frac: float = 0.5
-    # Train steps dispatched before the previous step's host work: 1 overlaps that work (logging, callbacks) with
-    # the devices; 0 finishes every step before dispatching the next. 1 crashes the devices around step 515
-    # (CUDA_ERROR_ILLEGAL_ADDRESS, with or without PGLE; batch 160), so it is opt-in until that is understood.
+    # 1: each step's host work (logging, callbacks, metric copies) runs on a background thread while the next step runs,
+    # so the devices do not sit idle between steps; 0 finishes every step on the train thread before dispatching the
+    # next. The old 1 (host work after the next dispatch, on the train thread) crashed near step 512 (see the train
+    # loop's lagged-step wait).
     pipeline_depth: int = 0
     # Batches the train loader's background thread keeps on the devices ahead of the step.
     loader_buffer_batches: int = TRAIN_LOADER_BUFFER_SIZE
@@ -1558,6 +1559,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 if config.trainer.pipeline_depth not in (0, 1):
                     raise ValueError(f"pipeline_depth must be 0 or 1, got {config.trainer.pipeline_depth}")
                 while host_step < stop_step:
+                    if pending is not None and not pending.needs_state:
+                        # Wait for the lagged step on the devices (no copy) before taking a batch and dispatching.
+                        # Dispatching while it still ran bought nothing: the dispatch's buffer allocation then blocked
+                        # until the step finished plus 50-75 ms (GPU idle). And taking a batch wakes the loader thread,
+                        # whose host-to-device copies then start with no step in flight, as with pipeline_depth 0. The
+                        # old depth 1 woke it with a step in flight and crashed at steps 512-514: the loader queue's
+                        # depth, i.e. when the first batches copied during training are consumed.
+                        jax.block_until_ready(pending.metrics["train/loss"])
                     with jax.profiler.TraceAnnotation("load_batch"):
                         batch = next(iterator)
                     if pending is not None:

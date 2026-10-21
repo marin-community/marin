@@ -953,8 +953,8 @@ def _layer_skip_rule(
     "--pipeline-depth",
     type=click.IntRange(0, 1),
     default=0,
-    help="Train steps dispatched before the previous step's host work (1: overlap, crashes near step 515; "
-    "0: finish each step first).",
+    help="1: run each step's host work on a background thread while the next step runs; 0: finish each step on the "
+    "train thread before dispatching the next.",
 )
 @click.option(
     "--loader-buffer-batches",
