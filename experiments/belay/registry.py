@@ -11,7 +11,8 @@ Results section of the Belay page, built with ``build``.
 
     uv run python -m experiments.belay.registry validate
     uv run python -m experiments.belay.registry build > results.json
-    uv run python -m experiments.belay.registry new --slug sqrt-softplus-router --name "..." --category "MoE and routing"
+    uv run python -m experiments.belay.registry new --slug sqrt-softplus-router --name "..." \\
+        --category "MoE and routing" --summary "..." --source agent
 """
 
 import argparse

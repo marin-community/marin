@@ -42,7 +42,7 @@ event naming the checkpoint, and a feature added by the checkpoint gets an `adop
 
 Comment on the weekly intake issue ([marin#9514](https://github.com/marin-community/marin/issues/9514)) with the
 template in [`intake_template.md`](intake_template.md). A 👍 from a maintainer approves it: the intake bot copies it
-into #9451, assigns the next id and writes a `status: approved` entry with the comment's text, which the Belay agent
+into the open `belay-weekly` issue, assigns the next id and writes a `status: approved` entry with the comment's text, which the Belay agent
 then fills in as it runs trials.
 
 ## Entry format
