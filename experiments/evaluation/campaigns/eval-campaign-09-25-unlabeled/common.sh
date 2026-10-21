@@ -429,11 +429,15 @@ assert swebench["datasets"] == [
     {
         "name": "swebench-verified",
         "version": "1.0",
-        "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/registry.json",
+        "registry_url": swebench["datasets"][0]["registry_url"],
     }
 ]
+assert swebench["agents"][0]["kwargs"]["model_info"] == {
+    "max_input_tokens": 131072,
+    "max_output_tokens": 16384,
+}
+assert swebench["agents"][0]["kwargs"].get("summarization_threshold_chars") is None
 for name in (
-    "swebench-verified",
     "ot-tblite-recovery",
     "ds-1000-local",
     "bfclparity-pi",
@@ -446,7 +450,8 @@ assert yaml.safe_load((harbor / "tau3-pi.yaml").read_text())["agents"][0]["kwarg
     "max_output_tokens": 32768,
 }
 
-registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/"
+# Dataset registry revisions are independent of the vendored runtime revision.
+registry_pattern = r"https://raw\.githubusercontent\.com/marin-community/harbor/[0-9a-f]{40}/registry\.json"
 for path in harbor.glob("*.yaml"):
     document = yaml.safe_load(path.read_text())
     for agent in document.get("agents") or []:
@@ -460,7 +465,7 @@ for path in harbor.glob("*.yaml"):
     assert {"AgentSetupTimeoutError", "VerifierTimeoutError"} <= included, path
     for dataset in document.get("datasets") or []:
         registry_url = dataset.get("registry_url")
-        assert not registry_url or registry_url.startswith(registry_prefix), path
+        assert not registry_url or re.fullmatch(registry_pattern, registry_url), path
 PY
   )
 
