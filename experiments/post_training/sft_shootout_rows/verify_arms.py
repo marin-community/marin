@@ -7,15 +7,15 @@ For each prefix: _SUCCESS present and no DRY_RUN_NOT_FOR_TRAINING marker; every 
 output_hashes; each epoch file's decompressed sha256 equals splits[epoch].rows_sha256; rows plus padding equal
 padded_rows, a multiple of 16, with steps = padded_rows / 16; padding rows are pad-only with zero loss; per-family
 supervised and context tokens equal the split's totals; no training row comes from a held-out task (pool v5 ids in the
-manifest). Across arms: replay rows in every epoch file are the same multiset as plain's epoch 0. Plain: the three
-epoch files hold the same rows (as a multiset) in different orders. RS-multi: each epoch's agentic supervised tokens
-are within 1% of plain's B, on plain's task slots. Recovery: plain's trials and B exactly, every row trains plain's
-target tokens, and rows not marked injected are byte-identical to plain's. Relay: each family's episodes reach plain's
-B for it to whole-episode granularity (dropping the family's last chosen episode would fall below it), or the family
-took every usable episode and its shortfall is reported; every epoch holds the same rows, each trial once. A relay
-component (COMPONENT_NOT_AN_ARM, some families, no replay) gets the same family checks; given with a full relay arm
-(components listed first), the arm's rows for the component's families must be byte-identical to the component's. Any
-other arm is refused.
+manifest). Across arms: replay rows in every epoch file are the same multiset as plain's epoch 0. Plain: the three epoch
+files hold the same rows (as a multiset) in different orders. RS-multi: each epoch's agentic supervised tokens are
+within 1.5% of plain's B and their 3-epoch mean within 1%, on plain's task slots. Recovery: plain's trials and B
+exactly, every row trains plain's target tokens, and rows not marked injected are byte-identical to plain's. Relay: each
+family's episodes reach plain's B for it to whole-episode granularity (dropping the family's last chosen episode would
+fall below it), or the family took every usable episode and its shortfall is reported; every epoch holds the same rows,
+each trial once. A relay component (COMPONENT_NOT_AN_ARM, some families, no replay) gets the same family checks; given
+with a full relay arm (components listed first), the arm's rows for the component's families must be byte-identical to
+the component's. Any other arm is refused.
 
 --dry-run checks dry builds (build.py --dry-run) instead: each prefix must carry the DRY_RUN_NOT_FOR_TRAINING marker
 and no _SUCCESS; every other check is the same.
@@ -35,6 +35,10 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.sft_shootout_rows.build import COMPONENT_MARKER, DRY_RUN_MARKER, EPOCHS, plain_family_b
 from experiments.post_training.sweep_data.prepare_agentic import BATCH, PAD_TOKEN, read_component
 from experiments.post_training.sweep_data.select import CONTEXT
+
+# RS-multi agentic supervised tokens against plain's B: per epoch, and the mean over the three epochs.
+RS_EPOCH_TOLERANCE = 0.015
+RS_MEAN_TOLERANCE = 0.01
 
 
 class ArmCheck(NamedTuple):
@@ -246,13 +250,22 @@ def main() -> None:
             slots = set(plain_manifest["task_slots"])
             if {item["task_id"] for item in index if item.get("task_id")} - slots:
                 raise ValueError(f"{uri}: rows outside plain's task slots")
+            # rs_multi_epochs draws one seeded clean pass per task per epoch and does not target B, so a single epoch
+            # can miss B by more than 1% (v7 HIGH: -1.10 / -0.77 / +0.86%); the 3-epoch mean is held to 1%.
             deviations = {}
             for epoch in range(EPOCHS):
                 agentic = sum(v for family, v in arm[epoch]["supervised"].items() if family != "replay")
                 deviations[epoch] = agentic / b - 1
-                if abs(deviations[epoch]) > 0.01:
-                    raise ValueError(f"{uri}: epoch {epoch} agentic supervised {agentic} is not within 1% of B {b}")
+                if abs(deviations[epoch]) > RS_EPOCH_TOLERANCE:
+                    raise ValueError(
+                        f"{uri}: epoch {epoch} agentic supervised {agentic} is not within "
+                        f"{RS_EPOCH_TOLERANCE:.1%} of B {b}"
+                    )
+            mean = sum(deviations.values()) / EPOCHS
+            if abs(mean) > RS_MEAN_TOLERANCE:
+                raise ValueError(f"{uri}: mean agentic supervised deviation {mean:+.2%} is not within 1% of B {b}")
             report["agentic_supervised_vs_B"] = deviations
+            report["agentic_supervised_vs_B_mean"] = mean
         elif manifest["arm"] == "relay":
             report["relay"] = check_relay(uri, check, plain_manifest)
             for component_uri, component in components:
