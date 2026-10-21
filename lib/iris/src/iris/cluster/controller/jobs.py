@@ -218,11 +218,13 @@ def peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: boo
     return job_pb2.PEER_STATUS_ASSIGNED
 
 
-def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int) -> str:
+def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int, peer_reachable: bool) -> str:
     """Return the user-visible reason for a pending federated job."""
     if handoff_state == int(HandoffState.QUEUED_HANDOFF):
         if not cluster:
             return "Queued for a federation peer to report free capacity"
+        if not peer_reachable:
+            return f"Peer {cluster} is unreachable; queued until it reconnects"
         return f"Queued for peer {cluster} to report free capacity"
     if peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING:
         return f"Awaiting acceptance by peer {cluster}"
@@ -1071,7 +1073,9 @@ def _job_to_proto(
     current_peer_status = peer_status(job.cluster, handoff_state, task_summary is not None)
     pending_reason = job.error or ""
     if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
-        pending_reason = _federated_pending_reason(job.cluster, handoff_state, current_peer_status)
+        pending_reason = _federated_pending_reason(
+            job.cluster, handoff_state, current_peer_status, dependencies.runtime.federation.peer_reachable(job.cluster)
+        )
     elif job.state == job_pb2.JOB_STATE_PENDING:
         sched_reason = dependencies.runtime.get_job_scheduling_diagnostics(job.job_id.to_wire())
         pending_reason = sched_reason or "Pending scheduler feedback"
