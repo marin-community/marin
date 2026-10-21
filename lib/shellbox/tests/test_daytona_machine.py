@@ -16,20 +16,135 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 pytest.importorskip("daytona")
 
-from daytona import CreateSandboxFromSnapshotParams, DaytonaNotFoundError
+from daytona import (
+    AsyncDaytona,
+    CreateSandboxFromSnapshotParams,
+    DaytonaConfig,
+    DaytonaNotFoundError,
+)
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.machine import (
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
     DaytonaNetworkPolicy,
+    _create_sandbox,
 )
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, DockerImage, ExitReason, MachineSpec, UnsupportedMachineSpec
+
+
+@pytest.mark.parametrize("failure", ["rejected_post", "late_get", "prolonged_throttle", "deadline", "cancelled"])
+def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, failure):
+    async def scenario():
+        requests = []
+        delays = []
+        waiting = asyncio.Event()
+
+        async def wait(delay):
+            delays.append(delay)
+            waiting.set()
+            if failure in {"deadline", "cancelled"}:
+                await asyncio.Future()
+
+        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+
+        created = False
+
+        async def endpoint(request):
+            nonlocal created
+            if request.headers.get("Upgrade", "").lower() == "websocket":
+                websocket = web.WebSocketResponse()
+                await websocket.prepare(request)
+                async for _ in websocket:
+                    pass
+                return websocket
+            requests.append(request.method)
+            if request.method == "POST" and created:
+                return web.json_response({"message": "name already exists"}, status=409)
+            if (request.method == "GET" and created and requests.count("GET") > 1) or (
+                request.method == "POST"
+                and (
+                    failure == "late_get"
+                    or (failure == "rejected_post" and requests.count("POST") == 2)
+                    or (failure == "prolonged_throttle" and requests.count("POST") == 10)
+                )
+            ):
+                created = True
+                return web.json_response(
+                    {
+                        "id": "created-once",
+                        "organizationId": "fixture",
+                        "name": "fixture",
+                        "user": "root",
+                        "env": {},
+                        "labels": {},
+                        "public": False,
+                        "networkBlockAll": False,
+                        "target": "us",
+                        "cpu": 2,
+                        "gpu": 0,
+                        "memory": 4,
+                        "disk": 10,
+                        "state": "started",
+                        "toolboxProxyUrl": (
+                            ""
+                            if failure == "late_get" and request.method == "POST"
+                            else "https://fixture.invalid/toolbox"
+                        ),
+                    }
+                )
+            return web.json_response(
+                {"message": "rate limited"}, status=429, headers={"Retry-After-sandbox-create": "17"}
+            )
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
+                if failure in {"rejected_post", "prolonged_throttle"}:
+                    sandbox = await _create_sandbox(client, params, 60)
+                    assert sandbox.id == "created-once"
+                    attempts = 2 if failure == "rejected_post" else 10
+                    assert requests == ["POST"] * attempts
+                    assert len(delays) == attempts - 1 and all(delay >= 17 for delay in delays)
+                elif failure == "deadline":
+                    with pytest.raises(TimeoutError):
+                        async with asyncio.timeout(None) as deadline:
+
+                            async def expire_when_waiting():
+                                await waiting.wait()
+                                deadline.reschedule(asyncio.get_running_loop().time())
+
+                            expiration = asyncio.create_task(expire_when_waiting())
+                            try:
+                                await _create_sandbox(client, params, 60)
+                            finally:
+                                await expiration
+                    assert requests == ["POST"]
+                elif failure == "cancelled":
+                    task = asyncio.create_task(_create_sandbox(client, params, 60))
+                    await waiting.wait()
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                    assert requests == ["POST"]
+                else:
+                    sandbox = await _create_sandbox(client, params, 60)
+                    assert sandbox.id == "created-once"
+                    assert requests == ["POST", "GET", "POST", "GET"]
+                    assert len(delays) == 1 and delays[0] >= 17
+
+    asyncio.run(scenario())
 
 
 class LocalFiles:
@@ -100,6 +215,11 @@ class LocalDaytona:
         self.timeout = timeout
         return self.sandbox
 
+    async def get(self, name):
+        if self.params is None or self.params.name != name:
+            raise DaytonaNotFoundError("Sandbox does not exist", status_code=404)
+        return self.sandbox
+
     async def delete(self, sandbox):
         assert sandbox is self.sandbox
         await sandbox.process.close()
@@ -110,6 +230,42 @@ class LocalDaytona:
 
     async def __aexit__(self, _exc_type, _exc, _traceback):
         self.closed = True
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
+def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type):
+    class AcceptedThenFailed(LocalDaytona):
+        async def create(self, params, *, timeout):
+            await super().create(params, timeout=timeout)
+            raise error_type("SDK failed after acceptance")
+
+    async def scenario():
+        client = AcceptedThenFailed()
+        factory = DaytonaMachineFactory(client_factory=lambda: client)
+        with pytest.raises(error_type):
+            await factory.create(MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2))
+        assert client.deleted
+        assert client.closed
+
+    asyncio.run(scenario())
+
+
+def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():
+    client = LocalDaytona()
+    factory = DaytonaMachineFactory(client_factory=lambda: client)
+    spec = MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), cpus=2, memory_mb=2049)
+
+    async def scenario():
+        first = await factory.prepare(spec)
+        second = await factory.prepare(spec)
+        assert first == second
+        assert len(client.snapshot.snapshots) == 1
+        snapshot = await client.snapshot.get(first)
+        assert snapshot.state == SnapshotState.ACTIVE
+        assert snapshot.params.resources.memory == 3
+        assert client.params is None
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
@@ -702,6 +858,23 @@ def test_daytona_rejects_add_inputs_before_snapshot_creation(tmp_path, instructi
     with pytest.raises(UnsupportedMachineSpec, match="ADD"):
         asyncio.run(DaytonaMachineFactory(lambda: client).create(MachineSpec(DockerfileSource(tmp_path, dockerfile))))
     assert not client.snapshot.snapshots
+
+
+@pytest.mark.parametrize("invalid_source", ["add", "outside_context"])
+def test_snapshot_preflight_rejects_unsupported_build_sources(tmp_path, invalid_source):
+    context = tmp_path / "context"
+    context.mkdir()
+    dockerfile = (tmp_path if invalid_source == "outside_context" else context) / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:24.04\nADD payload /opt/\n")
+    client = LocalDaytona()
+    with pytest.raises(UnsupportedMachineSpec):
+        asyncio.run(
+            DaytonaMachineFactory(client_factory=lambda: client).prepare(
+                MachineSpec(source=DockerfileSource(context, dockerfile), cpus=1)
+            )
+        )
+    assert not client.snapshot.snapshots
+    assert client.params is None
 
 
 @pytest.mark.parametrize("startup_timeout", [None, 0.01])
