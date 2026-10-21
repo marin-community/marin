@@ -236,8 +236,20 @@ def request_kwargs(
     }
 
 
+@dataclass
+class _LoopPool:
+    """The connection pool of one event loop, and the SDK client on it for one endpoint."""
+
+    http: httpx.AsyncClient
+    sdk: openai.AsyncOpenAI
+    endpoint: GlmEndpoint
+
+
 class GlmClient:
     """Async GLM client. Use as ``async with GlmClient(source, provider) as client``.
+
+    The client opens one connection pool in each event loop that uses it, and a pickled client holds only
+    ``source`` and ``provider``.
 
     Args:
         source: Supplies the endpoint. The client asks it again during holds and after a connection
@@ -252,12 +264,11 @@ class GlmClient:
         self._backoff = ExponentialBackoff(
             initial=provider.backoff_initial, maximum=provider.backoff_maximum, factor=provider.backoff_factor
         )
-        connections = provider.max_connections
-        self._http = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
-        )
         self._endpoint = source.current()
-        self._sdk = self._sdk_client(self._endpoint)
+        self._pools: dict[asyncio.AbstractEventLoop, _LoopPool] = {}
+
+    def __reduce__(self) -> tuple[type[Self], tuple[EndpointSource, LLMProviderConfig]]:
+        return type(self), (self._source, self._provider)
 
     @property
     def model(self) -> str:
@@ -265,8 +276,8 @@ class GlmClient:
 
     @property
     def http(self) -> httpx.AsyncClient:
-        """The SDK client's connection pool, for requests to the router's other endpoints such as ``/health``."""
-        return self._http
+        """The running event loop's connection pool, for requests to the router's other endpoints such as ``/health``."""
+        return self._pool().http
 
     async def __aenter__(self) -> Self:
         return self
@@ -274,24 +285,44 @@ class GlmClient:
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
-        await self._http.aclose()
+        pool = self._pools.pop(asyncio.get_running_loop(), None)
+        if pool is not None:
+            await pool.http.aclose()
 
-    def _sdk_client(self, endpoint: GlmEndpoint) -> openai.AsyncOpenAI:
+    def _pool(self) -> _LoopPool:
+        """The running event loop's connection pool and SDK client, opened on first use there.
+
+        An httpx pool works only in the event loop that opened it. The pools of closed loops are dropped.
+        """
+        for loop in [loop for loop in list(self._pools) if loop.is_closed()]:
+            self._pools.pop(loop, None)
+        loop = asyncio.get_running_loop()
+        pool = self._pools.get(loop)
+        if pool is None:
+            limit = self._provider.max_connections
+            http = httpx.AsyncClient(limits=httpx.Limits(max_connections=limit, max_keepalive_connections=limit))
+            pool = _LoopPool(http, self._sdk_client(self._endpoint, http), self._endpoint)
+            self._pools[loop] = pool
+        elif pool.endpoint != self._endpoint:
+            pool.sdk = self._sdk_client(self._endpoint, pool.http)
+            pool.endpoint = self._endpoint
+        return pool
+
+    def _sdk_client(self, endpoint: GlmEndpoint, http: httpx.AsyncClient) -> openai.AsyncOpenAI:
         timeout = httpx.Timeout(
             connect=CONNECT_TIMEOUT, read=self._provider.stall_timeout, write=WRITE_TIMEOUT, pool=None
         )
         return openai.AsyncOpenAI(
-            base_url=endpoint.base_url, api_key=endpoint.token, max_retries=0, timeout=timeout, http_client=self._http
+            base_url=endpoint.base_url, api_key=endpoint.token, max_retries=0, timeout=timeout, http_client=http
         )
 
     def _refresh_endpoint(self) -> None:
-        """Ask the source for the endpoint and rebuild the SDK client if it changed."""
+        """Ask the source for the endpoint. Each loop's SDK client moves to a new endpoint at its next request."""
         endpoint = self._source.current()
         if endpoint == self._endpoint:
             return
         logger.warning("GLM endpoint moved from %s to %s", self._endpoint.base_url, endpoint.base_url)
         self._endpoint = endpoint
-        self._sdk = self._sdk_client(endpoint)
 
     async def complete(
         self,
@@ -450,7 +481,7 @@ class GlmClient:
         started = time.monotonic()
         ttft: float | None = None
         try:
-            chunks = await self._sdk.chat.completions.create(**kwargs)
+            chunks = await self._pool().sdk.chat.completions.create(**kwargs)
             assert isinstance(chunks, openai.AsyncStream)
             async with chunks:
                 last_token = time.monotonic()
@@ -516,7 +547,7 @@ class GlmClient:
         """
         endpoint = self._endpoint
         try:
-            response = await self._http.get(
+            response = await self._pool().http.get(
                 f"{endpoint.base_url.removesuffix(API_ROOT)}/health",
                 headers={"Authorization": f"Bearer {endpoint.token}"},
                 timeout=HEALTH_TIMEOUT,

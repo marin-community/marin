@@ -3,9 +3,12 @@
 
 import asyncio
 import json
+import pickle
 import socket
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -334,3 +337,42 @@ def test_continuations_stop_at_policy_limit(fake_glm, run):
     assert completion.content == "abc"
     assert completion.finish_reason is FinishReason.LENGTH
     assert len(fake_glm.requests) == 3
+
+
+def test_a_pickled_client_completes_in_each_new_event_loop(fake_glm, fast_provider):
+    fake_glm.stream(content="first")
+    fake_glm.stream(content="second")
+    client = pickle.loads(pickle.dumps(GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)))
+
+    # Each asyncio.run is a new event loop.
+    replies = [asyncio.run(client.complete(MESSAGES, LLMPolicy())).content for _ in range(2)]
+
+    assert replies == ["first", "second"]
+
+
+class KeepAliveHealth(BaseHTTPRequestHandler):
+    """Answers ``/health`` and keeps the connection open, as the router does."""
+
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 (the base class names it format)
+        pass
+
+
+def test_the_connection_pool_of_one_client_works_in_each_new_event_loop(fast_provider):
+    with ThreadingHTTPServer(("127.0.0.1", 0), KeepAliveHealth) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        client = GlmClient(FixedEndpoint(endpoint(f"{base_url}/v1")), fast_provider)
+
+        async def health() -> int:
+            return (await client.http.get(f"{base_url}/health")).status_code
+
+        # A pool that a closed loop opened fails on its kept-alive connection with "Event loop is closed".
+        assert [asyncio.run(health()) for _ in range(2)] == [200, 200]
+        server.shutdown()
