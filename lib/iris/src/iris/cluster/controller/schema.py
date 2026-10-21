@@ -228,6 +228,7 @@ federation_budget_reports_table = Table(
     "federation_budget_reports",
     metadata,
     Column("cluster", String, primary_key=True),
+    Column("authority_id", String, nullable=False),
     Column("user_spend", JSONDict(), nullable=False),
     Column("reported_at_ms", TimestampMsType, nullable=False),
     Column("refresh_epoch", String, nullable=False),

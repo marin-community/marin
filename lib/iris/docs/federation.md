@@ -240,7 +240,9 @@ budget demotion. No task is killed merely for exceeding a budget.
 New scheduling pauses if the parent policy or any required usage report is
 older than 30 seconds. Existing attempts continue to reconcile. The parent
 retains a missing peer's last reported spend and requires a fresh report from
-every peer in the parent's `peers` map after startup before new scheduling resumes. Budget
+every budget-managed peer after startup before new scheduling resumes. A peer
+with an unknown budget authority must first report which authority owns it;
+a known peer governed by another authority does not gate budget readiness. Budget
 reads expose the last known values; `get-scheduler-state` also reports
 `budget_authority` and `budget_policy_ready`.
 
@@ -253,7 +255,7 @@ uv run iris --cluster=cw-rno2a rpc controller get-scheduler-state
 Deploy the matching parent and peer versions together under the controller
 rollout procedure. A peer configured with `budget_parent` pauses new scheduling
 until its parent supports the budget exchange. A new parent waits for reports
-from all configured peers. Verify `budget_policy_ready: true` on the parent
+from all budget-managed peers. Verify `budget_policy_ready: true` on the parent
 and every peer before considering the rollout complete.
 
 Task status carries the effective priority fixed for its current attempt.

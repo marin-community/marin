@@ -55,7 +55,7 @@ def test_budget_migration_forces_full_priority_resync_and_preserves_reports():
         conn.execute("INSERT INTO federation_sync_state VALUES ('peer', '123')")
         migrate(conn)
         assert conn.execute("SELECT peer_id FROM federation_sync_state").fetchall() == []
-        conn.execute("INSERT INTO federation_budget_reports VALUES ('peer', '{\"alice\":12}', 1000, 'epoch', 1)")
+        conn.execute("INSERT INTO federation_budget_reports VALUES ('peer', 'hub', '{\"alice\":12}', 1000, 'epoch', 1)")
         migrate(conn)
         assert conn.execute("SELECT user_spend FROM federation_budget_reports").fetchall() == [('{"alice":12}',)]
 
@@ -211,6 +211,14 @@ def test_secondary_routing_hub_does_not_charge_usage_owned_by_another_authority(
         assert context(secondary).ready
         assert context(secondary).user("alice").budget_spent == 0
         assert context(parent).user("alice").budget_spent == 12
+        clock.advance(31)
+        assert context(secondary).ready
+        assert not context(parent).ready
+        restarted = FederationBudgets(
+            secondary_state._db, secondary.defaults, cluster_id="dev", peer_ids=("a",), now=clock.now
+        )
+        assert context(restarted).ready
+        assert restarted.check_submission().user("alice").budget_spent == 0
 
 
 def test_direct_submission_waits_for_parent_and_obeys_its_updated_ceiling(federation, peer_service):

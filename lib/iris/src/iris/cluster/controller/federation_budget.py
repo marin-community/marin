@@ -125,13 +125,15 @@ class FederationBudgets:
                     budget_spent=value,
                 )
         reports = tx.execute(select(federation_budget_reports_table)).all()
+        known_peers = {row.cluster for row in reports}
+        budget_peers = {row.cluster for row in reports if row.authority_id == self.cluster_id}
         fresh_peers = {
             row.cluster
             for row in reports
             if self._now().epoch_ms() - row.reported_at_ms.epoch_ms() < BUDGET_POLICY_MAX_AGE.to_ms()
         }
         with self._condition:
-            ready = set(self.peer_ids) <= fresh_peers & self._observed_peers
+            ready = set(self.peer_ids) <= known_peers and budget_peers <= fresh_peers & self._observed_peers
         return BudgetContext(users, self.defaults, ready=ready)
 
     def check_submission(self) -> BudgetContext:
@@ -216,6 +218,7 @@ class FederationBudgets:
             return
         values = dict(
             cluster=peer_id,
+            authority_id=report.authority_id,
             user_spend=dict(report.user_spend) if report.authority_id == self.cluster_id else {},
             reported_at_ms=self._now(),
             refresh_epoch=report.refresh_epoch,
