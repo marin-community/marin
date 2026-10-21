@@ -12,12 +12,15 @@ import numpy as np
 import pytest
 
 from levanter.grug.mxfp8 import (
+    MxWeightQuant,
     _ragged_wgrad,
     mx_dequantize_rows,
     mx_pack_rows,
     mx_quantize_dequantize_groups,
     mx_quantize_row_blocks,
+    mx_quantize_cols,
     mx_quantize_rows,
+    mx_quantize_tiles,
     mx_swiglu_experts,
 )
 from levanter.grug.mxfp8_pallas import (
@@ -150,7 +153,68 @@ def _exact_relu2_experts(x, w_up, w_down, group_sizes):
     return jax.lax.ragged_dot(jnp.square(jax.nn.relu(pre)), as_f32(w_down), group_sizes)
 
 
-def _relu2_kernel_run(x, w_up, w_down, dy, *, mxfp8: bool):
+def _tile_max_weights(rng, shape):
+    """Weights whose every 32-row and 32-column block in a 32 x 32 tile reaches the tile's amax (a permutation
+    pattern of maxima), so per-tile and per-block MXFP8 scales coincide."""
+    *lead, r, c = shape
+    w = rng.uniform(-1, 1, shape) * np.exp2(rng.integers(-6, 6, (*lead, r // 32, 1, c // 32, 1))).repeat(
+        32, -3
+    ).repeat(32, -1).reshape(shape)
+    tile_max = np.abs(w).reshape(*lead, r // 32, 32, c // 32, 32).max(axis=(-3, -1))
+    rows, cols = np.arange(r), (np.arange(r) * 7) % 32
+    for col_tile in range(c // 32):
+        w[..., rows, col_tile * 32 + cols] = np.repeat(tile_max[..., :, col_tile], 32, axis=-1)
+    return w.astype(np.float32)
+
+
+def test_tile_quantization_matches_block_quantization_when_every_block_reaches_its_tile_max():
+    w = _tile_max_weights(np.random.default_rng(2), (2, 64, 96))
+    values, tiles = mx_quantize_tiles(jnp.asarray(w))
+    row_values, row_exponents = mx_quantize_rows(jnp.asarray(w))
+    col_values, col_exponents = mx_quantize_cols(jnp.asarray(w))
+    as_bytes = lambda a: np.asarray(jax.lax.bitcast_convert_type(a, jnp.uint8))  # noqa: E731
+    np.testing.assert_array_equal(as_bytes(values), as_bytes(row_values))
+    np.testing.assert_array_equal(as_bytes(values), as_bytes(col_values))
+    np.testing.assert_array_equal(np.repeat(np.asarray(tiles), 32, axis=1), np.asarray(row_exponents))
+    np.testing.assert_array_equal(np.repeat(np.asarray(tiles), 32, axis=2), np.asarray(col_exponents))
+
+
+def test_tile_scales_are_at_least_every_block_scale():
+    w = jnp.asarray(np.random.default_rng(3).standard_normal((3, 64, 128)) * np.exp2(np.arange(128) % 9), jnp.float32)
+    _, tiles = mx_quantize_tiles(w)
+    _, row_exponents = mx_quantize_rows(w)
+    _, col_exponents = mx_quantize_cols(w)
+    assert np.all(np.repeat(np.asarray(tiles), 32, axis=1) >= np.asarray(row_exponents))
+    assert np.all(np.repeat(np.asarray(tiles), 32, axis=2) >= np.asarray(col_exponents))
+
+
+def test_relu2_mxfp8_tiles_match_blocks_when_every_block_reaches_its_tile_max():
+    """The tile scales feed both GEMM layouts correctly: with weights whose tile and block scales coincide, the
+    TILES expert MLP (forward and fused MXFP8 backward) is bitwise the BLOCKS one."""
+    _require_sm100()
+    mx = importlib.import_module("levanter.grug._moe.quack_mxfp8")
+    rng = np.random.default_rng(8)
+    x = jnp.asarray(rng.normal(0, 1.0, (_NUM_TOKENS, _HIDDEN)), jnp.bfloat16)
+    dy = jnp.asarray(rng.normal(0, 1.0, (_NUM_TOKENS, _HIDDEN)), jnp.bfloat16)
+    w_up = jnp.asarray(_tile_max_weights(rng, (3, _HIDDEN, _WIDTH)) * _HIDDEN**-0.5)
+    w_down = jnp.asarray(_tile_max_weights(rng, (3, _WIDTH, _HIDDEN)) * _WIDTH**-0.5)
+    cu = jnp.asarray(np.concatenate([[0], np.cumsum(_GROUP_SIZES)]), jnp.int32)
+
+    def run(weight_quant):
+        y, residuals = mx.relu2_expert_mlp_mxfp8_wgrad_fwd(x, w_up, w_down, cu, weight_quant=weight_quant)
+        return (y, *mx.relu2_expert_mlp_mxfp8_backward(residuals, dy, weight_quant=weight_quant))
+
+    blocks = jax.jit(lambda: run(MxWeightQuant.BLOCKS))()
+    tiles = jax.jit(lambda: run(MxWeightQuant.TILES))()
+    active = slice(0, _NUM_TOKENS)
+    for name, b, t in zip(("y", "dx", "dw_up", "dw_down", "row_dot"), blocks, tiles, strict=True):
+        b, t = np.asarray(b, np.float32), np.asarray(t, np.float32)
+        if name in ("y", "dx", "row_dot"):
+            b, t = b[active], t[active]
+        np.testing.assert_array_equal(t, b, err_msg=name)
+
+
+def _relu2_kernel_run(x, w_up, w_down, dy, *, mxfp8: bool, weight_quant=MxWeightQuant.BLOCKS):
     mx = importlib.import_module("levanter.grug._moe.quack_mxfp8")
     sonic = importlib.import_module("levanter.grug._moe.sonic_cute")
     cu = jnp.asarray(np.concatenate([[0], np.cumsum(_GROUP_SIZES)]), jnp.int32)
@@ -158,18 +222,22 @@ def _relu2_kernel_run(x, w_up, w_down, dy, *, mxfp8: bool):
         y, residuals = sonic._relu2_expert_mlp_quack_fwd(x, w_up, w_down, cu)
         dx, dw_up, dw_down, row_dot = sonic._relu2_expert_mlp_quack_backward(residuals, dy)
         return y, dx, dw_up, dw_down, row_dot
-    y, residuals = mx.relu2_expert_mlp_mxfp8_fwd(x, w_up, w_down, cu)
-    dx, row_dot, wgrad_args = mx.relu2_expert_mlp_mxfp8_backward_input(residuals, dy)
+    y, residuals = mx.relu2_expert_mlp_mxfp8_fwd(x, w_up, w_down, cu, weight_quant=weight_quant)
+    dx, row_dot, wgrad_args = mx.relu2_expert_mlp_mxfp8_backward_input(residuals, dy, weight_quant=weight_quant)
     dw_up, dw_down = sonic._relu2_expert_mlp_quack_wgrads(*wgrad_args)
     return y, dx, dw_up, dw_down, row_dot
 
 
-@pytest.mark.parametrize(("mxfp8", "max_relative"), [(False, 2e-2), (True, 0.1)], ids=["bf16", "mxfp8"])
-def test_relu2_expert_mlp_matches_the_exact_mlp(mxfp8, max_relative):
+@pytest.mark.parametrize(
+    ("mxfp8", "weight_quant", "max_relative"),
+    [(False, MxWeightQuant.BLOCKS, 2e-2), (True, MxWeightQuant.BLOCKS, 0.1), (True, MxWeightQuant.TILES, 0.1)],
+    ids=["bf16", "mxfp8", "mxfp8_tiles"],
+)
+def test_relu2_expert_mlp_matches_the_exact_mlp(mxfp8, weight_quant, max_relative):
     _require_sm100()
     x, w13_il, w_down, dy = _inputs(0)
     w_up = w13_il[..., :_WIDTH]
-    actual = jax.jit(lambda *a: _relu2_kernel_run(*a, mxfp8=mxfp8))(x, w_up, w_down, dy)
+    actual = jax.jit(lambda *a: _relu2_kernel_run(*a, mxfp8=mxfp8, weight_quant=weight_quant))(x, w_up, w_down, dy)
     expected = jax.jit(lambda *a: _reference_run(_exact_relu2_experts, *a))(x, w_up, w_down, dy)
     for name, got, want in zip(("y", "dx", "dw_up", "dw_down"), actual[:4], expected, strict=True):
         got, want = np.asarray(got, np.float32), np.asarray(want, np.float32)
