@@ -68,7 +68,7 @@ test -z "$(git status --porcelain -- experiments lib)"
 date -u
 exec uv run --frozen iris --cluster=marin job run \
   --target-cluster "$CLUSTER" --enable-extra-resources \
-  --cpu 4 --memory 16GB --disk 32GB --priority production --max-retries 0 \
+  --cpu 4 --memory 16GB --disk 32GB --max-retries 0 \
   --job-name "$NAME" --no-wait \
   -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
   -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \
