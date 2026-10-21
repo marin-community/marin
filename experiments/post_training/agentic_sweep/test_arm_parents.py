@@ -23,7 +23,7 @@ def manifest(parent_name, arm):
     }
 
 
-def graph(rows, parent_name, plateau=False, data_variant="high"):
+def graph(rows, parent_name, plateau=False, data_variant="high", context_length=32768):
     return pipeline(
         rows,
         "a" * 64,
@@ -34,6 +34,7 @@ def graph(rows, parent_name, plateau=False, data_variant="high"):
         [ArmEpoch(f"epoch-{epoch}", 16, 1, 128, 256) for epoch in range(3)],
         plateau,
         data_variant=data_variant,
+        context_length=context_length,
     )
 
 
@@ -92,3 +93,25 @@ def test_wrong_parent_tokenizer_or_relay_student_cannot_build_a_training_graph()
     changed_student["relay_student"] = manifest("v0", "relay")["parent_model"]
     with pytest.raises(ValueError, match="relay student"):
         graph(changed_student, "v0.1")
+
+
+def test_long_context_uses_matching_rows_and_cannot_resume_the_short_context_run():
+    rows = manifest("v0.1", "plain")
+    short = graph(rows, "v0.1")
+    with pytest.raises(ValueError, match="manifest row cap"):
+        graph(rows, "v0.1", context_length=40960)
+    rows["max_sequence_tokens"] = 40960
+    long = graph(rows, "v0.1", context_length=40960)
+    configurations = [
+        trained.build_config(StepContext.for_run(trained.path("/outputs"), "/outputs", deps=trained.deps)).train_config
+        for trained in (short["train"], long["train"])
+    ]
+    assert [config.train_seq_len for config in configurations] == [32768, 40960]
+    assert [config.adapter.sequence_length for config in configurations] == [32768, 40960]
+    assert configurations[0].trainer.train_batch_size == configurations[1].trainer.train_batch_size == 16
+    assert configurations[0].trainer.load_checkpoint_path != configurations[1].trainer.load_checkpoint_path
+    assert {cache.path("/outputs") for cache in short["caches"]}.isdisjoint(
+        cache.path("/outputs") for cache in long["caches"]
+    )
+    with pytest.raises(ValueError, match="manifest row cap"):
+        graph(rows, "v0.1")

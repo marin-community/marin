@@ -17,6 +17,8 @@ Recipe of the #203 sweep: AdamW, constant LR, betas 0.9/0.999, WD 0, clip 1.0, r
 mean loss over supervised tokens, no in-loop validation, NCCL WARN. A permanent checkpoint at every epoch end, HF
 exports after epoch 2 and at the end, and per-epoch supervised and context tokens checked against the manifest
 within 0.1% (epoch-metrics.jsonl). ``--plateau`` turns on plateau dropping (task #226).
+``--context-length`` changes the padded training length only with a matching manifest row cap. Nondefault
+lengths receive separate cache, checkpoint and tracker identities; existing rows are never cropped or padded.
 
     python -m experiments.post_training.agentic_sweep.arms --arm plain --arm-data <prefix> --manifest-sha256 <sha256> \\
         --plain-data <plain arm prefix> --parent v0.1 --run-date 20261020 \\
@@ -395,14 +397,17 @@ def pipeline(
     preemption_retries: int = 0,
     *,
     data_variant: str = "high",
+    context_length: int = CONTEXT,
 ) -> dict[str, ArtifactStep | list[ArtifactStep]]:
     selected_parent = manifest_parent(manifest, parent_name)
-    if manifest["max_sequence_tokens"] != CONTEXT:
-        raise ValueError("The arm changes the frozen context")
+    if context_length <= 0 or manifest["max_sequence_tokens"] != context_length:
+        raise ValueError("Training context must equal the manifest row cap; rebuild rows rather than truncate or pad")
     if learning_rate <= 0:
         raise ValueError("The learning rate must be positive")
     arm = manifest["arm"]
     identity = run_identity(arm, parent_name, run_date, plateau, data_variant)
+    if context_length != CONTEXT:
+        identity = f"{identity}-ctx{context_length}"
     version = datetime.strptime(run_date, "%Y%m%d").strftime("%Y.%m.%d")
     ends = list(itertools.accumulate(epoch.updates for epoch in epochs))
     source = ArtifactStep.adopt(
@@ -461,7 +466,7 @@ def pipeline(
             dcn_axes={"replica_dcn": 1, "context": 4},
             compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context", "vocab": "model"},
         ),
-        seq_len=CONTEXT,
+        seq_len=context_length,
         pack=False,
         batch_size=BATCH_SIZE,
         num_train_steps=ends[-1],
@@ -534,6 +539,7 @@ def main() -> None:
     parser.add_argument("--parent", choices=tuple(PARENTS), required=True)
     parser.add_argument("--run-date", required=True, help="YYYYMMDD, part of every output identity")
     parser.add_argument("--data-variant", choices=("high", "low"), default="high")
+    parser.add_argument("--context-length", type=int, default=CONTEXT)
     parser.add_argument("--learning-rate", type=float, required=True)
     parser.add_argument("--epochs", type=int, required=True)
     parser.add_argument("--plateau", action="store_true")
@@ -562,6 +568,7 @@ def main() -> None:
             epochs,
             args.plateau,
             data_variant=args.data_variant,
+            context_length=args.context_length,
         )
         print(lower(cast(ArtifactStep, artifacts["train"])))
         print(json.dumps({"arm": manifest["arm"], "epochs": [asdict(epoch) for epoch in epochs]}, indent=1))
@@ -588,6 +595,7 @@ def main() -> None:
         args.resume_checkpoint,
         args.preemption_retries,
         data_variant=args.data_variant,
+        context_length=args.context_length,
     )
     info = get_job_info()
     assert info is not None and info.controller_address is not None
