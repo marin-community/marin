@@ -949,7 +949,8 @@ class GrugModelConfig:
     hero width) alive through the MoE backward; split, the two working sets never overlap, for 36 GiB more host
     residuals and two phase-1 block mixes per layer. With any split position the reverse scan also copies the
     residuals per sublayer phase (mid partial and routed output for an MLP phase, the incoming partial for an
-    attention phase, all three for an unsplit layer) instead of a unit's at once. Needs
+    attention phase, all three for an unsplit layer) instead of a unit's at once; XLA places those copies, so the
+    plan relies on a memory limit that binds (a moderate ``--xla_gpu_memory_limit_slop_factor``). Needs
     ``scan_offload_partials``. Same math."""
     scan_release_weight_grads: bool = False
     """``scan_layers`` backward: each layer's end barrier holds the previous layer's weight gradients instead of its
@@ -5732,8 +5733,9 @@ def _planned_scan_bwd(sources, logits, store, d_history, units_diff, queries, ar
             layer_index = len(plan.unit) * u + j
             num_gates = 2 + (layer_diff.attn_res_query_shared is not None)
             with jax.named_scope(f"attn_res_scan_bwd_{half}{j}"):
-                # The next phase's host slices pass through this phase's start barrier, so their copies to HBM start no
-                # earlier than this phase (one phase of lookahead).
+                # The next phase's host slices ride through this phase's start barrier. XLA's host offloader still
+                # moves each copy's start to the step start, so the scheduler's memory limit is what bounds how many
+                # are in flight (GB200 S6/S7: --xla_gpu_memory_limit_slop_factor=110-115; 140 hoists them all).
                 upcoming = _phase_residuals(unit_store, args.split_layers, phases[k + 1]) if k + 1 < len(phases) else {}
                 if half == _ScanHalf.ATTN:
                     # The MLP phase's cotangents (weight gradients included) are done before this phase's recompute.
