@@ -25,7 +25,7 @@ class _HPCStub:
 
 
 @pytest.fixture
-def math_rl_config(tmp_path):
+def math_rl_config_path(tmp_path):
     config = tmp_path / "math.yaml"
     config.write_text(
         yaml.safe_dump(
@@ -45,8 +45,8 @@ def math_rl_config(tmp_path):
     return config
 
 
-def test_math_config_composes_environment_and_caps_into_hydra_config(math_rl_config):
-    parsed = parse_rl_config(str(math_rl_config))
+def test_math_config_composes_environment_and_caps_into_hydra_config(math_rl_config_path):
+    parsed = parse_rl_config(str(math_rl_config_path))
     exp_args = {"job_name": "math-rl-test", "experiments_dir": "/tmp/exp", "num_nodes": 4}
     cfg = compose_skyrl_config(parsed, exp_args, _HPCStub()).config
     assert cfg.environment.env_class == "aime"
@@ -57,8 +57,8 @@ def test_math_config_composes_environment_and_caps_into_hydra_config(math_rl_con
     assert "model_num_attention_heads" not in cfg
 
 
-def test_launch_without_hub_destination_does_not_publish(math_rl_config):
-    parsed = parse_rl_config(str(math_rl_config))
+def test_launch_without_hub_destination_does_not_publish(math_rl_config_path):
+    parsed = parse_rl_config(str(math_rl_config_path))
 
     cfg = compose_skyrl_config(
         parsed,
@@ -75,8 +75,8 @@ def test_launch_without_hub_destination_does_not_publish(math_rl_config):
     assert cfg.trainer.get("hf_hub_repo_id") is None
 
 
-def test_iris_derives_durable_training_trajectory_path(math_rl_config):
-    parsed = parse_rl_config(str(math_rl_config))
+def test_iris_derives_durable_training_trajectory_path(math_rl_config_path):
+    parsed = parse_rl_config(str(math_rl_config_path))
     cfg = compose_skyrl_config(
         parsed,
         {"job_name": "retained-run", "experiments_dir": "s3://bucket/iris/", "num_nodes": 4},
@@ -88,8 +88,8 @@ def test_iris_derives_durable_training_trajectory_path(math_rl_config):
     )
 
 
-def test_model_source_locator_reaches_trainer_config(math_rl_config):
-    parsed = parse_rl_config(str(math_rl_config))
+def test_model_source_locator_reaches_trainer_config(math_rl_config_path):
+    parsed = parse_rl_config(str(math_rl_config_path))
     exp_args = {
         "job_name": "exportable-run",
         "model_path": "/tmp/materialized-model",
@@ -103,8 +103,8 @@ def test_model_source_locator_reaches_trainer_config(math_rl_config):
     assert cfg.trainer.policy.model.source_identity == "policy@abc123"
 
 
-def test_policy_revision_override_reaches_trainer_config(math_rl_config):
-    parsed = parse_rl_config(str(math_rl_config))
+def test_policy_revision_override_reaches_trainer_config(math_rl_config_path):
+    parsed = parse_rl_config(str(math_rl_config_path))
     revision = "68c46c4b3498877f3ef123c856ecfde50c39f404"
 
     cfg = compose_skyrl_config(

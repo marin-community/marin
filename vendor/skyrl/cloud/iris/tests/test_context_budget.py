@@ -28,7 +28,7 @@ class _HPCStub:
 
 
 @pytest.fixture
-def context_config(tmp_path):
+def context_config_path(tmp_path):
     config = tmp_path / "context.yaml"
     config.write_text(
         yaml.safe_dump(
@@ -62,8 +62,8 @@ def test_iris_config_materializes_one_coherent_context_budget(config_path):
         assert parsed.terminal_bench["harbor"]["max_turns"] == budget.max_turns
 
 
-def test_context_budget_derives_all_hydra_length_arguments(context_config):
-    parsed = parse_rl_config(str(context_config))
+def test_context_budget_derives_all_hydra_length_arguments(context_config_path):
+    parsed = parse_rl_config(str(context_config_path))
     cfg = compose_skyrl_config(parsed, {"job_name": "context-test", "num_nodes": 4}, _HPCStub()).config
 
     assert cfg.trainer.max_prompt_length == 114688
@@ -127,8 +127,8 @@ def test_context_budget_allows_overlong_fraction_overrides(tmp_path):
     assert parsed.generator["trajectory_reward_shaping"]["overlong"] == {"l_max": 12288, "l_cache": 3072}
 
 
-def test_resolved_context_budget_artifact_is_reproducible(tmp_path, context_config):
-    parsed = parse_rl_config(str(context_config))
+def test_resolved_context_budget_artifact_is_reproducible(tmp_path, context_config_path):
+    parsed = parse_rl_config(str(context_config_path))
     artifact = write_resolved_context_budget(
         parsed.context_budget, tmp_path / "resolved-context-budget.json", parsed.config_path
     )
