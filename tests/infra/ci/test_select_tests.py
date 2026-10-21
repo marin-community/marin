@@ -275,7 +275,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
             "lib/taskcompendium/src/taskcompendium/lowering.py",
             ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
         ),
-        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit"]),
+        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "taskforge-unit"]),
         (
             "lib/shellbox/src/shellbox/machine.py",
             ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
