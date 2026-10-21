@@ -9,7 +9,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195646-Qwen-Qwen3.6-35B-A3B-swebench-65k-16k-summary-1c54924de79046249ff367dc660388d2-65k-16k-summary-e7cbd26c69425cbbb4d3f4f0c662cc72/results",
     "started_at": "2026-10-21T08:14:51.252000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:40:54.202181+00:00",
     "evidence": "Iris task events: /benfeuer/eval-20261020-195646-Qwen-Qwen3.6-35B-A3B-swebench-65k-16k-summary-1c54924de79046249ff367dc660388d2-00f6ec36/inference-ef1574f3d6f643498d725222d4f295d3/0 WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 2594d1d4-319c-4591-95f4-3824adf03fea.",
     "arm": "65k/16k, summary"
   },
@@ -30,21 +30,21 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200532-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-summary-0e5acf1bd86c43ce91c4c864aa7b5518-65k-16k-summary-9d8f8f35df805226abe49ab91bd96d34/results",
     "started_at": "2026-10-21T08:14:51.252000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:40:54.279769+00:00",
     "evidence": "Iris task events: /benfeuer/eval-20261020-200532-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-summary-0e5acf1bd86c43ce91c4c864aa7b5518-b90f9ecd/inference-b39846e6c42a4b3ea1c303da0cd6f2a4/0 WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 2594d1d4-319c-4591-95f4-3824adf03fea.",
     "arm": "65k/16k, summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-211609-google-gemma-4-26B-A4B-it-swebench-131k-16k-no-summary-b932337c1f2a43f8aeec48855e0604e1-harbor-e4709bcd7ab85767a3b9128e711608ed/results",
     "started_at": "2026-10-21T08:14:51.252000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:40:54.214533+00:00",
     "evidence": "Iris task events: /benfeuer/eval-20261020-211609-google-gemma-4-26B-A4B-it-swebench-131k-16k-no-summary-b932337c1f2a43f8aeec48855e0604e1-9ea52b01/inference-56daecce88164a4c97dbb3743e3327c1/0 WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 2594d1d4-319c-4591-95f4-3824adf03fea.",
     "arm": "131k/16k, no summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-233954-google-gemma-4-26B-A4B-it-swebench-32k-8k-summary-24b2a6f377404a6484fa9a47792e2717-harbor-11108a402840502da3594328368a514c/results",
     "started_at": "2026-10-21T08:14:51.253000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:40:54.325051+00:00",
     "evidence": "Iris task events: /benfeuer/eval-20261020-233954-google-gemma-4-26B-A4B-it-swebench-32k-8k-summary-24b2a6f377404a6484fa9a47792e2717-31165a8d/inference-affb2e8f8e1a43548470c1c7c15737ff/0 WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 2594d1d4-319c-4591-95f4-3824adf03fea.",
     "arm": "32k/8k, summary"
   },
@@ -65,7 +65,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261021-045837-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-no-summary-33f0a442956d4d5280c5370305804fc9-harbor-bf6a9adedbe55739a9e380316fad6274/results",
     "started_at": "2026-10-21T07:28:49.511000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:40:55.291287+00:00",
     "evidence": "Iris task events: inference-a6f3f263caaa47bb8b290e884ee46e39/0 attempt 1 WorkloadEvictedDueToPreempted; attempt 2 SchedulingGated. Preemptor workload UID d3b92df0-0187-40c5-9032-886cac9d1ca4.",
     "arm": "65k/16k, no summary"
   },
@@ -107,7 +107,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200324-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-32k-8k-summary-99b6b05cd4ab4bb4aef42f8cf76fbb3e-32k-8k-summary-8e3161346e6d56a2a16f9cc120867f13/results",
     "started_at": "2026-10-21T06:40:46.956000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:40:54.280385+00:00",
     "evidence": "Iris task events: inference-de6c5d20c4c64f5ba2c8e0599ca2a102/0 attempt 6 WorkloadEvictedDueToPreempted; attempt 7 SchedulingGated. Preemptor workload UID 34783837-8bc0-4fd8-bcb8-242bb787b6bc.",
     "arm": "32k/8k, summary"
   },
@@ -121,7 +121,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-212113-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-131k-16k-no-summary-656bb1d55ea64f1891f0d97c6a431138-harbor-0f63a464cee25ab19b1c7a27505b1794/results",
     "started_at": "2026-10-21T06:40:46.956000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:40:54.381213+00:00",
     "evidence": "Iris task events: inference-c5cdfaf4a8fc4b979a919792bfeeddb1/0 attempt 5 WorkloadEvictedDueToPreempted; attempt 6 SchedulingGated. Preemptor workload UID 34783837-8bc0-4fd8-bcb8-242bb787b6bc.",
     "arm": "131k/16k, no summary"
   },
