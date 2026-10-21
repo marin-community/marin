@@ -127,6 +127,24 @@ class ExpertA2aParams(NamedTuple):
     recv_sizes: Int[Array, "U"]
 
 
+def _aligned_group_sizes(group_sizes: Int[Array, "*batch E"], alignment: int) -> Int[Array, "*batch E"]:
+    """Each group's rows rounded up to a multiple of ``alignment``: the rows it spans in an aligned buffer."""
+    # Alignment 1 adds no operations, so a packed layout's program is unchanged.
+    if alignment == 1:
+        return group_sizes
+    return (group_sizes + alignment - 1) // alignment * alignment
+
+
+def _aligned_receiver_rows(capacity: int, experts: int, alignment: int) -> int:
+    """Rows of a receiver buffer that holds ``capacity`` rows over ``experts`` aligned groups.
+
+    Each group takes at most ``alignment - 1`` rows beyond its own for its rounding, so this fits
+    every split of ``capacity`` rows. Alignment 1 gives ``capacity``.
+    """
+    rows = capacity + (alignment - 1) * experts
+    return -(-rows // alignment) * alignment
+
+
 def _expert_granular_a2a_params(
     all_group_sizes: Int[Array, "S E"],
     clipped_group_sizes: Int[Array, "S E"],
