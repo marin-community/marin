@@ -247,8 +247,8 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195646-Qwen-Qwen3.6-35B-A3B-swebench-65k-16k-summary-1c54924de79046249ff367dc660388d2-65k-16k-summary-e7cbd26c69425cbbb4d3f4f0c662cc72/results",
     "started_at": "2026-10-20T23:37:07.275137Z",
-    "finished_at": null,
-    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-195646-a71b3ed6-6-8df54e57e0a15d4c-a1aa2",
+    "finished_at": "2026-10-21T00:56:18.527370+00:00",
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-195646-a71b3ed6-6-8df54e57e0a15d4c-a1aa2. Recovery probe: configured model alias matched /models; one-token chat completion returned HTTP 200.",
     "arm": "65k/16k, summary"
   },
   {
@@ -261,8 +261,8 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195526-Qwen-Qwen3.6-35B-A3B-swebench-32k-8k-summary-c7803e1e44884c96ae48f55f67eec1fa-32k-8k-summary-38fb91f20481579f9c591e0190f9928c/results",
     "started_at": "2026-10-20T23:37:07.281617Z",
-    "finished_at": null,
-    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-195526-d6e953ed-3-ab5fe64537019946-4d472",
+    "finished_at": "2026-10-21T00:56:13.460800+00:00",
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-195526-d6e953ed-3-ab5fe64537019946-4d472. Recovery probe: configured model alias matched /models; one-token chat completion returned HTTP 200.",
     "arm": "32k/8k, summary"
   },
   {
