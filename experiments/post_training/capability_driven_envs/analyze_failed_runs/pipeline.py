@@ -88,7 +88,8 @@ def analyze_failed_runs(
     rounds. Run the plan outside an event loop, for example ``ctx.execute(plan).results``.
 
     An idea must cite failed rollouts of at least ``min_tasks_per_idea`` tasks, or of every failed task when there are
-    fewer. Otherwise one defective grader, on a task with many samples, can make an idea by itself.
+    fewer. Otherwise one defective grader, on a task with many samples, can make an idea by itself. The merges rank the
+    ideas of fewer tasks last, so that such an idea does not take the place of an idea that cites enough tasks.
     """
     if 2 * max_new_ideas > max_ideas_per_merge:
         raise ValueError(
@@ -101,6 +102,7 @@ def analyze_failed_runs(
         make_client=make_client,
         max_new_ideas=max_new_ideas,
         max_ideas_per_merge=max_ideas_per_merge,
+        min_tasks=min_tasks,
         policy=merge_ideas_llm_policy,
     )
     return (
@@ -143,15 +145,18 @@ def merge_ideas(
     make_client: MakeClient,
     max_new_ideas: int,
     max_ideas_per_merge: int,
+    min_tasks: int,
     policy: LLMPolicy,
 ) -> list[MaybeIdea]:
-    """At most ``max_new_ideas`` ideas that structured calls merge from ``ideas``, with more rollouts first.
+    """At most ``max_new_ideas`` ideas that structured calls merge from ``ideas``, in the order of ``_merged_batch``.
 
     One call merges at most ``max_ideas_per_merge`` ideas. Thus more ideas merge in rounds: each round merges batches
     of that size, and the next round merges the results. The merge keeps the capabilities that explain the most
     rollouts, and the pipeline counter ``DROPPED_ROLLOUTS`` adds the rollouts that the merged ideas no longer cite.
     """
-    merge = partial(_merged_batch, make_client=make_client, max_new_ideas=max_new_ideas, policy=policy)
+    merge = partial(
+        _merged_batch, make_client=make_client, max_new_ideas=max_new_ideas, min_tasks=min_tasks, policy=policy
+    )
     candidates = list(ideas)
     rollouts = frozenset().union(*(candidate.evidence for candidate in candidates))
     while len(candidates) > max_ideas_per_merge:
@@ -163,9 +168,11 @@ def merge_ideas(
 
 
 def _merged_batch(
-    ideas: Sequence[MaybeIdea], *, make_client: MakeClient, max_new_ideas: int, policy: LLMPolicy
+    ideas: Sequence[MaybeIdea], *, make_client: MakeClient, max_new_ideas: int, min_tasks: int, policy: LLMPolicy
 ) -> list[MaybeIdea]:
-    """At most ``max_new_ideas`` ideas that one structured call merges from ``ideas``, with more rollouts first.
+    """At most ``max_new_ideas`` ideas that one structured call merges from ``ideas``.
+
+    The ideas that cite at least ``min_tasks`` tasks come first, and then the ideas with more rollouts.
 
     A merged idea joins the evidence of the ideas that it holds. The reply lists their IDs, so it grows with the ideas,
     and GLM sometimes runs away to the output limit in a long structured reply. Thus a merge makes up to
@@ -198,7 +205,9 @@ def _merged_batch(
         )
         for group in reply.capabilities
     ]
-    return sorted(merged, key=lambda candidate: -candidate.num_rollouts)[:max_new_ideas]
+    return sorted(merged, key=lambda candidate: (candidate.num_tasks < min_tasks, -candidate.num_rollouts))[
+        :max_new_ideas
+    ]
 
 
 def merge_idea_lists(

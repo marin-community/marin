@@ -170,12 +170,14 @@ def ctx(tmp_path_factory):
         yield context
 
 
-def analyze(ctx: ZephyrContext, rollouts, shard_size: int = 100, make_client=Analyst) -> ZephyrExecutionResult:
+def analyze(
+    ctx: ZephyrContext, rollouts, shard_size: int = 100, make_client=Analyst, max_new_ideas: int = 8
+) -> ZephyrExecutionResult:
     plan = analyze_failed_runs(
         rollouts,
         make_client,
         pass_threshold=1.0,
-        max_new_ideas=8,
+        max_new_ideas=max_new_ideas,
         shard_size=shard_size,
         extract_ideas_llm_policy=LLMPolicy(),
         merge_ideas_llm_policy=LLMPolicy(),
@@ -222,9 +224,12 @@ def test_the_counters_report_the_invalid_replies_and_the_rollouts_that_a_merge_d
 def test_an_idea_needs_rollouts_of_two_tasks_unless_one_task_failed(ctx):
     samples = [loop(f"sample-{i}", task_id="task-a") for i in range(3)]
 
-    ideas = analyze(ctx, [*samples, wrong("wrong-b"), wrong("wrong-c")]).results
+    rollouts = [*samples, wrong("wrong-b"), wrong("wrong-c")]
 
-    assert names_and_evidence(ideas) == [(CHECK_WORK.name, ["wrong-b", "wrong-c"])]
+    assert names_and_evidence(analyze(ctx, rollouts).results) == [(CHECK_WORK.name, ["wrong-b", "wrong-c"])]
+    assert names_and_evidence(analyze(ctx, rollouts, max_new_ideas=1).results) == [
+        (CHECK_WORK.name, ["wrong-b", "wrong-c"])
+    ]
     assert names_and_evidence(analyze(ctx, samples).results) == [(STOP_LOOPS.name, [f"sample-{i}" for i in range(3)])]
 
 
@@ -254,7 +259,7 @@ def test_a_merge_samples_again_after_a_cut_off_reply():
     ]
 
     [merged] = merge_ideas(
-        ideas, make_client=lambda: analyst, max_new_ideas=8, max_ideas_per_merge=100, policy=LLMPolicy()
+        ideas, make_client=lambda: analyst, max_new_ideas=8, max_ideas_per_merge=100, min_tasks=1, policy=LLMPolicy()
     )
 
     assert (merged.idea.name, merged.num_rollouts, merged.num_tasks, len(analyst.requests)) == (STOP_LOOPS.name, 2, 2, 3)
@@ -265,7 +270,9 @@ def test_more_ideas_than_one_merge_call_holds_merge_in_rounds_and_keep_their_evi
     ideas = [MaybeIdea(STOP_LOOPS, frozenset({f"loop-{i}"}), frozenset({f"task-{i}"})) for i in range(5)]
     ideas.append(MaybeIdea(CHECK_WORK, frozenset({"wrong"}), frozenset({"task-wrong"})))
 
-    merged = merge_ideas(ideas, make_client=lambda: analyst, max_new_ideas=2, max_ideas_per_merge=4, policy=LLMPolicy())
+    merged = merge_ideas(
+        ideas, make_client=lambda: analyst, max_new_ideas=2, max_ideas_per_merge=4, min_tasks=1, policy=LLMPolicy()
+    )
 
     assert [(candidate.idea.name, candidate.num_rollouts) for candidate in merged] == [
         (STOP_LOOPS.name, 5),
