@@ -166,7 +166,7 @@ packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_tra
 [tool.uv]
 package = true
 prerelease = "allow"
-required-version = ">=0.8.10"
+required-version = ">=0.13.1"
 conflicts = [
     [{ extra = "cpu" }, { extra = "cuda" }],
     [{ extra = "cpu" }, { extra = "megatron" }],
