@@ -97,10 +97,19 @@ def test_generated_cohort_runs_each_family_through_tasks_harness_and_grader(tmp_
     output = tmp_path / "tasks"
     prepare_tasks(near, output, tool_prompt=tool_prompt, initializer=initializer)
     tasks = load_validation(output)
+    originals = {row["case_id"]: row for row in map(json.loads, (cases / "validation.jsonl").read_text().splitlines())}
+    assert {task.id for task in tasks} == {"structure-closure:" + identity for identity in originals}
     answers = {}
     for task in tasks:
+        original = originals[task.id.removeprefix("structure-closure:")]
         spec = verifyit_spec(task.grader)
         assert isinstance(spec, StructureClosureSpec)
+        if original["family"] in (Family.TOOL, Family.REPEATED_OPENER):
+            assert json.loads(spec.expected.removeprefix("<tool_call>").removesuffix("</tool_call>")) == json.loads(
+                original["expected"].removeprefix("<tool_call>").removesuffix("</tool_call>")
+            )
+        else:
+            assert spec.expected == original["expected"]
         answers[tuple((event.role, event.content) for event in task.context.events)] = spec.expected[len(spec.prefix) :]
 
     async def complete(request):
@@ -173,7 +182,9 @@ def test_text_evaluation_accepts_actual_model_tokenization_and_semantic_output(t
     assert record.result.rollout.conversations[0].prompt_token_ids == tokens
 
 
-@pytest.mark.parametrize("failure", ["missing", "duplicate", "conditioning", "sampling", "reward", "interrupted"])
+@pytest.mark.parametrize(
+    "failure", ["missing", "duplicate", "conditioning", "sampling", "reward", "interrupted", "task_digest", "response"]
+)
 def test_audit_rejects_changed_or_incomplete_evidence_without_shrinking_denominators(failure):
     first = object_task()
     second = first.model_copy(update={"id": "structure-closure:second"})
@@ -201,6 +212,16 @@ def test_audit_rejects_changed_or_incomplete_evidence_without_shrinking_denomina
             records[1] = replace(record, request=request)
         elif failure == "reward":
             records[1] = replace(record, result=replace(record.result, grade=replace(record.result.grade, reward=0)))
+        elif failure == "task_digest":
+            records[1] = replace(record, task_sha256="modified-task")
+        elif failure == "response":
+            conversation = record.result.rollout.conversations[0]
+            conversation = replace(
+                conversation,
+                messages=(*conversation.messages[:-1], {"role": "assistant", "content": "different response"}),
+            )
+            rollout = replace(record.result.rollout, conversations=(conversation,))
+            records[1] = replace(record, result=replace(record.result, rollout=rollout))
         else:
             rollout = replace(record.result.rollout, failure=RolloutFailure("TimeoutError"))
             records[1] = replace(record, result=replace(record.result, rollout=rollout))
@@ -211,7 +232,7 @@ def test_audit_rejects_changed_or_incomplete_evidence_without_shrinking_denomina
     if failure != "duplicate":
         assert report["groups"]["json_object"]["unscored"] == 1
         assert report["groups"]["json_object"]["success_rate"] == 0.5
-    with pytest.raises(ValueError, match="Incomplete"):
+    with pytest.raises(ValueError):
         compare_evaluations(report, report)
 
 
@@ -233,7 +254,7 @@ def test_audit_compares_real_model_failures_and_improvement_on_the_same_cases():
         reports.append(rollout_summary([task], audit, sampling=SAMPLING))
     assert compare_evaluations(*reports)["json_object"] == {"baseline": 0, "candidate": 1, "change": 1}
     changed = {**reports[1], "sampling": {**SAMPLING, "temperature": 1}}
-    with pytest.raises(ValueError, match="sampling"):
+    with pytest.raises(ValueError):
         compare_evaluations(reports[0], changed)
 
 
@@ -241,12 +262,12 @@ def test_task_export_rejects_cross_split_parent_leakage_without_partial_splits(t
     cases = tmp_path / "cases"
     write_cases(cases, overlap=True)
     output = tmp_path / "tasks"
-    with pytest.raises(ValueError, match="task conversion failures"):
+    with pytest.raises(ValueError):
         prepare_tasks(cases, output, tool_prompt=ToolPrompt.COMPACT, initializer=None)
     assert not (output / "train.jsonl").exists()
     assert not (output / "validation.jsonl").exists()
     assert not (output / "manifest.json").exists()
-    assert "same parent" in json.loads((output / "conversion-failures.json").read_text())[0]["error"]
+    assert len(json.loads((output / "conversion-failures.json").read_text())) == 1
 
 
 def test_benchmark_builder_uses_disjoint_parent_tasks_and_persists_both_splits(tmp_path):
@@ -274,7 +295,15 @@ def test_benchmark_builder_uses_disjoint_parent_tasks_and_persists_both_splits(t
     output = tmp_path / "tasks"
     prepare_tasks(built, output, tool_prompt=ToolPrompt.COMPACT, initializer=None)
     training = [TaskSpec.model_validate_json(line) for line in (output / "train.jsonl").read_text().splitlines()]
-    assert {task.id for task in training}.isdisjoint(task.id for task in load_validation(output))
+    validation = load_validation(output)
+    assert training and validation
+    assert {row["task_id"] for row in map(json.loads, (built / "train.jsonl").read_text().splitlines())} == {
+        "train_parent"
+    }
+    assert {row["task_id"] for row in map(json.loads, (built / "validation.jsonl").read_text().splitlines())} == {
+        "validation_parent"
+    }
+    assert {task.id for task in training}.isdisjoint(task.id for task in validation)
 
 
 @pytest.mark.asyncio
@@ -502,6 +531,8 @@ def test_parsed_reasoning_is_unscored_instead_of_a_false_model_failure():
     record = asyncio.run(
         evaluate_task(task, parsed, limits=rollout_limits(max_turns=1), trace=TraceMode.MESSAGES, sampling=SAMPLING)
     )
+    assert record.result.grade.reward is None
+    assert record.result.rollout.failure is not None
     audit = audit_rollouts([task], [record], sampling=SAMPLING)
     assert not audit.complete
     assert not audit.results

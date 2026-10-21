@@ -15,9 +15,17 @@ MARIN_PACKAGES = {"rolloutengine", "shellbox", "taskcompendium", "verifyit"}
 PYTHON_ENVIRONMENT_KEYS = {"PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"}
 
 
-def check_project(source: Path) -> None:
-    """Run the import contract in SkyRL's frozen CPU environment."""
+def check_project(source: Path, *, marin_source: Path | None = None) -> None:
+    """Check frozen packages, optionally selecting Marin imports from a checkout."""
     environment = {key: value for key, value in os.environ.items() if key not in PYTHON_ENVIRONMENT_KEYS}
+    if marin_source is not None:
+        source_roots = [
+            (marin_source / "lib" / package / "src").resolve(strict=True) for package in sorted(MARIN_PACKAGES)
+        ]
+        for root in source_roots:
+            if not root.is_dir():
+                raise ValueError(f"Marin source root is not a directory: {root}")
+        environment["PYTHONPATH"] = os.pathsep.join(str(root) for root in source_roots)
     subprocess.run(
         [
             "uv",
@@ -26,6 +34,8 @@ def check_project(source: Path) -> None:
             "--project",
             str(source.resolve()),
             "--frozen",
+            "--extra",
+            "cpu",
             "--no-group",
             "dev",
             "python",
@@ -74,9 +84,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("project", "imports"))
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--marin-source", type=Path, help="Check checkout sources instead of locked Marin packages")
     args = parser.parse_args()
     if args.command == "project":
-        check_project(args.source)
+        check_project(args.source, marin_source=args.marin_source)
     else:
         check_imports(args.source)
 
