@@ -18,6 +18,8 @@ TOKENIZATION_POLICY = "fast-track-long-string-v1"
 TOKENIZATION_CHUNK_CHARS = 10_000
 TOKENIZATION_MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 STEP_NAME_DIGEST_CHARS = 20
+# Frozen fast-track inputs that are not executor steps: task copies, probe tables, and fixed models.
+FAST_TRACK_ROOT = "s3://marin-us-east-02a/marin/fast-track"
 
 
 def tokenization_policy_identity() -> dict[str, str | int]:

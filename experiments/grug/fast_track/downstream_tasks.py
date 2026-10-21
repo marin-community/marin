@@ -17,6 +17,8 @@ from dataclasses import asdict, dataclass
 from datasets import load_dataset
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.grug.fast_track.contracts import FAST_TRACK_ROOT
+
 DOWNSTREAM_TASKS_VERSION = "downstream-cloze-v3"
 # Large tasks are capped so one checkpoint scores in minutes. The cap is a fixed prefix
 # of the dataset order, so every checkpoint sees the same examples.
@@ -275,7 +277,7 @@ def task_examples(task: str) -> list[TaskExample]:
     return examples
 
 
-STAGED_TASKS_ROOT = f"s3://marin-us-east-02a/marin/fast-track/downstream-tasks/{DOWNSTREAM_TASKS_VERSION}"
+STAGED_TASKS_ROOT = f"{FAST_TRACK_ROOT}/downstream-tasks/{DOWNSTREAM_TASKS_VERSION}"
 
 
 def staged_task_examples(task: str) -> list[TaskExample]:

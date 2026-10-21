@@ -20,6 +20,7 @@ from marin.execution.artifact import read_artifact
 from numpy.typing import NDArray
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.grug.fast_track.contracts import FAST_TRACK_ROOT
 from experiments.grug.fast_track.downstream_eval import collapse_whitespace
 from experiments.grug.fast_track.quality import (
     DocumentQualityScorer,
@@ -29,19 +30,16 @@ from experiments.grug.fast_track.quality import (
 )
 from experiments.grug.fast_track.quality_labels import FittedRidgeQualityHead
 
-RIDGE_HEAD_PATH = "s3://marin-us-east-02a/marin/fast-track/quality-head/8fc570a91617dbf22066/2026.10.14"
+RIDGE_HEAD_PATH = f"{FAST_TRACK_ROOT}/quality-head/8fc570a91617dbf22066/2026.10.14"
+PROBE_TABLES_ROOT = f"{FAST_TRACK_ROOT}/probe-tables"
 # Token-weighted quantiles per source of the character fraction that whitespace collapsing removes,
 # from 1/24 of the raw-pool shards. Sources missing from the sample use the pooled ``__all__`` table.
-FORMAT_SOURCE_QUOTA_TABLE_PATH = (
-    "s3://marin-us-east-02a/marin/fast-track/probe-tables/format_excess_source_quota_table.json"
-)
+FORMAT_SOURCE_QUOTA_TABLE_PATH = f"{PROBE_TABLES_ROOT}/format_excess_source_quota_table.json"
 # Token-weighted quantiles per source of minus the UTF-8 byte length, from the same sample.
-SHORTEST_SOURCE_QUOTA_TABLE_PATH = (
-    "s3://marin-us-east-02a/marin/fast-track/probe-tables/shortest_source_quota_table.json"
-)
+SHORTEST_SOURCE_QUOTA_TABLE_PATH = f"{PROBE_TABLES_ROOT}/shortest_source_quota_table.json"
 POOLED_TABLE = "__all__"
 # Token-weighted ridge-score quantiles per source, from the ridge scored pool of the 10.7B-token pool.
-RIDGE_SOURCE_QUOTA_TABLE_PATH = "s3://marin-us-east-02a/marin/fast-track/probe-tables/ridge_source_quota_table.json"
+RIDGE_SOURCE_QUOTA_TABLE_PATH = f"{PROBE_TABLES_ROOT}/ridge_source_quota_table.json"
 
 
 def inverted_ridge() -> DocumentQualityScorer:
@@ -186,8 +184,7 @@ def shortest_source_quota() -> DocumentQualityScorer:
 # The public DCLM fastText classifier (OpenHermes 2.5 and ELI5 against RefinedWeb), copied from
 # mlfoundations/fasttext-oh-eli5 at revision cd8b714a90f2.
 DCLM_FASTTEXT_MODEL_PATH = (
-    "s3://marin-us-east-02a/marin/fast-track/models/dclm-fasttext-oh-eli5/cd8b714a90f2/"
-    "openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin"
+    f"{FAST_TRACK_ROOT}/models/dclm-fasttext-oh-eli5/cd8b714a90f2/openhermes_reddit_eli5_vs_rw_v2_bigram_200k_train.bin"
 )
 DCLM_HIGH_QUALITY_LABEL = "__label__hq"
 
