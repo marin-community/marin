@@ -255,8 +255,8 @@ def _apply_hero_ep_runtime_defaults(
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     if expert_precision == ExpertPrecision.MXFP8:
         # MXFP8 runs only with command buffers off. Its fused kernels are custom calls that XLA
-        # captures into CUDA graphs, where replays returned a partly NaN down-projection gradient
-        # until the wgrad kernel acquired its online scale-factor descriptors. That fix is verified
+        # captures into CUDA graphs, where replays returned a partly NaN weight gradient until
+        # nvidia-cudnn-frontend 1.31.0's wgrad kernel acquired its online TMA descriptors. That is verified
         # on the expert MLP alone, not on the hero step under CUDA graphs (#5675). Like the ragged
         # flags, the caller does not choose this; unlike them, a conflicting entry fails rather
         # than being dropped, because whoever set it expected command buffers on.

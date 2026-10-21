@@ -336,8 +336,9 @@ def test_mxfp8_expert_mlp_apply_returns_forwards_output_bitwise(problem):
 def test_mxfp8_expert_mlp_cuda_graph_replays_match_the_program_without_command_buffers(problem):
     """At these shapes XLA places both weight-gradient calls' descriptor workspaces at one address.
 
-    Before the wgrad kernel acquired its online scale-factor descriptors for the tensormap proxy,
-    every replay after the first execution returned a wrong, partly NaN down-projection gradient.
+    Before nvidia-cudnn-frontend 1.31.0, whose wgrad kernel acquires its online TMA descriptors for
+    the tensormap proxy, every replay after the first execution returned a wrong, partly NaN
+    weight gradient.
     """
     expert_mlp = _require_mxfp8_expert_mlp()
     inputs = _inputs(problem, expert_mlp.receiver_alignment, seed=4)

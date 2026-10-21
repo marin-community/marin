@@ -25,9 +25,9 @@ whose backward recomputes it, runs the same kernels without writing any of the r
 
 The hero compiles with XLA GPU command buffers off (``--xla_gpu_enable_command_buffer=``), and its
 launcher refuses MXFP8 with them on. CUDA-graph replays of the forward and backward match the
-program without command buffers bitwise once the wgrad kernel acquires its online scale-factor
-descriptors. Before that fence, a replay could read a stale descriptor from the other weight
-gradient's call at the same workspace address and return a partly NaN down-projection gradient.
+program without command buffers bitwise with nvidia-cudnn-frontend 1.31.0, whose wgrad kernel
+acquires its online TMA descriptors. Before that fence, a replay could read a stale descriptor from
+the other weight gradient's call at the same workspace address and return a partly NaN gradient.
 
 Ported from c3cb334f8e:experiments/grug/moe/mxfp8.py (``_forward_pipeline``,
 ``_backward_pipeline``).
