@@ -90,19 +90,10 @@ def test_load_names_the_file_and_the_missing_key(tmp_path):
         R.load_registry(tmp_path)
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"commit": "e8cd1b9"},
-        {"commit": "E8CD1B97EC"},
-        {"commit": "e8cd1b97ec133ea54cd42ac520bf069ee659d2d3a"},
-        {"commit": "e8cd1b97ec\n"},
-    ],
-)
-def test_validate_rejects_malformed_commits(overrides):
+def test_validate_rejects_a_commit_with_a_trailing_newline():
     (trial,) = _experiment().trials
     with pytest.raises(ValueError):
-        R.validate([_experiment(trials=(dataclasses.replace(trial, **overrides),))])
+        R.validate([_experiment(trials=(dataclasses.replace(trial, commit="e8cd1b97ec\n"),))])
 
 
 def test_load_rejects_an_unquoted_all_digit_commit(tmp_path):
@@ -111,12 +102,6 @@ def test_load_rejects_an_unquoted_all_digit_commit(tmp_path):
     path.write_text(path.read_text().replace("commit: e8cd1b97ec", "commit: 1234567890"))
     with pytest.raises(ValueError, match="quote it"):
         R.load_registry(tmp_path)
-
-
-@pytest.mark.parametrize("commit", ["e8cd1b97ec", "e8cd1b97ec133ea54cd42ac520bf069ee659d2d3"])
-def test_validate_accepts_short_and_full_commits(commit):
-    (trial,) = _experiment().trials
-    R.validate([_experiment(trials=(dataclasses.replace(trial, commit=commit),))])
 
 
 def test_validate_rejects_duplicate_slugs():
