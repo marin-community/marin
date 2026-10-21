@@ -99,7 +99,10 @@ MINI_SWE_CONSTRAINTS = AGENTS_PATH / "mini-swe-agent-2.1.0-constraints.txt"
 # Each student is served from a regional bucket copy (see its YAML); the second field is the Hub revision the copy
 # matches, recorded in driver_config.
 STUDENTS = {
-    "v0": (Path("experiments/post_training/sft_shootout/students/snowball-v0.yaml"), "4eeb756b404db25bc04e4daf49dfb9817bceb741"),
+    "v0": (
+        Path("experiments/post_training/sft_shootout/students/snowball-v0.yaml"),
+        "4eeb756b404db25bc04e4daf49dfb9817bceb741",
+    ),
     "v0.1": (
         Path("experiments/post_training/sft_shootout/students/snowball-v0.1.yaml"),
         "6783e9743478bd25a9ce03ab3460e84d6a9814b0",
@@ -117,7 +120,8 @@ POLICIES = {"tmax": POLICY_DIR / "tb2-recovery.yaml", "swesmith": POLICY_DIR / "
 # Generation-only change to the policy: a smaller context window (model_info max_input_tokens, the total window in
 # Harbor) so a trajectory that fits it also fits 32,768 tokens in v0's chat template, the SFT row length. In the
 # SWE-smith pilot, v0-template / GLM tokens for passing traces was median 1.038, p99 1.073, max 1.089, so
-# 30,000 x 1.089 = 32,670. TMax keeps the policy window (the ratio there is not stable).
+# 30,000 x 1.089 = 32,670. TMax keeps the policy window (the ratio there is not stable). --window-tokens sets a
+# different SWE-smith window; above 30,000 most traces that use the window no longer fit a 32,768-token row.
 GENERATION_WINDOW = {"swesmith": 30_000}
 AGENTS = {
     # Runs each task's solution/solve.sh with no model; used for task and visibility probes.
@@ -280,8 +284,13 @@ def policy_agent(args: argparse.Namespace, served_info: dict | None) -> dict:
         raise ValueError(f"the {args.family} policy runs {agent['name']}, not {args.agent}")
     kwargs = {**agent.get("kwargs", {}), **AGENTS[args.agent].get("kwargs", {})}
     kwargs[MODEL_INFO_KEY] = reconciled_model_info(served_info, kwargs.get(MODEL_INFO_KEY))
-    if args.family in GENERATION_WINDOW:
-        kwargs[MODEL_INFO_KEY][MAX_INPUT_TOKENS_KEY] = GENERATION_WINDOW[args.family]
+    if args.window_tokens is not None:
+        if served_info is not None and args.window_tokens > served_info[MAX_INPUT_TOKENS_KEY]:
+            raise ValueError(
+                f"--window-tokens {args.window_tokens} exceeds the student's max_model_len "
+                f"{served_info[MAX_INPUT_TOKENS_KEY]}"
+            )
+        kwargs[MODEL_INFO_KEY][MAX_INPUT_TOKENS_KEY] = args.window_tokens
     if args.agent == "terminus-2":
         kwargs["llm_call_kwargs"] = {
             **kwargs.get("llm_call_kwargs", {}),
@@ -357,6 +366,11 @@ def main() -> None:
     parser.add_argument(
         "--budget-fraction", type=float, default=0.75, help="Relay context-budget trigger, as a fraction of the window."
     )
+    parser.add_argument(
+        "--window-tokens",
+        type=int,
+        help="Generation window (model_info max_input_tokens) for SWE-smith; default 30,000. TMax keeps its policy's.",
+    )
     parser.add_argument("--glm-relay-job", default=DEFAULT_GLM_RELAY_JOB)
     parser.add_argument(
         "--student", choices=sorted(STUDENTS), default="v0", help="Relay student (recorded in every run)."
@@ -372,6 +386,10 @@ def main() -> None:
         "--package-revision", required=True, help="Source and revision of the task packages, for provenance."
     )
     args = parser.parse_args()
+    if args.family not in GENERATION_WINDOW and args.window_tokens is not None:
+        parser.error(f"--window-tokens applies only to {sorted(GENERATION_WINDOW)}")
+    if args.window_tokens is None:
+        args.window_tokens = GENERATION_WINDOW.get(args.family)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     # httpx logs every request URL at INFO, and the student's URL is a capability URL.
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -442,14 +460,14 @@ def main() -> None:
         "policy": str(POLICIES[args.family]),
         "policy_changes": (
             None
-            if args.family not in GENERATION_WINDOW
+            if args.window_tokens is None
             else {
                 "model_info.max_input_tokens": {
                     "policy": reconciled_model_info(
                         None, policy(args.family)["agents"][0].get("kwargs", {}).get(MODEL_INFO_KEY)
                     )[MAX_INPUT_TOKENS_KEY],
-                    "generation": GENERATION_WINDOW[args.family],
-                    "why": "generation only: keep trajectories within 32,768 tokens in v0's chat template",
+                    "generation": args.window_tokens,
+                    "why": "generation only: 30,000 keeps trajectories within 32,768 tokens in v0's chat template",
                 }
             }
         ),
