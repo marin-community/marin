@@ -1,8 +1,9 @@
 # Shared data buckets
 
-This Pulumi project owns the shared Marin buckets and their complete lifecycle policies across
-GCS, CoreWeave AI Object Storage, and Cloudflare R2. The `marin-buckets` stack is operated
-manually because its provider credentials are not available to CI.
+This Pulumi project manages shared Marin data buckets and lifecycle policies in
+GCS, CoreWeave AI Object Storage, and Cloudflare R2, plus creation of the shared
+Hugging Face bucket. The `marin-buckets` stack is operated manually because its
+provider credentials are not available to CI.
 
 Active bucket names, stores, locations, and endpoints come from the reviewed `data:` blocks in
 [`config/marin.yaml`](../../config/marin.yaml) and
@@ -10,6 +11,14 @@ Active bucket names, stores, locations, and endpoints come from the reviewed `da
 [`DataBuckets`](../pulumi/src/iac/buckets/__init__.py) component. GCS bucket IAM remains in the
 `marin-iac/marin` stack with the other project grants. The existing R2 bucket remains
 declared in `infra/buckets/__main__.py` independently of runtime storage routing.
+
+The stack creates the private Hugging Face bucket `open-athena/marin`, addressed as
+`hf://buckets/open-athena/marin` in `fsutil`. A protected `command.local.Command`
+resource runs `.venv/bin/hf buckets create open-athena/marin --private` from the
+Marin repository root. Pulumi blocks removal while the resource is protected. After explicit
+unprotection, removing the resource leaves the HF bucket in place. The resource does
+not manage file contents or subsequent visibility changes. Creation fails if the
+bucket already exists, so an existing bucket cannot be silently adopted.
 
 ## Credentials
 
@@ -46,6 +55,10 @@ export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
 
 The provider credentials remain in the process environment. They are not Pulumi configuration,
 resource inputs, or stack outputs. GitHub Actions and `pulumi-ci` have no access to them.
+
+Hugging Face creation uses `HF_TOKEN` or the operator's saved `hf auth login` token.
+The token must have permission to create buckets under `open-athena`. Keep it in
+the operator environment or HF credential store; do not put it in Pulumi config.
 
 ## Preview and apply
 
