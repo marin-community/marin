@@ -130,6 +130,8 @@ class StoreConfig:
         key_secret_env: Variable holding the secret access key.
         temp_bucket: Shared lifecycle-managed scratch bucket for this backend.
             When absent, temporary paths stay in the source bucket.
+        checkpoint_bucket: Bucket for durable checkpoint and training output paths.
+            When absent, outputs stay in the source bucket.
         checkpoint_read_buckets: Additional scratch buckets to search when resuming checkpoints.
     """
 
@@ -138,6 +140,7 @@ class StoreConfig:
     key_id_env: str
     key_secret_env: str
     temp_bucket: BucketSpec | None = None
+    checkpoint_bucket: BucketSpec | None = None
     checkpoint_read_buckets: tuple[str, ...] = ()
 
 
@@ -172,6 +175,8 @@ class DataConfig:
         for store in self.stores.values():
             if store.temp_bucket is not None:
                 buckets[store.temp_bucket.name] = store.temp_bucket
+            if store.checkpoint_bucket is not None:
+                buckets[store.checkpoint_bucket.name] = store.checkpoint_bucket
         return buckets
 
     def resolved_root(self) -> str:
@@ -326,6 +331,11 @@ def _parse_store_config(name: object, value: object) -> StoreConfig:
     temp_bucket = _parse_bucket_spec(value["temp_bucket"]) if value.get("temp_bucket") is not None else None
     if temp_bucket is not None and temp_bucket.store != StoreType(str(name)):
         raise ValueError(f"stores.{name}.temp_bucket must use the same store: {value['temp_bucket']!r}")
+    checkpoint_bucket = (
+        _parse_bucket_spec(value["checkpoint_bucket"]) if value.get("checkpoint_bucket") is not None else None
+    )
+    if checkpoint_bucket is not None and checkpoint_bucket.store != StoreType(str(name)):
+        raise ValueError(f"stores.{name}.checkpoint_bucket must use the same store: {value['checkpoint_bucket']!r}")
     checkpoint_read_buckets = value.get("checkpoint_read_buckets", ())
     if not isinstance(checkpoint_read_buckets, (list, tuple)) or any(
         not isinstance(bucket, str) for bucket in checkpoint_read_buckets
@@ -334,6 +344,7 @@ def _parse_store_config(name: object, value: object) -> StoreConfig:
     return StoreConfig(
         **{field: str(value[field]) for field in required},
         temp_bucket=temp_bucket,
+        checkpoint_bucket=checkpoint_bucket,
         checkpoint_read_buckets=tuple(checkpoint_read_buckets),
     )
 
@@ -488,6 +499,20 @@ def s3_data_buckets() -> Mapping[str, BucketSpec]:
 # ---------------------------------------------------------------------------
 # Temp storage
 # ---------------------------------------------------------------------------
+
+
+def checkpoint_output_path(output_path: str) -> str:
+    """Route a durable output path to its backend's checkpoint bucket, if configured."""
+    path = StoragePath(output_path)
+    if path.scheme != "s3":
+        return output_path
+    bucket = s3_data_buckets().get(path.bucket)
+    if bucket is None:
+        return output_path
+    store = store_configs().get(bucket.store)
+    if store is None or store.checkpoint_bucket is None:
+        return output_path
+    return str(StoragePath(f"s3://{store.checkpoint_bucket.name}") / path.key)
 
 
 def _s3_bucket_from_prefix(prefix: str | None) -> str | None:

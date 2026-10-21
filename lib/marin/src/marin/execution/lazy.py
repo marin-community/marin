@@ -189,6 +189,8 @@ class ArtifactStep(Generic[T]):
     runtime_args: Mapping[str, Any] = field(default_factory=dict)
     """Execution choices the config pulls via ``ctx.runtime_arg(key)``. Excluded from the
     fingerprint, so changing one never forks identity."""
+    output_path_route: Callable[[str], str] | None = None
+    """Optional storage placement for a managed artifact, excluded from its fingerprint."""
     override_path: str | None = None
     """Pin the artifact to an existing location instead of ``{name}/{version}``. A relative
     pin is resolved against the prefix; an absolute one is used as-is. Writes no record.
@@ -235,7 +237,8 @@ class ArtifactStep(Generic[T]):
                 return prefix_join(resolved_prefix, location)
             return location
         # The explicit, hash-free ``{prefix}/{name}/{version}`` address.
-        return prefix_join(resolved_prefix, f"{self.name}/{self.version}")
+        path = prefix_join(resolved_prefix, f"{self.name}/{self.version}")
+        return self.output_path_route(path) if self.output_path_route is not None else path
 
     def lower(self) -> StepSpec:
         """Lower this handle graph into a ``StepSpec`` graph the ``StepRunner`` can run.
@@ -302,7 +305,11 @@ def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
 
 def _output_path_spec(handle: "ArtifactStep") -> str:
     """The relative output path StepSpec should use: the pin if set, else ``{name}/{version}``."""
-    return handle.override_path or f"{handle.name}/{handle.version}"
+    if handle.override_path is not None:
+        return handle.override_path
+    if handle.output_path_route is not None:
+        return handle.path()
+    return f"{handle.name}/{handle.version}"
 
 
 def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepSpec] | None = None) -> StepSpec:

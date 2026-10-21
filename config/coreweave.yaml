@@ -20,5 +20,6 @@ data:
       key_id_env: CW_KEY_ID
       key_secret_env: CW_KEY_SECRET
       temp_bucket: { bucket: marin-us-east-08a, store: coreweave, signing_region: US-EAST-08A }
+      checkpoint_bucket: { bucket: marin-us-east-08a, store: coreweave, signing_region: US-EAST-08A }
       checkpoint_read_buckets: [hero-checkpoints]
   root: s3://marin-us-east-02a/marin
