@@ -78,6 +78,7 @@ from experiments.grug.fast_track.model import (
     Transformer,
     forward_flops_per_token,
 )
+from experiments.grug.fast_track.quack_schedules import quack_schedule_context
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -945,7 +946,9 @@ def _loss_and_grads(
             metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
         return loss, metrics
 
-    return jax.value_and_grad(loss_fn, has_aux=True)(params)
+    # The QuACK GEMM schedules are read while tracing, and the custom-VJP backwards trace inside value_and_grad.
+    with quack_schedule_context(params.config):
+        return jax.value_and_grad(loss_fn, has_aux=True)(params)
 
 
 def _accumulated_loss_and_grads(

@@ -47,12 +47,38 @@ from levanter.grug.mxfp8_pallas import (
 from levanter.grug.mxfp8 import MX_BLOCK, mx_dequantize_rows, mx_quantize_cols, mx_quantize_rows, mx_unpack_rows
 from levanter.grug._moe.common import _swiglu_gate_up_backward, _unpack_pairs_u32
 from levanter.grug._moe.quack_moe_cute import _ACC, _QUACK_USE_PDL, _max_active_clusters, _mint_epilogue_gemm
+from levanter.grug._moe.quack_mxfp8_schedule import (
+    DEFAULT_SCHEDULE,
+    MXFP8_CLUSTER,
+    MXFP8_TILE_MN,
+    GemmKind,
+    GemmSchedule,
+    gemm_schedule,
+)
 
 SCALE_TILE_ROWS = 128
 _SCALE_ATOM_COLS = 4
-# Block-scaled 2-CTA MMA needs a 256-row tile.
-MXFP8_TILE_MN = (256, 256)
-MXFP8_CLUSTER = (2, 1, 1)
+
+
+def _launch_config(schedule: GemmSchedule, default: GemmSchedule = DEFAULT_SCHEDULE) -> dict:
+    """Launcher-factory keywords for ``schedule``: none for ``default``, so the default kernels keep their identity
+    (``cute_launcher_factory`` keys on the keywords passed)."""
+    config: dict[str, object] = {}
+    if schedule.tile_mn != default.tile_mn:
+        config["tile_mn"] = schedule.tile_mn
+    if schedule.cluster_mnk != default.cluster_mnk:
+        config["cluster_mnk"] = schedule.cluster_mnk
+    if schedule.clc:
+        config["use_clc_persistence"] = True
+    return config
+
+
+def _schedule_max_active_clusters(schedule: GemmSchedule) -> int:
+    cluster_size = schedule.cluster_mnk[0] * schedule.cluster_mnk[1]
+    clusters = _max_active_clusters(schedule.cluster_mnk)
+    if not schedule.sm_reserve:
+        return clusters
+    return max(1, clusters - -(-schedule.sm_reserve // cluster_size))
 
 
 def blocked_scales(scales: jax.Array) -> jax.Array:
@@ -131,24 +157,26 @@ _INDEX_SPEC = _TS(static=False)
 _OUT_SPEC = _TS(divisibility=(1, 8), static=False)
 
 
-def _gemm(gemm_type, a_dtype):
+def _gemm(gemm_type, a_dtype, tile_mn, cluster_mnk, use_clc_persistence):
     return gemm_type(
         _ACC,
         a_dtype,
-        MXFP8_TILE_MN,
-        MXFP8_CLUSTER,
+        tile_mn,
+        cluster_mnk,
         sf_vec_size=MX_BLOCK,
         gather_A=False,
-        use_clc_persistence=False,
+        use_clc_persistence=use_clc_persistence,
         use_pdl=_QUACK_USE_PDL,
     )
 
 
 @cute_launcher_factory
-def _build_plain_launcher(*, max_active_clusters, max_swizzle):
+def _build_plain_launcher(
+    *, max_active_clusters, max_swizzle, tile_mn=MXFP8_TILE_MN, cluster_mnk=MXFP8_CLUSTER, use_clc_persistence=False
+):
     @cute.jit
     def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mD):
-        gemm = _gemm(GemmDefaultSm100, cutlass.Float8E4M3FN)
+        gemm = _gemm(GemmDefaultSm100, cutlass.Float8E4M3FN, tile_mn, cluster_mnk, use_clc_persistence)
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
         gemm(
@@ -158,10 +186,24 @@ def _build_plain_launcher(*, max_active_clusters, max_swizzle):
     return launcher
 
 
-def mxfp8_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, b_major, out_dtype=jnp.bfloat16, max_swizzle=8):
+def _weight_features(b, b_major: str) -> tuple[int, int]:
+    """``(contraction, output)`` of a grouped weight stored ``[E, N, K]`` (``"k"``) or ``[E, K, N]`` (``"n"``)."""
+    return (b.shape[2], b.shape[1]) if b_major == "k" else (b.shape[1], b.shape[2])
+
+
+def mxfp8_grouped_gemm(
+    a, a_scales, b, b_scales, cu_seqlens, *, b_major, out_dtype=jnp.bfloat16, max_swizzle=8, schedule=None
+):
     """``a[M, K] @ b[e, N, K]^T`` per row group, e4m3 operands with blocked e8m0 scales; rows past ``cu[-1]``
-    unspecified. ``a_scales`` is the varlen-m layout, ``b_scales`` ``[E, rn, rk, 32, 4, 4]``."""
-    launcher = _build_plain_launcher(max_active_clusters=_max_active_clusters(MXFP8_CLUSTER), max_swizzle=max_swizzle)
+    unspecified. ``a_scales`` is the varlen-m layout, ``b_scales`` ``[E, rn, rk, 32, 4, 4]``. ``schedule`` overrides
+    the schedule table (``gemm_schedule``)."""
+    kind = GemmKind.GROUPED_K if b_major == "k" else GemmKind.GROUPED_N
+    schedule = schedule or gemm_schedule(kind, a.shape[0], _weight_features(b, b_major))
+    launcher = _build_plain_launcher(
+        max_active_clusters=_schedule_max_active_clusters(schedule),
+        max_swizzle=max_swizzle,
+        **_launch_config(schedule),
+    )
     call = cutlass_call(
         launcher,
         output_shape_dtype=jax.ShapeDtypeStruct((a.shape[0], b.shape[1 if b_major == "k" else 2]), out_dtype),
@@ -186,12 +228,14 @@ def _relu2_quant_epilogue():
 
 
 @cute_launcher_factory
-def _build_relu2_launcher(*, max_active_clusters, max_swizzle):
+def _build_relu2_launcher(
+    *, max_active_clusters, max_swizzle, tile_mn=MXFP8_TILE_MN, cluster_mnk=MXFP8_CLUSTER, use_clc_persistence=False
+):
     gemm_type = _mint_epilogue_gemm(_relu2_quant_epilogue(), kind_sig=(), paired_acc=False)
 
     @cute.jit
     def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mD, mPostAct, mPostActSF):
-        gemm = _gemm(gemm_type, cutlass.Float8E4M3FN)
+        gemm = _gemm(gemm_type, cutlass.Float8E4M3FN, tile_mn, cluster_mnk, use_clc_persistence)
         epi_args = gemm_type.EpilogueArguments(postact=mPostAct, postact_sf=mPostActSF, sfd_norm_const=Float32(1.0))
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
@@ -200,12 +244,17 @@ def _build_relu2_launcher(*, max_active_clusters, max_swizzle):
     return launcher
 
 
-def mxfp8_relu2_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, b_major, max_swizzle=8):
+def mxfp8_relu2_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, b_major, max_swizzle=8, schedule=None):
     """Block-scaled ``pre = a @ b^T`` with ``relu(pre)^2`` quantized in the epilogue.
 
     Returns ``(pre bf16 [M, N], post e4m3 [M, N], post scales)``, the scales in the varlen-m layout."""
     rows, cols = a.shape[0], b.shape[1 if b_major == "k" else 2]
-    launcher = _build_relu2_launcher(max_active_clusters=_max_active_clusters(MXFP8_CLUSTER), max_swizzle=max_swizzle)
+    schedule = schedule or gemm_schedule(GemmKind.UP_RELU2, rows, _weight_features(b, b_major))
+    launcher = _build_relu2_launcher(
+        max_active_clusters=_schedule_max_active_clusters(schedule),
+        max_swizzle=max_swizzle,
+        **_launch_config(schedule),
+    )
     call = cutlass_call(
         launcher,
         output_shape_dtype=(
@@ -239,12 +288,14 @@ def _drelu2_quant_epilogue():
 
 
 @cute_launcher_factory
-def _build_drelu2_launcher(*, max_active_clusters, max_swizzle):
+def _build_drelu2_launcher(
+    *, max_active_clusters, max_swizzle, tile_mn=MXFP8_TILE_MN, cluster_mnk=MXFP8_CLUSTER, use_clc_persistence=False
+):
     gemm_type = _mint_epilogue_gemm(_drelu2_quant_epilogue(), kind_sig=(("c", "c"),), paired_acc=False)
 
     @cute.jit
     def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mC, mPostAct, mDPreQ, mDPreSF, mDotPartials):
-        gemm = _gemm(gemm_type, cutlass.Float8E4M3FN)
+        gemm = _gemm(gemm_type, cutlass.Float8E4M3FN, tile_mn, cluster_mnk, use_clc_persistence)
         epi_args = gemm_type.EpilogueArguments(
             mAuxOut=mPostAct,
             dpre_q=mDPreQ,
@@ -261,7 +312,7 @@ def _build_drelu2_launcher(*, max_active_clusters, max_swizzle):
     return launcher
 
 
-def mxfp8_drelu2_grouped_gemm(dy, dy_scales, b, b_scales, pre, cu_seqlens, *, max_swizzle=8):
+def mxfp8_drelu2_grouped_gemm(dy, dy_scales, b, b_scales, pre, cu_seqlens, *, max_swizzle=8, schedule=None):
     """ReLU^2 backward fused into ``d post = dy @ b^T`` (block-scaled).
 
     Returns ``(post bf16, d_pre e4m3, d_pre scales (varlen-m layout), row_dot fp32 [M])`` with
@@ -269,8 +320,14 @@ def mxfp8_drelu2_grouped_gemm(dy, dy_scales, b, b_scales, pre, cu_seqlens, *, ma
     rows, cols = dy.shape[0], b.shape[1]
     if pre.shape != (rows, cols):
         raise ValueError(f"pre must be {(rows, cols)}, got {pre.shape}")
-    launcher = _build_drelu2_launcher(max_active_clusters=_max_active_clusters(MXFP8_CLUSTER), max_swizzle=max_swizzle)
-    n_tiles = -(-cols // MXFP8_TILE_MN[1])
+    schedule = schedule or gemm_schedule(GemmKind.DRELU2, rows, _weight_features(b, "k"))
+    launcher = _build_drelu2_launcher(
+        max_active_clusters=_schedule_max_active_clusters(schedule),
+        max_swizzle=max_swizzle,
+        **_launch_config(schedule),
+    )
+    # One <post, d post> partial per output tile column.
+    n_tiles = -(-cols // schedule.tile_mn[1])
     call = cutlass_call(
         launcher,
         output_shape_dtype=(
@@ -339,12 +396,14 @@ def _swiglu_quant_epilogue():
 
 
 @cute_launcher_factory
-def _build_swiglu_launcher(*, max_active_clusters, max_swizzle):
+def _build_swiglu_launcher(
+    *, max_active_clusters, max_swizzle, tile_mn=MXFP8_TILE_MN, cluster_mnk=MXFP8_CLUSTER, use_clc_persistence=False
+):
     gemm_type = _mint_epilogue_gemm(_swiglu_quant_epilogue(), kind_sig=(), paired_acc=True)
 
     @cute.jit
     def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mD, mPostAct, mPostActSF):
-        gemm = _gemm(gemm_type, cutlass.Float8E4M3FN)
+        gemm = _gemm(gemm_type, cutlass.Float8E4M3FN, tile_mn, cluster_mnk, use_clc_persistence)
         epi_args = gemm_type.EpilogueArguments(postact=mPostAct, postact_sf=mPostActSF, sfd_norm_const=Float32(1.0))
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
@@ -353,7 +412,7 @@ def _build_swiglu_launcher(*, max_active_clusters, max_swizzle):
     return launcher
 
 
-def mxfp8_swiglu_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, max_swizzle=8):
+def mxfp8_swiglu_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, max_swizzle=8, schedule=None):
     """Block-scaled ``gu = a @ b`` over interleaved gate/up weights ``b[E, K, 2N]`` (``[g0, u0, g1, u1, ...]``,
     quantized along ``K`` in place, ``mx_weights(b, "n")``) with ``silu(g) * u`` quantized in the epilogue.
 
@@ -361,7 +420,12 @@ def mxfp8_swiglu_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, max_swizz
     rows, cols = a.shape[0], b.shape[2]
     if cols % (2 * MX_BLOCK):
         raise ValueError(f"gate/up width {cols} must divide {2 * MX_BLOCK}")
-    launcher = _build_swiglu_launcher(max_active_clusters=_max_active_clusters(MXFP8_CLUSTER), max_swizzle=max_swizzle)
+    schedule = schedule or gemm_schedule(GemmKind.UP_SWIGLU, rows, _weight_features(b, "n"))
+    launcher = _build_swiglu_launcher(
+        max_active_clusters=_schedule_max_active_clusters(schedule),
+        max_swizzle=max_swizzle,
+        **_launch_config(schedule),
+    )
     call = cutlass_call(
         launcher,
         output_shape_dtype=(
@@ -444,7 +508,7 @@ def quantize_token_blocks(x: jax.Array, cu_seqlens: jax.Array) -> tuple[jax.Arra
 
 
 @cute_launcher_factory
-def _build_wgrad_launcher(*, tile_mn, cluster_mnk, max_active_clusters, max_swizzle):
+def _build_wgrad_launcher(*, tile_mn, cluster_mnk, max_active_clusters, max_swizzle, use_clc_persistence=False):
     @cute.jit
     def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mD):
         gemm = GemmDefaultSm100(
@@ -454,7 +518,7 @@ def _build_wgrad_launcher(*, tile_mn, cluster_mnk, max_active_clusters, max_swiz
             cluster_mnk,
             sf_vec_size=MX_BLOCK,
             gather_A=False,
-            use_clc_persistence=False,
+            use_clc_persistence=use_clc_persistence,
             use_pdl=_QUACK_USE_PDL,
         )
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
@@ -469,9 +533,6 @@ def _build_wgrad_launcher(*, tile_mn, cluster_mnk, max_active_clusters, max_swiz
 # varlen-k wants A m-major and B n-major: [T, M] and [T, N] as stored. Logical (M, K) / (N, K) / (L, M, N).
 _TOKEN_MAJOR = _TS(mode=(1, 0), divisibility=(1, 16), static=False)
 _WGRAD_OUT_SPEC = _TS(divisibility=(1, 1, 8), static=False)
-MXFP8_WGRAD_TILE_MN = (256, 256)
-# bench_mxfp8_expert_wgrad.py at the hero chunk: (2, 2, 1) beats (2, 1, 1) by 1-5%; 256 x 128 tiles lose 12-25%.
-MXFP8_WGRAD_CLUSTER = (2, 2, 1)
 
 
 def mxfp8_token_grouped_gemm(
@@ -480,21 +541,25 @@ def mxfp8_token_grouped_gemm(
     cu_seqlens: jax.Array,
     *,
     out_dtype=jnp.bfloat16,
-    tile_mn=MXFP8_WGRAD_TILE_MN,
-    cluster_mnk=MXFP8_WGRAD_CLUSTER,
     max_swizzle=8,
+    schedule: GemmSchedule | None = None,
 ) -> jax.Array:
     """Per-group ``lhs.T @ rhs`` (``[E, M, N]``) of two operands quantized along the token axis
     (``quantize_token_blocks``: e4m3 ``[T, M]`` and exponents ``[J, M]``), on QuACK's block-scaled varlen-k GEMM:
-    fp32 accumulation, rows past ``cu[-1]`` never read, and an empty group yields zeros."""
+    fp32 accumulation, rows past ``cu[-1]`` never read, and an empty group yields zeros. ``schedule`` overrides the
+    schedule table (``gemm_schedule``)."""
     (a, a_exponents), (b, b_exponents) = lhs, rhs
     if a.shape[0] != b.shape[0]:
         raise ValueError(f"lhs and rhs row counts must match, got lhs={a.shape}, rhs={b.shape}")
+    schedule = schedule or gemm_schedule(GemmKind.WGRAD, a.shape[0], (a.shape[1], b.shape[1]))
+    # bench_mxfp8_expert_wgrad.py at the hero chunk: cluster (2, 2, 1) beats (2, 1, 1) by 1-5%; 256 x 128 tiles lose
+    # 12-25%. The tile and cluster are always passed (the launcher has no defaults for them).
     launcher = _build_wgrad_launcher(
-        tile_mn=tile_mn,
-        cluster_mnk=cluster_mnk,
-        max_active_clusters=_max_active_clusters(cluster_mnk),
+        tile_mn=schedule.tile_mn,
+        cluster_mnk=schedule.cluster_mnk,
+        max_active_clusters=_schedule_max_active_clusters(schedule),
         max_swizzle=max_swizzle,
+        **({"use_clc_persistence": True} if schedule.clc else {}),
     )
     call = cutlass_call(
         launcher,
@@ -630,10 +695,12 @@ def relu2_expert_mlp_mxfp8_backward_parts(res, dy):
 
 
 @cute_launcher_factory
-def _build_dense_launcher(*, max_active_clusters, max_swizzle):
+def _build_dense_launcher(
+    *, max_active_clusters, max_swizzle, tile_mn=MXFP8_TILE_MN, cluster_mnk=MXFP8_CLUSTER, use_clc_persistence=False
+):
     @cute.jit
     def launcher(stream, mA, mB, mSFA, mSFB, mD):
-        gemm = _gemm(GemmDefaultSm100, cutlass.Float8E4M3FN)
+        gemm = _gemm(GemmDefaultSm100, cutlass.Float8E4M3FN, tile_mn, cluster_mnk, use_clc_persistence)
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         gemm(mA, mB, mD, None, GemmDefaultEpiMixin.EpilogueArguments(), scheduler_args, None, stream, mSFA, mSFB)
 
@@ -644,8 +711,12 @@ _K_MAJOR = _TS(divisibility=(1, 16), static=False)
 _MN_MAJOR = _TS(mode=(1, 0), divisibility=(1, 16), static=False)
 
 
-def _dense_gemm(a, a_scales, b, b_scales, *, a_spec, b_spec, rows, cols, max_swizzle=8):
-    launcher = _build_dense_launcher(max_active_clusters=_max_active_clusters(MXFP8_CLUSTER), max_swizzle=max_swizzle)
+def _dense_gemm(a, a_scales, b, b_scales, *, a_spec, b_spec, rows, cols, schedule, max_swizzle=8):
+    launcher = _build_dense_launcher(
+        max_active_clusters=_schedule_max_active_clusters(schedule),
+        max_swizzle=max_swizzle,
+        **_launch_config(schedule),
+    )
     call = cutlass_call(
         launcher,
         output_shape_dtype=jax.ShapeDtypeStruct((rows, cols), jnp.bfloat16),
@@ -667,31 +738,54 @@ def _quantize_rows(x: jax.Array) -> tuple[jax.Array, jax.Array]:
     return values, blocked_scales(exponents[None])
 
 
-def mxfp8_matmul(x: jax.Array, w_values: jax.Array, w_exponents: jax.Array) -> jax.Array:
+def mxfp8_matmul(x: jax.Array, w_values: jax.Array, w_exponents: jax.Array, *, schedule=None) -> jax.Array:
     """Local ``x[T, K] @ w[K, N]`` with both operands MXFP8 along ``K``; ``w`` comes quantized along ``K`` in its
     stored layout (``mx_quantize_cols``: e4m3 ``[K, N]``, exponents ``[K / 32, N]``)."""
     qx, sx = _quantize_rows(x)
     sw = blocked_scales(w_exponents.T[None])
+    schedule = schedule or gemm_schedule(GemmKind.DENSE_FWD, x.shape[0], w_values.shape)
     return _dense_gemm(
-        qx, sx, w_values, sw, a_spec=_K_MAJOR, b_spec=_MN_MAJOR, rows=x.shape[0], cols=w_values.shape[1]
+        qx,
+        sx,
+        w_values,
+        sw,
+        a_spec=_K_MAJOR,
+        b_spec=_MN_MAJOR,
+        rows=x.shape[0],
+        cols=w_values.shape[1],
+        schedule=schedule,
     )
 
 
-def mxfp8_matmul_dgrad(g_rows: tuple[jax.Array, jax.Array], w_values: jax.Array, w_exponents: jax.Array) -> jax.Array:
+def mxfp8_matmul_dgrad(
+    g_rows: tuple[jax.Array, jax.Array], w_values: jax.Array, w_exponents: jax.Array, *, schedule=None
+) -> jax.Array:
     """Local ``g[T, N] @ w[K, N]^T`` with both operands MXFP8 along ``N``: ``g_rows`` is ``quantize_rows(g)`` and
     ``w`` comes quantized along ``N`` (``mx_quantize_rows``: e4m3 ``[K, N]``, exponents ``[K, N / 32]``)."""
     qg, sg = g_rows[0], blocked_scales(g_rows[1][None])
     sw = blocked_scales(w_exponents[None])
+    schedule = schedule or gemm_schedule(GemmKind.DENSE_DGRAD, qg.shape[0], w_values.shape[::-1])
     return _dense_gemm(
-        qg, sg, w_values, sw, a_spec=_K_MAJOR, b_spec=_K_MAJOR, rows=qg.shape[0], cols=w_values.shape[0]
+        qg,
+        sg,
+        w_values,
+        sw,
+        a_spec=_K_MAJOR,
+        b_spec=_K_MAJOR,
+        rows=qg.shape[0],
+        cols=w_values.shape[0],
+        schedule=schedule,
     )
 
 
-def mxfp8_matmul_wgrad(x: jax.Array, g_cols: tuple[jax.Array, jax.Array]) -> jax.Array:
+def mxfp8_matmul_wgrad(x: jax.Array, g_cols: tuple[jax.Array, jax.Array], *, schedule=None) -> jax.Array:
     """Local ``x[T, K]^T @ g[T, N]`` with both operands MXFP8 along ``T``; ``g_cols`` is ``quantize_cols(g)``."""
     qx, sx = _quantize_cols(x)
     qg, sg = g_cols[0], blocked_scales(g_cols[1].T[None])
-    return _dense_gemm(qx, sx, qg, sg, a_spec=_MN_MAJOR, b_spec=_MN_MAJOR, rows=x.shape[1], cols=qg.shape[1])
+    schedule = schedule or gemm_schedule(GemmKind.DENSE_WGRAD, x.shape[0], (x.shape[1], qg.shape[1]))
+    return _dense_gemm(
+        qx, sx, qg, sg, a_spec=_MN_MAJOR, b_spec=_MN_MAJOR, rows=x.shape[1], cols=qg.shape[1], schedule=schedule
+    )
 
 
 def _axes(entry) -> tuple[str, ...]:
