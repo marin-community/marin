@@ -45,7 +45,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from transformers import PreTrainedTokenizerBase
-from verifyit.modes.grade_judge import JudgeConnection
+from verifyit.modes.grade_judge import MODEL_ENV, JudgeConnection
 
 EXPECTED_ROWS = 100_000
 FEATURE_DISTRIBUTIONS = ("marin-taskcompendium", "marin-rolloutengine", "marin-verifyit")
@@ -263,7 +263,9 @@ async def probe(
         prefill = PrefillHarness()
         remote_judge = task_sessions["remote_judge"]
         judge_connection = JudgeConnection(remote_judge["base_url"], os.environ[remote_judge["api_key_env"]])
-        os.environ["VERIFYIT_JUDGE_MODEL"] = config.runtime.task_env["VERIFYIT_JUDGE_MODEL"]
+        # Verifyit selects the model at the process boundary; its per-call connection
+        # carries only credentials. Keep the composed model without changing task graders.
+        os.environ[MODEL_ENV] = config.runtime.task_env[MODEL_ENV]
         scripts, native = inventory_representatives(path, report, factories, prefill, judge_connection)
         validation_canaries = {}
         tokenizer = preflight_tokenizer(config)

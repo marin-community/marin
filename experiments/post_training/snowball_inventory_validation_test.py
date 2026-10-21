@@ -71,7 +71,8 @@ def test_restored_source_preserves_grader_machine_limits_and_model_request():
 
     restored, family = restored_script_rollout(raw)
 
-    record, audit, _ = panel_record({"lowered_task_spec": raw}, 0)
+    prepared = panel_record({"lowered_task_spec": raw}, 0)
+    record, audit = prepared.record, prepared.audit
     from rolloutengine.models import TaskRolloutSpec  # noqa: PLC0415 - optional runtime boundary
 
     exported = TaskRolloutSpec.model_validate_json(record["task_rollout_spec"])
@@ -142,7 +143,8 @@ def test_panel_native_prefill_retains_source_pairing_and_private_resources():
         }
     )
     source = native_closure_task(raw, "")
-    record, audit, _ = panel_record({"lowered_task_spec": raw}, 17)
+    prepared = panel_record({"lowered_task_spec": raw}, 17)
+    record, audit = prepared.record, prepared.audit
     spec = TaskRolloutSpec.model_validate_json(record["task_rollout_spec"])
 
     assert record["task_id"] == source.task_id

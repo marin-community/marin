@@ -141,13 +141,13 @@ def load_document(text: str):
 
 
 def verify_model(uri: str) -> dict:
-    manifest = ModelManifest.from_mapping(read_json(uri + "/" + MODEL_MANIFEST_FILENAME), uri)
+    manifest = ModelManifest.from_mapping(read_json(str(StoragePath(uri) / MODEL_MANIFEST_FILENAME)), uri)
     filesystem, root = filesystem_and_path(uri)
     inventory = {entry.path: entry.size for _, entry in file_inventory(filesystem, root)}
     for entry in manifest.files:
         if inventory.get(entry.path) != entry.size:
             raise ValueError(f"Missing or differently sized model object: {entry.path}")
-    index_bytes = StoragePath(uri + "/model.safetensors.index.json").read_bytes()
+    index_bytes = (StoragePath(uri) / "model.safetensors.index.json").read_bytes()
     entry = next(entry for entry in manifest.files if entry.path == "model.safetensors.index.json")
     if hashlib.sha256(index_bytes).hexdigest() != entry.sha256:
         raise ValueError("HF weight index differs from the model manifest")
@@ -206,7 +206,7 @@ def preflight(request: dict) -> dict:
     factories = task_machine_factories(sessions)
     prefill = PrefillHarness()
     source = config.inputs.validation_data[0]
-    uri = str(source.uri).rstrip("/") + "/" + str(source.relative_path)
+    uri = str(StoragePath(str(source.uri)) / str(source.relative_path))
     tasks = []
     counts = {}
     engines = {}
@@ -290,7 +290,7 @@ def results(request: dict) -> dict:
     config = load_document(request["launch_config_yaml"])
     step = request.get("evaluation_step")
     session = "eval_only" if step is None else f"global_step_{step}_evals"
-    root = StoragePath(str(config.artifacts.export_root) + "/dumped_evals/" + session)
+    root = StoragePath(str(config.artifacts.export_root)) / "dumped_evals" / session
     outcomes = []
     for directory, _, files in root.walk():
         for filename in files:
@@ -333,7 +333,7 @@ def export_config(request: dict) -> dict:
     training = load_document(OmegaConf.to_yaml(OmegaConf.create(raw)))
     step = request["step"]
     checkpoint_root = str(training.artifacts.checkpoint_root)
-    checkpoint_path = checkpoint_root + f"/global_step_{step}"
+    checkpoint_path = str(StoragePath(checkpoint_root) / f"global_step_{step}")
     if terminal_checkpoint_step(checkpoint_root) < step:
         raise ValueError("The selected step has not been committed")
     filesystem, path = fs_and_path(checkpoint_path)
@@ -345,8 +345,8 @@ def export_config(request: dict) -> dict:
     if int(placement.policy_num_nodes) != 4 or int(placement.policy_num_gpus_per_node) != 8:
         raise ValueError("This exporter requires the approved four-by-eight saved policy geometry")
     model = training.inputs.model
-    destination = request["output_path"].rstrip("/")
-    export_root = destination + "/exports"
+    destination = StoragePath(request["output_path"])
+    export_root = str(destination / "exports")
     export_request = HFExportRequest(
         step=step,
         checkpoint_base_path=checkpoint_root,
@@ -376,19 +376,19 @@ def export_config(request: dict) -> dict:
     )
     config = checkpoint_export_launch_config(training, export_request, spec)
     config.runtime.source_digest = resolve_launcher_source().digest
-    config.run.id = "snowball-evaluation-export-" + hashlib.sha256(destination.encode()).hexdigest()[:12]
+    config.run.id = "snowball-evaluation-export-" + hashlib.sha256(str(destination).encode()).hexdigest()[:12]
     config.run.attempt_id = f"step-{step}"
     config.iris.job_name = f"{config.run.id}-step-{step}"
-    config.artifacts.attempts_root = destination + "/attempts"
-    config.artifacts.resolved_config_uri = destination + "/resolved-launch.yaml"
-    config.artifacts.terminal_manifest_uri = destination + "/terminal.json"
-    config.ray.rendezvous_dir = destination + "/attempts/rendezvous"
-    config.ray.log_dir = destination + "/attempts/ray-logs"
+    config.artifacts.attempts_root = str(destination / "attempts")
+    config.artifacts.resolved_config_uri = str(destination / "resolved-launch.yaml")
+    config.artifacts.terminal_manifest_uri = str(destination / "terminal.json")
+    config.ray.rendezvous_dir = str(destination / "attempts/rendezvous")
+    config.ray.log_dir = str(destination / "attempts/ray-logs")
     document = OmegaConf.to_yaml(config, resolve=True)
     load_document(document)
     return {
         "launch_config_yaml": document,
-        "policy_export_uri": export_root + f"/global_step_{step}/policy",
+        "policy_export_uri": str(StoragePath(export_root) / f"global_step_{step}" / "policy"),
         "source_config_sha256": hashlib.sha256(source_text.encode()).hexdigest(),
         "source_runtime_digest": str(training.runtime.source_digest),
         "checkpoint_step": step,

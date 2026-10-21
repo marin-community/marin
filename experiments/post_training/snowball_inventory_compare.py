@@ -18,10 +18,8 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
-    IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
-    IrisSkyRLExecution,
     SkyRLRetentionPolicy,
     SkyRLRun,
     SkyRLRuntime,
@@ -31,20 +29,18 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 
-from experiments.post_training.async_rl import SNOWBALL_RECIPE
 from experiments.post_training.snowball_inventory_evaluate import (
-    FAMILY_COUNTS,
     EvaluationOutcome,
     PanelTask,
     runtime_operation,
     summarize_panel,
 )
+from experiments.post_training.snowball_inventory_panel import FAMILY_COUNTS
 from experiments.post_training.snowball_inventory_smoke import (
-    CLUSTER,
-    CONTAINER_PROFILE,
     SEED,
     InventoryRunConfig,
     ModelSourceIdentity,
+    inventory_training_execution,
     run_inventory,
 )
 from experiments.post_training.snowball_inventory_train import CHECKPOINT_INTERVAL, ROLE_PLAN, training_recipe
@@ -132,7 +128,12 @@ def comparison_recipe(model_uri: str, *, judge_base_url: str, judge_model: str) 
     trainer["callbacks"] = [
         {"type": "checkpoint", "save_steps": CHECKPOINT_INTERVAL},
         {"type": "evaluation", "eval_steps": CHECKPOINT_INTERVAL, "eval_before_train": True},
-        {"type": "best_checkpoint", "initial_model_uri": model_uri, "expected_tasks": 910, "minimum_scored_tasks": 910},
+        {
+            "type": "best_checkpoint",
+            "initial_model_uri": model_uri,
+            "expected_tasks": sum(FAMILY_COUNTS.values()),
+            "minimum_scored_tasks": sum(FAMILY_COUNTS.values()),
+        },
         {"type": "hf_model_save", "save_steps": MAX_STEPS},
         {"type": "inference_stats"},
         {"type": "database_registration"},
@@ -201,21 +202,7 @@ def comparison_step(
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,
         ),
-        IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
-            cpu=32,
-            memory=SNOWBALL_RECIPE.host_memory,
-            disk="2TB",
-            priority="interactive",
-            max_retries=0,
-            target_cluster=CLUSTER,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=36,
-            job_timeout_seconds=24 * 60 * 60,
-            container_profile=CONTAINER_PROFILE,
-            wandb_entity="marin-community",
-        ),
+        inventory_training_execution(),
         export_hf=True,
     )
 

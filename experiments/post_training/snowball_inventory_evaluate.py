@@ -46,6 +46,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.async_rl import SNOWBALL_RECIPE
+from experiments.post_training.snowball_inventory_panel import FAMILY_COUNTS
 from experiments.post_training.snowball_inventory_smoke import (
     CLUSTER,
     CONTAINER_PROFILE,
@@ -56,13 +57,6 @@ from experiments.post_training.snowball_inventory_smoke import (
     smoke_recipe,
 )
 
-FAMILY_COUNTS = {
-    "calendar": 167,
-    "competitive_coding": 167,
-    "reasoning_gym": 167,
-    "stem": 166,
-    "structural": 243,
-}
 EVAL_ROLE_PLAN = replace(
     SNOWBALL_RECIPE.role_plan,
     colocate_all=True,

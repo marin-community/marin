@@ -62,6 +62,25 @@ class InventoryRunConfig:
     model_source: ModelSourceIdentity | None = None
 
 
+def inventory_training_execution() -> IrisSkyRLExecution:
+    """Execution settings for the full continuation and initializer comparison."""
+    return IrisSkyRLExecution(
+        cluster=CLUSTER,
+        cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+        cpu=32,
+        memory=SNOWBALL_RECIPE.host_memory,
+        disk="2TB",
+        priority="interactive",
+        max_retries=0,
+        target_cluster=CLUSTER,
+        parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+        coordinator_timeout_hours=36,
+        job_timeout_seconds=24 * 60 * 60,
+        container_profile=CONTAINER_PROFILE,
+        wandb_entity="marin-community",
+    )
+
+
 def runtime_environment() -> dict[str, str]:
     """Keep the vendored runtime independent from the parent Python environment."""
     environment = dict(os.environ)

@@ -9,14 +9,14 @@ terminal normalization are not claimed equivalent to this deployment.
 """
 
 import argparse
-import hashlib
 import json
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.prefill import PrefillHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
@@ -31,8 +31,10 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.runtime.shell import ShellToolConfig
 from verifyit.json_objects import unique_object
 
+from experiments.post_training.snowball_curriculum.bundle import file_sha256
 from experiments.post_training.snowball_curriculum.export import Deployment, rollout_record
 from experiments.post_training.snowball_curriculum.native import native_closure_task
+from experiments.post_training.snowball_inventory_panel import FAMILY_COUNTS
 
 GRADER_IMAGE = "ghcr.io/penfever/smartie-grader@sha256:398753f1ef9e163dd4ae503ce328a441b919bbd381b50cba32af2c564e9b0bc8"
 FAMILIES = {
@@ -41,13 +43,7 @@ FAMILIES = {
     "ultra_sft_step3200_reasoning_gym": "reasoning_gym",
     "ultra_sft_step3200_stem_mcqa": "stem",
 }
-EXPECTED_COUNTS = {"calendar": 167, "competitive_coding": 167, "reasoning_gym": 167, "stem": 166, "structural": 243}
 IDENTITY_COLUMNS = ("task_id", "contract_id", "public_content_id", "source_contract_id", "source_public_content_id")
-
-
-def file_sha256(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def restored_script_rollout(raw: str) -> tuple[TaskRolloutSpec, str]:
@@ -70,7 +66,14 @@ def restored_script_rollout(raw: str) -> tuple[TaskRolloutSpec, str]:
     return spec, FAMILIES[contract["dataset"]]
 
 
-def panel_record(row: dict, index: int) -> tuple[dict, dict, Deployment]:
+@dataclass(frozen=True)
+class PanelRecord:
+    record: dict
+    audit: dict
+    deployment: Deployment
+
+
+def panel_record(row: dict, index: int) -> PanelRecord:
     """Bind one historical panel row through the same exporter as the training pool."""
     raw = row["lowered_task_spec"]
     document = json.loads(raw, object_pairs_hook=unique_object)
@@ -121,7 +124,7 @@ def panel_record(row: dict, index: int) -> tuple[dict, dict, Deployment]:
         format=selected.get("format"),
         control=selected.get("control"),
     )
-    return record, audit, deployment
+    return PanelRecord(record, audit, deployment)
 
 
 def freeze_panel(
@@ -134,7 +137,10 @@ def freeze_panel(
     max_prompt_tokens: int,
 ) -> dict:
     """Keep fixed row order and pairing, rejecting overlaps or any loader admission loss."""
-    if file_sha256(source) != source_sha256 or file_sha256(training_pool) != training_sha256:
+    if (
+        file_sha256(StoragePath(str(source))) != source_sha256
+        or file_sha256(StoragePath(str(training_pool))) != training_sha256
+    ):
         raise ValueError("Frozen panel or training source differs from its declared SHA256")
     if output.exists():
         raise FileExistsError(output)
@@ -149,7 +155,8 @@ def freeze_panel(
     overlaps = Counter({column: 0 for column in IDENTITY_COLUMNS})
     overlaps.update(canonical_contracts_against_training_source=0, public_contexts_against_training_source=0)
     for index, row in enumerate(pq.read_table(source).to_pylist()):
-        record, audit, _ = panel_record(row, index)
+        prepared = panel_record(row, index)
+        record, audit = prepared.record, prepared.audit
         spec = TaskRolloutSpec.model_validate_json(record["task_rollout_spec"])
         RolloutEngine(
             factories, {spec.harness: PrefillHarness() if spec.harness == "prefill" else shell_harness(spec.harness)}
@@ -170,7 +177,11 @@ def freeze_panel(
         )
         records.append(record)
         mappings.append({"task_id": spec.task.id, "source_row_index": index, **audit})
-    if counts != EXPECTED_COUNTS or any(overlaps.values()) or len({r["task_id"] for r in records}) != 910:
+    if (
+        counts != FAMILY_COUNTS
+        or any(overlaps.values())
+        or len({r["task_id"] for r in records}) != sum(FAMILY_COUNTS.values())
+    ):
         raise ValueError(f"Fixed panel counts, pairing uniqueness or training disjointness failed: {counts}, {overlaps}")
     output.mkdir(parents=True)
     path = output / "validation.parquet"
@@ -179,11 +190,14 @@ def freeze_panel(
     admitted = dataset.collate_fn(list(dataset))
     if [r["input"].spec.task.id for r in admitted] != [r["task_id"] for r in records]:
         raise ValueError("TaskDataset dropped or reordered development rows")
-    if file_sha256(source) != source_sha256 or file_sha256(training_pool) != training_sha256:
+    if (
+        file_sha256(StoragePath(str(source))) != source_sha256
+        or file_sha256(StoragePath(str(training_pool))) != training_sha256
+    ):
         raise ValueError("Frozen source changed during panel preparation")
     report = {
         "status": "local_contract_and_loader_checks_passed",
-        "rows": 910,
+        "rows": sum(FAMILY_COUNTS.values()),
         "family_counts": dict(counts),
         "source_sha256": source_sha256,
         "training_sha256": training_sha256,
@@ -207,7 +221,9 @@ def freeze_panel(
     (output / "deployment-contract-mapping.jsonl").write_text(
         "".join(json.dumps(r, sort_keys=True) + "\n" for r in mappings)
     )
-    manifest = {p.name: {"sha256": file_sha256(p), "bytes": p.stat().st_size} for p in sorted(output.iterdir())}
+    manifest = {
+        p.name: {"sha256": file_sha256(StoragePath(str(p))), "bytes": p.stat().st_size} for p in sorted(output.iterdir())
+    }
     (output / "artifact-manifest.json").write_text(json.dumps({"files": manifest}, indent=2, sort_keys=True) + "\n")
     return report
 
