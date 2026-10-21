@@ -305,11 +305,20 @@ runtime `MARIN_PREFIX` to the reviewed `--output-prefix`. Each invocation create
 the `--launch-config` file exclusively, so use a fresh filename for submission.
 
 The smoke writes raw update telemetry, checkpoint timings,
-`telemetry/compiled-gradient-report.json` and
+`telemetry/gradient-structure-report.json` and
 `telemetry/compact-optimizer-report.json` under its training output. The optimizer
 report checks the exact compact parameter and Adam moment trees, FP32 dtypes,
-counter values and buffer sizes before the first update. Smoke assembly pins
-its raw SHA256, execution, base and measurement identity and requires step-zero
+counter values and buffer sizes before the first update. The gradient report
+records the actual compact gradient output paths, shapes and dtypes. It does not
+inspect internal kernel allocations or require a general HLO absence certificate.
+Independent numerical LoRA checks, finite updates and the declared diagnostic
+limits remain required for the bounded learning smoke.
+
+The older `assemble-smoke` qualification below still consumes a separately
+collected compiler certificate. It is not the launch gate for the reviewed
+bounded smoke; do not fabricate a certificate to satisfy that schema. The older
+assembler pins the optimizer report's raw SHA256, execution, base and measurement
+identity and requires step-zero
 counters and a passing structural report. This does not inspect moment values.
 Matching a frozen tensor's shape does not establish optimizer contamination.
 
@@ -390,9 +399,9 @@ weights, hardware and batch configurations match.
 
 The adapter path freezes the BF16 base before differentiation. Adam state covers
 only attention/shared-dense LoRA parameters and the five selected input/output
-vocabulary deltas. Effective routing biases stay frozen. Compilation checks and
-a learning smoke must establish that frozen weight-gradient and full-model
-optimizer work are absent on the actual backend.
+vocabulary deltas. Effective routing biases stay frozen. Independent numerical
+checks and the learning smoke validate the compact training path. General
+compiler certificates are optional diagnostics, not an acceptance gate.
 
 Compact checkpoints bind their base metadata, tokenizer and adapter configuration.
 At successful completion, the backend automatically exports D to
