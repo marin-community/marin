@@ -14,6 +14,28 @@ from shellbox.machine import HARBOR_EXEC_OUTPUT_LIMIT_BYTES, Command, ExitReason
 
 _Result = TypeVar("_Result")
 
+# Only constant Harbor error messages may become diagnostic labels. Unrecognized
+# ValueError text may contain task output or credentials and is never persisted.
+_PI_FAILURE_CODES = {
+    "Pi evidence stdout contained non-frame output": "non_frame_stdout",
+    "Pi returned malformed in-memory evidence chunks: missing separator": "missing_frame_separator",
+    "Pi returned malformed in-memory evidence chunks: invalid header": "invalid_frame_header",
+    "Pi returned malformed in-memory evidence chunks: empty fragment": "empty_frame_fragment",
+    "Pi returned malformed in-memory evidence chunks: oversized fragment": "oversized_frame_fragment",
+    "Pi returned conflicting in-memory evidence chunks": "conflicting_frame_chunks",
+    "Pi did not return exactly one in-memory evidence frame (missing chunks)": "missing_frame_chunks",
+    "Pi returned a corrupted in-memory evidence frame": "corrupted_frame",
+    "Pi in-memory evidence must be an object": "non_object_frame",
+    "Pi evidence frame must contain one collated trajectory": "missing_collated_trajectory",
+    "Pi evidence frame must contain model calls and one collated trajectory": "missing_calls_or_trajectory",
+}
+
+
+def _pi_failure_code(error: BaseException) -> str | None:
+    if type(error) is not ValueError:
+        return None
+    return _PI_FAILURE_CODES.get(str(error), "other_value_error")
+
 
 class BorrowedMachineEnvironment(BaseEnvironment):
     """Expose commands and transfers without owning container creation or deletion."""
@@ -55,6 +77,8 @@ class BorrowedMachineEnvironment(BaseEnvironment):
         record = {"timestamp_utc": datetime.now(UTC).isoformat(), "phase": phase}
         if error is not None:
             record["error_type"] = type(error).__name__
+            if code := _pi_failure_code(error):
+                record["error_code"] = code
         with self._diagnostics_path.open("a") as stream:
             stream.write(json.dumps(record) + "\n")
 

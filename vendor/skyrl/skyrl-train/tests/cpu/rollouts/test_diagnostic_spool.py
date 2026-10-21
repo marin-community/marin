@@ -3,7 +3,16 @@ import json
 from pathlib import Path
 
 import pytest
+from skyrl_train.rollouts.agent_environment import _pi_failure_code
 from skyrl_train.rollouts.diagnostic_spool import DiagnosticSpool
+
+
+def test_pi_failure_code_only_classifies_fixed_safe_messages():
+    assert _pi_failure_code(ValueError("Pi evidence stdout contained non-frame output")) == "non_frame_stdout"
+    assert _pi_failure_code(ValueError("Pi did not return exactly one in-memory evidence frame (missing chunks)")) == "missing_frame_chunks"
+    assert _pi_failure_code(ValueError("Pi evidence frame must contain one collated trajectory")) == "missing_collated_trajectory"
+    assert _pi_failure_code(ValueError("secret=do-not-persist")) == "other_value_error"
+    assert _pi_failure_code(RuntimeError("secret=do-not-persist")) is None
 
 
 @pytest.mark.asyncio
