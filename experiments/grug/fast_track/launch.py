@@ -31,7 +31,7 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.datasets import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
@@ -405,6 +405,7 @@ def _flat_cache_data_config(
     validation,
     tokenizer: str,
     train_cache_dir: str,
+    shuffle: bool | BlockShuffleConfig,
 ) -> LmDataConfig:
     """Straight-through single-source training on one pre-built flat cache (tokenizer-ablation runs).
 
@@ -435,6 +436,7 @@ def _flat_cache_data_config(
         components={**components, **val_components},
         train_weights=train_weights,
         auto_build_caches=False,
+        shuffle=shuffle,
     )
 
 
@@ -491,6 +493,7 @@ def build_h100_ladder_run(
     device: str | None = None,
     eval_on_train_dispatch: bool = False,
     eval_precision: EvalPrecision = EvalPrecision.TRAIN,
+    data_shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -507,6 +510,7 @@ def build_h100_ladder_run(
     ``eval_on_train_dispatch`` evaluates on the training mesh and MoE dispatch (e.g. the MXFP8 ragged experts) instead of
     the dropless local backend, at an eval-only capacity that cannot drop (a drop would make the eval loss NaN).
     ``eval_precision`` picks the evals' recipe (``EvalPrecision``).
+    ``data_shuffle`` is the train loader's shuffle (``LmDataConfig.shuffle``): ``True`` permutes the whole cache.
     ``device`` moves an H100 rung onto GB200 trays (4 GPUs per node) and ``nodes`` overrides the rung's node count.
     ``expert_axis_size`` (default: every device) shards the experts over
     that many devices and replicates them (data parallel, ``replica_dcn``) over the rest, e.g. 8 for expert
@@ -693,7 +697,7 @@ def build_h100_ladder_run(
             ),
         )
         data = _flat_cache_data_config(
-            ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir
+            ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir, shuffle=data_shuffle
         )
         return GrugRunConfig(
             model=model,
@@ -1074,6 +1078,13 @@ def _layer_skip_rule(
     "backend, at an eval-only capacity that cannot drop.",
 )
 @click.option(
+    "--data-shuffle",
+    default="block",
+    show_default=True,
+    help="Train-data shuffle: 'block' (levanter's default hierarchical block shuffle), 'full' (one permutation of "
+    "the whole cache), or 'IO_BLOCK_SIZE:WINDOW_BLOCKS' (a block shuffle with those sizes).",
+)
+@click.option(
     "--eval-precision",
     type=click.Choice([p.value for p in EvalPrecision]),
     default=EvalPrecision.TRAIN.value,
@@ -1182,6 +1193,7 @@ def main(
     device: str | None,
     eval_on_train_dispatch: bool,
     eval_precision: str,
+    data_shuffle: str,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -1242,7 +1254,20 @@ def main(
         device=device,
         eval_on_train_dispatch=eval_on_train_dispatch,
         eval_precision=EvalPrecision(eval_precision),
+        data_shuffle=_data_shuffle(data_shuffle),
     )
+
+
+def _data_shuffle(spec: str) -> bool | BlockShuffleConfig:
+    """``--data-shuffle`` -> ``LmDataConfig.shuffle``."""
+    if spec == "block":
+        return DEFAULT_LM_DATA_SHUFFLE
+    if spec == "full":
+        return True
+    io_block_size, sep, window_blocks = spec.partition(":")
+    if not sep:
+        raise ValueError(f"--data-shuffle must be 'block', 'full' or 'IO_BLOCK_SIZE:WINDOW_BLOCKS', got {spec!r}")
+    return BlockShuffleConfig(io_block_size=int(io_block_size), window_blocks=int(window_blocks))
 
 
 def _parse_settings(items: tuple[str, ...]) -> dict[str, str]:
