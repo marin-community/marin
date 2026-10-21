@@ -450,6 +450,8 @@ about `16 s² / (g + h)²` seeds for each arm give 80% power for that group (nor
 On the d512 web arena, `s` was 2.3% for knowledge, 0.9% for commonsense, 1.1% for code, 0.5% for math, and 0.4% for long context.
 On 24 later runs, `s` for knowledge was 1.6%. The counts below use 2.3%, because a low estimate gives too few seeds.
 Thus knowledge sets the count: for a 0.9% knowledge gain, use about 24 seeds for each arm, and for no knowledge gain, about 86.
+A simulation of the complete judge gave 78% power with 24 seeds. It used the seed covariance of the 12 runs
+and the mean gains of all 24 DCLM runs (knowledge +0.9%). With no knowledge gain, it gave 80% power with 86 seeds.
 The 12-seed DCLM confirmation above had fewer seeds than this rule gives, so its knowledge result can change with new seeds.
 More evaluation examples do not help, because the knowledge variance comes from the model seed. SciQ has the largest seed SD.
 A larger rung does not help either: with three seeds, the knowledge intervals are about as wide at d768 and wider at d1280.
