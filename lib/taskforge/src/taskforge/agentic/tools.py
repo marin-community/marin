@@ -17,6 +17,7 @@ error result. A failure of the host, for example an unavailable judge model, rai
 import asyncio
 import json
 import logging
+import math
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Mapping
@@ -324,6 +325,21 @@ class ToolSession:
             raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
         except (ValueError, NotImplementedError) as error:
             raise ToolError(f"The grade failed; check the task: {error}") from error
+        status = result.grade.status
+        if status == Outcome.SUBMISSION_FAILURE:
+            # A wrong control must show that the grader rejects a wrong value, not that the format rejects the answer.
+            return _result(
+                {
+                    "outcome": status,
+                    "control": False,
+                    "error": (
+                        "The answer format rejects this answer, so it is no control. Grade answers in the "
+                        "answer format."
+                    ),
+                }
+            )
+        if status != Outcome.GRADED:
+            raise ToolError(f"The grade failed ({status}); check the task: {result.grade.error}")
         passed = _passed(result.grade)
         self.tools.evidence[_task_digest(task)].controls.append((expect == "pass", passed))
         return _result(
@@ -341,6 +357,7 @@ class ToolSession:
             raise ToolError("n must be at least 1")
         if not paths or len(set(paths)) < len(paths):
             raise ToolError("Give one or more different paths")
+        self._check_waves(n * len(paths))
         tasks = [await self._load(path) for path in paths]
         specs = [_solver_spec(_adversary_task(task) if role == "adversary" else task, self.config) for task in tasks]
         for path, spec in zip(paths, specs, strict=True):
@@ -354,6 +371,20 @@ class ToolSession:
         )
         left = self.config.budget.solver_rollouts - self.tools.spend.solver_rollouts
         return _result({"results": dict(zip(paths, results, strict=True)), "solver_rollouts_left": left})
+
+    def _check_waves(self, rollouts: int) -> None:
+        """Refuse a call whose rollouts, run ``max_concurrent_rollouts`` at a time, can outlast the agent's tool turn,
+        which would end the session."""
+        attempt, turn = self.config.solver_limits.attempt_timeout, self.config.agent_limits.tool_turn_timeout
+        if attempt is None or turn is None:
+            return
+        slots = self.config.max_concurrent_rollouts
+        most = (math.ceil(turn / attempt) - 1) * slots
+        if rollouts > most:
+            raise ToolError(
+                f"One call can run at most {most} rollouts: {slots} run at a time, each can take {attempt:g} s, and "
+                f"one tool call has {turn:g} s. Split the call."
+            )
 
     async def _rollouts(
         self, task: TaskSpec, spec: TaskRolloutSpec, n: int, role: Literal["solver", "adversary"]
