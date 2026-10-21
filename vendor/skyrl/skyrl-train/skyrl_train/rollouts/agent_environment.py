@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
 
+from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.task.config import EnvironmentConfig
@@ -35,6 +36,28 @@ def _pi_failure_code(error: BaseException) -> str | None:
     if type(error) is not ValueError:
         return None
     return _PI_FAILURE_CODES.get(str(error), "other_value_error")
+
+
+def _nonzero_agent_failure_code(result: ExecResult) -> str:
+    """Classify install/agent exits without persisting command output."""
+    output = f"{result.stderr or ''}\n{result.stdout or ''}".lower()
+    if "eai_again" in output or "temporary failure resolving" in output:
+        return "dns_temporary_failure"
+    if "etimedout" in output or "connection timed out" in output:
+        return "network_timeout"
+    if "econnreset" in output or "connection reset" in output:
+        return "connection_reset"
+    if "enospc" in output or "no space left on device" in output:
+        return "sandbox_disk_full"
+    if "npm error code e404" in output or "npm err! code e404" in output:
+        return "npm_package_not_found"
+    if "failed to fetch" in output:
+        return "apt_fetch_failed"
+    if "curl: (" in output:
+        return "curl_failed"
+    if "npm error" in output or "npm err!" in output:
+        return "npm_failed"
+    return "unclassified_nonzero_exit"
 
 
 class BorrowedMachineEnvironment(BaseEnvironment):
@@ -79,6 +102,10 @@ class BorrowedMachineEnvironment(BaseEnvironment):
             record["error_type"] = type(error).__name__
             if code := _pi_failure_code(error):
                 record["error_code"] = code
+            elif isinstance(error, NonZeroAgentExitCodeError) and error.result is not None:
+                record["error_code"] = _nonzero_agent_failure_code(error.result)
+                if 0 <= error.result.return_code <= 255:
+                    record["exit_code"] = error.result.return_code
         with self._diagnostics_path.open("a") as stream:
             stream.write(json.dumps(record) + "\n")
 

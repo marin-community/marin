@@ -3,7 +3,8 @@ import json
 from pathlib import Path
 
 import pytest
-from skyrl_train.rollouts.agent_environment import _pi_failure_code
+from harbor.environments.base import ExecResult
+from skyrl_train.rollouts.agent_environment import _nonzero_agent_failure_code, _pi_failure_code
 from skyrl_train.rollouts.diagnostic_spool import DiagnosticSpool
 
 
@@ -13,6 +14,24 @@ def test_pi_failure_code_only_classifies_fixed_safe_messages():
     assert _pi_failure_code(ValueError("Pi evidence frame must contain one collated trajectory")) == "missing_collated_trajectory"
     assert _pi_failure_code(ValueError("secret=do-not-persist")) == "other_value_error"
     assert _pi_failure_code(RuntimeError("secret=do-not-persist")) is None
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("npm error code EAI_AGAIN secret=do-not-persist", "dns_temporary_failure"),
+        ("npm ERR! code ETIMEDOUT", "network_timeout"),
+        ("npm ERR! code ECONNRESET", "connection_reset"),
+        ("npm error code E404", "npm_package_not_found"),
+        ("curl: (22) service unavailable", "curl_failed"),
+        ("private task content secret=do-not-persist", "unclassified_nonzero_exit"),
+    ],
+)
+def test_nonzero_agent_exit_code_never_persists_stderr(stderr, expected):
+    result = ExecResult(return_code=1, stderr=stderr)
+    code = _nonzero_agent_failure_code(result)
+    assert code == expected
+    assert "secret" not in code
 
 
 @pytest.mark.asyncio
