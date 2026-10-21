@@ -46,7 +46,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.mxfp8.layout import PaddedDispatch
-from levanter.grug._moe.mxfp8.quantize import _AMAX_FLOOR, E4M3_MAX, MXFP8_BLOCK_SIZE
+from levanter.grug._moe.mxfp8.quantize import _AMAX_FLOOR, E4M3_MAX, MXFP8_BLOCK_SIZE, SF_TILE_ROWS, DualQuantized
 
 try:
     import jax_triton as jt
@@ -57,8 +57,6 @@ except ModuleNotFoundError:
     triton = None
     tl = None
 
-# Rows of one swizzled scale tile, which holds 128 rows by 4 scale columns in 512 bytes.
-_SF_TILE_ROWS = 128
 # Columns of one tile: two row blocks, the widest tile whose lanes keep each token block in a warp.
 _BLOCK_H = 64
 
@@ -179,19 +177,6 @@ else:
     _dual_quantize_padded_kernel = None
 
 
-class DualQuantized(NamedTuple):
-    """Both MXFP8 copies of an ``[Mp, H]`` buffer, in `quantize.dual_quantize_activation`'s order."""
-
-    q_rows: Array
-    """E4M3 values quantized along features, the forward and data-gradient GEMMs' operand."""
-    sfa: Array
-    """E8M0 `build_sfa` scales of ``q_rows``."""
-    q_tokens: Array
-    """E4M3 values quantized along tokens, the weight-gradient GEMMs' operand."""
-    sf_wgrad: Array
-    """E8M0 `build_sf_wgrad` scales of ``q_tokens``."""
-
-
 def mxfp8_triton_quant_available() -> bool:
     """Whether the Triton producer can run in this process: Triton imports and a GPU default device."""
     return jt is not None and _dual_quantize_padded_kernel is not None and jax.devices()[0].platform == "gpu"
@@ -236,11 +221,11 @@ def _quantize_padded(
     if rows != padded_rows:
         raise ValueError(f"layout is for {padded_rows} receiver rows, x has {rows}")
     # Both scale layouts tile the hidden axis by 128: 4 scale columns of sfa, 128 rows of sf_wgrad.
-    if hidden % _SF_TILE_ROWS != 0:
-        raise ValueError(f"hidden size {hidden} is not a multiple of {_SF_TILE_ROWS}")
+    if hidden % SF_TILE_ROWS != 0:
+        raise ValueError(f"hidden size {hidden} is not a multiple of {SF_TILE_ROWS}")
     if tile.block_m % (32 * tile.num_warps) != 0 or padded_rows % tile.block_m != 0:
         raise ValueError(f"tile {tile} does not split the {padded_rows} padded rows into whole warps")
-    tiles = (hidden // _SF_TILE_ROWS) * (padded_rows // _SF_TILE_ROWS)
+    tiles = (hidden // SF_TILE_ROWS) * (padded_rows // SF_TILE_ROWS)
     if block_perm is not None and block_perm.shape != (tiles,):
         raise ValueError(f"block_perm has shape {block_perm.shape}, expected ({tiles},)")
     column_tiles = hidden // _BLOCK_H

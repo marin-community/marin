@@ -19,13 +19,13 @@ from typing import NamedTuple
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.grug._moe.mxfp8.quantize import SF_TILE_ROWS
+
 # Every expert's rows start on a multiple of this in the kernel-facing buffer (the fused kernels'
 # FIX_PAD_SIZE).
 GROUP_PAD = 256
 # Width of the gate and up column blocks the fused SwiGLU epilogue pairs.
 _GATE_UP_BLOCK = 32
-# One tile of the swizzled weight-gradient scales spans 128 rows and 128 tokens (4 scale columns).
-_SF_TILE = 128
 
 
 class PaddedDispatch(NamedTuple):
@@ -74,11 +74,11 @@ def wgrad_block_perm(padded_group_sizes: Int[Array, "E"], *, rows: int, total_to
     tile at position ``p`` in the kernel's order. ``padded_group_sizes`` must be multiples of 128
     that sum to ``total_tokens``, as a `PaddedDispatch` holds them.
     """
-    assert rows % _SF_TILE == 0, f"rows {rows} are not a multiple of {_SF_TILE}"
-    assert total_tokens % _SF_TILE == 0, f"tokens {total_tokens} are not a multiple of {_SF_TILE}"
-    row_blocks = rows // _SF_TILE
-    token_blocks = total_tokens // _SF_TILE
-    expert_token_blocks = padded_group_sizes.astype(jnp.int32) // _SF_TILE
+    assert rows % SF_TILE_ROWS == 0, f"rows {rows} are not a multiple of {SF_TILE_ROWS}"
+    assert total_tokens % SF_TILE_ROWS == 0, f"tokens {total_tokens} are not a multiple of {SF_TILE_ROWS}"
+    row_blocks = rows // SF_TILE_ROWS
+    token_blocks = total_tokens // SF_TILE_ROWS
+    expert_token_blocks = padded_group_sizes.astype(jnp.int32) // SF_TILE_ROWS
     expert_tiles = expert_token_blocks * row_blocks
     tile_ends = jnp.cumsum(expert_tiles)
     token_block_starts = jnp.cumsum(expert_token_blocks) - expert_token_blocks
