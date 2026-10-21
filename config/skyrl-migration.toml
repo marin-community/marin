@@ -110,9 +110,6 @@ reason = "retained checkpoint-export behavior"
 glob = "skyrl-train/tests/cpu/test_inline_harbor.py"
 reason = "Harbor subprocess isolation and validation score accounting"
 [[keep]]
-glob = "skyrl-train/tests/cpu/test_prefill.py"
-reason = "explicit prefill admission, raw transport and grading contracts"
-[[keep]]
 glob = "skyrl-train/tests/fixtures/**"
 reason = "data fixtures for retained acceptance tests"
 [[keep]]
