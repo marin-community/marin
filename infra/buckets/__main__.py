@@ -5,7 +5,9 @@
 
 from pathlib import Path
 
+import pulumi
 import pulumi_cloudflare as cloudflare
+import pulumi_command as command
 import pulumi_coreweave as coreweave
 import pulumi_gcp as gcp
 from iac.buckets import DataBuckets
@@ -41,6 +43,14 @@ def main() -> None:
         r2_account_id=CLOUDFLARE_ACCOUNT_ID,
         r2_bucket_name=R2_BUCKET_NAME,
     )
+
+    command.local.Command(
+        "hf-bucket-open-athena-marin",
+        create=".venv/bin/hf buckets create open-athena/marin --private",
+        dir="../..",
+        opts=pulumi.ResourceOptions(protect=True, retain_on_delete=True),
+    )
+    pulumi.export("huggingface_bucket", "hf://buckets/open-athena/marin")
 
 
 main()
