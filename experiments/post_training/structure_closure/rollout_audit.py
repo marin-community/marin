@@ -19,6 +19,7 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from verifyit.spec import StructureClosureSpec
 
+from experiments.post_training.structure_closure.benchmark import TASK_ID_PREFIX, Family
 from experiments.post_training.structure_closure.eval_audit import AuditFailure, EvaluationAudit, case_result
 from experiments.post_training.structure_closure.task_data import load_validation, task_digest
 
@@ -47,7 +48,7 @@ def evaluation_request(task: TaskSpec, sampling: dict[str, Any]) -> ModelRequest
         raise ValueError("Sampling cannot override task conditioning or template controls")
     body = {
         **prompt.options.get("extra_body", {}),
-        "chat_template_kwargs": {"enable_thinking": task_group(task, "family") == "reasoning_delimiter"},
+        "chat_template_kwargs": {"enable_thinking": task_group(task, "family") == Family.REASONING},
     }
     return ModelRequest(prompt.messages, {**sampling, **prompt.options, "extra_body": body})
 
@@ -90,7 +91,7 @@ def audit_rollouts(
             results.append(
                 case_result(
                     uid=uid,
-                    case_id=uid.removeprefix("structure-closure:"),
+                    case_id=uid.removeprefix(TASK_ID_PREFIX),
                     family=task_group(task, "family"),
                     control=task_group(task, "control"),
                     prefix=spec.prefix,

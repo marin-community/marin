@@ -25,6 +25,7 @@ from verifyit.tool_call_markup import ToolCallStatus, tool_call_regions
 from experiments.post_training.structure_closure.benchmark import (
     CONTINUE_REQUIRED,
     ESCAPE_CONTINUE_REQUIRED,
+    TASK_ID_PREFIX,
     VALUE_CONTINUE_REQUIRED,
 )
 from experiments.post_training.structure_closure.token_data import LOCAL_TOKEN_ROUNDTRIP_PASSED, TokenizedCaseRecord
@@ -40,7 +41,7 @@ class UidSource(StrEnum):
 def cases_by_uid(cases: Sequence[TokenizedCaseRecord], source: UidSource) -> dict[str, TokenizedCaseRecord]:
     """Index the cohort using the ID convention recorded by its evaluation path."""
     identities = [
-        str(index) if source == UidSource.ROW_INDEX else "structure-closure:" + case["case_id"]
+        str(index) if source == UidSource.ROW_INDEX else TASK_ID_PREFIX + case["case_id"]
         for index, case in enumerate(cases)
     ]
     if len(set(identities)) != len(cases):
