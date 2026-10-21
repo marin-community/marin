@@ -55,12 +55,12 @@ from levanter.grug._moe.mxfp8.layout import (
     interleave_gate_up_blocks,
     wgrad_block_perm,
 )
-from levanter.grug._moe.mxfp8.quantize import build_sfb, quantize_mxfp8
+from levanter.grug._moe.mxfp8.quantize import SF_TILE_ROWS, build_sfb, quantize_mxfp8
 from levanter.grug._moe.mxfp8.triton_quant import dual_quantize_padded, quantize_rows_padded
 
-# The swizzled scales tile 128 rows by 4 scales of 32 elements, so every GEMM dimension the
-# scales cover, H and I, must be a multiple of 128.
-_FEATURE_ALIGNMENT = 128
+# The swizzled scales tile SF_TILE_ROWS rows by 4 scales of 32 elements, so every GEMM dimension
+# the scales cover, H and I, must be a multiple of the tile height.
+_FEATURE_ALIGNMENT = SF_TILE_ROWS
 
 
 class _Mxfp8Residuals(NamedTuple):
