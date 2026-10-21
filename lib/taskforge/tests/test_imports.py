@@ -6,8 +6,9 @@
 The test parses every module under ``src/taskforge`` and collects each ``taskforge.<package>``
 import, in any form and at any depth. A stage package ``stageNN_<name>`` may import stages with a
 lower number and the shared modules in ``SHARED``. A shared module may import other shared modules
-but no stage. A package in ``TOP`` coordinates the stages, so it may import every stage and shared
-module, and no package may import it.
+but no stage. A package in ``TOP`` runs the whole pipeline: ``stage_coordinator`` runs the stages, and
+``agentic`` replaces them with one agent. It may import every stage and shared module, and no package may
+import it.
 """
 
 import ast
@@ -18,7 +19,7 @@ from pathlib import Path
 import taskforge
 
 SHARED = ("capability", "content_hash", "llm")
-TOP = ("stage_coordinator",)
+TOP = ("agentic", "stage_coordinator")
 STAGE = re.compile(r"stage(\d+)_[a-z0-9_]+")
 ROOT = Path(taskforge.__file__).parent
 
