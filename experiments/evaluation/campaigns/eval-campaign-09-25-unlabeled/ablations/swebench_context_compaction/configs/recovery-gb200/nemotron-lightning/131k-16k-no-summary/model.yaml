@@ -1,0 +1,20 @@
+name: nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-131k-16k-no-summary-gb200
+location: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+revision: a9904d24bcc1d289a1950fa9d2b978c47cf903b9
+apply_chat_template: true
+resource_hint:
+  gpu:
+    GB200: 2
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 131072
+  tool_call_parser: qwen3_coder
+  reasoning_parser: nemotron_v3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
+generation:
+  max_gen_toks: 16384
