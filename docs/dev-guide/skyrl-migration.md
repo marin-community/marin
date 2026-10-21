@@ -67,7 +67,6 @@ restores the previous lock. Edit the nested `pyproject.toml` first when changing
 an explicit version constraint. Runtime acceptance must also exercise the
 harness; an import check alone cannot validate its execution contract.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
-Regenerate it with `uv 0.13.1`, matching the `skyrl-wheel` lane.
 The pinned Ray release has no Intel macOS wheel.
 
 The Marin CLI selects the nested launcher's `cpu` extra explicitly. Local task
@@ -76,39 +75,6 @@ the local machine factory and probes Linux bubblewrap before task admission.
 Omission or `null` disables the local backend. The launcher forwards an explicit
 Iris container profile to the coordinator and trainer; enabling local execution
 does not bypass the sandbox capability check.
-
-Features under review can require exact Git sources before their Marin library
-APIs are published. Such a lock is a development dependency contract, not a
-shared-library release. Replace these sources with genuine published packages
-and repeat the import and runtime gates before release adoption.
-
-Task Parquet rows explicitly select `prefill` for a one-turn continuation of
-the final assistant text. Admission and raw generation share the serving
-tokenizer, configured chat template and template arguments. Final tool schemas
-participate in rendering; the prefill harness cannot execute tools. Raw text
-retains structural delimiters and exact engine tokens/log probabilities.
-Parsed reasoning or tool-call channels interrupt the attempt without a score.
-Ordinary tasks retain the production `shellbox:{settings}` discriminator and
-restore `ToolHarness` with its serialized command timeout and shell tool.
-
-Evaluation-only `skyrl_train.entrypoints.main_generate` runs with
-`trainer.evaluation_runner=task` load prelowered TaskRolloutSpec Parquet rows
-from `data.val_data`. This preserves each task's private grader and serialized
-harness settings. The same entrypoint retains source-row loading for
-`trainer.evaluation_runner=training` and its Harbor dataset loader for
-`trainer.evaluation_runner=harbor`.
-
-`trajectory_runner.eval_max_concurrent_tasks` bounds the shared evaluation pool
-independently of training. A null value inherits `max_concurrent_tasks`.
-`trainer.eval_required_score_coverage` accepts a fraction in `[0, 1]` and stops
-an evaluation when verifier coverage falls below it. Null permits partial
-grading. A valid scored zero counts toward coverage. When
-`trainer.dump_eval_results` is enabled, results and failure diagnostics are
-written before the coverage check raises.
-
-The `skyrl-wheel` lane exercises these CPU contracts in the independent nested
-environment. This does not establish sandbox isolation or serving/GPU correctness.
-
 
 The migration tool rebuilds source candidates and prepares active work. It
 does not publish a wheel or archive the fork. Marin owns the integration and

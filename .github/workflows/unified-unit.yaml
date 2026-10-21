@@ -523,22 +523,11 @@ jobs:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.13.1"
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "vendor/skyrl/uv.lock"
       - name: Check independent lock, Marin contract, and built wheel
         run: uv run --no-project python -m scripts.skyrl_migration check-vendor
-      - name: Exercise prefill transport and admission
-        working-directory: vendor/skyrl
-        run: |
-          uv run --isolated --frozen --no-group dev --extra cpu --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
-            skyrl-train/tests/cpu/test_prefill.py
-      - name: Exercise task evaluation contracts
-        working-directory: vendor/skyrl
-        run: |
-          uv run --isolated --frozen --no-group dev --extra cpu --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
-            skyrl-train/tests/cpu/test_task_evaluation.py
       - name: Exercise the isolated source bundle, launchers, and verifier
         working-directory: vendor/skyrl
         env:

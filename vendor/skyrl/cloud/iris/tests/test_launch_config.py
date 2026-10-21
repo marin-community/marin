@@ -1,21 +1,64 @@
-"""Behavior tests for the structured SkyRL launch configuration."""
+"""Behavior tests for SkyRL launch, prefill and task evaluation contracts."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from iris.rpc import job_pb2
-from cloud.iris.iris_backend import _iris_submission_state
 import yaml
+from iris.rpc import job_pb2
 from omegaconf import OmegaConf
-from rolloutengine.models import ModelTurn
+from rolloutengine.harness.prefill import prefill_prompt
+from rolloutengine.models import ModelTurn, RolloutContractError
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
+from skyrl_gym.verification import VerificationResult
+from skyrl_train.config.utils import get_default_config
+from skyrl_train.dataset.tasks import TaskDataset, source_row_task, task_prompt_token_count, write_tasks
+from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
+from skyrl_train.entrypoints.main_generate import EvalOnlyEntrypoint
+from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
+from skyrl_train.rollouts.buffer import write_trajectory_batch
+from skyrl_train.rollouts.finalization import finalize_trajectory_batch
+from skyrl_train.rollouts.task_projections import WholeTaskProjection
+from skyrl_train.rollouts.task_worker import TaskRolloutWorker
+from skyrl_train.task_inputs import task_messages
+from skyrl_train.tokenizer import tokenizer_from_config
+from skyrl_train.trajectory_runners.model_clients import DirectModelClient
+from skyrl_train.trajectory_runners.trajectory_retention import (
+    TrajectorySink,
+    execute_publication,
+    parse_trajectory_retention_config,
+)
+from skyrl_train.trajectory_runners.trajectory_retention_publisher import InlineTrajectoryPublisher
+from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryBatch, TrajectoryID
+from taskcompendium.grader import verifyit_package
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    FunctionDefinition,
+    PlainText,
+    ScriptGrader,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
+from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task
+from tokenizers import Tokenizer, models, pre_tokenizers
+from transformers import PreTrainedTokenizerFast
+from verifyit.closure_scoring import ClosureFormat
+from verifyit.spec import NumericSpec, StructureClosureSpec
 
 from cloud.iris import training_driver
+from cloud.iris.iris_backend import _iris_submission_state
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -23,8 +66,6 @@ from cloud.iris.rl_config_translation import (
     materialize_launch_config,
     parse_rl_config,
 )
-from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
-from skyrl_train.dataset.tasks import source_row_task
 from marinskyrl.runtime_options import reference_model_required
 
 
@@ -521,3 +562,504 @@ def test_iris_submission_preserves_explicit_container_profile(tmp_path, profile,
     path.write_text(yaml.safe_dump(raw))
     args = _iris_submission_state(path, load_launch_config(path))
     assert args.container_profile == expected
+
+
+class WorkerTokenizer:
+    eos_token_id = 99
+
+    def apply_chat_template(self, messages, add_generation_prompt, **options):
+        return [1, 2]
+
+
+@pytest.fixture
+def task_inputs():
+    task = TaskSpec(
+        id="arithmetic",
+        context=ConversationInput(events=(TextMessage(role="user", content="What is six plus six?"),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.NUMBER,
+        answer_format=PlainText(),
+        grader=verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0)).grader,
+        source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+    )
+    config = OmegaConf.create(
+        {
+            "backend": "vllm",
+            "max_turns": 2,
+            "max_input_length": 100,
+            "apply_overlong_filtering": False,
+            "sampling_params": {
+                "max_generate_length": 10,
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "top_k": -1,
+                "min_p": 0,
+                "logprobs": True,
+            },
+        }
+    )
+    request = TaskRequestBatch(
+        rows=(task_input(lowered_task(task), teacher_route="arithmetic", data_source="arithmetic"),),
+        trajectory_ids=(TrajectoryID("arithmetic", 0),),
+    )
+    return config, request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response,parsed_channel,reward",
+    [
+        ("12}", None, 1.0),
+        ("12} trailing text", None, 1.0),
+        ("13}", None, 0.0),
+        ("12", None, 0.0),
+        ("12}", {"reasoning_content": "parsed reasoning"}, None),
+        ("12}", {"reasoning": "parsed reasoning alias"}, None),
+        ("12}", {"tool_calls": [{"id": "call-1", "type": "function"}]}, None),
+    ],
+)
+async def test_prefill_worker_preserves_continuation_and_rejects_parsed_channels(
+    task_inputs, response, parsed_channel, reward
+):
+    config, request = task_inputs
+    context = ConversationInput(
+        events=(
+            TextMessage(role="user", content="Complete the supplied structure"),
+            TextMessage(role="assistant", content='{"value":'),
+        ),
+    )
+    package = verifyit_package(StructureClosureSpec('{"value":', '{"value":12}', ClosureFormat.JSON))
+    task = request.rows[0].spec.task.model_copy(
+        update={
+            "context": context,
+            "answer_type": AnswerType.TEXT,
+            "answer_format": PlainText(),
+            "grader": package.grader,
+        }
+    )
+    request = replace(request, rows=(task_input(lowered_task(task, "prefill", max_turns=1)),))
+    observed = []
+
+    class Engine:
+        tokenizer = WorkerTokenizer()
+
+        async def generate(self, model_request):
+            observed.append(model_request)
+            return {
+                "responses": [response],
+                "assistant_messages": [{"role": "assistant", "content": response, **(parsed_channel or {})}],
+                "prompt_ids": model_request["prompt_token_ids"],
+                "response_ids": [[11, 12, 13]],
+                "response_logprobs": [[-0.1, -0.2, -0.3]],
+                "stop_reasons": ["stop"],
+            }
+
+    worker = TaskRolloutWorker(
+        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {}, shutdown_timeout=30
+    )
+    try:
+        (result,) = await worker.generate(request)
+    finally:
+        await worker.shutdown()
+    assert observed[0]["prompt_token_ids"] == [[1, 2]]
+    assert observed[0].get("prompts") is None and "tools" not in observed[0]
+    assert observed[0]["sampling_params"]["skip_special_tokens"] is False
+    assert result.grade.reward == reward
+    if parsed_channel:
+        assert result.grade.status != Outcome.GRADED
+        return
+    assert result.messages[-1] == {"role": "assistant", "content": response}
+    assert result.prompt_token_ids == (1, 2)
+    assert result.response_token_ids == (11, 12, 13)
+    assert result.loss_mask == (1, 1, 1)
+    assert result.logprobs == (-0.1, -0.2, -0.3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("served_prompt", ["matching", "different"])
+async def test_prefill_transport_renders_serving_tokens_and_retains_raw_structural_delimiters(served_prompt):
+    backend = Tokenizer(
+        models.WordLevel(
+            {
+                "[UNK]": 0,
+                "user": 1,
+                "question": 2,
+                "assistant": 3,
+                "prefix": 4,
+                "tool-description": 5,
+                "closed": 6,
+                "new-generation": 7,
+            },
+            unk_token="[UNK]",
+        )
+    )
+    backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="[UNK]",
+        chat_template="{% for tool in tools or [] %}{{ tool.function.description }} {% endfor %}"
+        "{% for m in messages %}{{ m.role }} {{ m.content }} {% endfor %}"
+        "closed {% if add_generation_prompt %}new-generation{% endif %}",
+    )
+    task = text_task("prefill").model_copy(
+        update={
+            "context": ConversationInput(
+                events=(TextMessage(role="user", content="question"), TextMessage(role="assistant", content="prefix"))
+            ),
+            "final_tools": (
+                FunctionDefinition(name="function", description="tool-description", parameters={"type": "object"}),
+            ),
+        }
+    )
+    prompt = prefill_prompt(task)
+    observed = []
+
+    class Engine:
+        async def generate(self, request):
+            observed.append(request)
+            return {
+                "responses": ["</think> </tool_call> trailing"],
+                "response_ids": [[8, 9, 10]],
+                "response_logprobs": [[-0.1, -0.2, -0.3]],
+                "stop_reasons": ["length"],
+                "prompt_ids": request["prompt_token_ids"] if served_prompt == "matching" else [[1, 2]],
+                "student_topk_indices": [[[8], [9], [10]]],
+                "behavior_topk_logprobs": [[[-0.1], [-0.2], [-0.3]]],
+                "response_policy_steps": [[4, 4, 4]],
+            }
+
+    engine = Engine()
+    engine.tokenizer = tokenizer
+    request = {
+        "prompts": [list(prompt.messages)],
+        "chat_completion_params": [dict(prompt.options)],
+        "session_ids": ["one"],
+        "sampling_params": {"max_generate_length": 10, "logprobs": 1},
+        "max_context_length": 8,
+        "max_prompt_length": 5,
+    }
+    if served_prompt == "different":
+        with pytest.raises(RolloutContractError):
+            await DirectModelClient(engine).generate(request)
+        assert observed[0]["prompt_token_ids"] == [[5, 1, 2, 3, 4]]
+        return
+    output = await DirectModelClient(engine).generate(request)
+    # Both admission and inference render the unfinished message, excluding its
+    # template closer and a new assistant generation prompt, including tool schemas.
+    assert output["prompt_ids"] == [[5, 1, 2, 3, 4]]
+    lowered = lowered_task(task, "prefill", max_turns=1)
+    assert task_prompt_token_count(tokenizer, {"task_rollout_spec": lowered.model_dump_json()}, "prompt") == 5
+    assert observed[0]["sampling_params"]["max_tokens"] == 3
+    assert observed[0]["sampling_params"]["skip_special_tokens"] is False
+    assert "extra_body" not in observed[0]["sampling_params"]
+    assert output["responses"] == ["</think> </tool_call> trailing"]
+    assert output["assistant_messages"] == [{"role": "assistant", "content": "</think> </tool_call> trailing"}]
+    assert output["response_ids"] == [[8, 9, 10]]
+    assert output["response_logprobs"] == [[-0.1, -0.2, -0.3]]
+    assert output["student_topk_indices"] == [[[8], [9], [10]]]
+    assert output["response_policy_steps"] == [[4, 4, 4]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_header,expected_ids", [(False, [1, 2]), (True, [3, 1, 2])])
+async def test_prefill_admission_and_transport_share_configured_template_and_defaults(
+    tmp_path, include_header, expected_ids
+):
+    backend = Tokenizer(models.WordLevel({"[UNK]": 0, "assistant": 1, "prefix": 2, "header": 3}, unk_token="[UNK]"))
+    backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    original = PreTrainedTokenizerFast(
+        tokenizer_object=backend, unk_token="[UNK]", chat_template="native template must not be used"
+    )
+    model_path = tmp_path / "model"
+    original.save_pretrained(model_path)
+    template_path = tmp_path / "serving.jinja"
+    template_path.write_text(
+        "{% if include_header %}header {% endif %}"
+        "{% for m in messages %}{{ m.role }} {{ m.content }} {% endfor %}"
+        "closed {% if add_generation_prompt %}new generation{% endif %}"
+    )
+    config = get_default_config()
+    config.trainer.policy.model.tokenizer_path = str(model_path)
+    config.generator.chat_template.source = "file"
+    config.generator.chat_template.name_or_path = str(template_path)
+    config.generator.chat_template_kwargs = {"include_header": include_header}
+    tokenizer = tokenizer_from_config(config)
+    task = text_task("configured-prefill").model_copy(
+        update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix"),))}
+    )
+    spec = lowered_task(task, "prefill", max_turns=1)
+    panel_path = tmp_path / "panel.parquet"
+    write_tasks(panel_path, [spec])
+    dataset = TaskDataset(
+        [str(panel_path)],
+        tokenizer,
+        len(expected_ids),
+        num_workers=1,
+        chat_template_kwargs=dict(config.generator.chat_template_kwargs),
+    )
+    assert [row["input"].spec for row in dataset.collate_fn(list(dataset))] == [spec]
+
+    class Engine:
+        async def generate(self, request):
+            return {
+                "prompt_ids": request["prompt_token_ids"],
+                "responses": ["continuation"],
+                "response_ids": [[4]],
+                "response_logprobs": [[-0.1]],
+                "stop_reasons": ["stop"],
+            }
+
+    engine = Engine()
+    engine.tokenizer = tokenizer
+    prompt = prefill_prompt(task)
+    output = await DirectModelClient(engine).generate(
+        {
+            "prompts": [list(prompt.messages)],
+            "chat_completion_params": [
+                {**prompt.options, "chat_template_kwargs": dict(config.generator.chat_template_kwargs)}
+            ],
+            "sampling_params": {"max_tokens": 1},
+            "max_prompt_length": len(expected_ids),
+            "max_context_length": 10,
+        }
+    )
+    assert output["prompt_ids"] == [expected_ids]
+    assert output["responses"] == ["continuation"]
+
+
+def test_prefill_dataset_counts_effective_continuation_without_new_generation_prompt(tmp_path):
+    backend = Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+    backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="[UNK]",
+        chat_template="{% for m in messages %}{{ m.content }} {% endfor %}"
+        "{% if add_generation_prompt %}new assistant generation prompt that exceeds the cap{% endif %}",
+    )
+    short = text_task("short-prefill").model_copy(
+        update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix one"),))}
+    )
+    long = text_task("long-prefill").model_copy(
+        update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix " * 20),))}
+    )
+    path = tmp_path / "prefill.parquet"
+    write_tasks(path, [lowered_task(task, "prefill", max_turns=1) for task in (short, long)])
+    dataset = TaskDataset([str(path)], tokenizer, 6, num_workers=1)
+    (selected,) = dataset.collate_fn(list(dataset))
+    spec = selected["input"].spec
+    assert spec.task.id == "short-prefill"
+    assert task_messages(spec) == [{"role": "assistant", "content": "prefix one"}]
+
+
+@pytest.fixture
+def dummy_config():
+    return get_default_config()
+
+
+class DummyRunner:
+    trajectory_runner_cfg = {}
+    trajectory_sink = None
+
+    def __init__(self, outputs: dict[str, TrajectoryBatch]):
+        self.outputs = outputs
+
+    async def run(self, input_batch) -> TrajectoryBatch:
+        output = {**self.outputs[input_batch.metadata[0].uid], "trajectory_ids": list(input_batch.trajectory_ids)}
+        return await finalize_trajectory_batch(input_batch, output, self.trajectory_runner_cfg, self.trajectory_sink)
+
+    async def run_task(self, task, writer) -> int:
+        output = await self.run(task.request)
+        return await write_trajectory_batch(task, writer, output)
+
+    def set_trajectory_sink(self, sink) -> None:
+        sink.bind_runner(type(self).__name__)
+        self.trajectory_sink = sink
+
+    async def start_eval_session(self, *, run_name: str, eval_step: int, val_set_name: str | None = None) -> None:
+        pass
+
+    async def stop_eval_session(self) -> None:
+        pass
+
+    async def startup(self) -> None:
+        pass
+
+    async def shutdown(self) -> None:
+        pass
+
+
+def configure_eval(cfg, tmp_path):
+    cfg.generator.backend = "vllm"
+    cfg.generator.eval_sampling_params = OmegaConf.create(
+        {
+            "max_generate_length": 20,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "top_k": -1,
+            "min_p": 0.0,
+            "logprobs": None,
+            "stop": None,
+        }
+    )
+    cfg.generator.eval_n_samples_per_prompt = 1
+    cfg.environment = OmegaConf.create({"env_class": "gsm8k"})
+    cfg.trainer.dump_eval_results = False
+    cfg.trainer.export_path = str(tmp_path)
+    return cfg
+
+
+class DummyStatefulDataLoader:
+    def __init__(self, batches):
+        self._batches = batches
+
+    def __len__(self):
+        return len(self._batches)
+
+    def __iter__(self):
+        return iter(self._batches)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("step_wise", [False, True])
+@pytest.mark.parametrize("scored", [False, True])
+async def test_required_coverage_persists_failed_attempts_and_accepts_valid_zero(
+    dummy_config, tmp_path, step_wise, scored
+):
+    cfg = configure_eval(dummy_config, tmp_path)
+    cfg.trainer.dump_eval_results = True
+    cfg.trainer.eval_required_score_coverage = 1.0
+    verdict = VerificationResult.verified(0.0) if scored else VerificationResult.unavailable("provider unavailable")
+    runner = DummyRunner(
+        {
+            "paired-task": {
+                "prompt_token_ids": [[101]],
+                "response_ids": [[201]],
+                "rewards": [0.0],
+                "loss_masks": [[1]],
+                "stop_reasons": ["stop"],
+                "rollout_logprobs": None,
+                "verification_results": [verdict],
+                "is_last_step": [True],
+            }
+        }
+    )
+    loader = DummyStatefulDataLoader(
+        [[{"input": task_input(lowered_task(text_task("paired-task", source="panel"))), "uid": "paired-task"}]]
+    )
+    evaluation = evaluate_step_wise if step_wise else evaluate
+    tokenizer = SimpleNamespace(decode=lambda _: "response")
+    sink = TrajectorySink(
+        parse_trajectory_retention_config(cfg.generator.trajectory_retention),
+        tokenizer,
+        publisher=InlineTrajectoryPublisher(execute_publication),
+    )
+    arguments = dict(
+        eval_dataloader=loader,
+        trajectory_runner=runner,
+        cfg=cfg,
+        global_step=0,
+        tokenizer=tokenizer,
+        trajectory_sink=sink,
+    )
+    if scored:
+        metrics = await evaluation(**arguments)
+        assert metrics["eval/all/avg_verifier_score"] == 0.0
+        assert metrics["eval/all/verifier_score_coverage"] == 1.0
+    else:
+        with pytest.raises(ValueError, match="Evaluation verifier coverage"):
+            await evaluation(**arguments)
+    record = json.loads((tmp_path / "dumped_evals/global_step_0_evals/panel.jsonl").read_text())
+    assert record["uid"] == ("eval-0-0--paired-task" if step_wise else "paired-task")
+    assert record["verification"]["status"] == ("verified" if scored else "unavailable")
+    assert record["verification"]["score"] == (0.0 if scored else None)
+
+
+class EvaluationLifecycle:
+    def __init__(self):
+        self.events = []
+
+    async def pause_and_drain(self):
+        self.events.append("drained")
+
+    def resume(self):
+        self.events.append("resumed")
+
+    def set_trajectory_sink(self, sink):
+        pass
+
+    async def start_eval_session(self, **kwargs):
+        self.events.append("started")
+
+    async def stop_eval_session(self):
+        self.events.append("stopped")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("eval_limit,expected_peak", [(2, 2), (None, 3)])
+async def test_evaluation_session_caps_shared_work_independently_of_training(eval_limit, expected_peak):
+    cfg = get_default_config()
+    cfg.trajectory_runner.max_concurrent_tasks = 3
+    cfg.trajectory_runner.eval_max_concurrent_tasks = eval_limit
+    ready = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+    peak = 0
+
+    async def work():
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if active == expected_peak:
+            ready.set()
+        await release.wait()
+        active -= 1
+
+    runner = EvaluationLifecycle()
+    async with evaluation_session(runner, cfg, 0, object()) as pool:
+        async with asyncio.TaskGroup() as tasks:
+            for source in ("native", "sandbox", "callback"):
+                tasks.create_task(pool.run(source, work))
+            async with asyncio.timeout(5):
+                await ready.wait()
+            release.set()
+    assert peak == expected_peak
+    assert runner.events == ["started", "stopped"]
+
+
+def test_eval_only_task_dataset_preserves_private_grader_and_prefill_contract(tmp_path):
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
+        unk_token="[UNK]",
+        chat_template="{% for message in messages %}{{ message.content }} {% endfor %}",
+    )
+    grader = ScriptGrader(argv=("sh", "/tests/private-grader.sh"), environment=NATIVE_ENVIRONMENT)
+    shell_task = text_task("shell-private").model_copy(update={"grader": grader})
+    native_task = text_task("native-private").model_copy(
+        update={
+            "grader": grader,
+            "context": ConversationInput(
+                events=(
+                    TextMessage(role="user", content="Complete this"),
+                    TextMessage(role="assistant", content="prefix"),
+                ),
+            ),
+        }
+    )
+    expected = [
+        lowered_task(shell_task, verifier_backend="daytona"),
+        lowered_task(native_task, "prefill", max_turns=1, verifier_backend="daytona"),
+    ]
+    path = tmp_path / "validation.parquet"
+    write_tasks(path, expected)
+    experiment = object.__new__(EvalOnlyEntrypoint)
+    experiment.cfg = get_default_config()
+    experiment.cfg.trainer.evaluation_runner = "task"
+    experiment.cfg.trainer.max_prompt_length = 8
+    experiment.cfg.data.val_data = [str(path)]
+    experiment.tokenizer = tokenizer
+
+    dataset = experiment.get_eval_dataset()
+    selected = dataset.collate_fn(list(dataset))
+
+    assert [row["input"].spec for row in selected] == expected
+    assert [row["uid"] for row in selected] == ["0", "1"]
