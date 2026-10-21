@@ -113,7 +113,7 @@ def comparison_recipe(
     max_steps: int = MAX_STEPS,
     evaluation_schedule: EvaluationSchedule = EvaluationSchedule.PERIODIC,
 ) -> dict:
-    """Keep the current optimizer/mixture recipe and evaluate every original panel row."""
+    """Keep the optimizer and mixture, with periodic or independent post-export scoring."""
     if max_steps < CHECKPOINT_INTERVAL or max_steps % CHECKPOINT_INTERVAL:
         raise ValueError("max_steps must be a positive multiple of 25")
     recipe = training_recipe(
