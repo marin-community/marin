@@ -249,16 +249,34 @@ def collect(data_dir: Path) -> None:
         print(bench, {key: len(items) for key, items in sorted(source[bench].items())})
 
 
-def load_scores(data_dir: Path) -> dict[str, dict[str, dict[str, float]]]:
+def shared_items(runs: dict[str, dict[str, float]], keys: Sequence[str]) -> dict[str, dict[str, float]]:
+    """Inner join: keep only the items that every evaluated run among ``keys`` has scored.
+
+    A run with no scored items yet is left out of the join rather than emptying it. While an agentic suite is still
+    running, the join is the tasks it has finished so far, which keeps every series paired on the same instances but
+    is not a random subset of the benchmark.
+    """
+    evaluated = [key for key in keys if runs.get(key)]
+    shared = set.intersection(*(set(runs[key]) for key in evaluated)) if evaluated else set()
+    return {key: {item: score for item, score in runs[key].items() if item in shared} for key in evaluated}
+
+
+def load_scores(
+    data_dir: Path, series: Sequence[str] = (), steps: Sequence[int] = (), shared: bool = False
+) -> dict[str, dict[str, dict[str, float]]]:
+    """Per-item scores for every run; with ``shared`` only the items every evaluated run in the selection scored."""
     tasks = json.loads((data_dir / "tasks.json").read_text())
     samples = json.loads((data_dir / "samples.json").read_text())
     scores = {bench: harbor_scores(tasks[bench], bench) for bench in HARBOR}
     scores |= {bench: sample_scores(samples[bench]) for bench in EVALCHEMY}
+    if shared:
+        keys = [REF, *(run_key(label, step) for label in series for step in steps)]
+        scores = {bench: shared_items(runs, keys) for bench, runs in scores.items()}
     return scores
 
 
-def report(data_dir: Path, series: Sequence[str], steps: Sequence[int]) -> None:
-    scores = load_scores(data_dir)
+def report(data_dir: Path, series: Sequence[str], steps: Sequence[int], shared: bool) -> None:
+    scores = load_scores(data_dir, series, steps, shared)
     rng = np.random.default_rng(0)
     samples = json.loads((data_dir / "samples.json").read_text())
     for bench in (*HARBOR, *EVALCHEMY):
@@ -333,8 +351,8 @@ def _style() -> None:
     )
 
 
-def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequence[int]) -> None:
-    scores = load_scores(data_dir)
+def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequence[int], shared: bool) -> None:
+    scores = load_scores(data_dir, series, steps, shared)
     points, rows = paired_points(scores, series, steps)
     _style()
     fig, axes = plt.subplots(2, 3, figsize=(10, 5.6), sharex=True, sharey=True)
@@ -377,7 +395,7 @@ def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequenc
         ax.text(
             1.0,
             1.02,
-            f"ref {100 * np.mean(list(ref.values())):.1f}%  ·  n={len(ref)}",
+            f"ref {100 * np.mean(list(ref.values())):.1f}%  ·  {'shared ' if shared else ''}n={len(ref)}",
             transform=ax.transAxes,
             ha="right",
             va="bottom",
@@ -392,8 +410,14 @@ def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequenc
         ax.set_xlabel("RL step")
     for ax in axes[:, 0]:
         ax.set_ylabel("Δ accuracy vs reference (pts, 80% CI)")
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 1.0), fontsize=9)
+    # A replicate may have points on some panels only, so the legend gathers every series drawn on any panel.
+    legend: dict[str, object] = {}
+    for ax in axes.flat:
+        for handle, label in zip(*ax.get_legend_handles_labels(), strict=True):
+            legend.setdefault(label, handle)
+    fig.legend(
+        legend.values(), legend.keys(), loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 1.0), fontsize=9
+    )
     fig.tight_layout(rect=(0, 0, 1, 0.95 if len(series) <= 3 else 0.91))
     for extension in ("png", "pdf", "svg"):
         fig.savefig(f"{out_prefix}.{extension}", dpi=220, bbox_inches="tight")
@@ -409,17 +433,22 @@ def main() -> None:
         "--series", default="a,b,c", help="comma-separated arm labels, such as a,b,c or a-seed43,b-seed43,c-seed43"
     )
     parser.add_argument("--steps", default="4,8,12")
+    parser.add_argument(
+        "--shared-items",
+        action="store_true",
+        help="inner join: score every run only on the items all evaluated runs in the selection have scored",
+    )
     args = parser.parse_args()
     series = args.series.split(",")
     steps = [int(step) for step in args.steps.split(",")]
     if args.action == "collect":
         collect(args.data_dir)
     elif args.action == "test":
-        report(args.data_dir, series, steps)
+        report(args.data_dir, series, steps, args.shared_items)
     else:
         if args.out_prefix is None:
             raise SystemExit("plot needs an output prefix")
-        plot(args.data_dir, args.out_prefix, series, steps)
+        plot(args.data_dir, args.out_prefix, series, steps, args.shared_items)
 
 
 if __name__ == "__main__":
