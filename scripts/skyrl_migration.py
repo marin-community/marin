@@ -873,9 +873,17 @@ def build_audited_wheel(source: Path, output: Path) -> BuiltWheel:
 
 
 def check_vendor(source: Path) -> None:
-    """Check the independent lock, isolated Marin contract, and wheel contents."""
+    """Check the independent lock, checkout Marin import contract, and wheel contents."""
     run("uv", "lock", "--project", str(source), "--check")
-    run(sys.executable, str(ROOT / "infra/ci/check_skyrl_marin.py"), "project", "--source", str(source))
+    run(
+        sys.executable,
+        str(ROOT / "infra/ci/check_skyrl_marin.py"),
+        "project",
+        "--source",
+        str(source),
+        "--marin-source",
+        str(ROOT),
+    )
     with tempfile.TemporaryDirectory(prefix="skyrl-wheel-") as temporary:
         wheel = build_audited_wheel(source, Path(temporary))
         print(json.dumps({"wheel_sha256": wheel.sha256, "members": len(wheel.members)}))
