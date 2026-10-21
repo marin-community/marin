@@ -8,9 +8,8 @@ separate controls. Some controls deliberately include the reference in the user
 instruction. They measure conditional completion. Independent task solving and
 downstream tool-use improvement require separate evaluations.
 
-The implementation lives under
-[`experiments/post_training/structure_closure/`](https://github.com/marin-community/marin/tree/main/experiments/post_training/structure_closure).
-It uses the existing [task grading and rollout APIs](task-rollouts.md).
+The modules in this directory use the existing
+[task grading and rollout APIs](../../../docs/references/task-rollouts.md).
 
 ## Build tasks
 
@@ -95,11 +94,12 @@ For example, `sampling.json` may contain:
 }
 ```
 
-The experiment requests thinking for the reasoning family and disables it for
-the other families using the template's `enable_thinking` parameter. Prefill flags
-come from `PrefillHarness`; tool declarations come from the task. These are part of the captured request
-and are checked by the auditor. Verify support for these template controls on
-the chosen backend; CPU tests do not validate a deployed model's rendering.
+The experiment requests thinking for the reasoning family and disables it for the other
+families using the template's `enable_thinking` parameter. Prefill flags come from
+`PrefillHarness`; tool declarations come from the task. The auditor compares the
+captured request with these task and sampling settings. Verify support for these
+template controls on the chosen backend; CPU tests do not validate a deployed model's
+rendering.
 
 ```bash
 uv run python -m experiments.post_training.structure_closure.evaluate \
@@ -119,14 +119,14 @@ with the same tasks and sampling settings. Add
 per-control success-rate changes. Both audits must be complete and must match
 the ordered task cohort and sampling settings.
 
-Each evaluation record contains the task identity and fingerprint, the actual
-model request and a generic `GradedRollout`. The audit regrades the captured
-conversation. It accepts the model's own tokenization, semantic JSON variations
-and output after the first complete outer structure. It separately reports
-trailing output, whole-response success, premature closure and tool protocol
-status. Duplicate, missing, interrupted or inconsistent evidence invalidates a
-complete comparison. Family denominators remain the full expected cohort;
-unscored cases are reported explicitly. A valid model failure stays a scored
+Each evaluation record contains the task identity, the actual model request and a
+generic `GradedRollout`. The audit scores the captured raw continuation against the task
+reference. Its primary score allows the model's own tokenization and semantic JSON
+variations. It grades the first complete JSON value or delimiter-bounded region for the
+task family, then separately reports trailing output, whole-response success, premature
+closure and tool protocol status. Duplicate, missing or interrupted records prevent a
+complete comparison. Family denominators come from the validation tasks loaded from the
+manifest; unscored cases are reported explicitly. A valid model failure stays a scored
 failure rather than disappearing from coverage.
 
 API callers can supply their own `Model` to `evaluate_task`. It must expose the
@@ -146,7 +146,7 @@ The model-specific reproduction tools remain available:
 | --- | --- |
 | `token_data` | Pinned-template token targets, conditional BPE round trips, context budgets and tokenizer/template fingerprints |
 | `tool_prompt_probe` | Four paired tool-probe token exports with a matching historical control arm |
-| `eval_audit` | Exact prompt-token checks and reward/metric checks for historical session-format evaluation dumps |
+| `eval_audit` | Exact prompt-token checks and raw-response scoring for historical session-format evaluation dumps |
 
 These tools retain their command-line interfaces. Their manifests record failed
 conversions, and consumers reject failed or modified cohorts. Exact historical

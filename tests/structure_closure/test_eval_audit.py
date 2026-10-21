@@ -39,17 +39,7 @@ def rows():
             "prompt_token_ids": [17, 23],
             "output_response": response,
             "stop_reason": "stop",
-            "env_class": "structure_closure",
-            "data_source": "structure-closure",
             "verification": {"status": "verified", "score": score},
-            "score": [0.0, score],
-            "env_metrics": {
-                "closure_region_v1/json_object/close_required/syntax_complete": score,
-                "closure_region_v1/json_object/close_required/content_preserved": score,
-                "closure_region_v1/json_object/close_required/success": score,
-                "closure_region_v1/json_object/close_required/trailing_content": score,
-                "closure_region_v1/json_object/close_required/whole_response_success": 0.0,
-            },
         }
         for index, (response, score) in enumerate((("}\nextra output<|eot_id|>", 1.0), ("<|eot_id|>", 0.0)))
     ]
@@ -70,21 +60,11 @@ def test_audit_keeps_identical_prompts_distinct_and_counts_model_failure(cohort,
     }
 
 
-def test_audit_reports_early_control_closure_without_changing_recorded_reward(cohort, rows):
+def test_audit_reports_early_control_closure(cohort, rows):
     case = cohort[1]
     case.update(control="continue_required", prefix='{"task":"x', expected='{"task":"xyz"}')
     row = rows[1]
     row["output_response"] = '"}<|eot_id|>'
-    row["env_metrics"] = {
-        f"closure_region_v1/json_object/continue_required/{name}": value
-        for name, value in {
-            "syntax_complete": 1.0,
-            "content_preserved": 0.0,
-            "success": 0.0,
-            "trailing_content": 0.0,
-            "whole_response_success": 0.0,
-        }.items()
-    }
     audit = audit_evaluation(cohort, rows, uid_source=UidSource.ROW_INDEX)
     assert audit.complete
     assert not audit.results[1].success
@@ -92,13 +72,11 @@ def test_audit_reports_early_control_closure_without_changing_recorded_reward(co
 
 
 @pytest.mark.parametrize("marker", ["<|eot_id|>", "<|end_of_text|>"])
-def test_audit_matches_training_reward_for_signed_zero_and_terminal_markers(cohort, rows, marker):
+def test_audit_scores_signed_zero_and_terminal_markers(cohort, rows, marker):
     case = cohort[0]
     case.update(prefix='{"a":', expected='{"a":0.0}')
     row = rows[0]
     row["output_response"] = "-0.0}" + marker
-    row["env_metrics"]["closure_region_v1/json_object/close_required/trailing_content"] = 0.0
-    row["env_metrics"]["closure_region_v1/json_object/close_required/whole_response_success"] = 1.0
     audit = audit_evaluation([case], [row], uid_source=UidSource.ROW_INDEX)
     assert audit.complete
     assert audit.results[0].success
@@ -107,7 +85,7 @@ def test_audit_matches_training_reward_for_signed_zero_and_terminal_markers(coho
 
 @pytest.mark.parametrize(
     "failure",
-    ["missing", "duplicate", "prefix", "unavailable", "metric", "reward", "infra", "legacy_scorer", "null_response"],
+    ["missing", "duplicate", "prefix", "unavailable", "infra", "null_response"],
 )
 def test_audit_rejects_incomplete_or_inconsistent_evidence(cohort, rows, failure):
     if failure == "missing":
@@ -118,16 +96,8 @@ def test_audit_rejects_incomplete_or_inconsistent_evidence(cohort, rows, failure
         rows[1]["prompt_token_ids"] = [17]
     elif failure == "unavailable":
         rows[1]["verification"] = {"status": "unavailable", "score": None}
-    elif failure == "metric":
-        rows[1]["env_metrics"]["closure_region_v1/json_object/close_required/success"] = 1.0
-    elif failure == "reward":
-        rows[1]["score"] = [0.0, 1.0]
     elif failure == "null_response":
         rows[1]["output_response"] = None
-    elif failure == "legacy_scorer":
-        rows[1]["env_metrics"] = {
-            name.replace("closure_region_v1/", "closure/"): value for name, value in rows[1]["env_metrics"].items()
-        }
     else:
         rows[1]["exception_type"] = "TimeoutError"
     audit = audit_evaluation(cohort, rows, uid_source=UidSource.ROW_INDEX)
@@ -157,11 +127,10 @@ def test_audit_matches_stable_case_ids_when_output_order_changes(cohort, rows):
 
 
 def test_audit_separates_repeated_openers_from_valid_calls_with_changed_content(cohort, rows):
-    for case, row, response, complete in zip(
+    for case, row, response in zip(
         cohort,
         rows,
         ('{"name":"other","arguments":{}}</tool_call>', "<tool_call><tool_call>"),
-        (True, False),
         strict=True,
     ):
         case.update(
@@ -171,17 +140,7 @@ def test_audit_separates_repeated_openers_from_valid_calls_with_changed_content(
             prefix="<tool_call>",
             expected='<tool_call>{"name":"expected","arguments":{}}</tool_call>',
         )
-        row.update(output_response=response, verification={"status": "verified", "score": 0.0}, score=[0.0])
-        row["env_metrics"] = {
-            f"closure_region_v1/repeated_opener_retention/opener_retention/{name}": value
-            for name, value in {
-                "syntax_complete": float(complete),
-                "content_preserved": 0.0,
-                "success": 0.0,
-                "trailing_content": 0.0,
-                "whole_response_success": 0.0,
-            }.items()
-        }
+        row.update(output_response=response, verification={"status": "verified", "score": 0.0})
     audit = audit_evaluation(cohort, rows, uid_source=UidSource.ROW_INDEX)
     assert audit.complete
     assert [result.success for result in audit.results] == [False, False]

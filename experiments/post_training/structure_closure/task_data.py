@@ -29,6 +29,7 @@ from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
 from experiments.post_training.structure_closure.benchmark import (
     CLOSE_REQUIRED,
+    TASK_ID_PREFIX,
     ClosureCase,
     Family,
     Split,
@@ -53,7 +54,7 @@ def case_task(case: ClosureCase, source: Source, *, tools: tuple[FunctionDefinit
     )
     validate_structure_closure(spec)
     return TaskSpec(
-        id="structure-closure:" + case.case_id,
+        id=TASK_ID_PREFIX + case.case_id,
         source=source,
         context=ConversationInput(
             events=(

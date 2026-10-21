@@ -35,7 +35,7 @@ from experiments.post_training.structure_closure.rollout_audit import (
     EvaluationRecord,
     evaluation_request,
 )
-from experiments.post_training.structure_closure.task_data import load_validation, task_digest
+from experiments.post_training.structure_closure.task_data import load_validation
 
 
 def completion_model(client: AsyncOpenAI, *, model: str, tokenizer: PreTrainedTokenizerFast) -> Model:
@@ -100,7 +100,7 @@ async def evaluate_task(
         result = await engine.run_task(spec, complete)
     except GradedRolloutInterrupted as error:
         result = GradedRollout(error.rollout, error.grade)
-    return EvaluationRecord(task.id, task_digest(task), request, result)
+    return EvaluationRecord(task.id, request, result)
 
 
 async def evaluate_cohort(

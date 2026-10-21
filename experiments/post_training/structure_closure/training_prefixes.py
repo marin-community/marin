@@ -1,7 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Move training continuation controls near a verified premature-closure boundary."""
+"""Move training continuation controls near a verified premature-closure boundary.
+
+For the reference ["first", "second"], a prefix such as ["first", "secon
+can be closed into valid JSON by appending "] but would lose the final "d".
+The correct continuation is d"]. This variant advances each training prefix to
+the latest such point, so a model must preserve the remaining reference content
+before closing. Validation data stays unchanged.
+"""
 
 import argparse
 import hashlib

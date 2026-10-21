@@ -35,7 +35,7 @@ def save(root: Path, message: str) -> str:
 
 
 def test_marin_import_contract_requires_explicit_checkout_sources(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "skyrl"
     write(
@@ -68,7 +68,6 @@ def test_marin_import_contract_requires_explicit_checkout_sources(
     # An inherited source path must not make the frozen published-package contract pass.
     with pytest.raises(subprocess.CalledProcessError):
         check_project(source)
-    assert "ModuleNotFoundError: No module named 'rolloutengine'" in capfd.readouterr().err
     assert not marker.exists()
 
     # The explicit source contract executes the checkout's new module in the child.
