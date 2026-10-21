@@ -2479,6 +2479,13 @@ class MoEMLP(eqx.Module):
         expert_axis_size = _mesh_axis_size(mesh, "expert")
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
+        local_experts = cfg.num_experts // expert_axis_size
+        if cfg.moe_implementation == "ragged_all_to_all" and local_experts % cfg.moe_ragged_chunks != 0:
+            # The backend would silently run one chunk instead.
+            raise ValueError(
+                f"moe_ragged_chunks={cfg.moe_ragged_chunks} must divide the {local_experts} local experts "
+                f"(num_experts={cfg.num_experts} over expert axis size={expert_axis_size})"
+            )
 
         d, e = cfg.hidden_dim, cfg.num_experts + cfg.num_null_experts
         # Routed experts live in the latent space; the router reads the full-width token, so its
