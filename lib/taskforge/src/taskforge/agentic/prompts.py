@@ -15,7 +15,8 @@ answer.
 gets a shell and the task's files in /workspace on a ShellSim machine: a simulated shell with ls, cat, grep, sed, \
 awk, jq, sort, wc, find and similar tools, but with no Python and no network. Its arithmetic is limited: awk has \
 log but no exp, sqrt or ^, and bc has no -l math library. Do not make a task hard only because the solver must \
-compute such functions by hand.
+compute such functions by hand. Its awk reads a field separator of one regular-expression character, for example | \
+or ., as a regular expression, with no error: separate the fields of the solver's files with commas, tabs or spaces.
 - The solver answers with its final message. The answer type is "text", "number" or "json". The grader is a \
 verifyit spec that grades the answer in process, for example a NumericSpec or an ExactSpec, made with \
 taskcompendium.grader.verifyit_package. The solver never sees the grader or its reference answer.
@@ -71,8 +72,11 @@ probably ambiguous: correct the prompt, not the difficulty.
 - Prefer one computed value, a number or a short text, graded with a NumericSpec or an ExactSpec without substring \
 matching. Do not grade free text by its keywords. Avoid multiple \
 choice: a model can often find the correct option by its form. If you give options, make them similar in length and \
-detail, and put each correct option at a random place in its list. A JSON answer with many fields fails as a whole \
-on one slip, so its pass rate jumps between 0 and 1 and is hard to bring into the band.
+detail, and put each correct option at a random place in its list. Do not make each wrong option from the correct \
+option with one change: the option that agrees most with the others is then the answer. A JSON answer with many \
+fields fails as a whole on one slip, so its pass rate jumps between 0 and 1 and is hard to bring into the band.
+- When the capability needs a judgment, for example of a text, make an answer that one clear judgment decides. A \
+count or a product over many judgment calls changes when one other reasonable call changes it.
 - Find the difficulty with few rollouts. Let the build program take a difficulty level, write versions of a task \
 at several levels, and probe them in one rollout call with 2 solver rollouts each. Measure more only for a version \
 that is probably in the band. A version whose pass rate stays near a limit of the band after 8 solver rollouts does \
