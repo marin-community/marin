@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 import click
 import yaml
 from fray.types import ResourceConfig
+from iris.rpc import job_pb2
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -76,7 +77,7 @@ def inventory_training_execution() -> IrisSkyRLExecution:
         parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
         coordinator_timeout_hours=36,
         job_timeout_seconds=24 * 60 * 60,
-        container_profile=CONTAINER_PROFILE,
+        container_profile=job_pb2.ContainerProfile.Value(CONTAINER_PROFILE),
         wandb_entity="marin-community",
     )
 
@@ -255,7 +256,7 @@ def main(
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=12,
             job_timeout_seconds=6 * 60 * 60,
-            container_profile=CONTAINER_PROFILE,
+            container_profile=job_pb2.ContainerProfile.Value(CONTAINER_PROFILE),
             wandb_entity="marin-community",
         ),
         export_hf=True,
