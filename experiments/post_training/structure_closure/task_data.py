@@ -11,7 +11,6 @@ from dataclasses import replace
 from pathlib import Path
 
 from taskcompendium.grader import verifyit_package
-from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -93,11 +92,6 @@ def paired_task_probes(case: ClosureCase, source: Source, tokenizer: PreTrainedT
     return tasks
 
 
-def task_digest(task: TaskSpec) -> str:
-    """Fingerprint both public conditioning and the private grading contract."""
-    return canonical_sha256(task.model_dump(mode="json"))
-
-
 def prepare_tasks(cases_directory: Path, output: Path, *, tool_prompt: ToolPrompt, initializer: Path | None) -> dict:
     """Validate every source row before writing either immutable task split."""
     if output.exists():
@@ -164,32 +158,9 @@ def prepare_tasks(cases_directory: Path, output: Path, *, tool_prompt: ToolPromp
         "hashes": hashes,
         "counts": dict(counts),
         "tool_prompt": tool_prompt,
-        "source_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
-        "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
-    if initializer is not None and tokenizer is not None:
-        report["tokenizer_sha256"] = hashlib.sha256((initializer / "tokenizer.json").read_bytes()).hexdigest()
-        report["chat_template_sha256"] = hashlib.sha256((initializer / "chat_template.jinja").read_bytes()).hexdigest()
     (output / "manifest.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
-
-
-def load_validation(directory: Path) -> tuple[TaskSpec, ...]:
-    """Read the entire validated evaluation cohort without filtering rows."""
-    manifest = json.loads((directory / "manifest.json").read_text())
-    payload = (directory / "validation.jsonl").read_bytes()
-    if (
-        manifest["status"] != "tasks-validated"
-        or hashlib.sha256(payload).hexdigest() != manifest["hashes"]["validation"]
-    ):
-        raise ValueError("Validation cohort differs from the task manifest")
-    tasks = tuple(TaskSpec.model_validate_json(line) for line in payload.splitlines())
-    count = sum(value for key, value in manifest["counts"].items() if key.startswith("validation/"))
-    if len(tasks) != count or len({task.id for task in tasks}) != count:
-        raise ValueError("Validation coverage or case identities differ from the task manifest")
-    if any("split:validation" not in task.tags for task in tasks):
-        raise ValueError("Training cases cannot enter validation")
-    return tasks
 
 
 if __name__ == "__main__":
