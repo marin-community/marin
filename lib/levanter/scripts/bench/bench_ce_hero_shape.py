@@ -115,6 +115,9 @@ VARIANTS: tuple[Variant, ...] = (
     # --- Liger-style: the forward computes both gradients, so value+grad is 3 GEMMs, not 4.
     # b_block_size is the rows per scan step, each holding [b_block_size, V] fp32 logits.
     # fwd_s times the loss-only primal, so only total_s is comparable to the other variants.
+    Variant("grad_in_fwd-tb512", impl="grad_in_fwd", b_block_size=512),
+    Variant("grad_in_fwd-tb1024", impl="grad_in_fwd", b_block_size=1024),
+    Variant("grad_in_fwd-tb2048", impl="grad_in_fwd", b_block_size=2048),
     Variant("grad_in_fwd-tb4096", impl="grad_in_fwd", b_block_size=4096),
     Variant("grad_in_fwd-tb8192", impl="grad_in_fwd", b_block_size=8192),
     Variant("grad_in_fwd-tb16384", impl="grad_in_fwd", b_block_size=16384),
