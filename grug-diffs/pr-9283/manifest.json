@@ -1,0 +1,48 @@
+{
+  "added_variants": [
+    "fast_track",
+    "moe_hero_pipeline",
+    "snowball_synthetic"
+  ],
+  "base_sha": "263b7f041290bf03a7a1f2c7506f049f9c01ad40",
+  "head_sha": "c87bea362431bda97c41aeefc6428c3d0a7baf7d",
+  "report_count": 3,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 4125,
+      "report_relpath": "fast_track/index.html",
+      "status_counts": {
+        "added": 9,
+        "changed": 3,
+        "removed": 0,
+        "unchanged": 1
+      },
+      "variant": "fast_track"
+    },
+    {
+      "closest_variant": "base",
+      "distance_score": 3221,
+      "report_relpath": "moe_hero_pipeline/index.html",
+      "status_counts": {
+        "added": 7,
+        "changed": 0,
+        "removed": 3,
+        "unchanged": 1
+      },
+      "variant": "moe_hero_pipeline"
+    },
+    {
+      "closest_variant": "base",
+      "distance_score": 1523,
+      "report_relpath": "snowball_synthetic/index.html",
+      "status_counts": {
+        "added": 2,
+        "changed": 1,
+        "removed": 2,
+        "unchanged": 1
+      },
+      "variant": "snowball_synthetic"
+    }
+  ]
+}
