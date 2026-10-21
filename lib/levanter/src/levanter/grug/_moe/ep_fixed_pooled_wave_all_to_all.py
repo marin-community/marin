@@ -46,6 +46,22 @@ class MoeOverlapWork:
     params: Any
 
 
+@dataclasses.dataclass(frozen=True)
+class TwoStageOverlapFn:
+    """An overlap ``fn`` in two stages: ``fn(tokens, params) = tail(head(tokens, params), tokens, params)``.
+
+    The ragged EP backend runs ``head`` under the first dispatch all-to-all and ``tail`` under the last return
+    all-to-all, and in the backward ``tail``'s pullback under the first return-cotangent all-to-all and ``head``'s
+    under the last input-cotangent return. Every other path calls it as the composed function.
+    """
+
+    head: Callable[[tuple[jax.Array, ...], Any], Any]
+    tail: Callable[[Any, tuple[jax.Array, ...], Any], jax.Array]
+
+    def __call__(self, tokens: tuple[jax.Array, ...], params: Any) -> jax.Array:
+        return self.tail(self.head(tokens, params), tokens, params)
+
+
 class _PooledDispatch(NamedTuple):
     compacted_x: Float[Array, "E R H"]
     receiver_linear_indices: Int[Array, " received"]

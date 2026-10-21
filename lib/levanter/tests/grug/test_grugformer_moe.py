@@ -1593,13 +1593,16 @@ def test_fp8_dispatch_matches_full_precision_dispatch_across_shards():
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("implementation", ["fixed_pooled_wave_all_to_all", "ragged_all_to_all"])
 @pytest.mark.parametrize("side_w_spec", [(None, None), ("expert", None)])
-@pytest.mark.parametrize("gather", ["in_work", "before_transport"])
+@pytest.mark.parametrize(
+    "gather,two_stage", [("in_work", False), ("before_transport", False), ("before_transport", True)]
+)
 def test_overlap_work_matches_running_it_separately(
-    implementation: MoeImplementation, side_w_spec: tuple, gather: str
+    implementation: MoeImplementation, side_w_spec: tuple, gather: str, two_stage: bool
 ):
     """Work scheduled under the dispatch all-to-all (``MoeOverlapWork``) keeps the values and gradients of
     running it outside the MoE, and is pinned by barriers in both the forward and the backward. A parameter
-    sharded over the token axes is all-gathered inside the EP shard (its gradient reduce-scattered)."""
+    sharded over the token axes is all-gathered inside the EP shard (its gradient reduce-scattered). A
+    ``TwoStageOverlapFn`` splits across the first dispatch and the last return in the ragged path."""
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
@@ -1608,6 +1611,7 @@ def test_overlap_work_matches_running_it_separately(
         IMPLEMENTATION = {implementation!r}
         SIDE_W_SPEC = {side_w_spec!r}
         GATHER = {gather!r}
+        TWO_STAGE = {two_stage!r}
     """
         + """
         import jax
@@ -1615,7 +1619,7 @@ def test_overlap_work_matches_running_it_separately(
         import numpy as np
         from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-        from levanter.grug.grug_moe import MoeOverlapWork, OverlapParamGather, moe_mlp
+        from levanter.grug.grug_moe import MoeOverlapWork, OverlapParamGather, TwoStageOverlapFn, moe_mlp
 
         mesh = Mesh(
             np.asarray(jax.devices()).reshape(1, 4, 1),
@@ -1641,8 +1645,13 @@ def test_overlap_work_matches_running_it_separately(
         w_up_gate, w_down = (jax.device_put(a, expert_sharding) for a in (w_up_gate, w_down))
         side_w = jax.device_put(side_w, NamedSharding(mesh, P(*SIDE_W_SPEC)))
 
-        def side_fn(side_tokens, params):
-            return jnp.tanh(jnp.einsum("td,de->te", side_tokens[0], params["w"]))
+        def side_head(side_tokens, params):
+            return jnp.einsum("td,de->te", side_tokens[0], params["w"])
+
+        def side_tail(mid, side_tokens, params):
+            return jnp.tanh(mid) * (1 + 0.1 * side_tokens[0][:, : mid.shape[1]])
+
+        side_fn = TwoStageOverlapFn(side_head, side_tail) if TWO_STAGE else (lambda t, p: jnp.tanh(side_head(t, p)))
 
         def loss(overlapped, x, combine_weights, w_up_gate, w_down, side_w):
             kwargs = dict(
@@ -1687,7 +1696,11 @@ def test_overlap_work_matches_running_it_separately(
             # Two barriers around the dispatch all-to-all in the forward and two in the backward (the pooled
             # path's are the forward pair's transposes; the ragged path pins its backward under the return
             # all-to-all in its custom VJP, and adds one more that serializes its two default expert chunks).
-            expected_barriers = {"fixed_pooled_wave_all_to_all": 4, "ragged_all_to_all": 5}[IMPLEMENTATION]
+            # A two-stage ragged overlap adds a pair per stage boundary in each direction (tail under the last
+            # return, head's pullback under the last input-cotangent return).
+            expected_barriers = {"fixed_pooled_wave_all_to_all": 4, "ragged_all_to_all": 9 if TWO_STAGE else 5}[
+                IMPLEMENTATION
+            ]
             assert count_barriers(jaxpr.jaxpr) == expected_barriers
             assert (count_barriers(jaxpr.jaxpr, "reduce_scatter") > 0) == (SIDE_W_SPEC[0] is not None)
             if IMPLEMENTATION == "ragged_all_to_all" and jax.default_backend() == "cpu":

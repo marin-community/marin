@@ -53,6 +53,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoeOverlapWork,
     OverlapParamGather,
+    TwoStageOverlapFn,
     moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
@@ -283,6 +284,17 @@ class SharedExpertPlacement(StrEnum):
     OVERLAP = "overlap"
     """The whole shared MLP is pinned under the first EP dispatch all-to-all by optimization barriers
     (``MoeOverlapWork``), forward and backward."""
+
+
+class OverlapStages(StrEnum):
+    """How ``moe_shared_placement=overlap`` splits the shared MLP across the EP transports (same math)."""
+
+    ONE = "one"
+    """The whole shared MLP under the first dispatch all-to-all, its backward under the first return-cotangent one."""
+    SPLIT = "split"
+    """Gate/up projections and activation under the first dispatch, the down projection under the last chunk's
+    return all-to-all (otherwise nothing runs under it); backward: the down projection's under the first
+    return-cotangent all-to-all, the gate/up projections' under the last input-cotangent return."""
 
 
 class GatedNormImplementation(StrEnum):
@@ -1011,6 +1023,8 @@ class GrugModelConfig:
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
+    moe_overlap_stages: OverlapStages = OverlapStages.ONE
+    """``moe_shared_placement=overlap``: which transports the shared MLP runs under (``OverlapStages``)."""
     moe_a2a_reserved_sms: int = 0
     """``ragged_all_to_all``: SMs the routed-expert and overlap QuACK GEMMs leave free for the ragged all-to-all
     device kernel (its 32-CTA grid), so the two run side by side instead of taking turns
@@ -2986,13 +3000,31 @@ def _shared_experts_tail(
     out_sharding: P | None,
 ) -> jax.Array:
     """Shared-expert output from each expert's gate/up projections ``parts`` (gates first when ``gated``)."""
+    hidden = _shared_experts_hidden(cfg, parts, num_shared, gated)
+    return _shared_experts_down(cfg, hidden, w_down, x_flat, shared_gate, out_sharding)
+
+
+def _shared_experts_hidden(
+    cfg: "GrugModelConfig", parts: Sequence[jax.Array], num_shared: int, gated: bool
+) -> jax.Array:
+    """The shared experts' concatenated hidden units from their gate/up projections ``parts``."""
     gates, ups = (parts[:num_shared], parts[num_shared:]) if gated else ((), parts)
     if gated:
         act = ActivationFunctionEnum(cfg.expert_activation).to_jax_fn()
-        hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
-    else:
-        slope = 0.0
-        hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
+        return jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
+    slope = 0.0
+    return jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
+
+
+def _shared_experts_down(
+    cfg: "GrugModelConfig",
+    hidden: jax.Array,
+    w_down: jax.Array,
+    x_flat: jax.Array,
+    shared_gate: jax.Array | None,
+    out_sharding: P | None,
+) -> jax.Array:
+    """The shared experts' down projection (summed over experts in its accumulator) and output gate."""
     shared_out = _proj(cfg, hidden, w_down, out_sharding=out_sharding)
     if shared_gate is not None:
         gate_logit = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), shared_gate)
@@ -3017,6 +3049,31 @@ def _shared_experts_local(
     parts = jnp.split(proj, list(itertools.accumulate(widths[:-1])), axis=1)
     num_shared = len(widths) // 2 if gated else len(widths)
     return _shared_experts_tail(cfg, parts, num_shared, gated, w_down, x_flat, shared_gate, None)
+
+
+def _shared_experts_local_head(
+    tokens: tuple[jax.Array, jax.Array],
+    params: tuple[jax.Array, jax.Array, jax.Array | None],
+    *,
+    cfg: "GrugModelConfig",
+    widths: tuple[int, ...],
+    gated: bool,
+) -> jax.Array:
+    """``_shared_experts_local``'s gate/up projections and activation (``OverlapStages.SPLIT``)."""
+    proj = _proj(cfg, tokens[0], params[0])
+    parts = jnp.split(proj, list(itertools.accumulate(widths[:-1])), axis=1)
+    return _shared_experts_hidden(cfg, parts, len(widths) // 2 if gated else len(widths), gated)
+
+
+def _shared_experts_local_tail(
+    hidden: jax.Array,
+    tokens: tuple[jax.Array, jax.Array],
+    params: tuple[jax.Array, jax.Array, jax.Array | None],
+    *,
+    cfg: "GrugModelConfig",
+) -> jax.Array:
+    """``_shared_experts_local``'s down projection and output gate on the head's hidden units."""
+    return _shared_experts_down(cfg, hidden, params[1], tokens[1], params[2], None)
 
 
 def moe_and_shared_fused(
@@ -3085,10 +3142,16 @@ def moe_and_shared_fused(
         # FSDP-sharded weights: the EP shard_map all-gathers them, so their gradients leave it reduce-scattered.
         rows, cols = P(_FSDP_AXES, None), P(None, _FSDP_AXES)
         overlap_up = [reshard(e.w_gate, rows) for e in shared if gated] + [reshard(e.w_up, rows) for e in shared]
+        widths = tuple(w.shape[1] for w in shared_weights)
+        if mlp.cfg.moe_overlap_stages == OverlapStages.SPLIT:
+            overlap_fn = TwoStageOverlapFn(
+                functools.partial(_shared_experts_local_head, cfg=mlp.cfg, widths=widths, gated=gated),
+                functools.partial(_shared_experts_local_tail, cfg=mlp.cfg),
+            )
+        else:
+            overlap_fn = functools.partial(_shared_experts_local, cfg=mlp.cfg, widths=widths, gated=gated)
         overlap = MoeOverlapWork(
-            functools.partial(
-                _shared_experts_local, cfg=mlp.cfg, widths=tuple(w.shape[1] for w in shared_weights), gated=gated
-            ),
+            overlap_fn,
             (shared_in, x_flat),
             (
                 jnp.concatenate(overlap_up, axis=1),

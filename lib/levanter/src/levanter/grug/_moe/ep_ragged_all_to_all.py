@@ -47,6 +47,7 @@ from levanter.grug._moe.sonic import (
     sonic_scatter_rows,
     unwritten_buffer,
 )
+from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import TwoStageOverlapFn
 from levanter.grug._moe.gemm_sm_reservation import reserved_sms
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
@@ -760,6 +761,7 @@ def _routed_experts_forward(
 def _routed_experts_forward_in_context(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap):
     assignments = sorted_x.shape[0]
     side = side_vjp = None
+    two_stage = overlap is not None and isinstance(overlap.fn, TwoStageOverlapFn)
     plans = _chunk_plans(routing, layout)
     # Rows no chunk writes are the dropped assignments, which the combine skips. The experts may
     # write a width O other than the H they read (``latent_out_dim``).
@@ -790,7 +792,10 @@ def _routed_experts_forward_in_context(sorted_x, weights, moe_w13_local, moe_w2_
                 source, tokens = jax.lax.optimization_barrier((source, overlap.tokens))
                 x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
                 with jax.named_scope("overlap"):
-                    side, side_vjp = jax.vjp(overlap.fn, tokens, overlap.params)
+                    if two_stage:
+                        side, head_vjp = jax.vjp(overlap.fn.head, tokens, overlap.params)
+                    else:
+                        side, side_vjp = jax.vjp(overlap.fn, tokens, overlap.params)
                 x_dispatch, side = jax.lax.optimization_barrier((x_dispatch, side))
             else:
                 x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
@@ -805,7 +810,17 @@ def _routed_experts_forward_in_context(sorted_x, weights, moe_w13_local, moe_w2_
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes, with
             # no expansion step.
-            returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
+            if two_stage and chunk_index == layout.chunks - 1:
+                # The tail waits for this chunk's expert output and is done before the combine reads the return,
+                # so it runs while the last return all-to-all is in flight.
+                out_dispatch, mid = jax.lax.optimization_barrier((out_dispatch, side))
+                returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
+                with jax.named_scope("overlap"):
+                    side, tail_vjp = jax.vjp(overlap.fn.tail, mid, tokens, overlap.params)
+                returned, side = jax.lax.optimization_barrier((returned, side))
+                side_vjp = _TwoStagePullback(head_vjp, tail_vjp)
+            else:
+                returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
             chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
 
     with jax.named_scope("combine"):
@@ -818,6 +833,14 @@ def _routed_experts_forward_in_context(sorted_x, weights, moe_w13_local, moe_w2_
             topk=layout.topk,
         ).astype(sorted_x.dtype)
     return out, tuple(chunk_residuals), side, side_vjp
+
+
+class _TwoStagePullback(NamedTuple):
+    """Pullbacks of a ``TwoStageOverlapFn``: ``head(d_mid) = (d_tokens, d_params)``,
+    ``tail(d_side) = (d_mid, d_tokens, d_params)``."""
+
+    head: Callable
+    tail: Callable
 
 
 class _OverlapInputs(NamedTuple):
@@ -949,6 +972,7 @@ def _routed_experts_backward_in_context(
     )  # [TK, 1]
     moe_w13_cotangents = []
     moe_w2_cotangents = []
+    two_stage = isinstance(side_vjp, _TwoStagePullback)
     for chunk_index in reversed(range(layout.chunks)):
         plan, expert_mlp_residuals = chunk_residuals[chunk_index]
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
@@ -968,8 +992,13 @@ def _routed_experts_backward_in_context(
             )
             if side_vjp is not None and first:
                 with jax.named_scope("overlap"):
-                    side_grads = side_vjp(side_cotangent)
+                    if two_stage:
+                        d_mid, *side_grads = side_vjp.tail(side_cotangent)
+                        side_grads = tuple(side_grads)
+                    else:
+                        side_grads = side_vjp(side_cotangent)
                 out_dispatch_cotangent, side_grads = jax.lax.optimization_barrier((out_dispatch_cotangent, side_grads))
+            head_here = two_stage and chunk_index == 0
             if layout.overlap_weight_grads:
                 x_dispatch_cotangent, row_output_dot, wgrad_args, wgrad = layout.expert_mlp.backward_parts(
                     expert_mlp_residuals, out_dispatch_cotangent
@@ -977,6 +1006,8 @@ def _routed_experts_backward_in_context(
                 # The weight gradients need nothing the transport sends: tie their inputs to dx and their
                 # results to the received buffer, so they run while dx is in flight.
                 x_dispatch_cotangent, wgrad_args = jax.lax.optimization_barrier((x_dispatch_cotangent, wgrad_args))
+                if head_here:
+                    raise ValueError("a two-stage overlap needs overlap_weight_grads off")
                 dispatch_cotangent = jax.lax.ragged_all_to_all(
                     x_dispatch_cotangent, dispatch_cotangent, *plan.return_params, axis_name="expert"
                 )
@@ -990,9 +1021,17 @@ def _routed_experts_backward_in_context(
                 )
                 # Chunks read disjoint rows of the sorted buffer, so each writes its rows of one
                 # shared cotangent buffer, and the rows no chunk writes are the dropped assignments.
+                if head_here:
+                    # The head's pullback runs while the last input-cotangent return is in flight.
+                    x_dispatch_cotangent, d_mid = jax.lax.optimization_barrier((x_dispatch_cotangent, d_mid))
                 dispatch_cotangent = jax.lax.ragged_all_to_all(
                     x_dispatch_cotangent, dispatch_cotangent, *plan.return_params, axis_name="expert"
                 )
+                if head_here:
+                    with jax.named_scope("overlap"):
+                        head_grads = side_vjp.head(d_mid)
+                    dispatch_cotangent, head_grads = jax.lax.optimization_barrier((dispatch_cotangent, head_grads))
+                    side_grads = jax.tree.map(jnp.add, tuple(side_grads), tuple(head_grads))
             # Each row's <y, dy> travels back to its assignment's sorted position like y did.
             output_dot = jax.lax.ragged_all_to_all(
                 row_output_dot[:, None], output_dot, *plan.return_params, axis_name="expert"

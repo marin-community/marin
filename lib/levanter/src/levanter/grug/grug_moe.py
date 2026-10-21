@@ -53,6 +53,7 @@ from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     MoeOverlapWork,
+    TwoStageOverlapFn,
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
 )
 from levanter.grug._moe.ep_ragged_all_to_all import DEFAULT_RAGGED_EXPERT_CHUNKS, _moe_mlp_ep_ragged_a2a_local
@@ -811,6 +812,8 @@ def moe_mlp(
                 lambda leaf: _token_axes_spec(leaf, token_sharding_axes), overlap.params
             )
             if overlap_param_gather == OverlapParamGather.IN_WORK:
+                if isinstance(overlap.fn, TwoStageOverlapFn):
+                    raise ValueError("a TwoStageOverlapFn needs overlap_param_gather=before_transport")
                 shard_local_fn = partial(
                     shard_local_fn, overlap_fn=_gathering_overlap_fn(overlap.fn, overlap_param_specs)
                 )
@@ -932,6 +935,7 @@ __all__ = [
     "MoEExpertMlpPspecs",
     "MoeImplementation",
     "MoeOverlapWork",
+    "TwoStageOverlapFn",
     "PspecAxis",
     "QBRoutedMoE",
     "moe_mlp",

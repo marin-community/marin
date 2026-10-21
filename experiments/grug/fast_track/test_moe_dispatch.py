@@ -50,6 +50,9 @@ _CASES = {
     "gpu_hero": dict(**_UNGATED, **_SCAN, **_HERO),
     "mxfp8_overlap": dict(**_UNGATED, **_SCAN, **_OVERLAP, **_MXFP8),
     "mxfp8_hero": dict(**_UNGATED, **_SCAN, **_HERO, **_MXFP8),
+    "gpu_overlap_split": dict(**_UNGATED, **_SCAN, **_OVERLAP, moe_overlap_stages="split"),
+    "mxfp8_overlap_split": dict(**_UNGATED, **_SCAN, **_OVERLAP, **_MXFP8, moe_overlap_stages="split"),
+    "mxfp8_overlap_r32": dict(**_UNGATED, **_SCAN, **_OVERLAP, **_MXFP8, moe_a2a_reserved_sms=32),
 }
 
 
@@ -188,6 +191,40 @@ def test_hero_dispatch_mxfp8_tracks_the_bridge(tmp_path):
     projections they no longer fuse (the latent down and shared gate/up quantize per FSDP shard)."""
     _require_sm100_gpus()
     _assert_close("mxfp8_hero", "mxfp8_overlap", tmp_path, rtol=2e-3, grad_rtol=0.15)
+
+
+@pytest.mark.timeout(900)
+def test_overlap_split_matches_the_overlap_placement(tmp_path):
+    """``moe_overlap_stages=split`` moves the shared down projection under the last return all-to-all: the same
+    function, as close to the one-stage overlap placement as the fused placement is (bf16 rounding order)."""
+    _require_sm100_gpus()
+    loss, grads = _case("gpu_overlap", tmp_path)
+    fused_loss, fused_grads = _case("gpu_fused", tmp_path)
+    split_loss, split_grads = _case("gpu_overlap_split", tmp_path)
+
+    def errors(other):
+        return [float(np.linalg.norm(o - g) / max(np.linalg.norm(g), 1e-30)) for o, g in zip(other, grads, strict=True)]
+
+    split_err, fused_err = errors(split_grads), errors(fused_grads)
+    print(
+        f"bf16 vs overlap: loss split {split_loss:.7f} fused {fused_loss:.7f} overlap {loss:.7f}; "
+        f"grad rel L2 max split {max(split_err):.3e} fused {max(fused_err):.3e}"
+    )
+    assert abs(split_loss - loss) <= 2 * abs(fused_loss - loss) + 1e-5 * abs(loss)
+    for e, f in zip(split_err, fused_err, strict=True):
+        assert e <= 2 * f + 1e-3
+    _assert_close("mxfp8_overlap_split", "mxfp8_overlap", tmp_path, rtol=2e-3, grad_rtol=0.15)
+
+
+@pytest.mark.timeout(900)
+def test_reserved_sms_keeps_the_mxfp8_step_bitwise(tmp_path):
+    """``moe_a2a_reserved_sms`` only shrinks the persistent GEMM grids; every tile computes the same values."""
+    _require_sm100_gpus()
+    loss, grads = _case("mxfp8_overlap", tmp_path)
+    reserved_loss, reserved_grads = _case("mxfp8_overlap_r32", tmp_path)
+    assert reserved_loss == loss
+    for r, g in zip(reserved_grads, grads, strict=True):
+        np.testing.assert_array_equal(r, g)
 
 
 if __name__ == "__main__":
