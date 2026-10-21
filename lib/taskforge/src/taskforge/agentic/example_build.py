@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""An example build program that the agent gets in its workspace. The agent runs programs like it in its shell.
+"""An example build program that the agent gets in its workspace. The agent runs programs like it in its shell,
+and ``submit`` runs the program again with other task ids.
 
 Run as ``python3 example_build.py <task id> <output path>``, the program draws a stock-ledger problem from the task
 id, computes the answer, and writes a TaskSpec: the ledger is a file in the solver's ShellSim workspace, and a
