@@ -21,7 +21,11 @@ from taskcompendium.pipeline.sampling import seeded_order
 
 from experiments.post_training.snowball_curriculum.bundle import verify_manifest, write_manifest, write_pool
 from experiments.post_training.snowball_curriculum.native import NativeSelection, select_native_closure_tasks
-from experiments.post_training.snowball_curriculum.selection import allocate_quotas, source_weights
+from experiments.post_training.snowball_curriculum.selection import (
+    TASK_SPEC_CONTRACT_KIND,
+    allocate_quotas,
+    source_weights,
+)
 
 
 def canonical_source_quotas(
@@ -86,7 +90,7 @@ def canonical_records(
             source, difficulty = row["source_id"], row["difficulty"]
             quota = bin_quotas[source][difficulty]
             row.update(
-                contract_kind="task_spec",
+                contract_kind=TASK_SPEC_CONTRACT_KIND,
                 lowered_task_spec=None,
                 family=recipe["resolved_source_families"][source],
                 previous_pool_inclusion_probability=row["inclusion_probability"],

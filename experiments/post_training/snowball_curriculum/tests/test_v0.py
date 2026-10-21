@@ -60,7 +60,9 @@ def test_v0_exports_admitted_source_selection_and_shortfall(tmp_path, monkeypatc
     )
     sources = load_sources(str(manifest), population="admitted")
     output = tmp_path / "selected"
-    run(sources=sources, recipe={"extensions": {"extension": "reasoning_gym"}}, output=str(output), target=10)
+    with monkeypatch.context() as local_cwd:
+        local_cwd.chdir(tmp_path)
+        run(sources=sources, recipe={"extensions": {"extension": "reasoning_gym"}}, output="selected", target=10)
     report = json.loads((output / "selection.json").read_text())
     exported = [json.loads(line) for line in (output / "tasks.jsonl").read_text().splitlines()]
     assert report["selected_count"] == 4
@@ -124,8 +126,8 @@ def test_catalog_sources_resolves_imported_archives_through_verified_migration(t
     final.mkdir(parents=True)
     parquet = final / "part-00000.parquet"
     pq.write_table(pa.table({"task_id": ["admitted-task"]}), parquet)
-    original = "gs://old-region/expired/source"
-    archived = {"intended_use": "train", "datasets": {"final": original + "/version/final"}}
+    original = "gs://old-region/expired/source/"
+    archived = {"intended_use": "train", "datasets": {"final": "gs://old-region/expired/source/version/final"}}
     manifest = destination / ".verified-copy-manifest.json"
     manifest.write_text(
         json.dumps(
@@ -162,7 +164,7 @@ def test_catalog_sources_resolves_imported_archives_through_verified_migration(t
         def current(self):
             return SimpleNamespace(snapshot_id="frozen-snapshot")
 
-        def sources(self, snapshot_id):
+        def sources(self, _snapshot_id):
             return [
                 SimpleNamespace(id="selected", assessment_key="assessment"),
                 SimpleNamespace(id="unrequested", assessment_key="unavailable"),
@@ -173,7 +175,7 @@ def test_catalog_sources_resolves_imported_archives_through_verified_migration(t
                 raise FileNotFoundError("Unrequested source evidence is unavailable")
             return SimpleNamespace(curation_uri="finestore://archived/evidence")
 
-        def document(self, uri):
+        def document(self, _uri):
             return archived
 
     monkeypatch.setattr(v0, "CurationCatalog", ImportedCatalog)

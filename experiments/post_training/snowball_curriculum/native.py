@@ -27,6 +27,7 @@ from verifyit.json_objects import unique_object
 from experiments.post_training.snowball_curriculum.selection import TaskAlias, allocate_quotas
 
 NATIVE_SOURCE = "SnowballV01:structure-closure"
+NATIVE_CONTRACT_KIND = "native-structure_closure"
 TOKENIZER_MODEL = "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14"
 TOKENIZER_REVISION = "6783e9743478bd25a9ce03ab3460e84d6a9814b0"
 TRAIN_SHA256 = "40fcd83f1cb3effd68e30d152c09c425cb33dbd531224cba00042574f6939608"
@@ -49,7 +50,7 @@ class NativeClosureTask:
     source_id: str = NATIVE_SOURCE
     tokenizer_model: str = TOKENIZER_MODEL
     tokenizer_revision: str = TOKENIZER_REVISION
-    contract_kind: str = "native-structure_closure"
+    contract_kind: str = NATIVE_CONTRACT_KIND
     prior_admission_status: str = "reviewed-import"
     review_status: str = "static-reference-checked"
     runtime_compatibility: str = "historical-source-only"

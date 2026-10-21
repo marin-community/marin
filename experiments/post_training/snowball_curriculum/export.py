@@ -8,6 +8,7 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,8 @@ from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.runtime.shell import ShellToolConfig
 
 from experiments.post_training.snowball_curriculum.bundle import file_sha256, verify_manifest, write_manifest
-from experiments.post_training.snowball_curriculum.native import native_closure_task
+from experiments.post_training.snowball_curriculum.native import NATIVE_CONTRACT_KIND, native_closure_task
+from experiments.post_training.snowball_curriculum.selection import TASK_SPEC_CONTRACT_KIND
 
 TOOLS = "shellbox"
 PREFILL = "prefill"
@@ -82,14 +84,21 @@ class DerivedDeployment(BaseModel):
     verifier_startup_timeout: float | None
 
 
-def selected_task(row: Mapping[str, Any]) -> tuple[TaskSpec, str, list[str]]:
+@dataclass(frozen=True)
+class SelectedTask:
+    task: TaskSpec
+    harness: str
+    semantic_changes: tuple[str, ...]
+
+
+def selected_task(row: Mapping[str, Any]) -> SelectedTask:
     """Keep canonical tasks intact; convert native raw records through the shared importer."""
-    if row["contract_kind"] == "task_spec":
+    if row["contract_kind"] == TASK_SPEC_CONTRACT_KIND:
         task = TaskSpec.model_validate_json(row["task_json"])
         if (semantic_digest(task, True), semantic_digest(task, False)) != (row["contract_id"], row["public_content_id"]):
             raise ValueError("Frozen canonical task identity differs from the current schema")
-        return task, TOOLS, []
-    if row["contract_kind"] != "native-structure_closure":
+        return SelectedTask(task, TOOLS, ())
+    if row["contract_kind"] != NATIVE_CONTRACT_KIND:
         raise ValueError("Unknown selected source contract kind")
     raw = row["lowered_task_spec"]
     original = native_closure_task(raw, row.get("teacher_route") or "")
@@ -111,11 +120,12 @@ def selected_task(row: Mapping[str, Any]) -> tuple[TaskSpec, str, list[str]]:
         raise ValueError("Native private verifier resources changed")
     # This deliberately changes conditioning and grading: historical token IDs and
     # terminal normalization remain source audit, not requirements of current tasks.
-    return task, PREFILL, ["context", "grader"]
+    return SelectedTask(task, PREFILL, ("context", "grader"))
 
 
 def rollout_record(row: dict, deployment: Deployment) -> tuple[dict, dict]:
-    task, harness_name, changes = selected_task(row)
+    selected = selected_task(row)
+    task, harness_name = selected.task, selected.harness
     if task.id != row["task_id"]:
         raise ValueError("Export changed the selected logical task ID")
     grader = task.grader
@@ -173,14 +183,14 @@ def rollout_record(row: dict, deployment: Deployment) -> tuple[dict, dict]:
         "public_content_id": output["public_content_id"],
         "task_sha256": canonical_sha256(task.model_dump(mode="json")),
         "runtime_sha256": hashlib.sha256(output["task_rollout_spec"].encode()).hexdigest(),
-        "task_semantic_changes": changes,
+        "task_semantic_changes": list(selected.semantic_changes),
         "historical_equivalence_claimed": False,
     }
     return output, audit
 
 
 def check_harness(spec: TaskRolloutSpec) -> None:
-    """Use the same explicit wire discriminator and tool settings as the trainer."""
+    """Reject unknown harnesses and tasks incompatible with their declared limits."""
     if spec.harness == PREFILL:
         harness = PrefillHarness()
     elif is_shell_harness(spec.harness):
