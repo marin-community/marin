@@ -16,8 +16,8 @@ uv run fsutil show gs://marin-us-central2/documents/shard-00000.parquet
 uv run fsutil du s3://marin-us-east-02a/iris/my-job
 uv run fsutil usage s3://marin-us-east-02a -o usage-report.md
 uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
-uv run fsutil cp --remote s3://marin-us-east-02a/my-file hf-bucket://open-athena/marin/my-file
-uv run fsutil cp --remote hf-model://open-athena/snowball-intermediate/config.json s3://marin-us-east-02a/config.json
+uv run fsutil cp --remote s3://marin-us-east-02a/my-file hf://buckets/open-athena/marin/my-file
+uv run fsutil cp --remote hf://open-athena/snowball-intermediate/config.json s3://marin-us-east-02a/config.json
 uv run fsutil mv /tmp/run.json gs://marin-us-central2/archive/
 uv run fsutil rsync --dry-run --delete /tmp/checkpoints gs://marin-us-central2/checkpoints
 uv run fsutil verified-copy gs://marin-us-central2/exports/model s3://marin-us-east-02a/marin/exports/model
@@ -25,21 +25,20 @@ uv run fsutil hash gs://marin-us-central2/archive/run.json
 uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix s3://marin-us-east-02a/tmp/old-prefix
 ```
 
-Paths are full URLs or local paths. Hugging Face schemes distinguish mutable buckets
+Paths are full URLs or local paths. Hugging Face URL prefixes distinguish mutable buckets
 from versioned model and dataset repositories:
 
 | Storage | URL |
 |---------|-----|
-| HF bucket | `hf-bucket://owner/bucket/path` |
-| HF model repository | `hf-model://owner/model/path` |
-| HF dataset repository | `hf-dataset://owner/dataset/path` |
+| HF bucket | `hf://buckets/owner/bucket/path` |
+| HF model repository | `hf://owner/model/path` or `hf://models/owner/model/path` |
+| HF dataset repository | `hf://datasets/owner/dataset/path` |
 | GCS bucket | `gs://bucket/path` |
 | S3-compatible bucket | `s3://bucket/path` |
 
 Model and dataset paths can pin a branch, tag, or commit after the repository name,
-such as `hf-model://open-athena/snowball-intermediate@main/config.json`.
-Buckets have no revisions. The native forms also work: `hf://buckets/owner/bucket/path`,
-`hf://owner/model/path`, and `hf://datasets/owner/dataset/path`.
+such as `hf://open-athena/snowball-intermediate@main/config.json`.
+Buckets have no revisions. An `hf://` URL without a type prefix selects a model repository.
 There is no current bucket to keep track of, and a copy may name a different backend on
 each side.
 

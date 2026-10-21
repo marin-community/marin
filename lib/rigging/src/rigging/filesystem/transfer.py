@@ -16,7 +16,6 @@ from huggingface_hub import parse_hf_uri
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.hashing import file_md5_for_path
-from rigging.filesystem.huggingface import HF_PROTOCOLS, hf_url
 from rigging.filesystem.storage_path import StoragePath
 
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
@@ -411,16 +410,14 @@ def _backend(location: TransferLocation) -> str:
         return "file"
     if scheme in _GCS_SCHEMES:
         return "gs"
-    if scheme in HF_PROTOCOLS:
-        return "hf"
     return scheme
 
 
 def _location_path(location: TransferLocation) -> str:
-    # Native and explicit HF URLs must compare equal to prevent copying a file
-    # onto itself through two different schemes.
-    if StoragePath(location.url).scheme in HF_PROTOCOLS:
-        uri = parse_hf_uri(hf_url(location.url))
+    # HF model paths may omit models/ and repository revisions default to main.
+    # Normalize both to prevent copying a file onto itself through another URL.
+    if StoragePath(location.url).scheme == "hf":
+        uri = parse_hf_uri(location.url)
         if uri.is_repo and uri.revision is None:
             uri = replace(uri, revision="main")
         return str(StoragePath(uri.to_uri()))

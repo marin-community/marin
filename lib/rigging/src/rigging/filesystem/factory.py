@@ -31,12 +31,6 @@ logger = logging.getLogger(__name__)
 # Register by class path so importing the factory does not load the mirror's
 # distributed-lock backends. fsspec imports the class on the first mirror:// use.
 fsspec.register_implementation("mirror", "rigging.filesystem.mirror.MirrorFileSystem")
-for protocol, implementation in (
-    ("hf-bucket", "HfBucketFileSystem"),
-    ("hf-model", "HfModelFileSystem"),
-    ("hf-dataset", "HfDatasetFileSystem"),
-):
-    fsspec.register_implementation(protocol, f"rigging.filesystem.huggingface.{implementation}")
 
 # fsspec has no constructor-default hook shared by raw and guarded entry points.
 # Its environment/file config is loaded before this point, so explicit cache settings win.

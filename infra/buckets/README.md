@@ -13,9 +13,9 @@ Active bucket names, stores, locations, and endpoints come from the reviewed `da
 declared in `infra/buckets/__main__.py` independently of runtime storage routing.
 
 The stack creates the private Hugging Face bucket `open-athena/marin`, addressed as
-`hf-bucket://open-athena/marin` in `fsutil`. A protected `command.local.Command`
-resource runs `hf buckets create open-athena/marin --private` from the repository
-environment. Pulumi blocks removal while the resource is protected. After explicit
+`hf://buckets/open-athena/marin` in `fsutil`. A protected `command.local.Command`
+resource runs `.venv/bin/hf buckets create open-athena/marin --private` from the
+Marin repository root. Pulumi blocks removal while the resource is protected. After explicit
 unprotection, removing the resource leaves the HF bucket in place. The resource does
 not manage file contents or subsequent visibility changes. Creation fails if the
 bucket already exists, so an existing bucket cannot be silently adopted.

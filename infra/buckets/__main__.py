@@ -50,7 +50,7 @@ def main() -> None:
         dir="../..",
         opts=pulumi.ResourceOptions(protect=True, retain_on_delete=True),
     )
-    pulumi.export("huggingface_bucket", "hf-bucket://open-athena/marin")
+    pulumi.export("huggingface_bucket", "hf://buckets/open-athena/marin")
 
 
 main()

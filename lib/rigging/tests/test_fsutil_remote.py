@@ -15,18 +15,15 @@ import rigging.fsutil.remote as remote_module
 from click.testing import CliRunner
 from huggingface_hub import HfApi, HfFileSystem
 from huggingface_hub.utils import _http as hf_http
-from rigging.filesystem.huggingface import HfBucketFileSystem, HfDatasetFileSystem, HfModelFileSystem
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import TransferError, copy_plan
 from rigging.fsutil.cli import cli
 from rigging.fsutil.listing import list_entries
 
 HF_STORAGE_ROOTS = (
-    "hf-bucket://owner/files",
-    "hf-model://owner/files",
-    "hf-dataset://owner/files",
     "hf://buckets/owner/files",
     "hf://owner/files",
+    "hf://models/owner/files",
     "hf://datasets/owner/files",
 )
 
@@ -111,15 +108,13 @@ def hub(monkeypatch):
         for source, destination in add:
             storage.files[destination] = Path(source).read_bytes()
 
-    for filesystem in (HfFileSystem, HfModelFileSystem, HfBucketFileSystem, HfDatasetFileSystem):
-        filesystem.clear_instance_cache()
+    HfFileSystem.clear_instance_cache()
     monkeypatch.setattr(HfApi, "upload_file", upload_file)
     monkeypatch.setattr(HfApi, "batch_bucket_files", batch_bucket_files)
     with httpx.Client(transport=httpx.MockTransport(storage.request)) as client:
         monkeypatch.setattr(hf_http, "_GLOBAL_CLIENT", client)
         yield storage
-    for filesystem in (HfFileSystem, HfModelFileSystem, HfBucketFileSystem, HfDatasetFileSystem):
-        filesystem.clear_instance_cache()
+    HfFileSystem.clear_instance_cache()
 
 
 @pytest.mark.parametrize("operation", ["cp", "mv"])
@@ -160,18 +155,17 @@ def test_hf_listing_and_glob_paths_can_be_reopened_and_copied(tmp_path, hub, roo
 
 
 @pytest.mark.parametrize(
-    ("scheme", "native_url"),
+    ("source_url", "destination_url"),
     [
-        ("hf-bucket", "hf://buckets/owner/files/payload.txt"),
-        ("hf-model", "hf://owner/files/payload.txt"),
-        ("hf-model", "hf://models/owner/files@main/payload.txt"),
-        ("hf-dataset", "hf://datasets/owner/files/payload.txt"),
+        ("hf://owner/files/payload.txt", "hf://models/owner/files/payload.txt"),
+        ("hf://owner/files/payload.txt", "hf://models/owner/files@main/payload.txt"),
+        ("hf://datasets/owner/files/payload.txt", "hf://datasets/owner/files@main/payload.txt"),
     ],
 )
-def test_copy_rejects_same_hf_file_through_different_schemes(hub, scheme, native_url):
+def test_copy_rejects_same_hf_file_through_equivalent_urls(hub, source_url, destination_url):
     hub.exists = True
     hub.files = {"payload.txt": b"keep this data"}
 
     with pytest.raises(TransferError):
-        copy_plan((f"{scheme}://owner/files/payload.txt",), native_url, recursive=False, no_clobber=False)
+        copy_plan((source_url,), destination_url, recursive=False, no_clobber=False)
     assert hub.files == {"payload.txt": b"keep this data"}

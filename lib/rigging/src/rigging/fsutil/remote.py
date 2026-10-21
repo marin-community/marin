@@ -9,7 +9,6 @@ import subprocess
 import click
 from huggingface_hub import get_token
 
-from rigging.filesystem.huggingface import HF_PROTOCOLS
 from rigging.filesystem.storage_path import StoragePath
 
 REMOTE_CLUSTER = "cw-us-east-02a"
@@ -37,7 +36,7 @@ def run_remote_transfer(
     # Iris forwards HF_TOKEN from the submitter's environment. A token saved by
     # `hf auth login` is otherwise only present on this machine, not the worker.
     environment = os.environ.copy()
-    if any(StoragePath(url).scheme in HF_PROTOCOLS for url in urls):
+    if any(StoragePath(url).scheme == "hf" for url in urls):
         token = get_token()
         if token:
             environment["HF_TOKEN"] = token
