@@ -5,11 +5,14 @@ description: Refresh a named Marin external fork pin onto a newer upstream base 
 
 # Refresh a fork
 
-Read `AGENTS.md`. Rebase refreshable fork overlays onto `main-next`, validate
-the selected sources, re-pin Marin, and prepare any protected-branch promotion.
-An unattended run opens a draft Marin PR and names the required admin
-promotion; it never force-moves a stable branch. A `fork_main` source selector
-reuses an existing stable lineage and does not create a staging branch.
+Read `AGENTS.md` and the target descriptor. Select a source and replay the
+fork's patches onto `main-next` when a rebase is needed. A `fork_main` selector
+uses an existing stable source SHA.
+
+For `vllm-gpu`, follow [the GPU guide](docs/vllm.md#source-release-and-adoption):
+review and land source on `main`, build and test the wheels, then test and open
+a Marin adoption PR. Other rebased forks test their staged sources before an
+admin moves `main`. The refresh agent never force-moves a protected branch.
 
 Refresh a `group` as one unit and one PR. Per-fork guidance lives beside this
 file: `docs/vllm.md` covers the `vllm`/`tpu-inference` group and the GPU release
@@ -43,13 +46,16 @@ revision.
 
 - If no newer base is selected and no pin metadata needs repair, exit successfully
   with a no-op summary.
-- On success, create the rollback and date tags described in
+- On success for a descriptor or isolated-project rebase, create the rollback
+  and date tags described in
   `docs/promotion-protocol.md` for each rebased fork, then open exactly one draft PR in
   `marin-community/marin` for the fork or group after the e2e passes. A grouped
   refresh re-pins every group section at its staged tip in that single PR. State the
   exact `main-next` to `main` admin promotion still required, request the
   descriptor's `blocker_assignee` as reviewer, and monitor the PR per
   `.agents/skills/commit/SKILL.md`.
+- For `vllm-gpu`, use `docs/vllm.md` for the source-review handoff and the
+  later Marin adoption PR.
 - On an unresolved blocker, do not open a PR. Create or update one
   `marin-community/marin` issue assigned to `blocker_assignee`, titled
   `Fork refresh blocked: <fork> — <short reason>`, with current pins, the selected
@@ -79,7 +85,7 @@ git -C <fork> remote set-head upstream -a                # so upstream/HEAD reso
 
 ## Select the base
 
-- `base_select = upstream_main` (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm-gpu`): the base is the
+- `base_select = upstream_main` (`vllm-gpu`): the base is the
   tip of the `upstream` default branch. These pins rebase onto upstream `main`; there is no
   release to gate on. `vllm-gpu` is the only unit that rebases the shared vLLM `main` source.
 - `base_select = latest_release` (`tpu-inference`): use GitHub Releases of the
@@ -107,16 +113,17 @@ Skip this section for `base_select = fork_main`: that selector reuses an exact
 source on the protected fork lineage.
 
 For every rebase, branch from the selected base as `main-next`. This staging
-branch is disposable, and is distinct from protected `main`, which the
-unattended refresh leaves unchanged.
+branch is disposable and distinct from protected `main`. An admin reviews and
+promotes it at the time specified by the pin's guide. The refresh agent does
+not force-move protected `main`.
 
 Find the base our commits currently sit on: `old_base` is the descriptor's
 `upstream_base` (descriptor pins) or `git merge-base <fork>/main upstream/HEAD`
 (isolated and release pins, where it is not recorded). `old_tip` is the head of our
-patches: the fork's `main` for isolated pins (Marin's recorded pin may lag `main`, so
-rebase from `main` to cover the full patch set), or the pin's stable `main` tip for
-descriptor and release pins (the descriptor's `commit`, or `gpu.toml`'s
-`source_commit`). Then, onto `new_base`:
+patches: the fetched fork's `main` for isolated and GPU release pins, or the
+descriptor's `commit` for descriptor pins. Marin's wheel or lock pin can lag
+the fork's `main`; record that consumer pin separately and replay the full
+current source overlay. Then, onto `new_base`:
 
 1. Inventory our commits in order: `git log --reverse --no-merges old_base..old_tip`.
    Merge commits (especially merges of `upstream` into a feature branch) are not
@@ -160,30 +167,32 @@ overlay from a net diff. Diff each hand-ported `fix` against the fork's stable
 branch. Put the inventory, conflict map, and distance behind upstream in the
 blocker issue.
 
-## Pin at the staged tip
+## Update Marin pins
 
-Point Marin at `main-next` so the e2e runs against the replayed code, then run
-`uv run config/update-external.py` to regenerate
-`lib/marin/src/marin/external_dependencies.py`; confirm only the intended pins change.
+For `vllm-gpu`, use the GPU guide's publication and adoption steps above.
+
+For rebased descriptor and isolated-project pins, point Marin at the exact
+`main-next` SHA so the e2e runs against the replayed code. For a `fork_main`
+descriptor, use the selected existing main-line SHA. Regenerate packaged pins
+with `uv run config/update-external.py vllm` for descriptor pins, or
+`uv run config/update-external.py <fork>` for an isolated project. Confirm only
+the intended pins change before running the e2e.
 The stable `main` remains at the old tip until an admin hard-swaps it after reviewing
 the draft PR. Because `main-next` and the eventual `main` are the same commit,
-the pin set here needs no change after that promotion.
+descriptor pins need no change after promotion. Isolated-project pins
+need the follow-up described below.
 
 - `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): for a rebased
   fork, push `main-next` and record its tip and selected base. For `fork_main`,
   record the exact existing main-line source and its upstream base without
   creating or promoting another branch. The section-by-section mechanics are
   in `docs/vllm.md`.
-- `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel, so the refresh builds
-  and promotes one through the fork's own release pipeline, then re-pins from the promoted
-  manifest. The candidate/promote/re-pin commands and the CUDA/torch ABI-boundary caveat
-  are in `docs/vllm.md`.
-- `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
+- `pin = isolated_project`: no current fork uses this pin kind. The uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
-  the uv source at `main-next` to validate. After the e2e passes, run
+  the uv source at `main-next`, then run
   `uv run config/update-external.py <fork>` to lock `config/external/<fork>/uv.lock`
-  against that exact tip. Keep the source on `main-next` in the draft PR while `main`
+  against that exact tip before the e2e. Keep the source on `main-next` in the draft PR while `main`
   still points at the old tip; the date tag keeps the staged SHA reachable. After an
   admin advances `main`, restore the source to `main`, rerun
   `uv run config/update-external.py <fork>`, and verify the lock still records the
@@ -227,32 +236,6 @@ Run the descriptor's `e2e` before opening the PR:
   `tpu-inference`) and `tests/cluster/vllm/test_snowball_backend_parity.py`
   (`vllm-gpu`) — are documented with their exact commands in `docs/vllm.md`.
 
-- **`experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml`** (`evalchemy`) and
-  **`experiments/evaluation/configs/harbor/aime-smoke.yaml`** (`harbor`) — one eval
-  runner drives both; only the config source differs. Submit a bounded run and
-  confirm it completes with metrics and no fork import/build/runtime traceback:
-
-```sh
-uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 \
-  --evalchemy-config experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml   # evalchemy
-uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml          # harbor
-```
-
-  `--dry-run` resolves the model, backend, and task plan — a wiring pre-check, not
-  fork validation. Depending on the eval it may not import the fork at all, or import
-  it without exercising it, so a green dry-run says nothing about whether the new pin
-  runs. Only the live run above validates the refreshed fork.
-
-- **`experiments/post_training/iceball_micro.py`** (`MarinSkyRL`) — the micro
-  post-training e2e. `--version` is required and `--run` builds the handles
-  (without it the command only prints the plan); confirm the terminal stage
-  completes:
-
-```sh
-uv run python -m experiments.post_training.iceball_micro --stage evaluation --version dev --run
-```
-
 When an e2e fails, rerun the same workload against Marin's current pins on the old
 fork stack, same target and priority. Fix only failures that pass on the old stack
 and fail on the refreshed one. If the old stack is already broken, the fork's e2e
@@ -261,11 +244,11 @@ blocker for the broken e2e and hold the refresh until it is fixed.
 
 ## Prepare the protected-branch promotion
 
-Once the e2e passes on `main-next`, create the rollback tag for the current stable
-tip and the date tag for the validated staged tip per `docs/promotion-protocol.md`.
-Push and verify those tags, then leave protected `main` unchanged. The
-draft Marin PR must identify each `main-next` to `main` hard swap that an admin
-must complete before merge.
+For `vllm-gpu`, follow the GPU guide's source-approval step before building.
+For other rebased forks, wait for the e2e to pass on `main-next`, then create
+and verify the rollback and date tags in `docs/promotion-protocol.md`. Leave
+protected `main` for the admin to update. The draft Marin PR must name each
+required source swap.
 
 A `fork_main` selector has no protected-branch promotion. Record the immutable
 source tag or ancestry proof in the PR instead.
@@ -284,8 +267,8 @@ refresh, and no text overclaims validation evidence.
 
 Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md`,
 request the descriptor's `blocker_assignee` as reviewer, and follow the commit
-skill's monitoring loop to an exit condition. PR body: above the fold, the fork,
-selected base, the staged tip SHA, its rollback and date tags, the pending admin
-promotion (and the wheel release tag for `vllm-gpu`), e2e outcome, and unresolved
-risks; in `<details>`, the base-selection evidence and the carry/drop/fix table with
+skill's monitoring loop to an exit condition. The GPU guide names the adoption
+PR evidence. For the other forks, include the selected base, staged tip SHA,
+rollback and date tags, pending admin promotion, e2e outcome, and unresolved
+risks; in `<details>`, include the base-selection evidence and carry/drop/fix table with
 dropped-patch reasons.

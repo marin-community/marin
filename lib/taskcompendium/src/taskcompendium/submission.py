@@ -1,32 +1,47 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submission conventions for semantic answer tasks."""
+"""Answer-format instructions, compatibility checks, and chat requests.
+
+An answer is the task's semantic result, identified by ``TaskSpec.answer_type``. A submission is
+the typed value the task's answer format extracts from a completed attempt for grading. Plain
+text, ``{"answer": "12"}``, and ``submit_answer(answer="12")`` all yield ``TextSubmission("12")``.
+"""
 
 import json
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import Annotated, Any, Literal, Self
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
-from tasktrove_verify.spec import Mode
+from verifyit.spec import ExactSpec, JudgeSpec, PredictedActionSpec, Spec, StructuredExactSpec, UnsolvableSpec
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
 from taskcompendium.models import (
-    AnswerType,
+    ANSWER_CALL_NAME,
+    ANSWER_FIELD,
+    ActionSubmission,
+    AnswerCall,
     AssistantToolCalls,
+    BaseAnswerFormat,
+    Boxed,
     ConversationEvent,
-    ConversationInput,
-    ConversationTrace,
+    FinalAction,
     FunctionDefinition,
+    GradingAttempt,
+    JsonAnswer,
+    JsonSubmission,
+    JsonValueAnswer,
+    PlainText,
+    StateSubmission,
+    Submission,
+    SubmissionFailure,
     TaskSpec,
     TextMessage,
+    TextSubmission,
+    VerifyitGrader,
     format_conversation,
+    verifyit_spec,
 )
 
-ANSWER_CALL_NAME = "submit_answer"
-ANSWER_FIELD = "answer"
 EJECT_CALL_NAME = "eject_button"
 EJECT_REASON_FIELD = "reason"
 
@@ -48,8 +63,52 @@ def eject_button() -> FunctionDefinition:
     )
 
 
+def is_ejection(submission: Submission) -> bool:
+    """Whether a submitted action is the sole terminal ejection call."""
+    return (
+        isinstance(submission, ActionSubmission)
+        and isinstance(submission.message, AssistantToolCalls)
+        and len(submission.message.calls) == 1
+        and submission.message.calls[0].name == EJECT_CALL_NAME
+    )
+
+
+def has_ejection(event: ConversationEvent) -> bool:
+    """Whether an assistant turn contains the reserved terminal action, including a mixed batch."""
+    return isinstance(event, AssistantToolCalls) and any(call.name == EJECT_CALL_NAME for call in event.calls)
+
+
+def extract_submission(answer_format: BaseAnswerFormat, attempt: GradingAttempt, *, context_length: int) -> Submission:
+    """Dispatch terminal ejection before normal extraction, without private grading data."""
+    # Completed calls in source history are input, not the current submission.
+    for event in attempt.conversation.events[context_length:-1]:
+        if has_ejection(event):
+            raise SubmissionFailure("The interaction continued after eject_button")
+    final = attempt.conversation.events[-1]
+    if not has_ejection(final):
+        return answer_format.extract(attempt)
+    assert isinstance(final, AssistantToolCalls)
+    if len(final.calls) != 1:
+        raise SubmissionFailure("Ejection requires a single terminal call")
+    arguments = final.calls[0].object_arguments()
+    if (
+        set(arguments) != {EJECT_REASON_FIELD}
+        or not isinstance(arguments[EJECT_REASON_FIELD], str)
+        or not arguments[EJECT_REASON_FIELD].strip()
+    ):
+        raise SubmissionFailure("Ejection requires a nonempty string reason")
+    return ActionSubmission(final)
+
+
+def visible_format(answer_format: BaseAnswerFormat) -> BaseAnswerFormat:
+    """Return the normal presentation independently of private solvability labels."""
+    if isinstance(answer_format, FinalAction) and answer_format.normal_submission is not None:
+        return answer_format.normal_submission
+    return answer_format
+
+
 def answer_call_tool() -> dict[str, object]:
-    """Return the function definition advertised by the answer-call convention."""
+    """Return the function definition advertised by the answer-call format."""
     return {
         "type": "function",
         "function": {
@@ -65,196 +124,37 @@ def answer_call_tool() -> dict[str, object]:
     }
 
 
-class AnswerFormat(StrEnum):
-    """The envelope used to deliver a result."""
-
-    PLAIN = "plain"
-    JSON = "json"
-    ANSWER_CALL = "answer_call"
-    FINAL_ACTION = "final_action"
-
-
-@dataclass(frozen=True)
-class GradingAttempt:
-    """Trial evidence available to submission conventions and verifiers."""
-
-    conversation: ConversationTrace
-    workspace: object
+def accepted_submission_types(verifier: Spec) -> tuple[type[Submission], ...]:
+    """Declare the submissions a verifyit mode can grade."""
+    if isinstance(verifier, StructuredExactSpec):
+        return (JsonSubmission, StateSubmission)
+    if isinstance(verifier, PredictedActionSpec | UnsolvableSpec):
+        return (ActionSubmission,)
+    if isinstance(verifier, JudgeSpec):
+        return (TextSubmission, ActionSubmission)
+    if isinstance(verifier, ExactSpec):
+        return (TextSubmission, JsonSubmission, StateSubmission)
+    return (TextSubmission,)
 
 
-@dataclass(frozen=True)
-class TextSubmission:
-    value: str
-
-
-@dataclass(frozen=True)
-class ActionSubmission:
-    message: TextMessage | AssistantToolCalls
-
-
-@dataclass(frozen=True)
-class StateSubmission:
-    value: JsonValue
-
-
-type Submission = TextSubmission | ActionSubmission | StateSubmission
-
-
-def is_ejection(submission: Submission) -> bool:
-    """Whether a submitted action is the sole terminal ejection call."""
-    return (
-        isinstance(submission, ActionSubmission)
-        and isinstance(submission.message, AssistantToolCalls)
-        and len(submission.message.calls) == 1
-        and submission.message.calls[0].name == EJECT_CALL_NAME
-    )
-
-
-class SubmissionFailure(ValueError):
-    """The agent ended the interaction without a valid submission."""
-
-
-class Convention(BaseModel, ABC):
-    """How a result is requested, delivered, and extracted."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    id: str
-    answer_format: AnswerFormat
-
-    @model_validator(mode="after")
-    def validate_convention(self) -> Self:
-        if not self.id:
-            raise ValueError("A submission convention id is required")
-        return self
-
-    def supports(self, answer_type: AnswerType) -> bool:
-        """Whether this convention can carry the semantic result."""
-        if self.answer_format == AnswerFormat.FINAL_ACTION:
-            return answer_type == AnswerType.NATIVE_ACTION
-        return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
-
-    @abstractmethod
-    async def extract(self, attempt: GradingAttempt) -> Submission:
-        """Read the normal submission without access to expected values."""
-
-
-class PlainText(Convention):
-    answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
-
-    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
-        return TextSubmission(_text_answer(attempt.conversation.events[-1]))
-
-
-class JsonAnswer(Convention):
-    answer_format: Literal[AnswerFormat.JSON] = AnswerFormat.JSON
-
-    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
-        try:
-            value = json.loads(_text_answer(attempt.conversation.events[-1]))
-        except json.JSONDecodeError as error:
-            raise SubmissionFailure("JSON submission is malformed") from error
-        if (
-            not isinstance(value, dict)
-            or not isinstance(value.get(ANSWER_FIELD), str)
-            or not value[ANSWER_FIELD].strip()
-        ):
-            raise SubmissionFailure("JSON submission requires a nonempty string answer")
-        return TextSubmission(value[ANSWER_FIELD])
-
-
-class AnswerCall(Convention):
-    answer_format: Literal[AnswerFormat.ANSWER_CALL] = AnswerFormat.ANSWER_CALL
-
-    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
-        response = attempt.conversation.events[-1]
-        if (
-            not isinstance(response, AssistantToolCalls)
-            or len(response.calls) != 1
-            or response.calls[0].name != ANSWER_CALL_NAME
-        ):
-            raise SubmissionFailure(f"Answer call requires one {ANSWER_CALL_NAME} function call")
-        arguments = response.calls[0].arguments
-        if (
-            set(arguments) != {ANSWER_FIELD}
-            or not isinstance(arguments[ANSWER_FIELD], str)
-            or not arguments[ANSWER_FIELD].strip()
-        ):
-            raise SubmissionFailure("Answer call requires a nonempty string answer")
-        return TextSubmission(arguments[ANSWER_FIELD])
-
-
-TextConvention = Annotated[PlainText | JsonAnswer | AnswerCall, Field(discriminator="answer_format")]
-
-
-class FinalAction(Convention):
-    answer_format: Literal[AnswerFormat.FINAL_ACTION] = AnswerFormat.FINAL_ACTION
-
-    require_call: bool = False
-    max_calls: int | None = Field(default=None, gt=0)
-
-    normal_submission: TextConvention | None = None
-
-    @model_validator(mode="after")
-    def validate_normal_submission(self) -> Self:
-        if self.normal_submission is not None and (self.require_call or self.max_calls is not None):
-            raise ValueError("Normal presentation owns answer constraints")
-        return self
-
-    def supports(self, answer_type: AnswerType) -> bool:
-        if self.normal_submission is not None:
-            return self.normal_submission.supports(answer_type)
-        return super().supports(answer_type)
-
-    def validate_final_message(self, response: ConversationEvent) -> TextMessage | AssistantToolCalls:
-        """Require the assistant's final message to honor the call contract."""
-        if not isinstance(response, (TextMessage, AssistantToolCalls)) or (
-            isinstance(response, TextMessage) and response.role != "assistant"
-        ):
-            raise SubmissionFailure("Final action requires an assistant message")
-        if self.require_call and not isinstance(response, AssistantToolCalls):
-            raise SubmissionFailure("Final action requires a function call")
-        if (
-            isinstance(response, AssistantToolCalls)
-            and self.max_calls is not None
-            and len(response.calls) > self.max_calls
-        ):
-            raise SubmissionFailure(f"Final action permits at most {self.max_calls} function calls")
-        return response
-
-    async def extract(self, attempt: GradingAttempt) -> ActionSubmission:
-        return ActionSubmission(self.validate_final_message(attempt.conversation.events[-1]))
-
-
-SubmissionConvention = Annotated[PlainText | JsonAnswer | AnswerCall | FinalAction, Field(discriminator="answer_format")]
-
-
-async def extract_submission(convention: SubmissionConvention, attempt: GradingAttempt) -> Submission:
-    """Dispatch a terminal choice without expected answers or solvability labels."""
-    final = attempt.conversation.events[-1]
-    if not isinstance(final, AssistantToolCalls) or not any(call.name == EJECT_CALL_NAME for call in final.calls):
-        return await convention.extract(attempt)
-    if len(final.calls) != 1:
-        raise SubmissionFailure("Ejection requires a single terminal call")
-    arguments = final.calls[0].arguments
-    if (
-        set(arguments) != {EJECT_REASON_FIELD}
-        or not isinstance(arguments[EJECT_REASON_FIELD], str)
-        or not arguments[EJECT_REASON_FIELD].strip()
-    ):
-        raise SubmissionFailure("Ejection requires a nonempty string reason")
-    return ActionSubmission(final)
-
-
-def _text_answer(response: ConversationEvent) -> str:
-    if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
-        raise SubmissionFailure("Text submission requires nonempty assistant content without tool calls")
-    return response.content
+def native_action_text(message: TextMessage | AssistantToolCalls) -> str:
+    """Serialize a typed final action for a private semantic judge, omitting transport call IDs."""
+    if isinstance(message, TextMessage):
+        value: dict[str, Any] = {"type": "message", "content": message.content}
+    elif len(message.calls) == 1:
+        call = message.calls[0]
+        value = {"type": "function_call", "name": call.name, "arguments": call.arguments}
+    else:
+        value = {
+            "type": "function_call_batch",
+            "calls": [{"name": call.name, "arguments": call.arguments} for call in message.calls],
+        }
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 @dataclass(frozen=True)
 class SubmissionCompatibility:
-    """Whether a convention preserves the task's result contract, with reasons when it does not."""
+    """Whether the answer format preserves the task's result contract, with reasons when it does not."""
 
     reasons: tuple[str, ...]
 
@@ -263,71 +163,70 @@ class SubmissionCompatibility:
         return not self.reasons
 
 
-def submission_compatibility(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
-    """Explain which parts of the task a submission convention cannot carry."""
-    if not convention.supports(specification.answer_type):
-        return SubmissionCompatibility(
-            (f"{convention.answer_format.value} cannot carry {specification.answer_type.value}",)
-        )
-    if specification.verifier.kind == Mode.UNSOLVABLE and (
-        not isinstance(convention, FinalAction)
-        or not any(function.name == EJECT_CALL_NAME for function in specification.final_tools)
+def submission_compatibility(task: TaskSpec) -> SubmissionCompatibility:
+    """Explain which parts of the task its answer format cannot carry."""
+    answer_format = task.answer_format
+    if not answer_format.supports(task.answer_type):
+        return SubmissionCompatibility((f"{type(answer_format).__name__} cannot carry {task.answer_type.value}",))
+    if isinstance(task.grader, VerifyitGrader):
+        verifier = verifyit_spec(task.grader)
+        if isinstance(verifier, UnsolvableSpec) and (
+            not isinstance(answer_format, FinalAction)
+            or not any(tool.name == EJECT_CALL_NAME for tool in task.final_tools)
+        ):
+            return SubmissionCompatibility(("Unsolvable tasks require final_action with ejection enabled",))
+        accepted = accepted_submission_types(verifier)
+        if not any(produced in accepted for produced in answer_format.submission_types):
+            return SubmissionCompatibility(("Submission envelope is not accepted by the selected verifier",))
+    if isinstance(answer_format, FinalAction) and not task.final_tools:
+        return SubmissionCompatibility(("final action requires at least one final tool",))
+    if isinstance(visible_format(answer_format), AnswerCall) and any(
+        function.name == ANSWER_CALL_NAME for function in task.final_tools
     ):
-        return SubmissionCompatibility(("unsolvable tasks require final_action with ejection enabled",))
-    visible = visible_convention(convention)
-    if visible.answer_format == AnswerFormat.FINAL_ACTION:
-        reasons = []
-        if not specification.final_tools:
-            reasons.append("final action requires at least one final tool")
-        return SubmissionCompatibility(tuple(reasons))
-    if visible.answer_format == AnswerFormat.ANSWER_CALL:
-        reasons = []
-        if any(function.name == ANSWER_CALL_NAME for function in specification.final_tools):
-            reasons.append("final tool name collides with submit_answer")
-        return SubmissionCompatibility(tuple(reasons))
+        return SubmissionCompatibility(("final tool name collides with submit_answer",))
     return SubmissionCompatibility(())
 
 
-def visible_convention(convention: SubmissionConvention) -> SubmissionConvention:
-    """Return the normal answer presentation, independent of private task labels."""
-    if isinstance(convention, FinalAction) and convention.normal_submission is not None:
-        return convention.normal_submission
-    return convention
-
-
-def submission_instruction(convention: SubmissionConvention) -> str:
-    return _normal_submission_instruction(visible_convention(convention))
-
-
-def _normal_submission_instruction(convention: SubmissionConvention) -> str:
-    """Return the instruction added after a conversation prefix."""
-    if convention.answer_format == AnswerFormat.PLAIN:
-        return "Give your answer as plain text."
-    if convention.answer_format == AnswerFormat.JSON:
-        return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
-    if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        return ""
-    raise ValueError(f"Unsupported answer format: {convention.answer_format}")
-
-
-def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
-    """Return Harbor instruction text for the selected convention."""
-    context = specification.context
-    compatibility = submission_compatibility(specification, convention)
+def require_submission_compatibility(task: TaskSpec) -> None:
+    """Raise ``ValueError`` naming the parts of the task its answer format cannot carry."""
+    compatibility = submission_compatibility(task)
     if not compatibility.compatible:
-        raise ValueError(f"Submission convention {convention.id!r} is incompatible: {'; '.join(compatibility.reasons)}")
-    instruction = submission_instruction(convention)
-    if not instruction:
-        return format_conversation(context.events)
-    return f"{format_conversation(context.events)}\n\n{instruction}\n"
+        raise ValueError(
+            f"Answer format {task.answer_format.kind!r} is incompatible: {'; '.join(compatibility.reasons)}"
+        )
 
 
-def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
-    """Convert the model-visible prefix to OpenAI-compatible chat messages."""
+def submission_instruction(answer_format: BaseAnswerFormat) -> str:
+    """Return the instruction added after a conversation prefix."""
+    match visible_format(answer_format):
+        case PlainText():
+            return "Give your answer as plain text."
+        case Boxed():
+            return "Put your final answer within \\boxed{}."
+        case JsonAnswer():
+            return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
+        case JsonValueAnswer():
+            return "Give your final answer as one JSON value, without Markdown fences."
+        case AnswerCall():
+            return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
+        case FinalAction():
+            return ""
+        case _:
+            raise ValueError(f"Unsupported answer format: {type(answer_format).__name__}")
+
+
+def render_instruction(task: TaskSpec) -> str:
+    """Return readable instruction text for the task's answer format."""
+    require_submission_compatibility(task)
+    if isinstance(visible_format(task.answer_format), FinalAction):
+        return format_conversation(task.context.events)
+    return f"{format_conversation(task.context.events)}\n\n{submission_instruction(task.answer_format)}\n"
+
+
+def conversation_messages(events: tuple[ConversationEvent, ...]) -> list[dict[str, Any]]:
+    """Convert conversation events to OpenAI-compatible chat messages."""
     messages: list[dict[str, Any]] = []
-    for event in context.events:
+    for event in events:
         if isinstance(event, TextMessage):
             messages.append({"role": event.role, "content": event.content})
         elif isinstance(event, AssistantToolCalls):
@@ -353,32 +252,29 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
     return messages
 
 
-def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
-    """Prepare the conversation and tools for the selected submission convention."""
-    unsupported = unsupported_direct_chat_features(specification)
+def chat_request(task: TaskSpec) -> dict[str, Any]:
+    """Prepare the conversation and tools for the task's answer format."""
+    unsupported = unsupported_direct_chat_features(task)
     if unsupported:
         raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
-    compatibility = submission_compatibility(specification, convention)
-    if not compatibility.compatible:
-        raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
-    messages = conversation_messages(specification.context)
-    instruction = submission_instruction(convention)
+    require_submission_compatibility(task)
+    answer_format = visible_format(task.answer_format)
+    messages = conversation_messages(task.context.events)
+    instruction = submission_instruction(answer_format)
     if instruction:
         messages.append({"role": "user", "content": instruction})
     request: dict[str, Any] = {"messages": messages}
     tools: list[dict[str, object]] = [
-        {"type": "function", "function": function.model_dump(exclude_none=True)}
-        for function in specification.final_tools
+        {"type": "function", "function": function.model_dump(exclude_none=True)} for function in task.final_tools
     ]
-    visible = visible_convention(convention)
-    if visible.answer_format == AnswerFormat.ANSWER_CALL:
+    if isinstance(answer_format, AnswerCall):
         tools.append(answer_call_tool())
         request.update(tool_choice="required", parallel_tool_calls=False)
     if tools:
         request["tools"] = tools
-    if isinstance(visible, FinalAction):
-        if visible.require_call:
+    if isinstance(answer_format, FinalAction):
+        if answer_format.require_call:
             request["tool_choice"] = "required"
-        if visible.max_calls == 1:
+        if answer_format.max_calls == 1:
             request["parallel_tool_calls"] = False
     return request

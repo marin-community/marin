@@ -14,8 +14,8 @@ would escape the prefix.
 ``/v1/*`` requests and the root ``/tokenize`` route are reverse-proxied to whichever
 serving backend runs on the slice (see :mod:`marin.inference.backend`). Harbor uses
 ``/tokenize`` for context accounting with the live model's chat template.
-Direct sessions preserve server-sent
-events end to end; brokered sessions return buffered JSON and reject streaming.
+Direct sessions preserve server-sent events end to end; brokered sessions return
+buffered JSON and reject streaming.
 ``/tools`` returns model-facing JSON schemas for dashboard-authored Python,
 ``/tools/{name}`` validates and runs one function, and ``/shell`` executes a
 command in a reconstructed ShellSim agent workspace. ``/chat-shares`` stores
@@ -35,6 +35,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 
 import httpx
+import shellsim
 import uvicorn
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
@@ -50,6 +51,7 @@ from marin.inference.python_tool_routes import (
     shell_workspace_response,
 )
 from marin.inference.repository_snapshot import repository_snapshot_response
+from marin.inference.shellsim_runtime import ToolRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -114,14 +116,16 @@ def build_dashboard_app(
     model_id: str,
     info: ServingInfo,
     request_timeout_seconds: float = 600.0,
+    shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
 ) -> Starlette:
-    """Build the Starlette app fronting a local serving backend.
+    """Build the dashboard and reverse proxy for a local serving backend.
 
     Args:
         upstream_base_url: Root URL of the backend's OpenAI server (without ``/v1``).
         model_id: The model id the backend reports; surfaced to the dashboard.
         info: Static serving metadata returned from ``/info``.
         request_timeout_seconds: Per-request timeout for upstream proxying.
+        shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
     """
     state: dict[str, httpx.AsyncClient] = {}
     chat_shares = _ChatShareStore()
@@ -187,7 +191,7 @@ def build_dashboard_app(
             media_type=upstream_response.headers.get("content-type"),
         )
 
-    return Starlette(
+    app = Starlette(
         routes=[
             Route("/", index),
             Route("/dashboard", index),
@@ -205,6 +209,8 @@ def build_dashboard_app(
         ],
         lifespan=lifespan,
     )
+    app.state.tool_runtime = ToolRuntime(shellsim_catalog)
+    return app
 
 
 def bind_serving_socket(host: str, port: int) -> socket.socket:

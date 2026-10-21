@@ -220,6 +220,7 @@ def build_memory_soak_run(
             profiler=ProfilerConfig(enabled=False),
             mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[HERO_MASTER_PARAM_MODE]),
             tracker=WandbConfig(
+                save_code=False,
                 entity="marin-community",
                 project=os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT,
                 tags=["grug", "moe", "hero", "ep", "memory-soak", "gb200", f"shape-{size}"],

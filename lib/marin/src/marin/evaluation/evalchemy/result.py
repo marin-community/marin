@@ -1,27 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed readers for evaluation output artifacts and aggregate reports.
-
-Eval steps write backend-native output. :class:`EvalResult` subclasses parse each backend's layout.
-:class:`FineStoreEvalchemyResult` reads current Evalchemy results artifacts;
-:class:`EvalchemyResult` retains the historical result-tree reader. :func:`compile_eval_report`
-merges several typed results.
-"""
+"""Read Evalchemy result trees and FineStore archives and compile aggregate reports."""
 
 import functools
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.evalchemy.client import EVALCHEMY_RESULTS_PREFIX, EVALCHEMY_RESULTS_SUFFIX
 from marin.evaluation.lm_eval_samples import (
     is_scratch_artifact,
-    read_native_evalchemy_artifacts,
+    read_evalchemy_results,
 )
 from marin.execution.artifact import Artifact, result_type_name
 
@@ -62,11 +54,12 @@ class EvalResult(Artifact):
 
 
 class EvalchemyResult(EvalResult):
-    """Per-task metrics from a pre-native Evalchemy result tree.
+    """Per-task metrics from an Evalchemy result tree.
 
-    Metric keys use task-config directories; group tasks append subtask names. Task-config keys keep
-    shot variants distinct. Evalchemy does not record cross-task averages. Historical reports persist
-    the ``EvalchemyResult`` type name, so this reader remains part of their durable decoding contract.
+    Keys use task-config directories, with subtask names appended for groups.
+    Shot variants remain distinct. Cross-task averages are empty.
+    Historical reports persist the ``EvalchemyResult`` type name, so this reader
+    remains part of their decoding contract.
     """
 
     @functools.cached_property
@@ -74,7 +67,7 @@ class EvalchemyResult(EvalResult):
         # StoragePath.glob reattaches the protocol to each match; a bare fs.glob result drops the
         # gs:// prefix and would reopen as a local path.
         root = StoragePath(self.path)
-        found = sorted((root / f"**/{EVALCHEMY_RESULTS_PREFIX}*{EVALCHEMY_RESULTS_SUFFIX}").glob(), key=str)
+        found = sorted((root / "**/results_*.json").glob(), key=str)
         if root.scheme == "file":
             # fsspec's local glob returns bare paths, while ``relative_to`` compares protocols.
             found = [StoragePath(scheme="file", segments=path.segments, rooted=path.rooted) for path in found]
@@ -100,18 +93,15 @@ class EvalchemyResult(EvalResult):
 
 
 class FineStoreEvalchemyResult(EvalResult):
-    """Per-task metrics from Evalchemy results artifacts stored in FineStore."""
+    """Per-task metrics from Evalchemy's FineStore results table."""
+
+    jobs: dict[str, str] = Field(default_factory=dict)
 
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
-        result_payloads = read_native_evalchemy_artifacts(self.path).result_payloads
-        if not result_payloads:
-            raise FileNotFoundError(f"no Evalchemy results artifacts in FineStore archive {self.path}")
-
         metrics: dict[str, dict[str, float]] = {}
-        for name, payload in sorted(result_payloads.items()):
-            task_dir = PurePosixPath(name).parent.parent.name
-            results = json.loads(payload).get("results", {})
+        for task_dir, document in sorted(read_evalchemy_results(self.path).items()):
+            results = document.get("results", {})
             metrics.update(_metrics_for_task_dir(results, task_dir))
         return metrics
 
@@ -123,12 +113,7 @@ class FineStoreEvalchemyResult(EvalResult):
 
 
 class EvalReport(Artifact):
-    """The aggregated report over a suite of :class:`EvalResult` artifacts.
-
-    A value artifact: ``task_metrics`` and ``averages`` round-trip through the record, so a downstream
-    step reads ``resolve(report).averages`` directly. :func:`compile_eval_report` also writes a
-    human-readable ``report.json`` alongside for inspection.
-    """
+    """An evaluation report with serialized per-task metrics and cross-task averages."""
 
     task_metrics: dict[str, dict[str, float]] = Field(default_factory=dict)
     """Every evaluated task across the suite, as ``{task: {metric: value}}``."""
@@ -157,10 +142,9 @@ class ReportEntry:
 
 
 def compile_eval_report(entries: list[ReportEntry], output_path: str) -> EvalReport:
-    """Read each result's metrics and merge them into one :class:`EvalReport`.
+    """Merge result metrics, write ``output_path/report.json``, and return the report.
 
-    Writes ``report.json`` under ``output_path`` and returns the typed report (its fields persist via
-    the record).
+    Reject duplicate task keys and namespace averages by result label.
     """
     task_metrics: dict[str, dict[str, float]] = {}
     averages: dict[str, float] = {}

@@ -10,7 +10,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.expr import col
 from zephyr.input_file import InputFileSpec
-from zephyr.readers import load_parquet, load_vortex
+from zephyr.readers import _VORTEX_READ_BATCH_ROWS, load_parquet, load_vortex
 from zephyr.writers import write_parquet_file, write_vortex_file
 
 
@@ -58,6 +58,24 @@ class TestVortexReader:
         spec = InputFileSpec(path=str(vortex_file), row_start=row_start, row_end=row_end)
         records = list(load_vortex(spec))
         assert [record["id"] for record in records] == list(range(100))[row_start:row_end]
+
+    def test_load_vortex_filter_and_projection_across_read_batches(self, tmp_path):
+        path = tmp_path / "large.vortex"
+        total_rows = _VORTEX_READ_BATCH_ROWS + 512
+        minimum_score = _VORTEX_READ_BATCH_ROWS + 16
+        write_vortex_file(({"id": i, "score": i} for i in range(total_rows)), str(path))
+
+        spec = InputFileSpec(
+            path=str(path),
+            columns=["id"],
+            row_start=0,
+            row_end=total_rows,
+            filter_expr=col("score") >= minimum_score,
+        )
+        expected = [{"id": i} for i in range(minimum_score, total_rows)]
+        assert list(load_vortex(spec)) == expected
+        whole_file = InputFileSpec(path=str(path), columns=["id"], filter_expr=col("score") >= minimum_score)
+        assert list(load_vortex(whole_file)) == expected
 
     def test_load_vortex_empty_file(self, tmp_path):
         """Test loading an empty vortex file."""

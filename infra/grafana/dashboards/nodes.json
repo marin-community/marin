@@ -484,7 +484,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
       "id": 3,
@@ -602,7 +603,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
       "id": 4,
@@ -703,7 +705,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
       "id": 5,
@@ -806,7 +809,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
       "id": 6,
@@ -907,7 +911,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
       "id": 7,
@@ -1010,7 +1015,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
       "id": 8,
@@ -1111,7 +1117,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
       "id": 9,
@@ -1250,7 +1257,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 10,
@@ -1346,7 +1354,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     }
   ]
 }

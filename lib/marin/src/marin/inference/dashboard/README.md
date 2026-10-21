@@ -10,13 +10,27 @@ bundled workspace and the PyPI `marin-core` wheel.
 ```bash
 npm install
 npm run build          # rebuild ../serve_dashboard.html (commit the result)
-npm run build:check    # vue-tsc, then build
+npm run build:check    # vue-tsc, tests, then build
 npm run dev            # local dev server (relative /v1, /info, /health fetches
                        # need a Marin serve dashboard server behind it)
 ```
 
 After editing anything under `src/`, rerun `npm run build` and commit the
 regenerated artifact alongside the source change.
+
+## Compare models
+
+Open **Compare** from a Marin serve dashboard, then paste the second model's
+dashboard URL. Both URLs must have the same browser origin, such as two Iris
+capability URLs on one controller. The shared composer sends each prompt to
+both endpoints. Each model receives its own prior messages on later turns.
+For any completed turn, select **Left is better**, **Right is better**, **Tie**,
+or **Both bad**. Click the selected choice again to clear it. The latest paired
+transcripts and selections are stored in the same browser's local storage as
+chat history. **New comparison** clears them. The second endpoint URL is not
+stored because its capability token grants access to that server; reconnect it
+after reloading the page to continue the saved comparison. No selection is
+sent to a server.
 
 ## Chat template controls
 
@@ -33,6 +47,10 @@ The dashboard does not expose raw `xml_tools`, `python_tools`, or `tools`
 template arguments. Functions entered in **Python tools** are converted to the
 standard OpenAI `tools` request field so the served model's active template
 formats them.
+
+When a reply reaches **Max tokens**, Chat warns that it may be incomplete. This
+applies whether the model stopped during thinking or after starting an answer.
+Increase **Max tokens** and retry the prompt.
 
 Enable **Raw chat** above the Chat composer to replace the rendered messages
 with one plain-text transcript of the entire chat. The transcript includes the
@@ -125,13 +143,9 @@ result to the next request as structured `tool_calls` and `role: "tool"`
 messages. The same template then renders the result in its trained format.
 The server derives schemas from the function syntax without executing the
 source. Pydantic validates arguments before each call and the return value
-afterward. Each call runs in a fresh ShellSim environment that cannot access
-the host filesystem, processes, network, environment variables, or clock. The
-simulation is limited to 10 million CPU ticks, 64 MiB of memory, 4 MiB of disk,
-and 1 MiB of output. An outer worker also enforces a 10-second wall timeout,
-and source is limited to 64 KiB. ShellSim implements a source-compatible subset
-of Python rather than full CPython, so unsupported modules and language features
-fail the tool call.
+afterward. Calls run in isolated ShellSim environments with CPython and NumPy,
+prepared on the first Python-tool invocation or shell command. Guest code has no
+ambient host filesystem, process, network, environment or clock access.
 
 Within one user turn, each model response that contains one or more calls counts
 as one tool round. **Max tool rounds** in **More settings** controls the number
@@ -187,8 +201,8 @@ limited to 32 commits and approximately 4 MiB of text changes; older commits
 are dropped first when necessary. Binary files and common generated directories
 such as `node_modules`, `.venv`, `target`, and `__pycache__` are skipped. A
 conversation may replay at most 32 commands totaling 128 KiB; each command is
-limited to 16 KiB. Each simulation is limited to 50 million CPU ticks, 64 MiB
-of memory, 16 MiB of disk, and 2 MiB of output, with the same 10-second outer
+limited to 16 KiB. Each simulation has 4 billion fuel units, 1 GiB memory,
+512 MiB disk and 2 MiB output, with the same 10-second outer
 worker timeout used for custom Python tools.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.

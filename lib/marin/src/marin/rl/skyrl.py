@@ -1,25 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin ArtifactStep adapter for the external MarinSkyRL trainer."""
+"""Marin ArtifactStep adapter for the vendored SkyRL executable."""
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 import fsspec
 import yaml
 from iris.cluster.client.job_info import get_job_info
 from pydantic import BaseModel
+from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -27,12 +29,10 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
-from marin.external_dependencies import MARIN_SKYRL
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
-_LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
@@ -40,6 +40,14 @@ _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
+SKYRL_PROJECT = Path("vendor/skyrl")
+
+
+def skyrl_runtime_digest() -> str:
+    """Ask the isolated executable to identify its checked-out source and lock."""
+    completed = _run_launcher(_project_command("source-digest"))
+    completed.check_returncode()
+    return completed.stdout.strip()
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -48,24 +56,49 @@ def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
     return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
 
 
-class SkyRLRuntimeProfile(StrEnum):
-    """Frozen upstream dependency set for a SkyRL training strategy."""
+@dataclass(frozen=True)
+class MegatronGeometry:
+    """Megatron parallelism for a policy or reference model."""
 
-    FSDP = "fsdp"
-    MEGATRON = "megatron"
+    tensor_model_parallel_size: int
+    pipeline_model_parallel_size: int
+    context_parallel_size: int
+    expert_model_parallel_size: int
+    expert_tensor_parallel_size: int
+
+
+def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpus: int) -> None:
+    """Require a role's GPUs to form complete Megatron model and expert groups."""
+    tp = geometry.tensor_model_parallel_size
+    pp = geometry.pipeline_model_parallel_size
+    cp = geometry.context_parallel_size
+    ep = geometry.expert_model_parallel_size
+    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}"
+    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep)):
+        raise ValueError(f"Megatron {role} has {num_gpus} GPUs with {sizes}; parallel sizes must be positive integers")
+    model_parallel = tp * pp * cp
+    if num_gpus % model_parallel or (num_gpus // model_parallel) % ep:
+        raise ValueError(
+            f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
+            "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
+        )
 
 
 @dataclass(frozen=True)
 class SkyRLRuntime:
-    """Identity-bearing SkyRL revision and locked dependency profile."""
+    """Digest of the current SkyRL source, assets, and independent lock."""
 
-    profile: SkyRLRuntimeProfile
-    commit: str = field(init=False, default=MARIN_SKYRL.commit)
+    source_digest: str = field(init=False, default_factory=skyrl_runtime_digest)
 
 
 @dataclass(frozen=True)
 class SkyRLRolePlan:
-    """Explicit policy and rollout settings that bear experiment identity."""
+    """Explicit policy, rollout, and reference settings that bear experiment identity.
+
+    The reference role reuses the policy's GPUs-per-node width: the vendored
+    launcher requires a single GPUs-per-node value across all Iris bundles, so a
+    distinct reference width is not representable downstream.
+    """
 
     colocate_all: bool
     policy_num_nodes: int
@@ -79,6 +112,26 @@ class SkyRLRolePlan:
     policy_mini_batch_size: int
     micro_train_batch_size_per_gpu: int
     n_samples_per_prompt: int
+    reference_num_nodes: int | None = None
+
+    @property
+    def colocate_policy_ref(self) -> bool:
+        return self.reference_num_nodes is None
+
+    @property
+    def num_nodes(self) -> int:
+        if self.colocate_all:
+            return self.policy_num_nodes
+        engine_gpus = (
+            self.inference_engine_tensor_parallel_size
+            * self.inference_engine_pipeline_parallel_size
+            * self.inference_engine_data_parallel_size
+        )
+        engines_per_node = self.policy_num_gpus_per_node // engine_gpus
+        if not engines_per_node:
+            raise ValueError("each SkyRL inference engine must fit on one node")
+        rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
+        return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
 
 
 @dataclass(frozen=True)
@@ -117,6 +170,10 @@ class SkyRLTopology:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
         if plan.policy_num_gpus_per_node > self.gpus_per_node:
             raise ValueError("SkyRL policy_num_gpus_per_node exceeds the GPUs on one allocated node")
+        if plan.colocate_all and not plan.colocate_policy_ref:
+            raise ValueError("colocate_all requires a shared policy/reference footprint")
+        if plan.reference_num_nodes is not None and plan.reference_num_nodes <= 0:
+            raise ValueError("SkyRL reference_num_nodes must be positive")
 
         tensor_pipeline_gpus = plan.inference_engine_tensor_parallel_size * plan.inference_engine_pipeline_parallel_size
         engine_gpus = tensor_pipeline_gpus * plan.inference_engine_data_parallel_size
@@ -147,8 +204,10 @@ class SkyRLTopology:
                 f"x PP{plan.inference_engine_pipeline_parallel_size} x DP{plan.inference_engine_data_parallel_size})"
             )
         planned_gpus = policy_gpus if plan.colocate_all else policy_gpus + rollout_gpus
+        if plan.reference_num_nodes is not None:
+            planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
         allocated_gpus = self.num_nodes * self.gpus_per_node
-        # MarinSkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
+        # SkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
         if planned_gpus > allocated_gpus:
             placement = "colocated policy/rollout" if plan.colocate_all else "policy + rollout"
@@ -312,11 +371,11 @@ class ArtifactDataSource:
 
 @dataclass(frozen=True)
 class TaskTroveDataSource:
-    """A metadata-selected cohort from the compatibility RL view of a TaskTrove release."""
+    """A metadata-selected cohort from an explicitly named packed Harbor file."""
 
     step: ArtifactStep[Artifact]
     selection: TaskTroveSelection
-    relative_path: str = "tasks/part-00000.parquet"
+    relative_path: str
     manifest_path: str = "manifest.json"
 
     def __post_init__(self) -> None:
@@ -364,7 +423,7 @@ class SkyRLSpec:
     seed: int
 
     def __post_init__(self) -> None:
-        _validate_skyrl_recipe(self.config_yaml, self.runtime, self.topology)
+        _validate_skyrl_recipe(self.config_yaml, self.topology)
 
 
 @dataclass(frozen=True)
@@ -418,14 +477,6 @@ class SkyRLOutputPaths:
     terminal_manifest_uri: str
 
 
-# The trainer strategy each runtime profile installs the closure for. A profile decides which
-# dependencies reach the pod; `trainer.strategy` decides which backend the trainer then asks for.
-# Nothing downstream reconciles them, so a mismatch installs one backend and runs another.
-_STRATEGY_FOR_PROFILE = {
-    SkyRLRuntimeProfile.FSDP: "fsdp2",
-    SkyRLRuntimeProfile.MEGATRON: "megatron",
-}
-
 _MISSING_CONFIG_VALUE = object()
 
 
@@ -449,13 +500,17 @@ def _declared_config_value(config: dict[str, object], dotted_key: str) -> object
 
 
 def _role_plan_config_values(role_plan: SkyRLRolePlan) -> dict[str, object]:
-    """Map Marin's typed role plan to the canonical SkyRL Hydra paths."""
+    """Map Marin's typed role plan to the canonical SkyRL Hydra paths.
+
+    The reference role inherits the policy's GPUs-per-node width: the pinned
+    launcher requires one width across all Iris bundles.
+    """
     return {
         "trainer.placement.colocate_all": role_plan.colocate_all,
-        "trainer.placement.colocate_policy_ref": True,
+        "trainer.placement.colocate_policy_ref": role_plan.colocate_policy_ref,
         "trainer.placement.policy_num_nodes": role_plan.policy_num_nodes,
         "trainer.placement.policy_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
-        "trainer.placement.ref_num_nodes": role_plan.policy_num_nodes,
+        "trainer.placement.ref_num_nodes": role_plan.reference_num_nodes or role_plan.policy_num_nodes,
         "trainer.placement.ref_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
         "trainer.train_batch_size": role_plan.train_batch_size,
         "trainer.policy_mini_batch_size": role_plan.policy_mini_batch_size,
@@ -499,38 +554,14 @@ def _materialize_role_plan_config(config: dict[str, object], role_plan: SkyRLRol
         _set_config_value(config, dotted_key, value)
 
 
-def _validate_entrypoint_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
-    """Reject entrypoint-specific constraints that MarinSkyRL would otherwise discover at startup."""
-    entrypoint = _declared_config_value(config, "entrypoint")
-    if entrypoint == "fully_async" and role_plan.train_batch_size != role_plan.policy_mini_batch_size:
-        raise ValueError(
-            "SkyRL fully_async entrypoint requires train_batch_size == policy_mini_batch_size; "
-            f"got {role_plan.train_batch_size} and {role_plan.policy_mini_batch_size}"
-        )
-
-
-def _effective_strategy(config: dict[str, object]) -> str | None:
-    """Return the trainer strategy, or None when the recipe leaves it to Hydra."""
-    trainer = config.get("trainer")
-    return trainer.get("strategy") if isinstance(trainer, dict) else None
-
-
-def _validate_runtime_strategy(config: dict[str, object], runtime: SkyRLRuntime) -> None:
-    strategy = _effective_strategy(config)
-    expected = _STRATEGY_FOR_PROFILE.get(runtime.profile)
-    if strategy is not None and expected is not None and strategy != expected:
-        raise ValueError(
-            f"runtime profile {runtime.profile.value!r} installs the {expected!r} backend, "
-            f"but config_yaml asks for trainer.strategy={strategy!r}"
-        )
-
-
 def _validate_skyrl_backend_constraints(
     config: dict[str, object],
     topology: SkyRLTopology,
 ) -> None:
     """Validate assumptions imposed by Marin's scalar role-plan interface."""
     plan = topology.role_plan
+    # The reference role inherits the policy width, so this one check covers both:
+    # the launcher requires a single GPUs-per-node value across all bundles.
     if plan.policy_num_gpus_per_node != topology.gpus_per_node:
         raise ValueError(
             "SkyRL policy_num_gpus_per_node must match the whole-node topology width; "
@@ -545,37 +576,39 @@ def _validate_skyrl_backend_constraints(
     if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
 
+    for key in ("use_conversation_multi_turn", "require_exact_chat_transport"):
+        if _declared_config_value(config, f"generator.{key}") is not _MISSING_CONFIG_VALUE:
+            raise ValueError(f"SkyRL task sessions do not support generator.{key}. Remove this setting.")
+
     use_kl_loss = _declared_config_value(config, "trainer.algorithm.use_kl_loss")
     if use_kl_loss is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")
-    use_kl_in_reward = _declared_config_value(config, "trainer.algorithm.use_kl_in_reward")
-    use_reference = bool(use_kl_loss) or (use_kl_in_reward is not _MISSING_CONFIG_VALUE and bool(use_kl_in_reward))
     critic_path = _declared_config_value(config, "trainer.critic.model.path")
     if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
         raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
 
-    if use_reference:
-        colocate_policy_ref = _declared_config_value(config, "trainer.placement.colocate_policy_ref")
-        if colocate_policy_ref is not _MISSING_CONFIG_VALUE and colocate_policy_ref is not True:
-            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to be colocated")
-        ref_num_nodes = _declared_config_value(config, "trainer.placement.ref_num_nodes")
-        ref_num_gpus = _declared_config_value(config, "trainer.placement.ref_num_gpus_per_node")
-        ref_num_nodes = plan.policy_num_nodes if ref_num_nodes in (_MISSING_CONFIG_VALUE, None) else ref_num_nodes
-        ref_num_gpus = plan.policy_num_gpus_per_node if ref_num_gpus in (_MISSING_CONFIG_VALUE, None) else ref_num_gpus
-        if (ref_num_nodes, ref_num_gpus) != (plan.policy_num_nodes, plan.policy_num_gpus_per_node):
-            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to share one footprint")
-
 
 def _validate_skyrl_recipe(
     config_yaml: str,
-    runtime: SkyRLRuntime,
     topology: SkyRLTopology,
 ) -> None:
     """Validate one effective recipe before building an artifact."""
     config = _parsed_config(config_yaml)
-    _validate_runtime_strategy(config, runtime)
+    if _declared_config_value(config, "trainer.strategy") != "megatron":
+        raise ValueError("SkyRL requires trainer.strategy=megatron")
     _validate_role_plan_config(config, topology.role_plan)
-    _validate_entrypoint_config(config, topology.role_plan)
+    forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
+    if forward_batch is not _MISSING_CONFIG_VALUE and forward_batch != topology.role_plan.micro_train_batch_size_per_gpu:
+        raise ValueError("Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu")
+    plan = topology.role_plan
+    for role, nodes in (("policy", plan.policy_num_nodes), ("ref", plan.reference_num_nodes or plan.policy_num_nodes)):
+        dimensions: dict[str, int] = {}
+        for dimension in fields(MegatronGeometry):
+            value = _declared_config_value(config, f"trainer.{role}.megatron_config.{dimension.name}")
+            dimensions[dimension.name] = 1 if value is _MISSING_CONFIG_VALUE else cast(int, value)
+        validate_megatron_geometry(
+            MegatronGeometry(**dimensions), role=role, num_gpus=nodes * plan.policy_num_gpus_per_node
+        )
     _validate_skyrl_backend_constraints(config, topology)
 
 
@@ -588,11 +621,10 @@ class SkyRLRunConfig:
     output: SkyRLOutputPaths
     export_hf: bool
     draft_checkpoint_root: str | None
-    launcher_requirement: str
 
 
 class SkyRLRun(Artifact):
-    """Terminal result from a MarinSkyRL run."""
+    """Terminal result from a SkyRL run."""
 
     hf_model_uri: str | None
     global_step: int | None
@@ -620,31 +652,38 @@ class _SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-def _launcher_command(requirement: str, config_path: str) -> list[str]:
+def _project_command(*arguments: str) -> list[str]:
+    workspace_root = find_project_root(Path(__file__))
+    if workspace_root is None:
+        raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
     return [
         "uv",
         "run",
-        "--isolated",
-        "--no-project",
-        "--prerelease=allow",
-        "--python",
-        _LAUNCHER_PYTHON,
-        "--with",
-        requirement,
+        "--project",
+        str(workspace_root / SKYRL_PROJECT),
+        "--frozen",
+        "--no-group",
+        "dev",
         "marinskyrl",
-        "iris",
-        "launch",
-        "--config",
-        config_path,
+        *arguments,
     ]
+
+
+def _launcher_command(config_path: str) -> list[str]:
+    return _project_command("iris", "launch", "--config", config_path)
 
 
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
     """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
     tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
+    environment = dict(os.environ)
+    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        environment.pop(key, None)
     with (
         tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as response,
-        subprocess.Popen(command, stdout=response, stderr=subprocess.PIPE, text=True, errors="replace") as process,
+        subprocess.Popen(
+            command, stdout=response, stderr=subprocess.PIPE, text=True, errors="replace", env=environment
+        ) as process,
     ):
         try:
             assert process.stderr is not None
@@ -661,13 +700,13 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
-    """Run the pinned external launcher and return its validated result."""
+    """Run the nested SkyRL executable and return its validated result."""
     response: _SkyRLLaunchResponse | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as launch_file:
             launch_file.write(config.launch_config_yaml)
             launch_file.flush()
-            completed = _run_launcher(_launcher_command(config.launcher_requirement, launch_file.name))
+            completed = _run_launcher(_launcher_command(launch_file.name))
         if not completed.stdout.strip():
             raise RuntimeError(
                 f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
@@ -746,10 +785,6 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
-    terminal_bench = recipe.get("terminal_bench", {})
-    harbor = terminal_bench.get("harbor", {}) if isinstance(terminal_bench, dict) else {}
-    agent_name = harbor.get("name") if isinstance(harbor, dict) else None
-    controller_ingress = agent_name == "opencode"
     submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
     target_cluster = None if submit_through_ambient_controller else execution.target_cluster
     parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
@@ -764,8 +799,8 @@ def _launch_config_yaml(
             "export_hf": export_hf,
         },
         "runtime": {
-            "launcher_commit": spec.runtime.commit,
-            "profile": spec.runtime.profile.value,
+            "source_digest": spec.runtime.source_digest,
+            "profile": _declared_config_value(recipe, "trainer.strategy"),
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
             "task_env": task_env,
@@ -789,14 +824,7 @@ def _launch_config_yaml(
             "target_cluster": target_cluster,
             "parent_cluster_config": parent_cluster_config,
         },
-        "ingress": {
-            "mode": "controller" if controller_ingress else "direct",
-            "host": "iris.oa.dev" if controller_ingress and execution.cluster.startswith("cw-") else "",
-            "record_literal": controller_ingress,
-            "vllm_http_port": 8000,
-        },
         "ray": {
-            "port": 6379,
             "spill_backend": "local",
             "spill_dir": "/tmp/skyrl-ray-spill",
             "rendezvous_dir": prefix_join(output.attempts_root, "rendezvous"),
@@ -830,7 +858,7 @@ def skyrl_step(
     *,
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
-    """Build a versioned MarinSkyRL training artifact."""
+    """Build a versioned SkyRL training artifact."""
     step_name = spec.name
     deps = tuple(
         dict.fromkeys(
@@ -892,7 +920,6 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
-            launcher_requirement=MARIN_SKYRL.requirement(),
         )
 
     return ArtifactStep(

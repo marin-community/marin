@@ -4,23 +4,25 @@
 """Generate paired direct-chat tasks with optional terminal ejection."""
 
 import argparse
-from dataclasses import dataclass
 from pathlib import Path
 
+from verifyit.spec import ExactSpec
+
 from taskcompendium.ejection import enable_ejection, mark_unsolvable
-from taskcompendium.grading import exact_answer
-from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
-from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
-from taskcompendium.submission import AnswerCall, SubmissionConvention, TextConvention
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import (
+    AnswerCall,
+    AnswerFormat,
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
 
 
-@dataclass(frozen=True)
-class EjectionExample:
-    specification: TaskSpec
-    convention: SubmissionConvention
-
-
-def ejection_examples(pairs_per_family: int, normal_submission: TextConvention) -> tuple[EjectionExample, ...]:
+def ejection_examples(pairs_per_family: int, normal_submission: AnswerFormat) -> tuple[TaskSpec, ...]:
     """Build missing-information, contradictory-constraint, and guideline pairs.
 
     Both members expose the same normal submission and ejection interface.
@@ -66,14 +68,14 @@ def ejection_examples(pairs_per_family: int, normal_submission: TextConvention) 
                     context=ConversationInput(events=(*prefix, TextMessage(role="user", content=prompt))),
                     environment_requirements=EnvironmentRequirements(),
                     answer_type=AnswerType.TEXT,
-                    verifier=exact_answer(answer),
+                    answer_format=normal,
+                    grader=verifyit_package(ExactSpec(expected=(answer,))).grader,
                     source=Source(dataset="ejection-poc", revision="1", row=task_id, importer_revision="1"),
                 )
                 specification = enable_ejection(specification)
-                convention = normal
                 if not is_solvable:
-                    specification, convention = mark_unsolvable(specification, normal)
-                examples.append(EjectionExample(specification, convention))
+                    specification = mark_unsolvable(specification)
+                examples.append(specification)
     return tuple(examples)
 
 
@@ -82,13 +84,9 @@ def main() -> None:
     parser.add_argument("destination", type=Path)
     parser.add_argument("--pairs-per-family", type=int, required=True)
     arguments = parser.parse_args()
-    for example in ejection_examples(arguments.pairs_per_family, AnswerCall(id="answer-call")):
-        lower_to_harbor(
-            example.specification,
-            example.convention,
-            HarborEnvironmentConfig(),
-            arguments.destination / example.specification.id,
-        )
+    arguments.destination.mkdir(parents=True, exist_ok=True)
+    for specification in ejection_examples(arguments.pairs_per_family, AnswerCall()):
+        (arguments.destination / f"{specification.id}.json").write_text(specification.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

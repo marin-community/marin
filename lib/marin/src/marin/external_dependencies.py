@@ -62,33 +62,6 @@ CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
 )
 
 
-EVALCHEMY = ExternalDependency(
-    config_name="evalchemy",
-    distribution="evalchemy",
-    repository="https://github.com/marin-community/evalchemy.git",
-    version="0.1.0",
-    commit="ae362881cf53f869a6ad52c8a59fa17343c0b5f8",
-    runtime_requirements=(),
-)
-
-HARBOR = ExternalDependency(
-    config_name="harbor",
-    distribution="harbor",
-    repository="https://github.com/marin-community/harbor.git",
-    version="0.8.1",
-    commit="0985d012bcf4cc9d1acb1a831a86350cd31ac72a",
-    runtime_requirements=("daytona==0.200.2", "gcsfs==2026.7.0", "pydantic-settings==2.14.2", "s3fs==2026.7.0"),
-)
-
-MARIN_SKYRL = ExternalDependency(
-    config_name="MarinSkyRL",
-    distribution="marinskyrl",
-    repository="https://github.com/marin-community/MarinSkyRL.git",
-    version="0.1.0",
-    commit="726c570471f302d04750f16c5cebfcbe46bf96e2",
-    runtime_requirements=(),
-)
-
 VLLM_GPU_RELEASE = VllmGpuRelease(
     release_tag="marin-vllm-gpu-20260924-01911be34fac",
     source_commit="01911be34fac8715347962a8d791ca34a879e01e",
@@ -119,13 +92,9 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
     ),
 )
 
-VLLM_FORK_REQUIREMENT = "vllm @ git+https://github.com/marin-community/vllm.git@70ea9ae8f2601f06d820ee9d70e3afbdc52683b1"
+VLLM_FORK_REQUIREMENT = "vllm @ git+https://github.com/marin-community/vllm.git@fb02daf1d7139d2adaeb0588448649591657d1e3"
 TPU_INFERENCE_FORK_REQUIREMENT = (
-    "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@29548fbab663b7ea946546ca7efaa473dab55ba5"
+    "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@a8fc5c9f6d14ac5a3b1f97d5c296d6015a73cabe"
 )
 
-EXTERNAL_DEPENDENCIES = (
-    EVALCHEMY,
-    HARBOR,
-    MARIN_SKYRL,
-)
+EXTERNAL_DEPENDENCIES = ()

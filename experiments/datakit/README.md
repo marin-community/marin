@@ -94,7 +94,7 @@ the stage. Global exact dedup, embed, and minhash have no standalone report.
 flowchart TD
     subgraph inputs["external inputs"]
         SRC[("normalized sources<br/>NormalizedData, per source")]
-        MODEL[("quality model dir<br/>*.eqx + remap + meta + calib_bme.json")]
+        MODEL[("quality model dir, marin-tokenizer vocabulary<br/>*.eqx + remap + meta + calib_bme.json")]
         EVALS[("eval corpus<br/>&lt;prefix&gt;/datakit/decontam/evals")]
     end
 
@@ -125,6 +125,7 @@ flowchart TD
     SRC --> TOK
     SRC --> EMB
     SRC --> QUAL
+    TOK --> QUAL
     SRC --> DECON
     SRC --> MH
     MODEL --> QUAL

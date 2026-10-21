@@ -15,30 +15,28 @@ from typing import IO
 import pytest
 import yaml
 from marin.execution.artifact import Artifact
-from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
     run_skyrl,
+    skyrl_runtime_digest,
     skyrl_step,
     skyrl_temporary_run_path,
+    validate_megatron_geometry,
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
-
-from experiments.post_training.tasktrove.rl_smoke import smoke_step
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -56,6 +54,20 @@ def _data_step() -> ArtifactStep[Artifact]:
         "2026.08.01",
         "s3://test/iceball-gsm8k",
     )
+
+
+def test_nested_launcher_does_not_inherit_parent_python_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYTHONPATH", "/parent/workspace")
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/parent/environment")
+    command = [
+        sys.executable,
+        "-c",
+        "import json, os; print(json.dumps({key: os.environ.get(key) for key in "
+        "['PYTHONPATH', 'UV_PROJECT_ENVIRONMENT']}))",
+    ]
+    result = run_launcher_for_test(command)
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {"PYTHONPATH": None, "UV_PROJECT_ENVIRONMENT": None}
 
 
 class _FakeLauncherProcess:
@@ -97,11 +109,11 @@ def _role_plan() -> SkyRLRolePlan:
     )
 
 
-def _config_yaml(*, strategy: str | None = None) -> str:
-    strategy_line = f"  strategy: {strategy}\n" if strategy is not None else ""
+def _config_yaml(*, strategy: str = "megatron") -> str:
     return f"""\
 trainer:
-{strategy_line}  max_steps: 8
+  strategy: {strategy}
+  max_steps: 8
   algorithm:
     use_kl_loss: false
 generator:
@@ -115,7 +127,7 @@ def _spec() -> SkyRLSpec:
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
         config_yaml=_config_yaml(),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
+        runtime=SkyRLRuntime(),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -151,6 +163,16 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     )
 
 
+@pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])
+@pytest.mark.parametrize("value", [False, True])
+def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str, value: bool) -> None:
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["generator"][key] = value
+
+    with pytest.raises(ValueError, match=f"generator.{key}"):
+        dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe))
+
+
 def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
     policy = SkyRLRetentionPolicy(resume_checkpoint_count=5)
 
@@ -182,7 +204,7 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     spec = dataclasses.replace(
         _spec(),
         config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=SkyRLRuntime(),
         topology=SkyRLTopology(
             num_nodes=6,
             gpus_per_node=8,
@@ -198,20 +220,6 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     assert launch["skyrl"]["generator"]["speculative_decoding"]["training"] == {}
     assert launch["run"]["export_hf"] is False
     assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
-
-
-def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
-    plan = dataclasses.replace(
-        _role_plan(),
-        colocate_all=False,
-        policy_num_nodes=4,
-        policy_num_gpus_per_node=8,
-        num_inference_engines=4,
-        inference_engine_data_parallel_size=8,
-        inference_engine_expert_parallel_size=8,
-    )
-
-    SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
 
 def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
@@ -246,35 +254,56 @@ def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
         )
 
 
-def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
-    spec = _spec()
-    plan = dataclasses.replace(_role_plan(), train_batch_size=32, policy_mini_batch_size=16)
+def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=8,
+        reference_num_nodes=2,
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
+    )
+    with pytest.raises(ValueError, match="core role plan exceeds the allocated topology"):
+        SkyRLTopology(num_nodes=5, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    topology = SkyRLTopology(num_nodes=7, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"]["algorithm"]["use_kl_loss"] = True
+    recipe["trainer"]["policy"] = {
+        "megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 8}
+    }
+    recipe["trainer"]["ref"] = {"megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 16}}
+    with pytest.raises(ValueError, match=r"Megatron ref has 16 GPUs.*data-parallel size by EP"):
+        dataclasses.replace(_spec(), topology=topology, config_yaml=yaml.safe_dump(recipe))
+    recipe["trainer"]["ref"]["megatron_config"]["expert_model_parallel_size"] = 8
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=yaml.safe_dump(recipe),
+        runtime=SkyRLRuntime(),
+        topology=topology,
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["iris"]["allocation"]["num_nodes"] * launch["iris"]["allocation"]["gpus_per_node"] == 56
+    assert launch["skyrl"]["trainer"]["placement"] == {
+        "colocate_all": False,
+        "colocate_policy_ref": False,
+        "policy_num_nodes": 4,
+        "policy_num_gpus_per_node": 8,
+        "ref_num_nodes": 2,
+        "ref_num_gpus_per_node": 8,
+    }
 
-    with pytest.raises(
-        ValueError,
-        match="fully_async entrypoint requires train_batch_size == policy_mini_batch_size; got 32 and 16",
-    ):
-        dataclasses.replace(
-            spec,
-            config_yaml=f"entrypoint: fully_async\n{_config_yaml()}",
-            topology=dataclasses.replace(spec.topology, role_plan=plan),
-        )
 
-
-def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
+def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
     spec = _spec()
     base = skyrl_step(spec, _execution())
     moved = skyrl_step(spec, _execution("cw-us-east-02a"))
     resized = skyrl_step(
         spec,
         dataclasses.replace(_execution(), cpu=64, memory="400GB", disk="2TB"),
-    )
-    changed_profile = skyrl_step(
-        dataclasses.replace(
-            spec,
-            runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
-        ),
-        _execution(),
     )
     changed_plan = dataclasses.replace(spec.topology.role_plan, train_batch_size=32)
     changed_roles = skyrl_step(
@@ -288,7 +317,6 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
 
     assert base.fingerprint() == moved.fingerprint()
     assert base.fingerprint() == resized.fingerprint()
-    assert base.fingerprint() != changed_profile.fingerprint()
     assert base.fingerprint() != changed_roles.fingerprint()
 
 
@@ -342,11 +370,12 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
             "s3://marin-us-east-02a/marin/users/alice/run",
             ttl_days=14,
         )
-        == "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/alice/run"
+        == "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/alice/run"
     )
 
 
 def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected_source_digest = skyrl_runtime_digest()
     step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
@@ -394,7 +423,7 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert launch["iris"]["timeout"] == 1800
     assert launch["schema_version"] == 1
     assert launch["run"]["export_hf"] is True
-    assert launch["runtime"]["launcher_commit"] == MARIN_SKYRL.commit
+    assert launch["runtime"]["source_digest"] == expected_source_digest
     assert launch["iris"]["allocation"] == {
         "num_nodes": 1,
         "gpus_per_node": 4,
@@ -462,31 +491,9 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert run.iris_job_id == "01KNOEXPORT"
 
 
-def test_tasktrove_smoke_renders_serializable_launch_document(tmp_path: Path) -> None:
-    release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
-    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "tasktrove-verify@abc123"}))
-    with build_context(BuildContext(versions=VersionCodex(default="2026.09.10"))):
-        step = smoke_step(release)
-    config = step.build_config(
-        StepContext.for_run(
-            output_path=str(tmp_path / "output"),
-            prefix=str(tmp_path),
-            runtime_args=step.runtime_args,
-            deps=step.deps,
-        )
-    )
-    launch = yaml.safe_load(config.launch_config_yaml)
-    source = json.loads(json.dumps(launch))["inputs"]["train_data"][0]
-
-    assert source["kind"] == "tasktrove_parquet"
-    assert source["uri"] == str(tmp_path / "tasks/part-00000.parquet")
-    assert source["verifier_ref"] == "tasktrove-verify@abc123"
-    assert source["selection"]["tag_match"] == "all"
-
-
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
     release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
-    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "tasktrove-verify@abc123"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit@abc123"}))
     source = TaskTroveDataSource(
         release,
         TaskTroveSelection(
@@ -497,6 +504,7 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
             limit=160,
             seed=17,
         ),
+        relative_path="tasks.parquet",
     )
     context = StepContext.for_run(
         output_path=str(tmp_path / "output"),
@@ -507,9 +515,9 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
 
     resolved = source.resolve(context)
 
-    assert resolved.uri == str(tmp_path / "tasks/part-00000.parquet")
-    assert resolved.relative_path == "part-00000.parquet"
-    assert resolved.verifier_ref == "tasktrove-verify@abc123"
+    assert resolved.uri == str(tmp_path / "tasks.parquet")
+    assert resolved.relative_path == "tasks.parquet"
+    assert resolved.verifier_ref == "verifyit@abc123"
     assert resolved.selection.sources == ("source-a", "source-b")
     assert resolved.selection.tags == ("bash", "terminal")
     assert resolved.kind == "tasktrove_parquet"
@@ -531,11 +539,6 @@ def test_tasktrove_selection_rejects_ambiguous_inputs(selection: Callable[[], Ta
 def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     """A launcher that dies before printing its terminal response must still say why."""
 
-    monkeypatch.setattr(
-        subprocess,
-        "Popen",
-        lambda command, **_kwargs: _FakeLauncherProcess(response="", logs="entrypoint must be a registered name\n"),
-    )
     catalog_rows = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
     step = skyrl_step(_spec(), _execution())
@@ -546,6 +549,12 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
             runtime_args=step.runtime_args,
             deps=step.deps,
         )
+    )
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda command, **_kwargs: _FakeLauncherProcess(response="", logs="entrypoint must be a registered name\n"),
     )
 
     with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):
@@ -597,32 +606,38 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     assert completed.returncode == 4
 
 
-def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> None:
-    """The mismatch is otherwise silent until the pod has its GPUs: the launcher installs one
-    backend's closure, the trainer asks for the other, and the run dies on an import error naming
-    neither the profile nor the strategy."""
-    spec = _spec()
-
-    with pytest.raises(ValueError, match="megatron"):
+def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
+    # Reject incompatible microbatch sizes before allocating the GPU workers.
+    base = _spec()
+    plan = dataclasses.replace(base.topology.role_plan, micro_train_batch_size_per_gpu=2)
+    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 1
+    with pytest.raises(ValueError, match="equal micro_forward_batch_size_per_gpu"):
         dataclasses.replace(
-            spec,
-            config_yaml=_config_yaml(strategy="megatron"),
-            runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.FSDP),
+            base,
+            runtime=SkyRLRuntime(),
+            topology=dataclasses.replace(base.topology, role_plan=plan),
+            config_yaml=yaml.safe_dump(recipe),
         )
-
-
-@pytest.mark.parametrize(
-    "config_yaml",
-    [
-        pytest.param(_config_yaml(strategy="megatron"), id="names the matching strategy"),
-        pytest.param(_config_yaml(), id="names no strategy"),
-    ],
-)
-def test_a_config_that_does_not_contradict_the_profile_is_accepted(config_yaml: str) -> None:
-    spec = _spec()
-
+    # Matching sizes still validate: the gate rejects the mismatch, not Megatron itself.
+    recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 2
     dataclasses.replace(
-        spec,
-        config_yaml=config_yaml,
-        runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
+        base,
+        runtime=SkyRLRuntime(),
+        topology=dataclasses.replace(base.topology, role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
     )
+
+
+def test_megatron_geometry_rejects_incomplete_expert_groups() -> None:
+    geometry = MegatronGeometry(1, 2, 1, 8, 1)
+    with pytest.raises(
+        ValueError, match=r"Megatron policy has 8 GPUs.*TP=1, PP=2, CP=1, EP=8.*data-parallel size by EP"
+    ):
+        validate_megatron_geometry(geometry, role="policy", num_gpus=8)
+
+
+def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:
+    # Unsupported curriculum strategies must fail before the launcher allocates workers.
+    with pytest.raises(ValueError, match=r"trainer\.strategy=megatron"):
+        dataclasses.replace(_spec(), config_yaml=_config_yaml(strategy="fsdp2"))

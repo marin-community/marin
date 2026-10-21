@@ -360,6 +360,7 @@ def cluster_text_step(
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
     max_shard_failures: int = DEFAULT_MAX_SHARD_FAILURES,
+    output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Create a text shuffle from a cluster plan."""
 
@@ -386,6 +387,7 @@ def cluster_text_step(
 
     return StepSpec(
         name=name,
+        output_path_prefix=output_path_prefix,
         deps=[plan],
         hash_attrs={"version": 1, "params": params.model_dump(mode="json")},
         fn=build,

@@ -3,53 +3,43 @@
 
 """Opt source tasks into terminal ejection without changing their visible problem."""
 
-from tasktrove_verify.candidate import supports_candidate_mode
-from tasktrove_verify.spec import Mode
+from verifyit.spec import UnsolvableSpec
 
 from taskcompendium.direct_chat import unsupported_direct_chat_features
-from taskcompendium.grading import unsolvable
-from taskcompendium.models import TaskSpec
-from taskcompendium.submission import (
-    EJECT_CALL_NAME,
-    FinalAction,
-    SubmissionConvention,
-    eject_button,
-    submission_compatibility,
-)
+from taskcompendium.grader import verifyit_package
+from taskcompendium.models import FinalAction, TaskSpec, VerifyitGrader
+from taskcompendium.submission import EJECT_CALL_NAME, eject_button, require_submission_compatibility
 
 
-def enable_ejection(specification: TaskSpec) -> TaskSpec:
+def enable_ejection(task: TaskSpec) -> TaskSpec:
     """Advertise the reserved terminal action independently of solvability."""
     tool = eject_button()
-    existing = tuple(function for function in specification.final_tools if function.name == EJECT_CALL_NAME)
-    if existing and existing != (tool,):
+    existing = tuple(function for function in task.final_tools if function.name == EJECT_CALL_NAME)
+    if any(function.name == EJECT_CALL_NAME for function in task.interaction_tools) or (
+        existing and existing != (tool,)
+    ):
         raise ValueError("Source function collides with the reserved eject_button action")
     if existing:
-        return specification
-    return TaskSpec.model_validate({**specification.model_dump(), "final_tools": (*specification.final_tools, tool)})
+        return task
+    return TaskSpec.model_validate({**dict(task), "final_tools": (*task.final_tools, tool)})
 
 
-def mark_unsolvable(
-    specification: TaskSpec, normal_submission: SubmissionConvention
-) -> tuple[TaskSpec, SubmissionConvention]:
-    """Label a confirmed broken source task privately, retaining its presentation.
+def mark_unsolvable(task: TaskSpec) -> TaskSpec:
+    """Privately label a confirmed unsolvable task, retaining its normal presentation.
 
-    The caller must establish that the problem cannot be solved. Unsupported
-    runtime requirements and data-read failures do not establish unsolvability.
+    Callers must establish unsolvability. Unsupported runtimes and missing evidence do not
+    establish it; this helper supports only tasks that can already be graded in direct chat.
     """
-    unsupported = unsupported_direct_chat_features(specification)
+    unsupported = unsupported_direct_chat_features(task)
     if unsupported:
         raise NotImplementedError(f"Direct chat cannot satisfy requirements: {', '.join(unsupported)}")
-    if not supports_candidate_mode(specification.verifier.kind) or specification.verifier.kind == Mode.STRUCTURED_EXACT:
-        raise NotImplementedError(f"Direct chat cannot submit to verifier: {specification.verifier.kind!r}")
-    compatibility = submission_compatibility(specification, normal_submission)
-    if not compatibility.compatible:
-        raise ValueError(f"Normal submission is incompatible: {'; '.join(compatibility.reasons)}")
-    enabled = enable_ejection(specification)
-    convention = (
-        normal_submission
-        if isinstance(normal_submission, FinalAction)
-        else FinalAction(id=normal_submission.id, normal_submission=normal_submission)
+    if not isinstance(task.grader, VerifyitGrader):
+        raise NotImplementedError("Unsolvable classification requires an in-process verifyit grader")
+    require_submission_compatibility(task)
+    enabled = enable_ejection(task)
+    answer_format = task.answer_format
+    if not isinstance(answer_format, FinalAction):
+        answer_format = FinalAction(normal_submission=answer_format)
+    return TaskSpec.model_validate(
+        {**dict(enabled), "answer_format": answer_format, "grader": verifyit_package(UnsolvableSpec()).grader}
     )
-    broken = TaskSpec.model_validate({**enabled.model_dump(), "verifier": unsolvable()})
-    return broken, convention

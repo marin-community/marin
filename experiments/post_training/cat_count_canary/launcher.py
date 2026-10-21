@@ -28,7 +28,6 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLRunConfig,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     _materialize_role_plan_config,
@@ -103,9 +102,7 @@ class Preset:
 PRESETS = MappingProxyType(
     {
         "dry": Preset(1, None),
-        "calibrate": Preset(30, None),
         "gate": Preset(30, 0.65),
-        "on-policy": Preset(30, None),
     }
 )
 
@@ -167,8 +164,6 @@ PROTECTED_SETTINGS = (
             "generator.run_engines_locally",
             "generator.enable_http_endpoint",
             "generator.backend",
-            "generator.use_conversation_multi_turn",
-            "generator.require_exact_chat_transport",
             "environment.env_class",
             "data.kind",
         }
@@ -254,7 +249,7 @@ def training_config(
             "gradient_checkpointing": False,
             "epochs": 1,
             "max_steps": max_steps,
-            "update_epochs_per_batch": 1 if preset == "on-policy" else 2,
+            "update_epochs_per_batch": 2,
             "micro_forward_batch_size_per_gpu": micro_train_batch_size,
             "eval_batch_size": len(cat_count_eval_ns(train_ns)),
             "eval_interval": 1 if preset == "dry" else 5,
@@ -289,7 +284,7 @@ def training_config(
             },
             "ref": {"megatron_config": geometry},
             "rollout_buffer": {
-                "max_staleness_steps": 0 if lane == "sync" or preset == "on-policy" else 2,
+                "max_staleness_steps": 0 if lane == "sync" else 2,
                 "batch_policy": "full_batch",
                 "max_in_flight": batch_size,
                 "object_store_root": None,
@@ -302,8 +297,6 @@ def training_config(
             "run_engines_locally": True,
             "enable_http_endpoint": False,
             "weight_sync_backend": "nccl",
-            "use_conversation_multi_turn": False,
-            "require_exact_chat_transport": False,
             "gpu_memory_utilization": 0.7,
             "enforce_eager": False,
             "chat_template": {"source": "name", "name_or_path": choice.chat_template},
@@ -432,7 +425,7 @@ def build_run(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model_step,
                 relative_path="" if model == DEFAULT_MODEL else None,
