@@ -43,6 +43,8 @@ from omegaconf import DictConfig
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
 
+EVALUATION_VERIFIER_COVERAGE_METRIC = "eval/all/verifier_score_coverage"
+
 
 @dataclass
 class _EvaluationRollouts:
@@ -215,7 +217,7 @@ def _calculate_eval_metrics(
     if verifier_scores is not None:
         coverage, average = verifier_score_summary(verifier_scores)
         metrics["eval/all/num_scored"] = float(sum(score is not None for score in verifier_scores))
-        metrics["eval/all/verifier_score_coverage"] = coverage
+        metrics[EVALUATION_VERIFIER_COVERAGE_METRIC] = coverage
         if average is not None:
             metrics["eval/all/avg_verifier_score"] = average
     metrics.update({f"eval/all/{key}": value for key, value in evaluation_response_metrics(batch).items()})
@@ -229,7 +231,7 @@ def require_evaluation_coverage(cfg: DictConfig, metrics: Dict[str, float]) -> N
         return
     if not 0 <= required <= 1:
         raise ValueError("trainer.eval_required_score_coverage must lie in [0, 1]")
-    coverage = metrics.get("eval/all/verifier_score_coverage")
+    coverage = metrics.get(EVALUATION_VERIFIER_COVERAGE_METRIC)
     if coverage is None or not math.isfinite(coverage) or coverage < required:
         raise ValueError(f"Evaluation verifier coverage {coverage} is below the required {required}")
 
