@@ -288,7 +288,6 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         rendezvous_dir=ray["rendezvous_dir"],
         cluster=iris["cluster"],
         cluster_config=iris["cluster_config"],
-        source_digest=runtime["source_digest"],
         runtime_profile=RuntimeProfile(runtime["profile"]),
         job_name=iris["job_name"],
         priority=iris["priority"],
@@ -329,7 +328,7 @@ class IrisBackend:
         if config.run.submission == SubmissionMode.PREPARE:
             raise ValueError("Prepare mode validates a launch without submitting it")
         with (
-            build_runtime_bundle(config.runtime.source_digest) as workspace,
+            build_runtime_bundle() as workspace,
             contextlib.redirect_stdout(sys.stderr),
         ):
             return launch(args, workspace)
@@ -845,7 +844,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
     print(f"[rl-iris] Job:        /{user}/{args.job_name}", flush=True)
     print(f"[rl-iris] Cluster:    {args.cluster}  ({args.cluster_config})", flush=True)
-    print(f"[rl-iris] Runtime:    {args.source_digest} ({args.runtime_profile.value})", flush=True)
+    print(f"[rl-iris] Runtime:    {args.runtime_profile.value}", flush=True)
     print(
         f"[rl-iris] Topology:   {args.num_nodes} node(s) x {gpu_spec}  "
         f"(= {args.num_nodes * args.gpus_per_node} GPUs, exclusive, gang/leafgroup)",
@@ -1104,7 +1103,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             environment=EnvironmentSpec(
                 env_vars=env_vars,
                 extras=["gpu"],
-                setup_scripts=[task_setup_script(args.source_digest, args.runtime_profile)],
+                setup_scripts=[task_setup_script(args.runtime_profile)],
             ),
             constraints=constraints or None,
             coscheduling=coscheduling,

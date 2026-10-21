@@ -528,7 +528,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "vendor/skyrl/uv.lock"
       - name: Check independent lock, Marin contract, and built wheel
-        run: uv run --no-project python -m scripts.skyrl_migration check-vendor
+        run: uv run --no-project python -m infra.ci.check_skyrl
       - name: Exercise the isolated source bundle, launchers, and verifier
         working-directory: vendor/skyrl
         run: |

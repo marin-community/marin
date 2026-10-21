@@ -106,21 +106,18 @@ Pull requests without `agent-generated` receive
 committable suggestions and no push. The holistic session ignores a head whose
 delta is only `Deslop` commits, which closes the review-then-deslop loop.
 
-## SkyRL migration checks
+## SkyRL runtime checks
 
-`Marin - Unit` selects `skyrl-wheel` for SkyRL source, migration manifest, or
-tooling changes. It checks the nested project's lock, Marin library imports and
+`Marin - Unit` selects `skyrl-wheel` for SkyRL source or CI tooling changes.
+It checks the nested project's lock, Marin library imports and
 constructor keywords, and built-wheel assets against the current source in an
-isolated environment. GPU smoke
-tests and the production launcher cutover remain separate gates; see
-`docs/dev-guide/skyrl-migration.md`.
+isolated environment through `infra/ci/check_skyrl.py`. GPU smoke tests run
+separately; see `docs/dev-guide/skyrl.md`.
 
 `Marin - SkyRL Nightly` runs OPD, Grug/Megatron and asynchronous GPU CatCount
 at 09:00 UTC. The Grug CUTLASS case runs weekly or by manual selection.
 `Marin - SkyRL CPU Nightly` runs CatCount learning and checkpoint/resume gates
 at 06:00 UTC. Both use the checked-out nested runtime and its independent lock.
-The GPU failure reporter retains the source tracking issue's title prefix so
-transferred failure history continues in the same issue.
 
 ## External dependency updates
 

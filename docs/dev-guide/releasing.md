@@ -78,11 +78,11 @@ release version, so the resolver may advance those packages together. Test the
 consumer and commit its manifest and lock. A consumer with multiple projects
 must refresh each affected lock.
 
-After a MarinSkyRL dependency change merges, advance the external Git revision
-and regenerate Marin's isolated lock and pins:
+To advance the published Marin libraries used by vendored SkyRL, update its
+independent lock:
 
 ```bash
-uv run config/update-external.py MarinSkyRL
+uv run config/update-external.py --skyrl-marin-packages
 ```
 
 ### Stable releases

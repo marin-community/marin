@@ -1,6 +1,6 @@
 """Path resolution helpers for the Iris RL launcher.
 
-``PROJECT_ROOT`` is the MarinSkyRL repository root. The launcher syncs this tree
+``PROJECT_ROOT`` is the vendored SkyRL project root. The launcher syncs this tree
 to ``/app`` inside the task container, so config paths are resolved relative to it
 both on the launch host and in the pod.
 """
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from marinskyrl.resource_locator import is_hugging_face_repo_id
 
-# cloud/iris/paths.py -> cloud/iris -> cloud -> repo root
+# cloud/iris/paths.py -> cloud/iris -> cloud -> project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 """Root directory of the MarinSkyRL project."""
 

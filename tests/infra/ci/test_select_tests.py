@@ -303,8 +303,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
         ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
-        ("config/skyrl-migration.toml", ["skyrl-wheel"]),
-        ("config/skyrl-migration/runtime-fixes.patch", ["skyrl-wheel"]),
+        ("infra/ci/check_skyrl.py", ["skyrl-wheel"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:

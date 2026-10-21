@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -11,7 +10,7 @@ from cloud.iris import runtime_bundle
 
 
 @pytest.fixture
-def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def runtime_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     project = tmp_path / "vendor/skyrl"
     files = {
         "cloud/iris/launch.py": "def main(): pass\n",
@@ -26,54 +25,25 @@ def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         target = project / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
-    provenance = project / runtime_bundle.PROVENANCE_FILE
-    provenance.parent.mkdir(parents=True)
-    provenance.write_text(json.dumps({"source_sha": "original-upstream-revision"}))
     monkeypatch.setattr(runtime_bundle, "PROJECT_ROOT", project)
-    source = runtime_bundle.resolve_launcher_source()
-    with runtime_bundle.build_runtime_bundle(source.digest) as workspace:
-        yield source, workspace
+    return project
 
 
-def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bundled_source):
-    source, workspace = bundled_source
-    assert (workspace / "uv.lock").read_bytes() == (source.root / "uv.lock").read_bytes()
-    assert (workspace / "chat_templates/model.jinja2").read_text() == "{{ messages }}"
-    assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
-
-
-def test_changed_bundled_training_config_is_rejected(bundled_source):
-    _, workspace = bundled_source
-    (workspace / "skyrl-train/skyrl_train/config/ppo_base_config.yaml").write_text("trainer: {max_steps: 999}\n")
-    with pytest.raises(RuntimeError, match="does not match its recorded identity"):
-        runtime_bundle.validate_bundled_runtime(workspace)
-
-
-@pytest.mark.parametrize("path", ["cloud/iris/launch.py", "cloud/iris/new_runtime.py"])
-def test_source_edits_get_a_new_identity_and_bundle_without_restaging(bundled_source, path):
-    source, _ = bundled_source
-    (source.root / path).write_text("updated = True\n")
-    changed = runtime_bundle.resolve_launcher_source()
-    assert changed.digest != source.digest
-    with runtime_bundle.build_runtime_bundle(changed.digest) as workspace:
-        assert (workspace / path).read_text() == "updated = True\n"
-        assert runtime_bundle.validate_bundled_runtime(workspace) == changed.digest
+def test_runtime_bundle_copies_current_source_dependencies_and_assets(runtime_source):
+    (runtime_source / "cloud/iris/launch.py").write_text("updated = True\n")
+    (runtime_source / "cloud/iris/new_runtime.py").write_text("new = True\n")
+    with runtime_bundle.build_runtime_bundle() as workspace:
+        for path in runtime_source.rglob("*"):
+            if path.is_file():
+                assert (workspace / path.relative_to(runtime_source)).read_bytes() == path.read_bytes()
 
 
 @pytest.mark.parametrize("submission_succeeds", [True, False])
-def test_runtime_workspace_is_removed_after_submission(bundled_source, submission_succeeds):
-    source, _ = bundled_source
+def test_runtime_workspace_is_removed_after_submission(runtime_source, submission_succeeds):
     outcome = nullcontext() if submission_succeeds else pytest.raises(RuntimeError, match="submission failed")
-    with outcome, runtime_bundle.build_runtime_bundle(source.digest) as workspace:
-        assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
+    with outcome, runtime_bundle.build_runtime_bundle() as workspace:
+        assert (workspace / "uv.lock").read_bytes() == (runtime_source / "uv.lock").read_bytes()
         if not submission_succeeds:
             raise RuntimeError("submission failed")
     assert not workspace.exists()
-    assert (source.root / "uv.lock").is_file()
-
-
-def test_unrecorded_file_added_to_a_built_bundle_is_rejected(bundled_source):
-    _, workspace = bundled_source
-    (workspace / "cloud/iris/injected.py").write_text("extra = True\n")
-    with pytest.raises(ValueError, match="do not match the selected runtime identity"):
-        runtime_bundle.validate_bundled_runtime(workspace)
+    assert (runtime_source / "uv.lock").is_file()

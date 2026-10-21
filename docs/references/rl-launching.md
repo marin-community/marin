@@ -63,12 +63,11 @@ workspace. The child discards the parent's Python environment selection. SkyRL
 may depend on Marin packages inside its own environment; Marin calls SkyRL only
 through the executable.
 
-The launch document records a hash of the current runtime files, assets, and
-independent lock in `runtime.source_digest`. The isolated executable computes
-it, so ordinary vendor edits change the identity without restaging migration
-provenance. The launcher bundles these files for Iris and workers verify their
-hashes. Workers install the bundled project in editable mode
-with the frozen Megatron/vLLM profile. They do not fetch the fork or require Git.
+The launcher copies the checked-out runtime files, assets, and independent
+lock into an Iris workspace. Workers install the bundled project in editable
+mode with the frozen Megatron/vLLM profile. Marin artifacts and SkyRL run
+records use `rigging.provenance` for checkout and launch context alongside
+the resolved configuration.
 Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
 
 ```text
@@ -164,7 +163,7 @@ the GPUs assigned to each role.
 
 ## Artifact and runtime boundaries
 
-Identity-bearing inputs belong in `SkyRLSpec`: the vendored SkyRL runtime identity, model and tokenizer,
+Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
@@ -180,10 +179,10 @@ can point at an incomplete export. Keep resume behavior and terminal export expl
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
 
-The temporary checkpoint root is derived from the RL artifact name and version, not only from the
-runtime source digest. When `SkyRLRuntime.source_digest` changes, use a fresh RL artifact version. Reusing the old
+The temporary checkpoint root is derived from the RL artifact name and version.
+After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
-runtime. Reuse a version across a runtime repin only after establishing checkpoint compatibility or
+runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.
 
 ## Pre-launch review
@@ -195,7 +194,7 @@ Before submitting a large run:
    Check that explicit forward and training microbatch sizes agree.
    For `fully_async`, confirm the train batch and policy mini-batch are equal.
 3. Confirm the vendored runtime supports the chosen strategy, CUDA stack, model, and vLLM
-   geometry. If its identity changed, use a fresh RL artifact version unless its checkpoints are
+   geometry. After runtime changes, use a fresh RL artifact version unless its checkpoints are
    explicitly compatible.
 4. Confirm request and response token budgets match the dataset and chat template.
 5. Check coordinator and worker CPU, host memory, disk, concurrency, timeout, and credentials.

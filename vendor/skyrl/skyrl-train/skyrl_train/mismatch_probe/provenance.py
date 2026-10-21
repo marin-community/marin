@@ -10,6 +10,7 @@ from dataclasses import asdict
 import torch
 from finestore.rl import mismatch_probe as mismatch
 from omegaconf import OmegaConf
+from rigging.provenance import launch_provenance
 
 from skyrl_train.inference_engines.vllm_teacher_oracle import tokenizer_vocabulary_fingerprint
 from skyrl_train.mismatch_probe.protocol import request_seed
@@ -27,7 +28,7 @@ def software_provenance(probe, trainer) -> dict[str, str | None]:
     return {
         "python": platform.python_version(),
         "torch": str(torch.__version__),
-        "marinskyrl_source_digest": probe.cfg.get("runtime", {}).get("source_digest"),
+        "marin_commit": launch_provenance().base_commit,
         "marinskyrl_version": version("marinskyrl"),
         "marin_finestore_version": version("marin-finestore"),
         "vllm_version": version("vllm"),
@@ -47,7 +48,7 @@ def manifest(probe, trainer, *, status: mismatch.ArchiveStatus):
             or trainer.cfg.trainer.resume_path
             or trainer.cfg.trainer.policy.model.path
         ),
-        runtime_commit=software["marinskyrl_source_digest"],
+        runtime_commit=software["marin_commit"],
         source_probe_archive=probe.spec.reuse_probe,
         tokenizer_fingerprint=probe.tokenizer_fingerprint,
         starting_global_step=probe.starting_global_step,

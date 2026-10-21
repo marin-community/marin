@@ -1,4 +1,4 @@
-# Paths are relative to the MarinSkyRL checkout and are copied into each Iris task workspace.
+# Paths are relative to vendor/skyrl and are copied into each Iris task workspace.
 cloud/iris/__init__.py
 cloud/iris/artifacts.py
 cloud/iris/export_hf_checkpoint.py
