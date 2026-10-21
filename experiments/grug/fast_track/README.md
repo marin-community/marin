@@ -438,9 +438,12 @@ The bounds are Welch t intervals. In an A/A test on 12 random-control runs, the 
 3-seed pairs and 1.4% of the 6-seed pairs. A percentile bootstrap over runs gave `better` for 5.5% of the 3-seed pairs.
 With three seeds, the intervals are about 11 points wide for knowledge, so use three seeds only to rank search candidates.
 For the confirmation, use new seeds and set the seed count before the runs.
+Do not add seeds after you read the result: more seeds until the interval passes is not a valid test.
+An `inconclusive` confirmation does not accept the candidate.
 For a group with a relative seed SD `s` for one run, an expected gain `g`, and a harm limit `h`,
 about `16 s² / (g + h)²` seeds for each arm give 80% power for that group (normal approximation).
 On the d512 web arena, `s` was 2.3% for knowledge, 0.9% for commonsense, 1.1% for code, 0.5% for math, and 0.4% for long context.
 Thus knowledge sets the count: for a 0.9% knowledge gain, use about 24 seeds for each arm, and for no knowledge gain, about 86.
 More evaluation examples do not help, because the knowledge variance comes from the model seed. SciQ has the largest seed SD.
+A larger rung does not help either: with three seeds, the knowledge intervals are about as wide at d768 and wider at d1280.
 The intervals do not include the effect of a search over many candidates, so do not accept a candidate from the search runs alone.
