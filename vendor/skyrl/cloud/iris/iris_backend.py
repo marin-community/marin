@@ -298,6 +298,11 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         dry_run=submission == SubmissionMode.PREPARE,
         target_cluster=iris["target_cluster"],
         parent_cluster_config=iris["parent_cluster_config"],
+        container_profile=(
+            job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+            if iris["container_profile"] is None
+            else job_pb2.ContainerProfile.Value(iris["container_profile"])
+        ),
         wandb_entity=iris["wandb_entity"],
         config=config,
     )
@@ -1094,6 +1099,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             entrypoint=entrypoint,
             name=args.job_name,
             task_image=IRIS_TASK_IMAGE,
+            container_profile=args.container_profile,
             resources=resources,
             environment=EnvironmentSpec(
                 env_vars=env_vars,
