@@ -69,6 +69,13 @@ harness; an import check alone cannot validate its execution contract.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
+The Marin CLI invokes `vendor/skyrl` with its `cpu` dependency extra.
+`environment.task_sessions.local: {}` enables the local machine factory, which
+probes Linux bubblewrap before task admission. Omitting this key or setting it
+to `null` disables the local backend. The launcher forwards an explicit
+`iris.container_profile` to the coordinator and trainer; local execution
+requires a successful sandbox capability check.
+
 The migration tool rebuilds source candidates and prepares active work. It
 does not publish a wheel or archive the fork. Marin owns the integration and
 the scheduled gates described below.
