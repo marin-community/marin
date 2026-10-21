@@ -84,6 +84,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reserve", type=int, nargs="+", default=[0, 32])
     parser.add_argument("--iters", type=int, default=30)
+    parser.add_argument("--profile-dir", default=None, help="Also trace a few calls of every program here.")
     args = parser.parse_args()
 
     devices = jax.devices()
@@ -132,6 +133,12 @@ def main() -> None:
         )
         g = _time(gemm, (a, w, cu), args.iters)
         b = _time(both, (x, *params, a, w, cu), args.iters)
+        if args.profile_dir:
+            with jax.profiler.trace(f"{args.profile_dir}/r{reserve}"):
+                for _ in range(3):
+                    jax.block_until_ready(a2a(x, *params))
+                    jax.block_until_ready(gemm(a, w, cu))
+                    jax.block_until_ready(both(x, *params, a, w, cu))
         results[f"gemm_r{reserve}_ms"] = g
         results[f"both_r{reserve}_ms"] = b
         print(
