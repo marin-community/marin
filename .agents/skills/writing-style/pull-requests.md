@@ -16,6 +16,28 @@ voice: neutral, compact, and useful in `git log`.
 Prefer `[sft] Add the OpenCode chat template` over
 `feat(sft): opencode tools-aware chat template resource + Levanter chat-format wiring`.
 
+## Write For A Tired Reviewer
+
+The reader is a person who switches between many reviews and has little attention to spare. Make the body easy to scan in under a minute.
+
+- Put the change and its main result in the first two sentences.
+- Keep each paragraph to one topic and two or three short sentences.
+- Put measurements of more than one configuration, such as before/after pairs across hardware, node counts, or flags, in a table. Give units in the column headers and add a change column. Do not string several numbers together in one sentence.
+- Split any sentence that holds a semicolon list or more than one comparison.
+
+Bad:
+
+> One node goes from 2.531 to 2.479 s per step (-2.0%) without PGLE and from 2.392 to 2.362 s (-1.3%) with PGLE; two nodes go from 3.286 to 3.234 s (-1.6%) and from 3.109 to 3.087 s (-0.7%).
+
+Better:
+
+| Nodes | PGLE | Before (s/step) | After (s/step) | Change |
+| --- | --- | --- | --- | --- |
+| 1 | no | 2.531 | 2.479 | -2.0% |
+| 1 | yes | 2.392 | 2.362 | -1.3% |
+| 2 | no | 3.286 | 3.234 | -1.6% |
+| 2 | yes | 3.109 | 3.087 | -0.7% |
+
 ## Write The Body
 
 - Treat the body as a permanent changelog entry. It must make sense to a
@@ -47,9 +69,7 @@ The body must stand alone, but it does not need to reproduce the diff. Delete:
   trailers;
 - filler openers such as `This PR`, `In this change`, or `Summary of changes`.
 
-Use a list, table, or diagram only when it conveys steps, data, or a relationship
-that is hard to express in prose. Do not add section headings to a normal PR
-body. Markdown is not a completeness signal.
+Use a table for measurements and a list for steps or several parallel items. Use a diagram only for a relationship that is hard to express in prose. Do not add section headings to a normal PR body. Markdown is not a completeness signal.
 
 ## Compress An Implementation Report
 
