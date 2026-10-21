@@ -3,14 +3,18 @@
 
 """Admission and training preserve explicitly selected text-prefill contracts."""
 
+import asyncio
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from omegaconf import OmegaConf
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 from rolloutengine.harness.prefill import prefill_prompt
-from rolloutengine.models import RolloutContractError
+from rolloutengine.models import ModelRequest, ModelTurn, RolloutContractError
+from marinskyrl.saved_answers import AnswerAdmission, SavedAnswer, admit_answer, answer_uri, regrade_once, save_answer
+from taskcompendium.grading import grade_answer
 from taskcompendium.models import (
     AnswerType,
     PlainText,
@@ -31,7 +35,7 @@ from skyrl_train.task_inputs import task_messages
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
-from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
+from skyrl_train.trajectory_runners.types import BatchMetadata, TaskRequestBatch, TrajectoryID
 from taskcompendium.grading_result import Outcome
 from tests.cpu.task_specs import text_task, lowered_task, task_input
 
@@ -91,7 +95,7 @@ def task_inputs():
     ],
 )
 async def test_prefill_worker_preserves_continuation_and_rejects_parsed_channels(
-    task_inputs, response, parsed_channel, reward
+    task_inputs, tmp_path, response, parsed_channel, reward
 ):
     config, request = task_inputs
     context = ConversationInput(
@@ -109,7 +113,8 @@ async def test_prefill_worker_preserves_continuation_and_rejects_parsed_channels
             "grader": package.grader,
         }
     )
-    request = replace(request, rows=(task_input(lowered_task(task, "prefill", max_turns=1)),))
+    spec = lowered_task(task, "prefill", max_turns=1)
+    request = replace(request, rows=(task_input(spec),), batch_metadata=BatchMetadata(0, "eval"))
     observed = []
 
     class Engine:
@@ -127,7 +132,12 @@ async def test_prefill_worker_preserves_continuation_and_rejects_parsed_channels
             }
 
     worker = TaskRolloutWorker(
-        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {}, shutdown_timeout=30
+        config,
+        WholeTaskProjection(config, WorkerTokenizer()),
+        DirectModelClient(Engine()),
+        {},
+        shutdown_timeout=30,
+        eval_saved_answers_root=str(tmp_path / "answers"),
     )
     try:
         (result,) = await worker.generate(request)
@@ -137,14 +147,137 @@ async def test_prefill_worker_preserves_continuation_and_rejects_parsed_channels
     assert observed[0].get("prompts") is None and "tools" not in observed[0]
     assert observed[0]["sampling_params"]["skip_special_tokens"] is False
     assert result.grade.reward == reward
+    path = Path(answer_uri(str(tmp_path / "answers"), "arithmetic"))
+    saved = SavedAnswer.model_validate_json(path.read_bytes())
+    admission = AnswerAdmission.model_validate_json(Path(str(path) + ".admission.json").read_bytes())
     if parsed_channel:
         assert result.grade.status != Outcome.GRADED
+        assert not admission.eligible
+        with pytest.raises(ValueError, match="not admitted"):
+            await regrade_once(saved, admission, spec, {}, None, str(tmp_path / "regrades"), timeout=2)
         return
+    assert saved.messages == result.messages
+    assert admission.eligible
     assert result.messages[-1] == {"role": "assistant", "content": response}
     assert result.prompt_token_ids == (1, 2)
     assert result.response_token_ids == (11, 12, 13)
     assert result.loss_mask == (1, 1, 1)
     assert result.logprobs == (-0.1, -0.2, -0.3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("storage", ["ready", "blocked"])
+async def test_grader_failure_keeps_durable_answer_for_one_retry_without_generation(
+    task_inputs, tmp_path, monkeypatch, storage
+):
+    config, request = task_inputs
+    spec = request.rows[0].spec
+    task = spec.task.model_copy(
+        update={
+            "context": ConversationInput(
+                events=(*spec.task.context.events, TextMessage(role="assistant", content="Answer:"))
+            )
+        }
+    )
+    spec = spec.model_copy(
+        update={"task": task, "harness": "prefill", "limits": spec.limits.model_copy(update={"max_turns": 1})}
+    )
+    request = replace(request, rows=(task_input(spec),), batch_metadata=BatchMetadata(0, "eval"))
+    root = str(tmp_path / "answers")
+    if storage == "blocked":
+        Path(root).write_text("storage unavailable")
+    path = Path(answer_uri(root, "arithmetic"))
+    generated = []
+    grades = []
+
+    class Engine:
+        tokenizer = WorkerTokenizer()
+
+        async def generate(self, model_request):
+            generated.append(model_request)
+            return {
+                "responses": ["12"],
+                "assistant_messages": [{"role": "assistant", "content": "12"}],
+                "prompt_ids": model_request["prompt_token_ids"],
+                "response_ids": [[11, 12]],
+                "response_logprobs": [[-0.1, -0.2]],
+                "stop_reasons": ["stop"],
+            }
+
+    def original_grader(task, attempt):
+        # The original grade cannot begin until the answer survived an exclusive filesystem write.
+        record = SavedAnswer.model_validate_json(path.read_bytes())
+        assert record.messages[-1]["content"] == "12"
+        grades.append(task.id)
+        if len(grades) == 1:
+            raise RuntimeError("temporary grader failure")
+        return grade_answer(task, attempt)
+
+    monkeypatch.setattr("rolloutengine.grading.grade_answer", original_grader)
+    monkeypatch.setattr("marinskyrl.saved_answers.grade_answer", original_grader)
+    worker = TaskRolloutWorker(
+        config,
+        WholeTaskProjection(config, WorkerTokenizer()),
+        DirectModelClient(Engine()),
+        {},
+        shutdown_timeout=30,
+        eval_saved_answers_root=root,
+    )
+    try:
+        if storage == "blocked":
+            with pytest.raises(ExceptionGroup) as failure:
+                await worker.generate(request)
+            assert failure.value.subgroup(OSError) is not None
+            assert len(generated) == 1 and not grades
+            return
+        (failed,) = await worker.generate(request)
+    finally:
+        await worker.shutdown()
+    assert failed.grade.reward is None and failed.failure is not None
+    record = SavedAnswer.model_validate_json(path.read_bytes())
+    admission = AnswerAdmission.model_validate_json(Path(str(path) + ".admission.json").read_bytes())
+    receipt = await regrade_once(record, admission, spec, {}, None, str(tmp_path / "regrades"), timeout=2)
+    assert receipt["status"] == Outcome.GRADED and receipt["reward"] == 1
+    assert record.response_token_ids == (11, 12)
+    # Reading an existing admitted result cannot spend the same retry again.
+    assert await regrade_once(record, admission, spec, {}, None, str(tmp_path / "regrades"), timeout=2) == receipt
+    assert len(generated) == 1 and len(grades) == 2
+
+
+@pytest.mark.asyncio
+async def test_canceled_saved_answer_attempt_cannot_spend_a_second_grade(task_inputs, tmp_path, monkeypatch):
+    _, request = task_inputs
+    spec = request.rows[0].spec
+    spec = spec.model_copy(update={"limits": spec.limits.model_copy(update={"max_turns": 1})})
+    messages = ({"role": "user", "content": "What is six plus six?"},)
+    turn = ModelTurn({"role": "assistant", "content": "12"}, (1,), (2,), None, "stop", text="12")
+    root = str(tmp_path / "answers")
+    save_answer(root, spec, "arithmetic", 0, ModelRequest(messages, {}), turn)
+    admit_answer(root, "arithmetic", 0, (*messages, turn.message), "grade", "TimeoutError", "infra_error")
+    path = Path(answer_uri(root, "arithmetic"))
+    record = SavedAnswer.model_validate_json(path.read_bytes())
+    admission = AnswerAdmission.model_validate_json(Path(str(path) + ".admission.json").read_bytes())
+    entered, released = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def pending_original_grade(*args, **kwargs):
+        calls.append(1)
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            released.set()
+
+    monkeypatch.setattr("marinskyrl.saved_answers.regrade_answer", pending_original_grade)
+    attempt = asyncio.create_task(regrade_once(record, admission, spec, {}, None, str(tmp_path / "grades"), timeout=2))
+    await entered.wait()
+    attempt.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await attempt
+    assert released.is_set()
+    resumed = await regrade_once(record, admission, spec, {}, None, str(tmp_path / "grades"), timeout=2)
+    assert resumed["status"] == Outcome.UNAVAILABLE and resumed["reward"] is None
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio

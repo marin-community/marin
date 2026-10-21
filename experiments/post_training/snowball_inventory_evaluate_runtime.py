@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -19,8 +20,17 @@ from cloud.iris.launch_config import load_launch_config
 from cloud.iris.runtime_bundle import resolve_launcher_source
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest, sha256_file
 from marinskyrl.remote_io import filesystem_and_path
+from marinskyrl.saved_answers import (
+    AnswerAdmission,
+    SavedAnswer,
+    answer_uri,
+    json_bytes,
+    regrade_once,
+    require_regradable,
+)
 from marinskyrl.task_machine_factories import task_machine_factories
 from omegaconf import DictConfig, OmegaConf
+from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.prefill import PrefillHarness
@@ -33,6 +43,7 @@ from skyrl_train.hf_export_schema import HFExportRequest
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ScriptGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
+from verifyit.modes.grade_judge import JudgeConnection
 
 from experiments.post_training.snowball_curriculum.export import DerivedDeployment, derived_record
 from experiments.post_training.snowball_inventory_probe import package_revisions, preflight_tokenizer
@@ -201,7 +212,14 @@ def preflight(request: dict) -> dict:
     config.skyrl.data.train_data = []
     revisions = package_revisions()
     model = verify_model(str(config.inputs.model.uri))
+    expected_model = request.get("expected_model_manifest_identity")
+    if expected_model is not None and model["model_manifest_identity"] != expected_model:
+        raise ValueError("Baseline model manifest differs from its exact cache identity")
     tokenizer = preflight_tokenizer(config)
+    template_sha256 = hashlib.sha256(tokenizer.get_chat_template().encode()).hexdigest()
+    expected_template = request.get("expected_tokenizer_template_sha256")
+    if expected_template is not None and template_sha256 != expected_template:
+        raise ValueError("Tokenizer chat template differs from its admitted cache identity")
     sessions = config.skyrl.environment.task_sessions
     factories = task_machine_factories(sessions)
     prefill = PrefillHarness()
@@ -222,6 +240,8 @@ def preflight(request: dict) -> dict:
         for batch in pq.ParquetFile(path).iter_batches(batch_size=256):
             for row in batch.to_pylist():
                 spec = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+                if request.get("recover_saved_answers"):
+                    require_regradable(spec)
                 if max_new_tokens == 8192:
                     require_reference_limits(spec)
                 if spec.task.id != row["task_id"]:
@@ -282,6 +302,7 @@ def preflight(request: dict) -> dict:
         "grader_canaries": checks,
         "factory_backends": sorted(factories),
         "package_revisions": revisions,
+        "tokenizer_template_sha256": template_sha256,
         **model,
     }
 
@@ -292,37 +313,158 @@ def results(request: dict) -> dict:
     session = "eval_only" if step is None else f"global_step_{step}_evals"
     root = StoragePath(str(config.artifacts.export_root)) / "dumped_evals" / session
     outcomes = []
-    for directory, _, files in root.walk():
-        for filename in files:
+    dumps = []
+    for directory, _, files in sorted(root.walk(), key=lambda entry: str(entry[0])):
+        for filename in sorted(files):
             if not filename.endswith(".jsonl") or filename == "aggregated_results.jsonl":
                 continue
-            with (directory / filename).open("rt") as source:
-                for line in source:
-                    row = json.loads(line)
-                    verification = row.get("verification")
-                    score = None
-                    if verification is not None:
-                        verification["status"] = VerificationStatus(verification["status"])
-                        verdict = VerificationResult(**verification)
-                        if verdict.status is VerificationStatus.VERIFIED:
-                            score = normalized_verifier_score(verdict)
-                    outcomes.append(
-                        {
-                            "task_id": request["dataset_uids"][row["uid"]],
-                            "score": score,
-                            "stop_reason": row.get("stop_reason"),
-                            "verification_status": verification["status"].value if verification is not None else None,
-                            "failure_type": (
-                                row.get("exception_type")
-                                or (
-                                    (verification.get("diagnostics") or {}).get("cause_error_type")
-                                    if verification
-                                    else None
-                                )
-                            ),
-                        }
+            source = directory / filename
+            raw = source.read_bytes()
+            dumps.append({"uri": str(source), "sha256": hashlib.sha256(raw).hexdigest()})
+            for line in raw.decode().splitlines():
+                row = json.loads(line)
+                verification = row.get("verification")
+                score = None
+                if verification is not None:
+                    verification["status"] = VerificationStatus(verification["status"])
+                    verdict = VerificationResult(**verification)
+                    if verdict.status is VerificationStatus.VERIFIED:
+                        score = normalized_verifier_score(verdict)
+                outcomes.append(
+                    {
+                        "task_id": request["dataset_uids"][row["uid"]],
+                        "score": score,
+                        "stop_reason": row.get("stop_reason"),
+                        "verification_status": verification["status"].value if verification is not None else None,
+                        "failure_type": (
+                            row.get("exception_type")
+                            or (
+                                (verification.get("diagnostics") or {}).get("cause_error_type") if verification else None
+                            )
+                        ),
+                    }
+                )
+    return {"outcomes": outcomes, "source_dumps": dumps}
+
+
+def generation_state(request: dict) -> dict:
+    """Resume CPU scoring only after an exact successful inference terminal manifest."""
+    config = load_document(request["launch_config_yaml"])
+    terminal = StoragePath(str(config.artifacts.terminal_manifest_uri))
+    if not terminal.exists():
+        return {"complete": False}
+    manifest = json.loads(terminal.read_text())
+    if manifest["config"] != OmegaConf.to_container(config, resolve=True):
+        raise ValueError("Existing inference terminal manifest belongs to another exact launch configuration")
+    result = manifest["result"]
+    if (result["state"], result["iris_job_state"], result["run_id"], result["attempt_id"], result["source_digest"]) != (
+        "succeeded",
+        "succeeded",
+        str(config.run.id),
+        str(config.run.attempt_id),
+        str(config.runtime.source_digest),
+    ):
+        raise ValueError("Existing inference attempt has not succeeded under the admitted source")
+    return {"complete": True, "iris_job_id": result["iris_job_id"]}
+
+
+async def recover_results(request: dict) -> dict:
+    """Attempt each missing grade once against its durable answer, without policy inference."""
+    config = load_document(request["launch_config_yaml"])
+    original = results(request)
+    root = StoragePath(request["output_path"])
+    if str(root) != str(config.artifacts.terminal_manifest_uri).rsplit("/", 1)[0]:
+        raise ValueError("Recovery output must remain within this inference artifact's declared root")
+    original_bytes = json_bytes(original)
+    snapshot = root / "original-outcomes.json"
+    if snapshot.exists():
+        if snapshot.read_bytes() != original_bytes:
+            raise ValueError("Original evaluation outcomes changed after recovery began")
+    else:
+        conditional_object(str(snapshot)).write(original_bytes, expected_version=None)
+    source = config.inputs.validation_data[0]
+    panel_uri = str(StoragePath(str(source.uri)) / str(source.relative_path))
+    panel_bytes = StoragePath(panel_uri).read_bytes()
+    if hashlib.sha256(panel_bytes).hexdigest() != request["panel_sha256"]:
+        raise ValueError("Recovery panel differs from the exact admitted original")
+    specs = {
+        row["task_id"]: TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+        for row in pq.read_table(pa.BufferReader(panel_bytes)).to_pylist()
+    }
+    uid_by_task = {task: uid for uid, task in request["dataset_uids"].items()}
+    if len(uid_by_task) != len(specs) or set(uid_by_task) != set(specs):
+        raise ValueError("Recovery task pairing differs from the complete panel")
+    outcomes = [dict(row) for row in original["outcomes"]]
+    if len({row["task_id"] for row in outcomes}) != len(outcomes):
+        raise ValueError("Recovery cannot choose among duplicate evaluation attempts")
+    factories = task_machine_factories(config.skyrl.environment.task_sessions)
+    remote_judge = config.skyrl.environment.task_sessions.get("remote_judge")
+    connection = (
+        None
+        if remote_judge is None
+        else JudgeConnection(remote_judge["base_url"], os.environ[remote_judge["api_key_env"]])
+    )
+    saved_root = str(config.skyrl.trajectory_runner.eval_saved_answers_root)
+    receipts = []
+    timed_out = False
+    try:
+        async with asyncio.timeout(request["total_timeout"]):
+            for row in outcomes:
+                if row["score"] is not None:
+                    continue
+                uid = uid_by_task[row["task_id"]]
+                path = StoragePath(answer_uri(saved_root, uid))
+                if not path.exists():
+                    row["failure_type"] = "SavedAnswerMissing"
+                    continue
+                record = SavedAnswer.model_validate_json(path.read_bytes())
+                admission_path = StoragePath(str(path) + ".admission.json")
+                if not admission_path.exists():
+                    row["failure_type"] = "SavedAnswerNotAdmitted"
+                    continue
+                admission = AnswerAdmission.model_validate_json(admission_path.read_bytes())
+                if not admission.eligible:
+                    continue
+                if admission.failure_operation != "grade" and admission.grade_status != Outcome.INFRA_ERROR:
+                    continue
+                if record.instance_id != uid or record.repetition_id != 0:
+                    raise ValueError("Saved answer pairing differs from the original inference attempt")
+                spec = specs[row["task_id"]]
+                timeout = min(
+                    request["per_answer_timeout"], spec.limits.verifier_timeout or request["per_answer_timeout"]
+                )
+                receipt = await regrade_once(
+                    record, admission, spec, factories, connection, str(root / "regrades"), timeout=timeout
+                )
+                receipts.append({"task_id": row["task_id"], **receipt})
+                if receipt["status"] in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE} and receipt["reward"] is not None:
+                    verdict = VerificationResult.verified(
+                        receipt["reward"], score_min=receipt["score_min"], score_max=receipt["score_max"]
                     )
-    return {"outcomes": outcomes}
+                    row.update(
+                        score=normalized_verifier_score(verdict),
+                        verification_status="verified",
+                        failure_type=None,
+                        stop_reason=record.stop_reason,
+                    )
+                else:
+                    row.update(verification_status="error", failure_type=receipt.get("failure") or receipt["error"])
+    except TimeoutError:
+        timed_out = True
+    return {
+        "outcomes": outcomes,
+        "recovery": {
+            "original_outcomes_sha256": hashlib.sha256(original_bytes).hexdigest(),
+            "original_outcomes_uri": str(snapshot),
+            "panel_sha256": request["panel_sha256"],
+            "maximum_attempts_per_answer": 1,
+            "per_answer_timeout": request["per_answer_timeout"],
+            "total_timeout": request["total_timeout"],
+            "job_timeout_reached": timed_out,
+            "regenerated_completions": 0,
+            "receipts": receipts,
+        },
+    }
 
 
 def export_config(request: dict) -> dict:
@@ -398,7 +540,10 @@ def export_config(request: dict) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("preflight", "results", "export-config", "verify-model"))
+    parser.add_argument(
+        "action",
+        choices=("preflight", "results", "generation-state", "recover-results", "export-config", "verify-model"),
+    )
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--result", type=Path, required=True)
     args = parser.parse_args()
@@ -406,6 +551,8 @@ def main() -> None:
     operation = {
         "preflight": preflight,
         "results": results,
+        "generation-state": generation_state,
+        "recover-results": lambda value: asyncio.run(recover_results(value)),
         "export-config": export_config,
         "verify-model": lambda value: verify_model(value["model_uri"]),
     }[args.action]

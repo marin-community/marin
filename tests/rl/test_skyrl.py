@@ -14,7 +14,7 @@ from typing import IO
 
 import pytest
 import yaml
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, write_artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -23,6 +23,7 @@ from marin.rl.skyrl import (
     MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
@@ -68,6 +69,36 @@ def test_nested_launcher_does_not_inherit_parent_python_environment(monkeypatch:
     result = run_launcher_for_test(command)
     assert result.returncode == 0
     assert json.loads(result.stdout) == {"PYTHONPATH": None, "UV_PROJECT_ENVIRONMENT": None}
+
+
+def test_rl_model_resolution_uses_the_recorded_export_instead_of_newer_siblings(tmp_path: Path) -> None:
+    producer = tmp_path / "producer"
+    committed = producer / "exports" / "global_step_25" / "policy"
+    newer = producer / "exports" / "global_step_99" / "policy"
+    for directory in (committed, newer):
+        directory.mkdir(parents=True)
+        (directory / "config.json").write_text("{}")
+    source = ArtifactStep.adopt("tests/completed-rl", "2026.10.21", str(producer), kind=SkyRLRun)
+    write_artifact(
+        SkyRLRun(
+            path=str(producer),
+            hf_model_uri=str(committed),
+            global_step=25,
+            tokenizer_uri="test-tokenizer",
+            tokenizer_revision="pinned",
+            checkpoint_root=str(producer / "checkpoints"),
+            draft_checkpoint_root=None,
+            terminal_manifest_uri=str(producer / "terminal.json"),
+            iris_job_id="/test/job",
+        ).model_dump(exclude={"path"}),
+        str(producer),
+    )
+    model = ArtifactHfModel(source, "test-tokenizer", "pinned")
+    context = StepContext.for_run(
+        output_path=str(tmp_path / "score"), prefix=str(tmp_path), runtime_args={}, deps=(source,)
+    )
+    assert model.resolve(context).uri == str(committed)
+    assert model.resolve(StepContext.for_fingerprint({}, (source,))).uri.endswith("/<terminal-hf-export>")
 
 
 class _FakeLauncherProcess:

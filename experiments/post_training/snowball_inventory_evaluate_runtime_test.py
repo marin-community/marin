@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import hashlib
+import json
 from typing import Any
 
 import pyarrow as pa
@@ -284,3 +286,99 @@ def test_initializer_admission_rejects_wrong_model_or_revision(tmp_path):
         with pytest.raises(ValueError, match="selected initializer"):
             verify_initializer_model(str(tmp_path), repository, revision)
     assert marker.read_bytes() == original
+
+
+@pytest.mark.manual
+def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_scored_rows(tmp_path, monkeypatch):
+    from marinskyrl.saved_answers import admit_answer, save_answer  # noqa: PLC0415
+    from omegaconf import OmegaConf  # noqa: PLC0415 - optional frozen runtime dependency
+    from rolloutengine.models import ModelRequest, ModelTurn  # noqa: PLC0415
+    from taskcompendium.grader import verifyit_package  # noqa: PLC0415
+    from verifyit.spec import NumericSpec  # noqa: PLC0415
+
+    from experiments.post_training import snowball_inventory_evaluate_runtime as worker  # noqa: PLC0415
+
+    specs = []
+    for index in range(2):
+        task = TaskSpec(
+            id=f"paired-{index}",
+            context=ConversationInput(events=(TextMessage(role="user", content="Six plus six?"),)),
+            environment_requirements=EnvironmentRequirements(),
+            answer_type="number",
+            answer_format={"kind": "plain_text"},
+            grader=verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0)).grader,
+            source=Source(dataset="original", revision="frozen", row=str(index), importer_revision="1"),
+        )
+        specs.append(
+            TaskRolloutSpec(
+                task=task,
+                harness="single_reply",
+                task_machine=None,
+                verifier_machine=None,
+                limits=RolloutLimits(
+                    max_turns=1,
+                    max_total_tokens=None,
+                    model_turn_timeout=30,
+                    tool_turn_timeout=30,
+                    total_turn_timeout=30,
+                    attempt_timeout=60,
+                    verifier_timeout=10,
+                    cleanup_timeout=5,
+                ),
+            )
+        )
+    panel = tmp_path / "panel"
+    panel.mkdir()
+    source = panel / "validation.parquet"
+    pq.write_table(
+        pa.Table.from_pylist([{"task_id": spec.task.id, "task_rollout_spec": spec.model_dump_json()} for spec in specs]),
+        source,
+    )
+    export = tmp_path / "exports"
+    dumps = export / "dumped_evals" / "eval_only"
+    dumps.mkdir(parents=True)
+    rows = [
+        {"uid": "0", "stop_reason": "stop", "verification": {"status": "verified", "score": 0.0}},
+        {
+            "uid": "1",
+            "stop_reason": "error",
+            "exception_type": "VerifierRuntimeError",
+            "verification": {"status": "error", "reason": "original grader failed"},
+        },
+    ]
+    original_dump = dumps / "dataset.jsonl"
+    original_dump.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    original_bytes = original_dump.read_bytes()
+    saved = str(export / "saved_answers")
+    messages = ({"role": "user", "content": "Six plus six?"},)
+    turn = ModelTurn({"role": "assistant", "content": "12"}, (1,), (2,), None, "stop", text="12")
+    save_answer(saved, specs[1], "1", 0, ModelRequest(messages, {}), turn)
+    admit_answer(saved, "1", 0, (*messages, turn.message), "grade", "RuntimeError", "unavailable")
+    config = OmegaConf.create(
+        {
+            "artifacts": {
+                "export_root": str(export),
+                "terminal_manifest_uri": str(tmp_path / "score" / "terminal.json"),
+            },
+            "inputs": {"validation_data": [{"uri": str(panel), "relative_path": "validation.parquet"}]},
+            "skyrl": {"environment": {"task_sessions": {}}, "trajectory_runner": {"eval_saved_answers_root": saved}},
+        }
+    )
+    monkeypatch.setattr(worker, "load_document", lambda _: config)
+    request = {
+        "launch_config_yaml": "test",
+        "dataset_uids": {"0": "paired-0", "1": "paired-1"},
+        "panel_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "output_path": str(tmp_path / "score"),
+        "per_answer_timeout": 2,
+        "total_timeout": 10,
+    }
+    recovered = asyncio.run(worker.recover_results(request))
+    assert [row["score"] for row in recovered["outcomes"]] == [0.0, 1.0]
+    assert [row["task_id"] for row in recovered["recovery"]["receipts"]] == ["paired-1"]
+    assert recovered["recovery"]["regenerated_completions"] == 0
+    original = json.loads((tmp_path / "score" / "original-outcomes.json").read_text())
+    assert original["outcomes"][1]["score"] is None
+    assert original["outcomes"][1]["failure_type"] == "VerifierRuntimeError"
+    assert original_dump.read_bytes() == original_bytes
+    assert asyncio.run(worker.recover_results(request)) == recovered

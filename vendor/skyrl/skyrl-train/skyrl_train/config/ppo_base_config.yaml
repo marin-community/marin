@@ -541,6 +541,8 @@ trajectory_runner:
   max_concurrent_tasks: 32
   # Bound the shared evaluation pool independently of training concurrency; null inherits it.
   eval_max_concurrent_tasks: null
+  # When set, await an immutable answer write before grading each single-turn eval response.
+  eval_saved_answers_root: null
   # One worker pool executes all task families on the trainer's node.
   rollout_workers:
     num_workers: 4
