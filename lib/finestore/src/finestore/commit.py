@@ -38,6 +38,8 @@ _COMMIT_BACKOFF_INITIAL = 0.5
 _COMMIT_BACKOFF_MAXIMUM = 5.0
 _COMMIT_RETRY_BUDGET = 60 * 60.0
 _MAX_COMMIT_ATTEMPTS = 100_000
+_SCHEMA_RETRY_BUDGET = 60.0
+_MAX_SCHEMA_ATTEMPTS = 1000
 _ROOT_COMMIT_ID = "root"
 
 _COMMITS = telemetry.counter("finestore_commits", unit="{commit}")
@@ -133,17 +135,29 @@ def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
     schema_id = hashlib.blake2b(data, digest_size=16).hexdigest()
     path = layout.schema_path(schema_id)
     obj = conditional_object(path)
-    existing = obj.read()
-    if existing is None:
-        try:
-            obj.write(data, expected_version=None)
-            return path
-        except ConditionalWriteError:
-            existing = obj.read()
-            assert existing is not None
-    if existing.data != data:
-        raise ValueError(f"schema digest collision at {path}")
-    return path
+
+    def publish() -> str:
+        existing = obj.read()
+        if existing is None:
+            try:
+                obj.write(data, expected_version=None)
+                return path
+            except ConditionalWriteError:
+                existing = obj.read()
+                if existing is None:
+                    raise
+        if existing.data != data:
+            raise ValueError(f"schema digest collision at {path}")
+        return path
+
+    return retry_with_backoff(
+        publish,
+        retryable=lambda exc: isinstance(exc, ConditionalWriteError),
+        max_attempts=_MAX_SCHEMA_ATTEMPTS,
+        max_elapsed=_SCHEMA_RETRY_BUDGET,
+        backoff=ExponentialBackoff(initial=0.1, maximum=1.0, factor=2.0, jitter=0.25),
+        operation=f"FineStore schema publication at {path}",
+    )
 
 
 def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
