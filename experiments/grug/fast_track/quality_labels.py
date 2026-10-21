@@ -50,7 +50,7 @@ class QualityLabelSpec:
     labels_path: str
     joined_path: str
     oracle_identity: str
-    feature_identity: dict
+    feature_identity: dict[str, str | int | float]
 
 
 class FrozenQualityLabels(Artifact):
@@ -61,7 +61,7 @@ class FrozenQualityLabels(Artifact):
     manifest_path: str
     duplicate_report_path: str
     label_exclusion: LabelExclusion
-    feature_identity: dict
+    feature_identity: dict[str, str | int | float]
     documents: int
     original_documents: int
     missing_by_source: dict[str, int]
@@ -73,7 +73,7 @@ class FittedRidgeQualityHead(Artifact):
 
     head: RidgeHead
     label_exclusion: LabelExclusion
-    feature_identity: dict
+    feature_identity: dict[str, str | int | float]
     split_seed: int
     training_documents: int
     development: LabelMetrics
@@ -238,6 +238,28 @@ def _read_joined_labels(
     return _JoinedLabels(records, joined_keys, duplicate_groups, duplicate_rows)
 
 
+def _parquet_bytes(rows: list[dict], schema: pa.Schema) -> tuple[bytes, str]:
+    """The zstd Parquet bytes of ``rows`` and their SHA-256."""
+    buffer = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), buffer, compression="zstd")
+    data = buffer.getvalue()
+    return data, hashlib.sha256(data).hexdigest()
+
+
+def _duplicate_summary(rows: list[dict], report_path: str) -> dict:
+    return {
+        "policy": DUPLICATE_EMBEDDING_POLICY,
+        "occurrences": len(rows),
+        "affected_documents": len({row["id"] for row in rows}),
+        "identical_occurrences": sum(row["embedding_identical"] for row in rows),
+        "differing_occurrences": sum(not row["embedding_identical"] for row in rows),
+        "max_abs_delta_int8": max((row["embedding_max_abs_delta_int8"] for row in rows), default=0),
+        "max_l2_delta_int8": max((row["embedding_l2_delta_int8"] for row in rows), default=0.0),
+        "minimum_cosine_similarity_int8": min((row["embedding_cosine_similarity_int8"] for row in rows), default=None),
+        "report_path": report_path,
+    }
+
+
 def _write_frozen_quality_labels(
     spec: QualityLabelSpec,
     output_path: str,
@@ -268,11 +290,7 @@ def _write_frozen_quality_labels(
         }
         for record in (joined.records[key] for key in sorted(joined.records))
     ]
-    table = pa.Table.from_pylist(table_rows, schema=schema)
-    buffer = io.BytesIO()
-    pq.write_table(table, buffer, compression="zstd")
-    table_bytes = buffer.getvalue()
-    table_hash = hashlib.sha256(table_bytes).hexdigest()
+    table_bytes, table_hash = _parquet_bytes(table_rows, schema)
     duplicate_schema = pa.schema(
         [
             ("id", pa.string()),
@@ -288,25 +306,9 @@ def _write_frozen_quality_labels(
             ("embedding_cosine_similarity_int8", pa.float64()),
         ]
     )
-    duplicate_table = pa.Table.from_pylist(joined.duplicate_rows, schema=duplicate_schema)
-    duplicate_buffer = io.BytesIO()
-    pq.write_table(duplicate_table, duplicate_buffer, compression="zstd")
+    duplicate_report_bytes, duplicate_report_hash = _parquet_bytes(joined.duplicate_rows, duplicate_schema)
     duplicate_report_path = prefix_join(output_path, "duplicate_embeddings.parquet")
-    duplicate_report_bytes = duplicate_buffer.getvalue()
-    duplicate_report_hash = hashlib.sha256(duplicate_report_bytes).hexdigest()
-    duplicate_summary = {
-        "policy": DUPLICATE_EMBEDDING_POLICY,
-        "occurrences": len(joined.duplicate_rows),
-        "affected_documents": len({row["id"] for row in joined.duplicate_rows}),
-        "identical_occurrences": sum(row["embedding_identical"] for row in joined.duplicate_rows),
-        "differing_occurrences": sum(not row["embedding_identical"] for row in joined.duplicate_rows),
-        "max_abs_delta_int8": max((row["embedding_max_abs_delta_int8"] for row in joined.duplicate_rows), default=0),
-        "max_l2_delta_int8": max((row["embedding_l2_delta_int8"] for row in joined.duplicate_rows), default=0.0),
-        "minimum_cosine_similarity_int8": min(
-            (row["embedding_cosine_similarity_int8"] for row in joined.duplicate_rows), default=None
-        ),
-        "report_path": duplicate_report_path,
-    }
+    duplicate_summary = _duplicate_summary(joined.duplicate_rows, duplicate_report_path)
     revision = hashlib.sha256(
         canonical_json(
             {
