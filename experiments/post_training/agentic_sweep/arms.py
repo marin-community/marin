@@ -95,7 +95,8 @@ PARENTS = {
     "v0": ParentModel(
         MODEL,
         REVISION,
-        "s3://marin-us-east-02a/marin/weight-merging/campaign3-20261011/dare-linear-02/model",
+        "s3://marin-us-east-02a/marin/models/"
+        "open-athena--Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026-10-12--4eeb756b404db25bc04e4daf49dfb9817bceb741",
     ),
     "v0.1": ParentModel(
         "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
@@ -427,7 +428,7 @@ def pipeline(
     )
     parent = ArtifactStep.adopt(
         f"checkpoints/karan/arm-parent-{parent_name}-{selected_parent.revision}",
-        version,
+        f"{version}.2" if parent_name == "v0" else version,
         selected_parent.uri,
         config={"model": selected_parent.model, "revision": selected_parent.revision},
     )

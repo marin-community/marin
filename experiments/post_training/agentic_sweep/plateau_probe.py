@@ -53,7 +53,10 @@ from experiments.post_training.agentic_sweep.validate import OFFLINE_MESH
 logger = logging.getLogger(__name__)
 
 PREPARED = "s3://marin-us-east-02a/marin/teacher-traces/mopd2/task202-sweep-prepared-20261016d"
-PARENT = "s3://marin-us-east-02a/marin/weight-merging/campaign3-20261011/dare-linear-02/model"
+PARENT = (
+    "s3://marin-us-east-02a/marin/models/"
+    "open-athena--Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026-10-12--4eeb756b404db25bc04e4daf49dfb9817bceb741"
+)
 RUN = "s3://marin-us-east-02a/marin/experiments/task203-sweep/checkpoints/karan/v0-agentic-pilot-lr1e-06"
 MODELS = (
     ("v0", "hf", PARENT),
