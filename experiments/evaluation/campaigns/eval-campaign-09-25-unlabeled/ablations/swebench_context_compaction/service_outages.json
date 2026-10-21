@@ -268,8 +268,8 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200205-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-65k-16k-summary-98cea9cde5f14cd8b9feda873e8e75b1-65k-16k-summary-d401cf7abca251269cc2a9023dbe47e7/results",
     "started_at": "2026-10-20T23:37:07.296152Z",
-    "finished_at": null,
-    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200205-4f4ca116-2-1faa86a659793f20-202ea",
+    "finished_at": "2026-10-21T00:41:18Z",
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200205-4f4ca116-2-1faa86a659793f20-202ea; recovery verified by configured model alias and one-token chat generation HTTP 200 at 2026-10-21T00:41:18Z",
     "arm": "65k/16k, summary"
   },
   {
@@ -289,8 +289,8 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200028-google-gemma-4-26B-A4B-it-swebench-65k-16k-summary-d3f9500038a04796972503728e1dd59e-65k-16k-summary-d27a7cf16b7352709da157160580ae21/results",
     "started_at": "2026-10-20T23:37:07.304156Z",
-    "finished_at": null,
-    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200028-98a42c32-2-7cec2aa3b079d77d-20b6d",
+    "finished_at": "2026-10-21T00:41:18Z",
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200028-98a42c32-2-7cec2aa3b079d77d-20b6d; recovery verified by configured model alias and one-token chat generation HTTP 200 at 2026-10-21T00:41:18Z",
     "arm": "65k/16k, summary"
   },
   {
