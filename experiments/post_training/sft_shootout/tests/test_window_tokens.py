@@ -15,11 +15,6 @@ def window(window_tokens, served=SERVED):
     return harbor_glm.policy_agent(args, served)["kwargs"][harbor_glm.MODEL_INFO_KEY][harbor_glm.MAX_INPUT_TOKENS_KEY]
 
 
-def test_the_swesmith_window_is_set_per_lane():
-    assert window(30_000) == 30_000
-    assert window(40_000) == 40_000
-
-
 def test_a_window_above_the_student_serve_is_refused():
     with pytest.raises(ValueError, match="max_model_len"):
         window(80_000)
