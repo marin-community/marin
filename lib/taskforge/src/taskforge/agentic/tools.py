@@ -151,7 +151,12 @@ class OptionList(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    options: tuple[str, ...] = Field(min_length=2, description="The options, quoted in full in their order.")
+    options: tuple[str, ...] = Field(
+        min_length=2,
+        description=(
+            "The options, quoted in full in their order. For an option that is a code, quote the text that defines it."
+        ),
+    )
     correct: int = Field(ge=1, description="The place of the correct option in the list, from 1.")
 
 
