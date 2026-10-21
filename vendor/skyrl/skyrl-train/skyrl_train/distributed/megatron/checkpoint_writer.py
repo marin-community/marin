@@ -16,16 +16,20 @@ from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
 _MASTER_WEIGHT_KEY = re.compile(r"(?:chained_\d+\.)?optimizer\.state\.(?:param|fp32_param)\.(.+)")
 
 
+def model_key_for_master(key: str) -> str | None:
+    match = _MASTER_WEIGHT_KEY.fullmatch(key)
+    return match.group(1) if match is not None else None
+
+
 def _master_weight_aliases(plans: list[SavePlan]) -> dict[str, str]:
     tensors = {
         item.index.fqn: item.tensor_data for plan in plans for item in plan.items if item.tensor_data is not None
     }
     aliases = {}
     for key, master in tensors.items():
-        match = _MASTER_WEIGHT_KEY.fullmatch(key)
-        if match is None or master.properties.dtype != torch.float32:
+        model_key = model_key_for_master(key)
+        if model_key is None or master.properties.dtype != torch.float32:
             continue
-        model_key = match.group(1)
         model = tensors.get(model_key)
         if model is None or model.properties.dtype != torch.bfloat16 or model.size != master.size:
             continue
