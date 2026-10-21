@@ -2,7 +2,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195526-Qwen-Qwen3.6-35B-A3B-swebench-32k-8k-summary-c7803e1e44884c96ae48f55f67eec1fa-32k-8k-summary-38fb91f20481579f9c591e0190f9928c/results",
     "started_at": "2026-10-21T08:18:08.299000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:59:19.324735+00:00",
     "evidence": "Iris task events: /benfeuer/eval-20261020-195526-Qwen-Qwen3.6-35B-A3B-swebench-32k-8k-summary-c7803e1e44884c96ae48f55f67eec1fa-65ef5d41/inference-9ddff1427af347388512198c78b36ac2/0 WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 18569c61-3186-4a1d-bb1e-55ff9c0cb2aa.",
     "arm": "32k/8k, summary"
   },
