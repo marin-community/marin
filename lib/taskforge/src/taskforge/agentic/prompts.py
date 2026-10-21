@@ -40,6 +40,9 @@ yourself, for example that each CSV row has as many fields as the header.
 - When a task gives code with its output, for example a log, make the output by running the code in your shell. \
 Test each claim of the prompt that an answer is the only one, for example "only one line causes the error", with \
 the other candidates.
+- The program of an accepted task also makes more tasks of the same kind from other task ids, for training and for \
+held-out tests. So every task id must give a valid task with different data and the same difficulty, and the \
+reference answers of different ids must vary: a policy that trains on tasks whose answers repeat learns to guess.
 
 # Tools
 
@@ -53,9 +56,12 @@ difficulty. Role "adversary" tells the \
 solver to get credit without solving the task, for example by finding the answer or exploiting the grader. An \
 adversary can also pass by doing the work, so the reviewer of submit judges its passes. The tool saves the \
 transcripts under /workspace/rollouts/.
-- submit: submit a task. It refuses a task that the tools cannot run, that leaks its answer, or that has a \
-malformed CSV or JSON file. Then it needs this evidence for the exact TaskSpec: a control with expect "pass" that \
-passed, a control with expect "fail" that failed, and no "fail" control that passed; at least {min_solver_runs} \
+- submit: submit a task with the path of its build program. It refuses a task that the tools cannot run, that \
+leaks its answer, or that has a malformed CSV or JSON file, and a program that does not write the same task again \
+from the task id, or that writes the same task, a broken task or a repeated reference answer from other task ids. \
+Then it needs this \
+evidence for the exact TaskSpec: a control with expect "pass" that passed, a control with expect "fail" that \
+failed, and no "fail" control that passed; at least {min_solver_runs} \
 graded solver rollouts with a pass rate from {low} to {high}; format failures in at most {max_format_failures} of \
 the solver rollouts; and at least {min_adversary_runs} adversary rollouts. Last, an independent reviewer reads the \
 task, its grader, the failed solver answers and the adversary rollouts, and accepts or refuses it. A changed task \

@@ -20,10 +20,11 @@ import io
 import json
 import logging
 import re
+import shlex
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -116,6 +117,16 @@ EARLY_FINISH_BUDGET_SHARE = 0.5
 left: an agent can stop after a few too-easy versions, when a harder version would get into the band."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
+PROGRAM_TIMEOUT = 120.0
+"""Seconds that one run of a build program can take."""
+VARIANT_SUFFIX = ".variant-"
+"""``submit`` runs the build program with the task id, this suffix and a number, to check the tasks of other ids."""
+VARIANTS = 8
+MAX_ANSWER_SHARE = 0.25
+"""The largest share of the variants that can have one reference answer. A policy that trains on a task whose
+answers repeat learns to guess the common answer instead of doing the work."""
+SNAPSHOT_EXCLUDES = frozenset({ROLLOUTS_DIR})
+"""Workspace entries that the snapshot of an accepted task leaves out: the transcripts are large and not inputs."""
 
 
 class ToolError(Exception):
@@ -157,11 +168,18 @@ class TaskReview(BaseModel):
 
 @dataclass(frozen=True)
 class AcceptedTask:
-    """A task that ``submit`` accepted, with the evidence that the gate accepted and the review."""
+    """A task that ``submit`` accepted, with the evidence that the gate accepted, the review, and its build program.
+
+    ``program`` writes the task again from its id, and other tasks of the same kind from other ids. ``workspace`` is
+    a gzipped tar of the workspace at the submit, without the transcripts, so that the program can run again later
+    with the files that it reads (see ``taskforge.agentic.instances``).
+    """
 
     task: TaskSpec
     evidence: Evidence
     review: TaskReview
+    program: str
+    workspace: bytes = field(repr=False)
 
 
 @dataclass
@@ -214,8 +232,18 @@ TOOL_DEFINITIONS = (
     ),
     _tool(
         "submit",
-        "Submit a task. The gate checks the task and its evidence, then an independent reviewer reads it.",
-        {"path": PATH},
+        "Submit a task with the build program that wrote it. The gate checks the program, the task and its "
+        "evidence, then an independent reviewer reads it.",
+        {
+            "path": PATH,
+            "program": {
+                "type": "string",
+                "description": (
+                    "The path of the build program in the workspace: `python3 <program> <task id> "
+                    "<output path>` (or `sh <program> ...` for a .sh file) must write this TaskSpec again."
+                ),
+            },
+        },
     ),
     _tool("finish", "Stop, with a report on the tasks and the problems.", {"report": {"type": "string"}}),
 )
@@ -418,12 +446,12 @@ class ToolSession:
             **_next_step(evidence, self.config.gate),
         }
 
-    async def submit(self, path: str) -> ToolCallResult:
+    async def submit(self, path: str, program: str) -> ToolCallResult:
         task = await self._load(path)
         key = _task_digest(task)
         if any(_task_digest(accepted.task) == key for accepted in self.tools.accepted):
             raise ToolError("This task is already accepted")
-        problems = _problems(task, self.tools.solver_engine, self.config)
+        problems = _problems(task, self.tools.solver_engine, self.config) or await self._program_problems(program, task)
         if problems:
             return _result({"accepted": False, "problems": problems})
         evidence = self.tools.evidence[key]
@@ -434,11 +462,62 @@ class ToolSession:
         review = await self._review(task, key, evidence)
         if not review.accept:
             return _result({"accepted": False, "review": review.model_dump(mode="json")})
-        accepted = AcceptedTask(task, replace(evidence, controls=list(evidence.controls)), review)
+        snapshot = await self._snapshot()
+        accepted = AcceptedTask(task, replace(evidence, controls=list(evidence.controls)), review, program, snapshot)
         self.tools.accepted.append(accepted)
         count = len(self.tools.accepted)
         reply = {"accepted": True, "accepted_tasks": count, "remaining": self.tools.n - count, "review": review.summary}
         return _result(reply, done=count >= self.tools.n)
+
+    async def _program_problems(self, program: str, task: TaskSpec) -> list[str]:
+        """Why ``program`` is not the build program of ``task``: it must write ``task`` again from its id, and from
+        other ids, runnable tasks with no leak, whose reference answers vary."""
+        try:
+            again = await self._build(program, task.id)
+            variants = [await self._build(program, f"{task.id}{VARIANT_SUFFIX}{k}") for k in range(VARIANTS)]
+        except ToolError as error:
+            return [str(error)]
+        if _task_digest(again) != _task_digest(task):
+            return [f"{program} with the task id {task.id!r} writes another TaskSpec than the submitted one"]
+        if any(content_digest(variant) == content_digest(task) for variant in variants):
+            return [f"{program} writes the same task for another task id; derive the task's data from the id"]
+        answers = Counter(_reference(variant) for variant in variants)
+        answer, count = answers.most_common(1)[0]
+        if count > MAX_ANSWER_SHARE * VARIANTS:
+            return [
+                f"{count} of {VARIANTS} tasks that {program} writes for other ids have the reference answer {answer!r}, "
+                "so a policy that guesses it passes too often. Draw the data so that the answers vary."
+            ]
+        return [
+            f"With the task id {variant.id!r}, {program} writes a task with a problem: {problem}"
+            for variant in variants
+            for problem in _problems(variant, self.tools.solver_engine, self.config)
+        ][:REVIEW_ANSWERS]
+
+    async def _build(self, program: str, task_id: str) -> TaskSpec:
+        output = f".submit/{task_id}.json"
+        command = (*program_command(program), task_id, output)
+        result = await self.machine.run(
+            Command(
+                ("sh", "-c", f"mkdir -p .submit && {shlex.join(command)}"), cwd=str(WORKDIR), timeout=PROGRAM_TIMEOUT
+            )
+        )
+        if result.exit_code != 0:
+            stderr = result.stderr.decode(errors="replace")
+            raise ToolError(
+                f"`{shlex.join(command)}` failed with exit code {result.exit_code}: {_clip(stderr, tail=True)}"
+            )
+        return await self._load(output)
+
+    async def _snapshot(self) -> bytes:
+        listing = await self.machine.run(Command(("ls", "-A", str(WORKDIR))))
+        entries = [name for name in listing.stdout.decode().split() if name not in SNAPSHOT_EXCLUDES]
+        result = await self.machine.run(
+            Command(("tar", "-czf", "-", *entries), cwd=str(WORKDIR), output_limit_bytes=MAX_FILE_BYTES)
+        )
+        if result.exit_code != 0 or result.stdout_truncated:
+            raise RuntimeError(f"The workspace snapshot failed: {_clip(result.stderr.decode(errors='replace'))}")
+        return result.stdout
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
         # The judge first solves the task without its reference answer, as a check that is not anchored on it.
@@ -618,11 +697,21 @@ def _task_digest(task: TaskSpec) -> str:
     return digest(task.model_dump(mode="json"))
 
 
+def content_digest(task: TaskSpec) -> str:
+    """The digest of everything that the solver and the grader see, without the task's identity."""
+    return digest(task.model_dump(mode="json", exclude={"id", "source", "tags"}))
+
+
+def program_command(program: str) -> tuple[str, ...]:
+    """The command that runs a build program: ``sh`` for a ``.sh`` file and ``python3`` for others."""
+    return ("sh", program) if program.endswith(".sh") else ("python3", program)
+
+
 def _absolute(path: str) -> str:
     return str(WORKDIR / path)
 
 
-def _needs_machine(task: TaskSpec) -> bool:
+def needs_machine(task: TaskSpec) -> bool:
     requirements = task.environment_requirements
     return bool(requirements.capabilities or requirements.setup_commands or task.resources.worker or task.output_paths)
 
@@ -631,7 +720,7 @@ def _solver_spec(task: TaskSpec, config: AgenticConfig) -> TaskRolloutSpec:
     return TaskRolloutSpec(
         task=task,
         harness=SOLVER_HARNESS,
-        task_machine=SHELLSIM_MACHINE if _needs_machine(task) else None,
+        task_machine=SHELLSIM_MACHINE if needs_machine(task) else None,
         verifier_machine=None,
         limits=config.solver_limits,
         trace=TraceMode.MESSAGES,
@@ -653,7 +742,7 @@ def _problems(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -> l
         except ValueError as error:
             problems.append(f"The grader is invalid: {error}")
     requirements = task.environment_requirements
-    if _needs_machine(task) and requirements.command_semantics != CommandSemantics.SHELL_SIMULATOR:
+    if needs_machine(task) and requirements.command_semantics != CommandSemantics.SHELL_SIMULATOR:
         problems.append("A task with a shell or files must use command_semantics shell_simulator")
     if requirements.tool_providers or task.interaction_tools or task.final_tools:
         problems.append("Tools other than the shell are not supported")
@@ -746,6 +835,12 @@ def _leaks(task: TaskSpec) -> list[str]:
         and re.search(rf"[\"'`]\s*{re.escape(answer)}\s*[\"'`]", prompt, re.IGNORECASE)
     ]
     return leaks
+
+
+def _reference(task: TaskSpec) -> str:
+    """The reference answers of ``task``'s grader, as one string."""
+    grader = task.grader
+    return json.dumps(sorted(_answer_values(grader.parameters))) if isinstance(grader, VerifyitGrader) else ""
 
 
 def _answer_values(value: Any, key: str | None = None) -> list[str]:

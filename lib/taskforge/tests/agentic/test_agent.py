@@ -18,6 +18,7 @@ from taskforge.agentic import example_build
 from taskforge.agentic.agent import generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
+from taskforge.agentic.instances import task_instances
 from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT
 from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, BlindSolution, TaskReview
@@ -28,7 +29,16 @@ from taskforge.llm.policy import LLMPolicy, Message
 TASK_ID = "ledger--00"
 TASK = f"tasks/{TASK_ID}.json"
 TASK_JSON = example_build.task_spec(TASK_ID).model_dump_json()
+EXPECTED_ANSWER = example_build.task_spec(TASK_ID).grader.parameters["expected"]
 CHANGED = "tasks/changed.json"
+# The test workspace is ShellSim, which has no Python, so the build program is a shell script. Other task ids give
+# another prompt and another reference answer: the expected answer followed by the text after the id's last hyphen.
+BUILD = (
+    f'if [ "$1" = {TASK_ID} ]; then cat task.json; '
+    f'else n=${{1##*-}}; sed "s/alone/alone, please/; s/{TASK_ID}/$1/g; '
+    f's/\\"expected\\":\\"{EXPECTED_ANSWER}\\"/\\"expected\\":\\"{EXPECTED_ANSWER}$n\\"/" task.json; fi > "$2"'
+)
+
 GRADER = example_build.task_spec(TASK_ID).grader
 assert isinstance(GRADER, VerifyitGrader)
 EXPECTED = str(GRADER.parameters["expected"])
@@ -58,17 +68,20 @@ def call(name: str, **arguments: object) -> tuple[str, dict[str, object]]:
 
 
 SCRIPT = (
-    # The test workspace is ShellSim, which has no Python, so the agent writes the TaskSpec with the shell.
-    call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
-    call("submit", path=TASK),
+    call(
+        "shell",
+        command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > task.json; cp task.json {TASK}; "
+        f"printf '%s\\n' {shlex.quote(BUILD)} > build.sh",
+    ),
+    call("submit", path=TASK, program="build.sh"),
     call("grade", path=TASK, answer="1", expect="pass"),  # A wrong control of the agent's own does not block.
     call("grade", path=TASK, answer=EXPECTED, expect="pass"),
     call("grade", path=TASK, answer="999999", expect="fail"),
     call("rollout", paths=[TASK], n=8, role="solver"),
     call("rollout", paths=[TASK], n=4, role="adversary"),
     call("shell", command=f"sed 's/Reply with the number alone/Reply with a number/' {TASK} > {CHANGED}"),
-    call("submit", path=CHANGED),
-    call("submit", path=TASK),
+    call("submit", path=CHANGED, program="build.sh"),
+    call("submit", path=TASK, program="build.sh"),
 )
 
 
@@ -151,15 +164,23 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     # The rollout results tell the agent what an in-band version still needs.
     assert "adversary rollouts" in replies["call-6"]["results"][TASK]["next"]
     assert replies["call-7"]["results"][TASK]["next"] == "This version has its evidence: submit it now."
-    assert replies["call-9"]["missing"] == ["controls", "solver band", "adversary"]
+    assert replies["call-9"]["problems"] == [
+        f"build.sh with the task id {TASK_ID!r} writes another TaskSpec than the submitted one"
+    ]
     [accepted] = result.tasks
     assert accepted.task == example_build.task_spec(TASK_ID)
+    assert accepted.program == "build.sh"
     assert (accepted.evidence.solver_runs, accepted.evidence.solver_passes) == (8, 4)
     assert (accepted.evidence.adversary_runs, accepted.evidence.adversary_passes) == (4, 0)
     assert accepted.evidence.controls == [(True, False), (True, True), (False, False)]
     assert accepted.review.accept
     # A review is a blind solve and the review itself.
     assert (result.spend.solver_rollouts, result.spend.judge_calls) == (12, 2)
+
+    [instance] = await task_instances(accepted, ["ledger--07"], ShellSimMachineFactory(), timeout=10)
+    assert instance.id == "ledger--07"
+    assert instance.context.events[0].content.endswith("Reply with the number alone, please.")
+    assert instance.grader.parameters["expected"] == f"{EXPECTED}07"
 
 
 @dataclass
@@ -210,7 +231,7 @@ async def test_submit_refuses_a_numeric_tolerance_that_accepts_the_next_values()
     task = example_build.task_spec(TASK_ID).model_copy(update={"grader": loose})
     script = (
         call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
-        call("submit", path=TASK),
+        call("submit", path=TASK, program="build.sh"),  # The task's own problem refuses it before the program runs.
         call("finish", report="done"),
     )
     async with ParallelWeb("unused") as web:

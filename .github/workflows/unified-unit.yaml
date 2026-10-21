@@ -450,11 +450,11 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-      - name: Test Taskforge and its capability environments
+      - name: Test Taskforge, its capability environments and the Baby RSI loop
         run: >-
           uv run --package marin-taskforge --frozen --group test pytest
           -c lib/taskforge/pyproject.toml lib/taskforge/tests
-          experiments/post_training/capability_driven_envs/tests -q
+          experiments/post_training/capability_driven_envs/tests experiments/post_training/baby_rsi/tests -q
 
       - name: Type-check Taskforge
         working-directory: lib/taskforge

@@ -6,9 +6,10 @@
 For each idea, ``generate_tasks.generate_task`` writes ``--tasks`` task programs with one GLM call each, and runs them.
 Then a scripted session of ``taskforge.agentic.agent.generate_tasks``, with no model of its own, takes each TaskSpec
 that a program wrote through the evidence and the review that the agent's tasks get: the grader's own positive
-candidate as the correct control, a wrong control, 8 solver and 4 adversary rollouts, and ``submit``. Thus the GLM
-tokens of the staged run are the tokens of the generator and of the reviewer. The job needs no privileged profile,
-because the session writes the task files in a ShellSim workspace::
+candidate as the correct control, a wrong control, 8 solver and 4 adversary rollouts, and ``submit`` with the
+program. Thus the GLM tokens of the staged run are the tokens of the generator and of the reviewer. ``submit`` runs
+the program again, so the session's workspace is a bubblewrap sandbox with Python, and the job needs
+``--container-profile container_profile_privileged``::
 
     uv run --package marin-taskforge --frozen python -m \\
         experiments.post_training.capability_driven_envs.compare_staged \\
@@ -33,7 +34,6 @@ import click
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rolloutengine.models import ModelRequest, ModelTurn, TokenUsage
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from taskcompendium.models import TaskSpec, VerifyitGrader
 from taskforge.agentic.agent import generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
@@ -62,6 +62,7 @@ from experiments.post_training.capability_driven_envs.generate_tasks_agentic imp
     agent_limits,
     chat_model,
     read_ideas,
+    workspace_factory,
     write_result,
 )
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB
@@ -75,21 +76,23 @@ WRONG_ANSWER = "0"
 """The wrong control of a grader that has no negative candidate of its own."""
 
 
-def tool_calls(task_files: dict[str, TaskSpec]) -> list[tuple[str, dict[str, object]]]:
-    """The tool calls that give each task the evidence of the gate and submit it, and then finish."""
-    calls: list[tuple[str, dict[str, object]]] = [("shell", {"command": "mkdir -p tasks"})]
-    for path, task in task_files.items():
-        text = task.model_dump_json()
-        for start in range(0, len(text), WRITE_CHUNK):
-            command = f"printf '%s' {shlex.quote(text[start : start + WRITE_CHUNK])} >> {path}"
-            calls.append(("shell", {"command": command}))
+def tool_calls(task_files: dict[str, tuple[TaskSpec, str]]) -> list[tuple[str, dict[str, object]]]:
+    """The tool calls that write each task and its program, give the task the evidence of the gate, submit it with
+    the program, and then finish."""
+    calls: list[tuple[str, dict[str, object]]] = [("shell", {"command": "mkdir -p tasks programs"})]
+    for path, (task, source) in task_files.items():
+        program = f"programs/{task.id}.py"
+        for target, text in ((path, task.model_dump_json()), (program, source)):
+            for start in range(0, len(text), WRITE_CHUNK):
+                command = f"printf '%s' {shlex.quote(text[start : start + WRITE_CHUNK])} >> {target}"
+                calls.append(("shell", {"command": command}))
         right, wrong = controls(task)
         if right is not None:
             calls.append(("grade", {"path": path, "answer": right, "expect": "pass"}))
         calls.append(("grade", {"path": path, "answer": wrong, "expect": "fail"}))
         calls.append(("rollout", {"paths": [path], "n": GATE.min_solver_runs, "role": "solver"}))
         calls.append(("rollout", {"paths": [path], "n": GATE.min_adversary_runs, "role": "adversary"}))
-        calls.append(("submit", {"path": path}))
+        calls.append(("submit", {"path": path, "program": program}))
     calls.append(("finish", {"report": "The scripted session submitted every task that the staged programs wrote."}))
     return calls
 
@@ -149,9 +152,9 @@ async def compare_idea(
         if workpiece.run is not None and workpiece.run.task is not None:
             _write(staged / TASK_FILE, workpiece.run.task.model_dump_json(indent=2))
     task_files = {
-        f"tasks/{workpiece.workpiece_id}.json": workpiece.run.task
+        f"tasks/{workpiece.workpiece_id}.json": (workpiece.run.task, workpiece.source)
         for workpiece in generated
-        if workpiece.run is not None and workpiece.run.task is not None
+        if workpiece.run is not None and workpiece.run.task is not None and workpiece.source is not None
     }
     calls = tool_calls(task_files)
     session = ScriptedSession(calls)
@@ -178,7 +181,7 @@ async def compare_all(
     async with GlmClient(source, GLM_PROVIDER) as glm, ParallelWeb("unused") as web:
         config = AgenticConfig(
             agent_model=ScriptedSession([]),
-            workspace_factory=ShellSimMachineFactory(),
+            workspace_factory=workspace_factory(),
             solver_model=solver,
             judge=glm,
             judge_policy=LLMPolicy(),
