@@ -11,7 +11,7 @@ version = "0.1.0"
 description = "Marin's typed launcher and RL training runtime"
 requires-python = "==3.12.*"
 dependencies = [
-    "marin-verifyit[math,schema,reasoning-gym,judge]>=0.2.202.dev39324959133",
+    "marin-verifyit[math,schema,reasoning-gym,judge] @ git+https://github.com/marin-community/marin.git@de5507111c2672a564cff96cbef54ffd2eb194aa#subdirectory=lib/verifyit",
     "aiohttp>=3.13.3",
     "boto3",
     "datasets>=4.0.0",
@@ -34,7 +34,7 @@ dependencies = [
     "marin-iris>=0.2.202.dev39324959133",
     "marin-iris-native",
     "marin-rigging[secrets]>=0.2.202.dev39324959133",
-    "marin-rolloutengine>=0.2.202.dev39324959133",
+    "marin-rolloutengine @ git+https://github.com/marin-community/marin.git@de5507111c2672a564cff96cbef54ffd2eb194aa#subdirectory=lib/rolloutengine",
     "marin-shellbox[daytona,shellsim]>=0.2.202.dev39324959133",
     "ninja",
     "nvidia-ml-py",
@@ -52,7 +52,7 @@ dependencies = [
     "s3fs",
     "smart_open",
     "tensorboard",
-    "marin-taskcompendium>=0.2.202.dev39324959133",
+    "marin-taskcompendium @ git+https://github.com/marin-community/marin.git@de5507111c2672a564cff96cbef54ffd2eb194aa#subdirectory=lib/taskcompendium",
     "tqdm>=4.66",
     "tokenizers==0.23.1",
     "transformers==5.16.1",
@@ -183,6 +183,10 @@ no-build-isolation-package = [
     "transformer-engine-torch",
 ]
 override-dependencies = [
+    "marin-shellbox[daytona,shellsim]==0.2.202.dev39324959133",
+    "marin-taskcompendium @ git+https://github.com/marin-community/marin.git@de5507111c2672a564cff96cbef54ffd2eb194aa#subdirectory=lib/taskcompendium",
+    "marin-rolloutengine @ git+https://github.com/marin-community/marin.git@de5507111c2672a564cff96cbef54ffd2eb194aa#subdirectory=lib/rolloutengine",
+    "marin-verifyit @ git+https://github.com/marin-community/marin.git@de5507111c2672a564cff96cbef54ffd2eb194aa#subdirectory=lib/verifyit",
     "marin-rigging[secrets,prometheus]==0.2.202.dev39324959133",
     # Megatron Bridge declares this native extension but does not import or use it.
     "fast-hadamard-transform ; sys_platform == 'never'",

@@ -117,6 +117,7 @@ class IrisConfig:
     timeout: int = 0
     target_cluster: str | None = None
     parent_cluster_config: str | None = None
+    container_profile: str | None = None
 
 
 @dataclass
@@ -309,11 +310,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError("iris.timeout cannot be negative")
     _validate_inputs(raw["inputs"])
     ray = raw["ray"]
-    if (
-        ray["rendezvous_timeout"] <= 0
-        or ray["cluster_join_timeout"] <= 0
-        or ray["driver_liveness_timeout"] < 0
-    ):
+    if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:
         raise ValueError(
             "ray rendezvous timeout and cluster join timeout must be positive; "
             "driver liveness timeout cannot be negative"

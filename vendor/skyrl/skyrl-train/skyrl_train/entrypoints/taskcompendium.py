@@ -10,14 +10,24 @@ from skyrl_train.entrypoints.main_base import BasePPOExp, config_dir, run_ray_dr
 
 class TaskCompendiumExp(BasePPOExp):
     def get_train_dataset(self):
-        dataset = TaskDataset(self.cfg.data.train_data, self.tokenizer, self.cfg.trainer.max_prompt_length)
+        dataset = TaskDataset(
+            self.cfg.data.train_data,
+            self.tokenizer,
+            self.cfg.trainer.max_prompt_length,
+            chat_template_kwargs=dict(self.cfg.generator.chat_template_kwargs),
+        )
         if len(dataset) < self.cfg.trainer.train_batch_size:
             raise ValueError("The task dataset is smaller than the training batch")
         return dataset
 
     def get_eval_dataset(self):
         if self.cfg.trainer.eval_interval > 0 and self.cfg.data.val_data:
-            return TaskDataset(self.cfg.data.val_data, self.tokenizer, self.cfg.trainer.max_prompt_length)
+            return TaskDataset(
+                self.cfg.data.val_data,
+                self.tokenizer,
+                self.cfg.trainer.max_prompt_length,
+                chat_template_kwargs=dict(self.cfg.generator.chat_template_kwargs),
+            )
         return None
 
 

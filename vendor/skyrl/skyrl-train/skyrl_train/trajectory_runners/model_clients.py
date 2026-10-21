@@ -8,6 +8,7 @@ from typing import Any, NotRequired, Protocol
 from uuid import uuid4
 
 import numpy as np
+from rolloutengine.models import RolloutContractError
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import REASONING_DELIMITERS, final_answer_text
 
@@ -29,6 +30,7 @@ from skyrl_train.inference_engines.chat_template import (
     template_error_from_exception,
 )
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
+from skyrl_train.inference_engines.prefill import prefill_token_ids
 from skyrl_train.inference_engines.response_topk import select_chat_response_topk
 from skyrl_train.trajectory_runners.types import TokenProvenance
 from skyrl_train.trajectory_runners.routed_experts import normalize_routed_experts
@@ -186,6 +188,57 @@ class DirectModelClient:
         output = await self._client.generate(request)
         return ModelClientOutput(**output, token_provenance=TokenProvenance.ENGINE)
 
+    async def _generate_prefill(
+        self, request: InferenceEngineInput, messages: list[dict[str, Any]], options: dict[str, Any], session_id: str
+    ) -> _ChatResult:
+        prompt_ids = prefill_token_ids(self._client.tokenizer, messages, options)
+        max_prompt_length = request.get("max_prompt_length")
+        if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
+            raise GenerationBudgetExceededError(prompt_ids)
+        sampling = dict(request.get("sampling_params") or {})
+        configured = [int(sampling[key]) for key in _OUTPUT_LIMIT_KEYS if sampling.get(key) is not None]
+        if options.get("max_completion_tokens") is not None:
+            configured.append(int(options["max_completion_tokens"]))
+        if options.get("max_output_tokens") is not None:
+            configured.append(int(options["max_output_tokens"]))
+        max_context_length = request.get("max_context_length")
+        if max_context_length is not None:
+            remaining = max_context_length - len(prompt_ids)
+            if remaining <= 0:
+                raise GenerationBudgetExceededError(prompt_ids)
+            configured.append(remaining)
+        token_budget = min(configured) if configured else None
+        if token_budget is not None:
+            sampling["max_tokens"] = token_budget
+        sampling.pop("max_generate_length", None)
+        sampling.update(skip_special_tokens=False, include_stop_str_in_output=True)
+        # Raw completions retain delimiters and bypass chat tool/reasoning parsers.
+        output = await self._client.generate(
+            {
+                "prompts": None,
+                "prompt_token_ids": [prompt_ids],
+                "session_ids": [session_id],
+                "sampling_params": sampling,
+            }
+        )
+        if output.get("prompt_ids") != [prompt_ids]:
+            raise RolloutContractError("Prefill inference did not report the rendered prompt token IDs")
+        text = output["responses"][0]
+        message = (output.get("assistant_messages") or [{"role": "assistant", "content": text}])[0]
+        return _ChatResult(
+            prompt_ids,
+            output["response_ids"][0],
+            None if output.get("response_logprobs") is None else output["response_logprobs"][0],
+            None if output.get("student_topk_indices") is None else output["student_topk_indices"][0],
+            None if output.get("behavior_topk_logprobs") is None else output["behavior_topk_logprobs"][0],
+            text,
+            output["stop_reasons"][0],
+            message,
+            token_budget,
+            (output.get("routed_experts") or [None])[0],
+            (output.get("response_policy_steps") or [None])[0],
+        )
+
     @staticmethod
     def _chat_options(options: dict[str, Any], sampling_params: dict[str, Any]) -> dict[str, Any]:
         result = dict(options)
@@ -220,6 +273,10 @@ class DirectModelClient:
         requested_top_k = requested_top_k if isinstance(requested_top_k, int) and requested_top_k > 0 else None
 
         async def generate_one(messages, row_options, session_id, continuation):
+            if row_options.get("extra_body", {}).get("continue_final_message") is True:
+                if continuation is not None:
+                    raise ValueError("An initial prefill cannot reuse a sampled chat continuation")
+                return await self._generate_prefill(request, messages, row_options, session_id)
             chat_options = self._chat_options(row_options, sampling_params)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {
