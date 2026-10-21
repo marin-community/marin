@@ -1,0 +1,380 @@
+{
+  "aime24": {
+    "model": {
+      "name": "open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "location": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "revision": "8c76b22afc38f5e95360c83ca88008f00b5ae1e0",
+      "tokenizer": null,
+      "tokenizer_revision": null,
+      "apply_chat_template": true,
+      "resource_hint": {
+        "hbm_gb": null,
+        "gpu": {
+          "H100": 8
+        },
+        "cpu": null,
+        "memory": "512g",
+        "disk": null
+      },
+      "serve": {
+        "backend": "vllm",
+        "tensor_parallel_size": 1,
+        "data_parallel_size": 8,
+        "pipeline_parallel_size": 1,
+        "gpu_memory_utilization": null,
+        "max_model_len": 73728,
+        "max_num_batched_tokens": 7168,
+        "max_num_seqs": 32,
+        "hf_overrides": null,
+        "limit_mm_per_prompt": null,
+        "tool_call_parser": "hermes",
+        "reasoning_parser": "grug",
+        "vllm_batch_invariant": null,
+        "vllm_use_flashinfer_sampler": null,
+        "vllm_extra_args": [
+          "--enable-expert-parallel",
+          "--model-loader-extra-config",
+          "{\"distributed\":true}"
+        ],
+        "speculative": null,
+        "chat_template": null,
+        "auto_overrides": false,
+        "vllm_source": null,
+        "vllm_version": null,
+        "object_store_load_mode": "stream",
+        "vllm_plugin_requirements": [],
+        "runai_streamer_concurrency": null,
+        "runai_streamer_s3_request_timeout_ms": null
+      },
+      "generation": {
+        "max_gen_toks": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {},
+        "thinking_off_template_kwargs": {}
+      },
+      "agent": {
+        "agent_kwargs": {
+          "thinking_format": "chat-template"
+        }
+      }
+    },
+    "results_path": "s3://marin-us-east-02a/marin/evals/20261005-225454-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-aime24-b8ae/results",
+    "run_id": "20261005-225454-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-aime24-b8ae",
+    "created_at": "2026-10-05T22:54:54.182894+00:00"
+  },
+  "gpqa-diamond": {
+    "model": {
+      "name": "open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "location": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "revision": "8c76b22afc38f5e95360c83ca88008f00b5ae1e0",
+      "tokenizer": null,
+      "tokenizer_revision": null,
+      "apply_chat_template": true,
+      "resource_hint": {
+        "hbm_gb": null,
+        "gpu": {
+          "H100": 8
+        },
+        "cpu": null,
+        "memory": "512g",
+        "disk": null
+      },
+      "serve": {
+        "backend": "vllm",
+        "tensor_parallel_size": 1,
+        "data_parallel_size": 8,
+        "pipeline_parallel_size": 1,
+        "gpu_memory_utilization": null,
+        "max_model_len": 73728,
+        "max_num_batched_tokens": 7168,
+        "max_num_seqs": 32,
+        "hf_overrides": null,
+        "limit_mm_per_prompt": null,
+        "tool_call_parser": "hermes",
+        "reasoning_parser": "grug",
+        "vllm_batch_invariant": null,
+        "vllm_use_flashinfer_sampler": null,
+        "vllm_extra_args": [
+          "--enable-expert-parallel",
+          "--model-loader-extra-config",
+          "{\"distributed\":true}"
+        ],
+        "speculative": null,
+        "chat_template": null,
+        "auto_overrides": false,
+        "vllm_source": null,
+        "vllm_version": null,
+        "object_store_load_mode": "stream",
+        "vllm_plugin_requirements": [],
+        "runai_streamer_concurrency": null,
+        "runai_streamer_s3_request_timeout_ms": null
+      },
+      "generation": {
+        "max_gen_toks": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {},
+        "thinking_off_template_kwargs": {}
+      },
+      "agent": {
+        "agent_kwargs": {
+          "thinking_format": "chat-template"
+        }
+      }
+    },
+    "results_path": "s3://marin-us-east-02a/marin/evals/20261005-225454-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-gpqa-diamond-76b6/results",
+    "run_id": "20261005-225454-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-gpqa-diamond-76b6",
+    "created_at": "2026-10-05T22:54:54.182894+00:00"
+  },
+  "mmlu-pro": {
+    "model": {
+      "name": "open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "location": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "revision": "8c76b22afc38f5e95360c83ca88008f00b5ae1e0",
+      "tokenizer": null,
+      "tokenizer_revision": null,
+      "apply_chat_template": true,
+      "resource_hint": {
+        "hbm_gb": null,
+        "gpu": {
+          "H100": 8
+        },
+        "cpu": null,
+        "memory": "512g",
+        "disk": null
+      },
+      "serve": {
+        "backend": "vllm",
+        "tensor_parallel_size": 1,
+        "data_parallel_size": 8,
+        "pipeline_parallel_size": 1,
+        "gpu_memory_utilization": null,
+        "max_model_len": 73728,
+        "max_num_batched_tokens": 7168,
+        "max_num_seqs": 32,
+        "hf_overrides": null,
+        "limit_mm_per_prompt": null,
+        "tool_call_parser": "hermes",
+        "reasoning_parser": "grug",
+        "vllm_batch_invariant": null,
+        "vllm_use_flashinfer_sampler": null,
+        "vllm_extra_args": [
+          "--enable-expert-parallel",
+          "--model-loader-extra-config",
+          "{\"distributed\":true}"
+        ],
+        "speculative": null,
+        "chat_template": null,
+        "auto_overrides": false,
+        "vllm_source": null,
+        "vllm_version": null,
+        "object_store_load_mode": "stream",
+        "vllm_plugin_requirements": [],
+        "runai_streamer_concurrency": null,
+        "runai_streamer_s3_request_timeout_ms": null
+      },
+      "generation": {
+        "max_gen_toks": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {},
+        "thinking_off_template_kwargs": {}
+      },
+      "agent": {
+        "agent_kwargs": {
+          "thinking_format": "chat-template"
+        }
+      }
+    },
+    "results_path": "s3://marin-us-east-02a/marin/evals/20261005-225454-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-mmlu-pro-a394/results",
+    "run_id": "20261005-225454-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-mmlu-pro-a394",
+    "created_at": "2026-10-05T22:54:54.182894+00:00"
+  },
+  "math500": {
+    "model": {
+      "name": "open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "location": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "revision": "8c76b22afc38f5e95360c83ca88008f00b5ae1e0",
+      "tokenizer": null,
+      "tokenizer_revision": null,
+      "apply_chat_template": true,
+      "resource_hint": {
+        "hbm_gb": null,
+        "gpu": {
+          "H100": 8
+        },
+        "cpu": null,
+        "memory": "512g",
+        "disk": null
+      },
+      "serve": {
+        "backend": "vllm",
+        "tensor_parallel_size": 1,
+        "data_parallel_size": 8,
+        "pipeline_parallel_size": 1,
+        "gpu_memory_utilization": null,
+        "max_model_len": 73728,
+        "max_num_batched_tokens": 7168,
+        "max_num_seqs": 32,
+        "hf_overrides": null,
+        "limit_mm_per_prompt": null,
+        "tool_call_parser": "hermes",
+        "reasoning_parser": "grug",
+        "vllm_batch_invariant": null,
+        "vllm_use_flashinfer_sampler": null,
+        "vllm_extra_args": [
+          "--enable-expert-parallel",
+          "--model-loader-extra-config",
+          "{\"distributed\":true}"
+        ],
+        "speculative": null,
+        "chat_template": null,
+        "auto_overrides": false,
+        "vllm_source": null,
+        "vllm_version": null,
+        "object_store_load_mode": "stream",
+        "vllm_plugin_requirements": [],
+        "runai_streamer_concurrency": null,
+        "runai_streamer_s3_request_timeout_ms": null
+      },
+      "generation": {
+        "max_gen_toks": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {},
+        "thinking_off_template_kwargs": {}
+      },
+      "agent": {
+        "agent_kwargs": {
+          "thinking_format": "chat-template"
+        }
+      }
+    },
+    "results_path": "s3://marin-us-east-02a/marin/evals/20261005-225454-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-math500-1586/results",
+    "run_id": "20261005-225454-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-math500-1586",
+    "created_at": "2026-10-05T22:54:54.182894+00:00"
+  },
+  "swebench-verified": {
+    "model": {
+      "name": "open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "location": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "revision": "8c76b22afc38f5e95360c83ca88008f00b5ae1e0",
+      "tokenizer": null,
+      "tokenizer_revision": null,
+      "apply_chat_template": true,
+      "resource_hint": {
+        "hbm_gb": null,
+        "gpu": {
+          "H100": 8
+        },
+        "cpu": null,
+        "memory": "512g",
+        "disk": null
+      },
+      "serve": {
+        "backend": "vllm",
+        "tensor_parallel_size": 1,
+        "data_parallel_size": 8,
+        "pipeline_parallel_size": 1,
+        "gpu_memory_utilization": null,
+        "max_model_len": 73728,
+        "max_num_batched_tokens": 7168,
+        "max_num_seqs": 32,
+        "hf_overrides": null,
+        "limit_mm_per_prompt": null,
+        "tool_call_parser": "hermes",
+        "reasoning_parser": "grug",
+        "vllm_batch_invariant": null,
+        "vllm_use_flashinfer_sampler": null,
+        "vllm_extra_args": [
+          "--enable-expert-parallel",
+          "--model-loader-extra-config",
+          "{\"distributed\":true}"
+        ],
+        "speculative": null,
+        "chat_template": null,
+        "auto_overrides": false,
+        "vllm_source": null,
+        "vllm_version": null,
+        "object_store_load_mode": "stream",
+        "vllm_plugin_requirements": [],
+        "runai_streamer_concurrency": null,
+        "runai_streamer_s3_request_timeout_ms": null
+      },
+      "generation": {
+        "max_gen_toks": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {},
+        "thinking_off_template_kwargs": {}
+      },
+      "agent": {
+        "agent_kwargs": {
+          "thinking_format": "chat-template"
+        }
+      }
+    },
+    "results_path": "s3://marin-us-east-02a/marin/evals/20261005-225512-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-swebench-verified-2610/results",
+    "run_id": "20261005-225512-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-swebench-verified-2610",
+    "created_at": "2026-10-05T22:55:12.218958+00:00"
+  },
+  "ot-tblite-recovery": {
+    "model": {
+      "name": "open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "location": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+      "revision": "8c76b22afc38f5e95360c83ca88008f00b5ae1e0",
+      "tokenizer": null,
+      "tokenizer_revision": null,
+      "apply_chat_template": true,
+      "resource_hint": {
+        "hbm_gb": null,
+        "gpu": {
+          "H100": 8
+        },
+        "cpu": null,
+        "memory": "512g",
+        "disk": null
+      },
+      "serve": {
+        "backend": "vllm",
+        "tensor_parallel_size": 1,
+        "data_parallel_size": 8,
+        "pipeline_parallel_size": 1,
+        "gpu_memory_utilization": null,
+        "max_model_len": 73728,
+        "max_num_batched_tokens": 7168,
+        "max_num_seqs": 32,
+        "hf_overrides": null,
+        "limit_mm_per_prompt": null,
+        "tool_call_parser": "hermes",
+        "reasoning_parser": "grug",
+        "vllm_batch_invariant": null,
+        "vllm_use_flashinfer_sampler": null,
+        "vllm_extra_args": [
+          "--enable-expert-parallel",
+          "--model-loader-extra-config",
+          "{\"distributed\":true}"
+        ],
+        "speculative": null,
+        "chat_template": null,
+        "auto_overrides": false,
+        "vllm_source": null,
+        "vllm_version": null,
+        "object_store_load_mode": "stream",
+        "vllm_plugin_requirements": [],
+        "runai_streamer_concurrency": null,
+        "runai_streamer_s3_request_timeout_ms": null
+      },
+      "generation": {
+        "max_gen_toks": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {},
+        "thinking_off_template_kwargs": {}
+      },
+      "agent": {
+        "agent_kwargs": {
+          "thinking_format": "chat-template"
+        }
+      }
+    },
+    "results_path": "s3://marin-us-east-02a/marin/evals/20261005-225512-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-ot-tblite-recovery-3646/results",
+    "run_id": "20261005-225512-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-ot-tblite-recovery-3646",
+    "created_at": "2026-10-05T22:55:12.218958+00:00"
+  }
+}
