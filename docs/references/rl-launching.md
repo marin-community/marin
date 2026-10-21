@@ -169,11 +169,11 @@ data artifacts, topology, seed, retention, and the rendered config. Cluster rout
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
 
-`IrisSkyRLExecution.container_profile` selects the container profile for the coordinator and trainer jobs.
-It defaults to `None`, which leaves the Iris default in effect. In-pod sandbox graders need namespace
-capabilities: use `CONTAINER_PROFILE_PRIVILEGED`, as the curation driver does, and give CPU preflight
-children the same profile. Iris requires admin authorization for this elevated profile. Grader commands
-still run inside their own sandbox.
+`IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
+coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
+which leaves the Iris default in effect. In-pod sandbox graders need namespace capabilities: use
+`job_pb2.CONTAINER_PROFILE_PRIVILEGED` and give CPU preflight children the same profile. Iris requires
+admin authorization for this elevated profile. Grader commands still run inside their own sandbox.
 
 Use artifact dependencies for model and data handoffs. A raw checkpoint path hides provenance and
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's

@@ -20,6 +20,7 @@ from typing import Literal, cast
 import fsspec
 import yaml
 from iris.cluster.client.job_info import get_job_info
+from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
@@ -442,7 +443,7 @@ class IrisSkyRLExecution:
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
-    container_profile: str | None = None
+    container_profile: job_pb2.ContainerProfile | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -851,7 +852,7 @@ def _launch_config_yaml(
         "skyrl": recipe,
     }
     if execution.container_profile is not None:
-        launch["iris"]["container_profile"] = execution.container_profile
+        launch["iris"]["container_profile"] = job_pb2.ContainerProfile.Name(execution.container_profile)
     return yaml.safe_dump(launch, sort_keys=False)
 
 
