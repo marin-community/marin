@@ -40,6 +40,7 @@ class MasterWeightsWriter(StreamingFsspecWriter):
 
     DCP readers cast the FP32 record into each destination's dtype. Keeping the
     BF16 logical entries also supports model-only loads without an optimizer.
+    Model-only loads read the full FP32 source record before casting to BF16.
     """
 
     def __init__(self, path: str, *, filesystem: AbstractFileSystem) -> None:
