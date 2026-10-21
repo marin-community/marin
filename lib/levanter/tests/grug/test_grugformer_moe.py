@@ -62,6 +62,7 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -1051,7 +1052,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     [
         "ring",
         "ring_gather_combine",
-        "ring_dedup",
+        "ring_filtered",
         "ragged_all_to_all",
         "fixed_all_to_all",
         "fixed_pooled_wave_all_to_all",
@@ -1439,7 +1440,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
 
 @pytest.mark.parametrize(
     "implementation",
-    ["ring", "ring_gather_combine", "ring_dedup", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
+    ["ring", "ring_gather_combine", "ring_filtered", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
 )
 @pytest.mark.parametrize(
     "token_valid",
@@ -1712,15 +1713,12 @@ def test_ring_gather_combine_rounds_each_bf16_token_sum_once():
     ],
     ids=["no_drops", "sender_drops", "receiver_drops", "both_drops_uneven_padding", "all_padding"],
 )
-def test_ring_dedup_matches_ring_and_dense_with_drops(
+def test_ring_filtered_matches_ring_and_dense_with_drops(
     transport_capacity_factor: float, capacity_factor: float, padding: str
 ):
-    """On 8 expert shards, ring_dedup matches a dense reference that applies its sender capacity and then ring's
+    """On 8 expert shards, ring_filtered matches a dense reference that applies its sender capacity and then ring's
     receiver capacity, and matches ring whenever no sender drops. Gradients include the combine weights, which
     carry the router gradient. The uneven padding leaves shard 0 with no valid tokens."""
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
     script = """
         import math
 
@@ -1729,7 +1727,7 @@ def test_ring_dedup_matches_ring_and_dense_with_drops(
         import numpy as np
         from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-        from levanter.grug._moe.ep_ring_dedup import destination_hit_fraction
+        from levanter.grug._moe.ep_ring_filtered import destination_hit_fraction
         from levanter.grug.grug_moe import moe_mlp
 
         shards, tokens_per_shard, hidden, inter, experts, topk = 8, 24, 8, 6, 32, 4
@@ -1841,7 +1839,7 @@ def test_ring_dedup_matches_ring_and_dense_with_drops(
         expected_grads = jax.grad(lambda *a: jnp.sum(dense(*a) * cotangent), argnums=(0, 1, 2, 3))(
             x, combine_weights, w_up_gate, w_down
         )
-        actual, counts, actual_grads = backend("ring_dedup")
+        actual, counts, actual_grads = backend("ring_filtered")
         references = [(expected, expected_grads)]
         if expected_sender_dropped == 0:
             ring_out, ring_counts, ring_grads = backend("ring")
@@ -1863,18 +1861,10 @@ def test_ring_dedup_matches_ring_and_dense_with_drops(
         .replace("__CAPACITY__", repr(capacity_factor))
         .replace("__PADDING__", padding)
     )
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
+    run_on_cpu_devices(script, device_count=8)
 
 
-def test_ring_dedup_expert_combine_keeps_bf16_sums_in_float32():
+def test_ring_filtered_expert_combine_keeps_bf16_sums_in_float32():
     """The expert-side combine sums each received row's bf16 expert outputs in float32 and rounds once. Its
     backward rounds each output-row gradient once and returns the float32 routing-weight gradient unrounded."""
     received_rows, topk, dispatch_rows, hidden = 6, 4, 16, 32

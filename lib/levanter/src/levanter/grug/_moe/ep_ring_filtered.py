@@ -1,10 +1,10 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Token-deduplicated expert-parallel Grug MoE backend.
+"""Destination-filtered expert-parallel Grug MoE backend.
 
-Each shard sends every local token at most once to each expert shard that owns one of its
-selected experts, through a fixed-capacity ``all_to_all``. The expert shard runs ring's grouped
+Each shard sends every local token only to the expert shards that own one of its selected experts,
+once per shard, through a fixed-capacity ``all_to_all``. The expert shard runs ring's grouped
 ``ragged_dot`` path on the received rows, sums each token's local expert outputs, and returns one
 row per received token through a second ``all_to_all``. The sender then sums the returned rows.
 
@@ -41,7 +41,7 @@ def destination_hit_fraction(*, num_experts: int, local_experts: int, topk: int)
     return 1.0 - math.comb(num_experts - local_experts, topk) / math.comb(num_experts, topk)
 
 
-def _moe_mlp_ep_ring_dedup_local(
+def _moe_mlp_ep_ring_filtered_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
@@ -55,7 +55,7 @@ def _moe_mlp_ep_ring_dedup_local(
     transport_capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
-    """Deduplicated all-to-all dispatch, ring's grouped expert MLP, expert-side combine.
+    """Filtered all-to-all dispatch, ring's grouped expert MLP, expert-side combine.
 
     ``transport_capacity_factor`` limits each (sender, destination) pair to a multiple of the
     distinct tokens the sender would send that destination under uniform routing,

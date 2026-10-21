@@ -97,7 +97,7 @@ MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Ar
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ring_gather_combine",  # `ring` moving activations only by gather; the default on GPUs.
-    "ring_dedup",  # Expert-parallel all-to-all sending each token once per destination shard.
+    "ring_filtered",  # Expert-parallel all-to-all sending each token only to shards that own its experts.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
@@ -110,13 +110,13 @@ _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = (
     "ring",
     "ring_gather_combine",
-    "ring_dedup",
+    "ring_filtered",
     "ragged_all_to_all",
     "fixed_all_to_all",
     "fixed_pooled_wave_all_to_all",
     "deepep",
 )
-_TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS = ("ring_dedup", "fixed_pooled_wave_all_to_all")
+_TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS = ("ring_filtered", "fixed_pooled_wave_all_to_all")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (

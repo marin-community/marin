@@ -58,7 +58,7 @@ from levanter.grug._moe.ep_ring import (
     _moe_mlp_ep_ring_local,
     _scatter_add_dispatch_combine,
 )
-from levanter.grug._moe.ep_ring_dedup import _moe_mlp_ep_ring_dedup_local
+from levanter.grug._moe.ep_ring_filtered import _moe_mlp_ep_ring_filtered_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
     _axis_names,
@@ -483,7 +483,7 @@ def moe_mlp(
 
     `pooled_transport_capacity_factor` sets the sender capacity for each
     destination pool (`fixed_pooled_wave_all_to_all`) or destination shard
-    (`ring_dedup`). `num_expert_waves` sets the static wave count for the
+    (`ring_filtered`). `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
@@ -585,9 +585,9 @@ def moe_mlp(
             shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_scatter_add_dispatch_combine)
         elif resolved_implementation == "ring_gather_combine":
             shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_gather_dispatch_combine)
-        elif resolved_implementation == "ring_dedup":
+        elif resolved_implementation == "ring_filtered":
             shard_local_fn = partial(
-                _moe_mlp_ep_ring_dedup_local,
+                _moe_mlp_ep_ring_filtered_local,
                 transport_capacity_factor=pooled_transport_capacity_factor,
             )
         elif resolved_implementation == "ragged_all_to_all":
