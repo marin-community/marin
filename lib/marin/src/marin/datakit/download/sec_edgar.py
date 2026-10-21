@@ -21,7 +21,6 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.writers import atomic_rename, ensure_parent_dir, parquet_sink
 
-from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
 from marin.datakit.normalize import normalize_step
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
@@ -178,7 +177,7 @@ def download_sec_edgar_step() -> StepSpec:
         fn=remote(
             download_sec_edgar,
             resources=ResourceConfig(cpu=1, ram="2g"),
-            pip_dependency_groups=list(CPU_DATAKIT_DEPENDENCY_GROUPS),
+            pip_dependency_groups=["datakit"],
         ),
         hash_attrs={
             "hf_dataset_id": HF_DATASET_ID,
