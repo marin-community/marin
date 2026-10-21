@@ -49,7 +49,7 @@ from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.async_rl import SNOWBALL_RECIPE
-from experiments.post_training.snowball_inventory_panel import FAMILY_COUNTS
+from experiments.post_training.snowball_inventory_panel import FAMILY_COUNTS, PROMPT_TOKEN_BUDGET, pairing_identity
 from experiments.post_training.snowball_inventory_smoke import (
     CLUSTER,
     CONTAINER_PROFILE,
@@ -71,7 +71,6 @@ EVAL_ROLE_PLAN = replace(
     n_samples_per_prompt=1,
 )
 WORKER_MODULE = "experiments.post_training.snowball_inventory_evaluate_runtime"
-PROMPT_TOKEN_BUDGET = 16_384
 
 
 @dataclass(frozen=True)
@@ -176,10 +175,9 @@ def summarize_panel(tasks: list[PanelTask], outcomes: list[EvaluationOutcome]) -
             )
         )
     pairing = [(task.task_id, task.evaluation_family, task.contract_id) for task in tasks]
-    encoded = json.dumps(pairing, separators=(",", ":")).encode()
     return {
         "complete": len(observed) == len(tasks) and all(outcome.score is not None for outcome in outcomes),
-        "pairing_identity": "sha256:" + hashlib.sha256(encoded).hexdigest(),
+        "pairing_identity": pairing_identity(pairing),
         "families": families,
         "aggregate_fixed_denominator_mean": sum(outcome.score or 0.0 for outcome in outcomes) / len(tasks),
         "macro_family_mean": sum(value["fixed_denominator_mean"] for value in families.values()) / len(families),

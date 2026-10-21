@@ -44,6 +44,7 @@ from taskcompendium.models import ScriptGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 from experiments.post_training.snowball_curriculum.export import DerivedDeployment, derived_record
+from experiments.post_training.snowball_inventory_panel import PROMPT_TOKEN_BUDGET
 from experiments.post_training.snowball_inventory_probe import package_revisions, preflight_tokenizer
 
 REFERENCE_RUNTIME_LIMITS = {"model_turn_timeout": 1800.0, "total_turn_timeout": 2400.0, "attempt_timeout": 3600.0}
@@ -200,7 +201,7 @@ def preflight(request: dict) -> dict:
     protocol = evaluation_protocol(config)
     expected_protocol = {
         "max_new_tokens": max_new_tokens,
-        "request_window_tokens": 16384 + max_new_tokens,
+        "request_window_tokens": PROMPT_TOKEN_BUDGET + max_new_tokens,
         "temperature": 0.0,
         "samples": 1,
     }
@@ -371,7 +372,7 @@ async def recover_results(request: dict) -> dict:
     config = load_document(request["launch_config_yaml"])
     original = results(request)
     root = StoragePath(request["output_path"])
-    if str(root) != str(config.artifacts.terminal_manifest_uri).rsplit("/", 1)[0]:
+    if root != StoragePath(str(config.artifacts.terminal_manifest_uri)).parent:
         raise ValueError("Recovery output must remain within this inference artifact's declared root")
     original_bytes = json_bytes(original)
     snapshot = root / "original-outcomes.json"
