@@ -20,6 +20,7 @@ from verifyit.closure_scoring import (
 from verifyit.structure_closure import PrefixStatus, json_closure_state
 from verifyit.tool_call_markup import THINK_CLOSE, THINK_OPEN, TOOL_CLOSE, TOOL_OPEN
 
+TASK_ID_PREFIX = "structure-closure:"
 CLOSE_REQUIRED = "close_required"
 CONTINUE_REQUIRED = "continue_required"
 ESCAPE_CONTINUE_REQUIRED = "escape_continue_required"
