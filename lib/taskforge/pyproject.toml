@@ -17,6 +17,9 @@ dependencies = [
     # click for its CLI and marin-iris to resolve the GLM relay inside an Iris task.
     "click",
     "marin-iris",
+    # Its failed-run analysis is a Zephyr pipeline over the rollout records of rolloutengine.
+    "marin-rolloutengine",
+    "marin-zephyr",
 ]
 
 [dependency-groups]
