@@ -12,6 +12,7 @@ import click
 import pytest
 from click.testing import CliRunner
 from iris.client.client import IrisClient
+from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import _coordinator_request, rl_build_options
@@ -46,13 +47,13 @@ def _execution() -> IrisSkyRLExecution:
     )
 
 
-@pytest.mark.parametrize("profile", [None, "CONTAINER_PROFILE_PRIVILEGED"])
-def test_coordinator_uses_the_explicit_job_container_profile(profile: str | None) -> None:
+@pytest.mark.parametrize("profile", [None, job_pb2.CONTAINER_PROFILE_PRIVILEGED])
+def test_coordinator_uses_the_explicit_job_container_profile(profile: job_pb2.ContainerProfile | None) -> None:
     execution = dataclasses.replace(_execution(), container_profile=profile)
     _, request = _coordinator_request(
         [_step(execution)], "experiments.test_rl", ("--run",), 1, Path("/workspace/marin"), {}
     )
-    assert request.resources.container_profile == profile
+    assert request.resources.container_profile == (None if profile is None else "CONTAINER_PROFILE_PRIVILEGED")
 
 
 def test_coordinator_request_replays_the_experiment_main() -> None:
