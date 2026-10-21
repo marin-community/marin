@@ -3153,7 +3153,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=18" },
     { name = "pycosat", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'", specifier = "==0.6.6" },
     { name = "pycosat", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl" },
-    { name = "pydantic", specifier = ">=2.12,<3" },
+    { name = "pydantic", specifier = ">=2.12.2,<3" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "quack-kernels", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.6.4" },
     { name = "ray", specifier = "==2.51.1" },
