@@ -188,6 +188,9 @@ lines.on("close", () => {
     process.stderr.write("__AUTHENTICATION_FAILURE_MARKER__\\n");
   } else if (/maximum context length|context_length_exceeded/i.test(lastAssistantErrorMessage ?? "")) {
     process.stderr.write("__CONTEXT_LENGTH_FAILURE_MARKER__\\n");
+  } else {
+    // Do not put an untrusted model error message on the evidence channel.
+    process.stderr.write("HARBOR_PI_ASSISTANT_ERROR\\n");
   }
   process.exitCode = 1;
 });

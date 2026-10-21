@@ -41,6 +41,10 @@ def _pi_failure_code(error: BaseException) -> str | None:
 def _nonzero_agent_failure_code(result: ExecResult) -> str:
     """Classify install/agent exits without persisting command output."""
     output = f"{result.stderr or ''}\n{result.stdout or ''}".lower()
+    if "harbor_pi_missing_assistant_result" in output:
+        return "missing_assistant_result"
+    if "harbor_pi_assistant_error" in output:
+        return "assistant_error"
     if "eai_again" in output or "temporary failure resolving" in output:
         return "dns_temporary_failure"
     if "etimedout" in output or "connection timed out" in output:

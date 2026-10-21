@@ -19,6 +19,8 @@ def test_pi_failure_code_only_classifies_fixed_safe_messages():
 @pytest.mark.parametrize(
     ("stderr", "expected"),
     [
+        ("HARBOR_PI_MISSING_ASSISTANT_RESULT secret=do-not-persist", "missing_assistant_result"),
+        ("HARBOR_PI_ASSISTANT_ERROR secret=do-not-persist", "assistant_error"),
         ("npm error code EAI_AGAIN secret=do-not-persist", "dns_temporary_failure"),
         ("npm ERR! code ETIMEDOUT", "network_timeout"),
         ("npm ERR! code ECONNRESET", "connection_reset"),

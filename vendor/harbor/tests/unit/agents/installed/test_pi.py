@@ -55,7 +55,9 @@ def test_pi_json_validator_requires_assistant_result(stream, expected_code):
     assert result.returncode == expected_code
     assert result.stdout == stream
     if expected_code and "message_end" not in stream:
-        assert "HARBOR_PI_MISSING_ASSISTANT_RESULT" in result.stderr
+        assert result.stderr == "HARBOR_PI_MISSING_ASSISTANT_RESULT\n"
+    elif expected_code:
+        assert result.stderr == "HARBOR_PI_ASSISTANT_ERROR\n"
 
 
 def test_pi_json_validator_does_not_echo_events_into_evidence_channel():
