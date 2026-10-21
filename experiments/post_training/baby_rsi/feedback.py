@@ -170,12 +170,10 @@ async def generate_tasks(ideas: AsyncIterable[CapabilityIdea], config: Synthesis
 
 
 def training_ids(accepted: AcceptedTask, count: int) -> list[str]:
-    """The task ids of the training instances of an accepted task."""
     return [f"{accepted.task.id}.train-{k}" for k in range(count)]
 
 
 def probe_ids(accepted: AcceptedTask, count: int) -> list[str]:
-    """The task ids of the held-out probes of an accepted task."""
     return [f"{accepted.task.id}.probe-{k}" for k in range(count)]
 
 
