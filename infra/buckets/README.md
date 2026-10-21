@@ -76,7 +76,7 @@ The declared R2 policy preserves seven-day incomplete-multipart cleanup and the 
 CoreWeave bucket lifecycle configurations apply the same nine expiration prefixes and abort
 incomplete multipart uploads after seven days.
 
-The shared scratch bucket for every CoreWeave cluster is declared as
+The default shared scratch bucket for CoreWeave clusters is declared as
 `data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`, separately from the region
 mirror set. Permanent east-region artifacts remain in `marin-us-east-02a`; `hero-checkpoints`
 is reserved for hero checkpoints.
@@ -86,6 +86,13 @@ Only `marin-us-east-02a` denies every principal the `s3:DeleteObject` and
 `s3:DeleteObjectVersion` actions under `marin/grug/hero-*`. The `hero-checkpoints` bucket and
 temporary checkpoint staging paths remain deletable. Before a policy update, audit each bucket's
 live access policy; Pulumi replaces the complete bucket policy.
+
+`marin-rno2a` is the RNO2A regional data bucket. It uses the same organization access policy,
+multipart cleanup, and `tmp/ttl=Nd/` lifecycle rules as the other regional buckets. RNO2A task
+configuration selects this bucket for both durable outputs and scratch with `MARIN_PREFIX`
+and `MARIN_TEMP_PREFIX`; it does not need a separate scratch bucket. Apply the bucket stack
+before deploying that task configuration. Existing RNO2A controller state and Finelog archives
+keep their `marin-us-east-02a` paths until a verified migration preserves their referenced objects.
 
 ## Automation boundary
 
