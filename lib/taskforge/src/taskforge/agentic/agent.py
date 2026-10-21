@@ -56,6 +56,9 @@ AGENTIC_REVISION = "1"
 """The revision of the agent task in the ``Source`` of each agent attempt."""
 WORKSPACE_SEMANTICS = {Backend.LOCAL: CommandSemantics.LINUX_PROCESS, Backend.SHELLSIM: CommandSemantics.SHELL_SIMULATOR}
 """The command semantics of the agent's shell on each supported workspace backend."""
+SHELL_OUTPUT_BYTES = 32 * 1024
+"""The most stdout, and stderr, of one agent shell command. A larger output, for example a whole TaskSpec, fills the
+agent's context and ends the session."""
 NOT_TEXT_MODES = frozenset({"predicted_action", "structure_closure"})
 """In-process verifyit modes that grade function calls or a prefill continuation, not a final answer."""
 
@@ -79,7 +82,9 @@ class AgentResult:
 async def generate_tasks(idea: CapabilityIdea, n: int, config: AgenticConfig) -> AgentResult:
     """Make up to ``n`` different tasks for ``idea``. A session that makes fewer gives a report that says why."""
     tools = TaskforgeTools(idea, n, config)
-    harness = ShellHarness(command_timeout=config.command_timeout, tools={AGENT_TOOLS: tools})
+    harness = ShellHarness(
+        command_timeout=config.command_timeout, output_limit_bytes=SHELL_OUTPUT_BYTES, tools={AGENT_TOOLS: tools}
+    )
     workspace = config.workspace_factory
     engine = RolloutEngine({workspace.backend: workspace}, {AGENT_HARNESS: harness})
     spec = TaskRolloutSpec(
@@ -115,6 +120,7 @@ def agent_task(idea: CapabilityIdea, n: int, config: AgenticConfig) -> TaskSpec:
         judge_calls=budget.judge_calls,
         web_calls=budget.web_calls,
         max_empty_budget_calls=MAX_EMPTY_BUDGET_CALLS,
+        shell_output_kib=SHELL_OUTPUT_BYTES // 1024,
     )
     workspace = WORKDIR.relative_to("/")
     files = (

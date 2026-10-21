@@ -111,6 +111,9 @@ REVIEW_FILE_CHARS = 20_000
 """The most characters of each solver file that the judge reads: it must see a synopsis or a table to judge it."""
 MAX_EMPTY_BUDGET_CALLS = 3
 """Calls on an empty budget after which the tools stop the session, so that an agent cannot loop on the refusal."""
+EARLY_FINISH_BUDGET_SHARE = 0.5
+"""``finish`` refuses once when fewer than n tasks are accepted and more than this share of the solver rollouts are
+left: an agent can stop after a few too-easy versions, when a harder version would get into the band."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
 
@@ -241,6 +244,7 @@ class TaskforgeTools:
         self.report: str | None = None
         self.spend = ToolSpend()
         self.empty_budget_calls = 0
+        self.early_finish_refused = False
         self.slots = asyncio.Semaphore(config.max_concurrent_rollouts)
 
     def tools(self, requirement: ProviderRequirement) -> tuple[FunctionDefinition, ...]:
@@ -451,6 +455,16 @@ class ToolSession:
         return await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
 
     async def finish(self, report: str) -> ToolCallResult:
+        budget = self.config.budget.solver_rollouts
+        left = budget - self.tools.spend.solver_rollouts
+        accepted = len(self.tools.accepted)
+        if accepted < self.tools.n and left > EARLY_FINISH_BUDGET_SHARE * budget and not self.tools.early_finish_refused:
+            self.tools.early_finish_refused = True
+            return _error(
+                f"{accepted} of {self.tools.n} tasks are accepted and {left} of {budget} solver rollouts are left. "
+                "Use them: make the task harder with more steps or more data, or make a different task. "
+                "Call finish again only if the capability cannot give tasks in the band."
+            )
         self.tools.report = report
         return _result({"finished": True, "accepted_tasks": len(self.tools.accepted)}, done=True)
 
@@ -525,10 +539,15 @@ class _ReplayModel:
 
 
 def _next_step(evidence: Evidence, gate: Gate) -> dict[str, str]:
-    """What a version whose pass rate is in the band so far still needs before ``submit``, as a nudge to finish it."""
+    """The next step for a version, from its pass rate so far: change a version above the band, finish one in it.
+
+    More rollouts of a version above the band seldom bring it into the band, so a harder version costs less.
+    """
     low, high = gate.solver_band
-    if evidence.solver_runs == 0 or not low <= evidence.solver_pass_rate <= high:
+    if evidence.solver_runs == 0 or evidence.solver_pass_rate < low:
         return {}
+    if evidence.solver_pass_rate > high:
+        return {"next": "This version is above the band so far: write a harder version to a new file."}
     needs = {
         "controls": "a correct control that passes and a wrong control that fails",
         "solver band": f"{gate.min_solver_runs} graded solver rollouts in the band",
