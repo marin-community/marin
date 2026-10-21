@@ -55,6 +55,7 @@ POOL_SCHEMA = pa.schema(
     ]
 )
 BATCH_ROWS = 128
+ARTIFACT_MANIFEST = "artifact-manifest.json"
 
 
 def file_sha256(path: StoragePath) -> str:
@@ -96,7 +97,7 @@ def write_manifest(root: StoragePath) -> dict:
     files = []
     paths = [directory / name for directory, _, names in root.walk() for name in names]
     for path in sorted(paths, key=str):
-        if path == root / "artifact-manifest.json":
+        if path == root / ARTIFACT_MANIFEST:
             continue
         with path.open("rb") as stream:
             size = 0
@@ -106,14 +107,14 @@ def write_manifest(root: StoragePath) -> dict:
                 digest.update(chunk)
         files.append({"path": path.relative_to(root), "size": size, "sha256": digest.hexdigest()})
     manifest = {"format": 1, "files": files}
-    (root / "artifact-manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+    (root / ARTIFACT_MANIFEST).write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
     return manifest
 
 
 def verify_manifest(root: StoragePath, expected_sha256: str) -> None:
     """Verify a pinned artifact inventory before consuming its payloads."""
     root = _manifest_root(root)
-    path = root / "artifact-manifest.json"
+    path = root / ARTIFACT_MANIFEST
     if file_sha256(path) != expected_sha256:
         raise ValueError("Artifact manifest differs from its immutable pin")
     manifest = json.loads(path.read_bytes())
@@ -121,7 +122,7 @@ def verify_manifest(root: StoragePath, expected_sha256: str) -> None:
         raise ValueError("Unknown artifact manifest format")
     listed = [entry["path"] for entry in manifest["files"]]
     actual = {(directory / name).relative_to(root) for directory, _, names in root.walk() for name in names}
-    actual.discard("artifact-manifest.json")
+    actual.discard(ARTIFACT_MANIFEST)
     if len(listed) != len(set(listed)) or set(listed) != actual:
         raise ValueError("Artifact inventory differs from its complete manifest")
     for entry in manifest["files"]:
