@@ -31,6 +31,7 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.mxfp8.quantize import SF_TILE_ROWS
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
     AttentionMask,
@@ -371,6 +372,15 @@ class GrugModelConfig:
                 f"expert_precision={self.expert_precision} requires moe_implementation='ragged_all_to_all', "
                 f"got {self.moe_implementation!r}"
             )
+        if self.expert_precision == ExpertPrecision.MXFP8:
+            # The MXFP8 kernels' swizzled scales tile both expert GEMM widths; the expert MLP checks this
+            # too, but only once the model is traced on the allocated devices.
+            expert_width = self.latent_dim if self.latent_dim is not None else self.hidden_dim
+            if expert_width % SF_TILE_ROWS or self.intermediate_dim % SF_TILE_ROWS:
+                raise ValueError(
+                    f"expert_precision={self.expert_precision} requires an expert width and intermediate_dim that "
+                    f"are multiples of {SF_TILE_ROWS}; got {expert_width} and {self.intermediate_dim}"
+                )
         if self.num_expert_waves <= 0:
             raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:

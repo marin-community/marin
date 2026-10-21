@@ -938,7 +938,10 @@ def test_dropless_eval_of_mxfp8_experts_computes_the_bf16_expert_function():
         ("replica_dcn", "data", "context", "expert", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
-    bf16_config = dataclasses.replace(_latent_config(), moe_implementation="ragged_all_to_all")
+    # MXFP8 configs need expert widths that are multiples of the kernels' 128-wide scale tiles.
+    bf16_config = dataclasses.replace(
+        _latent_config(), moe_implementation="ragged_all_to_all", hidden_dim=128, intermediate_dim=128
+    )
     mxfp8_config = dataclasses.replace(bf16_config, expert_precision=ExpertPrecision.MXFP8)
     tokens = jax.random.randint(jax.random.key(1), (2, bf16_config.max_seq_len), 0, bf16_config.vocab_size)
     dropless_logits = eqx.filter_jit(lambda m, t: train._to_dropless_local(m, implementation="scatter").logits(t))

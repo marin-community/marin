@@ -208,6 +208,10 @@ def build_diagnostic_run(
             f"num_experts={model.num_experts} must be divisible by expert ({expert_axis_size}) * "
             f"context ({context_axis_size}) = {bank_shards}, the expert bank's storage split"
         )
+    # Without a second expert rank the ragged backend runs its local scatter path, which has no MXFP8
+    # expert MLP; `moe_mlp` would reject this only once the model is traced on the rack.
+    if model.expert_precision == ExpertPrecision.MXFP8 and expert_axis_size < 2:
+        raise ValueError(f"expert_precision=mxfp8 requires expert_axis_size >= 2, got {expert_axis_size}")
     local_experts = model.num_experts // expert_axis_size
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(
