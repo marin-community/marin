@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+import subprocess
+import zipfile
 from dataclasses import dataclass
 from email.parser import Parser
 from pathlib import Path
-import subprocess
-import tomllib
-import zipfile
 
 from packaging.requirements import Requirement
 import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-PYPROJECT = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
+
+
 @dataclass(frozen=True)
 class BuiltWheel:
     names: set[str]
@@ -99,19 +99,6 @@ def test_training_extras_publish_hardware_policy_and_rollout_requirements(built_
     assert "Extras `cpu` and `cuda` are incompatible" in conflict.stderr
 
 
-def test_rollout_runtime_exports_pinned_harbor_for_linux_training() -> None:
-    platform = {"sys_platform": "linux", "platform_machine": "x86_64"}
-    requirements = _exported_requirements(("megatron", "vllm"))
-    harbor = next(
-        requirement for requirement in requirements
-        if requirement.name == "harbor"
-        and (requirement.marker is None or requirement.marker.evaluate(platform))
-    )
-    assert harbor.url is not None
-    assert harbor.url.startswith("git+https://github.com/marin-community/harbor.git@")
-    assert harbor.url.rsplit("@", 1)[-1] == PYPROJECT["tool"]["uv"]["sources"]["harbor"]["rev"]
-
-
 def _exported_requirements(extras: tuple[str, ...]) -> list[Requirement]:
     command = ["uv", "export", "--frozen", "--no-annotate", "--no-dev", "--no-hashes"]
     for extra in extras:
@@ -123,7 +110,11 @@ def _exported_requirements(extras: tuple[str, ...]) -> list[Requirement]:
         text=True,
         check=True,
     ).stdout.splitlines()
-    return [Requirement(line) for line in exported if line and not line.startswith(("#", "-e "))]
+    return [
+        Requirement(line)
+        for line in exported
+        if line and not line.startswith(("#", "-e ", "./"))
+    ]
 
 
 @pytest.mark.parametrize("extras", [("cuda",), ("megatron", "vllm")])

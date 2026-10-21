@@ -31,6 +31,9 @@ Harbor is excluded from Marin's uv workspace. Its own lock selects local editabl
 Marin FineStore and Rigging packages. The normal Marin environment and Iris
 `--all-packages` environments do not install Harbor. The `runtime` extra preserves
 the deployed Daytona SDK version, 0.200.2.
+SkyRL selects this same source through `vendor/skyrl/harbor` and records it in
+its independent lock. The Iris runtime bundle copies and hashes Harbor's package
+files so a change to this tree changes the SkyRL runtime identity.
 
 Edit Harbor and its local Marin dependencies in the same pull request. Update
 Harbor's lock when a dependency manifest changes, and run
