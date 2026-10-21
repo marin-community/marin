@@ -210,8 +210,7 @@ GRUG_SMOKE_RUNS = tuple(
 
 # The unseeded runs' eight samples per candidate plus eight more at seed 1: pass rates and selection at K=16.
 GRUG_K16_RUNS = tuple(
-    replace(run, name=f"{run.name}-k16", extra_seeds=(1,))
-    for run in (SWE_GRUG, TERMINAL_GRUG, OPENHANDS_GRUG)
+    replace(run, name=f"{run.name}-k16", extra_seeds=(1,)) for run in (SWE_GRUG, TERMINAL_GRUG, OPENHANDS_GRUG)
 )
 
 # SWE and Terminal pivots from the same K=16 pass rates at lambda 0.65: 1 to 10 passes of 16.
