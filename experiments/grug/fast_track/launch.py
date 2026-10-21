@@ -188,6 +188,9 @@ class MatchMode(StrEnum):
 
 # Data. In-region 16k BPE-ladder cache (train split), document-shuffled so sequential reads interleave domains.
 V16384_CACHE_DIR = "s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_shuf/train"
+# The same tokens with whole 4096-token sequences permuted (seq_shuffle_cache.py), so a long document's
+# sequences are no longer neighbors and the block shuffle gives near-iid batches.
+V16384_SEQSHUF_CACHE_DIR = "s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_seqshuf/train"
 V16384_TOKENIZER = "hero-bpe-v16384"
 V16384_VOCAB = 16384
 # Paloma caches rebuilt from the in-region detokenized raw (dodges the failed 2026.06.28 stubs).
@@ -1078,6 +1081,12 @@ def _layer_skip_rule(
     "backend, at an eval-only capacity that cannot drop.",
 )
 @click.option(
+    "--train-cache",
+    default=V16384_CACHE_DIR,
+    show_default=True,
+    help=f"Flat train cache. {V16384_SEQSHUF_CACHE_DIR} holds the same tokens in sequence-shuffled order.",
+)
+@click.option(
     "--data-shuffle",
     default="block",
     show_default=True,
@@ -1194,6 +1203,7 @@ def main(
     eval_on_train_dispatch: bool,
     eval_precision: str,
     data_shuffle: str,
+    train_cache: str,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -1255,6 +1265,7 @@ def main(
         eval_on_train_dispatch=eval_on_train_dispatch,
         eval_precision=EvalPrecision(eval_precision),
         data_shuffle=_data_shuffle(data_shuffle),
+        train_cache_dir=train_cache,
     )
 
 
