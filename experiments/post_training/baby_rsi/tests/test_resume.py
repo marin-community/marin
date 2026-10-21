@@ -3,6 +3,11 @@
 
 """A preempted run continues from its last complete adapter and gives back the synthesized tasks it did not train."""
 
+import pytest
+
+# The loop runs in the marin-taskforge environment; other suites skip it.
+pytest.importorskip("taskforge")
+
 import asyncio
 import io
 import json
