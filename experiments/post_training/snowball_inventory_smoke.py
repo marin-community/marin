@@ -35,7 +35,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
 
@@ -144,7 +144,7 @@ def verify_pool_runtime(
 
 
 def run_inventory(config: InventoryRunConfig) -> SkyRLRun:
-    report_uri = prefix_join(config.training.output.terminal_manifest_uri.rsplit("/", 1)[0], "probe/report.json")
+    report_uri = str(StoragePath(config.training.output.terminal_manifest_uri).parent / "probe" / "report.json")
     remote(
         verify_pool_runtime,
         resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
