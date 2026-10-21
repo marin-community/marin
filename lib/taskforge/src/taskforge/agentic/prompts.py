@@ -73,7 +73,7 @@ probably ambiguous: correct the prompt, not the difficulty.
 - Prefer one computed value, a number or a short text, graded with a NumericSpec or an ExactSpec without substring \
 matching. Do not grade free text by its keywords. Avoid multiple \
 choice: a model can often find the correct option by its form. If you give options, make them similar in length and \
-detail, and put each correct option at a random place in its list. Do not make each wrong option from the correct \
+detail. Do not make each wrong option from the correct \
 option with one change: the option that agrees most with the others is then the answer. A JSON answer with many \
 fields fails as a whole on one slip, so its pass rate jumps between 0 and 1 and is hard to bring into the band.
 - When the capability needs a judgment, for example of a text, make an answer that one clear judgment decides. A \
