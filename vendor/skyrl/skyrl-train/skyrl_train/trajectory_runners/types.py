@@ -54,7 +54,7 @@ class TaskRequestBatch:
 
     @property
     def public_prompts(self) -> tuple[ConversationType, ...]:
-        return tuple(task_messages(row.lowered) for row in self.rows)
+        return tuple(task_messages(row.spec) for row in self.rows)
 
 
 @dataclass(frozen=True)

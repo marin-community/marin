@@ -55,6 +55,13 @@ from skyrl_train.rollouts.pi_scenario_etl import (
 )
 
 
+def test_pi_task_request_exposes_public_prompt_for_retention(task_inputs):
+    _, request = task_inputs
+    prompts = request.public_prompts
+    assert len(prompts) == 1
+    assert any(message["role"] == "user" and "six plus six" in message["content"] for message in prompts[0])
+
+
 @pytest.mark.asyncio
 async def test_pi_rejects_offline_sandbox_before_installing_agent(task_inputs):
     config, request = task_inputs
