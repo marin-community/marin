@@ -293,7 +293,7 @@ class IrisJobHandle:
         self._job.cancel()
 
 
-def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str, max_concurrency: int) -> None:
+def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
     """Entrypoint for actor-hosting Iris jobs.
 
     Instantiates the actor class, creates an ActorServer, registers the
@@ -328,9 +328,7 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str, 
     finally:
         _reset_current_actor(token)
 
-    # Long-running actor methods occupy executor threads. Honor Fray's actor
-    # concurrency contract so control-plane calls still have a thread available.
-    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"), max_concurrency=max_concurrency)
+    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"))
     server.register(actor_name, instance)
     actual_port = server.serve_background()
 
@@ -737,9 +735,7 @@ class FrayIrisClient:
         finally:
             _reset_current_actor(token)
 
-        # host_actor runs in the submitting process, so it must apply the same
-        # ActorConfig contract as actors submitted through create_actor_group.
-        server = ActorServer(host="0.0.0.0", port=0, max_concurrency=actor_config.max_concurrency)
+        server = ActorServer(host="0.0.0.0", port=0)
         server.register(actor_name, instance)
         actual_port = server.serve_background()
 
@@ -796,14 +792,7 @@ class FrayIrisClient:
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
-        entrypoint = IrisEntrypoint.from_callable(
-            _host_actor,
-            actor_class,
-            args,
-            kwargs,
-            name,
-            actor_config.max_concurrency,
-        )
+        entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
 
         retry_kwargs: dict[str, Any] = {}
         if actor_config.max_task_retries is not None:
