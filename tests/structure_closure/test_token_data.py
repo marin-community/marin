@@ -30,7 +30,11 @@ def test_native_tool_prompts_preserve_content_and_continuation_controls(tokenize
             continue
         prompt = tokenizer.decode(native["prompt_token_ids"], clean_up_tokenization_spaces=False)
         target = tokenizer.decode(native["target_token_ids"], clean_up_tokenization_spaces=False)
-        assert prompt.startswith('TOOLS=[{"type": "function"')
+        [advertised] = json.loads(prompt.splitlines()[0].partition("=")[2])
+        assert advertised["function"]["name"] == "write_result"
+        parameters = advertised["function"]["parameters"]
+        assert set(parameters["required"]) == {"task", "result"}
+        assert parameters["properties"]["result"]["type"] == "array"
         assert native["prefix"].startswith("<tool_call>\n")
         assert native["prefix"] + target == native["expected"]
         assert json.loads(native["expected"].removeprefix("<tool_call>").removesuffix("</tool_call>")) == json.loads(
