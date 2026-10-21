@@ -219,7 +219,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200532-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-summary-0e5acf1bd86c43ce91c4c864aa7b5518-65k-16k-summary-9d8f8f35df805226abe49ab91bd96d34/results",
     "started_at": "2026-10-20T22:57:09.124000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T02:17:21.290375+00:00",
     "evidence": "Kueue WorkloadEvictedDueToPreempted",
     "arm": "65k/16k, summary"
   },
