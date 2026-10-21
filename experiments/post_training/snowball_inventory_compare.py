@@ -38,6 +38,8 @@ from experiments.post_training.snowball_inventory_evaluate import (
 from experiments.post_training.snowball_inventory_panel import FAMILY_COUNTS
 from experiments.post_training.snowball_inventory_smoke import (
     SEED,
+    TOKENIZER_MODEL,
+    TOKENIZER_REVISION,
     InventoryRunConfig,
     ModelSourceIdentity,
     inventory_training_execution,
@@ -55,9 +57,16 @@ EVALUATION_STEPS = tuple(range(0, MAX_STEPS + 1, CHECKPOINT_INTERVAL))
 class Initializer(StrEnum):
     SFT = "sft"
     DRDOOM = "drdoom"
+    SMARTIE = "smartie"
+
+
+class EvaluationSchedule(StrEnum):
+    PERIODIC = "periodic"
+    AFTER_EXPORT = "after-export"
 
 
 INITIALIZERS = {
+    Initializer.SMARTIE: ModelSourceIdentity(TOKENIZER_MODEL, TOKENIZER_REVISION),
     Initializer.SFT: ModelSourceIdentity(
         "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21", "fe666478454e79fe6027a0bab0388d9abd68f51a"
     ),
@@ -96,10 +105,19 @@ def summarize_periodic_evaluation(launch_document: str, probe_report: dict, step
     return report
 
 
-def comparison_recipe(model_uri: str, *, judge_base_url: str, judge_model: str) -> dict:
+def comparison_recipe(
+    model_uri: str,
+    *,
+    judge_base_url: str,
+    judge_model: str,
+    max_steps: int = MAX_STEPS,
+    evaluation_schedule: EvaluationSchedule = EvaluationSchedule.PERIODIC,
+) -> dict:
     """Keep the current optimizer/mixture recipe and evaluate every original panel row."""
+    if max_steps < CHECKPOINT_INTERVAL or max_steps % CHECKPOINT_INTERVAL:
+        raise ValueError("max_steps must be a positive multiple of 25")
     recipe = training_recipe(
-        MAX_STEPS,
+        max_steps,
         request_window_tokens=REQUEST_WINDOW_TOKENS,
         max_new_tokens=MAX_NEW_TOKENS,
         judge_base_url=judge_base_url,
@@ -134,7 +152,7 @@ def comparison_recipe(model_uri: str, *, judge_base_url: str, judge_model: str) 
             "expected_tasks": sum(FAMILY_COUNTS.values()),
             "minimum_scored_tasks": sum(FAMILY_COUNTS.values()),
         },
-        {"type": "hf_model_save", "save_steps": MAX_STEPS},
+        {"type": "hf_model_save", "save_steps": max_steps},
         {"type": "inference_stats"},
         {"type": "database_registration"},
     ]
@@ -151,6 +169,11 @@ def comparison_recipe(model_uri: str, *, judge_base_url: str, judge_model: str) 
             "stop": None,
         },
     )
+    if evaluation_schedule == EvaluationSchedule.AFTER_EXPORT:
+        trainer.update(eval_interval=-1, eval_before_train=False)
+        trainer["callbacks"] = [
+            callback for callback in trainer["callbacks"] if callback["type"] not in {"evaluation", "best_checkpoint"}
+        ]
     return recipe
 
 
@@ -167,10 +190,15 @@ def comparison_step(
     validation_sha256: str,
     judge_base_url: str,
     judge_model: str,
+    max_steps: int = MAX_STEPS,
+    evaluation_schedule: EvaluationSchedule = EvaluationSchedule.PERIODIC,
+    expected_model_manifest_identity: str | None = None,
+    expected_tokenizer_template_sha256: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
-    """Build one isolated 50-update arm, with full-pool and original-panel CPU admission."""
+    """Build an isolated initializer arm with full-pool and original-panel CPU admission."""
     identity = INITIALIZERS[initializer]
-    name = user_owned_name(f"checkpoints/snowball-inventory-compare/{initializer.value}")
+    suffix = "/iterations" if evaluation_schedule == EvaluationSchedule.AFTER_EXPORT else ""
+    name = user_owned_name(f"checkpoints/snowball-inventory-compare/{initializer.value}{suffix}")
     model = ArtifactStep.adopt(
         f"models/snowball-inventory-compare/{initializer.value}",
         version,
@@ -187,7 +215,14 @@ def comparison_step(
             name=name,
             version=version,
             config_yaml=yaml.safe_dump(
-                comparison_recipe(model_uri, judge_base_url=judge_base_url, judge_model=judge_model), sort_keys=False
+                comparison_recipe(
+                    model_uri,
+                    judge_base_url=judge_base_url,
+                    judge_model=judge_model,
+                    max_steps=max_steps,
+                    evaluation_schedule=evaluation_schedule,
+                ),
+                sort_keys=False,
             ),
             runtime=SkyRLRuntime(),
             model=ArtifactHfModel(model, identity.repository, identity.revision, relative_path=""),
@@ -207,7 +242,15 @@ def comparison_step(
     )
 
     def build_config(ctx: StepContext) -> InventoryRunConfig:
-        return InventoryRunConfig(rl.build_config(ctx), pool_sha256, validation_sha256, dict(FAMILY_COUNTS), identity)
+        return InventoryRunConfig(
+            rl.build_config(ctx),
+            pool_sha256,
+            validation_sha256,
+            dict(FAMILY_COUNTS),
+            identity,
+            expected_model_manifest_identity,
+            expected_tokenizer_template_sha256,
+        )
 
     return replace(rl, run=run_inventory, build_config=build_config)
 
