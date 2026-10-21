@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use Echo"
+  short_description: "Search Marin knowledge and record incidents"
+  default_prompt: "Use $use-echo to find prior Marin context or maintain the requested knowledge or incident record, reusing relevant evidence throughout the investigation."

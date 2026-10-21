@@ -99,6 +99,21 @@ authenticate with Loom, and profile permissions still apply.
 
 ## Automation identities
 
+Repository-owned task procedures live in `procedures/`:
+
+- [Lint reporting](procedures/lint-review.md), used by the `agentic-lint` profile.
+- [Canary triage](procedures/triage-canary.md), named by the canary failure action.
+- [Docs/code parity](procedures/scrub-docs-code-parity.md),
+  [experiment summaries](procedures/scrub-experiment-issue-tldrs.md), and
+  [self-improvement](procedures/scrub-reflection-self-improvement.md), for
+  explicitly assigned scheduler work. Their procedures retain the harness
+  result footer and, where declared, schedule metadata. Schedulers must name
+  the procedure path in the assignment; these files are not discoverable skills.
+
+The `pr-review` and `pr-holistic-review` profiles both use `review-pr`, selecting
+its correctness and holistic reporting contracts respectively. Profile
+permissions and automation behavior remain specific to each pass.
+
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
 activation. The deployment setting

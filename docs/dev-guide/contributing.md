@@ -64,8 +64,8 @@ Before opening a pull request:
 2. Run `uv run --no-project infra/ci/run_tests.py`.
 3. If your change adds, removes, renames, or rewires docs pages or docs-owned links, run `uv run python infra/check_docs_source_links.py`.
 4. If your change is docs-heavy, run `uv run mkdocs build --strict`.
-5. If your change adds or rewrites substantial prose, do a final prose-only review using `./.agents/skills/writing-style/SKILL.md`. Remove generic significance framing, stock AI-writing templates, and polished filler that does not add information.
-6. Follow `./.agents/skills/writing-style/pull-requests.md` for the PR title and body. The body becomes the squash-merge commit message: lead with what changes, then why, and retain the evidence and caveats a future reader needs.
+5. If your change adds or rewrites substantial prose, do a final prose-only review using [the writing guide](writing-style/index.md). Remove generic significance framing, stock AI-writing templates, and polished filler that does not add information.
+6. Follow [the PR writing guide](writing-style/pull-requests.md) for the PR title and body. The body becomes the squash-merge commit message: lead with what changes, then why, and retain the evidence and caveats a future reader needs.
 7. If the work came from an issue, end the PR body with `Fixes #NNNN` or `Part of #NNNN`.
 8. After pushing, verify the relevant GitHub CI checks pass before considering the PR ready for review.
 
