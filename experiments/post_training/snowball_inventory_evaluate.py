@@ -36,6 +36,7 @@ from marin.rl.skyrl import (
     ResolvedModelLocator,
     SkyRLOutputPaths,
     SkyRLRetentionPolicy,
+    SkyRLRun,
     SkyRLRunConfig,
     SkyRLRuntime,
     SkyRLSpec,
@@ -44,6 +45,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.async_rl import SNOWBALL_RECIPE
@@ -54,6 +56,7 @@ from experiments.post_training.snowball_inventory_smoke import (
     SEED,
     TOKENIZER_MODEL,
     TOKENIZER_REVISION,
+    inventory_training_execution,
     runtime_environment,
     smoke_recipe,
 )
@@ -100,11 +103,25 @@ class FamilyResult:
 
 
 @dataclass(frozen=True)
+class SavedAnswerRecovery:
+    per_answer_timeout: float
+    total_timeout: float
+
+    def __post_init__(self) -> None:
+        if not 0 < self.per_answer_timeout <= self.total_timeout <= 25 * 60:
+            raise ValueError("Recovery needs positive per-answer/total limits within the 30-minute worker envelope")
+
+
+@dataclass(frozen=True)
 class EvaluationConfig:
     launch: SkyRLRunConfig
     panel_sha256: str
     output_path: str
     max_new_tokens: int = 4096
+    family_counts: dict[str, int] | None = None
+    expected_model_manifest_identity: str | None = None
+    recovery: SavedAnswerRecovery | None = None
+    expected_tokenizer_template_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -180,7 +197,7 @@ def summarize_panel(tasks: list[PanelTask], outcomes: list[EvaluationOutcome]) -
     }
 
 
-def runtime_operation(action: str, request: dict) -> dict:
+def runtime_operation(action: str, request: dict, *, timeout: float = 30 * 60) -> dict:
     """Run optional runtime code in its frozen dependency environment."""
     with TemporaryDirectory(prefix="snowball-evaluation-") as directory:
         source = Path(directory) / "request.json"
@@ -208,7 +225,7 @@ def runtime_operation(action: str, request: dict) -> dict:
             ],
             cwd=Path(__file__).resolve().parents[2],
             check=True,
-            timeout=30 * 60,
+            timeout=timeout,
             env=runtime_environment(),
         )
         return json.loads(result.read_text())
@@ -220,8 +237,11 @@ def preflight_evaluation(config: EvaluationConfig) -> None:
         {
             "launch_config_yaml": config.launch.launch_config_yaml,
             "panel_sha256": config.panel_sha256,
-            "family_counts": FAMILY_COUNTS,
+            "family_counts": config.family_counts if config.family_counts is not None else FAMILY_COUNTS,
             "max_new_tokens": config.max_new_tokens,
+            "expected_model_manifest_identity": config.expected_model_manifest_identity,
+            "expected_tokenizer_template_sha256": config.expected_tokenizer_template_sha256,
+            "recover_saved_answers": config.recovery is not None,
         },
     )
     with StoragePath(prefix_join(config.output_path, "preflight.json")).open("wt") as target:
@@ -266,6 +286,146 @@ def run_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
         pairing_identity=summary["pairing_identity"],
         model_uri=config.launch.model.uri,
         complete=True,
+    )
+
+
+def run_recoverable_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
+    """Score an exported model; grader failures cannot invalidate its upstream training artifact."""
+    assert config.recovery is not None
+    remote(
+        preflight_evaluation,
+        resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
+    )(config)
+    with StoragePath(prefix_join(config.output_path, "preflight.json")).open("rt") as source:
+        preflight = json.load(source)
+    prepared = replace(config.launch, launch_config_yaml=preflight["launch_config_yaml"])
+    completed = runtime_operation("generation-state", {"launch_config_yaml": prepared.launch_config_yaml})
+    if not completed["complete"]:
+        # A coordinator crash cannot silently spend another inference job on this artifact.
+        conditional_object(prefix_join(config.output_path, "generation-started.json")).write(
+            json.dumps(
+                {"launch_config_sha256": hashlib.sha256(prepared.launch_config_yaml.encode()).hexdigest()}
+            ).encode(),
+            expected_version=None,
+        )
+        run_skyrl(prepared)
+    records = runtime_operation(
+        "recover-results",
+        {
+            "launch_config_yaml": prepared.launch_config_yaml,
+            "dataset_uids": preflight["dataset_uids"],
+            "panel_sha256": config.panel_sha256,
+            "output_path": config.output_path,
+            **asdict(config.recovery),
+        },
+        timeout=config.recovery.total_timeout + 5 * 60,
+    )
+    summary = summarize_panel(
+        [PanelTask(**row) for row in preflight["tasks"]],
+        [EvaluationOutcome(**row) for row in records["outcomes"]],
+    )
+    summary.update(
+        model=asdict(config.launch.model),
+        panel_sha256=config.panel_sha256,
+        launch_config_sha256=hashlib.sha256(prepared.launch_config_yaml.encode()).hexdigest(),
+        model_manifest_identity=preflight["model_manifest_identity"],
+        protocol=preflight["protocol"],
+        pairing_contract_field=preflight["pairing_contract_field"],
+        recovery=records["recovery"],
+        required_score_coverage=1.0,
+    )
+    report_uri = prefix_join(config.output_path, "report.json")
+    with StoragePath(report_uri).open("wt") as target:
+        json.dump(summary, target, indent=2, allow_nan=False)
+    return InventoryEvaluation(
+        path=config.output_path,
+        report_uri=report_uri,
+        pairing_identity=summary["pairing_identity"],
+        model_uri=config.launch.model.uri,
+        complete=summary["complete"],
+    )
+
+
+def recoverable_evaluation_recipe(max_new_tokens: int = 8192, *, judge_base_url: str, judge_model: str) -> dict:
+    recipe = evaluation_recipe(max_new_tokens)
+    # The post-generation scorer enforces full coverage after its one saved-answer attempt.
+    recipe["trainer"]["eval_required_score_coverage"] = None
+    recipe["trajectory_runner"]["eval_saved_answers_root"] = "${trainer.export_path}/saved_answers"
+    recipe["environment"]["task_sessions"]["remote_judge"] = {
+        "base_url": judge_base_url,
+        "api_key_env": "JUDGE_API_KEY",
+    }
+    recipe["extra_env"]["VERIFYIT_JUDGE_MODEL"] = judge_model
+    return recipe
+
+
+def recoverable_evaluation_step(
+    *,
+    name: str,
+    version: str,
+    model: ArtifactStep[LevanterCheckpoint] | ArtifactStep[SkyRLRun],
+    panel: ArtifactStep,
+    panel_sha256: str,
+    family_counts: dict[str, int],
+    tokenizer_uri: str,
+    tokenizer_revision: str,
+    recovery: SavedAnswerRecovery,
+    judge_base_url: str,
+    judge_model: str,
+    expected_model_manifest_identity: str | None = None,
+    expected_tokenizer_template_sha256: str | None = None,
+    relative_path: str | None = None,
+    max_new_tokens: int = 8192,
+) -> ArtifactStep[InventoryEvaluation]:
+    """Bind independent scoring to a completed export or an exact adopted baseline."""
+    execution = replace(
+        inventory_training_execution(), memory="256GB", coordinator_timeout_hours=8, job_timeout_seconds=4 * 60 * 60
+    )
+    launch = skyrl_step(
+        SkyRLSpec(
+            name=name,
+            version=version,
+            config_yaml=yaml.safe_dump(
+                recoverable_evaluation_recipe(max_new_tokens, judge_base_url=judge_base_url, judge_model=judge_model),
+                sort_keys=False,
+            ),
+            runtime=SkyRLRuntime(),
+            model=ArtifactHfModel(
+                model,
+                tokenizer_uri,
+                tokenizer_revision,
+                relative_path=relative_path,
+            ),
+            train_data=(),
+            validation_data=(ArtifactDataSource(panel, relative_path="validation.parquet"),),
+            topology=SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=EVAL_ROLE_PLAN),
+            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
+            seed=SEED,
+        ),
+        execution,
+        export_hf=False,
+    )
+
+    def build_config(ctx: StepContext) -> EvaluationConfig:
+        return EvaluationConfig(
+            launch.build_config(ctx),
+            panel_sha256,
+            ctx.output_path,
+            max_new_tokens,
+            dict(family_counts),
+            expected_model_manifest_identity,
+            recovery,
+            expected_tokenizer_template_sha256,
+        )
+
+    return ArtifactStep(
+        name=launch.name,
+        version=launch.version,
+        artifact_type=InventoryEvaluation,
+        run=run_recoverable_evaluation,
+        build_config=build_config,
+        deps=launch.deps,
+        runtime_args=launch.runtime_args,
     )
 
 

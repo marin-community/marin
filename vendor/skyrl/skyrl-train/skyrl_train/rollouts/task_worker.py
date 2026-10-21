@@ -36,6 +36,7 @@ from rolloutengine.models import (
 from rolloutengine.engine import RolloutEngine
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from marinskyrl.task_machine_factories import task_machine_factories
+from marinskyrl.saved_answers import admit_answer, require_regradable, save_answer
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
@@ -344,10 +345,12 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        eval_saved_answers_root: str | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
         self.judge_connection = judge_connection
+        self.eval_saved_answers_root = eval_saved_answers_root
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
         self.active_requests: set[asyncio.Task] = set()
         self.closing = False
@@ -463,9 +466,14 @@ class TaskRolloutWorker:
             task = lowered.task
             harbor = harbor_settings[index]
             session_id = session_ids[index]
+            saved_root = self.eval_saved_answers_root if phase == "eval" else None
+            if saved_root is not None:
+                require_regradable(lowered)
+                if trajectory_ids is None:
+                    raise ValueError("Durable evaluation answers require paired trajectory IDs")
 
             async def model(request):
-                return await _model_turn(
+                turn = await _model_turn(
                     self.model_client,
                     request,
                     sampling_params=sampling,
@@ -474,6 +482,13 @@ class TaskRolloutWorker:
                     chat_template_kwargs=self.chat_template_kwargs,
                     session_id=session_id,
                 )
+                if saved_root is not None:
+                    assert trajectory_ids is not None
+                    identity = trajectory_ids[index]
+                    await asyncio.to_thread(
+                        save_answer, saved_root, lowered, identity.instance_id, identity.repetition_id, request, turn
+                    )
+                return turn
 
             engine = engines[index]
             harbor_slots = (
@@ -490,6 +505,19 @@ class TaskRolloutWorker:
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
+                if saved_root is not None:
+                    assert trajectory_ids is not None
+                    identity = trajectory_ids[index]
+                    await asyncio.to_thread(
+                        admit_answer,
+                        saved_root,
+                        identity.instance_id,
+                        identity.repetition_id,
+                        result.messages,
+                        None if result.failure is None else result.failure.diagnostics.get("operation"),
+                        None if result.failure is None else result.failure.exception_type,
+                        result.grade.status,
+                    )
                 if (
                     isinstance(task.grader, NoGrader)
                     and result.grade.status == Outcome.UNAVAILABLE
@@ -669,4 +697,5 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            eval_saved_answers_root=self.config.trajectory_runner.get("eval_saved_answers_root"),
         )

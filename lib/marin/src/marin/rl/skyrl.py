@@ -322,7 +322,7 @@ def _validate_relative_file_path(name: str, value: str) -> None:
 class ArtifactHfModel:
     """An exact HF export produced by another Marin artifact step."""
 
-    step: ArtifactStep[LevanterCheckpoint]
+    step: ArtifactStep[LevanterCheckpoint] | ArtifactStep[SkyRLRun]
     tokenizer_uri: str
     tokenizer_revision: str
     relative_path: str | None = None
@@ -332,7 +332,23 @@ class ArtifactHfModel:
 
     def resolve(self, ctx: StepContext) -> ResolvedModelLocator:
         artifact_path = ctx.artifact_path(self.step)
-        if self.relative_path is not None:
+        if issubclass(self.step.artifact_type, SkyRLRun):
+            if self.relative_path is not None:
+                raise ValueError("An RL model must use its recorded terminal HF export")
+            if ctx.is_fingerprint:
+                uri = prefix_join(artifact_path, "<terminal-hf-export>")
+            else:
+                completed = ctx.resolved(self.step)
+                assert isinstance(completed, SkyRLRun)
+                if completed.hf_model_uri is None or completed.global_step is None:
+                    raise ValueError("The completed RL artifact has no terminal HF export")
+                if (completed.tokenizer_uri, completed.tokenizer_revision) != (
+                    self.tokenizer_uri,
+                    self.tokenizer_revision,
+                ):
+                    raise ValueError("The RL export tokenizer differs from the requested evaluation tokenizer")
+                uri = completed.hf_model_uri
+        elif self.relative_path is not None:
             uri = prefix_join(artifact_path, self.relative_path)
         elif ctx.is_fingerprint:
             uri = prefix_join(artifact_path, "<terminal-hf-export>")
