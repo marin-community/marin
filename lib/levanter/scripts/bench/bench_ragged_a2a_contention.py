@@ -36,7 +36,8 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
-from levanter.grug._moe.quack_moe_cute import quack_grouped_gemm, reserved_sms
+from levanter.grug._moe.gemm_sm_reservation import reserved_sms
+from levanter.grug._moe.quack_moe_cute import quack_grouped_gemm
 
 RESULT_PREFIX = "RESULT_JSON "
 

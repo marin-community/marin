@@ -17,9 +17,6 @@ that composes QuACK's SM100 kernel with an epilogue, then wrap it with
 """
 from __future__ import annotations
 
-import contextlib
-import contextvars
-
 import jax
 import jax.numpy as jnp
 
@@ -30,6 +27,7 @@ from quack.cute_dsl_utils import get_device_multiprocessor_count, get_max_active
 from quack.epilogue.library import dact_mod, linear_act_mod
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
+from levanter.grug._moe.gemm_sm_reservation import current_reserved_sms
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 from quack.rounding import RoundingMode
 
@@ -55,29 +53,6 @@ def _cute_dtype(dt):
     return _JAX_TO_CUTE[jnp.dtype(dt)]
 
 
-# SMs the QuACK GEMMs traced inside `reserved_sms` leave free. Set at trace time, read when a launcher is built.
-_RESERVED_SMS: contextvars.ContextVar[int] = contextvars.ContextVar("levanter_quack_reserved_sms", default=0)
-
-
-@contextlib.contextmanager
-def reserved_sms(count: int):
-    """Launch the QuACK GEMMs traced in this context on at most ``SM count - count`` SMs.
-
-    The GEMMs are persistent: their grid is one CTA per SM, each CTA owns a fixed share of the tiles,
-    and a GEMM CTA cannot share an SM with the ragged all-to-all's 512-thread CTAs. A GEMM that starts
-    while the all-to-all holds its SMs therefore leaves those CTAs' tiles waiting until the all-to-all
-    ends, and an all-to-all that starts under a full-width GEMM waits for its SMs. Keeping ``count``
-    SMs free (the all-to-all's grid) lets the two run side by side. The computed function is unchanged.
-    """
-    if count < 0:
-        raise ValueError(f"reserved SM count must be non-negative, got {count}")
-    token = _RESERVED_SMS.set(count)
-    try:
-        yield
-    finally:
-        _RESERVED_SMS.reset(token)
-
-
 def _max_active_clusters(cluster_mnk) -> int:
     """Clusters the device can hold less the `reserved_sms`, or a fixed stand-in when there is no device to ask.
 
@@ -88,7 +63,7 @@ def _max_active_clusters(cluster_mnk) -> int:
         return _FALLBACK_MAX_ACTIVE_CLUSTERS
     cluster_size = cluster_mnk[0] * cluster_mnk[1]
     clusters = get_max_active_clusters(cluster_size)
-    reserved = _RESERVED_SMS.get()
+    reserved = current_reserved_sms()
     if reserved == 0:
         return clusters
     free_sms = get_device_multiprocessor_count() - reserved

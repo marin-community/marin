@@ -47,6 +47,7 @@ from levanter.grug._moe.sonic import (
     sonic_scatter_rows,
     unwritten_buffer,
 )
+from levanter.grug._moe.gemm_sm_reservation import reserved_sms
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
     _clip_receiver_group_sizes,
@@ -670,6 +671,9 @@ class _ExpertLayout:
     # Dispatch the rows as MXFP8 bytes (``mx_pack_rows``) for an expert MLP that takes them so; the backward's
     # transports stay in the rows' dtype (quantization is straight-through).
     mxfp8_dispatch: bool = False
+    # SMs the QuACK GEMMs of the routed experts and the overlap work leave free for the all-to-all kernel
+    # (``gemm_sm_reservation``).
+    reserved_sms: int = 0
 
     @property
     def chunks(self) -> int:
@@ -747,6 +751,13 @@ def _routed_experts_forward(
 ) -> tuple[Float[Array, "Tlocal H"], tuple[_ChunkResiduals, ...], Any, Any]:
     """Returns ``(out, chunk_residuals, side, side_vjp)``; ``side`` (and its pullback) is the ``overlap`` work's
     output, run under the first chunk's dispatch all-to-all (None without ``overlap``)."""
+    with reserved_sms(layout.reserved_sms):
+        return _routed_experts_forward_in_context(
+            sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap
+        )
+
+
+def _routed_experts_forward_in_context(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap):
     assignments = sorted_x.shape[0]
     side = side_vjp = None
     plans = _chunk_plans(routing, layout)
@@ -896,6 +907,15 @@ def _routed_experts_backward(
 ):
     """Cotangents of ``(sorted_x, weights, moe_w13_local, moe_w2_local, routing)``, and with ``side_vjp`` the
     overlap's ``(d_tokens, d_params)``, pulled back under the first return-cotangent all-to-all."""
+    with reserved_sms(layout.reserved_sms):
+        return _routed_experts_backward_in_context(
+            layout, weights, routing, chunk_residuals, out_cotangent, side_vjp, side_cotangent
+        )
+
+
+def _routed_experts_backward_in_context(
+    layout, weights, routing, chunk_residuals, out_cotangent, side_vjp, side_cotangent
+):
     assignments = routing.sorted_indices.shape[0]
     out_dim = out_cotangent.shape[1]
     weights_f32 = weights.astype(jnp.float32)
@@ -1021,10 +1041,12 @@ def _moe_mlp_ep_ragged_a2a_local(
     mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     mxfp8_dispatch: bool = False,
     serial_pair: bool = False,
+    reserved_sms: int = 0,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
     """``overlap_fn`` (with ``overlap_tokens`` / ``overlap_params``, see ``MoeOverlapWork``) runs under the first
-    dispatch all-to-all and its backward under the first return-cotangent all-to-all; its output is appended."""
+    dispatch all-to-all and its backward under the first return-cotangent all-to-all; its output is appended.
+    ``reserved_sms`` keeps that many SMs free of the expert and overlap GEMMs (``gemm_sm_reservation``)."""
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -1115,6 +1137,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         expert_mlp=expert_mlp,
         overlap_weight_grads=overlap_weight_grads,
         mxfp8_dispatch=mxfp8_dispatch,
+        reserved_sms=reserved_sms,
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.

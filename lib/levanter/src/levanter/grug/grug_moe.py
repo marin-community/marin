@@ -534,6 +534,7 @@ def moe_mlp(
     overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK,
     ragged_expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     ragged_overlap_weight_grads: bool = False,
+    ragged_reserved_sms: int = 0,
     ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     ragged_expert_mxfp8_dispatch: bool = False,
     expert_serial_pair: bool = False,
@@ -579,6 +580,8 @@ def moe_mlp(
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
     `ragged_overlap_weight_grads` (``ragged_all_to_all``) pins each round's expert weight gradients under its
     input cotangent's return all-to-all (same math).
+    `ragged_reserved_sms` (``ragged_all_to_all``) launches the expert and overlap QuACK GEMMs on that many fewer
+    SMs, so they run beside the all-to-all kernel instead of taking turns with it (same math).
     `expert_serial_pair` (``ragged_all_to_all`` ungated experts only) runs each expert's two neuron halves
     in series: ``y1 = mlp_a(x)``, ``y = y1 + mlp_b(x + y1)``.
 
@@ -760,6 +763,7 @@ def moe_mlp(
                 expert_chunks=ragged_expert_chunks,
                 serial_pair=expert_serial_pair,
                 overlap_weight_grads=ragged_overlap_weight_grads,
+                reserved_sms=ragged_reserved_sms,
                 mxfp8=ragged_expert_mxfp8,
                 mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
             )

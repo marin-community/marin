@@ -1011,6 +1011,10 @@ class GrugModelConfig:
     moe_overlap_weight_grads: bool = False
     """``ragged_all_to_all``: run the routed experts' weight gradients while their input cotangent's return
     all-to-all is in flight (``ragged_overlap_weight_grads``). Same math."""
+    moe_a2a_reserved_sms: int = 0
+    """``ragged_all_to_all``: SMs the routed-expert and overlap QuACK GEMMs leave free for the ragged all-to-all
+    device kernel (its 32-CTA grid), so the two run side by side instead of taking turns
+    (``ragged_reserved_sms``). Same math."""
     kda_fused_projections: bool = False
     """Under a real MXFP8 dense ``fp8_recipe``, project KDA's q/k/v/gate (and write/erase) from ``x`` as one
     block-scaled GEMM over their concatenated weights, so ``x`` is quantized once. Off: 1% slower on the GB200
@@ -3912,6 +3916,7 @@ def _run_expert_bank(
             ragged_expert_chunks=cfg.moe_ragged_chunks,
             expert_serial_pair=cfg.moe_serial_pair,
             ragged_overlap_weight_grads=cfg.moe_overlap_weight_grads,
+            ragged_reserved_sms=cfg.moe_a2a_reserved_sms,
         )
     if cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM:
         raise ValueError("fp8_recipe=mxfp8_sim simulates ungated ReLU^2 expert banks only")
