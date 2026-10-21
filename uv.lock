@@ -7733,7 +7733,9 @@ dependencies = [
     { name = "httpx" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
+    { name = "marin-rolloutengine" },
     { name = "marin-taskcompendium" },
+    { name = "marin-zephyr" },
     { name = "openai" },
     { name = "pydantic" },
 ]
@@ -7751,7 +7753,9 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rolloutengine", editable = "lib/rolloutengine" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
+    { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
