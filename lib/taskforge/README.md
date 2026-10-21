@@ -12,6 +12,9 @@ src/taskforge/
                                JsonEventStore;
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
+  agentic/                     agent.py: `generate_tasks`, one managed agent that makes tasks for an idea;
+                               tools.py: the agent's Taskforge tools; gate.py: the acceptance rule;
+                               config.py, prompts.py, parallel.py (web search), example_build.py
   capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
@@ -74,6 +77,34 @@ Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage 
 token budget, which Taskforge leaves unset. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
+
+## Agentic generation
+
+`agentic.agent.generate_tasks(idea, n, config)` replaces the stages with one managed agent: one
+`RolloutEngine.run_task` attempt whose shell harness serves a workspace machine and the tools of
+`agentic/tools.py`. The workspace is `AgenticConfig.workspace_factory`: the driver uses a bubblewrap
+`LocalMachineFactory` that mounts its Python environment read-only, so the agent's shell has Python
+with taskcompendium and verifyit and no network. Bubblewrap needs namespaces, which an Iris task has
+only under the privileged container profile. The agent writes, runs and validates its build programs
+in that shell. A shell command returns at most 32 KiB of output, so that one large output cannot
+fill the agent's context.
+
+The tools do only what the shell cannot: `grade` grades a control answer; `rollout` runs solver or
+adversary rollouts for one or more task files at the same time, on new ShellSim machines, and tells
+the agent what an in-band version still needs. `web_search` and `web_fetch` use Parallel; `submit`
+is the gate; and `finish` ends the session with a report. While fewer than n tasks are accepted and
+more than half of the solver rollouts are left, `finish` refuses once. After three calls on an empty
+budget, the tools stop the session, and a session that stops before `finish` with fewer than n tasks
+gets a report of the tools.
+
+`submit` refuses a task that the tools cannot run. Then the evidence of that exact `TaskSpec` (by
+content digest) must satisfy the `Gate`: a correct control that passes, a wrong control that fails,
+and no wrong control that passes; a solver pass rate in the band over the graded answers; few
+answer-format failures; and adversary rollouts. Last, an independent reviewer solves the task blind,
+then reads the task, its evidence and the blind solution, and decides. Before it decides, it names
+the reading or the mistake behind each failed solver answer, and the statement that this reading
+breaks, so that a failed answer from another reasonable reading refuses the task as ambiguous. The
+experiment driver is `experiments/post_training/capability_driven_envs/generate_tasks_agentic.py`.
 
 ## The build DAG
 
