@@ -12,6 +12,7 @@ import random
 import sys
 from pathlib import Path
 
+from shellbox.machine import PackageSpec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import (
     AnswerType,
@@ -50,8 +51,10 @@ def task_spec(task_id: str) -> TaskSpec:
         id=task_id,
         context=ConversationInput(events=(TextMessage(role="user", content=instruction),)),
         environment_requirements=EnvironmentRequirements(
-            capabilities=("shell", "filesystem"),
+            capabilities=("shell", "filesystem", "python"),
             command_semantics=CommandSemantics.SHELL_SIMULATOR,
+            # A package spec with pypi_packages, even none, gives the solver's ShellSim shell python3.
+            package_spec=PackageSpec(pypi_packages=()),
             working_directory=WORKDIR,
         ),
         answer_type=AnswerType.TEXT,

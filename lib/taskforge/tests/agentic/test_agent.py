@@ -117,6 +117,21 @@ class Solver:
 
 
 @dataclass
+class PythonSolver:
+    """Runs python3 in its shell, then answers with what the shell returned."""
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        last = request.messages[-1]
+        if last.get("role") == "tool":
+            message = {"role": "assistant", "content": str(last.get("content"))}
+            return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(5, 1))
+        arguments = json.dumps({"command": "python3 -c 'print(6 * 7)'"})
+        tool_call = {"id": "call-1", "type": "function", "function": {"name": "shell", "arguments": arguments}}
+        message = {"role": "assistant", "content": "", "tool_calls": [tool_call]}
+        return ModelTurn(message, (), (), None, "tool_calls", usage=TokenUsage(5, 1))
+
+
+@dataclass
 class AcceptingJudge:
     """Accepts each task."""
 
@@ -289,6 +304,21 @@ async def test_rollout_refuses_a_call_that_can_outlast_the_tool_turn():
     [refusal] = tool_replies(result, "call-2")
     assert "One call can run at most 8 rollouts" in refusal["error"]
     assert result.spend.solver_rollouts == 0
+
+
+async def test_the_solver_of_the_example_task_has_python():
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("rollout", paths=[TASK], n=1, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=PythonSolver()))
+
+    [rollout] = tool_replies(result, "call-2")
+    [answer] = rollout["results"][TASK]["answers"]
+    assert "42" in answer["answer"] and "not found" not in answer["answer"]
 
 
 async def test_finish_refuses_once_while_most_of_the_budget_is_left():
