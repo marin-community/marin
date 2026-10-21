@@ -13,11 +13,11 @@ def validate_unsolvable(spec: UnsolvableSpec) -> None:
     empty_output_policy(spec)
 
 
-def grade_unsolvable_candidate(spec: UnsolvableSpec, candidate: str) -> Reward:
+def grade_unsolvable_candidate(spec: UnsolvableSpec, _candidate: str) -> Reward:
     validate_unsolvable(spec)
     return scored(0.0)
 
 
-def grade(spec: UnsolvableSpec, tests_dir: Path, workspace: Path) -> Reward:
+def grade(spec: UnsolvableSpec, _tests_dir: Path, _workspace: Path) -> Reward:
     validate_unsolvable(spec)
     return scored(0.0)
