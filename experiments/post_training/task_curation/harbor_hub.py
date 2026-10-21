@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acquire pinned Harbor Hub packages using the isolated config/external/harbor runtime."""
+"""Acquire pinned Harbor Hub packages using the isolated vendor/harbor runtime."""
 
 import argparse
 import asyncio
@@ -16,9 +16,9 @@ from tempfile import TemporaryDirectory
 
 from harbor.db.client import RegistryDB
 from harbor.models.task.id import PackageTaskId
-from harbor.publisher.packager import Packager
 from harbor.registry.client.package import PackageDatasetClient
 from harbor.storage.supabase import SupabaseStorage
+from harbor.tasks.packager import Packager
 from rigging.filesystem.storage_path import StoragePath
 
 LOGGER = logging.getLogger(__name__)

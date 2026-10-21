@@ -3,14 +3,14 @@
 The existing `Harbor Hub:skill2env` catalog entry has a conversion recipe for
 network-disabled tasks whose final Docker working directory is within `/workspace`, native programmatic tests,
 and a reference solution. Acquisition resolves the pinned release through Harbor
-and verifies each downloaded task's content digest using the pinned client in
-`config/external/harbor`. The resolved task list is retained in the export
+and verifies each downloaded task's content digest using the vendored client in
+`vendor/harbor`. The resolved task list is retained in the export
 manifest. Acquisition does not edit upstream tasks.
 
 Acquire a bounded selection for QUICK conversion; Docker and container-registry access are not required:
 
 ```bash
-uv run --isolated --project config/external/harbor --frozen python \
+uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --frozen python \
   -m experiments.post_training.task_curation.harbor_hub \
   --release skill2env/skill2env@sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c \
   --task skill2env/task_api-design-reviewer_jdkbai64@sha256:acfc393449fdad22ae5a2da63d16d27605c02a983059fac0c5dd49384bf6c260 \

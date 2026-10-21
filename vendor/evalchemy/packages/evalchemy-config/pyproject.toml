@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalchemy-config"
+version = "0.1.0"
+description = "Typed, dependency-light evaluation configuration for Evalchemy"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2",
+    "pyyaml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalchemy_config"]
