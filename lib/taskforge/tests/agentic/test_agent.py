@@ -3,6 +3,7 @@
 
 """``generate_tasks`` with a scripted agent, solver and reviewer on real ShellSim machines and the real gate."""
 
+import dataclasses
 import itertools
 import json
 import shlex
@@ -20,7 +21,7 @@ from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT
-from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, BlindSolution, TaskReview
+from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, BlindSolution, OptionList, TaskReview
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
@@ -103,8 +104,12 @@ class Solver:
         return ModelTurn({"role": "assistant", "content": answer}, (), (), None, "stop", usage=TokenUsage(5, 1))
 
 
+@dataclass
 class AcceptingJudge:
-    model = "judge"
+    """Accepts each task, and quotes ``option_lists`` as the option lists of the task."""
+
+    option_lists: tuple[OptionList, ...] = ()
+    model: str = "judge"
 
     async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
         raise AssertionError("The tools ask the judge only for structured replies")
@@ -114,7 +119,13 @@ class AcceptingJudge:
     ) -> StructuredResult[T]:
         replies = {
             BlindSolution: {"readings": [], "answer": EXPECTED},
-            TaskReview: {"failure_causes": [], "problems": [], "summary": "ok", "accept": True},
+            TaskReview: {
+                "option_lists": [options.model_dump() for options in self.option_lists],
+                "failure_causes": [],
+                "problems": [],
+                "summary": "ok",
+                "accept": True,
+            },
         }
         return StructuredResult(output_type.model_validate(replies[output_type]), ())
 
@@ -160,6 +171,23 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     assert accepted.review.accept
     # A review is a blind solve and the review itself.
     assert (result.spend.solver_rollouts, result.spend.judge_calls) == (12, 2)
+
+
+async def test_submit_refuses_a_task_whose_correct_option_is_the_longest():
+    wrong = ("Lower the cooling water flow by one tenth.", "Raise the feed rate of the reactor by one tenth.")
+    correct = "Raise the cooling water flow by one tenth, because the hot steady state then disappears below 440 K."
+    judge = AcceptingJudge(option_lists=(OptionList(options=(*wrong, correct), correct=3),))
+    script = (*SCRIPT, call("finish", report="done"))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=judge))
+
+    [submit] = [
+        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-10"
+    ]
+    assert not submit["accepted"]
+    assert any("longer than any other option" in problem for problem in submit["review"]["problems"])
+    assert result.tasks == ()
 
 
 @dataclass

@@ -61,7 +61,9 @@ that passes; a solver pass rate in the band over the graded answers; few answer-
 adversary rollouts. Last, an independent reviewer solves the task blind, then reads the task, its
 evidence and the blind solution, and decides. Before it decides, it names the reading or the mistake behind each failed solver answer, and the statement that
 this reading breaks, so that a failed answer from another reasonable reading refuses the task as
-ambiguous. After three calls on an empty budget, the tools stop the session. The experiment driver is
+ambiguous. The reviewer also quotes each list of options that the answer selects from, and code refuses a
+correct option that is clearly the longest, or a place that the correct options of the idea's tasks all
+share. After three calls on an empty budget, the tools stop the session. The experiment driver is
 `experiments/post_training/capability_driven_envs/generate_tasks_agentic.py`.
 
 ## The build DAG

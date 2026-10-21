@@ -114,6 +114,13 @@ MAX_EMPTY_BUDGET_CALLS = 3
 EARLY_FINISH_BUDGET_SHARE = 0.5
 """``finish`` refuses once when fewer than n tasks are accepted and more than this share of the solver rollouts are
 left: an agent can stop after a few too-easy versions, when a harder version would get into the band."""
+MIN_PATTERN_LISTS = 4
+"""Option lists of an idea's tasks that ``submit`` pools before it refuses a place that all correct options share:
+with fewer, a shared place often comes by chance."""
+MIN_LONG_OPTION_CHARS = 30
+"""Options of text, not of codes or numbers: the length of an option tells only in a list of such options."""
+MAX_CORRECT_LENGTH_RATIO = 1.2
+"""The most that the correct option can exceed the longest other option in length before it stands out."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
 
@@ -138,11 +145,26 @@ class BlindSolution(BaseModel):
     answer: str = Field(description="Your answer to the task, in the task's answer format.")
 
 
+class OptionList(BaseModel):
+    """A list of options in a task, from which the answer selects one."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    options: tuple[str, ...] = Field(min_length=2, description="The options, quoted in full in their order.")
+    correct: int = Field(ge=1, description="The place of the correct option in the list, from 1.")
+
+
 class TaskReview(BaseModel):
     """The review of one task. The decision comes last, so that the judge writes its analysis first."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    option_lists: tuple[OptionList, ...] = Field(
+        description=(
+            "Each list of options in the prompt or the files from which the answer selects one option, with the "
+            "place of the correct option. Empty when the answer selects no option."
+        )
+    )
     failure_causes: tuple[str, ...] = Field(
         description=(
             "For each distinct failed answer: the answer, the reading or the mistake that gives it, and the "
@@ -452,7 +474,12 @@ class ToolSession:
             [accepted.task for accepted in self.tools.accepted],
             blind,
         )
-        return await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
+        review = await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
+        accepted_lists = [options for accepted in self.tools.accepted for options in accepted.review.option_lists]
+        problems = _option_problems(list(review.option_lists), accepted_lists)
+        if not problems:
+            return review
+        return review.model_copy(update={"accept": False, "problems": (*review.problems, *problems)})
 
     async def finish(self, report: str) -> ToolCallResult:
         budget = self.config.budget.solver_rollouts
@@ -536,6 +563,36 @@ class _ReplayModel:
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         message = {"role": "assistant", "content": self.answer}
         return ModelTurn(message, (), (), None, "stop", text=self.answer, usage=TokenUsage(0, 0))
+
+
+def _option_problems(lists: list[OptionList], accepted: list[OptionList]) -> list[str]:
+    """The option lists of a task whose correct option a guess finds: by its length, or by a place that the correct
+    options of this task and of the accepted tasks all share."""
+    lists = [options for options in lists if options.correct <= len(options.options)]
+    problems = []
+    for number, options in enumerate(lists, start=1):
+        others = [len(option) for place, option in enumerate(options.options, start=1) if place != options.correct]
+        correct = len(options.options[options.correct - 1])
+        text = len(others) >= 2 and min(others) >= MIN_LONG_OPTION_CHARS
+        if text and correct > MAX_CORRECT_LENGTH_RATIO * max(others):
+            problems.append(
+                f"The correct option of option list {number} is {correct / max(others) - 1:.0%} longer than any other "
+                "option, so a guess of the longest option gives it. Make the options similar in length and detail."
+            )
+    pooled = [*lists, *accepted]
+    if len(pooled) < MIN_PATTERN_LISTS:
+        return problems
+    if len({options.correct for options in pooled}) == 1:
+        where = f"place {pooled[0].correct}"
+    elif all(options.correct == len(options.options) for options in pooled):
+        where = "the last place"
+    else:
+        return problems
+    problems.append(
+        f"The correct options of the {len(pooled)} option lists of this task and the accepted tasks are all at "
+        f"{where}, so a guess of the place gives the answer. Put each correct option at a random place."
+    )
+    return problems
 
 
 def _next_step(evidence: Evidence, gate: Gate) -> dict[str, str]:
