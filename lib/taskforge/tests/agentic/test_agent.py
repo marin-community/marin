@@ -21,8 +21,8 @@ from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
-from taskforge.agentic.prompts import ADVERSARY_PROMPT
-from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, BlindSolution, TaskReview
+from taskforge.agentic.prompts import ADVERSARY_PROMPT, GUESS_PROMPT
+from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, BlindSolution, OptionList, TaskReview
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.client import Completion, ContextExhausted, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
@@ -101,15 +101,18 @@ class ScriptedAgent:
 
 @dataclass
 class Solver:
-    """Solves every second task attempt. The adversary role answers 0."""
+    """Solves every second task attempt. The adversary role answers 0, and a guess answers 0 or the reference."""
 
+    guesses_right: bool = False
     attempts: itertools.count = field(default_factory=itertools.count)
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         def told(prompt: str) -> bool:
             return any(prompt in str(message.get("content")) for message in request.messages)
 
-        if told(ADVERSARY_PROMPT):
+        if told(GUESS_PROMPT):
+            answer = EXPECTED if self.guesses_right else "0"
+        elif told(ADVERSARY_PROMPT):
             answer = "0"
         else:
             answer = EXPECTED if next(self.attempts) % 2 == 0 else "1"
@@ -118,8 +121,9 @@ class Solver:
 
 @dataclass
 class AcceptingJudge:
-    """Accepts each task."""
+    """Accepts each task, and quotes ``option_lists`` as the option lists of the task."""
 
+    option_lists: tuple[OptionList, ...] = ()
     model: str = "judge"
 
     async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
@@ -131,6 +135,7 @@ class AcceptingJudge:
         replies = {
             BlindSolution: {"readings": [], "answer": EXPECTED},
             TaskReview: {
+                "option_lists": [options.model_dump() for options in self.option_lists],
                 "failure_causes": [],
                 "problems": [],
                 "summary": "ok",
@@ -181,6 +186,32 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     assert accepted.review.accept
     # A review is a blind solve and the review itself.
     assert (result.spend.solver_rollouts, result.spend.judge_calls) == (12, 2)
+
+
+async def test_submit_refuses_a_task_whose_correct_option_is_the_longest():
+    wrong = ("Lower the cooling water flow by one tenth.", "Raise the feed rate of the reactor by one tenth.")
+    correct = "Raise the cooling water flow by one tenth, because the hot steady state then disappears below 440 K."
+    judge = AcceptingJudge(option_lists=(OptionList(options=(*wrong, correct), correct=3),))
+    script = (*SCRIPT, call("finish", report="done"))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=judge))
+
+    [submit] = tool_replies(result, "call-10")
+    assert not submit["accepted"]
+    assert any("longer than any other option" in problem for problem in submit["review"]["problems"])
+    assert result.tasks == ()
+
+
+async def test_submit_refuses_a_task_whose_answer_the_prompt_alone_gives():
+    script = (*SCRIPT, call("finish", report="done"))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=Solver(guesses_right=True)))
+
+    [submit] = tool_replies(result, "call-10")
+    assert any("guessed the answer in 4 of 4" in problem for problem in submit["problems"])
+    assert result.tasks == ()
 
 
 class OverflowJudge(AcceptingJudge):
@@ -300,3 +331,21 @@ async def test_finish_refuses_once_while_most_of_the_budget_is_left():
     [refusal] = tool_replies(result, "call-1")
     assert "20 of 20 solver rollouts are left" in refusal["error"]
     assert result.report == "too easy"
+
+
+async def test_submit_refuses_a_numeric_tolerance_that_accepts_the_next_values():
+    # The reference is an integer, so a tolerance of 1 also accepts the reference plus or minus 1.
+    loose = GRADER.model_copy(update={"parameters": {**GRADER.parameters, "tolerance_abs": 1.0}})
+    task = example_build.task_spec(TASK_ID).model_copy(update={"grader": loose})
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
+        call("submit", path=TASK),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [submit] = tool_replies(result, "call-2")
+    assert not submit["accepted"]
+    assert any("also accepts" in problem for problem in submit["problems"])
