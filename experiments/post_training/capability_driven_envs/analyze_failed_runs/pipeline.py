@@ -52,6 +52,8 @@ SUBJECT_NAME = "Capabilities that failed runs lack"
 MERGE_ATTEMPTS = 3
 INVALID_REPLIES = "failed_runs.invalid_replies"
 """The pipeline counter of the failed rollouts whose reply stayed invalid."""
+DROPPED_ROLLOUTS = "failed_runs.dropped_rollouts"
+"""The pipeline counter of the failed rollouts that no merged idea cites after a merge."""
 
 logger = logging.getLogger(__name__)
 
@@ -146,13 +148,18 @@ def merge_ideas(
     """At most ``max_new_ideas`` ideas that structured calls merge from ``ideas``, with more rollouts first.
 
     One call merges at most ``max_ideas_per_merge`` ideas. Thus more ideas merge in rounds: each round merges batches
-    of that size, and the next round merges the results.
+    of that size, and the next round merges the results. The merge keeps the capabilities that explain the most
+    rollouts, and the pipeline counter ``DROPPED_ROLLOUTS`` adds the rollouts that the merged ideas no longer cite.
     """
     merge = partial(_merged_batch, make_client=make_client, max_new_ideas=max_new_ideas, policy=policy)
     candidates = list(ideas)
+    rollouts = frozenset().union(*(candidate.evidence for candidate in candidates))
     while len(candidates) > max_ideas_per_merge:
         candidates = list(chain.from_iterable(map(merge, batched(candidates, max_ideas_per_merge))))
-    return merge(candidates)
+    merged = merge(candidates)
+    cited = frozenset().union(*(candidate.evidence for candidate in merged))
+    counters.pipeline.update_counter(DROPPED_ROLLOUTS, len(rollouts - cited))
+    return merged
 
 
 def _merged_batch(
@@ -160,9 +167,9 @@ def _merged_batch(
 ) -> list[MaybeIdea]:
     """At most ``max_new_ideas`` ideas that one structured call merges from ``ideas``, with more rollouts first.
 
-    The reply puts each idea in exactly one merged idea, which joins the evidence of its ideas. The reply lists the ID
-    of each line, so it grows with the ideas, and GLM sometimes runs away to the output limit in a long structured
-    reply. Thus a merge makes up to ``MERGE_ATTEMPTS`` calls until a reply is valid.
+    A merged idea joins the evidence of the ideas that it holds. The reply lists their IDs, so it grows with the ideas,
+    and GLM sometimes runs away to the output limit in a long structured reply. Thus a merge makes up to
+    ``MERGE_ATTEMPTS`` calls until a reply is valid.
     """
     lines = {f"k{i}": candidate for i, candidate in enumerate(ideas)}
     if not lines:

@@ -31,6 +31,5 @@ message starts a new line with its number, for example [0]."""
 MERGE_PROMPT = f"""\
 Each line is a capability that failed rollouts of a language-model agent lack, with the ID of the line and the \
 number of rollouts that show the gap. Merge the capabilities into at most {{count}}: merge the capabilities that are \
-about the same skill, and keep separate the capabilities that explain the most rollouts. Give each merged capability \
-a different ID and the IDs of the lines that it holds. Each line goes in exactly one merged capability. \
-{CAPABILITY_RULES}"""
+about the same skill, and keep the capabilities that explain the most rollouts. Give each merged capability a \
+different ID and the IDs of the lines that it holds. {CAPABILITY_RULES}"""
