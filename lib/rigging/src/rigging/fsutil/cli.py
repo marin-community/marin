@@ -3,7 +3,8 @@
 
 """The ``fsutil`` command line: list, read, size, copy, and remove across Marin's buckets and HF.
 
-Every path is a full URL (``gs://``, ``s3://``, ``hf://``, or a local path). There is no implicit
+Every path is a full URL (``gs://``, ``s3://``, ``hf-bucket://``, ``hf-model://``,
+``hf-dataset://``, or a local path). There is no implicit
 current bucket, so the same command means the same thing from any shell, and a copy can
 name two different backends. Bare ``fsutil`` opens the interactive browser, and
 ``fsutil URL`` opens the browser on a directory or the file viewer on anything else.
@@ -122,7 +123,8 @@ class _AutoOpenGroup(click.Group):
 def cli(ctx: click.Context, verbose: bool) -> None:
     """Browse and manipulate Marin's object storage (GCS, CoreWeave, R2, HF).
 
-    Paths are full URLs: gs://bucket/key, s3://bucket/key, hf://..., or a local path.
+    Paths are full URLs: gs://bucket/key, s3://bucket/key, hf-bucket://owner/bucket/key,
+    hf-model://owner/model/key, hf-dataset://owner/dataset/key, or a local path.
     A bare URL opens the browser on a directory or the viewer on a file.
     """
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
@@ -330,8 +332,8 @@ def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool, remote: bool) -
         run_remote_transfer("cp", urls, recursive=recursive, no_clobber=no_clobber)
         return
     try:
-        plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=no_clobber)
         prepare_hf_destination(destination_url)
+        plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=no_clobber)
         _execute_transfer(plan)
     except TransferError as error:
         raise click.ClickException(str(error)) from error
@@ -352,8 +354,8 @@ def mv(urls: tuple[str, ...], recursive: bool, remote: bool) -> None:
         run_remote_transfer("mv", urls, recursive=recursive)
         return
     try:
-        plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=False)
         prepare_hf_destination(destination_url)
+        plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=False)
         _execute_transfer(plan)
         remove_sources(plan.sources)
     except TransferError as error:

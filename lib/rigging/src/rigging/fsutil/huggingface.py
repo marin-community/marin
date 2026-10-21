@@ -6,6 +6,7 @@
 from huggingface_hub import bucket_info, create_bucket, create_repo, repo_exists
 from huggingface_hub.errors import BucketNotFoundError
 
+from rigging.filesystem.huggingface import hf_url
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import TransferError
 
@@ -18,7 +19,7 @@ def prepare_hf_destination(url: str) -> None:
 
     Existing destinations retain their visibility.
     """
-    path = StoragePath(url)
+    path = StoragePath(hf_url(url))
     if path.scheme != "hf":
         return
 

@@ -12,9 +12,11 @@ from glob import has_magic
 from typing import Any, cast
 
 from fsspec import AbstractFileSystem
+from huggingface_hub import parse_hf_uri
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.hashing import file_md5_for_path
+from rigging.filesystem.huggingface import HF_PROTOCOLS, hf_url
 from rigging.filesystem.storage_path import StoragePath
 
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
@@ -53,7 +55,7 @@ class TransferLocation:
     def relative_to(self, root: "TransferLocation") -> str:
         if _backend(self) != _backend(root):
             raise ValueError(f"{self.url} is not under {root.url}")
-        return _relative_path(self.path, root.path)
+        return _relative_path(_location_path(self), _location_path(root))
 
 
 @dataclass(frozen=True)
@@ -409,18 +411,30 @@ def _backend(location: TransferLocation) -> str:
         return "file"
     if scheme in _GCS_SCHEMES:
         return "gs"
+    if scheme in HF_PROTOCOLS:
+        return "hf"
     return scheme
 
 
+def _location_path(location: TransferLocation) -> str:
+    # Native and explicit HF URLs must compare equal to prevent copying a file
+    # onto itself through two different schemes.
+    if StoragePath(location.url).scheme in HF_PROTOCOLS:
+        uri = parse_hf_uri(hf_url(location.url))
+        revision = f"@{uri.revision or 'main'}" if uri.is_repo else ""
+        return f"{uri.type}/{uri.id}{revision}/{uri.path_in_repo}".rstrip("/")
+    return location.path
+
+
 def _same_location(left: TransferLocation, right: TransferLocation) -> bool:
-    return _backend(left) == _backend(right) and left.path == right.path
+    return _backend(left) == _backend(right) and _location_path(left) == _location_path(right)
 
 
 def _strictly_contains(parent: TransferLocation, child: TransferLocation) -> bool:
     if _backend(parent) != _backend(child):
         return False
-    parent_path = parent.path.rstrip("/")
-    child_path = child.path.rstrip("/")
+    parent_path = _location_path(parent).rstrip("/")
+    child_path = _location_path(child).rstrip("/")
     if parent_path == child_path:
         return False
     prefix = f"{parent_path}/" if parent_path else "/" if parent.path.startswith("/") else ""

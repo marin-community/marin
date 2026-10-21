@@ -16,8 +16,8 @@ uv run fsutil show gs://marin-us-central2/documents/shard-00000.parquet
 uv run fsutil du s3://marin-us-east-02a/iris/my-job
 uv run fsutil usage s3://marin-us-east-02a -o usage-report.md
 uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
-uv run fsutil cp --remote s3://marin-us-east-02a/my-file hf://buckets/marin/my-bucket/my-file
-uv run fsutil cp --remote hf://buckets/marin/my-bucket/my-file s3://marin-us-east-02a/my-file
+uv run fsutil cp --remote s3://marin-us-east-02a/my-file hf-bucket://open-athena/marin/my-file
+uv run fsutil cp --remote hf-model://open-athena/snowball-intermediate/config.json s3://marin-us-east-02a/config.json
 uv run fsutil mv /tmp/run.json gs://marin-us-central2/archive/
 uv run fsutil rsync --dry-run --delete /tmp/checkpoints gs://marin-us-central2/checkpoints
 uv run fsutil verified-copy gs://marin-us-central2/exports/model s3://marin-us-east-02a/marin/exports/model
@@ -25,9 +25,21 @@ uv run fsutil hash gs://marin-us-central2/archive/run.json
 uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix s3://marin-us-east-02a/tmp/old-prefix
 ```
 
-Paths are always full URLs — `gs://bucket/key`, `s3://bucket/key`, or a local path.
-Hugging Face storage buckets use `hf://buckets/owner/bucket/key`. Hugging Face
-model, dataset, and Space repositories also accept `hf://` paths.
+Paths are full URLs or local paths. Hugging Face schemes distinguish mutable buckets
+from versioned model and dataset repositories:
+
+| Storage | URL |
+|---------|-----|
+| HF bucket | `hf-bucket://owner/bucket/path` |
+| HF model repository | `hf-model://owner/model/path` |
+| HF dataset repository | `hf-dataset://owner/dataset/path` |
+| GCS bucket | `gs://bucket/path` |
+| S3-compatible bucket | `s3://bucket/path` |
+
+Model and dataset paths can pin a branch, tag, or commit after the repository name,
+such as `hf-model://open-athena/snowball-intermediate@main/config.json`.
+Buckets have no revisions. The native forms also work: `hf://buckets/owner/bucket/path`,
+`hf://owner/model/path`, and `hf://datasets/owner/dataset/path`.
 There is no current bucket to keep track of, and a copy may name a different backend on
 each side.
 
@@ -51,9 +63,11 @@ CoreWeave also accepts the generic `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
 
 Hugging Face uses `HF_TOKEN` or a token saved by `hf auth login`. For `cp` and `mv`
 with `--remote`, fsutil forwards that token to the Iris job through its environment;
-the token does not appear in the job command. The CoreWeave worker uses its
-configured S3 credentials. A new Hugging Face bucket or repository written by
+the token does not appear in the job command. The remote Iris worker uses its
+configured CoreWeave S3 credentials. A new Hugging Face bucket or repository written by
 fsutil is created private. Existing storage keeps its current visibility.
+Creating storage requires permission in the owning user or organization;
+uploading requires write access to the destination.
 
 `fsutil buckets` reports which backends are reachable, so an unconfigured one shows up
 before a command fails against it. A backend with no credentials only breaks commands

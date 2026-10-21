@@ -6,18 +6,34 @@
 import json
 import os
 import sys
+from dataclasses import dataclass, field
+from pathlib import Path
 
+import httpx
 import pytest
-import rigging.fsutil.huggingface as huggingface_module
 import rigging.fsutil.remote as remote_module
 from click.testing import CliRunner
-from httpx import Request, Response
-from huggingface_hub.errors import BucketNotFoundError
+from huggingface_hub import HfApi, HfFileSystem
+from huggingface_hub.utils import _http as hf_http
+from rigging.filesystem.huggingface import HfBucketFileSystem, HfDatasetFileSystem, HfModelFileSystem
+from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.transfer import TransferError, copy_plan
 from rigging.fsutil.cli import cli
+from rigging.fsutil.listing import list_entries
+
+HF_STORAGE_ROOTS = (
+    "hf-bucket://owner/files",
+    "hf-model://owner/files",
+    "hf-dataset://owner/files",
+    "hf://buckets/owner/files",
+    "hf://owner/files",
+    "hf://datasets/owner/files",
+)
 
 
 @pytest.mark.parametrize("operation", ["cp", "mv"])
-def test_remote_transfer_forwards_saved_hf_token_without_putting_it_in_command(tmp_path, monkeypatch, operation):
+@pytest.mark.parametrize("root", HF_STORAGE_ROOTS)
+def test_remote_transfer_forwards_saved_hf_token_without_putting_it_in_command(tmp_path, monkeypatch, operation, root):
     capture = tmp_path / "submission.json"
     iris = tmp_path / "iris"
     iris.write_text(
@@ -34,7 +50,7 @@ def test_remote_transfer_forwards_saved_hf_token_without_putting_it_in_command(t
 
     result = CliRunner().invoke(
         cli,
-        [operation, "--remote", "s3://marin-us-east-02a/example", "hf://buckets/marin/test/example"],
+        [operation, "--remote", "s3://marin-us-east-02a/example", f"{root}/example"],
     )
 
     assert result.exit_code == 0, result.output
@@ -57,30 +73,123 @@ def test_remote_transfer_forwards_saved_hf_token_without_putting_it_in_command(t
         "fsutil",
         operation,
         "s3://marin-us-east-02a/example",
-        "hf://buckets/marin/test/example",
+        f"{root}/example",
     ]
 
 
-def test_new_hf_bucket_is_private(monkeypatch):
-    calls = []
+@dataclass
+class HubStorage:
+    exists: bool = False
+    private: bool = False
+    files: dict[str, bytes] = field(default_factory=dict)
 
-    def missing_bucket(_bucket_id):
-        raise BucketNotFoundError(
-            "missing", response=Response(404, request=Request("GET", "https://huggingface.co/api/buckets"))
-        )
+    def request(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and (path == "/api/repos/create" or path == "/api/buckets/owner/files"):
+            self.exists = True
+            payload = json.loads(request.content)
+            self.private = payload["visibility"] == "private" if path == "/api/repos/create" else payload["private"]
+            return httpx.Response(200, json={"url": "https://huggingface.co/owner/files"})
+        if not self.exists:
+            return httpx.Response(404, headers={"X-Error-Code": "RepoNotFound"}, json={"error": "Not found"})
+        if "/tree" in path:
+            return httpx.Response(
+                200,
+                json=[
+                    {"type": "file", "path": name, "size": len(data), "oid": "blob", "xetHash": "xet"}
+                    for name, data in self.files.items()
+                ],
+            )
+        if "/paths-info/" in path:
+            return httpx.Response(200, json=[])
+        if path.startswith("/api/") and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "owner/files",
+                    "private": self.private,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "size": sum(map(len, self.files.values())),
+                    "totalFiles": len(self.files),
+                },
+            )
+        if "/resolve/" in path:
+            return httpx.Response(200, content=self.files[path.rsplit("/", 1)[-1]])
+        raise AssertionError(f"Unexpected Hub request: {request.method} {request.url}")
 
-    monkeypatch.setattr(huggingface_module, "bucket_info", missing_bucket)
-    monkeypatch.setattr(huggingface_module, "create_bucket", lambda *args, **kwargs: calls.append((args, kwargs)))
 
-    huggingface_module.prepare_hf_destination("hf://buckets/marin/test/example")
+@pytest.fixture
+def hub(monkeypatch):
+    storage = HubStorage()
 
-    assert calls == [(("marin/test",), {"private": True, "exist_ok": True})]
+    def upload_file(_api, *, path_or_fileobj, path_in_repo, **kwargs):
+        storage.files[path_in_repo] = Path(path_or_fileobj).read_bytes()
+
+    def batch_bucket_files(_api, bucket_id, *, add):
+        for source, destination in add:
+            storage.files[destination] = Path(source).read_bytes()
+
+    for filesystem in (HfFileSystem, HfModelFileSystem, HfBucketFileSystem, HfDatasetFileSystem):
+        filesystem.clear_instance_cache()
+    monkeypatch.setattr(HfApi, "upload_file", upload_file)
+    monkeypatch.setattr(HfApi, "batch_bucket_files", batch_bucket_files)
+    with httpx.Client(transport=httpx.MockTransport(storage.request)) as client:
+        monkeypatch.setattr(hf_http, "_GLOBAL_CLIENT", client)
+        yield storage
+    for filesystem in (HfFileSystem, HfModelFileSystem, HfBucketFileSystem, HfDatasetFileSystem):
+        filesystem.clear_instance_cache()
 
 
-def test_existing_hf_bucket_keeps_visibility(monkeypatch):
-    monkeypatch.setattr(huggingface_module, "bucket_info", lambda _bucket_id: object())
-    monkeypatch.setattr(
-        huggingface_module, "create_bucket", lambda *args, **kwargs: pytest.fail("existing bucket recreated")
-    )
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+@pytest.mark.parametrize("root", HF_STORAGE_ROOTS)
+@pytest.mark.parametrize("existing_public", [False, True])
+def test_transfer_uploads_into_new_private_or_existing_public_storage(tmp_path, hub, operation, root, existing_public):
+    hub.exists = existing_public
+    source = tmp_path / "payload.txt"
+    source.write_bytes(b"transfer payload")
+    destination = f"{root}/payload.txt"
 
-    huggingface_module.prepare_hf_destination("hf://buckets/marin/existing/file")
+    result = CliRunner().invoke(cli, [operation, str(source), destination], catch_exceptions=False)
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert hub.files == {"payload.txt": b"transfer payload"}
+    assert hub.private is not existing_public
+    assert source.exists() is (operation == "cp")
+    assert StoragePath(destination).read_bytes() == b"transfer payload"
+
+
+@pytest.mark.parametrize("root", HF_STORAGE_ROOTS)
+def test_hf_listing_and_glob_paths_can_be_reopened_and_copied(tmp_path, hub, root):
+    hub.exists = True
+    hub.files = {"first.txt": b"first", "second.txt": b"second"}
+
+    entries = list_entries(root)
+    assert {entry.url for entry in entries} == {f"{root}/first.txt", f"{root}/second.txt"}
+    assert {StoragePath(entry.url).read_bytes() for entry in entries} == {b"first", b"second"}
+    assert {path.read_bytes() for path in StoragePath(f"{root}/*.txt").glob()} == {b"first", b"second"}
+
+    result = CliRunner().invoke(cli, ["cp", f"{root}/*.txt", str(tmp_path)])
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == {
+        "first.txt": b"first",
+        "second.txt": b"second",
+    }
+
+
+@pytest.mark.parametrize(
+    ("scheme", "native_url"),
+    [
+        ("hf-bucket", "hf://buckets/owner/files/payload.txt"),
+        ("hf-model", "hf://owner/files/payload.txt"),
+        ("hf-model", "hf://models/owner/files@main/payload.txt"),
+        ("hf-dataset", "hf://datasets/owner/files/payload.txt"),
+    ],
+)
+def test_copy_rejects_same_hf_file_through_different_schemes(hub, scheme, native_url):
+    hub.exists = True
+    hub.files = {"payload.txt": b"keep this data"}
+
+    with pytest.raises(TransferError):
+        copy_plan((f"{scheme}://owner/files/payload.txt",), native_url, recursive=False, no_clobber=False)
+    assert hub.files == {"payload.txt": b"keep this data"}
