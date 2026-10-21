@@ -756,9 +756,7 @@ def _peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: bo
     return job_pb2.PEER_STATUS_ASSIGNED
 
 
-def _federated_pending_reason(
-    cluster: str, handoff_state: int | None, peer_status: int, peer_reachable: bool | None
-) -> str:
+def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int, peer_reachable: bool) -> str:
     """Pending reason for a federated job, which the local scheduler never sees.
 
     A handed-off job's tasks live on the peer and are excluded from the local
@@ -771,7 +769,7 @@ def _federated_pending_reason(
     if handoff_state == int(HandoffState.QUEUED_HANDOFF):
         if not cluster:
             return "Queued for a federation peer to report free capacity"
-        if peer_reachable is False:
+        if not peer_reachable:
             return f"Peer {cluster} is unreachable; queued until it reconnects"
         return f"Queued for peer {cluster} to report free capacity"
     if peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING:

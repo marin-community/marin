@@ -171,10 +171,10 @@ class FederationManager:
         """Whether ``peer_id`` names a configured federation peer."""
         return peer_id in self._peers
 
-    def peer_reachable(self, peer_id: str) -> bool | None:
-        """The latest heartbeat verdict, or None for an unknown peer."""
+    def peer_reachable(self, peer_id: str) -> bool:
+        """Whether a configured peer passed its latest heartbeat."""
         peer = self._peers.get(peer_id)
-        return peer.heartbeat().reachable if peer is not None else None
+        return peer is not None and peer.heartbeat().reachable
 
     def peer_controller_address(self, peer_id: str) -> str | None:
         """The configured controller base URL of ``peer_id``, or None when it is not a peer."""
