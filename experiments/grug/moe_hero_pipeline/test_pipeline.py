@@ -30,7 +30,7 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 )
 
 
-def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
+def _tiny_hero(qb_estimator: QbEstimator, *, num_layers: int = 5) -> tuple[Mesh, Transformer]:
     config = GrugModelConfig(
         vocab_size=16,
         hidden_dim=8,
@@ -40,7 +40,7 @@ def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
         num_shared_experts=2,
         num_experts=4,
         num_experts_per_token=1,
-        num_layers=5,
+        num_layers=num_layers,
         num_heads=2,
         num_kv_heads=2,
         local_kv_heads=2,
@@ -175,7 +175,10 @@ def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimato
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("remat_mode", ["recompute_all", "offload_carry"])
 def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
-    mesh, model = _tiny_hero(QbEstimator.HIST)
+    # Three layers retain a stage boundary, a multi-layer stage, and both local
+    # and global attention while reducing the two gradient compilations.
+    layer_counts = (1, 2)
+    mesh, model = _tiny_hero(QbEstimator.HIST, num_layers=sum(layer_counts))
     batch = _packed_batch()
 
     def ordinary_loss(params):
@@ -183,7 +186,7 @@ def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
 
     def pipeline_loss(params):
         params = dataclasses.replace(params, config=dataclasses.replace(params.config, remat_mode=remat_mode))
-        stages = split_transformer(params, 2, layer_counts=(2, 3))
+        stages = split_transformer(params, len(layer_counts), layer_counts=layer_counts)
         hidden = stages[0].embed(batch.tokens)
         for stage in stages:
             hidden, _ = stage.run_blocks(hidden, batch.attn_mask)
