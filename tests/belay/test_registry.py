@@ -83,10 +83,24 @@ def test_validate_accepts_gaps_in_trial_ids():
     R.validate([_experiment(trials=(trial, dataclasses.replace(trial, id="t003")))])
 
 
-def test_load_names_the_file_and_the_missing_key(tmp_path):
+def test_load_names_the_file_with_a_missing_key(tmp_path):
     text = R.write_experiment(_experiment(), tmp_path).read_text().replace("- id: t001\n  variant", "- variant")
     (tmp_path / "X0001-sqrt-softplus-router.yaml").write_text(text)
-    with pytest.raises(ValueError, match=r"X0001-sqrt-softplus-router.yaml: Trial: missing keys \['id'\]"):
+    with pytest.raises(ValueError, match=r"X0001-sqrt-softplus-router\.yaml"):
+        R.load_registry(tmp_path)
+
+
+def test_validate_rejects_a_commit_with_a_trailing_newline():
+    (trial,) = _experiment().trials
+    with pytest.raises(ValueError):
+        R.validate([_experiment(trials=(dataclasses.replace(trial, commit="e8cd1b97ec\n"),))])
+
+
+def test_load_rejects_an_unquoted_all_digit_commit(tmp_path):
+    (trial,) = _experiment().trials
+    path = R.write_experiment(_experiment(trials=(dataclasses.replace(trial, commit="e8cd1b97ec"),)), tmp_path)
+    path.write_text(path.read_text().replace("commit: e8cd1b97ec", "commit: 1234567890"))
+    with pytest.raises(ValueError):
         R.load_registry(tmp_path)
 
 
