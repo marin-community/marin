@@ -1,6 +1,20 @@
 [
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195526-Qwen-Qwen3.6-35B-A3B-swebench-32k-8k-summary-c7803e1e44884c96ae48f55f67eec1fa-32k-8k-summary-38fb91f20481579f9c591e0190f9928c/results",
+    "started_at": "2026-10-21T07:27:30.557000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: inference-9ddff1427af347388512198c78b36ac2/0 attempt 6 WorkloadEvictedDueToPreempted; attempt 7 SchedulingGated. Preemptor workload UID 28b7561d-6884-450d-8892-b071778b6e34.",
+    "arm": "32k/8k, summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261021-045837-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-65k-16k-no-summary-33f0a442956d4d5280c5370305804fc9-harbor-bf6a9adedbe55739a9e380316fad6274/results",
+    "started_at": "2026-10-21T07:28:49.511000+00:00",
+    "finished_at": null,
+    "evidence": "Iris task events: inference-a6f3f263caaa47bb8b290e884ee46e39/0 attempt 1 WorkloadEvictedDueToPreempted; attempt 2 SchedulingGated. Preemptor workload UID d3b92df0-0187-40c5-9032-886cac9d1ca4.",
+    "arm": "65k/16k, no summary"
+  },
+  {
+    "results_root": "s3://marin-us-east-02a/marin/evals/20261020-195526-Qwen-Qwen3.6-35B-A3B-swebench-32k-8k-summary-c7803e1e44884c96ae48f55f67eec1fa-32k-8k-summary-38fb91f20481579f9c591e0190f9928c/results",
     "started_at": "2026-10-21T06:46:04.563000+00:00",
     "finished_at": "2026-10-21T07:20:47.860248+00:00",
     "evidence": "Iris task events: WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 7eda2b5d-58eb-4acd-880c-ff7957bfc64d. Recovery probe matched the configured model alias and returned a one-token chat completion with HTTP 200.",
