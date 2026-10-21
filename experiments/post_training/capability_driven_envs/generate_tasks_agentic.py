@@ -3,11 +3,10 @@
 
 """Generate TaskSpecs for catalog capabilities with the agentic Taskforge: one GLM agent for each capability.
 
-The agent and its reviewer use GLM, and the solver rollouts use DeepSeek without thinking by default. With thinking,
-DeepSeek passed 69% of the agent's task versions every time, and the agent spent its rollout budget on the search for
-a difficulty in the band. The agent's shell runs in a bubblewrap sandbox, so the Iris job needs
-``--container-profile container_profile_privileged``. ``--pool`` selects the GLM bearer token as in
-``generate_tasks``, and ``PARALLEL_API_KEY`` holds the key of the agent's web tools.
+The agent and its reviewer use GLM, and the solver rollouts use DeepSeek without thinking by default. The agent's
+shell runs in a bubblewrap sandbox, so the Iris job needs ``--container-profile container_profile_privileged``.
+``--pool`` selects the GLM bearer token as in ``generate_tasks``, and ``PARALLEL_API_KEY`` holds the key of the
+agent's web tools.
 Inside an Iris task::
 
     uv run --package marin-taskforge --frozen python -m \\
