@@ -799,5 +799,5 @@ class TestInstallMethod:
         await agent.install(environment)
 
         install_command = environment.exec.call_args_list[1].kwargs["command"]
-        assert "uv tool install mini-swe-agent --with mcp==2.3.0" in install_command
+        assert "uv tool install mini-swe-agent --with mcp==2.3.0 --with litellm==1.103.5" in install_command
         assert "from mcp.types import CacheableResult" in install_command
