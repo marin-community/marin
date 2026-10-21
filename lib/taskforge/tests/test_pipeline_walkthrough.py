@@ -376,16 +376,16 @@ NULL_PROPOSAL = replace(
     PROPOSAL,
     header=replace(PROPOSAL.header, build=(), resources=(), null_reason="the capability has no gradable artifact here"),
 )
-ESCAPING_PROPOSAL = replace(PROPOSAL, header=replace(PROPOSAL.header, resources=("../numbers.txt",)))
+RISKS_HEADING = "## Risks and null conditions\n"
+THIN_PROPOSAL = replace(PROPOSAL, body=PROPOSAL.body[: PROPOSAL.body.index(RISKS_HEADING)] + RISKS_HEADING + "None.\n")
 MACHINELESS_SHELLSIM = replace(PROPOSAL, header=replace(PROPOSAL.header, solver_machine=SolverMachine.NONE))
 
 
 @pytest.mark.parametrize(
     ("proposal", "reason"),
     [
-        (ESCAPING_PROPOSAL, "header_schema_valid: resources must be relative paths inside the build root"),
+        (THIN_PROPOSAL, "required_sections: '## Risks and null conditions' has 1 words, fewer than 40"),
         (NULL_PROPOSAL, "null proposal: the capability has no gradable artifact here"),
-        (MACHINELESS_SHELLSIM, "solver_machine_fits: only a reasoning proposal may declare none"),
     ],
 )
 async def test_the_default_preflight_rejects_a_proposal_with_the_failing_check_before_any_later_stage(
@@ -805,9 +805,8 @@ class TriageInTurn:
 class MachineRepair:
     """A deterministic repair of one header defect, recording each call.
 
-    A shellsim proposal declaring no solver machine, which the preflight's ``solver_machine_fits``
-    rejects, is rewritten to declare ShellSim. Any other proposal has no rewrite here and raises
-    ``ProposalFormatError``.
+    A shellsim proposal declaring no solver machine is rewritten to declare ShellSim. Any other
+    proposal has no rewrite here and raises ``ProposalFormatError``.
     """
 
     def __init__(self) -> None:
