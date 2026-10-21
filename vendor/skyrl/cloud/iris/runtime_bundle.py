@@ -23,6 +23,7 @@ RUNTIME_SOURCE_PREFIXES = (
     "skyrl-train/skyrl_train/",
     "skyrl-gym/skyrl_gym/",
     "open_mopd_versions.py",
+    "harbor/src/",
 )
 
 
@@ -72,7 +73,20 @@ def read_manifest_paths(root: Path) -> tuple[str, ...]:
 
 def _bundle_paths(root: Path) -> tuple[Path, ...]:
     names = set(read_manifest_paths(root))
-    names.update({BUNDLE_FILE_MANIFEST.as_posix(), PROVENANCE_FILE.as_posix(), "pyproject.toml", "uv.lock"})
+    names.update(
+        {
+            BUNDLE_FILE_MANIFEST.as_posix(),
+            PROVENANCE_FILE.as_posix(),
+            "pyproject.toml",
+            "uv.lock",
+            "harbor/pyproject.toml",
+            "harbor/README.md",
+            "harbor/LICENSE",
+        }
+    )
+    harbor_root = root / "harbor"
+    if harbor_root.is_symlink() and harbor_root.readlink() != Path("../harbor"):
+        raise ValueError("Vendored Harbor source must point to ../harbor")
     for prefix in RUNTIME_SOURCE_PREFIXES:
         source = root / prefix
         if source.is_dir():
@@ -85,7 +99,8 @@ def _bundle_paths(root: Path) -> tuple[Path, ...]:
         if {"tests", "__pycache__"}.intersection(path.parts) or path.suffix in {".pyc", ".pyo"}:
             continue
         original = root / path
-        original.resolve().relative_to(root.resolve())
+        allowed_root = harbor_root.resolve() if path.parts[0] == "harbor" else root.resolve()
+        original.resolve().relative_to(allowed_root)
         if not original.is_file():
             raise FileNotFoundError(f"Runtime source file is missing: {name}")
         paths.append(path)

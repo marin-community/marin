@@ -13,6 +13,7 @@ from cloud.iris import runtime_bundle
 @pytest.fixture
 def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     project = tmp_path / "vendor/skyrl"
+    harbor = tmp_path / "vendor/harbor"
     files = {
         "cloud/iris/launch.py": "def main(): pass\n",
         "cloud/iris/runtime_bundle_files.txt": "cloud/iris/launch.py\n",
@@ -26,6 +27,16 @@ def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         target = project / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
+    for name, content in {
+        "pyproject.toml": '[project]\nname = "harbor"\n',
+        "README.md": "Harbor runtime\n",
+        "LICENSE": "Apache-2.0\n",
+        "src/harbor/job.py": "RUNTIME = 1\n",
+    }.items():
+        target = harbor / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    (project / "harbor").symlink_to("../harbor", target_is_directory=True)
     provenance = project / runtime_bundle.PROVENANCE_FILE
     provenance.parent.mkdir(parents=True)
     provenance.write_text(json.dumps({"source_sha": "original-upstream-revision"}))
@@ -39,6 +50,8 @@ def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bun
     source, workspace = bundled_source
     assert (workspace / "uv.lock").read_bytes() == (source.root / "uv.lock").read_bytes()
     assert (workspace / "chat_templates/model.jinja2").read_text() == "{{ messages }}"
+    assert (workspace / "harbor/src/harbor/job.py").read_text() == "RUNTIME = 1\n"
+    assert not (workspace / "harbor").is_symlink()
     assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
 
 
@@ -49,7 +62,7 @@ def test_changed_bundled_training_config_is_rejected(bundled_source):
         runtime_bundle.validate_bundled_runtime(workspace)
 
 
-@pytest.mark.parametrize("path", ["cloud/iris/launch.py", "cloud/iris/new_runtime.py"])
+@pytest.mark.parametrize("path", ["cloud/iris/launch.py", "cloud/iris/new_runtime.py", "harbor/src/harbor/job.py"])
 def test_source_edits_get_a_new_identity_and_bundle_without_restaging(bundled_source, path):
     source, _ = bundled_source
     (source.root / path).write_text("updated = True\n")

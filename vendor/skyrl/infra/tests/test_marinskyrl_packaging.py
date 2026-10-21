@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import subprocess
+import zipfile
 from dataclasses import dataclass
 from email.parser import Parser
 from pathlib import Path
-import subprocess
-import tomllib
-import zipfile
 
+from packaging.markers import Marker
 from packaging.requirements import Requirement
 import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-PYPROJECT = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
+
+
 @dataclass(frozen=True)
 class BuiltWheel:
     names: set[str]
@@ -99,20 +100,14 @@ def test_training_extras_publish_hardware_policy_and_rollout_requirements(built_
     assert "Extras `cpu` and `cuda` are incompatible" in conflict.stderr
 
 
-def test_rollout_runtime_exports_pinned_harbor_for_linux_training() -> None:
+def test_rollout_runtime_exports_vendored_harbor_for_linux_training() -> None:
     platform = {"sys_platform": "linux", "platform_machine": "x86_64"}
-    requirements = _exported_requirements(("megatron", "vllm"))
-    harbor = next(
-        requirement for requirement in requirements
-        if requirement.name == "harbor"
-        and (requirement.marker is None or requirement.marker.evaluate(platform))
-    )
-    assert harbor.url is not None
-    assert harbor.url.startswith("git+https://github.com/marin-community/harbor.git@")
-    assert harbor.url.rsplit("@", 1)[-1] == PYPROJECT["tool"]["uv"]["sources"]["harbor"]["rev"]
+    harbor = next(line for line in _exported_lines(("megatron", "vllm")) if line.startswith("./harbor ;"))
+    assert Marker(harbor.partition(";")[2].strip()).evaluate(platform)
+    assert (REPOSITORY_ROOT / "harbor").resolve() == (REPOSITORY_ROOT.parent / "harbor").resolve()
 
 
-def _exported_requirements(extras: tuple[str, ...]) -> list[Requirement]:
+def _exported_lines(extras: tuple[str, ...]) -> list[str]:
     command = ["uv", "export", "--frozen", "--no-annotate", "--no-dev", "--no-hashes"]
     for extra in extras:
         command.extend(("--extra", extra))
@@ -123,7 +118,11 @@ def _exported_requirements(extras: tuple[str, ...]) -> list[Requirement]:
         text=True,
         check=True,
     ).stdout.splitlines()
-    return [Requirement(line) for line in exported if line and not line.startswith(("#", "-e "))]
+    return [line for line in exported if line and not line.startswith(("#", "-e "))]
+
+
+def _exported_requirements(extras: tuple[str, ...]) -> list[Requirement]:
+    return [Requirement(line) for line in _exported_lines(extras) if not line.startswith("./")]
 
 
 @pytest.mark.parametrize("extras", [("cuda",), ("megatron", "vllm")])

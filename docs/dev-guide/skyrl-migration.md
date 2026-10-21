@@ -13,8 +13,9 @@ Marin's launcher uses this nested project. It passes the launch document to
 `uv run --project vendor/skyrl --frozen --no-group dev marinskyrl`
 after clearing the parent's Python environment selection. The CPU launcher
 verifies source and asset hashes, then bundles the project and its lock for
-Iris. Workers install that source in editable mode with the frozen
-Megatron/vLLM profile. No task clones the SkyRL fork.
+Iris. The bundle includes the vendored Harbor package selected by SkyRL's local
+`harbor` source. Workers install that source in editable mode with the frozen
+Megatron/vLLM profile. No task clones the SkyRL or Harbor fork.
 
 The launcher reuses `vendor/skyrl/.venv` for its CPU dependencies. It clears
 Marin's Python environment selection before invoking uv, so that environment
@@ -45,10 +46,11 @@ flowchart LR
     Outputs --> Eval["Marin evaluation artifact"]
 ```
 
-`SkyRLRuntime.source_digest` hashes the current runtime files, assets, and
-independent lock. The nested executable computes it without importing SkyRL
-into Marin. Ordinary edits and new runtime files change the identity without
-restaging the migration. The Iris bundle records and verifies each file's hash.
+`SkyRLRuntime.source_digest` hashes the current runtime files, assets, the
+vendored Harbor package, and the independent lock. The nested executable computes
+it without importing SkyRL into Marin. Ordinary edits and new runtime files
+change the identity without restaging the migration. The Iris bundle records and
+verifies each file's hash.
 Use a fresh artifact version when the digest changes. The provenance document
 records the upstream origin and captured migration patches; it does not prevent
 editing the vendored source.
@@ -66,6 +68,9 @@ and explicit constructor keywords in the nested environment. A failed check
 restores the previous lock. Edit the nested `pyproject.toml` first when changing
 an explicit version constraint. Runtime acceptance must also exercise the
 harness; an import check alone cannot validate its execution contract.
+The `vendor/skyrl/harbor` source link points to `vendor/harbor`. Keep that link
+and the bundle's Harbor source inventory when refreshing SkyRL; update Harbor
+through its own vendoring procedure in `vendor/harbor/README.md`.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
