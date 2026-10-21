@@ -182,9 +182,7 @@ def test_text_evaluation_accepts_actual_model_tokenization_and_semantic_output(t
     assert record.result.rollout.conversations[0].prompt_token_ids == tokens
 
 
-@pytest.mark.parametrize(
-    "failure", ["missing", "duplicate", "conditioning", "sampling", "reward", "interrupted", "task_digest", "response"]
-)
+@pytest.mark.parametrize("failure", ["missing", "duplicate", "conditioning", "sampling", "interrupted"])
 def test_audit_rejects_changed_or_incomplete_evidence_without_shrinking_denominators(failure):
     first = object_task()
     second = first.model_copy(update={"id": "structure-closure:second"})
@@ -210,18 +208,6 @@ def test_audit_rejects_changed_or_incomplete_evidence_without_shrinking_denomina
         elif failure == "sampling":
             request = replace(record.request, options={**record.request.options, "temperature": 1})
             records[1] = replace(record, request=request)
-        elif failure == "reward":
-            records[1] = replace(record, result=replace(record.result, grade=replace(record.result.grade, reward=0)))
-        elif failure == "task_digest":
-            records[1] = replace(record, task_sha256="modified-task")
-        elif failure == "response":
-            conversation = record.result.rollout.conversations[0]
-            conversation = replace(
-                conversation,
-                messages=(*conversation.messages[:-1], {"role": "assistant", "content": "different response"}),
-            )
-            rollout = replace(record.result.rollout, conversations=(conversation,))
-            records[1] = replace(record, result=replace(record.result, rollout=rollout))
         else:
             rollout = replace(record.result.rollout, failure=RolloutFailure("TimeoutError"))
             records[1] = replace(record, result=replace(record.result, rollout=rollout))

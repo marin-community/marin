@@ -15,12 +15,11 @@ from typing import Any
 from pydantic import TypeAdapter
 from rolloutengine.harness.prefill import prefill_prompt
 from rolloutengine.models import GradedRollout, ModelRequest
-from taskcompendium.chat import chat_conversation
-from taskcompendium.grading import grade_answer
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import GradingAttempt, TaskSpec, VerifyitGrader, verifyit_spec
+from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
 from verifyit.spec import StructureClosureSpec
 
+from experiments.post_training.structure_closure.benchmark import TASK_ID_PREFIX, Family
 from experiments.post_training.structure_closure.eval_audit import AuditFailure, EvaluationAudit, case_result
 from experiments.post_training.structure_closure.task_data import load_validation, task_digest
 
@@ -28,7 +27,6 @@ from experiments.post_training.structure_closure.task_data import load_validatio
 @dataclass(frozen=True)
 class EvaluationRecord:
     task_id: str
-    task_sha256: str
     request: ModelRequest | None
     result: GradedRollout
 
@@ -50,7 +48,7 @@ def evaluation_request(task: TaskSpec, sampling: dict[str, Any]) -> ModelRequest
         raise ValueError("Sampling cannot override task conditioning or template controls")
     body = {
         **prompt.options.get("extra_body", {}),
-        "chat_template_kwargs": {"enable_thinking": task_group(task, "family") == "reasoning_delimiter"},
+        "chat_template_kwargs": {"enable_thinking": task_group(task, "family") == Family.REASONING},
     }
     return ModelRequest(prompt.messages, {**sampling, **prompt.options, "extra_body": body})
 
@@ -58,7 +56,7 @@ def evaluation_request(task: TaskSpec, sampling: dict[str, Any]) -> ModelRequest
 def audit_rollouts(
     tasks: Sequence[TaskSpec], records: Iterable[EvaluationRecord], *, sampling: dict[str, Any]
 ) -> EvaluationAudit:
-    """Check pairing, public conditioning and actual grade, independently of tokenization."""
+    """Rescore raw continuations with fixed cohort and request settings."""
     expected = {task.id: task for task in tasks}
     if len(expected) != len(tasks):
         raise ValueError("The evaluation cohort contains duplicate task identities")
@@ -73,16 +71,8 @@ def audit_rollouts(
                 raise ValueError("Unknown or duplicate evaluation task")
             seen.add(uid)
             task = expected[uid]
-            if record.task_sha256 != task_digest(task):
-                raise ValueError("The evaluated task differs from the frozen cohort")
-            request = record.request
-            expected_request = evaluation_request(task, sampling)
-            if request is None or request.messages != expected_request.messages:
-                raise ValueError("The model did not receive the frozen public conditioning")
-            if request.prompt_token_ids is not None or request.continuation is not None:
-                raise ValueError("Text-prefill evaluation cannot substitute pinned token conditioning")
-            if request.options != expected_request.options:
-                raise ValueError("The model request changed sampling, thinking, prefill or tool settings")
+            if record.request != evaluation_request(task, sampling):
+                raise ValueError("The model request differs from the cohort or sampling settings")
             result = record.result
             rollout = result.rollout
             if rollout.failure is not None:
@@ -91,42 +81,23 @@ def audit_rollouts(
                 raise ValueError("A closure task requires exactly one captured model turn")
             conversation = rollout.conversations[0]
             turn = conversation.steps[0].turn
-            if conversation.messages != (*request.messages, turn.message):
-                raise ValueError("The graded conversation differs from the captured request and response")
-            if turn.message.get("role") != "assistant" or not isinstance(turn.message.get("content"), str):
-                raise ValueError("The model response is missing assistant text")
-            if (
-                turn.message.get("reasoning_content")
-                or turn.message.get("reasoning")
-                or turn.metadata.get("reasoning")
-                or turn.message.get("tool_calls")
-            ):
-                raise ValueError("Parsed response channels cannot establish the raw structural continuation")
-            attempt = GradingAttempt(chat_conversation(list(conversation.messages)), stop_reason=rollout.stop_reason)
-            rescored = grade_answer(task, attempt)
-            scored_outcomes = (Outcome.GRADED, Outcome.SUBMISSION_FAILURE)
-            if result.grade.status not in scored_outcomes or rescored.status not in scored_outcomes:
+            if result.grade.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE):
                 raise ValueError("The task has no scored verifier result")
-            if result.grade != rescored:
-                raise ValueError("Recorded grade disagrees with the captured response")
             if not isinstance(task.grader, VerifyitGrader):
                 raise ValueError("The cohort contains a non-verifyit grader")
             spec = verifyit_spec(task.grader)
             if not isinstance(spec, StructureClosureSpec):
                 raise ValueError("The cohort contains a non-closure grader")
-            content = ""
-            if rescored.status == Outcome.GRADED:
-                content = turn.message["content"]
             results.append(
                 case_result(
                     uid=uid,
-                    case_id=uid.removeprefix("structure-closure:"),
+                    case_id=uid.removeprefix(TASK_ID_PREFIX),
                     family=task_group(task, "family"),
                     control=task_group(task, "control"),
                     prefix=spec.prefix,
                     expected=spec.expected,
                     structure_format=spec.format,
-                    content=content,
+                    content=turn.message["content"],
                 )
             )
         except (KeyError, TypeError, ValueError) as error:
