@@ -23,6 +23,7 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.runtime_interface import ControllerRuntime
 from iris.cluster.stats.tables import (
     PROFILE_NAMESPACE,
@@ -56,6 +57,7 @@ class ControllerServiceImpl:
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
         capability_url_config: attempts.CapabilityUrlConfig | None = None,
+        budgets: FederationBudgets | None = None,
     ):
         self._db = db
         self._controller = controller
@@ -63,7 +65,8 @@ class ControllerServiceImpl:
         self._bundle_store = bundle_store
         resolved_auth = auth or ControllerAuth()
         resolved_budget_defaults = user_budget_defaults or UserBudgetDefaults()
-        self._accounts = accounts.AccountDependencies(db=db, auth=resolved_auth)
+        resolved_budgets = budgets or FederationBudgets(db, resolved_budget_defaults)
+        self._accounts = accounts.AccountDependencies(db=db, auth=resolved_auth, budgets=resolved_budgets)
         self._diagnostics = diagnostics.DiagnosticDependencies(db=db)
         self._checkpoint = checkpoint.CheckpointDependencies(runtime=controller)
         self._workers = workers.WorkerDependencies(db=db, runtime=controller, auth=resolved_auth)
@@ -71,16 +74,16 @@ class ControllerServiceImpl:
         self._backend_status = backend_status.BackendStatusDependencies(
             db=db,
             runtime=controller,
-            user_budget_defaults=resolved_budget_defaults,
+            budgets=resolved_budgets,
         )
         self._jobs = jobs.JobDependencies(
             db=db,
             runtime=controller,
             bundles=bundle_store,
             auth=resolved_auth,
-            user_budget_defaults=resolved_budget_defaults,
+            budgets=resolved_budgets,
         )
-        self._federation = federation_service.FederationDependencies(db=db, runtime=controller)
+        self._federation = federation_service.FederationDependencies(db=db, runtime=controller, budgets=resolved_budgets)
         self._attempts = attempts.AttemptDependencies(
             db=db,
             runtime=controller,

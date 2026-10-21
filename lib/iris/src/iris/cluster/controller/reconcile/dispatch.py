@@ -27,6 +27,7 @@ from iris.cluster.controller.budget import (
     interleave_by_user,
 )
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.federation_budget import BudgetContext
 from iris.cluster.controller.projections.run_templates import build_run_request_fields
 from iris.cluster.controller.reads import (
     PENDING_DISPATCH_COLS,
@@ -266,6 +267,7 @@ def drain_for_dispatch(
     *,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
     defaults: UserBudgetDefaults | None = None,
+    budget_context: BudgetContext | None = None,
 ) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
@@ -297,6 +299,8 @@ def drain_for_dispatch(
     budget configuration later changes.
     """
     defaults = defaults or UserBudgetDefaults()
+    if budget_context is not None and not budget_context.ready:
+        max_promotions = 0
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
@@ -316,8 +320,12 @@ def drain_for_dispatch(
         if candidates:
             job_ids = {row.job_id for row in candidates}
             resolved_bands = reads.get_priority_bands(cur, job_ids)
-            user_spend = compute_user_spend(cur)
-            user_budget_limits = reads.get_all_user_budget_limits(cur)
+            user_spend = budget_context.spend if budget_context is not None else compute_user_spend(cur)
+            user_budget_limits = (
+                budget_context.limits if budget_context is not None else reads.get_all_user_budget_limits(cur)
+            )
+            if budget_context is not None:
+                defaults = budget_context.defaults
             budget_users = {row.job_id: row.budget_user for row in candidates}
             effective_bands = {
                 job_id: compute_effective_band(

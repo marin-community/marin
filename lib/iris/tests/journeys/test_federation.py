@@ -130,7 +130,7 @@ def test_parent_kick_retries_child_on_execution_peer(federation: FederationJourn
     root = federation.submit("kick-tree")
     federation.promote()
     federation.sync()
-    child = federation.peer.submit_child(root, "train", preemption_retries=2)
+    child = federation.submit_child_on_peer(root, "train", preemption_retries=2)
     federation.run_peer()
     # The child has not been mirrored yet; the peer owns target resolution.
     target = child.wire_id if target_kind == "job" else child[0].wire_id
@@ -160,7 +160,7 @@ def test_parent_kick_rejects_stale_attempt_on_peer(federation: FederationJourney
     root = federation.submit("stale-kick")
     federation.promote()
     federation.sync()
-    child = federation.peer.submit_child(root, "train", preemption_retries=2)
+    child = federation.submit_child_on_peer(root, "train", preemption_retries=2)
     federation.run_peer()
     federation.sync()
     assert federation.peer.kick(child[0], attempt_id=0).queued

@@ -917,9 +917,8 @@ def insert_mirrored_job_config(
     run the job (entrypoint, bundle, retries, timeouts) keep their defaults, since the
     peer runs it and the parent only renders it.
 
-    ``priority_band`` is the parent's band, which is what the peer's own inheritance
-    resolves for this child unless the child overrode it — the sync summary carries no
-    band, so the parent cannot know. It is a display value: a mirrored row is stamped
+    ``priority_band`` is the resolved requested band reported by the peer,
+    including an explicit child override. It is a display value: a mirrored row is stamped
     with the peer cluster, so it never enters local scheduling, spend, or dispatch.
     """
     tx.execute(
@@ -935,7 +934,7 @@ def insert_mirrored_job_config(
     )
 
 
-@writes_to(jobs_table)
+@writes_to(jobs_table, job_config_table)
 def mirror_federated_job(
     tx: Tx,
     *,
@@ -946,6 +945,7 @@ def mirror_federated_job(
     started_at_ms: int | None,
     finished_at_ms: int | None,
     num_tasks: int,
+    priority_band: int,
 ) -> None:
     """Mirror a peer's job state onto the local federated ``jobs`` row.
 
@@ -964,6 +964,7 @@ def mirror_federated_job(
             num_tasks=num_tasks,
         )
     )
+    tx.execute(update(job_config_table).where(job_config_table.c.job_id == job_id).values(priority_band=priority_band))
 
 
 @writes_to(tasks_table, federated_tasks_table)
@@ -981,15 +982,16 @@ def mirror_federated_task(
     started_at_ms: int | None,
     finished_at_ms: int | None,
     current_attempt_id: int,
+    priority_band: int,
     worker_address: str,
     peer_worker_label: str,
     status_message: str | None,
 ) -> None:
     """Upsert a mirrored federated task row (``cluster`` set to a peer, no worker FK).
 
-    Priority/retry columns are placeholders — a federated task is fold-excluded
-    and never scheduled locally — so only the display fields the task views read
-    are meaningful. ``submitted_at_ms`` carries the peer's real value so a
+    Priority carries the peer's effective band for the current attempt. Retry
+    limits are placeholders: a federated task is never scheduled locally.
+    ``submitted_at_ms`` carries the peer's real value so a
     not-yet-started task keeps its true submit time (not epoch 0). Failure and
     preemption counts are NOT mirrored as scalars: the parent derives them from
     the mirrored attempt rows (:func:`mirror_federated_attempts`), so they stay
@@ -1018,6 +1020,7 @@ def mirror_federated_task(
             priority_neg_depth=0,
             priority_root_submitted_ms=0,
             priority_insertion=0,
+            priority_band=priority_band,
         )
         .on_conflict_do_update(
             index_elements=["task_id"],
@@ -1029,6 +1032,7 @@ def mirror_federated_task(
                 "started_at_ms": started_at_ms,
                 "finished_at_ms": finished_at_ms,
                 "current_attempt_id": current_attempt_id,
+                "priority_band": priority_band,
                 "current_worker_address": worker_address,
                 "status_message": status_message,
                 "cluster": peer_id,

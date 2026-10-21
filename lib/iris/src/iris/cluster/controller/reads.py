@@ -262,7 +262,7 @@ _NEEDS_TASK_AGG: frozenset[int] = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# Job listing projection (12-col subset of jobs + job_config)
+# Job listing projection (subset of jobs + job_config)
 # ---------------------------------------------------------------------------
 
 _JOB_ROW_COLUMNS = (
@@ -282,6 +282,7 @@ _JOB_ROW_COLUMNS = (
     job_config_table.c.res_device_json,
     jobs_table.c.backend_id,
     jobs_table.c.cluster,
+    job_config_table.c.priority_band,
 )
 
 # Task states considered "completed" for dashboard task-summary counts.
@@ -2059,19 +2060,15 @@ def parent_mirror_seed(tx: Tx, parent_job_id: JobName):
 
     Seeds a mirrored child job — one born on a peer under a received root and
     reported back over sync — from its already-present parent: the whole federated
-    subtree shares the root's submitter, root submit time, and priority band (the
-    peer resolves the child's band by the same inheritance rule). Returns the SA Row
-    (``.submitting_user``, ``.root_submitted_at_ms``, ``.priority_band``) or ``None``
+    subtree shares the root's submitter and root submit time. Returns the SA Row
+    (``.submitting_user``, ``.root_submitted_at_ms``) or ``None``
     when the parent is absent (a delta arrived out of order).
     """
     return tx.execute(
         select(
             jobs_table.c.submitting_user,
             jobs_table.c.root_submitted_at_ms,
-            job_config_table.c.priority_band,
-        )
-        .select_from(jobs_table.join(job_config_table, job_config_table.c.job_id == jobs_table.c.job_id))
-        .where(jobs_table.c.job_id == bindparam("job_id")),
+        ).where(jobs_table.c.job_id == bindparam("job_id")),
         {"job_id": parent_job_id},
     ).first()
 

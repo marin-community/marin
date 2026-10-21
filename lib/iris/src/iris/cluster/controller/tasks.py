@@ -356,6 +356,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         attempts=attempts,
         backend_id=task.backend_id,
         cluster=task.cluster,
+        priority_band=task.priority_band,
     )
     if task.submitted_at_ms.epoch_ms() > 0:
         result.submitted_at.CopyFrom(timestamp_to_proto(task.submitted_at_ms))

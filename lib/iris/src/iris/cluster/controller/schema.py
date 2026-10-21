@@ -224,6 +224,17 @@ class JSONDict(TypeDecorator):
 metadata = MetaData()
 
 
+federation_budget_reports_table = Table(
+    "federation_budget_reports",
+    metadata,
+    Column("cluster", String, primary_key=True),
+    Column("user_spend", JSONDict(), nullable=False),
+    Column("reported_at_ms", TimestampMsType, nullable=False),
+    Column("refresh_epoch", String, nullable=False),
+    Column("refresh_generation", Integer, nullable=False),
+)
+
+
 schema_migrations_table = Table(
     "schema_migrations",
     metadata,

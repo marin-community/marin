@@ -44,6 +44,7 @@ finelog:
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-08a.oa.dev
 federation_public_parent: https://iris.oa.dev
+budget_parent: marin
 endpoints:
   /system/zephyr-history:
     uri: https://marina.oa.dev/zephyr/
@@ -185,10 +186,6 @@ defaults:
     runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
-user_budget_defaults:
-  budget_limit: 5680
-  max_band: interactive
-
 scale_groups:
   cpu-erapids:
     num_vms: 1
@@ -233,34 +230,3 @@ scale_groups:
       coreweave:
         region: US-EAST-08A
         instance_type: gb200-4x
-
-# 128000 is about one NVL72 rack: 18 gb200-4x nodes cost ~102,000.
-user_budgets:
-  - user_ids:
-      - betsy
-      - eczech
-      - larry
-      - marin
-      - zack
-    budget_limit: 128000
-    max_band: PRIORITY_BAND_INTERACTIVE
-  - user_ids:
-      - ben.feuer@openathena.ai
-      - benjaminfeuer
-      - david.hall@openathena.ai
-      - dlwh
-      - david.lundgren@openathena.ai
-      - mark.muchane@openathena.ai
-      - muchanem
-      - matt.wittmann@openathena.ai
-      - mwittmann
-      - rafal.wojdyla@openathena.ai
-      - rav
-      - romain.yon@openathena.ai
-      - romain
-      - russell.power@openathena.ai
-      - power
-      - will.held@openathena.ai
-      - held
-    budget_limit: 0
-    max_band: PRIORITY_BAND_INTERACTIVE

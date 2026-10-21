@@ -198,6 +198,68 @@ when it cannot connect to its upstream. Compare `proxy_responses_total` with `sc
 increase shows that requests reached the peer proxy, where its upstream is the
 registered endpoint. The `scope=total` counter is exact; per-endpoint series are capped.
 
+## Shared budgets
+
+The federation parent owns budget limits, default limits, and priority ceilings.
+Set `budget_parent: marin` on production peers and `budget_parent: marin-dev`
+on development peers. The name must occur in the peer's
+`auth.federation_peers` trust map. Configure `user_budgets` on the parent;
+peer-local budget edits are rejected.
+
+`marin-dev` also routes to production peers. A production peer continues to use
+`marin` as its budget authority for that work; it acknowledges the other hub's
+sync without exporting budget usage to it. The CI peer uses `marin-dev` policy.
+The routing hub still enforces its submission priority ceiling before handoff.
+
+Every peer reports its local active spend through `FederationSync`, including
+direct submissions and child jobs. Spend is the current sum of requested
+resources, valued as `1000 * accelerators + RAM_GiB + 5 * CPU_cores` per task;
+it is not accumulated compute time. Fractional GiB and CPU cores are truncated.
+The parent adds those reports to its own
+local spend. Mirrored task rows are excluded, so a handed-off task counts once.
+Reports replace the previous report from that cluster, including an empty
+report when its work finishes. Jobs explicitly requested at BATCH do not count;
+INTERACTIVE jobs demoted to BATCH still count. ASSIGNED and BUILDING tasks
+count alongside RUNNING tasks, including pods waiting for Kueue admission.
+
+A direct or child submission waits for the parent to acknowledge a new policy
+check before admission. This check travels over the existing signed
+parent-to-peer sync connection; CoreWeave needs no reverse IAP credentials.
+With the default three-second sync interval, a check can take two sync cycles.
+A check without an answer after 15 seconds returns `UNAVAILABLE`.
+Handed-off roots were already checked by the parent and do not wait again.
+
+Both VM scheduling and Kubernetes dispatch use the parent's policy and combined
+spend. Between reports, a peer replaces its own reported contribution with its
+current local spend. This prevents that peer from forgetting tasks it has just
+dispatched. Budgets remain soft priority thresholds: scheduling uses usage
+snapshots, concurrent promotions can overshoot a threshold, and existing
+attempts keep the effective priority fixed when they were assigned. SYSTEM and PRODUCTION remain exempt from
+budget demotion. No task is killed merely for exceeding a budget.
+
+New scheduling pauses if the parent policy or any required usage report is
+older than 30 seconds. Existing attempts continue to reconcile. The parent
+retains a missing peer's last reported spend and requires a fresh report from
+every peer in the parent's `peers` map after startup before new scheduling resumes. Budget
+reads expose the last known values; `get-scheduler-state` also reports
+`budget_authority` and `budget_policy_ready`.
+
+```bash
+uv run iris --cluster=marin user budget list
+uv run iris --cluster=marin rpc controller get-scheduler-state
+uv run iris --cluster=cw-rno2a rpc controller get-scheduler-state
+```
+
+Deploy the matching parent and peer versions together under the controller
+rollout procedure. A peer configured with `budget_parent` pauses new scheduling
+until its parent supports the budget exchange. A new parent waits for reports
+from all configured peers. Verify `budget_policy_ready: true` on the parent
+and every peer before considering the rollout complete.
+
+Task status carries the effective priority fixed for its current attempt.
+Job status carries the resolved requested priority, including explicit child
+overrides. Federation mirrors both fields for inspection from the parent.
+
 ## Observing federation
 
 There is no `iris peers` command. Reachability, advertised shapes, and free capacity come

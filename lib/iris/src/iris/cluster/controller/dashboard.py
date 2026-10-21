@@ -93,6 +93,8 @@ CONTROLLER_SHUTTING_DOWN = "Controller is shutting down"
 # independently of the controller's ordinary RPC handler pool.
 _EXEC_RPC_THREADS = 128
 _EXEC_RPC_PENDING = 1024
+_ADMISSION_RPC_THREADS = 128
+_ADMISSION_RPC_PENDING = 1024
 
 
 class _ControllerDrainingInterceptor:
@@ -227,6 +229,11 @@ class ControllerDashboard:
             max_pending=_EXEC_RPC_PENDING,
             thread_name_prefix="rpc-exec",
         )
+        self._admission_executor = BoundedThreadExecutor(
+            max_workers=_ADMISSION_RPC_THREADS,
+            max_pending=_ADMISSION_RPC_PENDING,
+            thread_name_prefix="rpc-admission",
+        )
         self._app = self._create_app()
 
     @property
@@ -256,7 +263,15 @@ class ControllerDashboard:
         controller_interceptors = [_ControllerDrainingInterceptor(self._draining), auth_interceptor, controller_timing]
         # AsyncServiceAdapter dispatches each sync handler to a thread.
         rpc_asgi_app = ControllerServiceASGIApplication(
-            service=AsyncServiceAdapter(self._service, isolated_methods={"exec_in_container": self._exec_executor}),
+            # Admission may wait for parent policy. FederationSync must stay
+            # runnable so a submission burst cannot starve its own budget check.
+            service=AsyncServiceAdapter(
+                self._service,
+                isolated_methods={
+                    "exec_in_container": self._exec_executor,
+                    "launch_job": self._admission_executor,
+                },
+            ),
             interceptors=controller_interceptors,
             compressions=IRIS_RPC_COMPRESSIONS,
         )
@@ -350,10 +365,11 @@ class ControllerDashboard:
         ]
         routes.append(static_files_mount())
 
-        async def shutdown_exec_executor() -> None:
+        async def shutdown_rpc_executors() -> None:
             self._exec_executor.shutdown()
+            self._admission_executor.shutdown()
 
-        app = Starlette(routes=routes, lifespan=on_shutdown(shutdown_exec_executor))
+        app = Starlette(routes=routes, lifespan=on_shutdown(shutdown_rpc_executors))
         # Starlette's default trailing-slash redirect builds an absolute
         # Location from ``scope["server"]`` (or the request's Host header).
         # Behind GCP IAP / a load balancer whose backend Host is the internal

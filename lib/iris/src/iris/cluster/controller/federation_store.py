@@ -22,8 +22,10 @@ from iris.cluster.constraints import (
     strip_cluster_constraints,
 )
 from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.codec import reconstruct_launch_job_request
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.federation_budget import BudgetContext
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -47,7 +49,7 @@ logger = logging.getLogger(__name__)
 FEDERATED_ENDPOINT_MIRROR_TTL = Duration.from_minutes(5)
 
 
-def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
+def build_queued_candidates(tx: Tx, *, budget_context: BudgetContext | None = None) -> list[QueuedCandidate]:
     """Read the queued federated jobs into candidates for the tick's federation pass.
 
     Each candidate carries its shape (routing constraints) and its
@@ -71,7 +73,17 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
             QueuedCandidate(
                 job_id=handle.job_id,
                 pinned_peer_id=handle.peer_id,
-                priority_band=job.priority_band,
+                priority_band=(
+                    compute_effective_band(
+                        job.priority_band,
+                        job.job_id.user,
+                        budget_context.spend,
+                        budget_context.limits,
+                        budget_context.defaults,
+                    )
+                    if budget_context is not None
+                    else job.priority_band
+                ),
                 submitted_at_ms=job.submitted_at_ms.epoch_ms() if job.submitted_at_ms is not None else 0,
                 shape_constraints=shape,
                 availability_gate=peer_availability_gate(request.resources.device, request.replicas),
@@ -301,7 +313,9 @@ class ControllerFederationStore:
             started_at_ms=_proto_ms(summary.HasField("started_at"), summary.started_at),
             finished_at_ms=_proto_ms(summary.HasField("finished_at"), summary.finished_at),
             num_tasks=summary.task_count,
+            priority_band=summary.priority_band,
         )
+        cur.caches[RunTemplatesProjection].invalidate_for_job(cur, local_job_id)
         for task in delta.changed_tasks:
             peer_task_id = JobName.from_wire(task.task_id)
             index = peer_task_id.task_index
@@ -321,6 +335,7 @@ class ControllerFederationStore:
                 started_at_ms=_proto_ms(task.HasField("started_at"), task.started_at),
                 finished_at_ms=_proto_ms(task.HasField("finished_at"), task.finished_at),
                 current_attempt_id=task.current_attempt_id,
+                priority_band=task.priority_band,
                 worker_address=task.worker_address,
                 peer_worker_label=task.worker_id or task.worker_address,
                 status_message=task.status_message or None,
@@ -333,8 +348,9 @@ class ControllerFederationStore:
     def _insert_child_mirror(self, cur: Tx, peer_id: str, local_job_id: JobName, summary) -> bool:
         """Create the local mirror rows for a child a peer spawned under a received root.
 
-        The whole federated subtree shares the root's submitter, root submit time, and
-        priority band, read from the (already-present) parent; the row is stamped with the peer
+        The whole federated subtree shares the root's submitter and root submit time,
+        read from the parent. The requested band comes from the peer, since children
+        can explicitly select a lower band. The row is stamped with the peer
         cluster so it folds out of local scheduling and renders as federated. Returns
         ``False`` (and skips) if the parent is not mirrored yet — deltas arrive in
         changelog order, so the parent's creation precedes the child's and this is
@@ -378,7 +394,7 @@ class ControllerFederationStore:
             job_id=local_job_id,
             name=local_job_id.name,
             resources=summary.resources,
-            priority_band=int(seed.priority_band),
+            priority_band=int(summary.priority_band),
         )
         # job_config backs RunTemplatesProjection; invalidate post-commit per its
         # watch contract, as ops.job.submit does for a locally-submitted job.

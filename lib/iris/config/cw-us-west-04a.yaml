@@ -9,6 +9,7 @@ name: cw-us-west-04a
 # public origin and carry this cluster's name so marin-dev relays them back.
 dashboard_url: https://iris-cw-us-west-04a.oa.dev
 federation_public_parent: https://iris-dev.oa.dev
+budget_parent: marin-dev
 
 # Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque
 # dict; iac.config owns the typed schema. NodePools derive from scale_groups,
@@ -121,10 +122,6 @@ defaults:
     runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
-user_budget_defaults:
-  budget_limit: 10688
-  max_band: interactive
-
 scale_groups:
   cpu-erapids:
     num_vms: 1
@@ -167,25 +164,3 @@ scale_groups:
       coreweave:
         region: US-WEST-04A
         instance_type: gd-8xh100ib-i128
-
-user_budgets:
-  - user_ids:
-      - ben.feuer@openathena.ai
-      - benjaminfeuer
-      - david.hall@openathena.ai
-      - dlwh
-      - david.lundgren@openathena.ai
-      - mark.muchane@openathena.ai
-      - muchanem
-      - matt.wittmann@openathena.ai
-      - mwittmann
-      - rafal.wojdyla@openathena.ai
-      - rav
-      - romain.yon@openathena.ai
-      - romain
-      - russell.power@openathena.ai
-      - power
-      - will.held@openathena.ai
-      - held
-    budget_limit: 0
-    max_band: PRIORITY_BAND_INTERACTIVE

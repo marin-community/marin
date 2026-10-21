@@ -3,6 +3,7 @@
 
 """Federation journeys over the authenticated peer boundary."""
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -13,6 +14,7 @@ from iris.cluster.controller.controller import Controller
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
+from iris.test_util import wait_for_condition
 from iris.testing.journeys.world import JobRef, JourneyWorld, TaskRef
 
 PARENT_CLUSTER_ID = "journey-parent"
@@ -85,7 +87,7 @@ class FederationJourney:
     """Drive two real controllers while scripting only peer reachability."""
 
     def __init__(self, root: Path, monkeypatch) -> None:
-        self.peer = JourneyWorld(root / "peer", monkeypatch)
+        self.peer = JourneyWorld(root / "peer", monkeypatch, cluster_id=PEER_ID, budget_parent=PARENT_CLUSTER_ID)
         self.connection = InProcessPeerConnection(self.peer.controller)
         self._federation_peer = FederationPeer(
             PEER_ID,
@@ -101,6 +103,8 @@ class FederationJourney:
             federation_peers=[self._federation_peer],
         )
         self.manager = self.parent.controller.federation
+        self.manager.sync_once()
+        self.manager.sync_once()
 
     def close(self) -> None:
         self.parent.close()
@@ -109,9 +113,19 @@ class FederationJourney:
     def submit(self, name: str, *, tasks: int = 1) -> JobRef:
         return self.parent.submit(name, tasks=tasks, required_attributes={CLUSTER_CONSTRAINT_KEY: PEER_ID})
 
-    def submit_child_on_peer(self, parent: JobRef, name: str, *, tasks: int = 1) -> JobRef:
+    def submit_child_on_peer(self, parent: JobRef, name: str, *, tasks: int = 1, preemption_retries: int = 0) -> JobRef:
         """Submit one descendant from the execution cluster."""
-        return self.peer.submit_child(parent, name, tasks=tasks)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                self.peer.submit_child, parent, name, tasks=tasks, preemption_retries=preemption_retries
+            )
+
+            def sync_until_done() -> bool:
+                self.manager.sync_once()
+                return future.done()
+
+            wait_for_condition(sync_until_done)
+            return future.result()
 
     def promote(self) -> None:
         """Run the parent tick that assigns a queued Job to peer B."""

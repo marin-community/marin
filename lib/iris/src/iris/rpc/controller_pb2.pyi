@@ -728,18 +728,22 @@ class Controller(_message.Message):
         utilization_percent: float
         def __init__(self, user_id: _Optional[str] = ..., budget_limit: _Optional[int] = ..., budget_spent: _Optional[int] = ..., max_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., effective_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., utilization_percent: _Optional[float] = ...) -> None: ...
     class GetSchedulerStateResponse(_message.Message):
-        __slots__ = ("user_budgets", "total_pending", "total_running", "pending_buckets", "running_buckets")
+        __slots__ = ("user_budgets", "total_pending", "total_running", "pending_buckets", "running_buckets", "budget_authority", "budget_policy_ready")
         USER_BUDGETS_FIELD_NUMBER: _ClassVar[int]
         TOTAL_PENDING_FIELD_NUMBER: _ClassVar[int]
         TOTAL_RUNNING_FIELD_NUMBER: _ClassVar[int]
         PENDING_BUCKETS_FIELD_NUMBER: _ClassVar[int]
         RUNNING_BUCKETS_FIELD_NUMBER: _ClassVar[int]
+        BUDGET_AUTHORITY_FIELD_NUMBER: _ClassVar[int]
+        BUDGET_POLICY_READY_FIELD_NUMBER: _ClassVar[int]
         user_budgets: _containers.RepeatedCompositeFieldContainer[Controller.SchedulerUserBudget]
         total_pending: int
         total_running: int
         pending_buckets: _containers.RepeatedCompositeFieldContainer[Controller.PendingTaskBucket]
         running_buckets: _containers.RepeatedCompositeFieldContainer[Controller.RunningTaskBucket]
-        def __init__(self, user_budgets: _Optional[_Iterable[_Union[Controller.SchedulerUserBudget, _Mapping]]] = ..., total_pending: _Optional[int] = ..., total_running: _Optional[int] = ..., pending_buckets: _Optional[_Iterable[_Union[Controller.PendingTaskBucket, _Mapping]]] = ..., running_buckets: _Optional[_Iterable[_Union[Controller.RunningTaskBucket, _Mapping]]] = ...) -> None: ...
+        budget_authority: str
+        budget_policy_ready: bool
+        def __init__(self, user_budgets: _Optional[_Iterable[_Union[Controller.SchedulerUserBudget, _Mapping]]] = ..., total_pending: _Optional[int] = ..., total_running: _Optional[int] = ..., pending_buckets: _Optional[_Iterable[_Union[Controller.PendingTaskBucket, _Mapping]]] = ..., running_buckets: _Optional[_Iterable[_Union[Controller.RunningTaskBucket, _Mapping]]] = ..., budget_authority: _Optional[str] = ..., budget_policy_ready: _Optional[bool] = ...) -> None: ...
     class ListBackendsRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
@@ -885,12 +889,56 @@ class Controller(_message.Message):
         peers: _containers.RepeatedCompositeFieldContainer[Controller.PeerSummary]
         def __init__(self, peers: _Optional[_Iterable[_Union[Controller.PeerSummary, _Mapping]]] = ...) -> None: ...
     class FederationSyncRequest(_message.Message):
-        __slots__ = ("requester_id", "cursor")
+        __slots__ = ("requester_id", "cursor", "budget_policy")
         REQUESTER_ID_FIELD_NUMBER: _ClassVar[int]
         CURSOR_FIELD_NUMBER: _ClassVar[int]
+        BUDGET_POLICY_FIELD_NUMBER: _ClassVar[int]
         requester_id: str
         cursor: str
-        def __init__(self, requester_id: _Optional[str] = ..., cursor: _Optional[str] = ...) -> None: ...
+        budget_policy: Controller.FederationBudgetPolicy
+        def __init__(self, requester_id: _Optional[str] = ..., cursor: _Optional[str] = ..., budget_policy: _Optional[_Union[Controller.FederationBudgetPolicy, _Mapping]] = ...) -> None: ...
+    class FederationBudgetPolicy(_message.Message):
+        __slots__ = ("users", "default_limit", "default_max_band", "refresh_epoch", "refresh_generation", "ready", "peer_spend")
+        class PeerSpendEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        USERS_FIELD_NUMBER: _ClassVar[int]
+        DEFAULT_LIMIT_FIELD_NUMBER: _ClassVar[int]
+        DEFAULT_MAX_BAND_FIELD_NUMBER: _ClassVar[int]
+        REFRESH_EPOCH_FIELD_NUMBER: _ClassVar[int]
+        REFRESH_GENERATION_FIELD_NUMBER: _ClassVar[int]
+        READY_FIELD_NUMBER: _ClassVar[int]
+        PEER_SPEND_FIELD_NUMBER: _ClassVar[int]
+        users: _containers.RepeatedCompositeFieldContainer[Controller.GetUserBudgetResponse]
+        default_limit: int
+        default_max_band: _job_pb2.PriorityBand
+        refresh_epoch: str
+        refresh_generation: int
+        ready: bool
+        peer_spend: _containers.ScalarMap[str, int]
+        def __init__(self, users: _Optional[_Iterable[_Union[Controller.GetUserBudgetResponse, _Mapping]]] = ..., default_limit: _Optional[int] = ..., default_max_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., refresh_epoch: _Optional[str] = ..., refresh_generation: _Optional[int] = ..., ready: _Optional[bool] = ..., peer_spend: _Optional[_Mapping[str, int]] = ...) -> None: ...
+    class FederationBudgetReport(_message.Message):
+        __slots__ = ("authority_id", "user_spend", "refresh_epoch", "refresh_generation")
+        class UserSpendEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        AUTHORITY_ID_FIELD_NUMBER: _ClassVar[int]
+        USER_SPEND_FIELD_NUMBER: _ClassVar[int]
+        REFRESH_EPOCH_FIELD_NUMBER: _ClassVar[int]
+        REFRESH_GENERATION_FIELD_NUMBER: _ClassVar[int]
+        authority_id: str
+        user_spend: _containers.ScalarMap[str, int]
+        refresh_epoch: str
+        refresh_generation: int
+        def __init__(self, authority_id: _Optional[str] = ..., user_spend: _Optional[_Mapping[str, int]] = ..., refresh_epoch: _Optional[str] = ..., refresh_generation: _Optional[int] = ...) -> None: ...
     class FederationJobDelta(_message.Message):
         __slots__ = ("job_id", "summary", "changed_tasks", "tombstone")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -927,16 +975,18 @@ class Controller(_message.Message):
         lease_remaining: _time_pb2.Duration
         def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., lease_remaining: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
     class FederationSyncResponse(_message.Message):
-        __slots__ = ("deltas", "next_cursor", "cursor_stale", "endpoints")
+        __slots__ = ("deltas", "next_cursor", "cursor_stale", "endpoints", "budget_report")
         DELTAS_FIELD_NUMBER: _ClassVar[int]
         NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
         CURSOR_STALE_FIELD_NUMBER: _ClassVar[int]
         ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
+        BUDGET_REPORT_FIELD_NUMBER: _ClassVar[int]
         deltas: _containers.RepeatedCompositeFieldContainer[Controller.FederationJobDelta]
         next_cursor: str
         cursor_stale: bool
         endpoints: _containers.RepeatedCompositeFieldContainer[Controller.FederationEndpoint]
-        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ..., endpoints: _Optional[_Iterable[_Union[Controller.FederationEndpoint, _Mapping]]] = ...) -> None: ...
+        budget_report: Controller.FederationBudgetReport
+        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ..., endpoints: _Optional[_Iterable[_Union[Controller.FederationEndpoint, _Mapping]]] = ..., budget_report: _Optional[_Union[Controller.FederationBudgetReport, _Mapping]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class StringList(_message.Message):

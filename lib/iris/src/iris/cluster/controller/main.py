@@ -267,6 +267,7 @@ def run_controller_serve(
         cluster_id=cluster_config.name,
         dashboard_url=cluster_config.dashboard_url,
         federation_public_parent=cluster_config.federation_public_parent,
+        budget_parent=cluster_config.budget_parent,
         peers=cluster_config.peers,
         user_budget_defaults=UserBudgetDefaults(
             budget_limit=cluster_config.user_budget_defaults.budget_limit,
@@ -288,7 +289,7 @@ def run_controller_serve(
     # Runs after migrations have cleared user_budgets (see migration 0037).
     # Unlisted users are left without a row and fall through to
     # UserBudgetDefaults when the scheduler and launch-job guard look them up.
-    if cluster_config.user_budgets:
+    if cluster_config.user_budgets and not cluster_config.budget_parent:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
     controller = Controller(

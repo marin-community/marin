@@ -70,6 +70,7 @@ class JourneyWorld:
         *,
         capacity_available: bool = True,
         cluster_id: str = "journey",
+        budget_parent: str = "",
         peer_configs: dict[str, PeerConfig] | None = None,
         federation_peers: list[FederationPeer] | None = None,
         dry_run: bool = False,
@@ -80,6 +81,7 @@ class JourneyWorld:
         self._incarnation = 0
         self._capacity_available = capacity_available
         self._cluster_id = cluster_id
+        self._budget_parent = budget_parent
         self._peer_configs = peer_configs or {}
         self._federation_peers = federation_peers
         self._dry_run = dry_run
@@ -100,6 +102,7 @@ class JourneyWorld:
         state_dir = self.root / f"controller-{self._incarnation}"
         config = ControllerConfig(
             cluster_id=self._cluster_id,
+            budget_parent=self._budget_parent,
             remote_state_dir=f"file://{self.root / 'remote'}",
             local_state_dir=state_dir,
             peers=self._peer_configs,
