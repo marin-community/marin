@@ -194,6 +194,9 @@ _ROUTED_INPUT = "routed_input"
 # strips), and the extras key that hands the saved value back to the backward's recompute.
 _ROUTED_COMBINE = "routed_combine"
 _SAVED_ROUTED = "saved_routed"
+# ``scan_split_backward_layers``: a split layer's mid partial (the running partial after its attention sublayer), a
+# stat the scan forward collects and strips.
+_MID_PARTIAL = "attn_res_mid_partial"
 # Per-layer moe_compress / moe_shadow_width loss and metrics, stacked over layers like the router stats.
 _COMPRESS_LOSS = "compress_loss"
 _DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA)
@@ -253,6 +256,17 @@ class AttnResLayerBackward(StrEnum):
     SAVE = "save"
     """Plain autodiff: the forward keeps the layer's residuals, so backward runs no forward again.
     Same math as RECOMPUTE; needs the memory to hold every layer's residuals."""
+
+
+class _ScanHalf(StrEnum):
+    """Which part of a scanned AttnRes layer ``_scan_history_layer`` runs (``scan_split_backward_layers``)."""
+
+    LAYER = "layer"
+    """Both sublayers: the forward, and the backward recompute of an unsplit layer."""
+    ATTN = "attn"
+    """The block roll and the attention sublayer: ``partial`` in, the mid partial out."""
+    MLP = "mlp"
+    """The MLP sublayer from the mid partial (``history.logits`` already rolled)."""
 
 
 class ContentGateActivation(StrEnum):
@@ -927,6 +941,16 @@ class GrugModelConfig:
     scan_device_sources: bool = False
     """With ``scan_offload_partials``, the final history sources stay in HBM between the forward and the backward
     instead of a pinned-host round trip at the forward/backward turn, where no compute hides the copies. Same math."""
+    scan_split_backward_layers: tuple[int, ...] = ()
+    """The scan's explicit activation memory plan: the unit positions (``0 .. global_every - 1``) whose backward
+    recomputes and differentiates the MLP sublayer first, from the layer's mid partial (the partial after its
+    attention sublayer, saved in the forward and offloaded with the other residuals), and only then the attention
+    sublayer, behind a barrier. A joint per-layer recompute keeps every attention residual (KDA: ~25 GiB per GPU at
+    hero width) alive through the MoE backward; split, the two working sets never overlap, for 36 GiB more host
+    residuals and two phase-1 block mixes per layer. With any split position the reverse scan also copies the
+    residuals per sublayer phase (mid partial and routed output for an MLP phase, the incoming partial for an
+    attention phase, all three for an unsplit layer), each one phase ahead, instead of a unit's at once. Needs
+    ``scan_offload_partials``. Same math."""
     scan_release_weight_grads: bool = False
     """``scan_layers`` backward: each layer's end barrier holds the previous layer's weight gradients instead of its
     own, so a layer's weight gradients and their FSDP reduce-scatters can finish under the next layer's backward
@@ -1095,6 +1119,17 @@ class GrugModelConfig:
             raise ValueError("layer_carry_offload offloads the plain layer scan's carry (attn_res=false)")
         if self.scan_save_routed_output and not self.scan_layers:
             raise ValueError("scan_save_routed_output saves the routed output across the scan_layers backward")
+        if self.scan_split_backward_layers:
+            if not self.scan_layers or not self.scan_offload_partials:
+                raise ValueError("scan_split_backward_layers plans the scan_offload_partials residuals")
+            if self.scan_prefetch_partials or self.scan_release_weight_grads:
+                raise ValueError(
+                    "scan_split_backward_layers schedules its own residual copies and weight-gradient barriers"
+                )
+            if not all(0 <= j < _scan_unit_size(self) for j in self.scan_split_backward_layers):
+                raise ValueError("scan_split_backward_layers holds scan unit positions 0 .. unit size - 1")
+            if self.moe_k_layers or self.moe_dynamic_layers or self.moe_k_static is not None:
+                raise ValueError("scan_split_backward_layers: the MLP phase cannot read the attention output (moe_k)")
         if self.moe_dispatch == MoeDispatch.HERO_LEVANTER and self.moe_shared_placement != SharedExpertPlacement.FUSED:
             raise ValueError(
                 "moe_dispatch=hero_levanter places the shared experts itself: keep moe_shared_placement=fused"
@@ -4531,6 +4566,19 @@ def _attn_res_layer(
     )
 
 
+class _AttnSublayer(NamedTuple):
+    """An AttnRes layer's state after its attention sublayer (``_attn_res_attn_sublayer``). A split MLP phase
+    (``scan_split_backward_layers``) starts from the mid ``partial`` alone."""
+
+    partial: jax.Array
+    attn_in: jax.Array | None
+    attn_out: jax.Array | None
+    z: jax.Array | float
+    weights: jax.Array | None
+    stats: dict[str, jax.Array]
+    v_stats: dict[str, jax.Array]
+
+
 def _attn_res_sublayers(
     layer: Block,
     partial: jax.Array | None,
@@ -4546,6 +4594,26 @@ def _attn_res_sublayers(
     """The attention and MLP sublayers of one AttnRes layer, each reading its gate's ``mix`` of the history.
 
     ``layer_index`` is a Python int in the unrolled loop and a traced int under ``scan_layers``."""
+    attn = _attn_res_attn_sublayer(
+        layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, kv_share, logit_bias
+    )
+    return _attn_res_mlp_sublayer(layer, attn, mix, mask, token_ids, layer_index, noise_key, logit_bias)
+
+
+def _attn_res_attn_sublayer(
+    layer: Block,
+    partial: jax.Array | None,
+    mix: GateMix,
+    mask: AttentionMask,
+    token_ids: Int[Array, "B S"],
+    use_long: bool,
+    layer_index: int | jax.Array,
+    noise_key: jax.Array | None,
+    kv_share: dict[str, jax.Array] | None,
+    logit_bias: dict[str, jax.Array | None] | None,
+) -> _AttnSublayer:
+    """``_attn_res_sublayers``' attention half: the attention gate's mix, the attention branch, and the partial
+    with its (scaled) output added."""
     cfg = layer.attn.cfg
     h, z_attn, w_attn = mix(partial, 2 * layer_index, True)
     attn_in = h
@@ -4578,12 +4646,29 @@ def _attn_res_sublayers(
     skip_keep = None if logit_bias is None else logit_bias.get(_SKIP_KEEP)
     if skip_keep is not None:
         attn_out = attn_out * skip_keep[..., None].astype(attn_out.dtype)
-    scale_attn = scale_mlp = None
+    partial_attn = attn_out
     if layer.attn_res_partial_scale is not None:
-        scale_attn, scale_mlp = (layer.attn_res_partial_scale[j].astype(attn_out.dtype) for j in range(2))
-    partial_attn = attn_out if scale_attn is None else scale_attn * attn_out
+        partial_attn = layer.attn_res_partial_scale[0].astype(attn_out.dtype) * attn_out
     partial = partial_attn if partial is None else partial + partial_attn
-    mlp_partial = partial
+    return _AttnSublayer(partial, attn_in, attn_out, z_attn, w_attn, attn_stats, v_stats)
+
+
+def _attn_res_mlp_sublayer(
+    layer: Block,
+    attn: _AttnSublayer,
+    mix: GateMix,
+    mask: AttentionMask,
+    token_ids: Int[Array, "B S"],
+    layer_index: int | jax.Array,
+    noise_key: jax.Array | None,
+    logit_bias: dict[str, jax.Array | None] | None,
+) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    """``_attn_res_sublayers``' MLP half from the mid partial ``attn.partial``: the MLP gate's mix, the MLP branch,
+    and the layer's output partial."""
+    cfg = layer.attn.cfg
+    physical = layer_index % cfg.num_layers
+    attn_out, attn_in, attn_stats = attn.attn_out, attn.attn_in, attn.stats
+    mlp_partial = attn.partial
     h, z_mlp, w_mlp = mix(mlp_partial, 2 * layer_index + 1, False)
     shared_kwargs: dict[str, Any] = {}
     if layer.attn_res_query_shared is not None:
@@ -4592,7 +4677,8 @@ def _attn_res_sublayers(
         z_mlp = z_mlp + z_shared
         shared_kwargs = {"sum_stream": h_shared, "sum_parts": ("shared",)}
     route = _route_kwargs(cfg, physical, token_ids, noise_key, logit_bias)
-    route["moe_k_keep"] = _moe_k_keep(cfg, physical, mask, attn_out)
+    # A split MLP phase has no attention output; the config check rules out the routing that reads it.
+    route["moe_k_keep"] = None if attn_out is None else _moe_k_keep(cfg, physical, mask, attn_out)
     route["moe_dynamic_layer"] = physical in cfg.moe_dynamic_layers
     mlp_out, router_stats = layer.mlp_branch(h, mask, **shared_kwargs, **route)
     mem_out, mem_stats = _memory_branch(h, logit_bias)
@@ -4606,16 +4692,17 @@ def _attn_res_sublayers(
         mlp_out = mlp_out + (layer.extra_mlp_gain.astype(extra.dtype) * extra) * extra_keep[..., None].astype(
             extra.dtype
         )
+    skip_keep = None if logit_bias is None else logit_bias.get(_SKIP_KEEP)
     if skip_keep is not None:
         mlp_out = mlp_out * skip_keep[..., None].astype(mlp_out.dtype)
-    if trace_capture.TRACE:
+    if trace_capture.TRACE and attn_out is not None:
         router_stats = {
             **router_stats,
             f"{_LAYER_KNOB_PREFIX}trace_attn_out": attn_out,
             f"{_LAYER_KNOB_PREFIX}trace_mlp_out": mlp_out,
         }
     spot = _probe_spot()
-    if spot is not None:
+    if spot is not None and attn_in is not None and attn_out is not None:
         router_stats = {
             **router_stats,
             f"{PROBE_STAT}attn_in": _at_spot(attn_in, spot),
@@ -4623,16 +4710,20 @@ def _attn_res_sublayers(
             f"{PROBE_STAT}mlp_in": _at_spot(h, spot),
             f"{PROBE_STAT}mlp_out": _at_spot(mlp_out, spot),
         }
-    return partial + (mlp_out if scale_mlp is None else scale_mlp * mlp_out), {
+    if layer.attn_res_partial_scale is not None:
+        mlp_out = layer.attn_res_partial_scale[1].astype(mlp_partial.dtype) * mlp_out
+    stats = {
         **router_stats,
         **attn_stats,
-        **v_stats,
+        **attn.v_stats,
         **mem_stats,
         **attn_stats,
-        _ATTN_RES_Z: z_attn + z_mlp,
-        _ATTN_RES_W_ATTN: w_attn,
+        _ATTN_RES_Z: attn.z + z_mlp,
         _ATTN_RES_W_MLP: w_mlp,
     }
+    if attn.weights is not None:
+        stats[_ATTN_RES_W_ATTN] = attn.weights
+    return mlp_partial + mlp_out, stats
 
 
 def _kv_stream_input(extras: dict[str, jax.Array | None] | None) -> jax.Array | None:
@@ -4916,12 +5007,17 @@ def _layer_scan(cfg: GrugModelConfig, schedule: _BlockSchedule) -> _LayerScan:
     return _LayerScan(unit, num_units, schedule)
 
 
+def _scan_unit_size(cfg: GrugModelConfig) -> int:
+    """Layers per scanned unit: ``global_every``, or with ``attn_res_static_boundaries`` its lcm with the AttnRes
+    block size (as in Transformer's block schedule)."""
+    if not cfg.attn_res_static_boundaries:
+        return cfg.global_every
+    return math.lcm(cfg.global_every, max(1, cfg.num_layers // cfg.attn_res_num_blocks))
+
+
 def _scan_units(cfg: GrugModelConfig) -> tuple[tuple[_UnitLayer, ...], int]:
     """``_layer_scan``'s unit and unit count, without the AttnRes schedule."""
-    unit_size = cfg.global_every
-    if cfg.attn_res_static_boundaries:
-        # The block size as in Transformer's AttnRes schedule.
-        unit_size = math.lcm(unit_size, max(1, cfg.num_layers // cfg.attn_res_num_blocks))
+    unit_size = _scan_unit_size(cfg)
     kda, tail = set(_kda_layer_indices(cfg)), set(_tail_layers(cfg))
 
     def signature(i: int) -> tuple[bool, bool, bool]:
@@ -4953,6 +5049,8 @@ def _scan_history_layer(
     route_key: jax.Array | None,
     probes: tuple[jax.Array, ...] | None = None,
     saved_routed: jax.Array | None = None,
+    half: _ScanHalf = _ScanHalf.LAYER,
+    save_mid: bool = False,
     static_boundary: bool | None = None,
 ) -> tuple[_AttnResHistory, dict[str, jax.Array], tuple[jax.Array, ...]]:
     """``_attn_res_layer`` on the fixed-shape history, at a traced ``layer_index``. ``static_boundary``: whether the
@@ -4966,7 +5064,11 @@ def _scan_history_layer(
     With ``probes`` (the backward's recompute) ``history.sources`` is the final history, whose slot already
     holds this partial, so the slot write is skipped; the source stack is held constant and each gate adds
     its zero probe to its mix and returns its source weights, so the caller rebuilds the source cotangent
-    as ``sum_gates weights * d_probe`` in one pass (``_accumulate_source_grads``)."""
+    as ``sum_gates weights * d_probe`` in one pass (``_accumulate_source_grads``).
+
+    ``half`` runs one sublayer (``scan_split_backward_layers``' recompute): ``ATTN`` returns the mid partial as
+    ``partial``; ``MLP`` takes it as ``history.partial`` with ``history.logits`` already rolled. ``save_mid`` adds the
+    mid partial to the stats (``_MID_PARTIAL``)."""
     num_sources = history.sources.shape[0]
     block = layer_index // schedule.seg_size
     boundary, slot = _roll_slot(schedule, layer_index)
@@ -4979,9 +5081,10 @@ def _scan_history_layer(
         old = jax.lax.dynamic_index_in_dim(buffer, slot, axis=0, keepdims=False)
         return jax.lax.dynamic_update_index_in_dim(buffer, jnp.where(boundary, new, old), slot, axis=0)
 
-    sources = roll(history.sources, history.partial) if probes is None else history.sources
+    mlp_only = half == _ScanHalf.MLP
+    sources = roll(history.sources, history.partial) if probes is None and not mlp_only else history.sources
     plain_sum = layer.attn.cfg.attn_res_plain_sum
-    if plain_sum:
+    if plain_sum or mlp_only:
         logits = history.logits
     elif static_boundary is not None:
         logits = (
@@ -5001,7 +5104,9 @@ def _scan_history_layer(
             ),
             lambda: history.logits,
         )
-    if static_boundary is not None:
+    if mlp_only:
+        partial = history.partial
+    elif static_boundary is not None:
         partial = jnp.zeros_like(history.partial) if static_boundary else history.partial
     else:
         partial = jnp.where(boundary, jnp.zeros_like(history.partial), history.partial)
@@ -5015,10 +5120,14 @@ def _scan_history_layer(
         src = sources if probes is None else jax.lax.stop_gradient(sources)
         completed_sum = _weighted_sources(unit_weights, src)
     two_phase = layer.attn.cfg.attn_res_two_phase
-    # Phase 1 (two_phase): the attention and MLP gates' mixes of the completed sources in one pass over them.
+    # Phase 1 (two_phase): the attention and MLP gates' mixes of the completed sources in one pass over them (one
+    # of them in a split half).
     inter = None
+    first_gate = 1 if mlp_only else 0
+    num_phase1 = 1 if half != _ScanHalf.LAYER else 2
     if two_phase and not plain_sum:
-        gate_logits_2 = jax.lax.dynamic_slice_in_dim(logits, 2 * layer_index, 2, axis=1)  # [N, 2, B, S]
+        first_row = 2 * layer_index + first_gate if first_gate else 2 * layer_index
+        gate_logits_2 = jax.lax.dynamic_slice_in_dim(logits, first_row, num_phase1, axis=1)  # [N, 2 or 1, B, S]
         gate_logits_2 = jnp.where(valid[:, None, None, None], gate_logits_2, -jnp.inf)
         lse = jax.nn.logsumexp(gate_logits_2, axis=0)  # [2, B, S]
         inter_weights = jnp.exp(gate_logits_2 - lse[None])  # [N, 2, B, S]
@@ -5031,7 +5140,7 @@ def _scan_history_layer(
                 normed = normed + inter_weights[n][..., None] * src[n][None].astype(jnp.float32)
             normed = normed.astype(sources.dtype)
         inter = (normed, lse, inter_weights)
-    calls = [0]
+    calls = [first_gate]
 
     def probed(mixed: jax.Array, source_weights: jax.Array) -> jax.Array:
         """The gate's float32 mix in the stream dtype; in the recompute plus its zero probe (whose cotangent is
@@ -5046,14 +5155,15 @@ def _scan_history_layer(
         """Phase 2: merge phase-1 mix ``j`` (0: attention gate, 1: MLP gate) with the partial (online softmax)."""
         assert inter is not None and attn_gate == (j == 0)
         normed, lse, inter_weights = inter
+        k = j - first_gate
         query = jax.lax.dynamic_index_in_dim(queries, gate_index, axis=0, keepdims=True)
         partial_logit = _attn_res_source_logits(p, query, eps)[0]  # [B, S]
         if attn_gate:
             partial_logit = jnp.where(boundary, -jnp.inf, partial_logit)
-        total = jnp.logaddexp(lse[j], partial_logit)
-        alpha = jnp.exp(lse[j] - total)  # the completed sources' share
-        source_weights = inter_weights[:, j] * alpha[None]
-        mixed = alpha[..., None] * normed[j].astype(jnp.float32) + (1.0 - alpha)[..., None] * p.astype(jnp.float32)
+        total = jnp.logaddexp(lse[k], partial_logit)
+        alpha = jnp.exp(lse[k] - total)  # the completed sources' share
+        source_weights = inter_weights[:, k] * alpha[None]
+        mixed = alpha[..., None] * normed[k].astype(jnp.float32) + (1.0 - alpha)[..., None] * p.astype(jnp.float32)
         out = probed(mixed, source_weights)
         weights = jnp.concatenate([source_weights, (1.0 - alpha)[None]])
         mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
@@ -5092,9 +5202,27 @@ def _scan_history_layer(
 
     noise_key = None if route_key is None else jax.random.fold_in(route_key, layer_index)
     extras = None if saved_routed is None else {_SAVED_ROUTED: saved_routed}
-    partial, stats = _attn_res_sublayers(
-        layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, None, extras
-    )
+    if mlp_only:
+        partial, stats = _attn_res_mlp_sublayer(
+            layer,
+            _AttnSublayer(partial, None, None, 0.0, None, {}, {}),
+            mix,
+            mask,
+            token_ids,
+            layer_index,
+            noise_key,
+            extras,
+        )
+    else:
+        attn = _attn_res_attn_sublayer(
+            layer, partial, mix, mask, token_ids, use_long, layer_index, noise_key, None, extras
+        )
+        if half == _ScanHalf.ATTN:
+            partial, stats = attn.partial, attn.stats
+        else:
+            partial, stats = _attn_res_mlp_sublayer(layer, attn, mix, mask, token_ids, layer_index, noise_key, extras)
+            if save_mid:
+                stats = {**stats, _MID_PARTIAL: attn.partial}
     if unsupported := set(stats) & set(_DIFFERENTIABLE_STATS):
         raise ValueError(f"scan_layers does not carry the differentiable layer stats {sorted(unsupported)}")
     return _AttnResHistory(sources, logits, partial), stats, tuple(gate_weights)
@@ -5275,6 +5403,7 @@ class _ScanArgs(NamedTuple):
     prefetch_partials: bool
     offload_sources: bool
     release_weight_grads: bool
+    split_layers: tuple[int, ...] = ()
 
 
 @jax.custom_vjp
@@ -5356,6 +5485,8 @@ def _run_unit_layer(
     args: _ScanArgs,
     probes: tuple[jax.Array, ...] | None = None,
     saved_routed: jax.Array | None = None,
+    half: _ScanHalf = _ScanHalf.LAYER,
+    save_mid: bool = False,
 ) -> tuple[_AttnResHistory, dict[str, jax.Array], tuple[jax.Array, ...]]:
     return _scan_history_layer(
         layer,
@@ -5370,19 +5501,44 @@ def _run_unit_layer(
         args.route_key,
         probes,
         saved_routed,
+        half,
+        save_mid,
         static_boundary=unit_layer.boundary,
     )
 
 
 def _layer_history(
-    layer_diff, logits, partial, queries, probes, *, sources, layer_static, layer_index, unit_layer, args, saved_routed
+    layer_diff,
+    logits,
+    partial,
+    queries,
+    probes,
+    *,
+    sources,
+    layer_static,
+    layer_index,
+    unit_layer,
+    args,
+    saved_routed,
+    half=_ScanHalf.LAYER,
 ):
     """``_run_unit_layer``'s ``(logits, partial)`` as a function of the differentiable inputs (the backward's
-    ``jax.vjp``), with the gates' source weights as aux. ``sources`` is the final history, held constant."""
+    ``jax.vjp``), with the gates' source weights as aux. ``sources`` is the final history, held constant. An MLP
+    ``half`` leaves the logits as they are and returns the partial alone."""
     layer = eqx.combine(_cast_floats(layer_diff, sources.dtype), layer_static)
     history, _, gate_weights = _run_unit_layer(
-        layer, _AttnResHistory(sources, logits, partial), queries, layer_index, unit_layer, args, probes, saved_routed
+        layer,
+        _AttnResHistory(sources, logits, partial),
+        queries,
+        layer_index,
+        unit_layer,
+        args,
+        probes,
+        saved_routed,
+        half,
     )
+    if half == _ScanHalf.MLP:
+        return history.partial, gate_weights
     return (history.logits, history.partial), gate_weights
 
 
@@ -5396,19 +5552,30 @@ def _scan_forward(
         unit_diff, unit_static, u = xs
         dtype = history.sources.dtype
         units = {kind: eqx.combine(_cast_floats(unit_diff[kind], dtype), unit_static[kind]) for kind in unit_diff}
-        partials, stats, routed = [], [], []
+        partials, stats, routed, mids = [], [], [], []
         for j, unit_layer in enumerate(plan.unit):
             partials.append(history.partial)
             history, layer_stats, _ = _run_unit_layer(
-                _unit_layer(units, unit_layer), history, queries, len(plan.unit) * u + j, unit_layer, args
+                _unit_layer(units, unit_layer),
+                history,
+                queries,
+                len(plan.unit) * u + j,
+                unit_layer,
+                args,
+                save_mid=save_partials and j in args.split_layers,
             )
-            if _ROUTED_COMBINE in layer_stats:
+            if _ROUTED_COMBINE in layer_stats or _MID_PARTIAL in layer_stats:
                 layer_stats = dict(layer_stats)
-                routed.append(layer_stats.pop(_ROUTED_COMBINE))
+                if _ROUTED_COMBINE in layer_stats:
+                    routed.append(layer_stats.pop(_ROUTED_COMBINE))
+                if _MID_PARTIAL in layer_stats:
+                    mids.append(layer_stats.pop(_MID_PARTIAL))
             stats.append(layer_stats)
         if not save_partials:
             return history, (tuple(stats), None)
         saved = (jnp.stack(partials), tuple(routed))
+        if args.split_layers:
+            saved = (*saved, tuple(mids))
         # Offloaded per unit as the scan produces it, so the stacked residuals live in pinned host memory.
         return history, (tuple(stats), _to_memory_kind(saved, "pinned_host") if args.offload_partials else saved)
 
@@ -5450,6 +5617,8 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
     d_history = _AttnResHistory(
         *(jnp.zeros_like(x) if d is None else d for d, x in zip(d_history, (sources, logits, sources[0]), strict=True))
     )
+    if args.split_layers:
+        return _planned_scan_bwd(sources, logits, partials, d_history, units_diff, queries, args)
 
     def unit_residuals(u):
         return jax.tree.map(lambda a: jax.lax.dynamic_index_in_dim(a, u, axis=0, keepdims=False), partials)
@@ -5539,6 +5708,149 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
         return d_units, d_queries, d_history
     xs = (units_diff, args.units_static, partials, units)
     (d_history, d_queries), d_units = jax.lax.scan(unit_step, (d_history, jnp.zeros_like(queries)), xs, reverse=True)
+    return d_units, d_queries, d_history
+
+
+class _ScanPhase(NamedTuple):
+    """One step of the planned reverse scan (``scan_split_backward_layers``): sublayer ``half`` of unit position
+    ``j``."""
+
+    half: _ScanHalf
+    j: int
+
+
+def _scan_phases(unit_size: int, split_layers: tuple[int, ...]) -> tuple[_ScanPhase, ...]:
+    """A unit's backward phases in execution order: a split layer's MLP phase, then its attention phase."""
+    phases: list[_ScanPhase] = []
+    for j in reversed(range(unit_size)):
+        if j in split_layers:
+            phases += [_ScanPhase(_ScanHalf.MLP, j), _ScanPhase(_ScanHalf.ATTN, j)]
+        else:
+            phases.append(_ScanPhase(_ScanHalf.LAYER, j))
+    return tuple(phases)
+
+
+def _load_phase_residuals(store, split_layers: tuple[int, ...], u: jax.Array, phase: _ScanPhase) -> dict[str, jax.Array]:
+    """Copy the pinned-host residuals ``phase`` reads to HBM: the incoming partial for an attention or unsplit
+    phase, the routed output (``scan_save_routed_output``) and the mid partial for an MLP or unsplit phase."""
+    partials, routed, mids = store
+    half, j = phase
+
+    def take(a: jax.Array, *index: jax.Array | int) -> jax.Array:
+        starts = (u, *index) + (0,) * (a.ndim - 1 - len(index))
+        sizes = (1,) * (1 + len(index)) + a.shape[1 + len(index) :]
+        on_device = _to_memory_kind(jax.lax.dynamic_slice(a, starts, sizes), "device")
+        return jax.lax.squeeze(on_device, tuple(range(1 + len(index))))
+
+    out = {}
+    if half != _ScanHalf.MLP:
+        out["partial"] = take(partials, j)
+    if half != _ScanHalf.ATTN and routed:
+        out["routed"] = take(routed[j])
+    if half == _ScanHalf.MLP:
+        out["mid"] = take(mids[sorted(split_layers).index(j)])
+    return out
+
+
+def _planned_scan_bwd(sources, logits, store, d_history, units_diff, queries, args: _ScanArgs):
+    """``_scan_layers_bwd`` under ``scan_split_backward_layers``: per unit position, the joint layer VJP or (split)
+    the MLP sublayer's VJP from the saved mid partial followed, behind a barrier, by the attention sublayer's, so
+    their residuals are never alive together. Each phase's residuals are copied from pinned host one phase ahead
+    (the host store passes through the previous phase's start barrier, so the copy cannot be hoisted further), and the
+    next unit's first phase rides in the carry. The copy offsets stay functions of the scan index (the host store,
+    not the index, passes through the barrier), which XLA needs to run a host-to-device dynamic slice as a DMA copy
+    rather than as a kernel reading pinned host memory."""
+    plan = args.plan
+    phases = _scan_phases(len(plan.unit), args.split_layers)
+
+    def load(host_store, u, phase):
+        return _load_phase_residuals(host_store, args.split_layers, u, phase)
+
+    def layer_fn(layer_static, unit_layer, layer_index, saved_routed, half):
+        return functools.partial(
+            _layer_history,
+            sources=sources,
+            layer_static=layer_static,
+            layer_index=layer_index,
+            unit_layer=unit_layer,
+            args=args,
+            saved_routed=saved_routed,
+            half=half,
+        )
+
+    def unit_step(carry, xs):
+        d_history, d_queries, res = carry
+        unit_diff, unit_static, u = xs
+        d_unit: dict[bool, list[Block | None]] = {kind: [None] * plan.kind_count(kind) for kind in unit_diff}
+        mlp_part = None
+        for k, (half, j) in enumerate(phases):
+            unit_layer = plan.unit[j]
+            layer_diff = _unit_layer(unit_diff, unit_layer)
+            layer_static = _unit_layer(unit_static, unit_layer)
+            layer_index = len(plan.unit) * u + j
+            num_gates = 2 + (layer_diff.attn_res_query_shared is not None)
+            with jax.named_scope(f"attn_res_scan_bwd_{half}{j}"):
+                if half == _ScanHalf.ATTN:
+                    # The MLP phase's cotangents (weight gradients included) are done before this phase's recompute.
+                    mlp_part, layer_diff, res, d_history, host_store = jax.lax.optimization_barrier(
+                        (mlp_part, layer_diff, res, d_history, store)
+                    )
+                else:
+                    layer_diff, res, d_history, host_store = jax.lax.optimization_barrier(
+                        (layer_diff, res, d_history, store)
+                    )
+                if k + 1 < len(phases):
+                    next_res = load(host_store, u, phases[k + 1])
+                else:
+                    next_res = load(host_store, jnp.maximum(u - 1, 0), phases[0])
+                if half == _ScanHalf.MLP:
+                    fn = layer_fn(layer_static, unit_layer, layer_index, res.get("routed"), half)
+                    probes = tuple(jnp.zeros_like(res["mid"]) for _ in range(num_gates - 1))
+                    _, vjp_fn, gate_weights = jax.vjp(fn, layer_diff, logits, res["mid"], queries, probes, has_aux=True)
+                    # (d_layer, d_logits, d_mid, d_q, d_mixes, gate weights)
+                    mlp_part = (*vjp_fn(d_history.partial), gate_weights)
+                    res = next_res
+                    continue
+                saved_routed = res.get("routed") if half == _ScanHalf.LAYER else None
+                fn = layer_fn(layer_static, unit_layer, layer_index, saved_routed, half)
+                partial_in = res["partial"]
+                own_gates = num_gates if half == _ScanHalf.LAYER else 1
+                probes = tuple(jnp.zeros_like(partial_in) for _ in range(own_gates))
+                _, vjp_fn, gate_weights = jax.vjp(fn, layer_diff, logits, partial_in, queries, probes, has_aux=True)
+                if half == _ScanHalf.LAYER:
+                    d_layer, d_logits, d_partial, d_q, d_mixes = vjp_fn((d_history.logits, d_history.partial))
+                else:
+                    assert mlp_part is not None
+                    m_layer, m_logits, d_mid, m_q, m_mixes, m_weights = mlp_part
+                    d_layer, d_logits, d_partial, d_q, d_mixes = vjp_fn((d_history.logits + m_logits, d_mid))
+                    d_layer = jax.tree.map(jnp.add, d_layer, m_layer)
+                    d_q = d_q + m_q
+                    d_mixes, gate_weights = (*d_mixes, *m_mixes), (*gate_weights, *m_weights)
+                    mlp_part = None
+                d_sources, d_partial = _accumulate_source_grads(
+                    d_history.sources,
+                    d_partial,
+                    gate_weights,
+                    d_mixes,
+                    plan.schedule,
+                    layer_index,
+                    fused=layer_static.attn.cfg.attn_res_fused_source_grads,
+                    static_boundary=unit_layer.boundary,
+                )
+                d_history = _AttnResHistory(d_sources, d_logits, d_partial)
+                d_layer, d_history, d_q = jax.lax.optimization_barrier((d_layer, d_history, d_q))
+            d_queries = d_queries + d_q
+            d_unit[unit_layer.is_kda][unit_layer.index] = d_layer
+            res = next_res
+        stacked = {kind: jax.tree.map(lambda *xs: jnp.stack(xs), *layers) for kind, layers in d_unit.items()}
+        return (d_history, d_queries, res), stacked
+
+    units = jnp.arange(plan.num_units, dtype=jnp.int32)
+    first = load(store, jnp.asarray(plan.num_units - 1, jnp.int32), phases[0])
+    xs = (units_diff, args.units_static, units)
+    (d_history, d_queries, _), d_units = jax.lax.scan(
+        unit_step, (d_history, jnp.zeros_like(queries), first), xs, reverse=True
+    )
     return d_units, d_queries, d_history
 
 
@@ -6391,6 +6703,7 @@ class Transformer(eqx.Module):
             self.config.scan_prefetch_partials,
             self.config.scan_offload_partials and not self.config.scan_device_sources,
             self.config.scan_release_weight_grads,
+            tuple(sorted(self.config.scan_split_backward_layers)),
         )
         return _scan_layers((units_diff, queries, history), args)
 

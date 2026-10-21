@@ -137,3 +137,61 @@ def test_static_boundaries_match_the_traced_boundaries(fused_source_grads):
     assert gate_logs
     for key in gate_logs:
         np.testing.assert_allclose(np.asarray(static_metrics[key]), np.asarray(metrics[key]), rtol=1e-5, atol=1e-7)
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "split, extra",
+    [
+        # The KDA positions split, the softmax-attention layer joint, ahead of an unrolled tail layer.
+        ((0, 1, 2), dict(num_layers=10, latent_out_full_layers=(9,))),
+        # Every position split, with the fused AttnRes kernels (Pallas interpret mode on CPU) and the saved routed
+        # output as on the GB200 stack (every layer scanned).
+        (
+            (0, 1, 2, 3),
+            dict(
+                num_layers=8,
+                attn_res_fused_block_mix=True,
+                attn_res_fused_source_grads=True,
+                scan_save_routed_output=True,
+            ),
+        ),
+    ],
+)
+def test_split_backward_matches_the_joint_scan(split, extra):
+    overrides = dict(attn_res_num_blocks=3, scan_layers=True, **extra)
+    loss, grads, _ = _loss_grads_metrics(scan_offload_partials=True, **overrides)
+    split_loss, split_grads, _ = _loss_grads_metrics(
+        scan_offload_partials=True, scan_split_backward_layers=split, **overrides
+    )
+    # The forward is the joint scan's, op for op.
+    assert split_loss == loss
+    # The split backward sums each layer's cotangents in another order (the MLP phase's, then the attention
+    # phase's), so its float32 gradients differ from the joint scan's by rounding only (~1e-6 of each leaf's scale;
+    # a dropped cotangent path is O(1)).
+    for joint, planned in zip(grads, split_grads, strict=True):
+        assert np.max(np.abs(planned - joint)) <= 1e-5 * np.max(np.abs(joint)) + 1e-12
+
+
+@pytest.mark.timeout(600)
+def test_split_backward_with_static_boundaries_matches_the_joint_scan():
+    # 12-layer units (blocks of 6), every unit position split.
+    overrides = dict(
+        num_layers=24,
+        attn_res_num_blocks=4,
+        scan_layers=True,
+        attn_res_static_boundaries=True,
+        attn_res_fused_source_grads=True,
+        scan_save_routed_output=True,
+        scan_offload_partials=True,
+    )
+    loss, grads, _ = _loss_grads_metrics(**overrides)
+    split_loss, split_grads, _ = _loss_grads_metrics(scan_split_backward_layers=tuple(range(12)), **overrides)
+    _, exact_grads, _ = _loss_grads_metrics(
+        jnp.float64, num_layers=24, attn_res_num_blocks=4, scan_layers=True, attn_res_static_boundaries=True
+    )
+    assert split_loss == loss
+    # 24 layers of float32 rounding: compared by their error against float64 (a dropped cotangent path is O(1)).
+    for joint, planned, exact in zip(grads, split_grads, exact_grads, strict=True):
+        joint_err = np.max(np.abs(joint - exact))
+        assert np.max(np.abs(planned - exact)) <= 2 * joint_err + 1e-6 * np.max(np.abs(exact)) + 1e-12

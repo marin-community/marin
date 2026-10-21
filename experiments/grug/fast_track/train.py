@@ -234,6 +234,27 @@ class MasterParamMode(StrEnum):
     FP32_PINNED_HOST = "fp32_pinned_host"
 
 
+class OptStateOffload(StrEnum):
+    """Which optimizer-state leaves live on pinned host memory between steps.
+
+    ALL offloads every leaf; NONE keeps the whole state on device (no per-step H2D/D2H copies); EXPERT_DOWN offloads
+    only the routed experts' ``w_down`` state (the MuonH momentum of one of the two expert stacks), for programs where
+    the whole state on device leaves too little memory.
+    """
+
+    ALL = "all"
+    NONE = "none"
+    EXPERT_DOWN = "expert_down"
+
+
+def _offloads_leaf(mode: OptStateOffload, path: str) -> bool:
+    if mode == OptStateOffload.ALL:
+        return True
+    if mode == OptStateOffload.NONE:
+        return False
+    return path.endswith(".expert_mlp.w_down")
+
+
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
@@ -255,6 +276,20 @@ def _tree_to_memory_kind(tree, memory_kind: str):
         return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
 
     return jax.tree.map(_move, tree)
+
+
+def _opt_state_to_memory_kind(opt_state, mode: OptStateOffload, memory_kind: str):
+    """Move the ``mode``-selected optimizer-state leaves to ``memory_kind``; the rest stay where they are."""
+    if mode == OptStateOffload.NONE:
+        return opt_state
+    if mode == OptStateOffload.ALL:
+        return _tree_to_memory_kind(opt_state, memory_kind)
+    return jax.tree_util.tree_map_with_path(
+        lambda path, leaf: (
+            _tree_to_memory_kind(leaf, memory_kind) if _offloads_leaf(mode, jax.tree_util.keystr(path)) else leaf
+        ),
+        opt_state,
+    )
 
 
 @dataclass(frozen=True)
@@ -360,7 +395,7 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     # Hero-scale memory: optimizer state on pinned host memory between steps, and where the master weights live.
-    offload_opt_state: bool = False
+    opt_state_offload: OptStateOffload = OptStateOffload.NONE
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE
 
 
@@ -789,7 +824,7 @@ def initial_state(
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None = None,
-    offload_opt_state: bool = False,
+    opt_state_offload: OptStateOffload = OptStateOffload.NONE,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ) -> GrugTrainState:
     initialized = Transformer.init(model_config, key=key)
@@ -802,8 +837,7 @@ def initial_state(
         params = mp.cast_to_param(initialized)
         master_params = None
         opt_state = optimizer.init(params)
-    if offload_opt_state:
-        opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+    opt_state = _opt_state_to_memory_kind(opt_state, opt_state_offload, "pinned_host")
     return GrugTrainState(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
@@ -985,15 +1019,15 @@ def _make_train_step(
     ema_start_step: int = 0,
     watch_config: WatchConfig | None = None,
     grad_accum_microbatches: int = 1,
-    offload_opt_state: bool = False,
+    opt_state_offload: OptStateOffload = OptStateOffload.NONE,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_step: int = 0,
 ):
     """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
-    (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
-    between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
+    (``_accumulated_loss_and_grads``). ``opt_state_offload`` picks the optimizer-state leaves kept on pinned host
+    memory between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -1018,7 +1052,7 @@ def _make_train_step(
         else:
             (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, layer_skip, extra_active)
         metrics = {"train/loss": loss, **summarized_metrics}
-        opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
+        opt_state_in = _opt_state_to_memory_kind(state.opt_state, opt_state_offload, "device")
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
             # MFU-baseline mode: run fwd+bwd (grads above) but skip the optimizer update (Muon NS).
             # Params/master/opt_state pass through unchanged, so loss does not descend -- this isolates
@@ -1043,8 +1077,7 @@ def _make_train_step(
             with jax.named_scope("apply_updates"):
                 params = optax.apply_updates(qb_params, updates)
             master_params = None
-        if offload_opt_state:
-            opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+        opt_state = _opt_state_to_memory_kind(opt_state, opt_state_offload, "pinned_host")
 
         if ema_beta is None:
             ema_params = None
@@ -1210,7 +1243,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
-                offload_opt_state=config.trainer.offload_opt_state,
+                opt_state_offload=config.trainer.opt_state_offload,
                 master_param_mode=config.trainer.master_param_mode,
             )
 
@@ -1877,7 +1910,7 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         ema_start_step=_ema_start_step(config),
         watch_config=inline_watch_config,
         grad_accum_microbatches=config.trainer.grad_accum_microbatches,
-        offload_opt_state=config.trainer.offload_opt_state,
+        opt_state_offload=config.trainer.opt_state_offload,
         master_param_mode=config.trainer.master_param_mode,
         layer_skip=config.trainer.layer_skip,
         # Late by default, once the entropy head has learned something.
@@ -1918,7 +1951,7 @@ def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
                 mp=trainer.mp,
                 key=key,
                 ema_beta=config.trainer.ema_beta,
-                offload_opt_state=config.trainer.offload_opt_state,
+                opt_state_offload=config.trainer.opt_state_offload,
                 master_param_mode=config.trainer.master_param_mode,
             )
         )(jax.random.PRNGKey(trainer.seed))
@@ -1949,9 +1982,9 @@ def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
 
 
 def _upload_memory_reports(directory: str) -> None:
-    """Copy the seed compile's XLA memory-usage reports and optimized HLO to ``directory`` (the HLO dump's
-    directory)."""
-    patterns = ("*memory-usage-report*", "*train_step*after_optimizations.txt")
+    """Copy the seed compile's XLA memory-usage reports, buffer assignment (with the buffers live at the peak) and
+    optimized HLO to ``directory`` (the HLO dump's directory)."""
+    patterns = ("*memory-usage-report*", "*train_step*after_optimizations.txt", "*train_step*buffer-assignment*")
     for local in [path for pattern in patterns for path in glob.glob(os.path.join(SEED_XLA_DUMP_DIR, pattern))]:
         remote = prefix_join(directory, os.path.basename(local))
         with open(local, "rb") as src, fsspec.open(remote, "wb") as dst:
