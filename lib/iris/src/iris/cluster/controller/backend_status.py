@@ -19,7 +19,6 @@ from iris.cluster.controller.backend import (
     TaskBackend,
     dashboard_backend_descriptor,
 )
-from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.schema import tasks_table, workers_table
@@ -84,7 +83,6 @@ def get_scheduler_state(
     with dependencies.db.read_snapshot() as snapshot:
         budget_context = dependencies.budgets.context(snapshot)
         budgets = list(budget_context.users.values())
-        budget_limits = {budget.user_id: budget.budget_limit for budget in budgets}
         user_spend = budget_context.spend
         pending_rows = reads.pending_tasks_with_jobs(snapshot)
         requested_bands = reads.get_priority_bands(snapshot, {row.job_id for row in pending_rows})
@@ -103,12 +101,9 @@ def get_scheduler_state(
     pending_counts: dict[tuple[int, str, str, str], int] = {}
     for row in pending_rows:
         user_id = row.job_id.user
-        band = compute_effective_band(
+        band = budget_context.effective_band(
             requested_bands.get(row.job_id, row.priority_band),
             user_id,
-            user_spend,
-            budget_limits,
-            budget_context.defaults,
         )
         job_id = (row.task_id.parent or row.task_id).to_wire()
         key = (band, user_id, job_id, str(row.backend_id or ""))
@@ -136,13 +131,7 @@ def get_scheduler_state(
                 budget_limit=budget_limit,
                 budget_spent=spent,
                 max_band=max_band,
-                effective_band=compute_effective_band(
-                    job_pb2.PRIORITY_BAND_INTERACTIVE,
-                    user_id,
-                    user_spend,
-                    budget_limits,
-                    defaults,
-                ),
+                effective_band=budget_context.effective_band(job_pb2.PRIORITY_BAND_INTERACTIVE, user_id),
                 utilization_percent=(spent / budget_limit * 100.0) if budget_limit > 0 else 0.0,
             )
         )

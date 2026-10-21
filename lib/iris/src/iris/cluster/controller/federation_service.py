@@ -168,7 +168,9 @@ def federation_sync(
     """Return the peer-visible job changes since the requester's cursor."""
     requester_id = request.requester_id
     _authorize_sync(requester_id)
-    budget_report = dependencies.budgets.receive_sync(requester_id, request)
+    budget_report = dependencies.budgets.receive_policy(
+        requester_id, request.budget_policy if request.HasField("budget_policy") else None
+    )
     cursor = request.cursor
     cursor_seq = int(cursor) if cursor else 0
     deltas: list[controller_pb2.Controller.FederationJobDelta] = []

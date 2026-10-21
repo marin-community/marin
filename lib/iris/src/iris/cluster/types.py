@@ -466,7 +466,7 @@ DEFAULT_USER_BUDGET_LIMIT = 1000
 DEFAULT_USER_BUDGET_MAX_BAND = job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
-@dataclass
+@dataclass(frozen=True)
 class UserBudgetDefaults:
     """Budget settings applied when a user has no override row in ``user_budgets``.
 

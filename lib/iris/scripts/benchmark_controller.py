@@ -67,6 +67,7 @@ from iris.cluster.controller.controller import (
     ControllerConfig,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.federation_budget import read_budget_context
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment, apply_reconcile_updates
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
@@ -1153,7 +1154,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             _sched_snap,
             health,
             _NoAttrs(),
-            defaults,
+            read_budget_context(_sched_snap, defaults),
         )
 
     def _demand():

@@ -138,12 +138,7 @@ def get_user_budget(
         budget = budget_context.users.get(request.user_id)
     if budget is None:
         raise ConnectError(Code.NOT_FOUND, f"No budget found for user {request.user_id}")
-    return controller_pb2.Controller.GetUserBudgetResponse(
-        user_id=budget.user_id,
-        budget_limit=budget.budget_limit,
-        budget_spent=budget.budget_spent,
-        max_band=budget.max_band,
-    )
+    return budget.to_proto()
 
 
 def list_user_budgets(
@@ -156,17 +151,7 @@ def list_user_budgets(
     require_identity()
     with dependencies.db.read_snapshot() as snapshot:
         budgets = dependencies.budgets.context(snapshot).users.values()
-    return controller_pb2.Controller.ListUserBudgetsResponse(
-        users=[
-            controller_pb2.Controller.GetUserBudgetResponse(
-                user_id=budget.user_id,
-                budget_limit=budget.budget_limit,
-                budget_spent=budget.budget_spent,
-                max_band=budget.max_band,
-            )
-            for budget in budgets
-        ]
-    )
+    return controller_pb2.Controller.ListUserBudgetsResponse(users=[budget.to_proto() for budget in budgets])
 
 
 def _active_job_count(counts: dict[int, int]) -> int:

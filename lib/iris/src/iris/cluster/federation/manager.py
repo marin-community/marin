@@ -60,7 +60,7 @@ DEFAULT_SYNC_INTERVAL = Duration.from_seconds(3)
 
 
 class BudgetExchange(Protocol):
-    def prepare_sync(self, peer_id: str, request: controller_pb2.Controller.FederationSyncRequest) -> None: ...
+    def policy_for_peer(self, peer_id: str) -> controller_pb2.Controller.FederationBudgetPolicy | None: ...
 
     def record_report(self, peer_id: str, report: controller_pb2.Controller.FederationBudgetReport) -> None: ...
 
@@ -454,7 +454,9 @@ class FederationManager:
         cursor = self._store.read_cursor(peer.peer_id)
         request = controller_pb2.Controller.FederationSyncRequest(requester_id=self._cluster_id, cursor=cursor)
         if self._budgets is not None:
-            self._budgets.prepare_sync(peer.peer_id, request)
+            policy = self._budgets.policy_for_peer(peer.peer_id)
+            if policy is not None:
+                request.budget_policy.CopyFrom(policy)
         try:
             response = peer.federation_sync(request)
         except _PEER_RPC_ERRORS as exc:

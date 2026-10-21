@@ -18,7 +18,7 @@ from iris.cluster.controller.scheduling.policy import (
     run_preemption_pass,
 )
 from iris.cluster.controller.scheduling.scheduler import JobRequirements, RunningTaskInfo, WorkerCapacity
-from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     ControllerTestHarness,
@@ -1035,12 +1035,7 @@ def test_over_budget_user_tasks_preemptible():
     ctx = _make_simple_context([cap])
 
     # Alice is over budget — her INTERACTIVE task should have effective band BATCH
-    user_spend = {"alice": 10000}
-    user_budget_limits = {"alice": 5000}
-    defaults = UserBudgetDefaults()
-    effective = compute_effective_band(
-        job_pb2.PRIORITY_BAND_INTERACTIVE, "alice", user_spend, user_budget_limits, defaults
-    )
+    effective = compute_effective_band(job_pb2.PRIORITY_BAND_INTERACTIVE, 10000, 5000)
     assert effective == job_pb2.PRIORITY_BAND_BATCH
 
     victim = RunningTaskInfo(
@@ -1068,12 +1063,7 @@ def test_over_budget_user_tasks_preemptible():
 
 def test_over_budget_production_not_preemptible():
     """Over-budget user's PRODUCTION tasks are NOT downgraded and stay non-preemptible by INTERACTIVE."""
-    user_spend = {"alice": 10000}
-    user_budget_limits = {"alice": 5000}
-    defaults = UserBudgetDefaults()
-    effective = compute_effective_band(
-        job_pb2.PRIORITY_BAND_PRODUCTION, "alice", user_spend, user_budget_limits, defaults
-    )
+    effective = compute_effective_band(job_pb2.PRIORITY_BAND_PRODUCTION, 10000, 5000)
     assert effective == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
@@ -1144,10 +1134,8 @@ def test_demoted_task_re_promotes_after_user_returns_under_budget():
         assert (
             compute_effective_band(
                 requested[job_id],
-                "alice",
-                user_spend={"alice": 0},
-                user_budgets={"alice": 5000},
-                defaults=UserBudgetDefaults(),
+                budget_spent=0,
+                budget_limit=5000,
             )
             == job_pb2.PRIORITY_BAND_INTERACTIVE
         )

@@ -1157,14 +1157,12 @@ class Controller:
             snap,
             self._worker_health,
             snap.caches[WorkerAttrsProjection],
-            self._config.user_budget_defaults,
             budget_context=budget_context,
         )
         queued: list[QueuedCandidate] = []
         expired: list[JobName] = []
         if self._config.peers:
-            if budget_context.ready:
-                queued = build_queued_candidates(snap, budget_context=budget_context)
+            queued = build_queued_candidates(snap, budget_context=budget_context)
             expired = reads.expired_queued_handoffs(snap, now.epoch_ms())
         return _SchedulingInputs(
             context=context if context.pending_task_rows else None,
@@ -1511,8 +1509,7 @@ class Controller:
             budget_context = self._budgets.context(cur)
             batch = dispatch.drain_for_dispatch(
                 cur,
-                max_promotions=max_promotions if budget_context.ready else 0,
-                defaults=self._config.user_budget_defaults,
+                max_promotions=max_promotions,
                 budget_context=budget_context,
             )
         if batch.tasks_to_run:

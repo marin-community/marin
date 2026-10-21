@@ -22,7 +22,6 @@ from iris.cluster.constraints import (
     strip_cluster_constraints,
 )
 from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.codec import reconstruct_launch_job_request
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.federation_budget import BudgetContext
@@ -49,7 +48,7 @@ logger = logging.getLogger(__name__)
 FEDERATED_ENDPOINT_MIRROR_TTL = Duration.from_minutes(5)
 
 
-def build_queued_candidates(tx: Tx, *, budget_context: BudgetContext | None = None) -> list[QueuedCandidate]:
+def build_queued_candidates(tx: Tx, *, budget_context: BudgetContext) -> list[QueuedCandidate]:
     """Read the queued federated jobs into candidates for the tick's federation pass.
 
     Each candidate carries its shape (routing constraints) and its
@@ -57,6 +56,8 @@ def build_queued_candidates(tx: Tx, *, budget_context: BudgetContext | None = No
     request. Ordered by priority band, then oldest submission first — the order the
     assignment pass consumes them in.
     """
+    if not budget_context.ready:
+        return []
     candidates: list[QueuedCandidate] = []
     for handle in reads.queued_handoff_handles(tx):
         job = reads.get_job_detail(tx, handle.job_id)
@@ -73,17 +74,7 @@ def build_queued_candidates(tx: Tx, *, budget_context: BudgetContext | None = No
             QueuedCandidate(
                 job_id=handle.job_id,
                 pinned_peer_id=handle.peer_id,
-                priority_band=(
-                    compute_effective_band(
-                        job.priority_band,
-                        job.job_id.user,
-                        budget_context.spend,
-                        budget_context.limits,
-                        budget_context.defaults,
-                    )
-                    if budget_context is not None
-                    else job.priority_band
-                ),
+                priority_band=budget_context.effective_band(job.priority_band, job.job_id.user),
                 submitted_at_ms=job.submitted_at_ms.epoch_ms() if job.submitted_at_ms is not None else 0,
                 shape_constraints=shape,
                 availability_gate=peer_availability_gate(request.resources.device, request.replicas),

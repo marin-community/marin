@@ -22,8 +22,6 @@ from sqlalchemy import select
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import (
     UserTask,
-    compute_effective_band,
-    compute_user_spend,
     interleave_by_user,
 )
 from iris.cluster.controller.db import Tx
@@ -37,7 +35,7 @@ from iris.cluster.controller.reads import (
 )
 from iris.cluster.controller.schema import job_config_table, jobs_table, local_tasks
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
-from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_rank
 
@@ -266,8 +264,7 @@ def drain_for_dispatch(
     cur: Tx,
     *,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
-    defaults: UserBudgetDefaults | None = None,
-    budget_context: BudgetContext | None = None,
+    budget_context: BudgetContext,
 ) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
@@ -298,8 +295,7 @@ def drain_for_dispatch(
     WorkloadPriorityClass; a redrive reuses that fixed band even if spend or
     budget configuration later changes.
     """
-    defaults = defaults or UserBudgetDefaults()
-    if budget_context is not None and not budget_context.ready:
+    if not budget_context.ready:
         max_promotions = 0
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
@@ -320,18 +316,10 @@ def drain_for_dispatch(
         if candidates:
             job_ids = {row.job_id for row in candidates}
             resolved_bands = reads.get_priority_bands(cur, job_ids)
-            user_spend = budget_context.spend if budget_context is not None else compute_user_spend(cur)
-            user_budget_limits = (
-                budget_context.limits if budget_context is not None else reads.get_all_user_budget_limits(cur)
-            )
-            if budget_context is not None:
-                defaults = budget_context.defaults
+            user_spend = budget_context.spend
             budget_users = {row.job_id: row.budget_user for row in candidates}
             effective_bands = {
-                job_id: compute_effective_band(
-                    resolved_bands[job_id], budget_users[job_id], user_spend, user_budget_limits, defaults
-                )
-                for job_id in job_ids
+                job_id: budget_context.effective_band(resolved_bands[job_id], budget_users[job_id]) for job_id in job_ids
             }
             units = _rank_promotion_units(_build_promotion_units(candidates), effective_bands, user_spend)
             promote_units = _select_within_cap(units, effective_bands, max_promotions)

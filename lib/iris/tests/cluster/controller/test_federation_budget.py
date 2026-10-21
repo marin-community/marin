@@ -20,7 +20,7 @@ from iris.cluster.controller import writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.federation_budget import FederationBudgets
+from iris.cluster.controller.federation_budget import FederationBudgets, read_budget_context
 from iris.cluster.controller.reconcile.dispatch import drain_for_dispatch
 from iris.cluster.controller.scheduling.policy import (
     apply_scheduling_gates,
@@ -42,9 +42,7 @@ BATCH = job_pb2.PRIORITY_BAND_BATCH
 
 
 def exchange(parent, child, peer_id):
-    request = controller_pb2.Controller.FederationSyncRequest(requester_id="hub")
-    parent.prepare_sync(peer_id, request)
-    report = child.receive_sync("hub", request)
+    report = child.receive_policy("hub", parent.policy_for_peer(peer_id))
     parent.record_report(peer_id, report)
 
 
@@ -99,7 +97,7 @@ def peer_service(federation, log_client, tmp_path):
 def activate(state, name, *, band=INTERACTIVE, replicas=1):
     submit_job(state, name, make_job_request(name=name, priority_band=band, replicas=replicas))
     with state._db.transaction() as tx:
-        drain_for_dispatch(tx)
+        drain_for_dispatch(tx, budget_context=read_budget_context(tx, UserBudgetDefaults()))
 
 
 def test_direct_roots_and_children_share_budget_across_clusters(federation):
@@ -177,7 +175,6 @@ def test_worker_scheduler_uses_usage_from_other_peers(federation):
             tx,
             states[1]._health,
             states[1]._worker_attrs,
-            children[0].defaults,
             budget_context=children[0].context(tx),
         )
     gated = apply_scheduling_gates(scheduling, max_tasks_per_job_per_cycle=100)
@@ -187,13 +184,30 @@ def test_worker_scheduler_uses_usage_from_other_peers(federation):
 
 def test_unrelated_federation_parent_cannot_replace_budget_policy(federation):
     _, parent, children, _ = federation
-    request = controller_pb2.Controller.FederationSyncRequest(requester_id="other")
-    parent.prepare_sync("a", request)
-    request.budget_policy.default_limit = 0
-    report = children[0].receive_sync("other", request)
+    policy = parent.policy_for_peer("a")
+    assert policy is not None
+    policy.default_limit = 0
+    report = children[0].receive_policy("other", policy)
     assert report.authority_id == "hub"
     assert not report.user_spend
     assert context(children[0]).defaults.budget_limit == 10
+
+
+def test_reused_sync_message_cannot_change_received_budget_policy(federation):
+    states, parent, children, _ = federation
+    activate(states[1], "/alice/active")
+    exchange(parent, children[0], "a")
+    policy = parent.policy_for_peer("a")
+    assert policy is not None
+    children[0].receive_policy("hub", policy)
+
+    # RPC messages belong to the caller; retained policy must own its data.
+    policy.users[0].budget_limit = 0
+    policy.users[0].max_band = BATCH
+    policy.users[0].budget_spent = 100
+    policy.peer_spend["alice"] = 100
+    budget = context(children[0]).user("alice")
+    assert (budget.budget_limit, budget.max_band, budget.budget_spent) == (10, INTERACTIVE, 6)
 
 
 def test_secondary_routing_hub_does_not_charge_usage_owned_by_another_authority(federation):
@@ -204,9 +218,7 @@ def test_secondary_routing_hub_does_not_charge_usage_owned_by_another_authority(
         secondary = FederationBudgets(
             secondary_state._db, UserBudgetDefaults(), cluster_id="dev", peer_ids=("a",), now=clock.now
         )
-        request = controller_pb2.Controller.FederationSyncRequest(requester_id="dev")
-        secondary.prepare_sync("a", request)
-        report = children[0].receive_sync("dev", request)
+        report = children[0].receive_policy("dev", secondary.policy_for_peer("a"))
         secondary.record_report("a", report)
         assert context(secondary).ready
         assert context(secondary).user("alice").budget_spent == 0
@@ -272,8 +284,9 @@ def test_waiting_submission_leaves_rpc_capacity_for_parent_budget_sync(federatio
                 await asyncio.sleep(0)  # Let LaunchJob reach its parent-policy wait before syncing.
                 async with asyncio.timeout(3):
                     while not launch.done():
-                        request = controller_pb2.Controller.FederationSyncRequest(requester_id="hub")
-                        parent.prepare_sync("a", request)
+                        request = controller_pb2.Controller.FederationSyncRequest(
+                            requester_id="hub", budget_policy=parent.policy_for_peer("a")
+                        )
                         response = await asyncio.wait_for(
                             client.post("/iris.cluster.ControllerService/FederationSync", json=MessageToDict(request)), 2
                         )

@@ -17,13 +17,14 @@ sync will write and pin the boundary now.
 """
 
 from iris.cluster.controller import reads
+from iris.cluster.controller.federation_budget import read_budget_context
 from iris.cluster.controller.reads import TaskScope
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
+from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName, UserBudgetDefaults
 from iris.rpc import job_pb2
 from iris.testing.controller import make_worker_metadata, query_tasks_for_job, register_worker, submit_direct_job
 from rigging.timing import Timestamp
@@ -79,7 +80,7 @@ def test_federated_pending_task_is_not_routed_or_dispatched(state):
     # Dispatch: the direct-provider drain is the canonical silent break — a
     # federated PENDING row would be promoted to ASSIGNED and run locally.
     with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur)
+        batch = dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
     dispatched = {r.task_id for r in batch.tasks_to_run}
     assert local_task.to_wire() in dispatched
     assert dispatched.isdisjoint({t.to_wire() for t in fed_tasks})
@@ -129,7 +130,7 @@ def test_federated_running_row_excluded_from_dispatch_poll_set(state):
     [local_task] = submit_direct_job(state, "local-run")
     # Promote the local task to ASSIGNED so it populates the null-worker poll set.
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur)
+        dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
 
     fed_job = JobName.root("test-user", "fed-run")
     [fed_task] = submit_direct_job(state, "fed-run")
