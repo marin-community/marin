@@ -17,8 +17,9 @@ compares these groups against the matched random selection:
 Quality classifiers trade S for K, so the two English groups have separate harm limits. A gain is
 the relative decrease against random. The weighted gain is the mean of English ((K + S) / 2), C, and M.
 A candidate is better only when the lower bound of the weighted gain is above zero and no group
-can lose more than its harm limit. The bounds come from a bootstrap over training runs and
-paired evaluation examples.
+can lose more than its harm limit. The bounds are Welch t intervals. Their variance adds the seed
+variance of the per-run gains of each arm and the variance of a bootstrap over paired evaluation
+examples. With three runs per arm, a percentile bootstrap over runs covers only about 80% at 95%.
 """
 
 import json
@@ -31,6 +32,7 @@ import click
 import numpy as np
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from scipy.stats import t as student_t
 
 from experiments.grug.fast_track.downstream_eval import LONG_CONTEXT_LOSS_KEY, METRICS_FILE, RECORDS_FILE
 
@@ -96,6 +98,32 @@ def _group_value(run: RunScores, tasks: Sequence[str], index: dict[str, np.ndarr
     return float(np.mean([values.mean() for values in per_task]))
 
 
+def _run_values(run: RunScores) -> dict[str, float]:
+    values = {group: _group_value(run, tasks, None) for group, tasks in GROUP_TASKS.items()}
+    values["L"] = run.long_context_loss
+    return values
+
+
+def _weighted(gains: dict) -> float | np.ndarray:
+    return np.mean([(gains["K"] + gains["S"]) / 2, gains["C"], gains["M"]], axis=0)
+
+
+def _per_run_gains(
+    runs: Sequence[RunScores], control_means: dict[str, float], scale: dict[str, float]
+) -> dict[str, np.ndarray]:
+    """Relative gain of each run against the control means, times ``scale``.
+
+    The candidate and control means of these gains differ by ``relative_gains``.
+    """
+    values = [_run_values(run) for run in runs]
+    gains = {
+        key: np.array([scale[key] * (mean - value[key]) / mean for value in values])
+        for key, mean in control_means.items()
+    }
+    gains["G"] = _weighted(gains)
+    return gains
+
+
 def relative_gains(
     candidate: Sequence[RunScores],
     control: Sequence[RunScores],
@@ -110,7 +138,7 @@ def relative_gains(
     candidate_long = np.mean([run.long_context_loss for run in candidate])
     control_long = np.mean([run.long_context_loss for run in control])
     gains["L"] = float((control_long - candidate_long) / control_long)
-    gains["G"] = float(np.mean([(gains["K"] + gains["S"]) / 2, gains["C"], gains["M"]]))
+    gains["G"] = float(_weighted(gains))
     return gains
 
 
@@ -121,7 +149,7 @@ def judge(
     samples: int = BOOTSTRAP_SAMPLES,
     seed: int = 0,
 ) -> Judgement:
-    """Compare matched runs with a bootstrap over runs and paired evaluation examples."""
+    """Compare matched runs with Welch t intervals over runs plus a bootstrap over paired evaluation examples."""
     if len(candidate) < 2 or len(control) < 2:
         raise ValueError("the judge needs at least two candidate runs and two control runs")
     runs = [*candidate, *control]
@@ -129,15 +157,33 @@ def judge(
         raise ValueError("all runs must come from the same task copy and scorer version")
     rng = np.random.default_rng(seed)
     example_counts = {task: len(values) for task, values in control[0].gold_bpb.items()}
-    draws = []
-    for _ in range(samples):
-        index = {task: rng.integers(0, count, count) for task, count in example_counts.items()}
-        candidate_draw = [candidate[i] for i in rng.integers(0, len(candidate), len(candidate))]
-        control_draw = [control[i] for i in rng.integers(0, len(control), len(control))]
-        draws.append(relative_gains(candidate_draw, control_draw, index))
+    example_draws = [
+        relative_gains(
+            candidate, control, {task: rng.integers(0, count, count) for task, count in example_counts.items()}
+        )
+        for _ in range(samples)
+    ]
     gains = relative_gains(candidate, control)
-    lower = {key: float(np.percentile([draw[key] for draw in draws], 2.5)) for key in gains}
-    upper = {key: float(np.percentile([draw[key] for draw in draws], 97.5)) for key in gains}
+    keys = (*GROUP_TASKS, "L")
+    control_means = {key: float(np.mean([_run_values(run)[key] for run in control])) for key in keys}
+    candidate_means = {key: float(np.mean([_run_values(run)[key] for run in candidate])) for key in keys}
+    # The control mean is also the denominator of the gain, so its runs count with the factor
+    # candidate mean / control mean (the delta method for a ratio).
+    ratio = {key: candidate_means[key] / control_means[key] for key in keys}
+    candidate_runs = _per_run_gains(candidate, control_means, dict.fromkeys(keys, 1.0))
+    control_runs = _per_run_gains(control, control_means, ratio)
+    lower, upper = {}, {}
+    for key, gain in gains.items():
+        candidate_var = candidate_runs[key].var(ddof=1) / len(candidate)
+        control_var = control_runs[key].var(ddof=1) / len(control)
+        seed_var = candidate_var + control_var
+        if seed_var == 0:
+            raise ValueError(f"the runs have no seed variance for {key}; compare runs with different seeds")
+        # Welch degrees of freedom of the seed part; the example part has many examples, so it adds none.
+        dof = seed_var**2 / (candidate_var**2 / (len(candidate) - 1) + control_var**2 / (len(control) - 1))
+        example_var = np.var([draw[key] for draw in example_draws], ddof=1)
+        half_width = float(student_t.ppf(0.975, dof) * math.sqrt(seed_var + example_var))
+        lower[key], upper[key] = gain - half_width, gain + half_width
     if lower["G"] > 0 and all(lower[group] > -limit for group, limit in HARM_LIMITS.items()):
         decision = Decision.BETTER
     elif upper["G"] < 0 or any(upper[group] < -limit for group, limit in HARM_LIMITS.items()):
