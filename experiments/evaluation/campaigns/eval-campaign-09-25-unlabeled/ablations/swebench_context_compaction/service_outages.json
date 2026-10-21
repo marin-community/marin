@@ -16,14 +16,14 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200028-google-gemma-4-26B-A4B-it-swebench-65k-16k-summary-d3f9500038a04796972503728e1dd59e-65k-16k-summary-d27a7cf16b7352709da157160580ae21/results",
     "started_at": "2026-10-21T08:18:08.299000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:44:32.282329+00:00",
     "evidence": "Iris task events: /benfeuer/eval-20261020-200028-google-gemma-4-26B-A4B-it-swebench-65k-16k-summary-d3f9500038a04796972503728e1dd59e-d06c4e90/inference-365378fa4e1c4c208e08db5d1d071e62/0 WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 18569c61-3186-4a1d-bb1e-55ff9c0cb2aa.",
     "arm": "65k/16k, summary"
   },
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200205-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-65k-16k-summary-98cea9cde5f14cd8b9feda873e8e75b1-65k-16k-summary-d401cf7abca251269cc2a9023dbe47e7/results",
     "started_at": "2026-10-21T08:18:08.299000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:44:31.185577+00:00",
     "evidence": "Iris task events: /benfeuer/eval-20261020-200205-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-65k-16k-summary-98cea9cde5f14cd8b9feda873e8e75b1-b1a2e969/inference-4f372d5558414df5a692a77192709a27/0 WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 18569c61-3186-4a1d-bb1e-55ff9c0cb2aa.",
     "arm": "65k/16k, summary"
   },
@@ -51,7 +51,7 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261021-044722-google-gemma-4-26B-A4B-it-swebench-65k-16k-no-summary-d6118f24d23c46d28d127a62f296889e-harbor-7b6a1231f6c2516fb6b1e535c559bd2b/results",
     "started_at": "2026-10-21T08:14:51.253000+00:00",
-    "finished_at": null,
+    "finished_at": "2026-10-21T08:44:30.544332+00:00",
     "evidence": "Iris task events: /benfeuer/eval-20261021-044722-google-gemma-4-26B-A4B-it-swebench-65k-16k-no-summary-d6118f24d23c46d28d127a62f296889e-8db43b69/inference-94e75dd8a0ed4557ac32751817441c7a/0 WorkloadEvictedDueToPreempted; replacement attempt SchedulingGated. Preemptor workload UID 2594d1d4-319c-4591-95f4-3824adf03fea.",
     "arm": "65k/16k, no summary"
   },
