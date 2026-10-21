@@ -240,8 +240,8 @@
   {
     "results_root": "s3://marin-us-east-02a/marin/evals/20261020-200324-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-32k-8k-summary-99b6b05cd4ab4bb4aef42f8cf76fbb3e-32k-8k-summary-8e3161346e6d56a2a16f9cc120867f13/results",
     "started_at": "2026-10-20T23:37:07.273986Z",
-    "finished_at": null,
-    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200324-8dfc8e0d-4-3d70c9f8e57a6f5c-8857f",
+    "finished_at": "2026-10-21T03:51:48.423227+00:00",
+    "evidence": "Kueue EvictedDueToPreempted; pod-iris-benfeuer-eval-20261020-200324-8dfc8e0d-4-3d70c9f8e57a6f5c-8857f. Recovery probe: configured model alias matched /models; one-token chat completion returned HTTP 200.",
     "arm": "32k/8k, summary"
   },
   {
