@@ -59,7 +59,8 @@ left, `finish` refuses once.
 format example), that has a malformed CSV or JSON file, or whose numeric tolerance also accepts the next
 values at the precision of the reference. Then the evidence of that exact `TaskSpec` (by content digest)
 must satisfy the `Gate`: a correct control that passes, a wrong control that fails, and no wrong control
-that passes; a solver pass rate in the band over the graded answers; few answer-format failures; and
+that passes; a solver pass rate in the band over the graded answers; few answer-format failures (a failed
+answer whose last line passes is one too); and
 adversary rollouts. Last, an independent reviewer solves the task blind, then reads the task, its
 evidence and the blind solution, and decides. Before it decides, it names the reading or the mistake behind each failed solver answer, and the statement that
 this reading breaks, so that a failed answer from another reasonable reading refuses the task as

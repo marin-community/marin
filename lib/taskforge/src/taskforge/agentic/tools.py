@@ -137,6 +137,8 @@ MAX_GUESS_PASSES = 2
 stands out. Random guesses among four options pass three of four times in 5% of tasks."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
+MARKUP = re.compile(r"[*`]")
+"""Markdown emphasis and code marks, which a solver often puts around its answer."""
 
 
 class ToolError(Exception):
@@ -442,14 +444,11 @@ class ToolSession:
                 continue
             passed = _passed(grade)
             answer = _final_answer(rollout)
-            answers.append(
-                {
-                    "passed": passed,
-                    "format_failure": grade.status == Outcome.SUBMISSION_FAILURE,
-                    "answer": _clip(answer, limit=200),
-                }
+            format_failure = grade.status == Outcome.SUBMISSION_FAILURE or (
+                role == "solver" and not passed and await self._passes_as_last_line(spec, answer)
             )
-            if role == "solver" and grade.status == Outcome.SUBMISSION_FAILURE:
+            answers.append({"passed": passed, "format_failure": format_failure, "answer": _clip(answer, limit=200)})
+            if role == "solver" and format_failure:
                 evidence.solver_format_failures += 1
             elif role == "solver":
                 evidence.solver_runs += 1
@@ -473,6 +472,20 @@ class ToolSession:
             "evidence": asdict(evidence),
             **_next_step(evidence, self.config.gate),
         }
+
+    async def _passes_as_last_line(self, spec: TaskRolloutSpec, answer: str) -> bool:
+        """Whether the last line of a failed answer, with no markup, passes. Such an answer is correct in a form
+        that the grader rejects, so it is a format failure: it tells nothing about the skill, as when the answer
+        format rejects an answer."""
+        lines = [line.strip() for line in answer.strip().splitlines() if line.strip()]
+        last = MARKUP.sub("", lines[-1]).strip() if lines else ""
+        if not last or last == answer.strip():
+            return False
+        try:
+            result = await self.tools.solver_engine.run_task(spec, _ReplayModel(last))
+        except RolloutInterrupted:
+            return False
+        return _passed(result.grade)
 
     async def submit(self, path: str) -> ToolCallResult:
         task = await self._load(path)
