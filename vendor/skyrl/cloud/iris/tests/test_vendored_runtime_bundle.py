@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import shutil
 from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
+from iris.cluster.client.bundle import collect_workspace_files
 
 from cloud.iris import runtime_bundle
 
@@ -40,6 +42,37 @@ def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bun
     assert (workspace / "uv.lock").read_bytes() == (source.root / "uv.lock").read_bytes()
     assert (workspace / "chat_templates/model.jinja2").read_text() == "{{ messages }}"
     assert runtime_bundle.validate_bundled_runtime(workspace) == source.digest
+
+
+def test_sibling_harbor_source_is_verified_with_the_skyrl_runtime(bundled_source, tmp_path: Path):
+    source, _ = bundled_source
+    harbor = source.root.parent / "harbor"
+    (harbor / "src/harbor").mkdir(parents=True)
+    (harbor / "src/harbor/agents.py").write_text("pi_capture = True\n")
+    (harbor / "pyproject.toml").write_text('[project]\nname = "harbor"\n')
+    (harbor / "README.md").write_text("Harbor\n")
+    (harbor / "LICENSE").write_text("Apache-2.0\n")
+    documentation = harbor / "src/harbor/environments/apptainer/docs/workflow.md"
+    documentation.parent.mkdir(parents=True)
+    documentation.write_text("Not required at runtime\n")
+    (source.root / "harbor").symlink_to("../harbor", target_is_directory=True)
+
+    updated = runtime_bundle.resolve_launcher_source()
+    assert updated.digest != source.digest
+    with runtime_bundle.build_runtime_bundle(updated.digest) as workspace:
+        bundled = workspace / "harbor/src/harbor/agents.py"
+        assert bundled.read_text() == "pi_capture = True\n"
+        assert runtime_bundle.validate_bundled_runtime(workspace) == updated.digest
+        assert not (workspace / "harbor/src/harbor/environments/apptainer/docs/workflow.md").exists()
+        uploaded = tmp_path / "uploaded"
+        for file in collect_workspace_files(workspace):
+            destination = uploaded / file.relative_to(workspace)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(file, destination)
+        assert runtime_bundle.validate_bundled_runtime(uploaded) == updated.digest
+        bundled.write_text("pi_capture = False\n")
+        with pytest.raises(RuntimeError, match="does not match its recorded identity"):
+            runtime_bundle.validate_bundled_runtime(workspace)
 
 
 def test_changed_bundled_training_config_is_rejected(bundled_source):

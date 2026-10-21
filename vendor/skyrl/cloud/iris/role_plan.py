@@ -18,6 +18,7 @@ from marinskyrl.distillation import (
     compile_distillation_plan,
 )
 from cloud.iris.runtime_environment import RuntimeProfile
+from skyrl_train.rollouts.pi_teacher_binding import PiTeacherBinding
 
 
 class ModelRoleKind(StrEnum):
@@ -397,6 +398,7 @@ def derive_role_plan(config: dict[str, Any]) -> SkyRLRolePlan:
     if inference_engines_required(config):
         claims.append(_rollout_claim(config, values))
     claims.extend(_teacher_claims(config))
+    claims.extend(_pi_teacher_claims(config, values))
     claims.extend(_draft_trainer_claims(config, values))
     return _role_plan(tuple(claims), values)
 
@@ -415,6 +417,54 @@ def _role_plan(claims: tuple[ModelRoleClaim, ...], values: _RolePlanValues) -> S
         policy_mini_batch_size=values.policy_mini_batch_size,
         micro_train_batch_size_per_gpu=values.micro_train_batch_size_per_gpu,
         n_samples_per_prompt=values.n_samples_per_prompt,
+    )
+
+
+def _pi_teacher_claims(config: dict[str, Any], values: _RolePlanValues) -> tuple[ModelRoleClaim, ...]:
+    """Reserve a separate Pi trace teacher bundle, or record its external source."""
+    if _optional_at(config, "scenario.preset") not in ("teacher_demo_pi_base", "teacher_demo_pi_verified_base"):
+        return ()
+    raw = _at(config, "terminal_bench_config.installed_agent.teacher")
+    teacher = PiTeacherBinding.model_validate(raw)
+    if teacher.source == "external_vllm":
+        return (
+            ModelRoleClaim(
+                role_id="teacher:pi_trace",
+                kind=ModelRoleKind.TEACHER,
+                execution=RoleExecution.REMOTE,
+                backend="external_vllm",
+                colocation_group=None,
+                num_nodes=0,
+                gpus_per_node=0,
+                replicas=1,
+                tensor_parallel_size=0,
+                pipeline_parallel_size=0,
+                data_parallel_size=0,
+                expert_parallel_size=0,
+            ),
+        )
+    resources = teacher.resources
+    if resources is None:
+        raise ValueError("SkyRL-managed Pi trace teacher requires GPU resources")
+    width = values.policy_num_gpus_per_node
+    if resources.tensor_parallel_size > width:
+        raise ValueError("Pi trace teacher tensor parallelism exceeds the Iris node GPU width")
+    total_gpus = resources.num_engines * resources.tensor_parallel_size
+    return (
+        ModelRoleClaim(
+            role_id="teacher:pi_trace",
+            kind=ModelRoleKind.TEACHER,
+            execution=RoleExecution.LOCAL,
+            backend="vllm",
+            colocation_group="teacher:pi_trace",
+            num_nodes=(total_gpus + width - 1) // width,
+            gpus_per_node=width,
+            replicas=resources.num_engines,
+            tensor_parallel_size=resources.tensor_parallel_size,
+            pipeline_parallel_size=1,
+            data_parallel_size=1,
+            expert_parallel_size=1,
+        ),
     )
 
 

@@ -98,3 +98,19 @@ def test_daytona_preflight_follows_task_backend(entrypoint, terminal_bench_data,
     )
 
     assert launcher._rl_config_uses_daytona(config) is expected
+
+
+@pytest.mark.parametrize("backend,expected", [("daytona", True), ("docker", False)])
+def test_direct_pi_tasks_on_standard_entrypoint_request_daytona_credentials(backend, expected):
+    config = OmegaConf.create(
+        {
+            "runtime": {"entrypoint": "skyrl_train.entrypoints.main_base"},
+            "skyrl": {
+                "scenario": {"preset": "teacher_demo_pi_base"},
+                "data": {"train_data": ["s3://bucket/direct-tasks.parquet"], "terminal_bench_data": []},
+                "terminal_bench_config": {"harbor": {"environment_type": backend}},
+            },
+        }
+    )
+
+    assert launcher._rl_config_uses_daytona(config) is expected

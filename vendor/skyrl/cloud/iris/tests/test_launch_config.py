@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+import json
 from typing import Any
 
 import pytest
@@ -14,6 +15,9 @@ from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
 from cloud.iris import training_driver
+from cloud.iris.launch import _prepare_config
+from cloud.iris.task_runtime import _runtime_namespace
+from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -381,6 +385,83 @@ def test_installed_agent_artifacts_follow_launch_attempt_and_survive_reload(tmp_
     assert destination == "s3://runs/smoke/attempts/trajectories/installed-agents"
     OmegaConf.save(resolved, path)
     assert load_launch_config(path).skyrl.terminal_bench_config.installed_agent.output_path == destination
+
+
+@pytest.mark.parametrize(
+    ("recipe", "nodes"),
+    [
+        ("pi_verifier_grpo_smoke", 1),
+        ("pi_teacher_trace_smoke", 2),
+    ],
+)
+def test_pi_smoke_recipe_survives_staged_model_and_role_plan(tmp_path: Path, monkeypatch, recipe, nodes) -> None:
+    monkeypatch.setenv("PI_SMOKE_TASK_DATA", "/tmp/pi-tasks.parquet")
+    monkeypatch.setenv("PI_SMOKE_EVAL_TASK_DATA", "/tmp/pi-eval-tasks.parquet")
+    monkeypatch.setenv("PI_SMOKE_OUTPUT", "s3://runs/smoke/trajectories")
+    monkeypatch.setenv("PI_SMOKE_STUDENT_LOCAL_PATH", "/tmp/models/qwen")
+    raw = _raw_config()
+    raw["iris"]["allocation"]["num_nodes"] = nodes
+    raw["skyrl"] = yaml.safe_load((Path(__file__).resolve().parents[1] / f"configs/{recipe}.yaml").read_text())
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    resolved = load_launch_config(path)
+
+    # Keep the true vLLM window, trainer/agent input allowance, and per-turn
+    # generation cap together; a larger output cap alone cannot fit Pi's prompt.
+    assert raw["skyrl"]["context_budget"]["request_window_tokens"] == 8192
+    assert raw["skyrl"]["context_budget"]["max_new_tokens_per_turn"] == 2048
+    assert resolved.skyrl.generator.engine_init_kwargs.max_model_len == 8192
+    assert resolved.skyrl.generator.max_input_length == 6144
+    assert resolved.skyrl.trainer.max_prompt_length == 6144
+    assert resolved.skyrl.generator.sampling_params.max_generate_length == 2048
+    assert resolved.skyrl.trainer.policy.model.path == "/tmp/models/qwen"
+    assert resolved.skyrl.terminal_bench_config.installed_agent.output_path.startswith("s3://runs/smoke/")
+    assert resolved.inputs.data_kind == "tasks"
+    assert resolved.skyrl.terminal_bench_config.harbor.environment_type == "daytona"
+    assert resolved.skyrl.terminal_bench_config.harbor.daytona_api_key_env == "DAYTONA_API_KEY"
+    harbor = HarborTaskSettings.from_config(resolved.skyrl.terminal_bench_config)
+    assert harbor.environment.kwargs["api_key_env"] == "DAYTONA_API_KEY"
+    monkeypatch.delenv("DAYTONA_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="Missing Daytona credential environment variable"):
+        harbor.machine_factory()
+    assert resolved.skyrl.data.train_data == ["/tmp/pi-tasks.parquet"]
+    assert not resolved.skyrl.data.terminal_bench_data
+    if recipe == "pi_verifier_grpo_smoke":
+        assert resolved.skyrl.terminal_bench_config.installed_agent.agent.get("model_name") is None
+        assert resolved.skyrl.generator.n_samples_per_prompt == 4
+        assert resolved.skyrl.trainer.train_batch_size == 4
+    else:
+        assert resolved.skyrl.terminal_bench_config.installed_agent.teacher.student_model == "/tmp/models/qwen"
+        assert resolved.skyrl.terminal_bench_config.harbor.verifier_disable is True
+        assert resolved.skyrl.trainer.eval_interval == -1
+
+
+def test_remote_pi_task_pack_requires_typed_staging_input(tmp_path: Path, monkeypatch) -> None:
+    uri = "s3://marin-us-east-02a/MarinFold/pi-smoke/direct-v2/tasks.parquet"
+    monkeypatch.setenv("PI_SMOKE_TASK_DATA", uri)
+    monkeypatch.setenv("PI_SMOKE_OUTPUT", "s3://runs/smoke/trajectories")
+    monkeypatch.setenv("PI_SMOKE_STUDENT_LOCAL_PATH", "/tmp/models/qwen")
+    raw = _raw_config()
+    raw["iris"]["allocation"]["num_nodes"] = 2
+    raw["skyrl"] = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "configs/pi_teacher_trace_smoke.yaml").read_text()
+    )
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="node-local extraction"):
+        load_launch_config(path)
+
+    raw["inputs"]["train_data"] = [uri]
+    path.write_text(yaml.safe_dump(raw))
+    resolved = load_launch_config(path)
+    assert resolved.inputs.train_data == [uri]
+    assert resolved.skyrl.data.train_data == [uri]
+    prepared = _prepare_config(resolved)
+    assert prepared.inputs.train_data == [uri]
+    runtime = _runtime_namespace(prepared)
+    assert runtime.data_kind == "tasks"
+    assert json.loads(runtime.data_sources_json) == [uri]
 
 
 def test_null_nonfinite_limit_in_launch_fails_on_first_invalid_step(tmp_path: Path) -> None:

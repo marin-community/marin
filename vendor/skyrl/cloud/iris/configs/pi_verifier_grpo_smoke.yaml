@@ -1,0 +1,94 @@
+# One-optimizer-step GPU integration gate. The three data/output paths must be
+# co-located with the selected Iris zone; see docs/pi-scenario-smokes.md.
+entrypoint: standard
+config_groups:
+  terminal_bench_config: terminal_bench
+scenario:
+  preset: verifier_grpo_base
+context_budget:
+  request_window_tokens: 8192
+  max_new_tokens_per_turn: 2048
+  max_turns: 4
+terminal_bench:
+  harbor:
+    environment_type: daytona
+    daytona_api_key_env: DAYTONA_API_KEY
+    override_timeout_sec: 600
+    verifier_override_timeout_sec: 120
+    n_concurrent_trials: 2
+    max_retries: 0
+    enable_reward_shaping: false
+    default_error_treatment: passthrough
+  installed_agent:
+    agent:
+      name: pi
+      kwargs:
+        thinking_format: qwen-chat-template
+    setup_timeout: 120
+    run_timeout: 600
+    cleanup_timeout: 60
+    service_startup_timeout: 30
+    service_shutdown_timeout: 30
+trainer:
+  strategy: megatron
+  flash_attn: false
+  use_sample_packing: false
+  gradient_checkpointing: true
+  algorithm:
+    use_kl_loss: false
+  epochs: 1
+  max_steps: 1
+  update_epochs_per_batch: 1
+  train_batch_size: 4
+  policy_mini_batch_size: 4
+  eval_batch_size: 4
+  micro_forward_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: 1
+  eval_before_train: false
+  eval_interval: -1
+  ckpt_interval: 1
+  resume_mode: none
+  logger: console
+  policy:
+    model:
+      path: Qwen/Qwen3-0.6B
+    optimizer_config:
+      lr: 1.0e-6
+      max_grad_norm: 1.0
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      optimizer_checkpoint_sharding_type: dp_reshardable
+  placement:
+    colocate_all: true
+    policy_num_nodes: 1
+    policy_num_gpus_per_node: 8
+generator:
+  # Four independent physical trials per task improve the chance of a mixed-reward group.
+  n_samples_per_prompt: 4
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  inference_engine_tensor_parallel_size: 1
+  num_inference_engines: 8
+  gpu_memory_utilization: 0.7
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  trajectory_retention:
+    output_path: ${oc.env:PI_SMOKE_OUTPUT}
+  sampling_params:
+    temperature: 1.0
+    top_p: 1.0
+  engine_init_kwargs:
+    served_model_name: Qwen3-0.6B
+    enable_auto_tool_choice: true
+    tool_call_parser: hermes
+data:
+  kind: tasks
+  train_data:
+    - ${oc.env:PI_SMOKE_TASK_DATA}
+  val_data: []
+extra_env:
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True

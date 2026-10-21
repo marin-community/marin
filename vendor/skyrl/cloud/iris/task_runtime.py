@@ -454,12 +454,18 @@ def prepare_draft_model(
     return SpeculatorModelConfig(source_uri=source_uri, source_identity=manifest.identity)
 
 
-def materialize_data_sources(data_sources_json: str) -> None:
-    """Copy immutable train and validation data locators onto this allocated node."""
+def materialize_data_sources(data_sources_json: str, *, data_kind: str = "tasks") -> None:
+    """Stage typed artifacts and packed data locators on this allocated node."""
     sources = json.loads(data_sources_json)
     if not isinstance(sources, list):
         raise ValueError("--data-sources-json must contain a JSON list")
+    from cloud.iris.rl_data import resolve_rl_train_data
+
     for value in sources:
+        if isinstance(value, str):
+            paths = resolve_rl_train_data([value], kind=data_kind)
+            _log(f"Dataset staged on rank {_rank()}/{_num_tasks()}: {value} -> {paths[0]}")
+            continue
         source = ArtifactSource(uri=value["uri"], local_path=value["local_path"], identity=value["identity"])
         artifact = materialize(source)
         _log(
@@ -2056,6 +2062,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         task_env=task_env,
         terminal_bench_data=_json_list(skyrl.get("data", {}).get("terminal_bench_data", [])),
         data_sources_json=_json_list(data_sources) if data_sources else "",
+        data_kind=str(config.inputs.data_kind),
         prestage_model=prestage_model,
         model_revision=str(skyrl.get("trainer", {}).get("policy", {}).get("model", {}).get("revision") or ""),
         prestage_teacher_models=() if checkpoint_export else _local_teacher_models(skyrl),
@@ -2195,7 +2202,7 @@ def main() -> None:
     # Without this, only rank-0 has the extracted tasks and the rollout workers die
     # with FileNotFoundError on task.toml. See stage_task_data docstring.
     if args.data_sources_json:
-        materialize_data_sources(args.data_sources_json)
+        materialize_data_sources(args.data_sources_json, data_kind=args.data_kind)
     if args.terminal_bench_data:
         stage_task_data(args.terminal_bench_data, role="terminal-bench sidechannel")
     policy_model = prepare_policy_model(args)
