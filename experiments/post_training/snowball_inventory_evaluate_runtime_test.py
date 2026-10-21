@@ -289,7 +289,10 @@ def test_initializer_admission_rejects_wrong_model_or_revision(tmp_path):
 
 
 @pytest.mark.manual
-def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_scored_rows(tmp_path, monkeypatch):
+@pytest.mark.parametrize("terminal_separator", ["/", "//"])
+def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_scored_rows(
+    tmp_path, monkeypatch, terminal_separator
+):
     from marinskyrl.saved_answers import admit_answer, save_answer  # noqa: PLC0415
     from omegaconf import OmegaConf  # noqa: PLC0415 - optional frozen runtime dependency
     from rolloutengine.harness.prefill import prefill_prompt  # noqa: PLC0415
@@ -360,7 +363,7 @@ def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_sco
         {
             "artifacts": {
                 "export_root": str(export),
-                "terminal_manifest_uri": str(tmp_path / "score" / "terminal.json"),
+                "terminal_manifest_uri": str(tmp_path / "score") + terminal_separator + "terminal.json",
             },
             "inputs": {"validation_data": [{"uri": str(panel), "relative_path": "validation.parquet"}]},
             "skyrl": {"environment": {"task_sessions": {}}, "trajectory_runner": {"eval_saved_answers_root": saved}},
