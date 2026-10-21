@@ -69,7 +69,7 @@ class _TileConfig(NamedTuple):
     """Most 64-column tiles one program walks; it takes the largest count that divides ``H / 64``."""
 
 
-# Best of lib/levanter/scripts/bench/bench_mxfp8_quantizer.py's sweep on one B200 at the hero chunk
+# Best of a sweep over block_m, num_warps and tiles per program on one B200 at the hero chunk
 # (C = 302,336, H = 3072): 0.82 ms end to end, against 0.83 ms for 4 tiles per program, 1.17 ms for
 # one, and 5.1 ms for the XLA composition.
 _DEFAULT_TILE = _TileConfig(block_m=128, num_warps=4, max_tiles_per_program=8)
