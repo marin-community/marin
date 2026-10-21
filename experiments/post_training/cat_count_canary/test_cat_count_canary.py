@@ -154,6 +154,7 @@ def test_remote_result_round_trips_at_the_run_output_prefix(tmp_path, monkeypatc
     )
     monkeypatch.setattr("experiments.post_training.cat_count_canary.launcher.run_skyrl", lambda _config: result)
     run = build_run(version="2026.10.01", preset="gate", export=export)
+    assert run.path().startswith("s3://marin-us-east-08a/marin/rl-canaries/cat-count/gpu/runs/")
     config = run.build_config(
         StepContext.for_run(output_path=str(output), prefix=str(tmp_path), runtime_args=run.runtime_args, deps=run.deps)
     )

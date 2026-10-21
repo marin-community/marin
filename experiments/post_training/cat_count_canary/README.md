@@ -79,8 +79,8 @@ The coordinator resolves the pinned model and data dependencies and submits
 the training child. Checkpoints and HF export are enabled only with
 `--checkpoint` and `--export`; export also enables its prerequisite checkpoint.
 Both are off by default and in CI.
-The default model reads the immutable rl-canaries Qwen snapshot, and outputs
-resolve below `s3://marin-us-east-02a/marin/rl-canaries/cat-count/gpu/runs/`.
+The default model reads the immutable rl-canaries Qwen snapshot in `marin-us-east-02a`.
+Outputs resolve below `s3://marin-us-east-08a/marin/rl-canaries/cat-count/gpu/runs/`.
 The coordinator timeout covers the whole run; `--job-timeout-seconds` bounds
 only the training child. Monitor queue
 time as part of a separate submission-to-completion deadline. Verify the
