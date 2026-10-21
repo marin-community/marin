@@ -756,19 +756,23 @@ def _peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: bo
     return job_pb2.PEER_STATUS_ASSIGNED
 
 
-def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int) -> str:
+def _federated_pending_reason(
+    cluster: str, handoff_state: int | None, peer_status: int, peer_reachable: bool | None
+) -> str:
     """Pending reason for a federated job, which the local scheduler never sees.
 
     A handed-off job's tasks live on the peer and are excluded from the local
     fold, so the local scheduling diagnostic is meaningless for it. Derive the
     message from the handoff posture (single source of truth): waiting in the
-    federation queue for a peer with free capacity, awaiting the peer's acceptance,
-    awaiting its first status report, or pending on the peer once it has reported
-    tasks. A queued job names a peer only when it is pinned to one.
+    federation queue for a reachable peer with free capacity, awaiting the peer's
+    acceptance, awaiting its first status report, or pending on the peer once it
+    has reported tasks. A queued job names a peer only when it is pinned to one.
     """
     if handoff_state == int(HandoffState.QUEUED_HANDOFF):
         if not cluster:
             return "Queued for a federation peer to report free capacity"
+        if peer_reachable is False:
+            return f"Peer {cluster} is unreachable; queued until it reconnects"
         return f"Queued for peer {cluster} to report free capacity"
     if peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING:
         return f"Awaiting acceptance by peer {cluster}"
@@ -1933,7 +1937,9 @@ class ControllerServiceImpl:
         peer_status = _peer_status(job.cluster, handoff_state, summary is not None)
         pending_reason = ""
         if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
-            pending_reason = _federated_pending_reason(job.cluster, handoff_state, peer_status)
+            pending_reason = _federated_pending_reason(
+                job.cluster, handoff_state, peer_status, self._controller.federation.peer_reachable(job.cluster)
+            )
         elif job.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
@@ -2060,7 +2066,9 @@ class ControllerServiceImpl:
         peer_status = _peer_status(j.cluster, handoff_state, task_summary is not None)
         pending_reason = j.error or ""
         if j.state == job_pb2.JOB_STATE_PENDING and is_federated(j.cluster):
-            pending_reason = _federated_pending_reason(j.cluster, handoff_state, peer_status)
+            pending_reason = _federated_pending_reason(
+                j.cluster, handoff_state, peer_status, self._controller.federation.peer_reachable(j.cluster)
+            )
         elif j.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"

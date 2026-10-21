@@ -171,6 +171,11 @@ class FederationManager:
         """Whether ``peer_id`` names a configured federation peer."""
         return peer_id in self._peers
 
+    def peer_reachable(self, peer_id: str) -> bool | None:
+        """The latest heartbeat verdict, or None for an unknown peer."""
+        peer = self._peers.get(peer_id)
+        return peer.heartbeat().reachable if peer is not None else None
+
     def peer_controller_address(self, peer_id: str) -> str | None:
         """The configured controller base URL of ``peer_id``, or None when it is not a peer."""
         peer = self._peers.get(peer_id)
@@ -476,11 +481,21 @@ class FederationManager:
     def _build_summary(self, peer: FederationPeer) -> controller_pb2.Controller.PeerSummary:
         heartbeat = peer.heartbeat()
         active = self._store.active_federated_job_count(peer.peer_id) if self._store is not None else 0
+        backends: Sequence[controller_pb2.Controller.BackendSummary] = heartbeat.backends
+        if not heartbeat.reachable:
+            # Preserve last-known shapes without publishing stale free capacity.
+            stale_backends = []
+            for backend in heartbeat.backends:
+                stale_backend = controller_pb2.Controller.BackendSummary()
+                stale_backend.CopyFrom(backend)
+                stale_backend.ClearField("availability")
+                stale_backends.append(stale_backend)
+            backends = stale_backends
         return controller_pb2.Controller.PeerSummary(
             peer_id=peer.peer_id,
             controller_address=peer.controller_address,
             reachable=heartbeat.reachable,
             last_contact_ms=heartbeat.last_contact_ms,
             active_federated_jobs=active,
-            backends=heartbeat.backends,
+            backends=backends,
         )

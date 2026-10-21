@@ -61,6 +61,20 @@ def test_peer_outage_preserves_last_known_state_until_recovery_sync(federation: 
     assert federation.parent_job(job).state == job_pb2.JOB_STATE_SUCCEEDED
 
 
+def test_unreachable_pinned_queue_reports_peer_outage_and_recovers(federation: FederationJourney) -> None:
+    job = federation.submit("queued")
+    assert federation.parent_job(job).pending_reason == f"Queued for peer {PEER_ID} to report free capacity"
+
+    federation.set_peer_reachable(False)
+    expected = f"Peer {PEER_ID} is unreachable; queued until it reconnects"
+    assert federation.parent_job(job).pending_reason == expected
+    (listed,) = [status for status in federation.parent.jobs() if status.job_id == job.wire_id]
+    assert listed.pending_reason == expected
+
+    federation.set_peer_reachable(True)
+    assert federation.parent_job(job).pending_reason == f"Queued for peer {PEER_ID} to report free capacity"
+
+
 def test_unreachable_handoff_reports_awaiting_peer_and_recovers(federation: FederationJourney) -> None:
     job = federation.submit("delayed")
     federation.promote()

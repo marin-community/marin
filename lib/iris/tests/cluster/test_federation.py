@@ -173,6 +173,26 @@ def _availability_backend(backend_id: str, version: int) -> controller_pb2.Contr
     return backend
 
 
+def test_list_peers_hides_stale_capacity_when_peer_is_unreachable():
+    connection = _StubConnection((_availability_backend("gpu", AVAILABILITY_METRIC_VERSION),))
+    peer = _peer("cw", connection)
+    manager = FederationManager([peer], threads=get_thread_container())
+    peer.probe()
+    assert manager.peer_summaries()[0].backends[0].availability.amounts["h100"] == 8
+
+    connection.fail = True
+    peer.probe()
+    (summary,) = manager.peer_summaries()
+    assert not summary.reachable
+    assert not summary.backends[0].HasField("availability")
+    assert summary.backends[0].advertised_attributes[WellKnownAttribute.DEVICE_VARIANT].values == ["h100"]
+    assert peer.heartbeat().backends[0].availability.amounts["h100"] == 8
+
+    connection.fail = False
+    peer.probe()
+    assert manager.peer_summaries()[0].backends[0].availability.amounts["h100"] == 8
+
+
 def test_availability_at_a_known_version_is_read_in_full():
     peer = _peer("cw", _StubConnection((_availability_backend("gpu", AVAILABILITY_METRIC_VERSION),)))
     manager = FederationManager([peer], threads=get_thread_container())
