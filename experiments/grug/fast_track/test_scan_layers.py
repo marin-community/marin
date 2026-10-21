@@ -113,3 +113,27 @@ def test_released_weight_grads_match_the_barriered_scan():
     assert released_loss == loss
     for want, got in zip(grads, released_grads, strict=True):
         np.testing.assert_array_equal(got, want)
+
+
+@pytest.mark.timeout(400)
+@pytest.mark.parametrize("fused_source_grads", [False, True])
+def test_static_boundaries_match_the_traced_boundaries(fused_source_grads):
+    # Blocks of 6 layers in units of 4: the traced boundary falls in different unit layers from unit to unit; the
+    # static schedule scans 12-layer units instead, so the boundaries sit at unit layers 0 and 6 in every unit.
+    overrides = dict(
+        num_layers=24, attn_res_num_blocks=4, scan_layers=True, attn_res_fused_source_grads=fused_source_grads
+    )
+    loss, grads, metrics = _loss_grads_metrics(**overrides)
+    static_loss, static_grads, static_metrics = _loss_grads_metrics(attn_res_static_boundaries=True, **overrides)
+    _, exact_grads, _ = _loss_grads_metrics(
+        jnp.float64, num_layers=24, attn_res_num_blocks=4, scan_layers=True, attn_res_static_boundaries=True
+    )
+    np.testing.assert_allclose(static_loss, loss, rtol=1e-6)
+    # XLA fuses the two programs differently, so float32 gradients are compared by their error against float64.
+    for traced, static, exact in zip(grads, static_grads, exact_grads, strict=True):
+        traced_err = np.max(np.abs(traced - exact))
+        assert np.max(np.abs(static - exact)) <= 2 * traced_err + 1e-6 * np.max(np.abs(exact)) + 1e-12
+    gate_logs = sorted(k for k in metrics if k.startswith("train/attn_res/w_g"))
+    assert gate_logs
+    for key in gate_logs:
+        np.testing.assert_allclose(np.asarray(static_metrics[key]), np.asarray(metrics[key]), rtol=1e-5, atol=1e-7)

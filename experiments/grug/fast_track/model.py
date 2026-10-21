@@ -940,6 +940,12 @@ class GrugModelConfig:
     """``scan_layers`` backward: update the AttnRes source cotangents with one Pallas kernel per layer instead of
     XLA's fusion, which re-reads every token's gate cotangent once per source (``attn_res_source_grads``); the
     kernel skips the history slots no block has filled yet (zero weight)."""
+    attn_res_static_boundaries: bool = False
+    """``scan_layers``: make each scanned unit ``lcm(global_every, AttnRes block size)`` layers so every unit layer is
+    a block boundary in every unit or in none, and resolve the boundary at trace time. Without it the boundary is a
+    traced predicate and its ``lax.cond``s (the block logits, their backward, the fused source-grad roll) each copy
+    the predicate to the host and block it (192 per step at hero shape), so the host never runs ahead of the GPU.
+    Same math."""
     attn_res_fused_block_mix: bool = False
     """``scan_layers`` with ``attn_res_two_phase``: the attention and MLP gates' phase-1 mixes of the completed
     blocks (and their weight gradients) as Pallas kernels that read only the filled history slots, once for both
@@ -4871,11 +4877,13 @@ class _AttnResHistory(NamedTuple):
 
 
 class _UnitLayer(NamedTuple):
-    """Layer ``j`` of the scanned layer unit: slice ``index`` of its mixer kind's stack (``is_kda``)."""
+    """Layer ``j`` of the scanned layer unit: slice ``index`` of its mixer kind's stack (``is_kda``). ``boundary``
+    (``attn_res_static_boundaries``): whether it is an AttnRes block boundary in every unit; None: traced."""
 
     is_kda: bool
     index: int
     use_long: bool
+    boundary: bool | None = None
 
 
 class _LayerScan(NamedTuple):
@@ -4897,12 +4905,23 @@ def _layer_scan(cfg: GrugModelConfig, schedule: _BlockSchedule) -> _LayerScan:
     """The scanned prefix of ``scan_layers``: the leading run of ``global_every``-layer units whose layers
     match unit 0's mixer kinds and masks and are not tail layers (whose stacks differ in shape)."""
     unit, num_units = _scan_units(cfg)
+    if cfg.attn_res_static_boundaries:
+        static = []
+        for j, layer in enumerate(unit):
+            kinds = {schedule.is_boundary(len(unit) * u + j) for u in range(num_units)}
+            if len(kinds) != 1:
+                raise ValueError(f"attn_res_static_boundaries: unit layer {j} is a boundary in only some units")
+            static.append(layer._replace(boundary=kinds.pop()))
+        unit = tuple(static)
     return _LayerScan(unit, num_units, schedule)
 
 
 def _scan_units(cfg: GrugModelConfig) -> tuple[tuple[_UnitLayer, ...], int]:
     """``_layer_scan``'s unit and unit count, without the AttnRes schedule."""
     unit_size = cfg.global_every
+    if cfg.attn_res_static_boundaries:
+        # The block size as in Transformer's AttnRes schedule.
+        unit_size = math.lcm(unit_size, max(1, cfg.num_layers // cfg.attn_res_num_blocks))
     kda, tail = set(_kda_layer_indices(cfg)), set(_tail_layers(cfg))
 
     def signature(i: int) -> tuple[bool, bool, bool]:
@@ -4934,8 +4953,10 @@ def _scan_history_layer(
     route_key: jax.Array | None,
     probes: tuple[jax.Array, ...] | None = None,
     saved_routed: jax.Array | None = None,
+    static_boundary: bool | None = None,
 ) -> tuple[_AttnResHistory, dict[str, jax.Array], tuple[jax.Array, ...]]:
-    """``_attn_res_layer`` on the fixed-shape history, at a traced ``layer_index``.
+    """``_attn_res_layer`` on the fixed-shape history, at a traced ``layer_index``. ``static_boundary``: whether the
+    layer is a block boundary, known at trace time (None: from ``layer_index``).
 
     A block boundary writes the partial into its slot with its logits against every query and resets the
     partial to zero; off a boundary the slot write is a no-op. Unfilled sources get ``-inf`` logits (zero
@@ -4949,8 +4970,12 @@ def _scan_history_layer(
     num_sources = history.sources.shape[0]
     block = layer_index // schedule.seg_size
     boundary, slot = _roll_slot(schedule, layer_index)
+    if static_boundary is not None:
+        boundary = static_boundary
 
     def roll(buffer: jax.Array, new: jax.Array) -> jax.Array:
+        if static_boundary is not None:
+            return jax.lax.dynamic_update_index_in_dim(buffer, new, slot, axis=0) if static_boundary else buffer
         old = jax.lax.dynamic_index_in_dim(buffer, slot, axis=0, keepdims=False)
         return jax.lax.dynamic_update_index_in_dim(buffer, jnp.where(boundary, new, old), slot, axis=0)
 
@@ -4958,6 +4983,14 @@ def _scan_history_layer(
     plain_sum = layer.attn.cfg.attn_res_plain_sum
     if plain_sum:
         logits = history.logits
+    elif static_boundary is not None:
+        logits = (
+            jax.lax.dynamic_update_index_in_dim(
+                history.logits, _attn_res_source_logits(history.partial, queries, eps), slot, axis=0
+            )
+            if static_boundary
+            else history.logits
+        )
     else:
         # Only a boundary writes the new block's logits (off one the slot write is a no-op), so only a boundary
         # computes them: 8 of the hero's 48 layers.
@@ -4968,7 +5001,10 @@ def _scan_history_layer(
             ),
             lambda: history.logits,
         )
-    partial = jnp.where(boundary, jnp.zeros_like(history.partial), history.partial)
+    if static_boundary is not None:
+        partial = jnp.zeros_like(history.partial) if static_boundary else history.partial
+    else:
+        partial = jnp.where(boundary, jnp.zeros_like(history.partial), history.partial)
     num_valid = schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
     valid = jnp.arange(num_sources) < num_valid
     gate_weights: list[jax.Array] = []
@@ -5079,6 +5115,7 @@ def _accumulate_source_grads(
     schedule: _BlockSchedule,
     layer_index: jax.Array,
     fused: bool = False,
+    static_boundary: bool | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     """Add one layer's gate cotangents to the history's source cotangent: ``weights[n] * d_mix`` per gate;
     ``fused`` (``attn_res_fused_source_grads``) runs the stack update as one Pallas kernel.
@@ -5086,6 +5123,8 @@ def _accumulate_source_grads(
     At a block boundary the slot was written from the incoming partial, so its cotangent moves onto
     ``d_partial`` and the slot's (overwritten) previous value gets none."""
     boundary, slot = _roll_slot(schedule, layer_index)
+    if static_boundary is not None:
+        boundary = static_boundary
     if fused:
         block = layer_index // schedule.seg_size
         num_valid = schedule.num_extra + jnp.minimum(block + 1, schedule.block_cap)
@@ -5098,6 +5137,8 @@ def _accumulate_source_grads(
             cleared = jax.lax.dynamic_update_index_in_dim(updated, jnp.zeros_like(d_slot), slot, axis=0)
             return cleared, d_partial + d_slot.astype(d_partial.dtype)
 
+        if static_boundary is not None:
+            return roll_back(updated, d_partial) if static_boundary else (updated, d_partial)
         return jax.lax.cond(boundary, roll_back, lambda u, p: (u, p), updated, d_partial)
     d_slot = jax.lax.dynamic_index_in_dim(d_sources, slot, axis=0, keepdims=False).astype(jnp.float32)
     for weights, d_mix in zip(gate_weights, d_mixes, strict=True):
@@ -5329,6 +5370,7 @@ def _run_unit_layer(
         args.route_key,
         probes,
         saved_routed,
+        static_boundary=unit_layer.boundary,
     )
 
 
@@ -5461,6 +5503,7 @@ def _scan_layers_bwd(residuals, grad_out, perturbed, diff, args: _ScanArgs):
                     plan.schedule,
                     layer_index,
                     fused=layer_static.attn.cfg.attn_res_fused_source_grads,
+                    static_boundary=unit_layer.boundary,
                 )
                 d_history = _AttnResHistory(d_sources, d_logits, d_partial)
                 if args.release_weight_grads and pending is None:
