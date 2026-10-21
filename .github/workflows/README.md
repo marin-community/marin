@@ -108,11 +108,10 @@ delta is only `Deslop` commits, which closes the review-then-deslop loop.
 
 ## SkyRL runtime checks
 
-`Marin - Unit` selects `skyrl-wheel` for SkyRL source or CI tooling changes.
-It checks the nested project's lock, Marin library imports and
-constructor keywords, and built-wheel assets against the current source in an
-isolated environment through `infra/ci/check_skyrl.py`. GPU smoke tests run
-separately; see `docs/dev-guide/skyrl.md`.
+`Marin - Unit` selects `skyrl-wheel` for SkyRL, its editable Marin and Harbor
+dependencies, or CI tooling changes. It checks the nested lock and runs the
+packaging, launcher, and verifier tests in SkyRL's CPU environment. GPU smoke
+tests run separately; see `docs/dev-guide/skyrl.md`.
 
 `Marin - SkyRL Nightly` runs OPD, Grug/Megatron and asynchronous GPU CatCount
 at 09:00 UTC. The Grug CUTLASS case runs weekly or by manual selection.

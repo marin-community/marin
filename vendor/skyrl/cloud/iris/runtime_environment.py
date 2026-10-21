@@ -6,7 +6,7 @@ import shlex
 from enum import StrEnum
 
 
-MARINSKYRL_TASK_ROOT = "/app"
+MARINSKYRL_TASK_ROOT = "/app/vendor/skyrl"
 MARINSKYRL_ACTIVATION_FILE = f"{MARINSKYRL_TASK_ROOT}/.iris-runtime-env"
 MARINSKYRL_BOOTSTRAP_SCRIPT = "cloud/iris/bootstrap_runtime.sh"
 CHECKPOINT_EXPORT_ENTRYPOINT = "skyrl_train.entrypoints.checkpoint_export"
@@ -44,7 +44,7 @@ def runtime_profile_for_strategy(
 
 
 def task_setup_script(profile: RuntimeProfile) -> str:
-    """Install the bundled project's frozen dependency profile."""
+    """Install SkyRL's frozen profile and editable dependencies from the Marin workspace."""
     checkout = MARINSKYRL_TASK_ROOT
     activation_file = MARINSKYRL_ACTIVATION_FILE
     bootstrap_script = f"{checkout}/{MARINSKYRL_BOOTSTRAP_SCRIPT}"

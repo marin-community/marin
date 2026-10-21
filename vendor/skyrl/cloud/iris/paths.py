@@ -1,8 +1,7 @@
 """Path resolution helpers for the Iris RL launcher.
 
-``PROJECT_ROOT`` is the vendored SkyRL project root. The launcher syncs this tree
-to ``/app`` inside the task container, so config paths are resolved relative to it
-both on the launch host and in the pod.
+``PROJECT_ROOT`` is the vendored SkyRL project root. Iris syncs the Marin
+workspace to ``/app``, placing this project at ``/app/vendor/skyrl``.
 """
 
 from __future__ import annotations

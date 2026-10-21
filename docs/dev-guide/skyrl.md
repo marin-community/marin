@@ -10,15 +10,16 @@ Marin invokes the nested `marinskyrl` executable in an isolated child process:
 uv run --isolated --project vendor/skyrl --frozen --no-group dev marinskyrl --help
 ```
 
-The launcher clears the parent's Python environment selection. SkyRL uses
-published Marin libraries inside its own environment; Marin calls SkyRL
-through the executable. See [launching RL experiments](../references/rl-launching.md)
+The launcher clears the parent's Python environment selection. SkyRL installs
+Marin libraries and Harbor as editable dependencies from this checkout, using
+the paths in `vendor/skyrl/pyproject.toml`. Marin calls SkyRL through the executable.
+See [launching RL experiments](../references/rl-launching.md)
 for the artifact entry point, launch document, and resource configuration.
 
 ## Runtime and dependencies
 
-The launcher copies the checked-out runtime files, assets, and independent
-lock into an Iris workspace. Workers install the bundled project in editable
+Iris bundles the Marin repository through its standard workspace submission.
+Workers run SkyRL from `/app/vendor/skyrl` and install the project in editable
 mode using the `megatron`, `vllm`, and `telemetry` extras from the nested lock.
 `cloud/iris/bootstrap_runtime.sh` installs these extras for training. Marin artifacts and SkyRL run
 records use `rigging.provenance` to record the checkout and launch context
@@ -28,17 +29,14 @@ runtime changes unless checkpoint compatibility has been established.
 The runtime supports Megatron training. Marin's curriculum arms use Megatron
 for both Qwen and Snowball.
 
-Local editable Marin packages are not wired into the runtime bundle. To
-advance published Marin libraries within SkyRL's declared version constraints:
+Marin library edits are available to SkyRL without publishing wheels. When
+changing dependency declarations, refresh SkyRL's independent lock:
 
 ```bash
-uv run config/update-external.py --skyrl-marin-packages
+uv lock --project vendor/skyrl
 ```
 
-The updater resolves the nested lock and checks imported Marin symbols and
-explicit constructor keywords in the nested environment. A failed check
-restores the previous lock. Edit `vendor/skyrl/pyproject.toml` first when
-changing an explicit version constraint. Run the
+Run the
 [train, resume, and evaluation smoke](#train-resume-and-evaluate-through-marin)
 to check runtime behavior after dependency changes.
 
@@ -47,15 +45,14 @@ The pinned Ray release has no Intel macOS wheel.
 
 ## CI checks
 
-The `skyrl-wheel` unit lane checks the independent lock, isolated Marin import
-contract, and built wheel against the current source:
+The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
+launch configuration, checkpoint export, and verifier tests in SkyRL's CPU
+environment. Changes to its editable dependencies also select this lane.
+Check the lock locally with:
 
 ```bash
-uv run --no-project python -m infra.ci.check_skyrl
+uv lock --project vendor/skyrl --check
 ```
-
-It also exercises source bundles, launch configuration, checkpoint export,
-and verifier assets in the isolated CPU environment.
 
 `Marin - SkyRL Nightly` runs on-policy distillation, Grug/Megatron training and
 serving checks, and asynchronous GPU CatCount at 09:00 UTC from the checked-out

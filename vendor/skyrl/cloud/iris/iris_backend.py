@@ -33,6 +33,7 @@ from iris.cluster.types import CoschedulingConfig, ResourceSpec, gpu_device
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
 from omegaconf import DictConfig, OmegaConf
+from rigging.config_discovery import find_project_root
 
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
 from cloud.iris.launch import LaunchOutcome
@@ -52,7 +53,7 @@ from marinskyrl.resource_locator import (
     join_resource_path,
 )
 from skyrl_train.rollouts.harbor_settings import EnvironmentType
-from cloud.iris.runtime_bundle import build_runtime_bundle
+from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.ray_ports import RayPort
 from marinskyrl.environment_contract import (
     DEBUG_ARTIFACT_DIR_ENV,
@@ -327,10 +328,10 @@ class IrisBackend:
         args = _iris_submission_state(config_path, config)
         if config.run.submission == SubmissionMode.PREPARE:
             raise ValueError("Prepare mode validates a launch without submitting it")
-        with (
-            build_runtime_bundle() as workspace,
-            contextlib.redirect_stdout(sys.stderr),
-        ):
+        workspace = find_project_root(PROJECT_ROOT)
+        if workspace is None:
+            raise RuntimeError("SkyRL launches require a Marin checkout")
+        with contextlib.redirect_stdout(sys.stderr):
             return launch(args, workspace)
 
     def export_terminal_policy(self, config_path: Path) -> None:
@@ -542,9 +543,6 @@ def resolve_node_resource_requests(
 
 RL_PYTHON = "python"
 SKYRL_HOME = MARINSKYRL_TASK_ROOT
-# Iris synchronizes the small controller bundle to /app. The setup phase checks
-# out the same immutable MarinSkyRL commit and installs its locked training
-# environment under /app/marinskyrl.
 APP_DIR = "/app"
 
 
@@ -787,7 +785,7 @@ def _build_task_shell(
     if not flashqla_enabled:
         gdn_branch = f"exec {ctrl}"
     bash = (
-        f"set -e; {spill_preflight}cd {APP_DIR}; "
+        f"set -e; {spill_preflight}cd {SKYRL_HOME}; "
         f"export SKYRL_HOME={shlex.quote(SKYRL_HOME)}; "
         f"source {shlex.quote(MARINSKYRL_ACTIVATION_FILE)}; "
         f"export PYTHONPATH={shlex.quote(pythonpath)}:${{PYTHONPATH:-}}; "
