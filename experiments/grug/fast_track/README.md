@@ -441,6 +441,6 @@ For the confirmation, use new seeds and set the seed count before the runs.
 For a group with a relative seed SD `s` for one run, an expected gain `g`, and a harm limit `h`,
 about `16 s² / (g + h)²` seeds for each arm give 80% power for that group (normal approximation).
 On the d512 web arena, `s` was 2.3% for knowledge, 0.9% for commonsense, 1.1% for code, 0.5% for math, and 0.4% for long context.
-Thus knowledge sets the count: for a 0.9% knowledge gain, use about 24 seeds for each arm, and for no knowledge gain, about 85.
+Thus knowledge sets the count: for a 0.9% knowledge gain, use about 24 seeds for each arm, and for no knowledge gain, about 86.
 More evaluation examples do not help, because the knowledge variance comes from the model seed. SciQ has the largest seed SD.
 The intervals do not include the effect of a search over many candidates, so do not accept a candidate from the search runs alone.
