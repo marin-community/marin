@@ -3,10 +3,10 @@
 
 """Apply the Hero startup overlay to a clean, pinned JAXPP installation."""
 
-import gzip
 import hashlib
 import importlib.metadata
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -28,20 +28,27 @@ RUNTIME_PACKAGES = (
 )
 
 
+def apply_overlay(site_packages: Path, patch: bytes) -> None:
+    """Apply a source-tree patch to the installed JAXPP package."""
+    # Strip a/src so the patch paths address jaxpp inside site-packages.
+    command = ["git", "apply", "-p2", "-"]
+    # Ignore an enclosing checkout; Git otherwise silently skips these paths.
+    environment = {**os.environ, "GIT_CEILING_DIRECTORIES": str(site_packages.parent)}
+    subprocess.run([*command, "--check"], input=patch, cwd=site_packages, env=environment, check=True)
+    subprocess.run(command, input=patch, cwd=site_packages, env=environment, check=True)
+
+
 def main():
     distribution = importlib.metadata.distribution("jaxpp")
     direct_url = distribution.read_text("direct_url.json")
     assert direct_url is not None, "Install JAXPP from the pinned Git source before applying the overlay"
     source = json.loads(direct_url)
     assert source["vcs_info"]["commit_id"] == JAXPP_COMMIT, source
-    overlay = Path(__file__).with_name("jaxpp_host_startup.patch.gz")
-    patch = gzip.decompress(overlay.read_bytes())
+    overlay = Path(__file__).with_name("jaxpp_host_startup.patch")
+    patch = overlay.read_bytes()
     assert hashlib.sha256(patch).hexdigest() == OVERLAY_SHA256, overlay
     site_packages = Path(distribution.locate_file("jaxpp")).parent
-    # Strip a/src so the patch paths address jaxpp inside site-packages.
-    command = ["git", "apply", "-p2", "-"]
-    subprocess.run([*command, "--check"], input=patch, cwd=site_packages, check=True)
-    subprocess.run(command, input=patch, cwd=site_packages, check=True)
+    apply_overlay(site_packages, patch)
     print(
         json.dumps(
             {

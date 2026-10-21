@@ -23,12 +23,12 @@ older `a1e3ab278eeb05bb645db641dd3e7dabedf90dbb` source above. The later pin add
 installer recovery, neutral run names and an argument parser that rejects
 AdamW with the main recipe; it preserves the valid MuonH configuration and
 runtime overlay. No H100 hardware run was repeated for these changes.
-The executable is published on the PR branch. Use:
+Use the PR branch for the commands below; it includes later installer fixes
+and has not been rerun on GPUs:
 
 ```bash
 git clone --branch codex/hero-gb200-pipeline https://github.com/marin-community/marin.git
 cd marin
-git checkout 0da04acccf7b0842319a8668d71ccc697a7b10ec
 git rev-parse HEAD
 ```
 
@@ -50,9 +50,9 @@ The measured adapter runtime uses JAX/JAXlib and stock x86 CUDA 13 PJRT/plugin
 0.11.1, FA4 4.0.0b28, Cutlass DSL 4.6.2, Quack 0.6.4, and CUDA Torch
 2.11.0+cu128. JAXPP is pinned to
 `328f75a80cecf22c7cc030a82d8941d3c1e220b6` with the checked-in
-`experiments/grug/moe_hero_pipeline/runtime/jaxpp_host_startup.patch.gz` overlay
+`experiments/grug/moe_hero_pipeline/runtime/jaxpp_host_startup.patch` overlay
 for forward-offload scheduling, pinned-host inference, and disposable startup.
-Its decompressed SHA256 is
+Its SHA256 is
 `d987c16ece399fe5eeb69d413703d549135635f19a57dc4b6c60cc0d1ea4b1a7`.
 This JAXPP package declares JAX <=0.11.0; the 0.11.1 combination is an explicit
 validation gate. A stock JAXPP installation does not supply those overlays.

@@ -283,7 +283,7 @@ def _optimizer_and_contract(
 
 
 def _real_data_loader(
-    args: argparse.Namespace, model_config: GrugModelConfig, batch_size: int, flops_per_example: float, mesh: Mesh
+    args: argparse.Namespace, model_config: GrugModelConfig, batch_size: int, mesh: Mesh
 ) -> DataLoader[GrugLmExample]:
     set_jagged_array_read_cache_bytes(HERO_TENSORSTORE_CACHE_BYTES)
     # Resolve the adopted input only; this loader creates no output artifacts.
@@ -297,7 +297,6 @@ def _real_data_loader(
         schedule_steps=args.data_schedule_steps,
         batch_size=batch_size,
         max_seq_len=model_config.max_seq_len,
-        experiment_flops=flops_per_example * batch_size * args.steps,
     )
     batch_schedule = BatchSchedule(batch_size)
     dataset = build_train_dataset(
@@ -315,8 +314,7 @@ def _real_data_loader(
         simulated_epoching=False,
         component_lengths=component_lengths,
     )
-    train_loader = build_train_loader(dataset, batch_schedule=batch_schedule, mesh=mesh)
-    return train_loader
+    return build_train_loader(dataset, batch_schedule=batch_schedule, mesh=mesh)
 
 
 def main() -> None:
@@ -418,7 +416,7 @@ def main() -> None:
         _log("optimizer_state_offloaded", memory_kind=_HOST_MEMORY_KIND)
     train_loader = None
     if args.real_data:
-        train_loader = _real_data_loader(args, model_config, batch_size, flops_per_example, mesh)
+        train_loader = _real_data_loader(args, model_config, batch_size, mesh)
         with closing(train_loader.iter_from_step(0)) as sample_iterator:
             batch = next(sample_iterator)
         del sample_iterator

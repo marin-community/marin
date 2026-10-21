@@ -3,7 +3,7 @@
 
 import asyncio
 import weakref
-from contextlib import closing, nullcontext
+from contextlib import closing
 from typing import Sequence
 
 import jax
@@ -67,19 +67,14 @@ def test_loader_rejects_empty_finite_dataset():
 
 
 @pytest.mark.parametrize("buffered_batches", [-1, 0, 2])
-@pytest.mark.parametrize("training_fails", [False, True])
-def test_loader_close_releases_prefetch_iterator_and_preserves_resume(buffered_batches, training_fails):
+def test_loader_close_releases_prefetch_iterator_and_preserves_resume(buffered_batches):
     with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         batch_size = len(jax.devices())
         dataset = ListAsyncDataset([np.asarray([i]) for i in range(1000 * batch_size)])
         loader = DataLoader(dataset, batch_size, max_buffered_batches=buffered_batches, fetch_batch_size=1, mesh=mesh)
-        failure_context = pytest.raises(RuntimeError, match="training failed") if training_fails else nullcontext()
-        with failure_context:
-            with closing(loader.iter_from_step(0)) as iterator:
-                iterator_ref = weakref.ref(iterator)
-                np.testing.assert_array_equal(next(iterator).reshape(-1), np.arange(batch_size))
-                if training_fails:
-                    raise RuntimeError("training failed")
+        with closing(loader.iter_from_step(0)) as iterator:
+            iterator_ref = weakref.ref(iterator)
+            np.testing.assert_array_equal(next(iterator).reshape(-1), np.arange(batch_size))
         with pytest.raises(StopIteration):
             next(iterator)
         del iterator

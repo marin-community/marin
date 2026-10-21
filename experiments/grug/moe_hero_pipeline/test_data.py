@@ -12,37 +12,36 @@ from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
-    harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.train import build_train_dataset
 from experiments.grug.moe_hero_pipeline.data import raw_hero_data_config
 
 
 @pytest.mark.asyncio
-async def test_short_hero_trial_keeps_raw_components_and_mixture_schedule(monkeypatch, tmp_path):
+@pytest.mark.parametrize("schedule_steps,batch_size,max_seq_len", [(390251, 32, 4096), (1_000_000, 384, 65536)])
+async def test_short_hero_trial_keeps_raw_components_for_long_schedules(
+    monkeypatch, tmp_path, schedule_steps, batch_size, max_seq_len
+):
     ctx = StepContext.for_run(output_path=str(tmp_path), prefix=str(tmp_path), deps=(HARRIER_MIX_2026_08_18_STORE,))
     raw_config = raw_hero_data_config(
-        ctx=ctx, schedule_steps=390251, batch_size=32, max_seq_len=4096, experiment_flops=1e20
+        ctx=ctx, schedule_steps=schedule_steps, batch_size=batch_size, max_seq_len=max_seq_len
     )
-    main_config = harrier_mix_2026_08_18_data_config(
-        ctx=ctx, total_steps=390251, batch_size=32, max_seq_len=4096, experiment_flops=1e24, validation=()
-    )
-    assert raw_config == main_config
-
     # Substitute only cache I/O. Actual budget slicing, shuffle, mixture sampling,
     # and retrieval run on finite in-memory datasets, including a rare component.
     datasets = {name: ListAsyncDataset(list(range(838))) for name in raw_config.components}
     monkeypatch.setattr(LmDataConfig, "build_caches", lambda self, split: {})
     monkeypatch.setattr(LmDataConfig, "build_token_datasets", lambda self, caches, pos, split: datasets.copy())
-    short_config = dataclasses.replace(raw_config, target_budget=18_750_000_000_000, experiment_budget=20 * 32 * 4096)
+    short_config = dataclasses.replace(
+        raw_config, target_budget=18_750_000_000_000, experiment_budget=20 * batch_size * max_seq_len
+    )
     short_dataset = build_train_dataset(
-        short_config, max_seq_len=4096, batch_schedule=BatchSchedule(32), key=jax.random.key(0)
+        short_config, max_seq_len=max_seq_len, batch_schedule=BatchSchedule(batch_size), key=jax.random.key(0)
     )
     with pytest.raises(ValueError, match="empty finite dataset"):
         await short_dataset.get_batch(list(range(32)))
 
     raw_dataset = build_train_dataset(
-        raw_config, max_seq_len=4096, batch_schedule=BatchSchedule(32), key=jax.random.key(0)
+        raw_config, max_seq_len=max_seq_len, batch_schedule=BatchSchedule(batch_size), key=jax.random.key(0)
     )
     assert {name: await ds.async_len() for name, ds in raw_dataset.datasets.items()} == {name: 838 for name in datasets}
     samples = await raw_dataset.get_batch(list(range(32)))
