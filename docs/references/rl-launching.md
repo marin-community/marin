@@ -53,13 +53,22 @@ workloads use separate Daytona credentials.
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
-The runtime executes tasks through `TaskSession` and sends token requests to model engines.
-Harbor tasks use the Shellbox session. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
+The nested runtime uses its pinned RolloutEngine version for task execution and model requests.
+Harbor tasks use Shellbox. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 
-The launcher uses the frozen project in `config/external/MarinSkyRL` in an isolated environment.
-This project supplies the pinned SkyRL revision, published Rigging package, and platform wheel sources.
-The launch document records that revision in `runtime.launcher_commit`.
+The launcher runs `uv run --isolated --project vendor/skyrl --frozen --no-group dev
+marinskyrl` in a child process. SkyRL has its own lock and is excluded from Marin's
+workspace. The child discards the parent's Python environment selection. SkyRL
+may depend on Marin packages inside its own environment; Marin calls SkyRL only
+through the executable.
+
+The launch document records a hash of the current runtime files, assets, and
+independent lock in `runtime.source_digest`. The isolated executable computes
+it, so ordinary vendor edits change the identity without restaging migration
+provenance. The launcher bundles these files for Iris and workers verify their
+hashes. Workers install the bundled project in editable mode
+with the frozen Megatron/vLLM profile. They do not fetch the fork or require Git.
 Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
 
 ```text
@@ -147,13 +156,15 @@ That total must equal `num_nodes * gpus_per_node`. For example, four 8-GPU polic
 node-sized rollout engines require 64 GPUs. Leaving rollout DP at one describes only 36 GPUs and is
 rejected during graph construction.
 
-The preflight also requires positive dimensions, checks batch divisibility, and rejects a runtime
-profile whose installed backend contradicts `trainer.strategy`. The `fully_async` entry point has a
-stricter batch contract: `train_batch_size` must equal `policy_mini_batch_size`.
+The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
+forward microbatch size to equal the training microbatch size. It checks local engine placement,
+rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
+setting. For every launcher, preflight checks policy and reference Megatron parallelism against
+the GPUs assigned to each role.
 
 ## Artifact and runtime boundaries
 
-Identity-bearing inputs belong in `SkyRLSpec`: the pinned MarinSkyRL runtime, model and tokenizer,
+Identity-bearing inputs belong in `SkyRLSpec`: the vendored SkyRL runtime identity, model and tokenizer,
 data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
@@ -164,7 +175,7 @@ temporary-storage helper for checkpoints and trajectories so paths have a bounde
 not repeat a source bucket prefix.
 
 The temporary checkpoint root is derived from the RL artifact name and version, not only from the
-runtime commit. When `SkyRLRuntime.commit` changes, use a fresh RL artifact version. Reusing the old
+runtime source digest. When `SkyRLRuntime.source_digest` changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across a runtime repin only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.
@@ -175,9 +186,10 @@ Before submitting a large run:
 
 1. Print the plan with the intended immutable version and selection options.
 2. Check the resolved role plan and topology, especially engine count and DP/TP/PP/EP.
+   Check that explicit forward and training microbatch sizes agree.
    For `fully_async`, confirm the train batch and policy mini-batch are equal.
-3. Confirm the pinned MarinSkyRL commit supports the chosen strategy, CUDA stack, model, and vLLM
-   geometry. If the commit changed, use a fresh RL artifact version unless its checkpoints are
+3. Confirm the vendored runtime supports the chosen strategy, CUDA stack, model, and vLLM
+   geometry. If its identity changed, use a fresh RL artifact version unless its checkpoints are
    explicitly compatible.
 4. Confirm request and response token budgets match the dataset and chat template.
 5. Check coordinator and worker CPU, host memory, disk, concurrency, timeout, and credentials.

@@ -6,15 +6,15 @@
 For each selected capability and sample, the driver sends GLM the messages from
 ``program_prompt.program_messages`` and receives a Python program. The driver runs the program as a
 child process in the driver's own Python environment, passing it the path for the TaskSpec it
-writes. A failure from the model or the program goes into that item's record alone, so the run
-always writes its outputs. The driver holds everything in memory until every item finishes, then
+writes. A failure from the model or the program goes into that workpiece's record alone, so the run
+always writes its outputs. The driver holds everything in memory until every workpiece finishes, then
 writes:
 
-* ``OUTPUT_DIR/<item id>/`` with ``request.json``, ``completions.json`` (content, reasoning, usage
+* ``OUTPUT_DIR/<workpiece id>/`` with ``request.json``, ``completions.json`` (content, reasoning, usage
   and every HTTP attempt), ``program.py``, ``run.json`` and, when the output parses, ``task.json``.
-* ``OUTPUT_DIR/summary.json``, mapping each item id to ``task`` or to its failure.
+* ``OUTPUT_DIR/summary.json``, mapping each workpiece id to ``task`` or to its failure.
 
-Item ids are ``<capability id>--<sample>``.
+Workpiece ids are ``<capability id>--<sample>``.
 
 ``--pool`` selects the environment variable for the GLM bearer token: ``GLM_BULK_TOKEN`` for
 ``bulk``, ``GLM_HIGH_TOKEN`` for ``high``. The token in turn selects the router pool serving each
@@ -114,9 +114,9 @@ class ProgramRun:
 
 @dataclass(frozen=True)
 class GeneratedTask:
-    """An item's request and completions, with the program and its run when GLM submitted a valid program."""
+    """A workpiece's request and completions, with the program and its run when GLM submitted a valid program."""
 
-    item_id: str
+    workpiece_id: str
     messages: list[Message]
     completions: tuple[Completion, ...]
     source: str | None
@@ -166,13 +166,13 @@ async def run_program(source: str, task_id: str, timeout: float) -> ProgramRun:
 
 
 async def generate_task(
-    client: ModelClient, idea: CapabilityIdea, item_id: str, policy: LLMPolicy, program_timeout: float
+    client: ModelClient, idea: CapabilityIdea, workpiece_id: str, policy: LLMPolicy, program_timeout: float
 ) -> GeneratedTask:
     """Ask GLM for a program for ``idea`` and run it.
 
     An invalid submission, a rejected request, an exhausted context, an unavailable model and a failed
-    program all end up as this item's ``failure``. The function returns that failure in place of
-    raising it, so the other items proceed and the run still writes its outputs.
+    program all end up as this workpiece's ``failure``. The function returns that failure in place of
+    raising it, so the other workpieces proceed and the run still writes its outputs.
     """
     messages = program_messages(idea)
     # The library appends the field instruction as the final user turn; the record keeps what was sent.
@@ -180,60 +180,60 @@ async def generate_task(
     try:
         result = await client.complete_structured(messages, ProgramSubmission, policy)
     except StructuredOutputError as error:
-        return GeneratedTask(item_id, request, error.completions, None, None, str(error))
+        return GeneratedTask(workpiece_id, request, error.completions, None, None, str(error))
     except (ModelRequestRejected, ModelUnavailable) as error:
-        return GeneratedTask(item_id, request, (), None, None, str(error))
-    run = await run_program(result.value.source, item_id, program_timeout)
-    return GeneratedTask(item_id, request, result.completions, result.value.source, run, run.failure)
+        return GeneratedTask(workpiece_id, request, (), None, None, str(error))
+    run = await run_program(result.value.source, workpiece_id, program_timeout)
+    return GeneratedTask(workpiece_id, request, result.completions, result.value.source, run, run.failure)
 
 
 async def generate_tasks(
     client: ModelClient,
-    items: Sequence[tuple[str, CapabilityIdea]],
+    workpieces: Sequence[tuple[str, CapabilityIdea]],
     policy: LLMPolicy,
     program_timeout: float,
     concurrency: int,
 ) -> list[GeneratedTask]:
-    """Generate every ``(item id, idea)`` item, at most ``concurrency`` at a time."""
+    """Generate every ``(workpiece id, idea)`` workpiece, at most ``concurrency`` at a time."""
     slots = asyncio.Semaphore(concurrency)
 
-    async def limited(item_id: str, idea: CapabilityIdea) -> GeneratedTask:
+    async def limited(workpiece_id: str, idea: CapabilityIdea) -> GeneratedTask:
         async with slots:
-            generated = await generate_task(client, idea, item_id, policy, program_timeout)
-        logger.info("%s: %s", item_id, generated.failure or TASK_STATUS)
+            generated = await generate_task(client, idea, workpiece_id, policy, program_timeout)
+        logger.info("%s: %s", workpiece_id, generated.failure or TASK_STATUS)
         return generated
 
-    return await asyncio.gather(*(limited(item_id, idea) for item_id, idea in items))
+    return await asyncio.gather(*(limited(workpiece_id, idea) for workpiece_id, idea in workpieces))
 
 
-def task_items(ideas: Mapping[str, CapabilityIdea], samples: int) -> list[tuple[str, CapabilityIdea]]:
-    """Build ``samples`` items per idea with ids ``<capability id>--<sample>``.
+def task_workpieces(ideas: Mapping[str, CapabilityIdea], samples: int) -> list[tuple[str, CapabilityIdea]]:
+    """Build ``samples`` workpieces per idea with ids ``<capability id>--<sample>``.
 
     Raises ValueError for an id unsafe as a file name.
     """
-    items = [(f"{idea_id}--{sample:02d}", idea) for idea_id, idea in ideas.items() for sample in range(samples)]
-    for item_id, _ in items:
-        if FILE_SAFE_ID.match(item_id) is None:
-            raise ValueError(f"item id {item_id!r} is not file-safe")
-    return items
+    workpieces = [(f"{idea_id}--{sample:02d}", idea) for idea_id, idea in ideas.items() for sample in range(samples)]
+    for workpiece_id, _ in workpieces:
+        if FILE_SAFE_ID.match(workpiece_id) is None:
+            raise ValueError(f"workpiece id {workpiece_id!r} is not file-safe")
+    return workpieces
 
 
 def write_outputs(output_dir: Path, generated: Sequence[GeneratedTask]) -> None:
-    """Write every item's files and ``summary.json`` into ``output_dir``, which must not exist yet."""
+    """Write every workpiece's files and ``summary.json`` into ``output_dir``, which must not exist yet."""
     output_dir.mkdir(parents=True)
-    for item in generated:
-        item_dir = output_dir / item.item_id
-        item_dir.mkdir()
-        (item_dir / "request.json").write_text(json.dumps(item.messages, indent=2))
-        (item_dir / "completions.json").write_text(pretty_json(item.completions))
-        if item.source is not None:
-            (item_dir / PROGRAM_FILE).write_text(item.source)
-        if item.run is not None:
-            record = {key: value for key, value in asdict(item.run).items() if key != "task"}
-            (item_dir / "run.json").write_text(json.dumps(record, indent=2))
-            if item.run.task is not None:
-                (item_dir / TASK_FILE).write_text(item.run.task.model_dump_json(indent=2))
-    summary = {item.item_id: item.failure or TASK_STATUS for item in generated}
+    for workpiece in generated:
+        workpiece_dir = output_dir / workpiece.workpiece_id
+        workpiece_dir.mkdir()
+        (workpiece_dir / "request.json").write_text(json.dumps(workpiece.messages, indent=2))
+        (workpiece_dir / "completions.json").write_text(pretty_json(workpiece.completions))
+        if workpiece.source is not None:
+            (workpiece_dir / PROGRAM_FILE).write_text(workpiece.source)
+        if workpiece.run is not None:
+            record = {key: value for key, value in asdict(workpiece.run).items() if key != "task"}
+            (workpiece_dir / "run.json").write_text(json.dumps(record, indent=2))
+            if workpiece.run.task is not None:
+                (workpiece_dir / TASK_FILE).write_text(workpiece.run.task.model_dump_json(indent=2))
+    summary = {workpiece.workpiece_id: workpiece.failure or TASK_STATUS for workpiece in generated}
     (output_dir / SUMMARY_FILE).write_text(json.dumps(summary, indent=2))
 
 
@@ -283,12 +283,12 @@ def selected_ideas(catalog: Path, capability_ids: Sequence[str]) -> dict[str, Ca
 
 async def _generate(
     source: EndpointSource,
-    items: Sequence[tuple[str, CapabilityIdea]],
+    workpieces: Sequence[tuple[str, CapabilityIdea]],
     program_timeout: float,
     concurrency: int,
 ) -> list[GeneratedTask]:
     async with GlmClient(source, GLM_PROVIDER) as client:
-        return await generate_tasks(client, items, LLMPolicy(), program_timeout, concurrency)
+        return await generate_tasks(client, workpieces, LLMPolicy(), program_timeout, concurrency)
 
 
 @click.command()
@@ -323,7 +323,7 @@ async def _generate(
 )
 @click.option("--program-timeout", type=float, default=300.0, show_default=True, help="Seconds each program may run.")
 @click.option(
-    "--concurrency", type=click.IntRange(min=1), default=16, show_default=True, help="Items generated at once."
+    "--concurrency", type=click.IntRange(min=1), default=16, show_default=True, help="Workpieces generated at once."
 )
 def main(
     output_dir: Path,
@@ -346,8 +346,8 @@ def main(
     source = endpoint_source(base_url, relay_job, Pool(pool))
     if output_dir.exists():
         raise click.BadParameter(f"{output_dir} already exists", param_hint="'--output-dir'")
-    items = task_items(selected_ideas(catalog or example_catalog_path(), capabilities), samples)
-    generated = asyncio.run(_generate(source, items, program_timeout, concurrency))
+    workpieces = task_workpieces(selected_ideas(catalog or example_catalog_path(), capabilities), samples)
+    generated = asyncio.run(_generate(source, workpieces, program_timeout, concurrency))
     write_outputs(output_dir, generated)
     click.echo(output_dir / SUMMARY_FILE)
 

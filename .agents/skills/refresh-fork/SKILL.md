@@ -85,7 +85,7 @@ git -C <fork> remote set-head upstream -a                # so upstream/HEAD reso
 
 ## Select the base
 
-- `base_select = upstream_main` (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm-gpu`): the base is the
+- `base_select = upstream_main` (`vllm-gpu`): the base is the
   tip of the `upstream` default branch. These pins rebase onto upstream `main`; there is no
   release to gate on. `vllm-gpu` is the only unit that rebases the shared vLLM `main` source.
 - `base_select = latest_release` (`tpu-inference`): use GitHub Releases of the
@@ -187,7 +187,7 @@ need the follow-up described below.
   record the exact existing main-line source and its upstream base without
   creating or promoting another branch. The section-by-section mechanics are
   in `docs/vllm.md`.
-- `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
+- `pin = isolated_project`: no current fork uses this pin kind. The uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
   the uv source at `main-next`, then run
@@ -235,32 +235,6 @@ Run the descriptor's `e2e` before opening the PR:
   `marin-community/vllm:.github/workflows/marin-gpu-release.yaml` (`vllm`,
   `tpu-inference`) and `tests/cluster/vllm/test_snowball_backend_parity.py`
   (`vllm-gpu`) — are documented with their exact commands in `docs/vllm.md`.
-
-- **`experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml`** (`evalchemy`) and
-  **`experiments/evaluation/configs/harbor/aime-smoke.yaml`** (`harbor`) — one eval
-  runner drives both; only the config source differs. Submit a bounded run and
-  confirm it completes with metrics and no fork import/build/runtime traceback:
-
-```sh
-uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 \
-  --evalchemy-config experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml   # evalchemy
-uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 \
-  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml          # harbor
-```
-
-  `--dry-run` resolves the model, backend, and task plan — a wiring pre-check, not
-  fork validation. Depending on the eval it may not import the fork at all, or import
-  it without exercising it, so a green dry-run says nothing about whether the new pin
-  runs. Only the live run above validates the refreshed fork.
-
-- **`experiments/post_training/iceball_micro.py`** (`MarinSkyRL`) — the micro
-  post-training e2e. `--version` is required and `--run` builds the handles
-  (without it the command only prints the plan); confirm the terminal stage
-  completes:
-
-```sh
-uv run python -m experiments.post_training.iceball_micro --stage evaluation --version dev --run
-```
 
 When an e2e fails, rerun the same workload against Marin's current pins on the old
 fork stack, same target and priority. Fix only failures that pass on the old stack

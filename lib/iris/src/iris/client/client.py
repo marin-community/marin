@@ -798,8 +798,10 @@ class IrisClient:
                 an IAP-fronted cluster, the IAP OIDC ID token. None sends neither
                 (a loopback-trusted tunnel).
             extra_bundle_includes: Glob patterns (relative to ``workspace``) for
-                gitignored files the caller needs in the task bundle — e.g. a package's
-                built frontend ``dist``. Bundled in addition to the git-tracked files.
+                required files excluded by default, such as validation tests or a
+                gitignored frontend ``dist``. Overrides ``[tool.iris.bundle].exclude``
+                in the workspace pyproject. Explicit ``bundle_exclude`` patterns and
+                exclusions for credentials, caches, and local builds still apply.
             bundle_exclude: Regex matched against each candidate bundle path
                 (POSIX, relative to ``workspace``); matching paths are dropped from
                 the bundle. Trims otherwise-tracked files that a job does not need,

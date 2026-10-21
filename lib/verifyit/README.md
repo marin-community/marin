@@ -27,6 +27,7 @@ process exit after a verdict has been written.
 | `math` | expression equality through math-verify |
 | `numeric` | numeric equality with explicit tolerances |
 | `exact` | normalized string equality |
+| `structure_closure` | continuation of a pinned prefix matching the first completed outer reference region |
 | `json-schema` | JSON, YAML, or TOML checked against JSON Schema |
 | `xml-elements` | required XML elements and attributes |
 | `csv-columns` | required CSV header columns |
@@ -38,6 +39,9 @@ process exit after a verdict has been written.
 | `gotest` | `go test -json` events |
 | `judge` | reference-answer or checklist rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
+
+`structure_closure` preserves trailing-output diagnostics separately from its first-region reward.
+Callers with generation stop metadata remove configured terminal markers before candidate grading.
 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
 `PytestSpec.candidate_modules` names modules the task asks the candidate to implement.

@@ -3,8 +3,11 @@
 
 """Tests for workspace bundling."""
 
+import io
 import os
 import re
+import subprocess
+import zipfile
 from unittest.mock import patch
 
 import pytest
@@ -37,6 +40,88 @@ def test_collect_falls_back_when_git_unavailable(workspace):
     assert "pyproject.toml" in rel
     assert "src/main.py" in rel
     assert not any("__pycache__" in r for r in rel)
+
+
+@pytest.mark.parametrize("git_repo", [True, False], ids=["tracked", "without-git"])
+def test_zip_excludes_development_artifacts_and_keeps_runtime_files(workspace, git_repo):
+    runtime = {
+        "pyproject.toml",
+        "uv.lock",
+        "README.md",
+        "LICENSE",
+        "src/main.py",
+        "lib/marin/src/marin/inference/serve_dashboard.html",
+        "lib/marin/src/marin/resources/config.json",
+        "lib/iris/rust/Cargo.toml",
+        "lib/iris/rust/Cargo.lock",
+        "lib/iris/rust/src/lib.rs",
+        "lib/iris/src/iris/rpc/job_pb2.py",
+    }
+    development = {
+        "docs/guide.md",
+        "docs/design/diagram.png",
+        "lib/levanter/docs/figures/bitwise_repro_curve.png",
+        "tests/snapshots/web/inputs/dbrx.html",
+        "lib/iris/tests/e2e/gang_jax_smoke_workload.py",
+        "tests/test_june_snowball_model.py",
+        "lib/levanter/tests/test_snowball.py",
+        "lib/iris/tests/cluster/test_controller.py",
+        "tests/blocked.py",
+        "gha-creds-test.json",
+        ".agents/projects/report.md",
+        ".github/workflows/ci.yaml",
+        "AGENTS.md",
+        "lib/iris/OPS.md",
+        "lib/iris/config/examples/tpu-demo.ipynb",
+        "lib/iris/rust/target/release/libiris_native.so",
+        "lib/dupekit/rust/target/release/libdupekit_native.so",
+        "lib/finelog/rust/target/debug/finelog-migrate",
+        "lib/finelog/rust/target/release/libfinelog_server.so",
+        "lib/finelog/rust/target/debug/examples/planner_probe",
+        "lib/finelog/rust/target/debug/finelog-server",
+        "src/local_extension.so",
+        "infra/marina/journeys-out/tasktrove/sources.png",
+    }
+    for relative in runtime | development:
+        path = workspace / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if relative != "pyproject.toml":
+            path.write_text("fixture")
+
+    if git_repo:
+        subprocess.run(["git", "init", "--quiet"], cwd=workspace, check=True)
+        (workspace / ".gitignore").write_text("*_pb2.py\n")
+        subprocess.run(["git", "add", "--force", "."], cwd=workspace, check=True)
+        subprocess.run(["git", "rm", "--cached", "lib/iris/src/iris/rpc/job_pb2.py"], cwd=workspace, check=True)
+
+    with zipfile.ZipFile(io.BytesIO(create_workspace_zip(workspace))) as bundle:
+        bundled = set(bundle.namelist())
+    assert runtime <= bundled
+    assert development.isdisjoint(bundled)
+
+    selected_tests = {
+        "lib/iris/tests/e2e/gang_jax_smoke_workload.py",
+        "tests/test_june_snowball_model.py",
+        "lib/levanter/tests/test_snowball.py",
+    }
+    with zipfile.ZipFile(
+        io.BytesIO(
+            create_workspace_zip(
+                workspace,
+                extra_includes=[
+                    "tests/*.py",
+                    "lib/levanter/tests/*.py",
+                    "lib/iris/tests/e2e/*.py",
+                    "lib/finelog/rust/target/**/*",
+                    "gha-creds-*.json",
+                ],
+                exclude=re.compile(r"^tests/blocked\.py$"),
+            )
+        )
+    ) as bundle:
+        bundled = set(bundle.namelist())
+    assert runtime | selected_tests <= bundled
+    assert (development - selected_tests).isdisjoint(bundled)
 
 
 def test_collect_includes_generated_proto_files(workspace):
@@ -94,6 +179,61 @@ def test_extra_exclude_is_matched_literally_not_verbose(workspace):
     rel = {str(f.relative_to(workspace)) for f in files}
     assert "mydir/drop.txt" not in rel
     assert "my dir/keep.txt" in rel
+
+
+@pytest.mark.parametrize("use_git", [True, False], ids=["git-checkout", "unpacked-workspace"])
+def test_repository_excludes_keep_runtime_and_allow_explicit_validation_files(workspace, use_git):
+    (workspace / "pyproject.toml").write_text(
+        '[project]\nname = "test"\n[tool.iris.bundle]\n'
+        'include = ["vendor/harbor/src/**/*", "vendor/harbor/tests/**/*.py"]\n'
+        'exclude = ["^vendor/harbor/tests(/|$)"]\n'
+    )
+    runtime_paths = {
+        "vendor/harbor/pyproject.toml",
+        "vendor/harbor/uv.lock",
+        "vendor/harbor/UPSTREAM.toml",
+        "vendor/harbor/src/harbor/job.py",
+        "vendor/harbor/src/harbor_config/__init__.py",
+        "vendor/harbor/src/harbor/cli/template-task/tests/test.sh",
+        "vendor/harbor/src/harbor/environments/apptainer/docs/workflow.md",
+        "lib/rigging/src/rigging/__init__.py",
+        "lib/finestore/src/finestore/__init__.py",
+    }
+    test_path = "vendor/harbor/tests/unit/test_job.py"
+    for relative in runtime_paths | {test_path}:
+        path = workspace / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative)
+    if use_git:
+        subprocess.run(["git", "init", "--quiet", str(workspace)], check=True)
+        subprocess.run(["git", "-C", str(workspace), "add", "."], check=True)
+
+    with zipfile.ZipFile(io.BytesIO(create_workspace_zip(workspace))) as archive:
+        names = set(archive.namelist())
+        assert runtime_paths <= names
+        assert test_path not in names
+    with zipfile.ZipFile(
+        io.BytesIO(
+            create_workspace_zip(
+                workspace,
+                extra_includes=["vendor/harbor/tests/**/*.py", "**/*.pyc"],
+            )
+        )
+    ) as archive:
+        names = set(archive.namelist())
+        assert runtime_paths <= names
+        assert test_path in names
+        assert not any(name.endswith(".pyc") for name in names)
+    with zipfile.ZipFile(
+        io.BytesIO(
+            create_workspace_zip(
+                workspace,
+                extra_includes=["vendor/harbor/tests/**/*.py"],
+                exclude=re.compile("test_job[.]py$"),
+            )
+        )
+    ) as archive:
+        assert test_path not in archive.namelist()
 
 
 def test_zip_rejects_oversized_bundles(workspace):

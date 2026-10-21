@@ -33,7 +33,7 @@ flowchart LR
 | Field | Meaning |
 | --- | --- |
 | `id` | Stable identity for this task. |
-| `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
+| `context` | An ordered conversation, optionally ending in an unfinished assistant text message. |
 | `environment_requirements` | Required capabilities, pinned initial workspace, and named tool-provider contracts. |
 | `final_tools` | An ordered list of functions that terminate a chat. They are not backed by a tool provider. |
 | `interaction_tools` | Task-owned function definitions advertised to the agent. |
@@ -56,7 +56,9 @@ submission to 1,024 files and 16 MiB total, with a per-file limit from its outpu
 budget. Overflow fails the whole transfer. Selections cannot overlap `/tests`,
 `/logs/verifier` or `/solution`. The grader receives only declared submission paths.
 
-`context.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; a runtime preserves this history when presenting the task to the model. `answer_type` does not prescribe a wrapper such as JSON; `answer_format` does.
+`ConversationInput.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; a runtime preserves this history when presenting the task to the model. `answer_type` does not prescribe a wrapper such as JSON; `answer_format` does.
+
+Conversation events preserve their declared roles. A runtime harness determines how to use them: ordinary chat requests include completed assistant turns, while an explicitly selected `PrefillHarness` continues the final assistant text. The serving model chooses its tokenizer; historical token IDs are source provenance.
 
 `ConversationInput` is not a lossless Responses API transcript. It excludes provider reasoning items. The NeMo importer omits an unencrypted historical reasoning summary only when a visible assistant message or function call follows it. It rejects encrypted reasoning and reasoning left at the decision point. Exact provider continuation from reasoning state is outside this contract.
 
@@ -197,16 +199,15 @@ The runtime presents the source turns and function definitions and retains the f
 
 ## What is a grader?
 
-`TaskSpec.grader` declares how an attempt is graded. Its `kind` field selects one of four classes in `taskcompendium.models`:
+`TaskSpec.grader` declares how an attempt is graded. Its `kind` field selects one of three classes in `taskcompendium.models`:
 
 | `kind` | Class | Grading |
 | --- | --- | --- |
 | `verifyit` | `VerifyitGrader` | A stock verifyit `mode` and its `parameters`: the keys of verifyit's `verifier.toml` table other than `mode`. |
-| `script` | `ScriptGrader` | A command run after the episode in a fresh machine built from a pinned image. |
-| `session` | `SessionGrader` | A registered custom RolloutEngine `TaskSession` grades the task. |
+| `script` | `ScriptGrader` | A command run after the attempt in a fresh machine built from a pinned image. |
 | `none` | `NoGrader` | The task cannot be graded here. `reason` says why; `contract` optionally keeps the source's grading terms. |
 
-A `VerifyitGrader` without an `environment` grades the extracted answer in process. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, or `predicted_action`. A `VerifyitGrader` with an `environment` runs the verifyit command in a fresh machine built from that environment, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code or call a model, such as `pytest`, `stdio`, and `judge`, grade only there. Construction validates `parameters` with verifyit.
+A `VerifyitGrader` without an `environment` grades the extracted answer in process. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, or `predicted_action`. A `VerifyitGrader` with an `environment` runs the verifyit command in a fresh machine built from that environment, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code, such as `pytest` and `stdio`, grade only there. `grade_task` and RolloutEngine grade a `judge` grader on the host, through its judge service (`grade_remote_judge_answer`). Construction validates `parameters` with verifyit.
 
 A `ScriptGrader` declares:
 
@@ -230,7 +231,7 @@ TaskSpec validation ties the grader to the answer:
 - `ScriptGrader.answer_path` must be `None` for `file`, `state`, and `workspace_state` answers. `conversation_path` must not replace a verifier resource.
 - Answer paths, output paths, and output directories must lie outside `/tests` and `/logs/verifier`.
 
-A `SessionGrader` task is graded by the registered custom `TaskSession` that runs it; TaskCompendium cannot grade it. A `NoGrader` task grades as `unavailable`, with no reward and its `reason` as the error. Converters use `NoGrader` when the source evaluator needs a runtime this repository cannot provide; its `contract` records the evaluator, source revision, grading data and runtime requirements. `taskcompendium.grader.grader_config(task)` returns a copy of a `NoGrader`'s contract, or the `config.json` verifier resource of another grader.
+A `NoGrader` task grades as `unavailable`, with no reward and its `reason` as the error. Converters use `NoGrader` when the source evaluator needs a runtime this repository cannot provide; its `contract` records the evaluator, source revision, grading data and runtime requirements. `taskcompendium.grader.grader_config(task)` returns a copy of a `NoGrader`'s contract, or the `config.json` verifier resource of another grader.
 
 `taskcompendium.grader.GraderPackage` pairs a grader with its verifier resources, whose paths are relative to `/tests`. `verifyit_package(spec, resources=(), environment=None)` builds a `VerifyitGrader` from a verifyit `Spec`. Build other packages directly with `GraderPackage(grader, resources)`.
 
@@ -312,9 +313,9 @@ Three functions grade an attempt:
 
 - `taskcompendium.grading.grade_answer(task, attempt)` grades with an in-process `VerifyitGrader`. The answer format extracts the submission, or `attempt.state` supplies it for a `state` answer, and `verifyit.candidate.grade_candidate` scores it. It raises `TypeError` for other graders.
 - `taskcompendium.runtime.grading.grade_in_sandbox(task, attempt, factory, machine_spec, *, task_machine=None, timeout=None)` is asynchronous. It grades with a `VerifyitGrader` that has an environment, or with a `ScriptGrader`, in a fresh machine from `factory`. `task_machine` is the agent's machine, required for `collect` and `artifacts`. Machine exceptions propagate.
-- `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. An in-process grader uses `grade_answer`; a sandbox grader uses shared environment preparation and `grade_in_sandbox`. Unsupported requirements raise before machine creation. A missing factory or machine specification, and machine `RuntimeError` or `OSError`, become `infra_error`. A `SessionGrader` raises `TypeError`.
+- `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None, judge_connection=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. A judge grader uses `grade_remote_judge_answer` with `judge_connection`; an in-process grader uses `grade_answer`; a sandbox grader uses shared environment preparation and `grade_in_sandbox`. Unsupported requirements raise before machine creation. A missing factory or machine specification, and machine `RuntimeError` or `OSError`, become `infra_error`.
 
-RolloutEngine's Shellbox session calls `grade_answer` or `grade_in_sandbox` after the turn loop; see [task rollouts](../../docs/references/task-rollouts.md).
+RolloutEngine calls `grade_answer`, `grade_remote_judge_answer`, or `grade_in_sandbox` after the harness ends; see [task rollouts](../../docs/references/task-rollouts.md).
 
 The execution runtime completes file and environment-state acquisition before grading. `GradingAttempt` carries the conversation, captured file bytes keyed by absolute path, and an optional `StateSubmission`. A missing state is `None`; captured JSON null is `StateSubmission(None)`. `taskcompendium.runtime.models.grading_attempt(conversation, evidence)` builds an attempt from captured `RuntimeEvidence`. A grading machine also receives a conversational answer extracted from the conversation. Expected values remain in `task.grader` and verifier resources and must not be included in the model request.
 
