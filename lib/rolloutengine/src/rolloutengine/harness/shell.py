@@ -187,6 +187,9 @@ class ShellHarness:
     def __post_init__(self) -> None:
         if self.command_timeout is not None and not (math.isfinite(self.command_timeout) and self.command_timeout > 0):
             raise ValueError(f"The command timeout must be a positive, finite number: {self.command_timeout!r}")
+        # Machines treat a negative limit differently, for example ShellSim slices with it and returns most of a stream.
+        if self.output_limit_bytes <= 0:
+            raise ValueError(f"The output limit must be a positive number of bytes: {self.output_limit_bytes!r}")
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         shell_tool = resolve_shell_tool(task, self.shell_tool)
