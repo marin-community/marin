@@ -17,7 +17,6 @@ from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.snowball_curriculum.bundle import write_manifest
 from experiments.post_training.snowball_curriculum.selection import (
-    PRODUCTION_CATALOG,
     Population,
     SourceSpec,
     allocate_quotas,
@@ -45,34 +44,39 @@ BEN_FAMILY_WEIGHTS = {
 
 def migrated_final_paths(final: str, receipt: dict) -> tuple[str, ...]:
     """Resolve admitted files through a verified migration without reading the old store."""
-    matches = [
-        prefix
-        for prefix in receipt["prefixes"]
-        if prefix["ready"] and (final == prefix["source"] or final.startswith(prefix["source"] + "/"))
-    ]
+    final_path = StoragePath(final)
+    matches = []
+    for prefix in receipt["prefixes"]:
+        if not prefix["ready"]:
+            continue
+        try:
+            final_path.relative_to(StoragePath(prefix["source"]))
+        except ValueError:
+            continue
+        matches.append(prefix)
     if not matches:
         raise ValueError(f"No completed migration covers admitted final data: {final}")
-    migration = max(matches, key=lambda prefix: len(prefix["source"]))
+    migration = max(matches, key=lambda prefix: len(StoragePath(prefix["source"]).segments))
     raw_manifest = StoragePath(migration["url"]).read_bytes()
     if hashlib.sha256(raw_manifest).hexdigest() != migration["sha256"]:
         raise ValueError(f"Migration manifest changed: {migration['url']}")
     manifest = json.loads(raw_manifest)
     if manifest["source"] != migration["source"] or manifest["destination"] != migration["destination"]:
         raise ValueError(f"Migration manifest roots differ from the receipt: {migration['url']}")
-    suffix = final.removeprefix(migration["source"]).strip("/")
-    relative_prefix = suffix + "/" if suffix else ""
-    paths = tuple(
-        sorted(
-            str(StoragePath(migration["destination"]) / file["path"])
-            for file in manifest["files"]
-            if file["path"].startswith(relative_prefix)
-            and file["path"][len(relative_prefix) :].startswith("part-")
-            and file["path"].endswith(".parquet")
-        )
-    )
-    live_paths = tuple(
-        sorted(str(path) for path in (StoragePath(migration["destination"]) / suffix / "part-*.parquet").glob())
-    )
+    suffix = final_path.relative_to(StoragePath(migration["source"]))
+    destination = StoragePath(migration["destination"])
+    final_destination = destination / suffix
+    selected = []
+    for file in manifest["files"]:
+        path = destination / file["path"]
+        try:
+            relative = StoragePath(path.relative_to(final_destination))
+        except ValueError:
+            continue
+        if len(relative.segments) == 1 and relative.name.startswith("part-") and relative.name.endswith(".parquet"):
+            selected.append(str(path))
+    paths = tuple(sorted(selected))
+    live_paths = tuple(sorted(str(path) for path in (final_destination / "part-*.parquet").glob()))
     if not paths or paths != live_paths:
         raise ValueError(f"Migrated admitted files differ from the verified manifest: {final}")
     return paths
@@ -183,7 +187,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--sources", help="Frozen JSON source manifest with admitted task_paths")
-    inputs.add_argument("--catalog", help=f"Production catalog, normally {PRODUCTION_CATALOG}")
+    inputs.add_argument("--catalog", help="Pinned production catalog URI")
     parser.add_argument("--snapshot-id", help="Use a particular catalog snapshot instead of current")
     parser.add_argument("--migration-receipt", help="Verified migration receipt mapping archived data roots")
     parser.add_argument(

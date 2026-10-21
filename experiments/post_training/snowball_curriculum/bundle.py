@@ -6,7 +6,8 @@
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
-from pathlib import PurePosixPath
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pyarrow as pa
@@ -82,9 +83,16 @@ def write_pool(records: Iterable[Mapping[str, Any]], root: StoragePath) -> int:
     return count
 
 
+def _manifest_root(root: StoragePath) -> StoragePath:
+    if root.is_remote:
+        return root
+    local = replace(root, scheme=None, netloc="")
+    return StoragePath(str(Path(str(local)).resolve()))
+
+
 def write_manifest(root: StoragePath) -> dict:
     """Write the complete file inventory last; it is not a remote publication receipt."""
-    prefix = str(root).rstrip("/") + "/"
+    root = _manifest_root(root)
     files = []
     paths = [directory / name for directory, _, names in root.walk() for name in names]
     for path in sorted(paths, key=str):
@@ -96,7 +104,7 @@ def write_manifest(root: StoragePath) -> dict:
             while chunk := stream.read(1024 * 1024):
                 size += len(chunk)
                 digest.update(chunk)
-        files.append({"path": str(path).removeprefix(prefix), "size": size, "sha256": digest.hexdigest()})
+        files.append({"path": path.relative_to(root), "size": size, "sha256": digest.hexdigest()})
     manifest = {"format": 1, "files": files}
     (root / "artifact-manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
     return manifest
@@ -104,6 +112,7 @@ def write_manifest(root: StoragePath) -> dict:
 
 def verify_manifest(root: StoragePath, expected_sha256: str) -> None:
     """Verify a pinned artifact inventory before consuming its payloads."""
+    root = _manifest_root(root)
     path = root / "artifact-manifest.json"
     if file_sha256(path) != expected_sha256:
         raise ValueError("Artifact manifest differs from its immutable pin")
@@ -111,8 +120,7 @@ def verify_manifest(root: StoragePath, expected_sha256: str) -> None:
     if manifest["format"] != 1:
         raise ValueError("Unknown artifact manifest format")
     listed = [entry["path"] for entry in manifest["files"]]
-    prefix = str(root).rstrip("/") + "/"
-    actual = {str(directory / name).removeprefix(prefix) for directory, _, names in root.walk() for name in names}
+    actual = {(directory / name).relative_to(root) for directory, _, names in root.walk() for name in names}
     actual.discard("artifact-manifest.json")
     if len(listed) != len(set(listed)) or set(listed) != actual:
         raise ValueError("Artifact inventory differs from its complete manifest")

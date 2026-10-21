@@ -19,8 +19,7 @@ from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training.snowball_curriculum.bundle import write_manifest, write_pool
 
-PUBLICATION_MANIFEST = "s3://marin-us-east-02a/marin/rl-semantics/publication-008e95e5/2026.10.15.1/release.json"
-PRODUCTION_CATALOG = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
+TASK_SPEC_CONTRACT_KIND = "task_spec"
 type Population = Literal["converted", "admitted"]
 
 
@@ -335,7 +334,7 @@ def write_selection(
             record = asdict(row)
             record.pop("task")
             record["task_json"] = json.dumps(row.task)
-            record["contract_kind"] = "task_spec"
+            record["contract_kind"] = TASK_SPEC_CONTRACT_KIND
             record["inclusion_probability"] = (
                 result.difficulty_quotas[row.source_id][row.difficulty]
                 / result.eligible_difficulty_counts[row.source_id][row.difficulty]
