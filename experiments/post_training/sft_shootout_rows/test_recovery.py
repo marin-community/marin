@@ -253,16 +253,15 @@ def tmax_rows(tokenizer, count: int = 5) -> tuple[dict, dict]:
     return rows, chosen
 
 
-def test_a_row_over_the_context_keeps_its_plain_rendering(tokenizer, monkeypatch):
+def test_a_row_over_the_context_keeps_its_plain_rendering(tokenizer):
     rows, chosen = tmax_rows(tokenizer)
     # One selected row (round(0.2 * 5)); a context one token over the plain row cannot hold any injection.
-    monkeypatch.setattr(recovery, "CONTEXT", len(next(iter(rows.values()))[1].ids) + 1)
+    row_cap = len(next(iter(rows.values()))[1].ids) + 1
     recovered = {}
-    stats = recovery.build_recovery(chosen, rows, tokenizer, recovery.HARNESS_FAITHFUL, "seed", recovered)
+    stats = recovery.build_recovery(chosen, rows, tokenizer, recovery.HARNESS_FAITHFUL, "seed", recovered, row_cap)
     family = stats["families"]["tmax"]
     assert family["selected"] == 1 and family["skipped_over_context"] == 1 and family["injected"] == 0 and not recovered
-    monkeypatch.setattr(recovery, "CONTEXT", 32768)
-    stats = recovery.build_recovery(chosen, rows, tokenizer, recovery.HARNESS_FAITHFUL, "seed", recovered)
+    stats = recovery.build_recovery(chosen, rows, tokenizer, recovery.HARNESS_FAITHFUL, "seed", recovered, 32768)
     assert stats["families"]["tmax"]["injected"] == 1 and len(recovered) == 1
 
 
@@ -272,7 +271,7 @@ def test_smaller_plans_shrink_one_attempt_at_a_time_then_drop_the_last_point():
     assert shapes == [[(1, 2), (3, 3)], [(1, 2), (3, 2)], [(1, 2), (3, 1)], [(1, 1), (3, 1)], [(1, 1)]]
 
 
-def test_a_row_whose_full_injection_is_over_the_context_takes_a_smaller_one(tokenizer, monkeypatch):
+def test_a_row_whose_full_injection_is_over_the_context_takes_a_smaller_one(tokenizer):
     rows, chosen = tmax_rows(tokenizer)
     (trial,) = recovery.selected_rows({"tmax": sorted(rows)}, "seed")
     trace = rows[trial][2]
@@ -284,11 +283,10 @@ def test_a_row_whose_full_injection_is_over_the_context_takes_a_smaller_one(toke
     if len(lengths) < 2:
         pytest.skip("the seeded plan has a single attempt")
     # Fits the second plan, not the first.
-    monkeypatch.setattr(recovery, "CONTEXT", lengths[1])
     recovered = {}
-    family = recovery.build_recovery(chosen, rows, tokenizer, recovery.HARNESS_FAITHFUL, "seed", recovered)["families"][
-        "tmax"
-    ]
+    family = recovery.build_recovery(chosen, rows, tokenizer, recovery.HARNESS_FAITHFUL, "seed", recovered, lengths[1])[
+        "families"
+    ]["tmax"]
     assert family["injected"] == 1 and family["reduced_to_fit"] == 1 and family["skipped_over_context"] == 0
     assert len(recovered[trial].ids) == lengths[1]
     assert (
@@ -365,7 +363,7 @@ def test_handoff_rows_hold_b_by_dropping_clean_tmax_rows(tokenizer):
     pool = {"handoff-task": {"heldout": False, "family": "tmax", "import_names": []}}
     plain = {"task_slots": sorted(chosen), "B_supervised_tokens": sum(a.supervised for a in chosen.values())}
     kept = dict(rows)
-    handoff, removed, stats = build.handoff_rows([summarized], pool, tokenizer, kept, chosen, {}, plain, "seed")
+    handoff, removed, stats = build.handoff_rows([summarized], pool, tokenizer, kept, chosen, {}, plain, "seed", 32768)
     assert [a.trial_id for a in handoff] == ["summarized#conversation-1"] and handoff[0].trial_id in kept
     dropped = [a for a in chosen.values() if a.trial_id in removed]
     assert stats["supervised_tokens_dropped"] == sum(a.supervised for a in dropped) >= handoff[0].supervised

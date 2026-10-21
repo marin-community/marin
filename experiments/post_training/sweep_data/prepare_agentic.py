@@ -90,9 +90,9 @@ def row_line(record: TrainingRecord) -> str:
     return json.dumps(training_row(record["ids"], record["mask"], CONTEXT, PAD_TOKEN), separators=(",", ":"))
 
 
-def padding_row() -> str:
-    """The zero-loss padding row as its JSONL line (no newline)."""
-    return json.dumps({"input_ids": [PAD_TOKEN] * CONTEXT, "loss_weights": [0] * CONTEXT}, separators=(",", ":"))
+def padding_row(context: int = CONTEXT) -> str:
+    """The zero-loss padding row of width `context` as its JSONL line (no newline)."""
+    return json.dumps({"input_ids": [PAD_TOKEN] * context, "loss_weights": [0] * context}, separators=(",", ":"))
 
 
 @contextlib.contextmanager
@@ -106,15 +106,16 @@ def open_prebuilt(path: Path) -> Iterator[TextIO]:
         yield stream
 
 
-def write_prebuilt(path: Path, lines: Iterable[str]) -> tuple[int, int]:
-    """Write row lines, then zero-loss padding rows up to a multiple of the batch size; return (rows, padding)."""
+def write_prebuilt(path: Path, lines: Iterable[str], context: int = CONTEXT) -> tuple[int, int]:
+    """Write row lines, then zero-loss padding rows of width `context` up to a multiple of the batch size; return
+    (rows, padding)."""
     rows = 0
     with open_prebuilt(path) as stream:
         for line in lines:
             stream.write(line + "\n")
             rows += 1
         padding = -rows % BATCH
-        empty = padding_row()
+        empty = padding_row(context)
         for _ in range(padding):
             stream.write(empty + "\n")
     return rows, padding

@@ -7,10 +7,12 @@ Inputs: one or more rebuild_traces.py outputs (one row per conversation of a Har
 table, the LR-sweep replay slice (sweep_data), and for RS-multi, relay and recovery the plain arm's built prefix (it
 fixes the task slots, B and, for recovery, the trajectories).
 
-Rows follow the LR-sweep set: input_ids padded to 32,768 with pad id 128001, loss_weights shifted so weight i scores
-token i + 1, zero-loss padding rows to a multiple of 16, nothing truncated. Replay is a prefix of the replay slice in
-a seeded, fixed order, cut where its supervised tokens reach R = round(B / 4) with B from plain; every arm gets the same
-rows (checked by hash against plain's manifest).
+Rows follow the LR-sweep set: input_ids padded to the row cap (--row-cap, default 32,768) with pad id 128001,
+loss_weights shifted so weight i scores token i + 1, zero-loss padding rows to a multiple of 16, nothing truncated; a
+trace longer than the cap is dropped (over_context). The pinned replay rows are 32,768 wide; at a larger cap they are
+re-padded on load (pad tokens and zero loss appended, the same row training_row gives at that width). Replay is a prefix
+of the replay slice in a seeded, fixed order, cut where its supervised tokens reach R = round(B / 4) with B from plain;
+every arm gets the same rows (checked by hash against plain's manifest).
 
 Training order: the trainer reads rows in file order (mixture block 16, one block per batch) and concatenates the
 epoch files in order without shuffling. So each epoch file is its own seeded permutation of that epoch's rows (seed
@@ -130,7 +132,7 @@ LAUNCH_RULE = (
     "plain's manifest (B) and the replay cut are frozen before any arm launches; any later change to either is a new "
     "artifact version with a new name, never an edit"
 )
-LIMITATION = "results are for trajectories that fit 32,768 tokens in v0's chat template; longer passes are dropped"
+LIMITATION = "results are for trajectories that fit max_sequence_tokens in v0's chat template; longer passes are dropped"
 # Decided 2026-10-17: keep one multi-turn row per trace, as the community recipes under test do.
 FAMILY_NOTES = {
     "tmax": (
@@ -181,6 +183,8 @@ CHANGELOG = (
     "EXCLUDETRIALS --exclude-trials drops listed attempts (trial_name, retry) before selection; manifest "
     "excluded_trials; arms built on --plain must use the same list",
     "GZIPFIXED prebuilt .gz files are written with header mtime 0 and no file name, so output_hashes repeat",
+    "ROWCAP --row-cap sets the row width and the over_context limit (default 32,768, rows unchanged); replay rows are "
+    "re-padded to it; manifest max_sequence_tokens records it; arms built on --plain must use plain's cap",
 )
 # The generation proxy's capability URL carries a secret JWT (three base64url segments starting 'eyJ', payload
 # aud == 'iris-proxy'); a trace that printed it (e.g. GLM running 'env') must never become a training row. Tokens are
@@ -382,6 +386,7 @@ def candidates(
     traces: list[dict],
     pool: dict[str, dict],
     tokenizer,
+    row_cap: int,
     allow_summarized: bool = False,
     require_clean_completion: bool = False,
 ) -> tuple[dict[str, Candidate], list[dict]]:
@@ -389,7 +394,7 @@ def candidates(
 
     allow_summarized (recovery handoff rows only) keeps the conversations of a summarized trial, whose echoed history
     turns are tagged HISTORY by recovery.handoff_traces. require_clean_completion also drops passing trials that did
-    not end on the agent's own completion (clean_completion).
+    not end on the agent's own completion (clean_completion). A rendering longer than row_cap is dropped (over_context).
     """
     kept, dropped = {}, []
     for trace in traces:
@@ -404,7 +409,7 @@ def candidates(
         elif trace["relay"] != (arm == "relay"):  # validation, like plain, uses plain GLM runs
             reason = "relay_run" if trace["relay"] else "plain_run"
         elif trace.get("n_conversations", 1) > 1 and not allow_summarized:
-            # Terminus-2 summarized this trial's history: the trial does not fit one 32k row.
+            # Terminus-2 summarized this trial's history: the trial does not fit one row.
             reason = "summarized_trial"
         elif trace["problems"]:
             reason = "trace_problems"
@@ -436,7 +441,7 @@ def candidates(
             except ValueError as error:
                 reason = f"render_error: {error}"
             else:
-                if len(rendered.ids) > CONTEXT:
+                if len(rendered.ids) > row_cap:
                     reason = "over_context"
         if reason:
             dropped.append(
@@ -536,23 +541,24 @@ def epoch_seed(arm: str, epoch: int) -> str:
     return f"{SEED}:{arm}:epoch-{epoch}:{POOL_MANIFEST_SHA256}"
 
 
-def write_epochs(out: Path, arm: str, rows_for_epoch, splits: dict) -> list[dict]:
+def write_epochs(out: Path, arm: str, rows_for_epoch, splits: dict, row_cap: int) -> list[dict]:
     """Write train-epoch-<e> files, each a seeded permutation of its epoch's rows; return the index with epochs."""
     index = []
     for epoch in range(EPOCHS):
         epoch_index, splits[f"epoch-{epoch}"] = write_split(
-            out / f"train-epoch-{epoch}-prebuilt.jsonl.gz", rows_for_epoch(epoch), epoch_seed(arm, epoch)
+            out / f"train-epoch-{epoch}-prebuilt.jsonl.gz", rows_for_epoch(epoch), epoch_seed(arm, epoch), row_cap
         )
         index += [{"epoch": epoch} | item for item in epoch_index]
     return index
 
 
-def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple[list[dict], dict]:
-    """Shuffle (row json, index entry) pairs with `seed`, write rows plus zero-loss padding, re-read and check."""
+def write_split(path: Path, entries: list[tuple[str, dict]], seed: str, row_cap: int) -> tuple[list[dict], dict]:
+    """Shuffle (row json, index entry) pairs with `seed`, write rows plus zero-loss padding, re-read and check that every
+    row is row_cap wide."""
     order = list(range(len(entries)))
     random.Random(seed).shuffle(order)
     index = [{"row": row_number} | entries[position][1] for row_number, position in enumerate(order)]
-    _, padding = write_prebuilt(path, (entries[position][0] for position in order))
+    _, padding = write_prebuilt(path, (entries[position][0] for position in order), row_cap)
     supervised = collections.Counter()
     context = collections.Counter()
     digest = hashlib.sha256()
@@ -560,7 +566,7 @@ def write_split(path: Path, entries: list[tuple[str, dict]], seed: str) -> tuple
         for row_number, line in enumerate(stream):
             digest.update(line.encode())
             row = json.loads(line)
-            if len(row["input_ids"]) != CONTEXT or len(row["loss_weights"]) != CONTEXT:
+            if len(row["input_ids"]) != row_cap or len(row["loss_weights"]) != row_cap:
                 raise ValueError(f"Bad row shape at {row_number}")
             if row_number >= len(index):
                 if any(row["loss_weights"]):
@@ -642,6 +648,12 @@ def parse_args() -> argparse.Namespace:
         "--exclude-trials",
         help="JSON lines of {trial_name, retry?, task_id?}: attempts dropped before selection (see exclude_trials)",
     )
+    parser.add_argument(
+        "--row-cap",
+        type=int,
+        default=CONTEXT,
+        help=f"row width in tokens; longer traces are dropped as over_context (default {CONTEXT}; never below it)",
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--tokenizer-dir", help="local v0 tokenizer files (hash-checked); default: the regional copy")
     parser.add_argument(
@@ -671,6 +683,8 @@ def parse_args() -> argparse.Namespace:
             )
     else:
         args.trace_prefix = None
+    if args.row_cap < CONTEXT:
+        raise ValueError(f"--row-cap must be at least {CONTEXT}: the pinned replay rows are that wide")
     if (args.relay_families and args.arm != "relay") or (args.match_relay and args.arm != "plain"):
         raise ValueError("--relay-families is for the relay arm and --match-relay for plain")
     return args
@@ -714,10 +728,10 @@ def token_gate(trace_files: list[dict]) -> dict:
     return gate
 
 
-def entry(candidate: Candidate) -> tuple[str, dict]:
-    """A candidate's row line and its index entry."""
+def entry(candidate: Candidate, row_cap: int) -> tuple[str, dict]:
+    """A candidate's row line (row_cap wide) and its index entry."""
     attempt, rendered, trace = candidate
-    line = json.dumps(training_row(rendered.ids, rendered.mask, CONTEXT, PAD_TOKEN), separators=(",", ":"))
+    line = json.dumps(training_row(rendered.ids, rendered.mask, row_cap, PAD_TOKEN), separators=(",", ":"))
     return line, {
         "family": attempt.family,
         "task_id": attempt.task_id,
@@ -732,11 +746,26 @@ def entry(candidate: Candidate) -> tuple[str, dict]:
     }
 
 
+def widen_row(line: str, row_cap: int) -> str:
+    """A prebuilt row re-padded to row_cap: pad tokens and zero loss appended, as training_row pads at that width."""
+    row = json.loads(line)
+    padding = row_cap - len(row["input_ids"])
+    if padding < 0 or len(row["loss_weights"]) != len(row["input_ids"]):
+        raise ValueError(f"Cannot widen a {len(row['input_ids'])}-token row to {row_cap}")
+    widened = {
+        "input_ids": row["input_ids"] + [PAD_TOKEN] * padding,
+        "loss_weights": row["loss_weights"] + [0] * padding,
+    }
+    return json.dumps(widened, separators=(",", ":"))
+
+
 class Replay:
     """The replay slice's rows; `cut` takes the arm's R = round(B / 4) prefix and records it in `info`."""
 
-    def __init__(self, prefix: str, plain: dict | None):
+    def __init__(self, prefix: str, plain: dict | None, row_cap: int):
         lines, index, self.info = replay_rows(prefix)
+        if row_cap != CONTEXT:
+            lines = [widen_row(line, row_cap) for line in lines]
         self.entries = list(zip(lines, index, strict=True))
         self.plain = plain
 
@@ -767,6 +796,8 @@ def build_rows(
     relay_families: list[str] | None = None,
     match_relay: dict | None = None,
     plain_selection: str = "first",
+    *,
+    row_cap: int,
 ) -> ArmRows:
     """Select the arm's attempts and write its split files into `out`.
 
@@ -797,8 +828,8 @@ def build_rows(
                 }
             }
         selection = [{"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())]
-        rows = [entry(kept[a.trial_id]) for _, a in sorted(chosen.items())] + replay.cut(replay_b)
-        index = write_epochs(out, "plain", lambda epoch: rows, splits)
+        rows = [entry(kept[a.trial_id], row_cap) for _, a in sorted(chosen.items())] + replay.cut(replay_b)
+        index = write_epochs(out, "plain", lambda epoch: rows, splits, row_cap)
         return ArmRows(selection, index, splits, b_tokens, extra)
     if arm == "validation":
         # One fixed set for every arm: GLM's first passing trace per held-out task, per family, no replay.
@@ -806,9 +837,9 @@ def build_rows(
         selection = [{"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())]
         index = []
         for family in sorted({a.family for a in chosen.values()}):
-            rows = [entry(kept[a.trial_id]) for _, a in sorted(chosen.items()) if a.family == family]
+            rows = [entry(kept[a.trial_id], row_cap) for _, a in sorted(chosen.items()) if a.family == family]
             family_index, splits[f"validation-{family}"] = write_split(
-                out / f"validation-{family}-prebuilt.jsonl.gz", rows, f"{SEED}:validation:{family}"
+                out / f"validation-{family}-prebuilt.jsonl.gz", rows, f"{SEED}:validation:{family}", row_cap
             )
             index += [{"split": f"validation-{family}"} | item for item in family_index]
         return ArmRows(selection, index, splits, None, {})
@@ -830,8 +861,9 @@ def build_rows(
         index = write_epochs(
             out,
             "rs-multi",
-            lambda epoch: [entry(kept[a.trial_id]) for _, a in sorted(plan[epoch].items())] + replay_cut,
+            lambda epoch: [entry(kept[a.trial_id], row_cap) for _, a in sorted(plan[epoch].items())] + replay_cut,
             splits,
+            row_cap,
         )
         return ArmRows(selection, index, splits, b_tokens, {})
     budgets = plain_family_b(plain)
@@ -839,10 +871,10 @@ def build_rows(
     component = families != sorted(budgets)
     chosen_episodes, totals = relay_subsample(attempts, {family: budgets[family] for family in families})
     selection = [{"trial_id": a.trial_id, "task_id": a.task_id, "sample": a.sample} for a in chosen_episodes]
-    rows = [entry(kept[a.trial_id]) for a in chosen_episodes]
+    rows = [entry(kept[a.trial_id], row_cap) for a in chosen_episodes]
     if not component:
         rows += replay.cut(b_tokens)
-    index = write_epochs(out, "relay", lambda epoch: rows, splits)
+    index = write_epochs(out, "relay", lambda epoch: rows, splits, row_cap)
     extra = {
         "relay_families": {
             family: {"plain_b": budgets[family], "achieved": totals[family], "delta": totals[family] - budgets[family]}
@@ -875,13 +907,14 @@ def handoff_rows(
     recovered: dict[str, RenderedTrace],
     plain: dict,
     seed: str,
+    row_cap: int,
 ) -> tuple[list[Attempt], set[str], dict]:
     """Context-handoff rows for the recovery arm, and the clean TMax rows dropped to hold B; adds them to `kept`.
 
     Returns (handoff attempts, dropped trial ids, manifest stats).
     """
     handoff_kept, handoff_dropped = candidates(
-        "recovery", recovery.handoff_traces(traces), pool, tokenizer, allow_summarized=True
+        "recovery", recovery.handoff_traces(traces), pool, tokenizer, row_cap, allow_summarized=True
     )
     kept.update(handoff_kept)
     tmax_rows = sum(a.family == "tmax" for a in chosen.values())
@@ -933,10 +966,12 @@ def build_recovery_rows(
     selection = [{"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())]
     seed = f"{SEED}:recovery:{POOL_MANIFEST_SHA256}"
     recovered: dict[str, RenderedTrace] = {}
-    stats = recovery.build_recovery(chosen, kept, tokenizer, args.recovery_swe_mode, seed, recovered)
+    stats = recovery.build_recovery(chosen, kept, tokenizer, args.recovery_swe_mode, seed, recovered, args.row_cap)
     handoff, removed = [], set()
     if args.recovery_handoff:
-        handoff, removed, stats["handoff"] = handoff_rows(traces, pool, tokenizer, kept, chosen, recovered, plain, seed)
+        handoff, removed, stats["handoff"] = handoff_rows(
+            traces, pool, tokenizer, kept, chosen, recovered, plain, seed, args.row_cap
+        )
         b_tokens += stats["handoff"]["B_minus_plain_B"]
         selection += [{"task_id": a.task_id, "trial_id": a.trial_id, "handoff": True} for a in handoff]
         selection = [item for item in selection if item["trial_id"] not in removed]
@@ -947,7 +982,7 @@ def build_recovery_rows(
             rendered = recovered[attempt.trial_id]
             candidate = Candidate(dataclasses.replace(attempt, context=len(rendered.ids)), rendered, candidate.trace)
             extra = extra | {"plain_context_tokens": attempt.context}
-        line, item = entry(candidate)
+        line, item = entry(candidate, args.row_cap)
         return line, item | extra
 
     rows = [
@@ -959,7 +994,7 @@ def build_recovery_rows(
     # Replay is cut at plain's B so its rows hash-match plain's, with or without handoff rows.
     rows += replay.cut(plain["B_supervised_tokens"])
     splits: dict = {}
-    index = write_epochs(out, "recovery", lambda epoch: rows, splits)
+    index = write_epochs(out, "recovery", lambda epoch: rows, splits, args.row_cap)
     return ArmRows(selection, index, splits, b_tokens, {}), stats
 
 
@@ -983,7 +1018,7 @@ def eligibility(arm: Arm, traces: list[dict], pool: dict[str, dict], attempts: l
             "tasks_attempted": len(tasks),
             "tasks_eligible": len(eligible[family] & tasks),
             "rate": len(eligible[family] & tasks) / len(tasks) if tasks else None,
-            "note": "eligible = at least one passing attempt that fits 32,768 tokens and survives every drop rule",
+            "note": "eligible = at least one passing attempt that fits max_sequence_tokens and survives every drop rule",
         }
         for family, tasks in sorted(attempted.items())
     }
@@ -1061,7 +1096,7 @@ def build_manifest(
         "parent_model": {"name": args.parent} | BASES[args.parent],
         "relay_student": None if args.arm != "relay" else {"name": args.relay_student} | BASES[args.relay_student],
         "pad_token_id": PAD_TOKEN,
-        "max_sequence_tokens": CONTEXT,
+        "max_sequence_tokens": args.row_cap,
         "batch_size": BATCH,
         "seed": SEED,
         "pool_manifest_sha256": None if args.test_inputs else POOL_MANIFEST_SHA256,
@@ -1175,6 +1210,8 @@ def main() -> None:
     plain = json.loads((StoragePath(args.plain) / "manifest.json").read_text()) if args.plain else None
     if args.arm in ("rs-multi", "relay", "recovery") and plain is None:
         raise ValueError("--plain is required for rs-multi, relay and recovery")
+    if plain is not None and plain["max_sequence_tokens"] != args.row_cap:
+        raise ValueError(f"--row-cap {args.row_cap} differs from the --plain arm's {plain['max_sequence_tokens']}")
 
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -1189,10 +1226,10 @@ def main() -> None:
         gate = token_gate(trace_files)
         student_check = check_relay_student(args.traces, args.relay_student) if args.arm == "relay" else None
         kept, dropped = candidates(
-            args.arm, traces, pool, tokenizer, require_clean_completion=args.require_clean_completion
+            args.arm, traces, pool, tokenizer, args.row_cap, require_clean_completion=args.require_clean_completion
         )
         attempts = [candidate.attempt for candidate in kept.values()]
-        replay = Replay(args.replay, plain)
+        replay = Replay(args.replay, plain, args.row_cap)
         out = directory / "out"
         out.mkdir()
         recovery_stats = None
@@ -1202,8 +1239,19 @@ def main() -> None:
             match_relay = (
                 json.loads((StoragePath(args.match_relay) / "manifest.json").read_text()) if args.match_relay else None
             )
+            if match_relay is not None and match_relay["max_sequence_tokens"] != args.row_cap:
+                raise ValueError("--match-relay arm was built with a different --row-cap")
             rows = build_rows(
-                args.arm, kept, attempts, plain, replay, out, args.relay_families, match_relay, args.plain_selection
+                args.arm,
+                kept,
+                attempts,
+                plain,
+                replay,
+                out,
+                args.relay_families,
+                match_relay,
+                args.plain_selection,
+                row_cap=args.row_cap,
             )
         index_name = "validation-index.jsonl" if args.arm == "validation" else "train-index.jsonl"
         (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in rows.index))

@@ -5,17 +5,18 @@
 
 For each prefix: _SUCCESS present and no DRY_RUN_NOT_FOR_TRAINING marker; every file's sha256 equals the manifest's
 output_hashes; each epoch file's decompressed sha256 equals splits[epoch].rows_sha256; rows plus padding equal
-padded_rows, a multiple of 16, with steps = padded_rows / 16; padding rows are pad-only with zero loss; per-family
-supervised and context tokens equal the split's totals; no training row comes from a held-out task (pool v5 ids in the
-manifest). Across arms: replay rows in every epoch file are the same multiset as plain's epoch 0. Plain: the three epoch
-files hold the same rows (as a multiset) in different orders. RS-multi: each epoch's agentic supervised tokens are
-within 1.5% of plain's B and their 3-epoch mean within 1%, on plain's task slots. Recovery: plain's trials and B
-exactly, every row trains plain's target tokens, and rows not marked injected are byte-identical to plain's. Relay: each
-family's episodes reach plain's B for it to whole-episode granularity (dropping the family's last chosen episode would
-fall below it), or the family took every usable episode and its shortfall is reported; every epoch holds the same rows,
-each trial once. A relay component (COMPONENT_NOT_AN_ARM, some families, no replay) gets the same family checks; given
-with a full relay arm (components listed first), the arm's rows for the component's families must be byte-identical to
-the component's. Any other arm is refused.
+padded_rows, a multiple of 16, with steps = padded_rows / 16; every row is max_sequence_tokens wide and padding rows are
+pad-only with zero loss; per-family supervised and context tokens equal the split's totals; no training row comes from a
+held-out task (pool v5 ids in the manifest). Across arms: every arm has plain's max_sequence_tokens; replay rows in
+every epoch file are the same multiset as plain's epoch 0. Plain: the three epoch files hold the same rows (as a
+multiset) in different orders. RS-multi: each epoch's agentic supervised tokens are within 1.5% of plain's B and their
+3-epoch mean within 1%, on plain's task slots. Recovery: plain's trials and B exactly, every row trains plain's target
+tokens, and rows not marked injected are byte-identical to plain's. Relay: each family's episodes reach plain's B for it
+to whole-episode granularity (dropping the family's last chosen episode would fall below it), or the family took every
+usable episode and its shortfall is reported; every epoch holds the same rows, each trial once. A relay component
+(COMPONENT_NOT_AN_ARM, some families, no replay) gets the same family checks; given with a full relay arm (components
+listed first), the arm's rows for the component's families must be byte-identical to the component's. Any other arm is
+refused.
 
 --dry-run checks dry builds (build.py --dry-run) instead: each prefix must carry the DRY_RUN_NOT_FOR_TRAINING marker
 and no _SUCCESS; every other check is the same.
@@ -34,7 +35,6 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.sft_shootout_rows.build import COMPONENT_MARKER, DRY_RUN_MARKER, EPOCHS, plain_family_b
 from experiments.post_training.sweep_data.prepare_agentic import BATCH, PAD_TOKEN, read_component
-from experiments.post_training.sweep_data.select import CONTEXT
 
 # RS-multi agentic supervised tokens against plain's B: per epoch, and the mean over the three epochs.
 RS_EPOCH_TOLERANCE = 0.015
@@ -63,6 +63,7 @@ def check_prefix(uri: str, dry_run: bool = False) -> ArmCheck:
     manifest, _, files = read_component(root)
     if (COMPONENT_MARKER in files) != bool(manifest.get("relay_component")):
         raise ValueError(f"{uri}: component marker and manifest disagree")
+    width = manifest["max_sequence_tokens"]
     index = [json.loads(line) for line in files["train-index.jsonl"].decode().splitlines()]
     heldout = {task for tasks in manifest["heldout_task_ids"].values() for task in tasks}
     leaked = sorted({item["task_id"] for item in index if item.get("task_id") in heldout})
@@ -88,7 +89,7 @@ def check_prefix(uri: str, dry_run: bool = False) -> ArmCheck:
         for number, line in enumerate(lines):
             row = json.loads(line)
             ids, weights = row["input_ids"], row["loss_weights"]
-            if len(ids) != CONTEXT or len(weights) != CONTEXT or not set(weights) <= {0, 1}:
+            if len(ids) != width or len(weights) != width or not set(weights) <= {0, 1}:
                 raise ValueError(f"{uri}: epoch {epoch} row {number} malformed")
             if number >= len(entries):
                 if any(weights) or set(ids) != {PAD_TOKEN}:
@@ -120,6 +121,7 @@ def check_prefix(uri: str, dry_run: bool = False) -> ArmCheck:
         "prefix": uri,
         "arm": manifest["arm"],
         "B_supervised_tokens": manifest["B_supervised_tokens"],
+        "max_sequence_tokens": width,
         "epochs": {
             e: {
                 "rows": manifest["splits"][f"epoch-{e}"]["rows"],
@@ -234,6 +236,8 @@ def main() -> None:
     for uri in args.others:
         check = check_prefix(uri, args.dry_run)
         manifest, index, arm, report = check.manifest, check.index, check.epochs, check.report
+        if manifest["max_sequence_tokens"] != plain_manifest["max_sequence_tokens"]:
+            raise ValueError(f"{uri}: max_sequence_tokens differs from plain's")
         if manifest.get("relay_component"):
             if any(arm[epoch]["replay"] for epoch in range(EPOCHS)):
                 raise ValueError(f"{uri}: relay component holds replay rows")

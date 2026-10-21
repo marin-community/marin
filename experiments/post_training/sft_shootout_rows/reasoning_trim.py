@@ -39,7 +39,6 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.sft_shootout_rows.build import END_THINK, EPOCHS, START_THINK, v0_tokenizer
 from experiments.post_training.sweep_data.prepare_agentic import (
-    CONTEXT,
     PAD_TOKEN,
     open_prebuilt,
     output_hashes,
@@ -113,6 +112,7 @@ def main() -> None:
     plain, plain_bytes, files = read_component(plain_root)
     if plain["arm"] != "plain":
         raise ValueError("--plain must be a plain arm prefix")
+    width = plain["max_sequence_tokens"]
     index = [json.loads(line) for line in files["train-index.jsonl"].decode().splitlines()]
     variants = [(mode, cap) for mode in MODES for cap in CAPS]
     with tempfile.TemporaryDirectory() as temporary:
@@ -147,7 +147,7 @@ def main() -> None:
                     row = json.loads(line)
                     ids = row["input_ids"][: entry["context_tokens"]]
                     mask = [0, *row["loss_weights"][: entry["context_tokens"] - 1]]
-                    if row_line(training_row(ids, mask, CONTEXT, PAD_TOKEN)) != line:
+                    if row_line(training_row(ids, mask, width, PAD_TOKEN)) != line:
                         raise ValueError(f"epoch {epoch} row {number}: rebuilding plain's row does not reproduce it")
                     blocks = think_blocks(ids, mask)
                     family = entry["family"]
@@ -157,7 +157,7 @@ def main() -> None:
                         new_ids, new_mask = trim(ids, mask, over, mode)
                         if over:
                             check(tokenizer, ids, mask, new_ids, new_mask, over, mode)
-                        new_line = row_line(training_row(new_ids, new_mask, CONTEXT, PAD_TOKEN))
+                        new_line = row_line(training_row(new_ids, new_mask, width, PAD_TOKEN))
                         streams[v].write(new_line + "\n")
                         digests[v].update((new_line + "\n").encode())
                         new_entry = entry | {"supervised_tokens": sum(new_mask[1:]), "context_tokens": len(new_ids)}

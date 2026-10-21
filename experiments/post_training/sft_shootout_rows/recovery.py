@@ -39,7 +39,6 @@ from dataclasses import dataclass, replace
 
 from experiments.post_training.sft_shootout_rows.terminus_json_plain_parser import TerminusJSONPlainParser
 from experiments.post_training.sft_shootout_rows.traces import HISTORY, INJECTED, TEACHER, render_trace
-from experiments.post_training.sweep_data.select import CONTEXT
 
 FRACTION = 0.2
 POINTS = {1: 45, 2: 355}
@@ -401,12 +400,13 @@ def selected_rows(trial_ids_by_family: dict[str, list[str]], seed: str) -> set[s
     return chosen
 
 
-def build_recovery(chosen: dict, kept: dict, tokenizer, swe_mode: str, seed: str, recovered: dict) -> dict:
+def build_recovery(chosen: dict, kept: dict, tokenizer, swe_mode: str, seed: str, recovered: dict, row_cap: int) -> dict:
     """Inject into a seeded 20% of each family's chosen trajectories; fill `recovered` and return manifest stats.
 
     `chosen` maps task -> Attempt (plain's selection); `kept` maps trial id -> (Attempt, rendering, trace). An injected
     row must train exactly the plain row's tokens (checked). A row whose planned injection does not fit the context
-    takes the largest of `smaller_plans` that fits; one that cannot fit even one failed attempt keeps its plain row.
+    takes the largest of `smaller_plans` that fits in `row_cap` tokens; one that cannot fit even one failed attempt keeps
+    its plain row.
     """
     by_family = collections.defaultdict(list)
     for attempt in chosen.values():
@@ -447,7 +447,7 @@ def build_recovery(chosen: dict, kept: dict, tokenizer, swe_mode: str, seed: str
             trained = [token for token, weight in zip(injected.ids, injected.mask, strict=True) if weight]
             if trained != plain_trained:
                 raise ValueError(f"Injected row {trial} trains different tokens than its plain row")
-            if len(injected.ids) <= CONTEXT:
+            if len(injected.ids) <= row_cap:
                 break
         else:
             family["skipped_over_context"] += 1

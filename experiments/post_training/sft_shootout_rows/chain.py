@@ -22,7 +22,7 @@ DRY_RUN_NOT_FOR_TRAINING markers, no _SUCCESS.
 
     python -m experiments.post_training.sft_shootout_rows.chain --builder-commit <sha> --output <fresh prefix> \\
         [--trace-prefix <s3 .../traces-v7/>] [--relay-trace-prefix <s3 .../traces-v7-v0/>] [--parent v0.1|v0] \\
-        [--relay-student v0.1|v0] [--exclude-trials <jsonl>] [--dry-run]
+        [--relay-student v0.1|v0] [--exclude-trials <jsonl>] [--row-cap <tokens>] [--dry-run]
 """
 
 import argparse
@@ -34,6 +34,7 @@ import sys
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.sft_shootout_rows.build import BASES, REPLAY_URI, TRACE_PREFIX, family_supervised
+from experiments.post_training.sweep_data.select import CONTEXT
 
 POOL = "s3://marin-us-east-02a/marin/experiments/sft-shootout/pool/tasks.jsonl"
 POOL_MANIFEST = "s3://marin-us-east-02a/marin/experiments/sft-shootout/pool/manifest.json"
@@ -58,6 +59,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--tokenizer-dir")
     parser.add_argument("--exclude-trials", help="attempts every arm drops before selection (build.py exclude_trials)")
+    parser.add_argument("--row-cap", type=int, default=CONTEXT, help=f"every arm's row width (default {CONTEXT})")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     args.relay_trace_prefix = args.relay_trace_prefix or args.trace_prefix
@@ -78,6 +80,8 @@ def main() -> None:
         "--builder-commit",
         args.builder_commit,
         "--require-clean-completion",
+        "--row-cap",
+        str(args.row_cap),
     ]
     common += ["--tokenizer-dir", args.tokenizer_dir] if args.tokenizer_dir else []
     common += ["--exclude-trials", args.exclude_trials] if args.exclude_trials else []
@@ -113,6 +117,7 @@ def main() -> None:
         "dry_run": args.dry_run,
         "trace_prefix": args.trace_prefix,
         "relay_trace_prefix": args.relay_trace_prefix,
+        "row_cap": args.row_cap,
         "parent": args.parent,
         "relay_student": args.relay_student,
         "builder_commit": args.builder_commit,

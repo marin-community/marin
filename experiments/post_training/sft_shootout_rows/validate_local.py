@@ -363,7 +363,7 @@ def main() -> None:
     # The token gate refuses an input file holding a capability token; the drop rule behind it is checked directly.
     build("plain-with-secret-input", [*plain_inputs, str(work / "secret.jsonl")], refusal="Capability tokens")
     pool = {row["task_id"]: row for row in pool_rows}
-    _, secret_dropped = candidates("plain", fixtures.secret, pool, tokenizer)
+    _, secret_dropped = candidates("plain", fixtures.secret, pool, tokenizer, CONTEXT)
     proxy_drops = sum(1 for d in secret_dropped if d["reason"] == "contains_proxy_capability_token")
     assert proxy_drops == len(fixtures.secret), "capability-token traces were not dropped"
     library_drops = reports[0]["dropped"].get("touches_library_copy_of_repo", 0)
