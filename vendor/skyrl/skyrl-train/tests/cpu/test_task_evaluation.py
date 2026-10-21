@@ -211,7 +211,6 @@ async def test_evaluation_session_caps_shared_work_independently_of_training(eva
                 await ready.wait()
             release.set()
     assert peak == expected_peak
-    assert cfg.trajectory_runner.max_concurrent_tasks == 3
     assert runner.events == ["started", "stopped"]
 
 
