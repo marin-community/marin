@@ -113,3 +113,37 @@ def test_released_weight_grads_match_the_barriered_scan():
     assert released_loss == loss
     for want, got in zip(grads, released_grads, strict=True):
         np.testing.assert_array_equal(got, want)
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "split, extra",
+    [
+        # The KDA positions split, the softmax-attention layer joint, ahead of an unrolled tail layer.
+        ((0, 1, 2), dict(num_layers=10, latent_out_full_layers=(9,))),
+        # Every position split, with the fused AttnRes kernels (Pallas interpret mode on CPU) and the saved routed
+        # output as on the GB200 stack (every layer scanned).
+        (
+            (0, 1, 2, 3),
+            dict(
+                num_layers=8,
+                attn_res_fused_block_mix=True,
+                attn_res_fused_source_grads=True,
+                scan_save_routed_output=True,
+            ),
+        ),
+    ],
+)
+def test_split_backward_matches_the_joint_scan(split, extra):
+    overrides = dict(attn_res_num_blocks=3, scan_layers=True, **extra)
+    loss, grads, _ = _loss_grads_metrics(scan_offload_partials=True, **overrides)
+    split_loss, split_grads, _ = _loss_grads_metrics(
+        scan_offload_partials=True, scan_split_backward_layers=split, **overrides
+    )
+    # The forward is the joint scan's, op for op.
+    assert split_loss == loss
+    # The split backward sums each layer's cotangents in another order (the MLP phase's, then the attention
+    # phase's), so its float32 gradients differ from the joint scan's by rounding only (~1e-6 of each leaf's scale;
+    # a dropped cotangent path is O(1)).
+    for joint, planned in zip(grads, split_grads, strict=True):
+        assert np.max(np.abs(planned - joint)) <= 1e-5 * np.max(np.abs(joint)) + 1e-12
