@@ -35,7 +35,7 @@ dependencies = [
     "marin-iris-native",
     "marin-rigging[secrets]>=0.2.202.dev39324959133",
     "marin-rolloutengine>=0.2.202.dev39324959133",
-    "marin-shellbox[daytona,shellsim]>=0.2.202.dev39324959133",
+    "marin-shellbox[daytona,shellsim]>=0.2.211.dev39491611320",
     "ninja",
     "nvidia-ml-py",
     "omegaconf",
@@ -183,6 +183,7 @@ no-build-isolation-package = [
     "transformer-engine-torch",
 ]
 override-dependencies = [
+    "marin-shellbox[daytona,shellsim]==0.2.211.dev39491611320",
     "marin-rigging[secrets,prometheus]==0.2.202.dev39324959133",
     # Megatron Bridge declares this native extension but does not import or use it.
     "fast-hadamard-transform ; sys_platform == 'never'",

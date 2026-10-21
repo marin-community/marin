@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 from omegaconf import OmegaConf
+from shellbox.backends.local.machine import SandboxUnavailable
 from shellbox.machine import Backend
 from marinskyrl.task_machine_factories import task_machine_factories
 
@@ -28,8 +29,8 @@ def test_explicit_empty_local_settings_reach_the_host_capability_check(tmp_path,
     assert OmegaConf.to_container(config.environment.task_sessions.local) == {}
     # A host without the supported local sandbox must reject admission. A dropped
     # empty mapping previously silently omitted this backend instead.
-    monkeypatch.setattr("marinskyrl.task_machine_factories.sys.platform", "darwin")
-    with pytest.raises(ValueError, match="Local task execution requires a Linux host"):
+    monkeypatch.setattr("shellbox.backends.local.machine.sys.platform", "darwin")
+    with pytest.raises(SandboxUnavailable):
         task_machine_factories(config.environment.task_sessions)
 
 

@@ -43,6 +43,7 @@ overrides = [
     { name = "flashinfer-python", marker = "sys_platform == 'linux'", specifier = "==0.6.18.post1" },
     { name = "fsspec", specifier = "==2026.4.0" },
     { name = "marin-rigging", extras = ["secrets", "prometheus"], specifier = "==0.2.202.dev39324959133" },
+    { name = "marin-shellbox", extras = ["daytona", "shellsim"], specifier = "==0.2.211.dev39491611320" },
     { name = "nvidia-resiliency-ext", marker = "sys_platform == 'never'" },
     { name = "opentelemetry-api", marker = "sys_platform != 'linux'" },
     { name = "opentelemetry-api", marker = "sys_platform == 'linux'", specifier = "==1.44.0" },
@@ -2843,7 +2844,7 @@ name = "marin-rolloutengine"
 version = "0.2.202.dev39324959133"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "marin-shellbox" },
+    { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "marin-taskcompendium" },
     { name = "pydantic" },
 ]
@@ -2854,15 +2855,15 @@ wheels = [
 
 [[package]]
 name = "marin-shellbox"
-version = "0.2.202.dev39324959133"
+version = "0.2.211.dev39491611320"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bubblewrap-bin", marker = "sys_platform == 'linux' or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8c/ec/b6e57236e79a66bd090c2d11f3719ce74856ea6bdf2879d3f9dded6b3306/marin_shellbox-0.2.202.dev39324959133.tar.gz", hash = "sha256:247db390832ce177981e81d8cb789c2268d8749c6ee49ff6e601f8b804c1f9d0", size = 108830, upload-time = "2026-10-19T21:10:00.382Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d7/ec/410c472b8260843a9c5788b5925bf235615dc925509def34c5c57f2cfd97/marin_shellbox-0.2.211.dev39491611320.tar.gz", hash = "sha256:2399f4eb079d071e383013257985cff19cd1c2b2afefb495455fac60477cfd95", size = 115319, upload-time = "2026-10-20T20:27:54.21Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/bb/fe06bc1ec7b38da866fcf16ab64e0dcf1c68e43651a07d94bcc8f8709b38/marin_shellbox-0.2.202.dev39324959133-py3-none-any.whl", hash = "sha256:f37ee5aa02da74dfce2ecef7567424287797ec7211a70e5afe5ea795fcc759b0", size = 78282, upload-time = "2026-10-19T21:09:43.874Z" },
+    { url = "https://files.pythonhosted.org/packages/42/5e/2b86f4c0a33b40e643bc588da5e04e1d8a163dd8f2aa4df29052d144b76d/marin_shellbox-0.2.211.dev39491611320-py3-none-any.whl", hash = "sha256:604e9b9461c7060cdf884df72540e945a7ae767cdf04e441efb49e9ad0bb92b2", size = 81986, upload-time = "2026-10-20T20:27:35.361Z" },
 ]
 
 [package.optional-dependencies]
@@ -2892,7 +2893,7 @@ version = "0.2.202.dev39324959133"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
-    { name = "marin-shellbox" },
+    { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
     { name = "pydantic" },
     { name = "tomlkit" },
@@ -3066,7 +3067,7 @@ analysis = [
 dev = [
     { name = "litellm" },
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
-    { name = "marin-shellbox", extra = ["shellsim"] },
+    { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "marin-style" },
     { name = "matplotlib" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux' or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
@@ -3132,7 +3133,7 @@ requires-dist = [
     { name = "marin-rigging", extras = ["prometheus"], marker = "extra == 'telemetry'" },
     { name = "marin-rigging", extras = ["secrets"], specifier = ">=0.2.202.dev39324959133" },
     { name = "marin-rolloutengine", specifier = ">=0.2.202.dev39324959133" },
-    { name = "marin-shellbox", extras = ["daytona", "shellsim"], specifier = ">=0.2.202.dev39324959133" },
+    { name = "marin-shellbox", extras = ["daytona", "shellsim"], specifier = ">=0.2.211.dev39491611320" },
     { name = "marin-taskcompendium", specifier = ">=0.2.202.dev39324959133" },
     { name = "marin-verifyit", extras = ["math", "schema", "reasoning-gym", "judge"], specifier = ">=0.2.202.dev39324959133" },
     { name = "math-verify", specifier = "==0.9.0" },
