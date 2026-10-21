@@ -15,6 +15,17 @@ from skyrl_train.config.pi_training import validate_pi_evaluation_results
 BASE_CONFIG = Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml"
 
 
+@pytest.mark.parametrize(
+    "recipe_name",
+    ("pi_teacher_distribution_smoke.yaml", "pi_teacher_trace_smoke.yaml", "pi_verifier_grpo_smoke.yaml"),
+)
+def test_pi_gpu_recipes_allow_tool_followup_before_rollout_engine_stops(recipe_name):
+    # At two turns the engine cancels Pi during a tool follow-up, before it can
+    # return validated in-memory capture; a capped trial must fail closed.
+    recipe = yaml.safe_load((BASE_CONFIG.parent / recipe_name).read_text())
+    assert recipe["context_budget"]["max_turns"] >= 4
+
+
 def _recipe(tmp_path, preset):
     raw = yaml.safe_load(BASE_CONFIG.read_text())
     raw["scenario"] = {"preset": preset}
