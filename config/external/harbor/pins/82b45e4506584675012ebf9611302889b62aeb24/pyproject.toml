@@ -1,0 +1,21 @@
+[project]
+name = "marin-external-harbor"
+version = "0"
+requires-python = "==3.12.*"
+dependencies = [
+    "daytona==0.200.2",
+    "gcsfs",
+    "harbor[archive,tau3]",
+    "marin-rigging>=0.2.0",
+    # LiteLLM imports this at module initialization but does not declare it.
+    "pydantic-settings",
+    "s3fs",
+]
+
+[tool.uv]
+package = false
+prerelease = "allow"
+
+[tool.uv.sources]
+# The exact campaign revision is retained in uv.lock and advanced deliberately.
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "82b45e4506584675012ebf9611302889b62aeb24" }

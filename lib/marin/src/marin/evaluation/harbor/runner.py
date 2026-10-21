@@ -544,6 +544,7 @@ class HarborExecutor:
             verifier_env=verifier_env,
             archive_root=output_dir,
             archive_dataset=dataset,
+            hosted_judge_config=self.judge_config.model_dump(mode="json") if self.judge_config else None,
         )
         benchmark = self.config.benchmark_for(
             self.task_limit,

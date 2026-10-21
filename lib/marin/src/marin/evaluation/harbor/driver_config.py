@@ -191,6 +191,7 @@ class HarborRuntimeOverlay:
     verifier_env: Mapping[str, str]
     archive_root: str
     archive_dataset: str
+    hosted_judge_config: Mapping[str, object] | None = None
 
 
 def _driver_command(runtime_project: str, command: str, *paths: Path) -> list[str]:

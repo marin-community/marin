@@ -312,20 +312,16 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
     for (commit_sequence, generation), paths in sorted(by_version.items()):
         dataset = pds.dataset(paths, filesystem=plan.filesystem, format="parquet", schema=plan.schema)
         part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
-        part = part.append_column(
-            SystemColumns.GENERATION,
-            pa.array([generation] * part.num_rows, pa.int32()),
-        )
-        commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
-        if SystemColumns.COMMIT in part.column_names:
-            commit_index = part.schema.get_field_index(SystemColumns.COMMIT)
-            part = part.set_column(
-                commit_index,
-                SystemColumns.COMMIT,
-                pc.coalesce(part[SystemColumns.COMMIT], commit_values),
-            )
-        else:
-            part = part.append_column(SystemColumns.COMMIT, commit_values)
+        # Compacted shards already store version columns; fill only what is missing (backport of #10216).
+        for name, value, data_type in (
+            (SystemColumns.GENERATION, generation, pa.int32()),
+            (SystemColumns.COMMIT, commit_sequence, pa.int64()),
+        ):
+            index = part.schema.get_field_index(name)
+            if index < 0:
+                part = part.append_column(name, pa.array([value] * part.num_rows, type=data_type))
+            elif part.column(index).null_count:
+                part = part.set_column(index, name, pc.fill_null(part.column(index), value))
         parts.append(part)
 
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")

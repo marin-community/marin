@@ -20,7 +20,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -30,6 +34,16 @@ EVALCHEMY_RESULTS_SUFFIX = ".json"
 _REQUEST_TIMEOUT = 1800
 _TRANSPORT_RETRY_BUDGET = 1800
 _TRANSPORT_ATTEMPT_TIMEOUT = _REQUEST_TIMEOUT
+
+# While a preempted inference server reschedules, the Iris proxy answers 404 "No endpoint '...'".
+# Evalchemy treats a 4xx as a permanent request error that fails the whole task, so for the first
+# _OUTAGE_GRACE seconds of an outage the relay reports it as 503, which Evalchemy retries. A longer
+# outage gets the original 404: past Evalchemy's transport budget a waiting request is recorded as an
+# empty generation, which would silently score as wrong, so failing the task for a retry is safer.
+_UNREGISTERED_ENDPOINT_MARKER = b"No endpoint '"
+_UNAVAILABLE_STATUS = 503
+_OUTAGE_GRACE = 600
+_HOP_BY_HOP_HEADERS = frozenset({"connection", "keep-alive", "transfer-encoding", "content-length", "host"})
 
 # Without a configured cap, an lm-eval-native generation task gets the served context minus this
 # prompt reserve, so the model config's context window sets its budget the way Evalchemy's own
@@ -247,11 +261,74 @@ def scored_results(local_out: str) -> bool:
     return False
 
 
+class EndpointOutage:
+    """Tracks how long the upstream endpoint has been unregistered, across relay threads."""
+
+    def __init__(self, grace: float, clock=time.monotonic):
+        self._grace = grace
+        self._clock = clock
+        self._started: float | None = None
+        self._lock = threading.Lock()
+
+    def relay_status(self, status: int, body: bytes) -> int:
+        """The status to report for an upstream response: an unregistered endpoint is transient for a while."""
+        with self._lock:
+            if status != 404 or _UNREGISTERED_ENDPOINT_MARKER not in body:
+                self._started = None
+                return status
+            if self._started is None:
+                self._started = self._clock()
+            return _UNAVAILABLE_STATUS if self._clock() - self._started < self._grace else status
+
+
+def _relay_handler(upstream: str, outage: EndpointOutage) -> type[BaseHTTPRequestHandler]:
+    class RelayHandler(BaseHTTPRequestHandler):
+        def _forward(self) -> None:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else None
+            headers = {key: value for key, value in self.headers.items() if key.lower() not in _HOP_BY_HOP_HEADERS}
+            request = urllib.request.Request(upstream + self.path, data=body, headers=headers, method=self.command)
+            try:
+                with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT) as response:
+                    status, response_headers, payload = response.status, response.headers, response.read()
+            except urllib.error.HTTPError as error:
+                status, response_headers, payload = error.code, error.headers, error.read()
+            except (urllib.error.URLError, ConnectionError, TimeoutError) as error:
+                status, response_headers, payload = _UNAVAILABLE_STATUS, {}, f"relay upstream error: {error}".encode()
+            self.send_response(outage.relay_status(status, payload))
+            for key, value in response_headers.items():
+                if key.lower() not in _HOP_BY_HOP_HEADERS:
+                    self.send_header(key, value)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        do_GET = _forward
+        do_POST = _forward
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A002 - matches BaseHTTPRequestHandler
+            pass
+
+    return RelayHandler
+
+
+def start_endpoint_relay(upstream: str) -> ThreadingHTTPServer:
+    """Serve a localhost relay to ``upstream`` for the lifetime of the client process."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _relay_handler(upstream.rstrip("/"), EndpointOutage(_OUTAGE_GRACE)))
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     tasks = config["tasks"]
     if not tasks:
         raise SystemExit("run_evalchemy_client requires at least one task")
+
+    relay = start_endpoint_relay(config["base_url"])
+    print(f"relaying the served endpoint through 127.0.0.1:{relay.server_port}", flush=True)
+    config["base_url"] = f"http://127.0.0.1:{relay.server_port}"
 
     out_path = config["out_path"].rstrip("/")
     served = served_max_length(config["base_url"])

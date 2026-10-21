@@ -20,6 +20,7 @@ from fray.client import JobHandle
 from fray.current_client import current_client
 from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus
 from iris.client.client import iris_ctx
+from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.resources.state import TaskState, is_job_finished
@@ -71,7 +72,7 @@ _ENDPOINT_READY_POLL_SECONDS = 2.0
 # Bound on time spent queued (pending/building) before the server job is placed.
 # Distinct from the readiness timeout, which budgets server startup and only
 # counts while the job is actually running.
-_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = 4 * 3600.0
+_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = 24 * 3600.0
 _ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
@@ -562,6 +563,15 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
 
 
 _PLACED_TASK_STATES = frozenset({TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING})
+_ADMISSION_WAIT_PREFIX = "SchedulingGated:"
+
+
+def _task_is_placed(task: TaskStatus) -> bool:
+    if task.state is TaskState.RUNNING:
+        return True
+    # The Kubernetes backend reports BUILDING while Kueue admission is pending,
+    # before any GPUs are allocated. That wait belongs to the placement budget.
+    return task.state in _PLACED_TASK_STATES and not task.status_message.startswith(_ADMISSION_WAIT_PREFIX)
 
 
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
@@ -584,7 +594,7 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
             return endpoints[0].address, dict(endpoints[0].metadata)
         if job.status().value in {"succeeded", "failed", "stopped"}:
             raise RuntimeError(f"Inference job {job.job_id} finished before registering {endpoint_name!r}")
-        if any(task.state in _PLACED_TASK_STATES for task in ctx.client.list_tasks(job_name)):
+        if any(_task_is_placed(task) for task in ctx.client.list_tasks(job_name)):
             if ready_deadline is None:
                 ready_deadline = Deadline.from_seconds(timeout_seconds)
             if ready_deadline.expired():

@@ -1,0 +1,1848 @@
+{
+  "version": "eval-policy-2026-10-05-verified",
+  "source": "Original Grug October 5 EvalDash cohort records",
+  "evaluations": {
+    "gsm8k-0shot": {
+      "name": "gsm8k-0shot",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:173f8897d1b4ab1e81587111839e4b534853ebd6df98e1ee6a10ee57d085da65",
+      "tasks": [
+        {
+          "name": "gsm8k",
+          "num_fewshot": 0,
+          "task_alias": "gsm8k_0shot",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "gsm8k",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "exact_match",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 1319,
+            "n_attempted": 1319
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "mrcr-65k": {
+      "name": "mrcr-65k",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:982d932ed056e7090e720d187dd1c4ba51cc9717fc4be67fdbc847ef9f408cd5",
+      "tasks": [
+        {
+          "name": "MRCR",
+          "num_fewshot": 0,
+          "task_alias": "mrcr",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "MRCR",
+            "primary_metric": "mrcr_accuracy",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "mrcr_accuracy",
+                "source_name": "mrcr_accuracy",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "prefix_hit_rate",
+                "source_name": "prefix_hit_rate",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_2needle",
+                "source_name": "mrcr_8192_2needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_2needle_count",
+                "source_name": "mrcr_8192_2needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_4needle",
+                "source_name": "mrcr_8192_4needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_4needle_count",
+                "source_name": "mrcr_8192_4needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_8needle",
+                "source_name": "mrcr_8192_8needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_8needle_count",
+                "source_name": "mrcr_8192_8needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_2needle",
+                "source_name": "mrcr_16384_2needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_2needle_count",
+                "source_name": "mrcr_16384_2needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_4needle",
+                "source_name": "mrcr_16384_4needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_4needle_count",
+                "source_name": "mrcr_16384_4needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_8needle",
+                "source_name": "mrcr_16384_8needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_8needle_count",
+                "source_name": "mrcr_16384_8needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_2needle",
+                "source_name": "mrcr_32768_2needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_2needle_count",
+                "source_name": "mrcr_32768_2needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_4needle",
+                "source_name": "mrcr_32768_4needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_4needle_count",
+                "source_name": "mrcr_32768_4needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_8needle",
+                "source_name": "mrcr_32768_8needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_8needle_count",
+                "source_name": "mrcr_32768_8needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": null,
+            "n_attempted": 901
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": 4096,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": 65472
+      },
+      "harbor": null
+    },
+    "boolq": {
+      "name": "boolq",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:f2a1bfc80b0ec4109bb89157c467b74005a5a20a22fa950dab4f44c780fa62b6",
+      "tasks": [
+        {
+          "name": "boolq",
+          "num_fewshot": 0,
+          "task_alias": "boolq_0shot",
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "boolq",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "acc",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 3270,
+            "n_attempted": 3270
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": null,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "bixbench-pi": {
+      "name": "bixbench-pi",
+      "mechanism": "harbor",
+      "source_digest": "sha256:656bfe8bff597514ab3ecc7ca1c27666f32c819fb7330a2bfc5a580daf7715b0",
+      "tasks": [
+        {
+          "name": "bixbench-cli-marin-corrections",
+          "num_fewshot": null,
+          "task_alias": null,
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "bixbench-cli-marin-corrections",
+            "primary_metric": "reward",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "reward",
+                "source_name": "reward",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 205,
+            "n_attempted": 205
+          }
+        }
+      ],
+      "evalchemy": null,
+      "harbor": {
+        "dataset": "bixbench-cli-marin-corrections",
+        "version": "3",
+        "agent": "pi",
+        "env": "daytona",
+        "config_digest": "sha256:66cac329f7a353ee1eebe57630a71bed20614b6db9ac1a1e5e5af3a0d5e5c3ce",
+        "harbor_config_commit": "82b45e4506584675012ebf9611302889b62aeb24",
+        "max_input_tokens": 65536,
+        "max_output_tokens": 16384
+      }
+    },
+    "ds-1000-local": {
+      "name": "ds-1000-local",
+      "mechanism": "harbor",
+      "source_digest": "sha256:0008fec50b0ac3cc0e351a43240c1b6320920e6d3455e6ad915423fbceb6e798",
+      "tasks": [
+        {
+          "name": "ds-1000",
+          "num_fewshot": null,
+          "task_alias": null,
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "ds-1000",
+            "primary_metric": "reward",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "reward",
+                "source_name": "reward",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 200,
+            "n_attempted": 200
+          }
+        }
+      ],
+      "evalchemy": null,
+      "harbor": {
+        "dataset": "ds-1000",
+        "version": "mini-200",
+        "agent": "terminus-2",
+        "env": "daytona",
+        "config_digest": "sha256:d6ee0f9c23c95adc0a4fe3796fe69ed3f4cb7f0c857114a8e863d634d725d49c",
+        "harbor_config_commit": "82b45e4506584675012ebf9611302889b62aeb24",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192
+      }
+    },
+    "humanevalplus": {
+      "name": "humanevalplus",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:2d02189fefd56cb1d9f283ec3cdf82df7da1de810cdce63012e785277c03f9e0",
+      "tasks": [
+        {
+          "name": "HumanEvalPlus",
+          "num_fewshot": 0,
+          "task_alias": "humanevalplus",
+          "generation": true,
+          "unsafe_code": true,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "HumanEvalPlus",
+            "primary_metric": "pass_at_1",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "pass_at_1",
+                "source_name": "python_pass@1",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 164,
+            "n_attempted": 164
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "tb2-recovery": {
+      "name": "tb2-recovery",
+      "mechanism": "harbor",
+      "source_digest": "sha256:f919b270a90e3a0cb1e858fad32eb051a30b1d59b1e963dd73d8ac2903896d5a",
+      "tasks": [
+        {
+          "name": "terminal-bench/terminal-bench-2-1",
+          "num_fewshot": null,
+          "task_alias": null,
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "terminal-bench/terminal-bench-2-1",
+            "primary_metric": "reward",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "reward",
+                "source_name": "reward",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 89,
+            "n_attempted": 89
+          }
+        }
+      ],
+      "evalchemy": null,
+      "harbor": {
+        "dataset": "terminal-bench/terminal-bench-2-1",
+        "version": "6",
+        "agent": "terminus-2",
+        "env": "daytona",
+        "config_digest": "sha256:6b9bcd51169183664e99f86ccca6cf082e32ca3181f108af3ce77caf55965ddf",
+        "harbor_config_commit": "82b45e4506584675012ebf9611302889b62aeb24",
+        "max_input_tokens": 65536,
+        "max_output_tokens": 16384
+      }
+    },
+    "cruxeval": {
+      "name": "cruxeval",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:65bd8ac58b423b7fd516e4cdedde1369393bea8afc688bcc3be5572659b3969a",
+      "tasks": [
+        {
+          "name": "CruxEval",
+          "num_fewshot": 0,
+          "task_alias": "cruxeval",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "CruxEval",
+            "primary_metric": "input_pass@1",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "input_pass@1",
+                "source_name": "input_pass@1",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "output_pass@1",
+                "source_name": "output_pass@1",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": null,
+            "n_attempted": 1600
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "financebench": {
+      "name": "financebench",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:ff68bb55411d7c15bfbcc58f033ae947dbc330c9add1104920408945797223a4",
+      "tasks": [
+        {
+          "name": "FinanceBench",
+          "num_fewshot": 0,
+          "task_alias": "financebench",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "FinanceBench",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "accuracy",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": null,
+            "n_attempted": null
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": null,
+        "judge": {
+          "base_url": "https://api.together.xyz/v1",
+          "model": "openai/gpt-oss-120b"
+        }
+      },
+      "harbor": null
+    },
+    "sotopia-hard": {
+      "name": "sotopia-hard",
+      "mechanism": "harbor",
+      "source_digest": "sha256:6ecc5574ec138502834b25046693df7b83a8c96b5c63e20fb871c08c9a5ce997",
+      "tasks": [
+        {
+          "name": "hf://open-athena/sotopia-hard-harbor",
+          "num_fewshot": null,
+          "task_alias": null,
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "hf://open-athena/sotopia-hard-harbor",
+            "primary_metric": "reward",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "reward",
+                "source_name": "reward",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 100,
+            "n_attempted": 100
+          }
+        }
+      ],
+      "evalchemy": null,
+      "harbor": {
+        "dataset": "hf://open-athena/sotopia-hard-harbor",
+        "version": "65be6de928ab289e43a2730182b5b75cf2f75d41",
+        "agent": "harbor.agents.installed.sotopia:SotopiaAgent",
+        "env": "daytona",
+        "config_digest": "sha256:b1c9d80eef26adde916816b51764fb94ec4de165758a36681b4795a637c24f04",
+        "harbor_config_commit": "82b45e4506584675012ebf9611302889b62aeb24",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192
+      }
+    },
+    "winogrande": {
+      "name": "winogrande",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:b920d6f13a6ceddfeed73b978f94ae2f6daf18b0f74e0dad295bec448bb7988a",
+      "tasks": [
+        {
+          "name": "winogrande",
+          "num_fewshot": 5,
+          "task_alias": "winogrande_5shot",
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "winogrande",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "acc",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 1267,
+            "n_attempted": 1267
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": null,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "triviaqa": {
+      "name": "triviaqa",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:9163a251af774fc9da5e856e0eca3247ee1eb40e155af35cd6185900006f24c3",
+      "tasks": [
+        {
+          "name": "triviaqa",
+          "num_fewshot": 5,
+          "task_alias": "triviaqa_5shot",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "triviaqa",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "exact_match",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 17944,
+            "n_attempted": 17944
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "mrcr-32k": {
+      "name": "mrcr-32k",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:030920e73df54959293dcdda870c1599c37348c74e1a53b115c404121967d9ff",
+      "tasks": [
+        {
+          "name": "MRCR",
+          "num_fewshot": 0,
+          "task_alias": "mrcr",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "MRCR",
+            "primary_metric": "mrcr_accuracy",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "mrcr_accuracy",
+                "source_name": "mrcr_accuracy",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "prefix_hit_rate",
+                "source_name": "prefix_hit_rate",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_2needle",
+                "source_name": "mrcr_8192_2needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_2needle_count",
+                "source_name": "mrcr_8192_2needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_4needle",
+                "source_name": "mrcr_8192_4needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_4needle_count",
+                "source_name": "mrcr_8192_4needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_8needle",
+                "source_name": "mrcr_8192_8needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_8needle_count",
+                "source_name": "mrcr_8192_8needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_2needle",
+                "source_name": "mrcr_16384_2needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_2needle_count",
+                "source_name": "mrcr_16384_2needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_4needle",
+                "source_name": "mrcr_16384_4needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_4needle_count",
+                "source_name": "mrcr_16384_4needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_8needle",
+                "source_name": "mrcr_16384_8needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_8needle_count",
+                "source_name": "mrcr_16384_8needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": null,
+            "n_attempted": 602
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": 4096,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": 32704
+      },
+      "harbor": null
+    },
+    "mmlu-pro": {
+      "name": "mmlu-pro",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:584b10b83da64be4cb114a8f7715edb235a3bc3598c522dc3d8be053900f1f78",
+      "tasks": [
+        {
+          "name": "MMLUPro",
+          "num_fewshot": 0,
+          "task_alias": "mmlu-pro",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "MMLUPro",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "accuracy_avg",
+                "kind": "binary",
+                "higher_is_better": true
+              },
+              {
+                "name": "total_examples",
+                "source_name": "total_examples",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_business",
+                "source_name": "accuracy_business",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_business",
+                "source_name": "count_business",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_law",
+                "source_name": "accuracy_law",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_law",
+                "source_name": "count_law",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_psychology",
+                "source_name": "accuracy_psychology",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_psychology",
+                "source_name": "count_psychology",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_biology",
+                "source_name": "accuracy_biology",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_biology",
+                "source_name": "count_biology",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_chemistry",
+                "source_name": "accuracy_chemistry",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_chemistry",
+                "source_name": "count_chemistry",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_history",
+                "source_name": "accuracy_history",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_history",
+                "source_name": "count_history",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_other",
+                "source_name": "accuracy_other",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_other",
+                "source_name": "count_other",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_health",
+                "source_name": "accuracy_health",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_health",
+                "source_name": "count_health",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_economics",
+                "source_name": "accuracy_economics",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_economics",
+                "source_name": "count_economics",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_math",
+                "source_name": "accuracy_math",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_math",
+                "source_name": "count_math",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_physics",
+                "source_name": "accuracy_physics",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_physics",
+                "source_name": "count_physics",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_computer_science",
+                "source_name": "accuracy_computer science",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_computer_science",
+                "source_name": "count_computer science",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_philosophy",
+                "source_name": "accuracy_philosophy",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_philosophy",
+                "source_name": "count_philosophy",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy_engineering",
+                "source_name": "accuracy_engineering",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "count_engineering",
+                "source_name": "count_engineering",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": null,
+            "n_attempted": 12032
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "extra_model_args": {},
+        "max_length": 65536
+      },
+      "harbor": null
+    },
+    "swebench-verified": {
+      "name": "swebench-verified",
+      "mechanism": "harbor",
+      "source_digest": "sha256:700ad57f25ce610bfa41962fd90f10690c3f60b7d9ec297c1c8a5197063cec02",
+      "tasks": [
+        {
+          "name": "swebench-verified",
+          "num_fewshot": null,
+          "task_alias": null,
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "swebench-verified",
+            "primary_metric": "reward",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "reward",
+                "source_name": "reward",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 500,
+            "n_attempted": 500
+          }
+        }
+      ],
+      "evalchemy": null,
+      "harbor": {
+        "dataset": "swebench-verified",
+        "version": "1.0",
+        "agent": "mini-swe-agent",
+        "env": "daytona",
+        "config_digest": "sha256:92cf95648e1308b8ee4a2f9cc5c8563b13ce56a8385facb89027043a659676b0",
+        "harbor_config_commit": "82b45e4506584675012ebf9611302889b62aeb24",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192
+      }
+    },
+    "piqa": {
+      "name": "piqa",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:b8b365553547783b40a08769171c87dc9cc1f1b59dda2d2a256f4acff370a029",
+      "tasks": [
+        {
+          "name": "piqa",
+          "num_fewshot": 0,
+          "task_alias": "piqa_0shot",
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "piqa",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "acc",
+                "kind": "binary",
+                "higher_is_better": true
+              },
+              {
+                "name": "normalized_accuracy",
+                "source_name": "acc_norm",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 1838,
+            "n_attempted": 1838
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": null,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "olympiadbench": {
+      "name": "olympiadbench",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:7930f2a4899370b344f4c3da9421616609cd7898a7f956f341cc822fd5358787",
+      "tasks": [
+        {
+          "name": "OlympiadBench",
+          "num_fewshot": 0,
+          "task_alias": "olympiadbench",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "OlympiadBench",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "accuracy_avg",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 30,
+            "n_attempted": 30
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": 42,
+        "extra_gen_kwargs": {
+          "do_sample": "true",
+          "temperature": "0.7"
+        },
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "extra_model_args": {},
+        "max_length": null,
+        "judge": {
+          "base_url": "https://api.together.xyz/v1",
+          "model": "openai/gpt-oss-120b"
+        }
+      },
+      "harbor": null
+    },
+    "ifbench": {
+      "name": "ifbench",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:cbe79d3b33dffcfc5189b9f349c548236bd979de3d7c504c766ff8b162e682c6",
+      "tasks": [
+        {
+          "name": "IFBench",
+          "num_fewshot": 0,
+          "task_alias": "ifbench",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "IFBench",
+            "primary_metric": "strict_prompt_accuracy",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "strict_prompt_accuracy",
+                "source_name": "strict_prompt_accuracy",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "strict_instruction_accuracy",
+                "source_name": "strict_instruction_accuracy",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "loose_prompt_accuracy",
+                "source_name": "loose_prompt_accuracy",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "loose_instruction_accuracy",
+                "source_name": "loose_instruction_accuracy",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": null,
+            "n_attempted": 300
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "gpqa-diamond": {
+      "name": "gpqa-diamond",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:f4b49ee239d368fe9f65b62663276b90becaf8e0ce1768e99dcf370e2764fc63",
+      "tasks": [
+        {
+          "name": "GPQADiamond",
+          "num_fewshot": 0,
+          "task_alias": "gpqa-diamond",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "GPQADiamond",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "solved_avg",
+                "source_name": "solved_avg",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "accuracy",
+                "source_name": "accuracy_avg",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": null,
+            "n_attempted": 198
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {
+          "do_sample": "true",
+          "temperature": "0.7"
+        },
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "mbppplus": {
+      "name": "mbppplus",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:9cdee19d343ac4fdff07550d8ee4288deb11d5699d568dee87ff46ac13e6cb2f",
+      "tasks": [
+        {
+          "name": "MBPPPlus",
+          "num_fewshot": 0,
+          "task_alias": "mbppplus",
+          "generation": true,
+          "unsafe_code": true,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "MBPPPlus",
+            "primary_metric": "pass_at_1",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "pass_at_1",
+                "source_name": "pass@1",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 378,
+            "n_attempted": 378
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "ot-tblite-recovery": {
+      "name": "ot-tblite-recovery",
+      "mechanism": "harbor",
+      "source_digest": "sha256:56ef0c78ac7780cbd267fbec3b0a2c064563eba92c9a343dce8d896a51428667",
+      "tasks": [
+        {
+          "name": "openthoughts-tblite",
+          "num_fewshot": null,
+          "task_alias": null,
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "openthoughts-tblite",
+            "primary_metric": "reward",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "reward",
+                "source_name": "reward",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 100,
+            "n_attempted": 100
+          }
+        }
+      ],
+      "evalchemy": null,
+      "harbor": {
+        "dataset": "openthoughts-tblite",
+        "version": "2.0",
+        "agent": "terminus-2",
+        "env": "daytona",
+        "config_digest": "sha256:03a82e0eb65dc9b833000fd6c7663e8efb8b363a73e1f8465db4285d05797f07",
+        "harbor_config_commit": "82b45e4506584675012ebf9611302889b62aeb24",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192
+      }
+    },
+    "bfclparity-pi": {
+      "name": "bfclparity-pi",
+      "mechanism": "harbor",
+      "source_digest": "sha256:56d88c4dd269546a24038a3b6263cf366e6f90d4b8587bb992333c9460c36e72",
+      "tasks": [
+        {
+          "name": "bfcl_parity",
+          "num_fewshot": null,
+          "task_alias": null,
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "bfcl_parity",
+            "primary_metric": "reward",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "reward",
+                "source_name": "reward",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 123,
+            "n_attempted": 123
+          }
+        }
+      ],
+      "evalchemy": null,
+      "harbor": {
+        "dataset": "bfcl_parity",
+        "version": "1.0",
+        "agent": "pi",
+        "env": "daytona",
+        "config_digest": "sha256:d99186c6411e81d6d74838cb064271764383c1afcf2986c7f9199880fc64088a",
+        "harbor_config_commit": "82b45e4506584675012ebf9611302889b62aeb24",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192
+      }
+    },
+    "aime24": {
+      "name": "aime24",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:29e05a59e92c2aff97812d918b2edd79c0f3de0a373b43c72f36b69e2c787186",
+      "tasks": [
+        {
+          "name": "AIME24",
+          "num_fewshot": 0,
+          "task_alias": "aime24",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "AIME24",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "accuracy_avg",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 30,
+            "n_attempted": 30
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": 42,
+        "extra_gen_kwargs": {
+          "do_sample": "true",
+          "temperature": "0.7"
+        },
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "math500": {
+      "name": "math500",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:7846a64f268b603a082add8da7bb1aaf001ff49c15e2e22b4dacab81eaf8adbd",
+      "tasks": [
+        {
+          "name": "MATH500",
+          "num_fewshot": 0,
+          "task_alias": "math500",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "MATH500",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "accuracy",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 500,
+            "n_attempted": 500
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": null,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": true
+        },
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "truthfulqa": {
+      "name": "truthfulqa",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:1fc7570aaab932a15979c883895fb3f1b80c97141d809f4f94ead0e58723152f",
+      "tasks": [
+        {
+          "name": "truthfulqa_mc2",
+          "num_fewshot": 0,
+          "task_alias": "truthfulqa_mc2_0shot",
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "truthfulqa_mc2",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "acc",
+                "kind": "binary",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 817,
+            "n_attempted": 817
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": null,
+        "seed": null,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "max_length": null
+      },
+      "harbor": null
+    },
+    "nupa": {
+      "name": "nupa",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:3ff248af79f339c1d5514d20143e8881d74432306fcb11d064ab3a7f0c613148",
+      "tasks": [
+        {
+          "name": "NUPA5K-Loose",
+          "num_fewshot": 0,
+          "task_alias": "nupa5k",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "NUPA5K-Loose",
+            "primary_metric": "accuracy",
+            "metric_kind": "binary",
+            "metrics": [
+              {
+                "name": "accuracy",
+                "source_name": "exact_match",
+                "kind": "binary",
+                "higher_is_better": true
+              },
+              {
+                "name": "digit_match",
+                "source_name": "digit_match",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "format_valid_rate",
+                "source_name": "format_valid_rate",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 5000,
+            "n_attempted": 5000
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": null,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 20222943,
+        "extra_gen_kwargs": {},
+        "extra_model_args": {},
+        "max_length": 73664
+      },
+      "harbor": null
+    },
+    "mrcr": {
+      "name": "mrcr",
+      "mechanism": "evalchemy",
+      "source_digest": "sha256:e2ba247d6a66d59e04cf9ff6a68670d4e68f503f38c16362e28469494f8ad0b3",
+      "tasks": [
+        {
+          "name": "MRCR",
+          "num_fewshot": 0,
+          "task_alias": "mrcr",
+          "generation": true,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "MRCR",
+            "primary_metric": "mrcr_accuracy",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "mrcr_accuracy",
+                "source_name": "mrcr_accuracy",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "prefix_hit_rate",
+                "source_name": "prefix_hit_rate",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_2needle",
+                "source_name": "mrcr_8192_2needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_2needle_count",
+                "source_name": "mrcr_8192_2needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_4needle",
+                "source_name": "mrcr_8192_4needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_4needle_count",
+                "source_name": "mrcr_8192_4needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_8needle",
+                "source_name": "mrcr_8192_8needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_8192_8needle_count",
+                "source_name": "mrcr_8192_8needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_2needle",
+                "source_name": "mrcr_16384_2needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_2needle_count",
+                "source_name": "mrcr_16384_2needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_4needle",
+                "source_name": "mrcr_16384_4needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_4needle_count",
+                "source_name": "mrcr_16384_4needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_8needle",
+                "source_name": "mrcr_16384_8needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_16384_8needle_count",
+                "source_name": "mrcr_16384_8needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_2needle",
+                "source_name": "mrcr_32768_2needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_2needle_count",
+                "source_name": "mrcr_32768_2needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_4needle",
+                "source_name": "mrcr_32768_4needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_4needle_count",
+                "source_name": "mrcr_32768_4needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_8needle",
+                "source_name": "mrcr_32768_8needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_32768_8needle_count",
+                "source_name": "mrcr_32768_8needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_65536_2needle",
+                "source_name": "mrcr_65536_2needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_65536_2needle_count",
+                "source_name": "mrcr_65536_2needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_65536_4needle",
+                "source_name": "mrcr_65536_4needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_65536_4needle_count",
+                "source_name": "mrcr_65536_4needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_65536_8needle",
+                "source_name": "mrcr_65536_8needle",
+                "kind": "continuous",
+                "higher_is_better": true
+              },
+              {
+                "name": "mrcr_65536_8needle_count",
+                "source_name": "mrcr_65536_8needle_count",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": null,
+            "n_attempted": 1196
+          }
+        }
+      ],
+      "evalchemy": {
+        "apply_chat_template": true,
+        "debug": false,
+        "max_gen_toks": 4096,
+        "max_eval_instances": null,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 42,
+        "extra_gen_kwargs": {},
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "extra_model_args": {},
+        "max_length": 73728
+      },
+      "harbor": null
+    },
+    "tau3-pi": {
+      "name": "tau3-pi",
+      "mechanism": "harbor",
+      "source_digest": "sha256:06d3faa6f787d0eb0459988554c2063e1d61bfa4aa007fe81e20e936964abd8e",
+      "tasks": [
+        {
+          "name": "tau3-bench",
+          "num_fewshot": null,
+          "task_alias": null,
+          "generation": false,
+          "unsafe_code": false,
+          "completion_only": false,
+          "benchmark": {
+            "schema_version": 1,
+            "task": "tau3-bench",
+            "primary_metric": "reward",
+            "metric_kind": "continuous",
+            "metrics": [
+              {
+                "name": "reward",
+                "source_name": "reward",
+                "kind": "continuous",
+                "higher_is_better": true
+              }
+            ],
+            "n_benchmark": 375,
+            "n_attempted": 375
+          }
+        }
+      ],
+      "evalchemy": null,
+      "harbor": {
+        "dataset": "tau3-bench",
+        "version": "1.0.1",
+        "agent": "acp",
+        "env": "daytona",
+        "config_digest": "sha256:c240e4b9755a18b809cc75f150271934307159a5f705bfaa162a40d71f1a2921",
+        "harbor_config_commit": "82b45e4506584675012ebf9611302889b62aeb24",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768
+      }
+    }
+  }
+}

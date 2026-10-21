@@ -4,15 +4,19 @@
 """Validate and execute Harbor policies inside the pinned external environment."""
 
 import asyncio
+import base64
 import hashlib
 import importlib
 import importlib.metadata
 import inspect
 import json
 import os
+import shlex
 import sys
 import tempfile
 from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
@@ -24,14 +28,23 @@ from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-im
     is_acp_registry_shorthand,
     parse_registry_spec,
 )
+from harbor.agents.installed.mini_swe_agent import MiniSweAgent  # pyrefly: ignore[missing-import]
+from harbor.agents.terminus_2.tmux_session import (  # pyrefly: ignore[missing-import]
+    TmuxCommandError,
+    TmuxSession,
+    TmuxSessionEndedError,
+)
+from harbor.environments.daytona.environment import DaytonaEnvironment  # pyrefly: ignore[missing-import]
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor.models.job.lock import TrialLock  # pyrefly: ignore[missing-import]
+from harbor.verifier.verifier import Verifier  # pyrefly: ignore[missing-import]
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
 from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
 from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
-from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
+from harbor_config.models.trial.config import AgentConfig, TrialConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 
@@ -52,6 +65,8 @@ _PI_ACP_REGISTRY_ID = "pi-acp"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
+_MINI_SWE_LITELLM_VERSION = "1.105.1"
+_MINI_SWE_CONSTRAINT_PATH = "/tmp/marin-mini-swe.constraints"
 _STABLE_JOB_NAME = "__marin_job__"
 _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
@@ -72,6 +87,7 @@ class RuntimeOverlay(BaseModel):
     verifier_env: dict[str, str]
     archive_root: str
     archive_dataset: str
+    hosted_judge_config: dict[str, Any] | None = None
 
 
 class _DatasetKind(StrEnum):
@@ -496,9 +512,224 @@ def _preflight(request_path: Path) -> None:
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
-async def _run(config: JobConfig) -> None:
-    job = await Job.create(config)
-    await job.run()
+@contextmanager
+def _hosted_judge_transport_identity(overlay: RuntimeOverlay):
+    """Permit URL rotation only for the fully bound, identical hosted judge.
+
+    The pinned Harbor fingerprint already ignores candidate serving transport, but
+    includes the judge URL. Keep stored configs and grades intact; normalize only
+    the comparison key after checking the complete model-bound resume identity.
+    """
+    expected = overlay.hosted_judge_config
+    if expected is None:
+        yield
+        return
+    identity = json.loads((StoragePath.parse(overlay.archive_root) / "harbor_resume_identity.json").read_text())
+    judge_name = expected.get("name")
+    if (
+        identity.get("schema_version") != 2
+        or identity.get("judge") != expected
+        or not isinstance(judge_name, str)
+        or overlay.verifier_env.get("MODEL_NAME") != judge_name
+    ):
+        raise ValueError("Hosted judge transport rotation requires an identical bound judge configuration")
+    original = TrialConfig.identity_fingerprint
+    original_lock_key = TrialLock._equality_key
+
+    def lock_key(trial):
+        # Harbor separately compares every trial in lock.json before running.
+        # Normalize a copy so the saved lock and runtime endpoint stay intact.
+        env = trial.verifier.env
+        if env.get("MODEL_NAME") == judge_name and "OPENAI_BASE_URL" in env:
+            trial = trial.model_copy(deep=True)
+            trial.verifier.env["OPENAI_BASE_URL"] = "__marin_identical_hosted_judge_transport__"
+        return original_lock_key(trial)
+
+    def fingerprint(self: TrialConfig) -> dict[str, Any]:
+        value = original(self)
+        verifier = value.get("verifier") or {}
+        env = verifier.get("env") or {}
+        if env.get("MODEL_NAME") == judge_name and "OPENAI_BASE_URL" in env:
+            env["OPENAI_BASE_URL"] = "__marin_identical_hosted_judge_transport__"
+        return value
+
+    TrialConfig.identity_fingerprint = fingerprint
+    TrialLock._equality_key = lock_key
+    try:
+        yield
+    finally:
+        TrialConfig.identity_fingerprint = original
+        TrialLock._equality_key = original_lock_key
+
+
+def _opaque_terminal_batch_command(command: str) -> str:
+    if not command.startswith("if ! command -v tmux >/dev/null 2>&1; then\n"):
+        return command
+    if "harbor_tmux_has_session() {" not in command:
+        return command
+    # A process-name cleanup inside the pane must not match the transport's
+    # bash/timeout argv merely because that argv contains the agent's script.
+    encoded = base64.b64encode(command.encode("utf-8")).decode("ascii")
+    return f"eval \"$(printf '%s' '{encoded}' | base64 -d)\""
+
+
+@dataclass(frozen=True)
+class _VerifierCpuAllocation:
+    environment: Any
+    cpus: int
+
+
+_VERIFIER_CPU_ALLOCATION: ContextVar[_VerifierCpuAllocation | None] = ContextVar(
+    "marin_verifier_cpu_allocation", default=None
+)
+_VERIFIER_THREAD_ENV_KEYS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+
+
+@contextmanager
+def _daytona_verifier_cpu_limits():
+    original_verify = Verifier.verify
+    original_exec = DaytonaEnvironment._sandbox_exec
+    exec_signature = inspect.signature(original_exec)
+
+    async def verify(verifier: Any, *args: Any, **kwargs: Any) -> Any:
+        if not isinstance(verifier.environment, DaytonaEnvironment):
+            return await original_verify(verifier, *args, **kwargs)
+        cpus = verifier.environment._sandbox.cpu
+        if not isinstance(cpus, int) or isinstance(cpus, bool) or cpus < 1:
+            raise ValueError("Daytona verifier requires its allocated CPU count")
+        token = _VERIFIER_CPU_ALLOCATION.set(_VerifierCpuAllocation(verifier.environment, cpus))
+        try:
+            return await original_verify(verifier, *args, **kwargs)
+        finally:
+            _VERIFIER_CPU_ALLOCATION.reset(token)
+
+    async def sandbox_exec(environment: Any, command: str, *args: Any, **kwargs: Any) -> Any:
+        allocation = _VERIFIER_CPU_ALLOCATION.get()
+        if allocation is None or allocation.environment is not environment:
+            return await original_exec(environment, command, *args, **kwargs)
+        bound = exec_signature.bind(environment, command, *args, **kwargs)
+        env = dict(bound.arguments.get("env") or {})
+        # Daytona exposes host CPUs even when its cgroup grants one CPU. Native
+        # test libraries otherwise create host-sized pools and exhaust the
+        # original verifier timeout. Explicit task thread settings take priority.
+        for key in _VERIFIER_THREAD_ENV_KEYS:
+            env.setdefault(key, str(allocation.cpus))
+        bound.arguments["env"] = env
+        return await original_exec(*bound.args, **bound.kwargs)
+
+    Verifier.verify = verify
+    DaytonaEnvironment._sandbox_exec = sandbox_exec
+    try:
+        yield
+    finally:
+        Verifier.verify = original_verify
+        DaytonaEnvironment._sandbox_exec = original_exec
+
+
+@contextmanager
+def _daytona_ended_terminal_capture():
+    original = TmuxSession.send_keys_and_capture
+
+    async def capture(session: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await original(session, *args, **kwargs)
+        except (TmuxCommandError, TmuxSessionEndedError) as exc:
+            if not isinstance(session.environment, DaytonaEnvironment):
+                raise
+            capture_failed = isinstance(exc, TmuxCommandError) and str(exc).startswith(
+                f"{session.environment.session_id}: tmux capture failed:"
+            )
+            session_ended = isinstance(exc, TmuxSessionEndedError) and str(exc) == (
+                f"{session.environment.session_id}: tmux session ended before "
+                "Harbor could complete the requested terminal action"
+            )
+            if not (capture_failed or session_ended):
+                raise
+            # A terminal can close after Harbor's liveness check while the model
+            # answers, or between commands and capture. Confirm absence before
+            # following the existing session-ended path to the verifier.
+            try:
+                result = await session.environment.exec(
+                    command=f"tmux has-session -t {shlex.quote(session._session_name)} 2>&1",
+                    timeout_sec=5,
+                    user=session._user,
+                )
+            except Exception:
+                raise exc from None
+            status = (result.stdout or "") + (result.stderr or "")
+            if result.return_code != 1 or not any(
+                marker in status for marker in ("can't find session:", "no server running on", "no sessions")
+            ):
+                raise
+            output = await session._incremental_output_from_captures("", "")
+            return output, False
+
+    TmuxSession.send_keys_and_capture = capture
+    try:
+        yield
+    finally:
+        TmuxSession.send_keys_and_capture = original
+
+
+@contextmanager
+def _opaque_daytona_terminal_transport():
+    original = DaytonaEnvironment._sandbox_exec
+
+    async def sandbox_exec(environment: Any, command: str, *args: Any, **kwargs: Any) -> Any:
+        return await original(environment, _opaque_terminal_batch_command(command), *args, **kwargs)
+
+    DaytonaEnvironment._sandbox_exec = sandbox_exec
+    try:
+        yield
+    finally:
+        DaytonaEnvironment._sandbox_exec = original
+
+
+@contextmanager
+def _mini_swe_dependency_constraints():
+    """Keep sandbox tool calls on the dependency version used before the MCP import regression."""
+    original_install = MiniSweAgent.install
+
+    async def install(agent: MiniSweAgent, environment: Any) -> None:
+        original_env = agent._extra_env
+        if "UV_CONSTRAINT" in original_env:
+            raise ValueError("Mini-SWE dependency pin conflicts with an existing UV_CONSTRAINT")
+        with tempfile.TemporaryDirectory(prefix="marin-mini-swe-constraints-") as directory:
+            constraint = Path(directory) / "constraints.txt"
+            constraint.write_text(f"litellm=={_MINI_SWE_LITELLM_VERSION}\n")
+            await environment.upload_file(constraint, _MINI_SWE_CONSTRAINT_PATH)
+        agent._extra_env = {**original_env, "UV_CONSTRAINT": _MINI_SWE_CONSTRAINT_PATH}
+        try:
+            await original_install(agent, environment)
+            check = (
+                "import importlib.metadata; version = importlib.metadata.version('litellm'); "
+                f"assert version == {_MINI_SWE_LITELLM_VERSION!r}, version; print(version)"
+            )
+            result = await agent.exec_as_agent(
+                environment,
+                command='. "$HOME/.local/bin/env"; "$(uv tool dir)/mini-swe-agent/bin/python" -c ' + shlex.quote(check),
+            )
+            agent.logger.info("Mini-SWE LiteLLM dependency verified: %s", result.stdout.strip())
+        finally:
+            agent._extra_env = original_env
+
+    MiniSweAgent.install = install
+    try:
+        yield
+    finally:
+        MiniSweAgent.install = original_install
+
+
+async def _run(config: JobConfig, overlay: RuntimeOverlay) -> None:
+    with (
+        _hosted_judge_transport_identity(overlay),
+        _daytona_verifier_cpu_limits(),
+        _opaque_daytona_terminal_transport(),
+        _daytona_ended_terminal_capture(),
+        _mini_swe_dependency_constraints(),
+    ):
+        job = await Job.create(config)
+        await job.run()
 
 
 def effective_job_config(policy_path: Path, overlay_path: Path) -> JobConfig:
@@ -528,7 +759,8 @@ def main() -> None:
     except (IndexError, json.JSONDecodeError, OSError, TypeError, ValueError, ValidationError) as exc:
         print(_diagnostic(exc), file=sys.stderr)
         raise SystemExit(2) from exc
-    asyncio.run(_run(config))
+    overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text())
+    asyncio.run(_run(config, overlay))
 
 
 if __name__ == "__main__":

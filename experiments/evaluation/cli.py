@@ -206,6 +206,12 @@ def cli() -> None:
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
 @click.option(
+    "--cluster-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Explicit Iris controller configuration, including its credential identity.",
+)
+@click.option(
     "--records-prefix",
     default=None,
     help="Object-store prefix for run records; defaults to GCS, or CW S3 for CoreWeave-routed runs.",
@@ -240,6 +246,7 @@ def launch(
     resume_results_path: str | None,
     no_wait: bool,
     dry_run: bool,
+    cluster_config: Path | None,
     records_prefix: str | None,
     federated_cluster: str | None,
     priority: str | None,
@@ -298,7 +305,11 @@ def launch(
     if dry_run:
         _print_plan(spec, batch)
         return
-    with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
+    with open_iris_client(
+        config_file=cluster_config,
+        cluster_name=None if cluster_config is not None else EVALUATION_CONTROLLER_CLUSTER,
+        workspace=find_project_root(),
+    ) as client:
         group = launch_group(batch, client)
         click.echo(
             f"submitted group {group.group_id} ({len(group.evaluations)} evals, one serve) "

@@ -38,7 +38,7 @@ DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
 _MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
 _QWEN_NEXT_MODEL_MARKERS = ("qwen3.5", "qwen3-next")
-DEFAULT_SERVE_DISK = "100g"
+DEFAULT_SERVE_DISK = "500g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 _VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
 _VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
@@ -203,6 +203,20 @@ def _vllm_engine_config(
     if platform is Platform.TPU and (serve.vllm_source is not None or serve.vllm_plugin_requirements):
         raise ValueError("model-specific vLLM source and plugins require GPU serving")
     source = serve.vllm_source or (VllmSource.MARIN_FORK if platform is Platform.GPU else VllmSource.UPSTREAM)
+    # Distributed loading is a Run:ai streamer option. Object-store checkpoints
+    # select that loader automatically, but staged HF checkpoints look local and
+    # otherwise fall back to the incompatible default loader.
+    if not has_vllm_option(extra_args, "--load-format"):
+        for index, argument in enumerate(extra_args):
+            if argument == "--model-loader-extra-config" and index + 1 < len(extra_args):
+                loader_config = json.loads(extra_args[index + 1])
+            elif argument.startswith("--model-loader-extra-config="):
+                loader_config = json.loads(argument.split("=", 1)[1])
+            else:
+                continue
+            if isinstance(loader_config, dict) and loader_config.get("distributed") is True:
+                extra_args = (*extra_args, "--load-format", "runai_streamer")
+                break
     return VllmEngineConfig(
         launcher=launcher,
         source=source,

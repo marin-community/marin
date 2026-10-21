@@ -19,6 +19,8 @@ from marin.evaluation.records import EvalRef, EvalRunRecord, ModelRef
 
 EVALCHEMY_COMMIT = "c131e5ab84d3014490549ec06d45deb13b5673c2"
 HARBOR_COMMIT = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
+OCTOBER_5_VERSION = "eval-policy-2026-10-05-verified"
+OCTOBER_5_REFERENCES = json.loads(Path(__file__).with_name("october_5_reference.json").read_text())["evaluations"]
 NUPA_SEED = 20222943
 DEFAULT_SEED = 42
 AIME24_REPEATS = 10
@@ -144,12 +146,52 @@ RUNTIME_COMMITS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
         SEPTEMBER_16_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
         SEPTEMBER_24_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
+        OCTOBER_5_VERSION: MappingProxyType(
+            {
+                "evalchemy": "af61e0baaa291071f815f14f567852adece6e14c",
+                "harbor": "82b45e4506584675012ebf9611302889b62aeb24",
+            }
+        ),
     }
 )
 
 
 def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef) -> tuple[str, ...]:
     """Return launch/record violations; unlabelled and non-policy runs are unrestricted."""
+    if version == OCTOBER_5_VERSION:
+        reference = OCTOBER_5_REFERENCES.get(evaluation.name)
+        if reference is None:
+            return (f"{evaluation.name}: no October 5 reference policy recovered",)
+        problems = []
+        if evaluation.source_digest != reference["source_digest"]:
+            problems.append("source config differs from original October 5 cohort record")
+        if evaluation.mechanism != reference["mechanism"]:
+            problems.append("mechanism differs from original October 5 cohort record")
+        source_config = model.source_config or model.config
+        if source_config is None or model.config is None:
+            problems.append("missing normalized model configuration")
+        elif source_config.name != model.name or source_config.location != model.location:
+            problems.append("model identity differs from saved configuration")
+        elif model.config.serve.backend != model.backend:
+            problems.append("backend differs from saved configuration")
+        elif model.config_digest is not None and model.config_digest != model_config_digest(source_config):
+            problems.append("model configuration digest does not match saved configuration")
+        expected = EvalRef.model_validate(reference)
+        actual_tasks = tuple(task.model_dump(exclude={"benchmark"}) for task in evaluation.tasks)
+        expected_tasks = tuple(task.model_dump(exclude={"benchmark"}) for task in expected.tasks)
+        if actual_tasks != expected_tasks:
+            problems.append("task protocol differs from original October 5 cohort record")
+        actual_evalchemy = evaluation.evalchemy.model_dump(mode="json") if evaluation.evalchemy else None
+        expected_evalchemy = reference["evalchemy"]
+        if expected_evalchemy is not None:
+            actual_evalchemy = (
+                {key: actual_evalchemy.get(key) for key in expected_evalchemy} if actual_evalchemy else None
+            )
+        if actual_evalchemy != expected_evalchemy:
+            problems.append("effective Evalchemy settings differ from original October 5 cohort record")
+        if evaluation.harbor != expected.harbor:
+            problems.append("effective Harbor policy differs from original October 5 cohort record")
+        return tuple(problems)
     version_key = version or ""
     policy = POLICIES.get(version_key)
     if policy is None:
@@ -242,7 +284,7 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
 
 def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -> tuple[str, ...]:
     """Keep evaluator versions fixed within a verified cohort."""
-    if version not in POLICIES:
+    if version not in POLICIES and version != OCTOBER_5_VERSION:
         return ()
     commits = RUNTIME_COMMITS.get(version)
     if commits is None:
@@ -263,7 +305,7 @@ def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -
 
 def record_policy_violations(record: EvalRunRecord) -> tuple[str, ...]:
     """Validate verified records; historical labels remain readable without a policy claim."""
-    if record.version not in POLICIES:
+    if record.version not in POLICIES and record.version != OCTOBER_5_VERSION:
         return ()
     return (
         *policy_violations(record.version, record.model, record.evaluation),
