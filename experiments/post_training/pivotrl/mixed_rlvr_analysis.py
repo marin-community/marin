@@ -38,6 +38,7 @@ from dotenv import dotenv_values
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.post_training.pivotrl.mixed_rlvr_arms import ORIGINAL_SEED
 from experiments.post_training.pivotrl.mixed_rlvr_evals import EVALCHEMY, HARBOR, REFERENCE
 
 logger = logging.getLogger(__name__)
@@ -360,7 +361,7 @@ def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequenc
                 mec=color if seed else "white",
                 mew=1.2 if seed else 0.7,
                 zorder=3,
-                label=f"{base.upper()} · {description}" + (f" (seed {seed})" if seed else ""),
+                label=f"{base.upper()} · {description} (seed {seed or ORIGINAL_SEED})",
             )
         ax.set_title(f"{title}  ", loc="left", fontsize=10, fontweight="bold", color="#111111")
         ax.text(
