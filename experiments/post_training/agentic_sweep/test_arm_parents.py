@@ -61,22 +61,24 @@ def test_parent_and_plateau_outputs_are_disjoint_and_use_the_selected_weights():
 
 
 @pytest.mark.parametrize("parent_name", tuple(PARENTS))
-def test_low_plain_has_distinct_cache_checkpoint_and_tracker_identity(parent_name):
+@pytest.mark.parametrize("data_variant", ("low", "matched-relay"))
+def test_plain_variant_has_distinct_cache_checkpoint_and_tracker_identity(parent_name, data_variant):
     rows = manifest(parent_name, "plain")
     high = graph(rows, parent_name)
-    low = graph(rows, parent_name, data_variant="low")
-    high_train, low_train = high["train"], low["train"]
-    assert low_train.name == f"checkpoints/karan/plain-low-{parent_name}-v7-20261020-lr1e-06-3ep"
-    assert low_train.path("/outputs") != high_train.path("/outputs")
-    assert low_train.fingerprint() != high_train.fingerprint()
+    variant = graph(rows, parent_name, data_variant=data_variant)
+    high_train, variant_train = high["train"], variant["train"]
+    assert variant_train.name == f"checkpoints/karan/plain-{data_variant}-{parent_name}-v7-20261020-lr1e-06-3ep"
+    assert variant_train.path("/outputs") != high_train.path("/outputs")
+    assert variant_train.fingerprint() != high_train.fingerprint()
     assert {cache.path("/outputs") for cache in high["caches"]}.isdisjoint(
-        cache.path("/outputs") for cache in low["caches"]
+        cache.path("/outputs") for cache in variant["caches"]
     )
     configurations = [
         trained.build_config(StepContext.for_run(trained.path("/outputs"), "/outputs", deps=trained.deps)).train_config
-        for trained in (high_train, low_train)
+        for trained in (high_train, variant_train)
     ]
     assert configurations[0].trainer.id != configurations[1].trainer.id
+    assert configurations[0].trainer.load_checkpoint_path != configurations[1].trainer.load_checkpoint_path
     assert configurations[0].initialize_from_hf == configurations[1].initialize_from_hf == PARENTS[parent_name].uri
     assert rows["arm"] == "plain"
 

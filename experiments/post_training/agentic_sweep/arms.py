@@ -126,10 +126,12 @@ def run_identity(arm: str, parent_name: str, run_date: str, plateau: bool, data_
     datetime.strptime(run_date, "%Y%m%d")
     if plateau and arm != "plain":
         raise ValueError("Plateau training uses the plain arm's rows")
-    if data_variant not in ("high", "low"):
-        raise ValueError("data-variant must be high or low")
+    if data_variant not in ("high", "low", "matched-relay"):
+        raise ValueError("data-variant must be high, low or matched-relay")
+    if data_variant == "matched-relay" and (arm != "plain" or plateau):
+        raise ValueError("The matched-relay comparator uses plain training")
     method = "plateau" if plateau else arm
-    variant_suffix = "-low" if data_variant == "low" else ""
+    variant_suffix = f"-{data_variant}" if data_variant != "high" else ""
     return f"{method}{variant_suffix}-{parent_name}-v7-{run_date}"
 
 
@@ -538,7 +540,7 @@ def main() -> None:
     parser.add_argument("--plain-data", required=True, help="built plain arm prefix, the replay reference")
     parser.add_argument("--parent", choices=tuple(PARENTS), required=True)
     parser.add_argument("--run-date", required=True, help="YYYYMMDD, part of every output identity")
-    parser.add_argument("--data-variant", choices=("high", "low"), default="high")
+    parser.add_argument("--data-variant", choices=("high", "low", "matched-relay"), default="high")
     parser.add_argument("--context-length", type=int, default=CONTEXT)
     parser.add_argument("--learning-rate", type=float, required=True)
     parser.add_argument("--epochs", type=int, required=True)
