@@ -31,7 +31,7 @@ SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # A trial id is local to its experiment; elsewhere a trial is cited as "<experiment id>.<trial id>", e.g. X0014.t005.
 TRIAL_ID_RE = re.compile(r"^t\d{3}$")
 # A git commit SHA, full or abbreviated to at least 10 characters.
-COMMIT_RE = re.compile(r"^[0-9a-f]{10,40}$")
+COMMIT_RE = re.compile(r"[0-9a-f]{10,40}")
 # One list shared with the intake bot (scripts/ci/belay_intake.py), which reads it from this branch.
 CATEGORIES: tuple[str, ...] = tuple(json.loads((REGISTRY_DIR / "categories.json").read_text()))
 
@@ -243,7 +243,12 @@ def validate(experiments: list[Experiment]) -> None:
         if numbers != sorted(set(numbers)):
             raise ValueError(f"{e.id}: trial ids must increase down the file, with no repeats")
         for t in e.trials:
-            if t.commit is not None and not COMMIT_RE.match(t.commit):
+            if t.commit is None:
+                continue
+            # YAML reads an unquoted all-digit SHA as an int.
+            if not isinstance(t.commit, str):
+                raise ValueError(f"{e.id}.{t.id}: commit {t.commit!r} was read as a number; quote it in the YAML")
+            if not COMMIT_RE.fullmatch(t.commit):
                 raise ValueError(
                     f"{e.id}.{t.id}: commit {t.commit!r} must be a lowercase hex SHA of 10 to 40 characters"
                 )

@@ -96,12 +96,21 @@ def test_load_names_the_file_and_the_missing_key(tmp_path):
         {"commit": "e8cd1b9"},
         {"commit": "E8CD1B97EC"},
         {"commit": "e8cd1b97ec133ea54cd42ac520bf069ee659d2d3a"},
+        {"commit": "e8cd1b97ec\n"},
     ],
 )
 def test_validate_rejects_malformed_commits(overrides):
     (trial,) = _experiment().trials
     with pytest.raises(ValueError):
         R.validate([_experiment(trials=(dataclasses.replace(trial, **overrides),))])
+
+
+def test_load_rejects_an_unquoted_all_digit_commit(tmp_path):
+    (trial,) = _experiment().trials
+    path = R.write_experiment(_experiment(trials=(dataclasses.replace(trial, commit="e8cd1b97ec"),)), tmp_path)
+    path.write_text(path.read_text().replace("commit: e8cd1b97ec", "commit: 1234567890"))
+    with pytest.raises(ValueError, match="quote it"):
+        R.load_registry(tmp_path)
 
 
 @pytest.mark.parametrize("commit", ["e8cd1b97ec", "e8cd1b97ec133ea54cd42ac520bf069ee659d2d3"])
