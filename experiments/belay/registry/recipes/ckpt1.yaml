@@ -1,0 +1,14 @@
+id: ckpt1
+name: Belay Ckpt 1
+branch: marin_belay_v1_ckpt1
+commit: 8415c3ce84
+controls:
+- id: c001
+  wandb:
+  - belay-X0217-ctrl-s0
+  - belay-X0217-ctrl-s1
+  loss:
+  - 3.0269
+  - 3.0315
+  rung: d512
+  steps: 2760
