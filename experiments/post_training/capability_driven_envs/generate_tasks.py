@@ -36,7 +36,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 import signal
 import sys
 import tempfile
@@ -55,6 +54,7 @@ from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
 
 from experiments.post_training.capability_driven_envs.catalog import (
+    FILE_SAFE_ID,
     CapabilityIdea,
     example_catalog_path,
     load_capability_ideas,
@@ -72,7 +72,6 @@ from experiments.post_training.glm import (
 
 logger = logging.getLogger(__name__)
 
-FILE_SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 GLM_HIGH_TOKEN_ENV = "GLM_HIGH_TOKEN"
 POOL_TOKEN_ENV = {Pool.BULK: GLM_BULK_TOKEN_ENV, Pool.HIGH: GLM_HIGH_TOKEN_ENV}
 """The environment variable holding each pool's bearer token; the token selects the pool."""
