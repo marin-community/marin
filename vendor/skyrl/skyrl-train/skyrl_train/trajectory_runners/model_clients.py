@@ -3,6 +3,7 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from collections.abc import Awaitable, Callable
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
@@ -128,6 +129,8 @@ async def _render_chat_prompt(
     tokenize: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]],
     render_request: dict[str, Any],
     continuation: ChatContinuation | None,
+    *,
+    decode: Callable[[list[int]], str],
 ) -> tuple[list[dict[str, Any]], list[int]]:
     async def render(request: dict[str, Any], current_continuation: ChatContinuation | None) -> list[int] | None:
         if current_continuation is None:
@@ -135,6 +138,7 @@ async def _render_chat_prompt(
         return await render_exact_chat_continuation(
             tokenize,
             request,
+            decode=decode,
             assistant_message_index=current_continuation["assistant_message_index"],
             served_prefix_token_ids=current_continuation["served_prefix_token_ids"],
         )
@@ -168,7 +172,10 @@ async def _render_chat_prompt(
                 raise retry_template_error from retry_error
             raise
     if prompt_ids is None:
-        raise RuntimeError("Cannot preserve the exact served token prefix across this chat turn")
+        raise RuntimeError(
+            "Cannot preserve the exact served token prefix across this chat turn; "
+            "check the structural prefix and the assistant/tool-call and content-only closers"
+        )
     if not isinstance(prompt_ids, list) or not all(isinstance(token, int) for token in prompt_ids):
         raise RuntimeError("vLLM tokenization did not return prompt token IDs")
     return messages, prompt_ids
@@ -232,7 +239,16 @@ class DirectModelClient:
                 "headers": {},
             }
             with rollout_phase("tokenize"):
-                messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
+                messages, prompt_ids = await _render_chat_prompt(
+                    self._client.tokenize,
+                    render_request,
+                    continuation,
+                    decode=partial(
+                        self._client.tokenizer.decode,
+                        skip_special_tokens=False,
+                        clean_up_tokenization_spaces=False,
+                    ),
+                )
             max_prompt_length = request.get("max_prompt_length")
             if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
                 raise GenerationBudgetExceededError(prompt_ids)
