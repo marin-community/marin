@@ -6,10 +6,11 @@
     python -m experiments.post_training.pivotrl.mixed_rlvr_analysis test <data-dir> [--series a,b,c] [--steps 4,8,12]
     python -m experiments.post_training.pivotrl.mixed_rlvr_analysis plot <data-dir> <out-prefix> [--series a,b,c]
 
-``collect`` reads every record the arms' evaluations wrote under the CoreWeave evals prefix, keeps the fullest succeeded
-run per arm label, step and benchmark, and writes ``tasks.json`` (per-task Harbor rewards for SWE-bench Verified and
-OT-TBLite) and ``samples.json`` (per-question Evalchemy correctness for AIME24, GPQA Diamond, Math500 and MMLU-Pro)
-beside ``records.json``. The reference model's rows come from the October 5 cohort records in ``mixed_rlvr_evals/``.
+``collect`` reads every record the arms' evaluations wrote under the CoreWeave evals prefix, keeps the fullest run per
+arm label, step and benchmark (the newest among equal ones, whatever the record's status), and writes ``tasks.json``
+(per-task Harbor rewards for SWE-bench Verified and OT-TBLite) and ``samples.json`` (per-question Evalchemy correctness
+for AIME24, GPQA Diamond, Math500 and MMLU-Pro) beside ``records.json``. The reference model's rows come from the
+October 5 cohort records in ``mixed_rlvr_evals/``.
 
 Scoring: SWE-bench Verified counts a trial with no verifier result as unsolved and uses each task's first trial;
 OT-TBLite counts a task solved when at least two of its three trials score 1; AIME24 and GPQA Diamond average their
@@ -202,10 +203,14 @@ def _sample_correctness(fs, base: str) -> dict[str, bool | None]:
     return out
 
 
-def _merge_fullest(parts: Iterable[dict]) -> dict:
-    """The fullest run wins on overlap; partial runs only fill tasks it lacks."""
+def _merge_fullest(parts: Iterable[tuple[str, dict]]) -> dict:
+    """The fullest run wins on overlap, the newest among equal ones; partial runs only fill items it lacks.
+
+    A resubmission supersedes an earlier run of the same checkpoint and benchmark, so among complete runs the
+    latest ``created`` timestamp is the one that counts.
+    """
     merged: dict = {}
-    for part in sorted(parts, key=len, reverse=True):
+    for _, part in sorted(parts, key=lambda created_part: (len(created_part[1]), created_part[0]), reverse=True):
         for item, value in part.items():
             merged.setdefault(item, value)
     return merged
@@ -215,24 +220,28 @@ def collect(data_dir: Path) -> None:
     fs = _filesystem()
     records = _records(fs)
     (data_dir / "records.json").write_text(json.dumps(records, indent=1) + "\n")
-    runs: dict[tuple[str, str], list[str]] = collections.defaultdict(list)
+    runs: dict[tuple[str, str], list[tuple[str, str]]] = collections.defaultdict(list)
+    # Every run contributes its scored items regardless of the record's status: a coordinator killed after its last
+    # trial finished is recorded as infra_failed with complete results, while a resubmission supersedes it by date.
     for record in records:
-        if record["status"] == "succeeded":
-            runs[(record["eval"], record["key"])].append(record["results"])
+        runs[(record["eval"], record["key"])].append((record["created"], record["results"]))
     for bench in (*HARBOR, *EVALCHEMY):
-        runs[(bench, REF)].append(REFERENCE[bench]["results_path"].removeprefix("s3://"))
+        runs[(bench, REF)].append(
+            (REFERENCE[bench]["created_at"], REFERENCE[bench]["results_path"].removeprefix("s3://"))
+        )
     tasks: dict[str, dict[str, dict]] = {bench: {} for bench in HARBOR}
     samples: dict[str, dict[str, dict]] = {bench: {} for bench in EVALCHEMY}
     with ThreadPoolExecutor(8) as pool:
         jobs = {
             (bench, key): [
-                pool.submit(_harbor_rewards if bench in HARBOR else _sample_correctness, fs, base) for base in bases
+                (created, pool.submit(_harbor_rewards if bench in HARBOR else _sample_correctness, fs, base))
+                for created, base in bases
             ]
             for (bench, key), bases in runs.items()
         }
         for (bench, key), futures in jobs.items():
             target = tasks if bench in HARBOR else samples
-            target[bench][key] = _merge_fullest(future.result() for future in futures)
+            target[bench][key] = _merge_fullest((created, future.result()) for created, future in futures)
     (data_dir / "tasks.json").write_text(json.dumps(tasks) + "\n")
     (data_dir / "samples.json").write_text(json.dumps(samples) + "\n")
     for bench in (*HARBOR, *EVALCHEMY):
@@ -295,7 +304,8 @@ def paired_points(
     for bench, _ in PANELS:
         ref = scores[bench][REF]
         for label in series:
-            evaluated = [step for step in steps if run_key(label, step) in scores[bench]]
+            # A run whose samples are all unscored so far has an empty score dict and is not evaluated yet.
+            evaluated = [step for step in steps if scores[bench].get(run_key(label, step))]
             deltas = [(step, paired_delta(scores[bench][run_key(label, step)], ref, rng)) for step in evaluated]
             points[(bench, label)] = deltas
             for step, delta in deltas:
