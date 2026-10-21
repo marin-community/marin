@@ -84,8 +84,19 @@ library import contract, and the built wheel against the current source:
 uv run --no-project python -m scripts.skyrl_migration check-vendor
 ```
 
-This lane uses an isolated CPU environment. GPU runtime acceptance
-remains a separate operation.
+This lane uses the isolated `cpu` extra with `vendor/skyrl/uv.lock` and
+explicitly selects checkout sources for RolloutEngine, Shellbox, TaskCompendium
+and Verifyit for its import contract.
+It does not establish compatibility with released Marin packages. Check that
+separately, without a checkout overlay:
+
+```bash
+uv run --no-project python infra/ci/check_skyrl_marin.py project --source vendor/skyrl
+```
+
+Adopting new APIs in the standalone SkyRL runtime requires the release and dependency
+update described in [Releasing packages](releasing.md#adopting-a-python-library-change-downstream).
+GPU runtime acceptance remains a separate operation.
 
 ## Refresh while the fork changes
 

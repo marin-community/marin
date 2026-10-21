@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tomllib
 import zipfile
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from infra.ci.check_skyrl_marin import check_project
 from scripts import skyrl_migration as migration
 
 
@@ -30,6 +32,48 @@ def write(root: Path, path: str, data: str) -> None:
 def save(root: Path, message: str) -> str:
     migration.git(root, "add", ".")
     return migration.commit(root, message)
+
+
+def test_marin_import_contract_requires_explicit_checkout_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "skyrl"
+    write(
+        source,
+        "pyproject.toml",
+        '[project]\nname = "import-contract"\nversion = "0.0.0"\n'
+        'requires-python = ">=3.12"\ndependencies = []\n'
+        "[project.optional-dependencies]\ncpu = []\n[dependency-groups]\ndev = []\n",
+    )
+    write(source, "cloud/launcher.py", "from rolloutengine.harness.tools import ToolHarness\n")
+    checkout = tmp_path / "marin"
+    for package in ("rolloutengine", "shellbox", "taskcompendium", "verifyit"):
+        (checkout / "lib" / package / "src").mkdir(parents=True)
+    imports = checkout / "lib/rolloutengine/src"
+    marker = tmp_path / "imported"
+    write(imports, "rolloutengine/__init__.py", "")
+    write(imports, "rolloutengine/harness/__init__.py", "")
+    write(
+        imports,
+        "rolloutengine/harness/tools.py",
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('checkout')\nclass ToolHarness: pass\n",
+    )
+    monkeypatch.setenv("UV_PYTHON", sys.executable)
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    monkeypatch.setenv("UV_PYTHON_DOWNLOADS", "never")
+    monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "uv-cache"))
+    migration.run("uv", "lock", "--project", str(source))
+    monkeypatch.setenv("PYTHONPATH", str(imports))
+
+    # An inherited source path must not make the frozen published-package contract pass.
+    with pytest.raises(subprocess.CalledProcessError):
+        check_project(source)
+    assert "ModuleNotFoundError: No module named 'rolloutengine'" in capfd.readouterr().err
+    assert not marker.exists()
+
+    # The explicit source contract executes the checkout's new module in the child.
+    check_project(source, marin_source=checkout)
+    assert marker.read_text() == "checkout"
 
 
 @pytest.fixture
