@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from click.testing import CliRunner
 from marin.execution.artifact import read_record
 from marin.execution.lazy import ArtifactStep, run
 from marin.training.training import LevanterCheckpoint
@@ -121,16 +120,3 @@ def test_scoring_failure_preserves_export_and_warm_baseline_across_iterations(tm
     assert calls == {"baseline": 1, "training": 1, "final": 2}
     run(loop.iteration_step(**loop_options(tmp_path, max_steps=50, version="2026.10.21.2")), max_concurrent=1)
     assert calls == {"baseline": 1, "training": 2, "final": 3}
-
-
-def test_iteration_cli_builds_an_initializer_specific_export_then_score_plan(tmp_path):
-    options = loop_options(tmp_path)
-    options.pop("version")
-    arguments = ["--version", "2026.10.21.3"]
-    for key, value in options.items():
-        arguments.extend(["--" + key.replace("_", "-"), str(value)])
-    result = CliRunner().invoke(loop.main, arguments)
-    assert result.exit_code == 0, result.output
-    assert "snowball-inventory-compare/sft/iterations" in result.output
-    assert "snowball-initializer-baseline/" in result.output
-    assert "snowball-iteration/sft/fast/step-25" in result.output

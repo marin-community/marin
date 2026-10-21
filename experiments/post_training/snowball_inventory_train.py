@@ -96,7 +96,7 @@ def training_recipe(
 @click.option("--validation-uri", required=True)
 @click.option("--validation-sha256", required=True)
 @click.option("--validation-version", required=True)
-@click.option("--max-steps", type=click.IntRange(min=25), required=True)
+@click.option("--max-steps", type=click.IntRange(min=CHECKPOINT_INTERVAL), required=True)
 @click.option("--judge-base-url", required=True)
 @click.option("--judge-model", required=True)
 @rl_build_options
