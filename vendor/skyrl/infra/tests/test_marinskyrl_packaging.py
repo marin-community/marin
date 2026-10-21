@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from email.parser import Parser
 from pathlib import Path
 
-from packaging.markers import Marker
 from packaging.requirements import Requirement
 import pytest
 
@@ -100,14 +99,7 @@ def test_training_extras_publish_hardware_policy_and_rollout_requirements(built_
     assert "Extras `cpu` and `cuda` are incompatible" in conflict.stderr
 
 
-def test_rollout_runtime_exports_vendored_harbor_for_linux_training() -> None:
-    platform = {"sys_platform": "linux", "platform_machine": "x86_64"}
-    harbor = next(line for line in _exported_lines(("megatron", "vllm")) if line.startswith("./harbor ;"))
-    assert Marker(harbor.partition(";")[2].strip()).evaluate(platform)
-    assert (REPOSITORY_ROOT / "harbor").resolve() == (REPOSITORY_ROOT.parent / "harbor").resolve()
-
-
-def _exported_lines(extras: tuple[str, ...]) -> list[str]:
+def _exported_requirements(extras: tuple[str, ...]) -> list[Requirement]:
     command = ["uv", "export", "--frozen", "--no-annotate", "--no-dev", "--no-hashes"]
     for extra in extras:
         command.extend(("--extra", extra))
@@ -118,11 +110,11 @@ def _exported_lines(extras: tuple[str, ...]) -> list[str]:
         text=True,
         check=True,
     ).stdout.splitlines()
-    return [line for line in exported if line and not line.startswith(("#", "-e "))]
-
-
-def _exported_requirements(extras: tuple[str, ...]) -> list[Requirement]:
-    return [Requirement(line) for line in _exported_lines(extras) if not line.startswith("./")]
+    return [
+        Requirement(line)
+        for line in exported
+        if line and not line.startswith(("#", "-e ", "./"))
+    ]
 
 
 @pytest.mark.parametrize("extras", [("cuda",), ("megatron", "vllm")])

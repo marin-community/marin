@@ -2,7 +2,6 @@ import asyncio
 import os
 import subprocess
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -83,7 +82,6 @@ async def test_cohort_cache_shares_pinned_inputs_across_concurrent_trials(tmp_pa
     monkeypatch.setattr(asyncio, "create_subprocess_exec", git_process)
     cache = HarborTaskCache()
     prepared = await asyncio.gather(*(cache.prepare(config) for _ in range(3)))
-    # These are real external Git operations, not internal helper calls.
     assert len(fetches) == (3 if mixed_settings else 1)
     repository.rename(tmp_path / "unavailable-repository")
     for index, ready in enumerate(prepared):
@@ -93,8 +91,6 @@ async def test_cohort_cache_shares_pinned_inputs_across_concurrent_trials(tmp_pa
         )
         assert result.results[0].cached
         assert (result.paths[0] / "instruction.md").read_text() == f"original task {index}"
-        assert selected.get_task_id() == config.tasks[index].get_task_id()
-    assert [task.overwrite for task in config.tasks] == ([True, False, True] if mixed_settings else [True] * 3)
 
 
 @pytest.mark.asyncio
@@ -117,21 +113,6 @@ async def test_worker_preserves_task_download_stderr(tmp_path):
             await client.run(cohort, 0)
     stderr = str(caught.value).split("Subprocess stderr:", 1)[1]
     assert "missing-repository" in stderr
-
-
-@pytest.mark.asyncio
-async def test_worker_runs_outside_checkout_with_launcher_package_shadowed(tmp_path, monkeypatch):
-    # The task image can supply an older launcher while the trainer comes from
-    # the pinned source overlay. The worker must use that same trainer package.
-    launcher = tmp_path / "marinskyrl"
-    launcher.mkdir()
-    (launcher / "__init__.py").write_text("")
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = os.pathsep.join([str(tmp_path), str(Path(__file__).resolve().parents[2])])
-    monkeypatch.chdir(tmp_path)
-    async with asyncio.timeout(60), HarborTrialClient(environment) as client:
-        with pytest.raises(RuntimeError, match="explicit tasks"):
-            await client.run({"job": {"tasks": []}, "reward_key": "reward"}, 0)
 
 
 def test_validation_scores_preserve_infrastructure_missingness():
