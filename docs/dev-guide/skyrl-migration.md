@@ -70,6 +70,13 @@ The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 Regenerate it with `uv 0.13.1`, matching the `skyrl-wheel` lane.
 The pinned Ray release has no Intel macOS wheel.
 
+The Marin CLI selects the nested launcher's `cpu` extra explicitly. Local task
+execution is configured separately: `environment.task_sessions.local: {}` enables
+the local machine factory and probes Linux bubblewrap before task admission.
+Omission or `null` disables the local backend. The launcher forwards an explicit
+Iris container profile to the coordinator and trainer; enabling local execution
+does not bypass the sandbox capability check.
+
 Features under review can require exact Git sources before their Marin library
 APIs are published. Such a lock is a development dependency contract, not a
 shared-library release. Replace these sources with genuine published packages
@@ -101,6 +108,7 @@ written before the coverage check raises.
 
 The `skyrl-wheel` lane exercises these CPU contracts in the independent nested
 environment. This does not establish sandbox isolation or serving/GPU correctness.
+
 
 The migration tool rebuilds source candidates and prepares active work. It
 does not publish a wheel or archive the fork. Marin owns the integration and
