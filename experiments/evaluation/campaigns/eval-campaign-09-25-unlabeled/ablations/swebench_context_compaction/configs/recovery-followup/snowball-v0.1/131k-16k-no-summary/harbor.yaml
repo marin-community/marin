@@ -1,0 +1,94 @@
+n_concurrent_trials: 16
+n_attempts: 1
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+- name: mini-swe-agent
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    version: 2.1.0
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 16384
+datasets:
+- name: swebench-verified
+  version: '1.0'
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/2993c283f2111467b8d072485a7ca336be6f4473/registry.json
+  task_names:
+  - astropy__astropy-13033
+  - astropy__astropy-7166
+  - astropy__astropy-7606
+  - astropy__astropy-8872
+  - django__django-10880
+  - django__django-11333
+  - django__django-11951
+  - django__django-12125
+  - django__django-12143
+  - django__django-13112
+  - django__django-13195
+  - django__django-13406
+  - django__django-13417
+  - django__django-13670
+  - django__django-13794
+  - django__django-14007
+  - django__django-14089
+  - django__django-14559
+  - django__django-14672
+  - django__django-14765
+  - django__django-14771
+  - django__django-15037
+  - django__django-15098
+  - django__django-15368
+  - django__django-15503
+  - django__django-15561
+  - django__django-15957
+  - django__django-16032
+  - django__django-16263
+  - django__django-16642
+  - matplotlib__matplotlib-13989
+  - matplotlib__matplotlib-24177
+  - pydata__xarray-4687
+  - pydata__xarray-6599
+  - pydata__xarray-6992
+  - pytest-dev__pytest-10081
+  - scikit-learn__scikit-learn-25747
+  - scikit-learn__scikit-learn-25931
+  - sphinx-doc__sphinx-7748
+  - sphinx-doc__sphinx-7910
+  - sphinx-doc__sphinx-8265
+  - sphinx-doc__sphinx-8593
+  - sphinx-doc__sphinx-9230
+  - sphinx-doc__sphinx-9281
+  - sphinx-doc__sphinx-9591
+  - sympy__sympy-15345
+  - sympy__sympy-21596
+verifier:
+  override_timeout_sec: 300
