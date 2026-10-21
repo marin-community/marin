@@ -56,7 +56,7 @@ from levanter.grug.grug_moe import (
     moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
-from levanter.grug.mxfp8 import ExpertMxfp8, mx_dense
+from levanter.grug.mxfp8 import ExpertForward, ExpertMxfp8, mx_dense
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.short_conv import short_conv
 from levanter.kernels.triton.gated_norm import gated_rms_norm
@@ -1021,6 +1021,10 @@ class GrugModelConfig:
     mxfp8_expert_wgrad: bool = False
     """With MXFP8 experts (``fp8_recipe``), run the routed experts' weight-gradient GEMMs block-scaled too (operands
     quantized along the token axis per expert) instead of bf16 (``ExpertMxfp8.ALL``)."""
+    moe_mxfp8_lean_forward: bool = False
+    """With ``mxfp8_expert_wgrad`` ReLU^2 experts: the scanned forward computes only the routed output (rows
+    quantized along columns only, no ``pre`` store), and with ``scan_save_routed_output`` the backward's recompute
+    only the residuals (``pre`` only, no down GEMM). Same values and gradients (``ExpertForward``)."""
     moe_serial_pair: bool = False  # ragged experts: neuron halves in series, y1 + mlp_b(x + y1)
     """Sequential local-expert chunks of the ``ragged_all_to_all`` backend (each a dispatch, expert MLP and
     return); fewer chunks mean fewer, larger collectives at more transport-buffer memory."""
@@ -1077,6 +1081,8 @@ class GrugModelConfig:
     def __post_init__(self) -> None:
         if self.mxfp8_expert_wgrad and self.fp8_recipe not in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8):
             raise ValueError("mxfp8_expert_wgrad needs MXFP8 experts (fp8_recipe=mxfp8 or mxfp8_experts)")
+        if self.moe_mxfp8_lean_forward and not self.mxfp8_expert_wgrad:
+            raise ValueError("moe_mxfp8_lean_forward needs mxfp8_expert_wgrad")
         if self.moe_k_layers and (
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
@@ -2912,6 +2918,7 @@ class MoEMLP(eqx.Module):
                     bank_selected,
                     real_weights[:, col : col + bank_k],
                     overlap if bank_index == 1 else None,
+                    _routed_expert_forward(self.cfg, output_discarded=saved_routed is not None),
                 )
             if bank_overlap_out:
                 overlap_out = bank_overlap_out[0]
@@ -3881,11 +3888,12 @@ def _run_expert_bank(
     selected: jax.Array,
     combine_weights: jax.Array,
     overlap: MoeOverlapWork | None = None,
+    forward: ExpertForward = ExpertForward.FULL,
 ):
     """Dispatch one expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
     dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``, plus the
     ``overlap`` output when given. ``moe_drop_renorm`` also asks the backend for the per-slot keep mask
-    (``MoeDispatchCounts.assignment_keep``)."""
+    (``MoeDispatchCounts.assignment_keep``). ``forward`` is the ragged backend's ``ExpertForward``."""
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         return moe_mlp(
@@ -3906,6 +3914,7 @@ def _run_expert_bank(
             expert_mxfp8_sim=cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM,
             ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
             ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
+            ragged_expert_forward=forward,
             expert_remat=em.expert_remat,
             overlap=overlap,
             overlap_param_gather=cfg.moe_overlap_param_gather,
@@ -3915,6 +3924,8 @@ def _run_expert_bank(
         )
     if cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM:
         raise ValueError("fp8_recipe=mxfp8_sim simulates ungated ReLU^2 expert banks only")
+    if forward != ExpertForward.FULL:
+        raise ValueError("moe_mxfp8_lean_forward needs ungated ReLU^2 expert banks")
     return em(
         routed_input,
         selected,
@@ -3997,6 +4008,14 @@ def _drop_renorm_factor(
         ),
     }
     return factor, stats
+
+
+def _routed_expert_forward(cfg: "GrugModelConfig", *, output_discarded: bool) -> ExpertForward:
+    """``moe_mxfp8_lean_forward``'s ``ExpertForward``; ``output_discarded``: this call's output is replaced by the
+    forward's saved copy (the backward's recompute under ``scan_save_routed_output``)."""
+    if not cfg.moe_mxfp8_lean_forward:
+        return ExpertForward.FULL
+    return ExpertForward.RESIDUALS if output_discarded else ExpertForward.LEAN
 
 
 def _ragged_expert_mxfp8(cfg: "GrugModelConfig") -> ExpertMxfp8:

@@ -50,6 +50,7 @@ _CASES = {
     "gpu_hero": dict(**_UNGATED, **_SCAN, **_HERO),
     "mxfp8_overlap": dict(**_UNGATED, **_SCAN, **_OVERLAP, **_MXFP8),
     "mxfp8_hero": dict(**_UNGATED, **_SCAN, **_HERO, **_MXFP8),
+    "mxfp8_overlap_lean": dict(**_UNGATED, **_SCAN, **_OVERLAP, **_MXFP8, moe_mxfp8_lean_forward=True),
 }
 
 
@@ -188,6 +189,18 @@ def test_hero_dispatch_mxfp8_tracks_the_bridge(tmp_path):
     projections they no longer fuse (the latent down and shared gate/up quantize per FSDP shard)."""
     _require_sm100_gpus()
     _assert_close("mxfp8_hero", "mxfp8_overlap", tmp_path, rtol=2e-3, grad_rtol=0.15)
+
+
+@pytest.mark.timeout(900)
+def test_mxfp8_lean_forward_matches_the_bridge_bitwise(tmp_path):
+    """``moe_mxfp8_lean_forward`` splits the routed-expert forward into an output-only scan forward and a
+    residuals-only recompute: the same loss and gradients bit for bit."""
+    _require_sm100_gpus()
+    loss, grads = _case("mxfp8_overlap", tmp_path)
+    lean_loss, lean_grads = _case("mxfp8_overlap_lean", tmp_path)
+    assert lean_loss == loss
+    for lean, g in zip(lean_grads, grads, strict=True):
+        np.testing.assert_array_equal(lean, g)
 
 
 if __name__ == "__main__":

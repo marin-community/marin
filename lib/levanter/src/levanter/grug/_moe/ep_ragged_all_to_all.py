@@ -25,7 +25,7 @@ import functools
 import logging
 import math
 from collections.abc import Callable
-from enum import auto, IntEnum
+from enum import IntEnum, StrEnum, auto
 from typing import Any, NamedTuple, Protocol
 
 import jax
@@ -53,7 +53,7 @@ from levanter.grug._moe.ep_common import (
     _expert_granular_a2a_params,
     _sort_activations,
 )
-from levanter.grug.mxfp8 import ExpertMxfp8, mx_pack_rows
+from levanter.grug.mxfp8 import ExpertForward, ExpertMxfp8, mx_pack_rows
 from levanter.kernels.pallas.relu2_mlp import fused_relu2
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.kernels.pallas.relu2_ragged_mlp import (
@@ -398,6 +398,24 @@ class _CuteRelu2Mxfp8WgradExpertMlp:
             x_dispatch, moe_w13_local, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
         )
 
+    def forward_output(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        """``forward``'s output alone (``ExpertForward.LEAN``), with the up GEMM's output to order later work by."""
+        del physical_group_sizes
+        from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_wgrad_output  # noqa: PLC0415
+
+        return relu2_expert_mlp_mxfp8_wgrad_output(
+            x_dispatch, moe_w13_local, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+        )
+
+    def forward_residuals(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        """``forward``'s residuals alone (``ExpertForward.RESIDUALS``)."""
+        del physical_group_sizes
+        from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_wgrad_residuals  # noqa: PLC0415
+
+        return relu2_expert_mlp_mxfp8_wgrad_residuals(
+            x_dispatch, moe_w13_local, moe_w2_local, _cumulative_group_sizes(active_group_sizes)
+        )
+
     def backward(self, residuals, cotangent):
         dx, output_dot, wgrad_args, wgrad = self.backward_parts(residuals, cotangent)
         dw13, dw2 = wgrad(*wgrad_args)
@@ -670,6 +688,7 @@ class _ExpertLayout:
     # Dispatch the rows as MXFP8 bytes (``mx_pack_rows``) for an expert MLP that takes them so; the backward's
     # transports stay in the rows' dtype (quantization is straight-through).
     mxfp8_dispatch: bool = False
+    forward: ExpertForward = ExpertForward.FULL
 
     @property
     def chunks(self) -> int:
@@ -736,6 +755,22 @@ def _dispatch_chunk(sorted_x: Float[Array, "TK H"], plan: _ChunkPlan, layout: _E
     return jax.lax.ragged_all_to_all(sorted_x, dispatch_init, *plan.dispatch_params, axis_name="expert")
 
 
+class _ForwardParts(StrEnum):
+    """What one call of ``_routed_experts_forward`` computes (``ExpertForward``)."""
+
+    BOTH = "both"
+    OUTPUT = "output"
+    RESIDUALS = "residuals"
+
+
+def _primal_parts(layout: _ExpertLayout) -> _ForwardParts:
+    return _ForwardParts.BOTH if layout.forward == ExpertForward.FULL else _ForwardParts.OUTPUT
+
+
+def _vjp_fwd_parts(layout: _ExpertLayout) -> _ForwardParts:
+    return _ForwardParts.RESIDUALS if layout.forward == ExpertForward.RESIDUALS else _ForwardParts.BOTH
+
+
 def _routed_experts_forward(
     sorted_x: Float[Array, "TK H"],
     weights: Float[Array, "Tlocal K"],
@@ -744,9 +779,12 @@ def _routed_experts_forward(
     routing: _ExpertRouting,
     layout: _ExpertLayout,
     overlap: "_OverlapInputs | None" = None,
+    parts: _ForwardParts = _ForwardParts.BOTH,
 ) -> tuple[Float[Array, "Tlocal H"], tuple[_ChunkResiduals, ...], Any, Any]:
     """Returns ``(out, chunk_residuals, side, side_vjp)``; ``side`` (and its pullback) is the ``overlap`` work's
-    output, run under the first chunk's dispatch all-to-all (None without ``overlap``)."""
+    output, run under the first chunk's dispatch all-to-all (None without ``overlap``). ``parts=OUTPUT`` leaves
+    the chunk residuals None; ``parts=RESIDUALS`` skips the down GEMM and the return transport, and ``out`` is
+    unspecified."""
     assignments = sorted_x.shape[0]
     side = side_vjp = None
     plans = _chunk_plans(routing, layout)
@@ -760,11 +798,14 @@ def _routed_experts_forward(
         site=_TransportBufferSite.RETURN_OUTPUT,
     )  # [TK, O]
     chunk_residuals = []
+    # Per chunk, what the next chunk's dispatch waits for: its backward inputs, or with ``parts=OUTPUT`` the up
+    # GEMM's output, the same point in the chunk.
+    chunk_ready = []
     send = mx_pack_rows(sorted_x) if layout.mxfp8_dispatch else sorted_x  # [TK, H] or [TK, H + H / 32] bytes
     for chunk_index, plan in enumerate(plans):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             source = send
-            if chunk_residuals:
+            if chunk_ready:
                 # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
                 # of every chunk at the same time, and the chunk buffers are all live at once,
                 # which is the memory the chunks exist to save. The barrier waits for the previous
@@ -772,7 +813,7 @@ def _routed_experts_forward(
                 # need the return, so a recompute for the backward drops it and must not be held
                 # to it. (Dispatching chunk c+1 during chunk c's MLP measured 3 ms per layer
                 # slower in a rematted four-GPU layer scan.)
-                source, _ = jax.lax.optimization_barrier((send, chunk_residuals[-1].expert_mlp))
+                source, _ = jax.lax.optimization_barrier((send, chunk_ready[-1]))
             if overlap is not None and chunk_index == 0:
                 # Optimization barriers tie the overlap's inputs to the dispatch source and its output to the
                 # dispatched rows, so it runs while the dispatch all-to-all is in flight (as the pooled-wave path).
@@ -784,19 +825,33 @@ def _routed_experts_forward(
             else:
                 x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
-            out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
+            mlp_args = (
                 x_dispatch,
                 moe_w13_local[experts],
                 moe_w2_local[experts],
                 plan.physical_group_sizes,
                 plan.active_group_sizes,
             )
+            if parts == _ForwardParts.OUTPUT:
+                out_dispatch, ready = layout.expert_mlp.forward_output(*mlp_args)  # [C, H]
+                expert_mlp_residuals = None
+            elif parts == _ForwardParts.RESIDUALS:
+                expert_mlp_residuals = ready = layout.expert_mlp.forward_residuals(*mlp_args)
+            else:
+                out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(*mlp_args)  # [C, H]
+                ready = expert_mlp_residuals
+            chunk_ready.append(ready)
+            chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
+            if parts == _ForwardParts.RESIDUALS:
+                continue
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes, with
             # no expansion step.
             returned = jax.lax.ragged_all_to_all(out_dispatch, returned, *plan.return_params, axis_name="expert")
-            chunk_residuals.append(_ChunkResiduals(plan, expert_mlp_residuals))
 
+    if parts == _ForwardParts.RESIDUALS:
+        # The caller discards the output (``ExpertForward.RESIDUALS``); ``returned`` holds no expert output.
+        return returned[: layout.tokens_per_shard], tuple(chunk_residuals), side, side_vjp
     with jax.named_scope("combine"):
         out = _unpermute_from_global_expert(
             returned,
@@ -844,13 +899,15 @@ def _routed_experts(
     output is saved for the backward, a recompute for the backward runs only the dispatch and
     the gate/up projection.
     """
-    out, _residuals, _, _ = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+    out, _residuals, _, _ = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, parts=_primal_parts(layout)
+    )
     return out
 
 
 def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout):
     out, chunk_residuals, _, _ = _routed_experts_forward(
-        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, parts=_vjp_fwd_parts(layout)
     )
     return out, (weights, routing, chunk_residuals)
 
@@ -867,7 +924,9 @@ def _routed_experts_overlapped(
     """``_routed_experts`` plus ``overlap_fn(overlap_tokens, overlap_params)`` run under the first dispatch
     all-to-all, and its backward under the first return-cotangent all-to-all. Returns ``(out, side)``."""
     overlap = _OverlapInputs(overlap_fn, overlap_tokens, overlap_params)
-    out, _, side, _ = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap)
+    out, _, side, _ = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap, _primal_parts(layout)
+    )
     return out, side
 
 
@@ -876,7 +935,7 @@ def _routed_experts_overlapped_fwd(
 ):
     overlap = _OverlapInputs(overlap_fn, overlap_tokens, overlap_params)
     out, chunk_residuals, side, side_vjp = _routed_experts_forward(
-        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, overlap, _vjp_fwd_parts(layout)
     )
     return (out, side), (weights, routing, chunk_residuals, side_vjp)
 
@@ -1020,6 +1079,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     overlap_weight_grads: bool = False,
     mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     mxfp8_dispatch: bool = False,
+    forward: ExpertForward = ExpertForward.FULL,
     serial_pair: bool = False,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
@@ -1104,6 +1164,8 @@ def _moe_mlp_ep_ragged_a2a_local(
         expert_mlp = _SerialPairExpertMlp(expert_mlp)
     if mxfp8 != ExpertMxfp8.NONE:
         expert_mlp = _mxfp8_expert_mlp(expert_mlp, mxfp8)
+    if forward != ExpertForward.FULL and type(expert_mlp) is not _CuteRelu2Mxfp8WgradExpertMlp:
+        raise ValueError(f"ExpertForward.{forward.name} needs ExpertMxfp8.ALL ReLU^2 experts, got {expert_mlp}")
     layout = _ExpertLayout(
         tokens_per_shard=tokens_per_shard,
         topk=topk,
@@ -1115,6 +1177,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         expert_mlp=expert_mlp,
         overlap_weight_grads=overlap_weight_grads,
         mxfp8_dispatch=mxfp8_dispatch,
+        forward=forward,
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.

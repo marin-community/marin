@@ -354,3 +354,39 @@ def test_mxfp8_expert_backward_wgrads_stay_within_mxfp8_error_of_the_exact_mlp(g
         # path requantizes from its MXFP8 rows and the unfused one from their bf16 dequantization: equal values.
         max_error, _ = _normalized_errors(unfused_wgrads[index - 1], got)
         assert max_error <= 1e-2, f"{name}: fused vs unfused max normalized {max_error:.2e}"
+
+
+@pytest.mark.parametrize("dispatch", ["bf16", "mxfp8_bytes"])
+def test_relu2_mxfp8_split_forward_matches_the_full_forward_bitwise(dispatch):
+    """``ExpertForward.LEAN``/``RESIDUALS``: the output-only and residuals-only forwards give the full forward's
+    output, residuals and backward bit for bit on the active rows."""
+    _require_sm100()
+    mx = importlib.import_module("levanter.grug._moe.quack_mxfp8")
+    tail_rows = 133
+    x, w13_il, w_down, dy = _inputs(tail_rows)
+    w_up = w13_il[..., :_WIDTH]
+    cu = jnp.asarray(np.concatenate([[0], np.cumsum(_GROUP_SIZES)]), jnp.int32)
+    rows = mx_pack_rows(x) if dispatch == "mxfp8_bytes" else x
+
+    def run(x, w_up, w_down, dy):
+        y, residuals = mx.relu2_expert_mlp_mxfp8_wgrad_fwd(x, w_up, w_down, cu)
+        lean_y, _ = mx.relu2_expert_mlp_mxfp8_wgrad_output(x, w_up, w_down, cu)
+        lean_residuals = mx.relu2_expert_mlp_mxfp8_wgrad_residuals(x, w_up, w_down, cu)
+        return (
+            (y, lean_y),
+            mx.relu2_expert_mlp_mxfp8_backward(residuals, dy),
+            mx.relu2_expert_mlp_mxfp8_backward(lean_residuals, dy),
+            residuals[3],
+            lean_residuals[3],
+        )
+
+    (y, lean_y), full_grads, lean_grads, pre, lean_pre = jax.jit(run)(rows, w_up, w_down, dy)
+    active = slice(0, _NUM_TOKENS)
+    np.testing.assert_array_equal(np.asarray(lean_y[active], np.float32), np.asarray(y[active], np.float32))
+    np.testing.assert_array_equal(np.asarray(lean_pre[active], np.float32), np.asarray(pre[active], np.float32))
+    dx, dw_up, dw_down, row_dot = full_grads
+    lean_dx, lean_dw_up, lean_dw_down, lean_row_dot = lean_grads
+    np.testing.assert_array_equal(np.asarray(lean_dx[active], np.float32), np.asarray(dx[active], np.float32))
+    np.testing.assert_array_equal(np.asarray(lean_row_dot[active]), np.asarray(row_dot[active]))
+    np.testing.assert_array_equal(np.asarray(lean_dw_up, np.float32), np.asarray(dw_up, np.float32))
+    np.testing.assert_array_equal(np.asarray(lean_dw_down, np.float32), np.asarray(dw_down, np.float32))

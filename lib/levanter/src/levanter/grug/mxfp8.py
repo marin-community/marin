@@ -35,6 +35,24 @@ class ExpertMxfp8(StrEnum):
     """The activation-path GEMMs and the weight gradients, quantized along the token axis per expert."""
 
 
+class ExpertForward(StrEnum):
+    """What the ``ragged_all_to_all`` routed-expert forward computes (``ExpertMxfp8.ALL`` ReLU^2 experts only).
+
+    The undifferentiated forward (a scanned layer stack's forward whose backward recomputes each layer) keeps no
+    residuals, and a backward recompute whose output is replaced by a saved copy (``scan_save_routed_output``) needs
+    only the residuals. One forward serving both computes the dead half of each: XLA cannot drop one output of a
+    multi-output kernel."""
+
+    FULL = "full"
+    """Output and residuals in every forward."""
+    LEAN = "lean"
+    """The undifferentiated forward computes only the output (rows quantized along columns only, no ``pre``
+    store); the differentiated forward computes both."""
+    RESIDUALS = "residuals"
+    """As ``LEAN``, and the differentiated forward computes only the residuals (``pre`` only, no down GEMM, no
+    return transport) and returns an unspecified output, which the caller must not read."""
+
+
 def mx_quantize_dequantize(x: jax.Array, axis: int) -> jax.Array:
     """Round ``x`` to MXFP8 with 32-element blocks along ``axis`` and return it in ``x.dtype``."""
     axis = axis % x.ndim

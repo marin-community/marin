@@ -57,7 +57,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
 )
 from levanter.grug._moe.ep_ragged_all_to_all import DEFAULT_RAGGED_EXPERT_CHUNKS, _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
-from levanter.grug.mxfp8 import ExpertMxfp8
+from levanter.grug.mxfp8 import ExpertForward, ExpertMxfp8
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
     _axis_names,
@@ -536,6 +536,7 @@ def moe_mlp(
     ragged_overlap_weight_grads: bool = False,
     ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
     ragged_expert_mxfp8_dispatch: bool = False,
+    ragged_expert_forward: ExpertForward = ExpertForward.FULL,
     expert_serial_pair: bool = False,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
@@ -573,7 +574,9 @@ def moe_mlp(
     `ragged_expert_mxfp8` (``ragged_all_to_all``, ungated ReLU^2 or gated SwiGLU on SM100) runs the expert MLP's
     activation-path GEMMs block-scaled on QuACK, and with ``ExpertMxfp8.ALL`` the weight gradients too
     (``ACTIVATIONS``: they stay bf16); `ragged_expert_mxfp8_dispatch` also sends the dispatched rows as MXFP8 bytes
-    instead of quantizing them on arrival.
+    instead of quantizing them on arrival. `ragged_expert_forward` (``ExpertMxfp8.ALL`` ReLU^2 experts) splits what
+    the undifferentiated and the differentiated forwards compute (``ExpertForward``); with ``RESIDUALS`` the
+    differentiated output is unspecified.
     `overlap_param_gather` places the all-gather of the FSDP-sharded overlap parameters (``OverlapParamGather``).
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
@@ -602,6 +605,8 @@ def moe_mlp(
         raise ValueError(f"ragged_expert_mxfp8 requires ragged_all_to_all, got {resolved_implementation!r}")
     if ragged_expert_mxfp8_dispatch and ragged_expert_mxfp8 == ExpertMxfp8.NONE:
         raise ValueError("ragged_expert_mxfp8_dispatch requires ragged_expert_mxfp8")
+    if ragged_expert_forward != ExpertForward.FULL and ragged_expert_mxfp8 != ExpertMxfp8.ALL:
+        raise ValueError("ragged_expert_forward requires ragged_expert_mxfp8=ExpertMxfp8.ALL")
     if expert_mxfp8_sim and resolved_implementation != "fixed_pooled_wave_all_to_all":
         raise ValueError(f"expert_mxfp8_sim requires fixed_pooled_wave_all_to_all, got {resolved_implementation!r}")
 
@@ -762,6 +767,7 @@ def moe_mlp(
                 overlap_weight_grads=ragged_overlap_weight_grads,
                 mxfp8=ragged_expert_mxfp8,
                 mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
+                forward=ragged_expert_forward,
             )
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local

@@ -220,6 +220,41 @@ def mxfp8_relu2_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, b_major, m
     return call(a, b, a_scales, b_scales, cu_seqlens.astype(jnp.int32))
 
 
+@cute_launcher_factory
+def _build_relu2_post_launcher(*, max_active_clusters, max_swizzle):
+    gemm_type = _mint_epilogue_gemm(_relu2_quant_epilogue(), kind_sig=(), paired_acc=False)
+
+    @cute.jit
+    def launcher(stream, mA, mB, mSFA, mSFB, mCuSeqlens, mPostAct, mPostActSF):
+        gemm = _gemm(gemm_type, cutlass.Float8E4M3FN)
+        epi_args = gemm_type.EpilogueArguments(postact=mPostAct, postact_sf=mPostActSF, sfd_norm_const=Float32(1.0))
+        scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        varlen_args = make_varlen_args(mCuSeqlens, None, None)
+        # No D: the forward that only needs the output never reads ``pre``.
+        gemm(mA, mB, None, None, epi_args, scheduler_args, varlen_args, stream, mSFA, mSFB)
+
+    return launcher
+
+
+def mxfp8_relu2_post_grouped_gemm(a, a_scales, b, b_scales, cu_seqlens, *, b_major, max_swizzle=8):
+    """``mxfp8_relu2_grouped_gemm`` without the bf16 ``pre`` store: returns ``(post e4m3, post scales)``."""
+    rows, cols = a.shape[0], b.shape[1 if b_major == "k" else 2]
+    launcher = _build_relu2_post_launcher(
+        max_active_clusters=_max_active_clusters(MXFP8_CLUSTER), max_swizzle=max_swizzle
+    )
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=(
+            jax.ShapeDtypeStruct((rows, cols), jnp.float8_e4m3fn),
+            jax.ShapeDtypeStruct(varlen_output_scale_shape(rows, cols, cu_seqlens.shape[0] - 1), jnp.float8_e8m0fnu),
+        ),
+        input_spec=(_ROWS_SPEC, _WEIGHT_SPECS[b_major], _SCALE_SPEC, _SCALE_SPEC, _INDEX_SPEC),
+        output_spec=(_ROWS_SPEC, _SCALE_SPEC),
+        use_static_tensors=False,
+    )
+    return call(a, b, a_scales, b_scales, cu_seqlens.astype(jnp.int32))
+
+
 def _drelu2_quant_epilogue():
     dact = dact_fn_map["relu_sq"]
 
@@ -557,6 +592,26 @@ def relu2_expert_mlp_mxfp8_wgrad_fwd(x, w_up, w_down, cu):
     y = mxfp8_grouped_gemm(post, post_scales, *mx_weights(w_down, "n"), cu, b_major="n")
     # The token-axis exponents go last: callers read the pre-activations at index 3, as in the other variants.
     return y, (x_tokens[0], w_up, w_down, pre, cu, x_tokens[1])
+
+
+def relu2_expert_mlp_mxfp8_wgrad_output(x, w_up, w_down, cu):
+    """The output of ``relu2_expert_mlp_mxfp8_wgrad_fwd`` alone, for a forward that keeps no residuals: the rows
+    are quantized along their columns only and the up GEMM stores no ``pre``. Returns ``(y, post)``; ``post`` (the
+    up GEMM's e4m3 output) lets a caller order work after the up GEMM. Same ``y`` bits on the active rows."""
+    values, exponents = _dispatched_rows(x, w_up.shape[1])
+    post, post_scales = mxfp8_relu2_post_grouped_gemm(
+        values, padded_scale_rows(exponents, cu), *mx_weights(w_up, "n"), cu, b_major="n"
+    )
+    y = mxfp8_grouped_gemm(post, post_scales, *mx_weights(w_down, "n"), cu, b_major="n")
+    return y, post
+
+
+def relu2_expert_mlp_mxfp8_wgrad_residuals(x, w_up, w_down, cu):
+    """The residuals of ``relu2_expert_mlp_mxfp8_wgrad_fwd`` alone, for a recompute whose output is discarded: the
+    up GEMM stores only ``pre`` (no ReLU^2 epilogue) and no down GEMM runs. Same residual bits."""
+    (values, exponents), x_tokens = _dispatched_rows_and_tokens(x, w_up.shape[1], cu)
+    pre = mxfp8_grouped_gemm(values, padded_scale_rows(exponents, cu), *mx_weights(w_up, "n"), cu, b_major="n")
+    return (x_tokens[0], w_up, w_down, pre, cu, x_tokens[1])
 
 
 def swiglu_expert_mlp_mxfp8_backward(res, dy):
