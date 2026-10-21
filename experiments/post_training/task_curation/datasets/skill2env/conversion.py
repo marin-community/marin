@@ -36,14 +36,31 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.post_training.task_curation.datasets.skill2env import grade
 
+MEMORY_MB = 4096
 WORKSPACE = "/workspace"
 ADAPTER_PATH = "curation-adapter.py"
 CONTRACT_PATH = "curation-contract.json"
 RELEASE = "skill2env/skill2env@sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c"
 
 
+def content_digest(files: dict[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    for name, blob in sorted(files.items()):
+        digest.update(f"{name}\0{hashlib.sha256(blob).hexdigest()}\n".encode())
+    return digest.hexdigest()
+
+
 def read_task(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
     """Read one native archive, retaining file contents and permission modes."""
+    manifest = json.loads((path.parent.parent / "release.json").read_text())
+    if manifest["release"] != RELEASE:
+        raise ValueError("Input belongs to another Skill2Env release")
+    selected = set(manifest["selected"])
+    if not selected.issubset(manifest["task_refs"]):
+        raise ValueError("Selected tasks are absent from the release manifest")
+    selected_names = {hashlib.sha256(ref.encode()).hexdigest() + ".tar.gz" for ref in selected}
+    if path.name not in selected_names:
+        return
     files = {}
     modes = {}
     with path.open("rb") as stream, tarfile.open(fileobj=stream, mode="r|gz") as archive:
@@ -61,10 +78,7 @@ def read_task(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
             files[name] = content.read()
             modes[name] = format(member.mode & 0o7777, "o")
     config = tomllib.loads(files["task.toml"].decode())
-    digest = hashlib.sha256()
-    for name, blob in sorted(files.items()):
-        digest.update(f"{name}\0{hashlib.sha256(blob).hexdigest()}\n".encode())
-    task_ref = f"{config['task']['name']}@sha256:{digest.hexdigest()}"
+    task_ref = f"{config['task']['name']}@sha256:{content_digest(files)}"
     if path.name != hashlib.sha256(task_ref.encode()).hexdigest() + ".tar.gz":
         raise ValueError("Archive contents differ from the pinned task filename")
     yield {"release": RELEASE, "task_ref": task_ref, "files": files, "modes": modes}
@@ -77,11 +91,8 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
     if "unsupported" in data:
         return unsupported(data["unsupported"], "Native export could not preserve this task")
     files = data["files"]
-    digest = hashlib.sha256()
-    for path, blob in sorted(files.items()):
-        digest.update(f"{path}\0{hashlib.sha256(blob).hexdigest()}\n".encode())
     task_name, task_digest = data["task_ref"].rsplit("@", 1)
-    if task_digest != f"sha256:{digest.hexdigest()}":
+    if task_digest != f"sha256:{content_digest(files)}":
         raise ValueError("Exported files differ from the pinned task")
     config = tomllib.loads(files["task.toml"].decode())
     if config["task"]["name"] != task_name:
@@ -108,7 +119,7 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
             return unsupported("native_network", "Only network-disabled task contracts are supported")
     if any(
         config["environment"].get(key) != value
-        for key, value in (("cpus", 2), ("memory_mb", 4096), ("storage_mb", 4096))
+        for key, value in (("cpus", 2), ("memory_mb", MEMORY_MB), ("storage_mb", 4096))
     ):
         return unsupported("native_resources", "This recipe supports 2 CPU / 4096 MiB RAM / 4096 MiB storage tasks")
     if config["environment"].get("mcp_servers") or config["verifier"].get("collect"):

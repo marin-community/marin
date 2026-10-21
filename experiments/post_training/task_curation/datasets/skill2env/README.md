@@ -5,7 +5,9 @@ network-disabled tasks whose final Docker working directory is within `/workspac
 and a reference solution. Acquisition resolves the pinned release through Harbor
 and verifies each downloaded task's content digest using the vendored client in
 `vendor/harbor`. The resolved task list is retained in the export
-manifest. Acquisition does not edit upstream tasks.
+manifest. The reader checks the release and converts only archives selected in that
+manifest, ignoring older cached archives when an acquisition directory is reused.
+Acquisition does not edit upstream tasks.
 
 Acquire a bounded selection for QUICK conversion; Docker and container-registry access are not required:
 

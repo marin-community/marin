@@ -101,6 +101,20 @@ storage_mb = 4096
     )
 
 
+def write_selection(root: Path, selection) -> None:
+    (root / "tasks").mkdir(parents=True, exist_ok=True)
+    refs = [row.data["task_ref"] for row in selection]
+    (root / "release.json").write_text(json.dumps({"release": RELEASE, "selected": refs, "task_refs": refs}))
+    for row in selection:
+        digest = hashlib.sha256(row.data["task_ref"].encode()).hexdigest()
+        with tarfile.open(root / "tasks" / f"{digest}.tar.gz", "w:gz") as archive:
+            for name, blob in row.data["files"].items():
+                member = tarfile.TarInfo(name)
+                member.size = len(blob)
+                member.mode = int(row.data["modes"][name], 8)
+                archive.addfile(member, io.BytesIO(blob))
+
+
 def test_prepared_selections_keep_distinct_stable_task_ids(tmp_path):
     config = sources()[0].config
     assert config is not None
@@ -112,27 +126,27 @@ def test_prepared_selections_keep_distinct_stable_task_ids(tmp_path):
     for index, selection in enumerate(selections):
         root = tmp_path / str(index)
         (root / "tasks").mkdir(parents=True)
-        for row in selection:
-            digest = hashlib.sha256(row.data["task_ref"].encode()).hexdigest()
-            with tarfile.open(root / "tasks" / f"{digest}.tar.gz", "w:gz") as archive:
-                for name, blob in row.data["files"].items():
-                    member = tarfile.TarInfo(name)
-                    member.size = len(blob)
-                    member.mode = int(row.data["modes"][name], 8)
-                    archive.addfile(member, io.BytesIO(blob))
+        write_selection(root, selection)
         tasks = {}
         for shard in conversion_shards(str(root), recipe.source):
             for record in staged_file_rows(str(root), shard, recipe.source, context):
                 converted = convert_record(record, recipe)
                 assert isinstance(converted.result, NormalizedTask)
                 tasks[record["data"]["task_ref"]] = converted.result.task.id
-                verifier = next(file for file in converted.result.task.resources.verifier if file.path == "test.sh")
-                assert verifier.mode == "755"
         assert len(tasks) == len(selection)
         identities.append(tasks)
     first_ids, second_ids, combined_ids = identities
     assert len(combined_ids) == len(set(combined_ids.values())) == 2
     assert combined_ids == {**first_ids, **second_ids}
+
+
+def test_selected_archive_tampering_is_rejected(tmp_path):
+    first = exported_row("first")
+    root = tmp_path
+    write_selection(root, [first])
+    config = sources()[0].config
+    recipe = source_recipe(config, {}, None)
+    context = ConversionContext({}, None)
     # Replacing an archive under its original immutable filename must fail before conversion.
     payload = next((root / "tasks").glob("*.tar.gz"))
     with tarfile.open(payload, "w:gz") as archive:
@@ -147,10 +161,37 @@ def test_prepared_selections_keep_distinct_stable_task_ids(tmp_path):
             list(staged_file_rows(str(root), shard, recipe.source, context))
 
 
+@pytest.mark.parametrize("wrong_release", [False, True])
+def test_reader_honors_replaced_selection(tmp_path, wrong_release):
+    first, second = exported_row("first"), exported_row("second")
+    write_selection(tmp_path, [first])
+    write_selection(tmp_path, [second])
+    recipe = source_recipe(sources()[0].config, {}, None)
+    context = ConversionContext({}, None)
+
+    def records():
+        return [
+            record
+            for shard in conversion_shards(str(tmp_path), recipe.source)
+            for record in staged_file_rows(str(tmp_path), shard, recipe.source, context)
+        ]
+
+    if wrong_release:
+        manifest_path = tmp_path / "release.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["release"] = "another/release@sha256:other"
+        manifest_path.write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match="another Skill2Env release"):
+            records()
+    else:
+        assert [record["data"]["task_ref"] for record in records()] == [second.data["task_ref"]]
+
+
 def test_conversion_retains_hidden_files_and_detects_modified_exports():
     row = exported_row()
     result = convert_row(row, convert_task, ConversionContext({}, None))
     assert isinstance(result, NormalizedTask)
+    assert next(file for file in result.task.resources.verifier if file.path == "test.sh").mode == "755"
     restored = TaskSpec.model_validate_json(result.task.model_dump_json())
     assert (
         resource_bytes(next(file for file in restored.resources.verifier if file.path == "test.sh"))

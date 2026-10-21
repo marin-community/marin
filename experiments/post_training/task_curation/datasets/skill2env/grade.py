@@ -13,6 +13,7 @@ ADAPTED_REWARD = Path("/logs/verifier/curation-reward.json")
 
 
 def component_reward(rewards: dict[str, float]) -> dict:
+    """Return the arithmetic mean as ``reward`` and native components in ``detail.native_rewards``."""
     if not isinstance(rewards, dict) or not rewards:
         raise ValueError("Expected a nonempty native reward mapping")
     if any(

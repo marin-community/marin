@@ -7,6 +7,7 @@
 from taskcompendium.pipeline.models import Controls, IntendedUse
 
 from experiments.post_training.task_curation.datasets.skill2env.conversion import (
+    MEMORY_MB,
     RELEASE,
     convert_task,
     golden,
@@ -48,11 +49,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             config=CurationRecipe(
                 name="skill2env",
                 source=HarborHubSource(name, revision, read=read_task),
-                version="7",
+                version="8",
                 convert=convert_task,
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
-                controls=Controls(golden=golden, memory_mb=4096),
+                controls=Controls(golden=golden, memory_mb=MEMORY_MB),
             ),
             pipeline=process_rows,
         )
