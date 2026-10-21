@@ -1,8 +1,9 @@
 # Skill2Env conversion
 
 The existing `Harbor Hub:skill2env` catalog entry has a conversion recipe for
-network-disabled tasks whose final Docker working directory is within `/workspace`, native programmatic tests,
-and a reference solution. Acquisition resolves the pinned release through Harbor
+network-disabled tasks with native programmatic tests and a reference solution.
+The default contract requires a final Docker working directory within `/workspace`;
+the digest-pinned capture exceptions below support two additional layouts. Acquisition resolves the pinned release through Harbor
 and verifies each downloaded task's content digest using the vendored client in
 `vendor/harbor`. The resolved task list is retained in the export
 manifest. The reader checks the release and converts only archives selected in that
@@ -26,7 +27,7 @@ across selections, including when differently named tasks share content.
 Earlier build-time working directories are retained; actor and verifier execution
 use the final literal absolute working directory.
 Conversion retains the native `environment/` files as an
-unresolved `DockerBuildContext`. The verifier context adds workspace clearing
+unresolved `DockerBuildContext`. The verifier context adds capture-directory clearing
 so submitted deletions are preserved. Private tests and reference solutions
 remain separate from both build contexts. The runtime rejects unresolved
 contexts before execution.
@@ -61,8 +62,14 @@ the outcome-reward method in [the paper, section 3.2.2](https://www.alphaxiv.org
 It uses the existing scalar reward interface without a separate pass/fail verdict.
 The optional written LLM rubric is preserved but not executed.
 
-Workspace capture preserves file contents, including changes to preexisting
+The default capture directory is `/workspace`. Two digest-pinned exceptions also
+capture the memory-journal task's `/root/.claude/memory`, or the spreadsheet task's
+`/work` and `/var/lib/gws-local`. These include the state inspected by the native
+verifiers, not just the declared output artifacts. Other external paths remain
+unsupported until their capture requirements are validated.
+
+Directory capture preserves file contents, including changes to preexisting
 files and deletions. It does not reproduce file modes, symlinks, empty
-directories, running processes, or changes outside `/workspace`. Tasks that
+directories, running processes, or changes outside the configured capture directories. Tasks that
 depend on these properties need another execution contract. A passing reference
 solution alone does not establish grader equivalence.

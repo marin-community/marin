@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert offline, single-workspace Skill2Env tasks without rewriting native tests."""
+"""Convert offline Skill2Env tasks without rewriting native tests."""
 
 import hashlib
 import json
@@ -41,6 +41,21 @@ WORKSPACE = "/workspace"
 ADAPTER_PATH = "curation-adapter.py"
 CONTRACT_PATH = "curation-contract.json"
 RELEASE = "skill2env/skill2env@sha256:bef4f739bde8d865af04c04a2cb1c84ecad83b52dd558f4d582dd46c7933666c"
+
+# These native verifiers read complete state directories, not just the declared artifacts.
+# Scope exceptions to the audited package contents; later releases need another audit.
+CAPTURE_ROOTS = {
+    # task_c-memory_qi67nu17: journal plus protected memory and session files.
+    "sha256:a9b30e4581483338bc51c87e08ae83a4b5d4f42a4fbb2d3394e4fc4c86d9ee85": (
+        WORKSPACE,
+        "/root/.claude/memory",
+    ),
+    # task_gws-sheets-append_njhq0ebv: workbook state and append audit log.
+    "sha256:a3a76ed72a278586f3a76af9543d89bd514f137f751d42f78d1af1409f4b52de": (
+        "/work",
+        "/var/lib/gws-local",
+    ),
+}
 
 
 def content_digest(files: dict[str, bytes]) -> str:
@@ -99,21 +114,24 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         raise ValueError("Task identity differs from its native configuration")
     if any(path.startswith("steps/") for path in files):
         return unsupported("native_steps", "Multi-step tasks require a session execution contract")
+    output_paths = CAPTURE_ROOTS.get(task_digest, (WORKSPACE,))
     dockerfile = files["environment/Dockerfile"].decode()
     final_stage = re.split(r"(?im)^[ \t]*FROM[ \t]+", dockerfile)[-1]
     workdirs = re.findall(r"(?im)^[ \t]*WORKDIR[ \t]+([^\r\n]*)", final_stage)
     if not workdirs or re.fullmatch(r"\S+", workdirs[-1].strip()) is None:
-        return unsupported("native_workspace", "Requires a final literal absolute WORKDIR within /workspace")
+        return unsupported("native_workspace", "Requires a final literal absolute WORKDIR within the capture roots")
     workdir = PurePosixPath(workdirs[-1].strip())
     if (
-        not workdir.is_relative_to(WORKSPACE)
+        not any(workdir.is_relative_to(root) for root in output_paths)
         or ".." in workdir.parts
         or any(character in str(workdir) for character in ("$", "\\", "'", '"'))
     ):
-        return unsupported("native_workspace", "Requires a final literal absolute WORKDIR within /workspace")
+        return unsupported("native_workspace", "Requires a final literal absolute WORKDIR within the capture roots")
     working_directory = str(workdir)
-    if not all(path.startswith(WORKSPACE + "/") for path in config.get("artifacts", [])):
-        return unsupported("native_outputs", "Outputs outside /workspace need another capture contract")
+    if not all(
+        any(PurePosixPath(path).is_relative_to(root) for root in output_paths) for path in config.get("artifacts", [])
+    ):
+        return unsupported("native_outputs", "Outputs outside the audited capture roots need another capture contract")
     for section in ("environment", "agent", "verifier"):
         if config[section].get("network_mode") != "no-network" or config[section].get("allowed_hosts"):
             return unsupported("native_network", "Only network-disabled task contracts are supported")
@@ -134,10 +152,11 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         if path.startswith("environment/")
     )
     actor_build = DockerBuildContext(files=context)
-    # A pristine workspace would resurrect files deleted by the submitted solution.
+    # Clear every captured directory so the image cannot resurrect submitted deletions.
+    clear_paths = shlex.join(output_paths)
     verifier_dockerfile = (
         dockerfile.rstrip()
-        + f"\nUSER root\nRUN rm -rf /workspace && mkdir -p {shlex.quote(working_directory)}\n"
+        + f"\nUSER root\nRUN rm -rf {clear_paths} && mkdir -p {shlex.quote(working_directory)}\n"
         + f"WORKDIR {working_directory}\n"
     )
     grader_build = DockerBuildContext(
@@ -169,7 +188,7 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         "release": data["release"],
         "task_ref": data["task_ref"],
         "native_config": config,
-        "capture": WORKSPACE,
+        "capture": output_paths,
         "additional_llm_rubric": "preserved but not executed",
     }
     return TaskSpec(
@@ -187,7 +206,7 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
                 native_resource(files, data["modes"], path, path) for path in files if path.startswith("solution/")
             ),
         ),
-        output_paths=(WORKSPACE,),
+        output_paths=output_paths,
         answer_type=AnswerType.WORKSPACE_STATE,
         answer_format=PlainText(),
         grader=ScriptGrader(

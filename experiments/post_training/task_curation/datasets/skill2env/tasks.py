@@ -20,8 +20,8 @@ RUBRIC = """
 Compare the original task instructions with the unchanged programmatic verifier and private reference solution.
 Flag hidden requirements, reward hacking opportunities, and valid solutions incorrectly rejected by static checks.
 
-The grader receives the captured /workspace in a separate native image. Check whether grading depends on paths
-outside that workspace, file modes, symlinks, empty directories, network access, or undeclared services. These
+The grader receives the captured output directories in a separate native image. Check whether grading depends on paths
+outside those directories, file modes, symlinks, empty directories, network access, or undeclared services. These
 contracts need additional runtime support; do not infer equivalence from a passing reference solution alone.
 
 The scalar reward is the arithmetic mean of native components, following the authors' outcome-reward method.
@@ -49,7 +49,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             config=CurationRecipe(
                 name="skill2env",
                 source=HarborHubSource(name, revision, read=read_task),
-                version="8",
+                version="9",
                 convert=convert_task,
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
