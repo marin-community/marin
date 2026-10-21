@@ -537,8 +537,10 @@ jobs:
             cloud/iris/tests/test_task_machine_config.py
       - name: Exercise the isolated source bundle, launchers, and verifier
         working-directory: vendor/skyrl
+        env:
+          PYTHONPATH: ${{ github.workspace }}/lib/rolloutengine/src:${{ github.workspace }}/lib/shellbox/src:${{ github.workspace }}/lib/taskcompendium/src:${{ github.workspace }}/lib/verifyit/src
         run: |
-          uv run --isolated --frozen --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
+          uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
             cloud/iris/tests/test_vendored_runtime_bundle.py \
             cloud/iris/tests/test_ray_spill_policy.py \
             cloud/iris/tests/test_task_runtime_source_selection.py \
