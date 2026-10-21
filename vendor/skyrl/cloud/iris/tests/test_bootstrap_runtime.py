@@ -8,6 +8,9 @@ import sys
 
 import pytest
 
+# The launcher tests share the repository process-group owner for bounded subprocess cleanup.
+from tests.process_gang import launch_process_gang
+
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "cloud" / "iris" / "bootstrap_runtime.sh"
@@ -118,25 +121,32 @@ def _fake_frozen_runtime(
     else:
         uv.write_text("#!/bin/sh\nexit 0\n")
     uv.chmod(0o755)
-    return environment, os.environ | {
+    process_environment = os.environ.copy()
+    # Bootstrap must resolve packages from its isolated frozen environment.
+    process_environment.pop("PYTHONPATH", None)
+    return environment, process_environment | {
         "EXPECTED_SYSTEM_PYTHON": str(fake_bin / "python3.12"),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
     }
+
+
+def _bootstrap_command(environment: Path, profile: str) -> list[str]:
+    return [
+        "bash",
+        str(BOOTSTRAP_SCRIPT),
+        str(REPOSITORY_ROOT),
+        str(environment),
+        str(environment / "runtime.sh"),
+        profile,
+        "production",
+    ]
 
 
 def _run_bootstrap(
     environment: Path, process_environment: dict[str, str], profile: str
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [
-            "bash",
-            str(BOOTSTRAP_SCRIPT),
-            str(REPOSITORY_ROOT),
-            str(environment),
-            str(environment / "runtime.sh"),
-            profile,
-            "production",
-        ],
+        _bootstrap_command(environment, profile),
         cwd=REPOSITORY_ROOT,
         env=process_environment,
         capture_output=True,
@@ -238,3 +248,38 @@ def test_bootstrap_rejects_incomplete_agentic_debug_runtime(
 
     assert result.returncode != 0
     assert expected_error in result.stderr
+
+
+def test_parallel_bootstrap_waits_for_every_check_and_reports_failure(tmp_path):
+    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    site_packages = next((environment / "lib").glob("python*/site-packages"))
+    barrier = tmp_path / "imports-ready"
+    os.mkfifo(barrier)
+    completed = tmp_path / "megatron-completed"
+    transformer_engine = site_packages / "transformer_engine/common/__init__.py"
+    transformer_engine.write_text(
+        transformer_engine.read_text()
+        + f"with open({str(barrier)!r}, 'rb', buffering=0) as gate:\n    assert gate.read(1) == b'r'\n"
+        + f"Path({str(completed)!r}).touch()\n"
+    )
+    _write_module(
+        site_packages,
+        "memray.py",
+        f"with open({str(barrier)!r}, 'wb', buffering=0) as gate:\n    gate.write(b'r')\n"
+        + "raise RuntimeError('memray import failed')\n",
+    )
+    _write_module(site_packages, "quack/activation.py", "raise RuntimeError('vllm import failed')\n")
+    with launch_process_gang(
+        command=_bootstrap_command(environment, "megatron"),
+        working_directory=REPOSITORY_ROOT,
+        environment=process_environment,
+        control_directory=tmp_path,
+        log_path=tmp_path / "bootstrap.log",
+        reap_timeout_seconds=5,
+        process_description="runtime bootstrap",
+    ) as gang:
+        result = gang.wait(timeout_seconds=15)
+    assert completed.is_file()
+    assert result.returncode != 0, result.output
+    assert "memray import failed" in result.output
+    assert "vllm import failed" in result.output

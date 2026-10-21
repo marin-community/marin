@@ -295,12 +295,18 @@ class BasePPOExp:
 
         The `cfg` passed here will be the final config from Hydra, including CLI overrides.
         """
+        from skyrl_train.utils.utils import Timer  # noqa: PLC0415
+
         self.cfg = cfg
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
-        self.tokenizer = self.get_tokenizer()
-        self.train_dataset = self.get_train_dataset()
-        self.eval_dataset = self.get_eval_dataset()
+        self.startup_timings = {}
+        with Timer("driver/tokenizer", self.startup_timings):
+            self.tokenizer = self.get_tokenizer()
+        with Timer("driver/train_dataset", self.startup_timings):
+            self.train_dataset = self.get_train_dataset()
+        with Timer("driver/eval_dataset", self.startup_timings):
+            self.eval_dataset = self.get_eval_dataset()
         self.colocate_pg = self.get_colocate_pg()
         # Reserve the policy/training placement group BEFORE the inference
         # engines (which are created later, in `_setup_trainer`), so that in the
@@ -611,17 +617,21 @@ class BasePPOExp:
 
     def _setup_trainer(self, tracker):
         """Construct the trainer and models with the experiment's active tracker."""
+        from skyrl_train.utils.utils import Timer  # noqa: PLC0415
+
         logger.info(self.get_cfg_as_str(self.cfg))
         os.makedirs(self.cfg.trainer.export_path, exist_ok=True)
         os.makedirs(self.cfg.trainer.ckpt_path, exist_ok=True)
 
-        PolicyWorker, CriticWorker, RefWorker = self.get_worker_classes()
+        with Timer("driver/worker_classes", self.startup_timings):
+            PolicyWorker, CriticWorker, RefWorker = self.get_worker_classes()
 
         tokenizer = self.tokenizer
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
-        inference_engine_client = self.create_inference_engine_client()
+        with Timer("engines/create", self.startup_timings):
+            inference_engine_client = self.create_inference_engine_client()
 
         trajectory_runner: TrajectoryRunner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
 
@@ -639,7 +649,12 @@ class BasePPOExp:
         # Pass the policy placement group reserved before inference startup.
         logger.info("Starting policy workers: strategy={}", self.cfg.trainer.strategy)
         try:
-            trainer.build_models(PolicyWorker, CriticWorker, RefWorker, policy_pg=self.policy_pg)
+            with Timer("policy/build_models", self.startup_timings):
+                trainer.build_models(PolicyWorker, CriticWorker, RefWorker, policy_pg=self.policy_pg)
+            self.startup_timings.update(
+                {f"policy/{name}": duration for name, duration in trainer.policy_model.startup_timings.items()}
+            )
+            trainer.all_startup_timings.update(self.startup_timings)
             logger.info(
                 "Policy workers ready: strategy={} count={}",
                 self.cfg.trainer.strategy,
@@ -688,7 +703,11 @@ class BasePPOExp:
         # See agent_logs/2026-05-29_skyrl_uvloop_integration_and_robustness_research.md
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
-        with self.get_tracker() as tracker:
+        from skyrl_train.utils.utils import Timer  # noqa: PLC0415
+
+        with Timer("driver/tracker", self.startup_timings):
+            tracker_context = self.get_tracker()
+        with tracker_context as tracker:
             trainer = None
             try:
                 trainer = self._setup_trainer(tracker)

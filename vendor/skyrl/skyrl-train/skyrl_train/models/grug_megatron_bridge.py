@@ -31,6 +31,7 @@ from skyrl_train.models.grug_moe import (
     GRUG_DEFAULT_GLOBAL_EVERY,
     GRUG_MOE_MODEL_TYPE,
     GRUG_SPLIT_EXPERT_SCHEMA_VERSION,
+    GRUG_STACKED_EXPERT_SLICE_PATTERNS,
     grug_long_layer_flags,
 )
 
@@ -166,11 +167,7 @@ def _gated_norm_mappings(megatron_prefix: str, hf_norm: str, hf_gate_prefix: str
 class GrugMoeBridge(MegatronModelBridge):
     """Convert Grug MoE HF checkpoints to and from the Megatron-Core model."""
 
-    REMOTE_FIRST_DIM_SLICE_PATTERNS = (
-        "model.layers.*.mlp.experts.gate_proj.weight",
-        "model.layers.*.mlp.experts.up_proj.weight",
-        "model.layers.*.mlp.experts.down_proj.weight",
-    )
+    REMOTE_FIRST_DIM_SLICE_PATTERNS = GRUG_STACKED_EXPERT_SLICE_PATTERNS
 
     def provider_bridge(self, hf_pretrained) -> GrugModelProvider:
         provider = super().provider_bridge(hf_pretrained)

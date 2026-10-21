@@ -20,7 +20,7 @@ from taskcompendium.models import EnvironmentRequirements, NoGrader, Source
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
 
-from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count
+from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
@@ -46,7 +46,9 @@ class TaskDataset(PromptDataset):
     """Render public conversation fields and retain private lowered tasks for workers."""
 
     def prepare_dataset(self, dataset):
-        return dataset.map(_stored_task_prompt, num_proc=self.num_workers).with_transform(_restore_task_prompts)
+        return dataset.map(
+            _stored_task_prompt, num_proc=dataset_num_proc(len(dataset), self.num_workers)
+        ).with_transform(_restore_task_prompts)
 
     @staticmethod
     def prompt_token_count(tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str) -> int:
@@ -214,6 +216,6 @@ class SourceTaskDataset(TaskDataset):
             mapper,
             with_indices=True,
             remove_columns=dataset.column_names,
-            num_proc=self.num_workers,
+            num_proc=dataset_num_proc(len(dataset), self.num_workers),
             keep_in_memory=True,
         )

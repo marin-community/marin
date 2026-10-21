@@ -749,6 +749,8 @@ def _skyrl_config_sections(
     data = copy.deepcopy(parsed.data)
     environment = copy.deepcopy(parsed.environment)
     trajectory_runner = copy.deepcopy(parsed.trajectory_runner)
+    # Iris task venvs are node-local, so rollout workers start together.
+    trajectory_runner.setdefault("rollout_workers", {}).setdefault("start_interval_seconds", 0.0)
     experiments_dir = str(exp_args.get("experiments_dir", ""))
     job_name = str(exp_args.get("job_name", ""))
 
