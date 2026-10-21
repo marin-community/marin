@@ -4,6 +4,7 @@ import shlex
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from time import monotonic
 from typing import Any, Literal
 
 from upath import UPath
@@ -11,6 +12,8 @@ from upath import UPath
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
+    NonZeroAgentExitCodeError,
+    sandbox_deadline_command,
     with_prompt_template,
 )
 from harbor.agents.utils import get_api_key_var_names_from_model_name
@@ -36,6 +39,7 @@ from harbor.models.trajectories import (
     Trajectory,
 )
 from harbor.models.trial.paths import EnvironmentPaths
+from harbor.trial.errors import AgentTimeoutError
 from harbor.utils.logger import logger
 
 
@@ -570,6 +574,11 @@ class MiniSweAgent(BaseInstalledAgent):
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext
     ) -> None:
+        deadline = (
+            monotonic() + environment.agent_timeout_sec
+            if environment.agent_timeout_sec is not None
+            else None
+        )
         augmented_instruction = instruction
         if self.mcp_servers:
             mcp_info = "\n\nMCP Servers:\nThe following MCP servers are available for this task.\n"
@@ -691,14 +700,31 @@ class MiniSweAgent(BaseInstalledAgent):
                 + " "
             )
 
-        await self.exec_as_agent(
-            environment,
-            command=(
-                '. "$HOME/.local/bin/env"; '
-                f"mini-swe-agent --yolo --model={self.model_alias} --task={escaped_instruction} "
-                f"--output={self._mini_swe_agent_trajectory_path} {extra_flags}"
-                f"{config_flags}"
-                f"--exit-immediately 2>&1 </dev/null | tee /logs/agent/mini-swe-agent.txt"
-            ),
-            env=env,
+        remaining = deadline - monotonic() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            raise AgentTimeoutError("Mini-SWE setup exhausted its agent-phase deadline")
+        command = (
+            '. "$HOME/.local/bin/env"; '
+            f"mini-swe-agent --yolo --model={self.model_alias} --task={escaped_instruction} "
+            f"--output={self._mini_swe_agent_trajectory_path} {extra_flags}"
+            f"{config_flags}"
+            f"--exit-immediately 2>&1 </dev/null | tee /logs/agent/mini-swe-agent.txt"
         )
+        # Cancelling Daytona's local poll leaves this detached process running
+        # and blocks verifier commands in the same session. Stop it remotely.
+        try:
+            await self.exec_as_agent(
+                environment,
+                command=sandbox_deadline_command(command, remaining),
+                env=env,
+            )
+        except NonZeroAgentExitCodeError as error:
+            if (
+                remaining is not None
+                and error.result is not None
+                and error.result.return_code == 124
+            ):
+                raise AgentTimeoutError(
+                    "Mini-SWE exceeded its agent-phase deadline and was terminated server-side"
+                ) from error
+            raise

@@ -367,6 +367,8 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     trajectory = tmp_path / "mini-swe-agent.trajectory.json"
 
     class HarnessEnvironment:
+        agent_timeout_sec = None
+
         async def exec(self, *, command, env, **kwargs):
             words = shlex.split(command)
             if "mini-swe-agent" not in words:

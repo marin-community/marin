@@ -16,17 +16,39 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.agents.installed.mini_swe_agent import (
     MiniSweAgent,
     _normalize_content,
     convert_and_save_trajectory,
     convert_mini_swe_agent_to_atif,
 )
+from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
+from harbor.trial.errors import AgentTimeoutError
 
 # ---------------------------------------------------------------------------
 # Fixtures: realistic v2 tool-calling trajectory data
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("return_code", "expected_error"),
+    [(124, AgentTimeoutError), (1, NonZeroAgentExitCodeError)],
+)
+async def test_remote_deadline_is_scoreable_but_other_exit_remains_distinct(
+    tmp_path, return_code, expected_error
+):
+    agent = MiniSweAgent(logs_dir=tmp_path, model_name="hosted_vllm/test-model")
+    environment = AsyncMock()
+    environment.agent_timeout_sec = 1800
+    environment.exec.return_value = ExecResult(
+        return_code=return_code, stdout="", stderr=""
+    )
+    with pytest.raises(expected_error):
+        await agent.run("Solve the task", environment, AgentContext())
+
 
 V2_TOOL_CALLING_TRAJECTORY = {
     "trajectory_format": "mini-swe-agent-1.1",
@@ -707,6 +729,7 @@ class TestCreateRunAgentCommands:
                 logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
             )
             mock_env = AsyncMock()
+            mock_env.agent_timeout_sec = None
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("Fix the bug", mock_env, AsyncMock())
 
@@ -726,6 +749,7 @@ class TestCreateRunAgentCommands:
                 logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
             )
             mock_env = AsyncMock()
+            mock_env.agent_timeout_sec = None
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("task", mock_env, AsyncMock())
 
@@ -737,6 +761,7 @@ class TestCreateRunAgentCommands:
         with patch.dict(os.environ, {"MSWEA_API_KEY": "sk-test"}, clear=False):
             agent = MiniSweAgent(logs_dir=temp_dir, model_name="openai/gpt-4o")
             mock_env = AsyncMock()
+            mock_env.agent_timeout_sec = None
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("task", mock_env, AsyncMock())
 
@@ -752,6 +777,7 @@ class TestCreateRunAgentCommands:
                 api_base="https://hosted-vllm.invalid/v1",
             )
             mock_env = AsyncMock()
+            mock_env.agent_timeout_sec = None
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("task", mock_env, AsyncMock())
 
@@ -764,6 +790,7 @@ class TestCreateRunAgentCommands:
     async def test_invalid_model_raises(self, temp_dir):
         agent = MiniSweAgent(logs_dir=temp_dir, model_name="no-slash")
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with pytest.raises(ValueError, match="provider/model_name"):
             await agent.run("task", mock_env, AsyncMock())
@@ -775,6 +802,7 @@ class TestCreateRunAgentCommands:
                 logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
             )
             mock_env = AsyncMock()
+            mock_env.agent_timeout_sec = None
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("Fix the bug; rm -rf /", mock_env, AsyncMock())
 
