@@ -71,6 +71,8 @@ from marinskyrl.distillation import (
 )
 from skyrl_train.objective.teacher import teacher_advantages
 from skyrl_train.objective.correction import compute_correction
+from skyrl_train.objective.score_centering import collate_score_centering, collate_score_probe, hypothetical_score_probe
+from skyrl_train.config.objective_spec import score_centering_probe_unavailable_reason, score_centering_tis_cap
 from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
@@ -397,6 +399,7 @@ class RayPPOTrainer:
         self._checkpoint_save_failures = 0.0
         self._ftpo_stopped = False
         self._shutdown_complete = False
+        self._last_score_probe_time: float | None = None
         self._restored_rollout_state: TrainingContextState | None = None
         self.global_step = 0
         self.loaded_checkpoint_path: str | None = None
@@ -1689,6 +1692,9 @@ class RayPPOTrainer:
         with Timer("compute_advantages_and_returns", self.all_timings):
             training_input = self.compute_advantages_and_returns(training_input)
             training_input = self.finalize_advantages_for_training(training_input)
+        if "score_probe_positions" in training_input:
+            with Timer("score_centering_probe_summary", self.all_timings):
+                self._finish_score_probe(training_input)
 
         if self.cfg.trainer.dump_data_batch:
             if step_wall is not None:
@@ -2227,6 +2233,19 @@ class RayPPOTrainer:
             if len(rollout_routed_experts_rows) != len(response_ids):
                 raise ValueError("routed experts must have one row per response")
         distillation_tensors = _validated_distillation_tensors(trajectory_batch, response_masks_tensor)
+        score_tensors = {}
+        score_width = self.cfg.trainer.algorithm.get("score_centering_topk", 0)
+        if score_width:
+            if rollout_logprobs_tensor is None:
+                raise ValueError("score centering requires sampled behavior log probabilities on every batch")
+            ids, scores = collate_score_centering(
+                trajectory_batch,
+                response_ids,
+                response_masks_tensor,
+                score_width,
+                sampled_logprobs=rollout_logprobs_tensor,
+            )
+            score_tensors = {"score_topk_indices": ids, "score_behavior_logprobs": scores}
         # Policy steps are bounded by leases, so a batch without leases keeps zero staleness.
         policy_steps = None
         if rollout_staleness is None:
@@ -2243,6 +2262,27 @@ class RayPPOTrainer:
             )
         if self._training_metrics_enabled:
             self.all_metrics.update(_token_staleness_metrics(rollout_staleness_tensor, loss_masks_tensor, policy_steps))
+        probe_reason = score_centering_probe_unavailable_reason(self.cfg)
+        self.all_metrics["score_centering_probe/available"] = float(probe_reason is None)
+        self.all_metrics["score_centering_probe/observed"] = 0.0
+        if "score_probe_positions" in trajectory_batch:
+            if probe_reason is not None:
+                raise ValueError(f"Received score probe evidence when probes are unavailable: {probe_reason}")
+            with Timer("score_centering_probe_collation", self.all_timings):
+                probe_tensors = collate_score_probe(
+                    trajectory_batch,
+                    response_ids,
+                    self.cfg.trainer.algorithm.score_centering_probe.topk,
+                    sampled_logprobs=rollout_logprobs_tensor,
+                )
+            self.all_metrics["score_centering_probe/observed"] = 1.0
+            self.all_metrics["score_centering_probe/sampled_tokens"] = 0.0
+            if probe_tensors:
+                positions = probe_tensors["score_probe_positions"]
+                probe_tensors["score_probe_source_steps"] = (
+                    policy_steps.gather(1, positions) if policy_steps is not None else torch.full_like(positions, -1)
+                )
+                score_tensors.update(probe_tensors)
         training_input = TrainingInputBatch(
             {
                 "sequences": sequences_tensor,  # Full trajectories (padded and concatenated prompts and responses)
@@ -2261,6 +2301,7 @@ class RayPPOTrainer:
             routed_expert_rows=rollout_routed_experts_rows,
         )
         training_input.update(distillation_tensors)
+        training_input.update(score_tensors)
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None:
             candidates, scores, _ = collate_student_selected_rollout(
@@ -2832,6 +2873,31 @@ class RayPPOTrainer:
         return new_training_input
 
     @torch.no_grad()
+    def _finish_score_probe(self, training_input: TrainingInputBatch) -> None:
+        positions = training_input.pop("score_probe_positions")
+        valid = (training_input.pop("score_topk_indices") >= 0).all(-1)
+        valid &= training_input["loss_mask"].gather(1, positions).bool()
+        metrics = hypothetical_score_probe(
+            training_input.pop("score_old_logprobs"),
+            training_input.pop("score_behavior_logprobs"),
+            training_input["action_log_probs"].gather(1, positions),
+            training_input["rollout_logprobs"].gather(1, positions),
+            training_input["advantages"].gather(1, positions),
+            valid,
+            training_input.pop("score_probe_source_steps"),
+            training_step=self.global_step,
+            loss_tokens=int(training_input["loss_mask"].bool().sum()),
+            tis_cap=score_centering_tis_cap(self.cfg.trainer.algorithm),
+            eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
+            eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
+        )
+        now = time.monotonic()
+        if self._last_score_probe_time is not None:
+            metrics["score_centering_probe/seconds_since_previous"] = now - self._last_score_probe_time
+        self._last_score_probe_time = now
+        self.all_metrics.update(metrics)
+
+    @torch.no_grad()
     def fwd_logprobs_values_reward(
         self,
         training_input: TrainingInputBatch,
@@ -2867,6 +2933,17 @@ class RayPPOTrainer:
             fwd_keys.append("rollout_routed_experts")
         data_fwd_pass = training_input.select(keys=fwd_keys, metadata_keys=["response_length"])
         data_fwd_pass.metadata["global_step"] = self.global_step
+        policy_fwd_pass = data_fwd_pass
+        if "score_topk_indices" in training_input:
+            policy_fwd_pass = training_input.select(
+                keys=[
+                    *fwd_keys,
+                    "score_topk_indices",
+                    *(["score_probe_positions"] if "score_probe_positions" in training_input else []),
+                ],
+                metadata_keys=["response_length"],
+            )
+            policy_fwd_pass.metadata["global_step"] = self.global_step
 
         def collect_results(actor_infos, results, key):
             ret_outputs: TrainingOutputBatch = concatenate_outputs_after_mesh_dispatch(actor_infos, results)
@@ -2914,7 +2991,7 @@ class RayPPOTrainer:
         if self.colocate_all:
             self.policy_model.backload_to_gpu(backload_optimizer=False, backload_model=True)
 
-        action_log_probs_refs = self.policy_model.async_run_ray_method("mesh", "forward", data=data_fwd_pass)
+        action_log_probs_refs = self.policy_model.async_run_ray_method("mesh", "forward", data=policy_fwd_pass)
         if self.colocate_all:
             all_rank_action_log_probs: List[TrainingOutputBatch] = ray.get(action_log_probs_refs)
             action_log_probs = collect_results(self.policy_model.actor_infos, all_rank_action_log_probs, key="output")
@@ -2956,6 +3033,13 @@ class RayPPOTrainer:
         # NOTE (sumanthrh): The slicing is needed to make sure that the batch dimension doesn't change for the tensordict.
         reference_scores = reference_scores[: len(sequences_all)] if reference_scores is not None else None
         action_log_probs = action_log_probs[: len(sequences_all)]
+        if "score_topk_indices" in training_input:
+            old_selected = collect_results(
+                self.policy_model.actor_infos, all_rank_action_log_probs, key="score_old_logprobs"
+            )[: len(sequences_all)]
+            if old_selected.shape != training_input["score_behavior_logprobs"].shape:
+                raise ValueError("old-trainer top-K log probabilities must align with captured behavior evidence")
+            training_input["score_old_logprobs"] = old_selected
         values = values[: len(sequences_all)] if values is not None else None
 
         if "ftpo_chosen_mask" in training_input:

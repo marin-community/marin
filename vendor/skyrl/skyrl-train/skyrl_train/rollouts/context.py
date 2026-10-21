@@ -48,7 +48,7 @@ from skyrl_train.rollouts.workers import RolloutWorkers
 from skyrl_train.telemetry import GeneratedWork, record_generated_work, record_rollout_buffer
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
-from skyrl_train.config.objective_spec import rollout_logprobs_required
+from skyrl_train.config.objective_spec import rollout_logprobs_required, score_centering_probe_unavailable_reason
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 
 _T = TypeVar("_T")
@@ -60,18 +60,29 @@ class RolloutRequestSpec:
 
     samples_per_prompt: int
     sampling_params: dict
+    probe_interval: int = 0
+    probe_topk: int = 0
+    probe_tokens: int = 0
 
     @classmethod
     def from_config(cls, config: DictConfig) -> RolloutRequestSpec:
+        probe = config.trainer.algorithm.get("score_centering_probe")
+        reason = score_centering_probe_unavailable_reason(config)
+        if reason is not None:
+            logger.info("Periodic score-centering probes unavailable: {}", reason)
         return cls(
             samples_per_prompt=config.generator.n_samples_per_prompt,
             sampling_params=get_sampling_params_for_backend(config.generator.backend, config.generator.sampling_params),
+            probe_interval=int(probe.interval) if reason is None else 0,
+            probe_topk=int(config.trainer.algorithm.score_centering_topk or probe.topk) if reason is None else 0,
+            probe_tokens=int(probe.tokens_per_response) if reason is None else 0,
         )
 
-    def request(self, prompt: dict, policy_step: int) -> TrajectoryRequestBatch:
-        request, _ = prepare_trajectory_request(
-            [prompt], self.samples_per_prompt, self.sampling_params, "train", policy_step
-        )
+    def request(self, prompt: dict, policy_step: int, *, probe: bool = False) -> TrajectoryRequestBatch:
+        sampling = {**self.sampling_params, "logprobs": self.probe_topk} if probe else self.sampling_params
+        request, _ = prepare_trajectory_request([prompt], self.samples_per_prompt, sampling, "train", policy_step)
+        if probe:
+            request = dataclasses.replace(request, score_centering_probe_tokens=self.probe_tokens)
         return request
 
 
@@ -153,6 +164,7 @@ class TrainingContext:
         self._rollout_spans = rollout_spans
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
+        self._last_score_probe_step: int | None = None
         self._buffer = buffer
         self._payloads = payloads
         self._writer = payloads.writer(self._buffer, content_policy)
@@ -390,7 +402,14 @@ class TrainingContext:
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.
                 await self._submission_allowed.wait()
-                task = RolloutTask(lease, prompt, self._request_spec.request(prompt, lease.policy_step))
+                interval = self._request_spec.probe_interval
+                probe = bool(interval) and (
+                    self._last_score_probe_step is None or lease.policy_step >= self._last_score_probe_step + interval
+                )
+                request = self._request_spec.request(prompt, lease.policy_step, probe=probe)
+                if probe:
+                    self._last_score_probe_step = lease.policy_step
+                task = RolloutTask(lease, prompt, request)
                 self._in_flight[lease.lease_id] = task
                 running = asyncio.create_task(self._run(task))
                 self._running.add(running)

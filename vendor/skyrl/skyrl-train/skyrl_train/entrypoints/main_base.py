@@ -32,6 +32,7 @@ from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
     validate_rollout_launch,
 )
+from skyrl_train.config.objective_spec import score_centering_probe_unavailable_reason
 from marinskyrl.speculative_decoding import (
     STANDARD_TRAINING_ENTRYPOINT,
     parse_speculative_decoding_config,
@@ -181,6 +182,8 @@ def create_ray_wrapped_inference_engines_from_config(
             engine_init_kwargs["weight_transfer_config"] = {"backend": "runai_streamer"}
 
     requested_logprobs = [cfg.generator.sampling_params.logprobs, cfg.generator.eval_sampling_params.logprobs]
+    if score_centering_probe_unavailable_reason(cfg) is None:
+        requested_logprobs.append(cfg.trainer.algorithm.score_centering_probe.topk)
     for callback in cfg.trainer.get("callbacks") or []:
         if callback.get("type") == "evaluation":
             requested_logprobs.extend(

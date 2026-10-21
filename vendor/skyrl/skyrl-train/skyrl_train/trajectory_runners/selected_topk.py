@@ -40,7 +40,9 @@ def align_student_topk(
         len(ids) != width or len(scores) != width for ids, scores in zip(candidate_ids, candidate_scores, strict=True)
     ):
         raise ValueError("student top-K candidate widths must agree across tokens")
-    candidate_ids_array = np.asarray(candidate_ids, dtype=np.int64)
+    candidate_ids_array = np.asarray(candidate_ids)
+    if not np.issubdtype(candidate_ids_array.dtype, np.integer):
+        candidate_ids_array = candidate_ids_array.astype(np.int64)
     id_dtype = (
         np.int32
         if candidate_ids_array.min() >= np.iinfo(np.int32).min and candidate_ids_array.max() <= np.iinfo(np.int32).max

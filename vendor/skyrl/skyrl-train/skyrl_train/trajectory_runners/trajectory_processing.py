@@ -272,6 +272,13 @@ def concatenate_trajectory_batches(
     elif any(output.get("behavior_topk_logprobs") is not None for output in trajectory_batches):
         raise ValueError("student-selected behavior scores require selected token IDs")
 
+    probe_channels = {}
+    for key in ("score_probe_positions", "score_probe_indices", "score_probe_logprobs"):
+        if any(key in output for output in trajectory_batches):
+            probe_channels[key] = [
+                row for output in trajectory_batches for row in output.get(key, [None] * len(output["response_ids"]))
+            ]
+
     data_sources_concat = None
     if any(output.get("data_sources") is not None for output in trajectory_batches):
         data_sources_concat = [
@@ -397,6 +404,7 @@ def concatenate_trajectory_batches(
     if selected_topk_concat is not None:
         result["student_topk_indices"] = selected_topk_concat
         result["behavior_topk_logprobs"] = behavior_topk_concat
+    result.update(probe_channels)
     if data_sources_concat is not None:
         result["data_sources"] = data_sources_concat
     if token_level_shaping_concat is not None:

@@ -110,6 +110,18 @@ reason = "retained checkpoint-export behavior"
 glob = "skyrl-train/tests/cpu/test_inline_harbor.py"
 reason = "Harbor subprocess isolation and validation score accounting"
 [[keep]]
+glob = "skyrl-train/tests/cpu/test_score_centering_*.py"
+reason = "SC causal positions, gradient parity, numeric transport and bounded probe dispatch"
+[[keep]]
+glob = "skyrl-train/tests/cpu/objective/test_score_centering.py"
+reason = "SC collation, serialization and finalized-advantage probe behavior"
+[[keep]]
+glob = "skyrl-train/tests/cpu/inf_engines/test_response_topk.py"
+reason = "natural behavior heads, sampled-token exclusion and pinned chat tie/floor semantics"
+[[keep]]
+glob = "skyrl-train/tests/cpu/inf_engines/vllm/test_compact_chat.py"
+reason = "owned numeric capture, concurrent request isolation and cancellation"
+[[keep]]
 glob = "skyrl-train/tests/fixtures/**"
 reason = "data fixtures for retained acceptance tests"
 [[keep]]

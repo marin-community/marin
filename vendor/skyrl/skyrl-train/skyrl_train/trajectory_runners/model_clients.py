@@ -29,7 +29,7 @@ from skyrl_train.inference_engines.chat_template import (
     template_error_from_exception,
 )
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
-from skyrl_train.inference_engines.response_topk import select_chat_response_topk
+from skyrl_train.inference_engines.response_topk import CHAT_TOPK_WIDTH_KEY, CHOICE_TOPK_KEY
 from skyrl_train.trajectory_runners.types import TokenProvenance
 from skyrl_train.trajectory_runners.routed_experts import normalize_routed_experts
 from skyrl_train.rollout_observability import rollout_phase
@@ -81,8 +81,8 @@ class _ChatResult:
     prompt_ids: list[int]
     response_ids: list[int]
     response_logprobs: list[float] | None
-    student_topk_indices: list[list[int]] | None
-    behavior_topk_logprobs: list[list[float]] | None
+    student_topk_indices: np.ndarray | None
+    behavior_topk_logprobs: np.ndarray | None
     text: str
     stop_reason: str
     assistant_message: dict[str, Any]
@@ -258,14 +258,16 @@ class DirectModelClient:
             if sampling_params.get("logprobs") is not None:
                 body["logprobs"] = True
             if requested_top_k is not None:
-                # vLLM may include the sampled token outside the natural top K.
                 body["top_logprobs"] = requested_top_k + 1
                 body["return_tokens_as_token_ids"] = True
             request_id = uuid4().hex
             headers = {"x-request-id": request_id}
             if session_id is not None:
                 headers[SESSION_ID_HEADER] = str(session_id)
-            response = await self._client.chat_completion({"json": body, "headers": headers})
+            payload = {"json": body, "headers": headers}
+            if requested_top_k is not None:
+                payload[CHAT_TOPK_WIDTH_KEY] = requested_top_k
+            response = await self._client.chat_completion(payload)
             if "choices" not in response:
                 error = response.get("error") or {}
                 error_type = (
@@ -305,12 +307,18 @@ class DirectModelClient:
                 [float(item["logprob"]) for item in logprob_items] if logprob_items is not None else None
             )
             selected = None
-            if requested_top_k is not None and logprob_items is not None:
-                if len(logprob_items) != len(response_ids):
-                    raise ValueError("chat response top-K rows must align with exact token IDs")
-                selected = [
-                    select_chat_response_topk(item.get("top_logprobs") or [], requested_top_k) for item in logprob_items
-                ]
+            if requested_top_k is not None:
+                selected = choice.get(CHOICE_TOPK_KEY)
+                if selected is None:
+                    raise ValueError("Native chat omitted compact response top-K evidence")
+                expected_shape = (len(response_ids), requested_top_k)
+                if (
+                    len(selected.sampled_logprobs) != len(response_ids)
+                    or selected.topk_indices.shape != expected_shape
+                    or selected.topk_logprobs.shape != expected_shape
+                ):
+                    raise ValueError("Compact chat top-K rows must align with exact response token IDs")
+                response_logprobs = selected.sampled_logprobs
             stop_reason = choice["finish_reason"]
             token_budget = chat_options.get("max_completion_tokens")
             if (
@@ -326,8 +334,8 @@ class DirectModelClient:
                 prompt_ids,
                 response_ids,
                 response_logprobs,
-                None if selected is None else [ids for ids, _ in selected],
-                None if selected is None else [scores for _, scores in selected],
+                None if selected is None else selected.topk_indices,
+                None if selected is None else selected.topk_logprobs,
                 text,
                 stop_reason,
                 message,

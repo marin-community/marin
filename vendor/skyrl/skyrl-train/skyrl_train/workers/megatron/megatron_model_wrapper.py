@@ -20,9 +20,10 @@ from skyrl_train.distributed.megatron.model_utils import (
 )
 from skyrl_train.distributed.megatron.megatron_utils import get_model_config
 from skyrl_train.ftpo import FTPOTargets, FTPOInputs, boundary_values, compact_boundary_logits, ftpo_counts
-from skyrl_train.distillation import TopKEvidence, student_topk_logprobs
+from skyrl_train.distillation import TopKEvidence, student_topk_logprobs, INVALID_TOPK_INDEX
 from skyrl_train.models.megatron_router_replay import MegatronRouterReplay
-from skyrl_train.config.objective_spec import topk_loss_params
+from skyrl_train.config.objective_spec import topk_loss_params, score_centering_tis_cap
+from skyrl_train.objective.score_centering import ppo_tis_score_centering_correction, score_centering_diagnostics
 from skyrl_train.config.ftpo import ftpo_config
 from skyrl_train.objective.objective import (
     FTPOAuxiliaryBatch,
@@ -70,6 +71,14 @@ class MegatronForwardMicroBatch:
     rollout_routed_experts: Optional[torch.Tensor] = None
     ftpo_chosen_mask: torch.Tensor | None = None
     probe_row_indices: Optional[torch.Tensor] = None
+    score_topk_indices: Optional[torch.Tensor] = None
+    score_probe_positions: torch.Tensor | None = None
+
+
+@dataclass(frozen=True)
+class MegatronForwardResult:
+    scores: torch.Tensor
+    selected_logprobs: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +110,9 @@ class MegatronPolicyMicroBatch:
     correction_weights: Optional[torch.Tensor] = None
     rollout_routed_experts: Optional[torch.Tensor] = None
     pair_roles: Optional[torch.Tensor] = None
+    score_topk_indices: Optional[torch.Tensor] = None
+    score_old_logprobs: Optional[torch.Tensor] = None
+    score_behavior_logprobs: Optional[torch.Tensor] = None
 
 
 class MegatronModelWrapper:
@@ -187,6 +199,61 @@ class MegatronModelWrapper:
             chunk_size=self._logprob_chunk_size,
         )
         return scatter_token_values(compact_logprobs, attention_mask, drop_last=True)
+
+    def _response_logprobs(
+        self,
+        logits: torch.Tensor,
+        sequences: torch.Tensor,
+        attention_mask: torch.Tensor,
+        num_actions: int,
+        packed_seq_params,
+        candidate_ids: torch.Tensor | None = None,
+        candidate_positions: torch.Tensor | None = None,
+    ) -> MegatronForwardResult:
+        """Score response actions and candidates with the same differentiable normalizer.
+
+        Logits already include the scoring temperature. Returned scores use the
+        original response suffix, despite Megatron's compacted model positions.
+        """
+        chosen = self._token_logprobs(logits, sequences, attention_mask.to(bool), packed_seq_params)[:, -num_actions:]
+        selected = None
+        if candidate_ids is not None:
+            if candidate_ids.ndim != 3 or candidate_ids.shape[0] != chosen.shape[0]:
+                raise ValueError("selected response IDs must align with chosen logprobs")
+            if candidate_positions is None:
+                if candidate_ids.shape[:2] != chosen.shape:
+                    raise ValueError("selected response IDs must align with chosen logprobs")
+                response_positions = torch.arange(num_actions, device=logits.device).expand(chosen.shape[0], -1)
+            else:
+                if candidate_positions.shape != candidate_ids.shape[:2]:
+                    raise ValueError("compact selected response positions must align with candidate IDs")
+                response_positions = candidate_positions.long()
+                if torch.any(response_positions < 0) or torch.any(response_positions >= num_actions):
+                    raise ValueError("compact selected positions are outside the response")
+            query_start = attention_mask.shape[1] - num_actions - 1
+            if query_start < 0:
+                raise ValueError("selected response IDs require at least one prompt token")
+            queries = query_start + response_positions
+            positions = attention_mask.long().cumsum(1).gather(1, queries) - 1
+            valid = candidate_ids != INVALID_TOPK_INDEX
+            valid_rows = valid.any(-1)
+            if torch.any(
+                valid_rows & ~(attention_mask.gather(1, queries).bool() & attention_mask.gather(1, queries + 1).bool())
+            ):
+                raise ValueError("selected response IDs refer to padded prompt or response positions")
+            if torch.any(candidate_ids < INVALID_TOPK_INDEX) or torch.any(candidate_ids[valid] >= logits.shape[-1]):
+                raise ValueError("selected token IDs are outside the student vocabulary")
+            positions = positions.masked_fill(~valid_rows, 0)
+            rows = torch.arange(logits.shape[0], device=logits.device)[:, None]
+            head_logits = logits[rows[:, :, None], positions[:, :, None], candidate_ids.masked_fill(~valid, 0).long()]
+            chosen_logits = logits[rows, positions, sequences[:, -num_actions:].gather(1, response_positions)]
+            # Reuse the differentiable chosen normalizer; save no second FP32 vocabulary tensor.
+            selected = (
+                chosen.gather(1, response_positions).unsqueeze(-1)
+                + head_logits.float()
+                - chosen_logits.float().unsqueeze(-1)
+            ).masked_fill(~valid, torch.nan)
+        return MegatronForwardResult(chosen, selected)
 
     def _token_entropies(self, logits: torch.Tensor, attention_mask: torch.Tensor, packed_seq_params) -> torch.Tensor:
         """Compute entropy before reconstructing only scalar token values."""
@@ -377,7 +444,7 @@ class MegatronModelWrapper:
         seq_len: int,
         micro_batch_size: int,
         temperature: float = 1.0,
-    ) -> torch.Tensor:
+    ) -> MegatronForwardResult:
         """
         Score response tokens, or return raw vocabulary logits at FTPO boundaries.
 
@@ -388,8 +455,8 @@ class MegatronModelWrapper:
             temperature: Optional temperature scaling for logits.
 
         Returns:
-            Concatenated response log-probabilities [B,T], or FTPO boundary logits [B,V].
-            Valid on the pipeline last stage only.
+            Response scores [B,T], or FTPO boundary logits [B,V], and optional
+            aligned selected log probabilities. Valid on the pipeline last stage only.
         """
         forward_backward_func = get_forward_backward_func()
 
@@ -404,8 +471,19 @@ class MegatronModelWrapper:
             if temperature != 1.0:
                 logits.div_(temperature)
 
-            token_logprobs = self._token_logprobs(logits, sequences, data.attention_mask.to(bool), packed_seq_params)
-            return torch.tensor(0.0, device=token_logprobs.device), {"scores": token_logprobs}
+            response = self._response_logprobs(
+                logits,
+                sequences,
+                data.attention_mask,
+                data.num_actions,
+                packed_seq_params,
+                data.score_topk_indices,
+                data.score_probe_positions,
+            )
+            result = {"scores": response.scores}
+            if response.selected_logprobs is not None:
+                result["selected_logprobs"] = response.selected_logprobs
+            return response.scores.new_zeros(()), result
 
         def forward_step(batch_iter, model):
             batch = next(batch_iter)
@@ -442,16 +520,17 @@ class MegatronModelWrapper:
         if mpu.is_pipeline_last_stage(ignore_virtual=True):
             scores = [o["scores"] for o in output]
             scores = torch.cat(scores, dim=0)
-            # take last num_actions tokens per micro; concatenate later
-            # Assume all micros have same num_actions
-            num_actions = micro_batches[0].num_actions
-            if micro_batches[0].ftpo_chosen_mask is None:
-                scores = scores[:, -num_actions:]
+            selected_logprobs = (
+                torch.cat([o["selected_logprobs"] for o in output], dim=0)
+                if micro_batches[0].score_topk_indices is not None
+                else None
+            )
         else:
             # return dummy tensor for non-last pp stages
             device = micro_batches[0].sequences.device
             scores = torch.zeros(size=(1, 1), dtype=torch.bfloat16, device=device)
-        return scores
+            selected_logprobs = None
+        return MegatronForwardResult(scores, selected_logprobs)
 
     def _distillation_student_logprobs(
         self,
@@ -557,9 +636,34 @@ class MegatronModelWrapper:
             if data.ftpo is None and temperature != 1.0:
                 logits.div_(temperature)
 
-            token_logprobs = self._token_logprobs(logits, sequences, data.attention_mask.to(bool), packed_seq_params)
-
-            action_log_probs = token_logprobs[:, -num_actions:]
+            centering_width = self.cfg.trainer.algorithm.get("score_centering_topk", 0)
+            response = self._response_logprobs(
+                logits,
+                sequences,
+                data.attention_mask,
+                num_actions,
+                packed_seq_params,
+                data.score_topk_indices if centering_width else None,
+            )
+            action_log_probs = response.scores
+            score_centering = None
+            if centering_width:
+                if any(
+                    value is None
+                    for value in (data.score_topk_indices, data.score_old_logprobs, data.score_behavior_logprobs)
+                ):
+                    raise ValueError("score centering requires behavior IDs and old and behavior log probabilities")
+                if self.cfg.trainer.algorithm.get("score_centering_enabled", False):
+                    score_centering = ppo_tis_score_centering_correction(
+                        response.selected_logprobs,
+                        data.score_old_logprobs,
+                        data.score_behavior_logprobs,
+                        advantages,
+                        loss_mask,
+                        tis_cap=score_centering_tis_cap(self.cfg.trainer.algorithm),
+                        eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
+                        eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
+                    )
 
             structural = None
             if data.ftpo is not None and data.ftpo.weights is not None:
@@ -601,6 +705,7 @@ class MegatronModelWrapper:
                 ftpo=ftpo_inputs,
                 structural=structural,
                 pair_roles=data.pair_roles,
+                score_centering=score_centering,
             )
             objective = compute_policy_objective(
                 batch,
@@ -622,6 +727,20 @@ class MegatronModelWrapper:
                 "policy_kl": objective.rows.kl.detach().item(),
             }
             metrics.update(objective.metrics)
+            diagnostic_tokens = self.cfg.trainer.algorithm.get("score_centering_diagnostic_tokens", 0)
+            if centering_width and diagnostic_tokens:
+                metrics.update(
+                    score_centering_diagnostics(
+                        response.selected_logprobs,
+                        data.score_old_logprobs,
+                        data.score_behavior_logprobs,
+                        action_log_probs,
+                        rollout_action_logprobs,
+                        score_centering,
+                        loss_mask,
+                        diagnostic_tokens,
+                    )
+                )
             if completed_microbatches == len(micro_batches):
                 # Token logprobs are already reconstructed across TP/CP, so pool across data-parallel ranks only.
                 group = (

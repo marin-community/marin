@@ -16,6 +16,7 @@ from zmq.error import ZMQError
 from types import SimpleNamespace
 from vllm import SamplingParams
 from vllm.inputs import TokensPrompt
+from vllm.logprobs import FlatLogprobs
 from vllm.distributed.parallel_state import get_dp_group, get_ep_group, get_pp_group
 from vllm.distributed.weight_transfer.base import WeightTransferUpdateRequest
 from vllm.renderers.online_renderer import OnlineRenderer
@@ -36,7 +37,11 @@ from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
 from skyrl_train.inference_engines.vllm.route_capture import response_routes
 from skyrl_train.io import io
 
-from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest, ChatCompletionResponse
+from vllm.entrypoints.openai.chat_completion.protocol import (
+    ChatCompletionLogProb,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+)
 from vllm.entrypoints.openai.chat_completion.serving import OpenAIServingChat
 from vllm.entrypoints.openai.completion.protocol import CompletionRequest, CompletionResponse
 from vllm.entrypoints.openai.completion.serving import OpenAIServingCompletion
@@ -64,7 +69,13 @@ from skyrl_train.inference_engines.base import (
     LORA_DISK_LOAD_NAME,
     LORA_DISK_PATH_KEY,
 )
-from skyrl_train.inference_engines.response_topk import select_response_topk
+from skyrl_train.inference_engines.response_topk import (
+    CHAT_TOPK_WIDTH_KEY,
+    CHOICE_TOPK_KEY,
+    select_flat_response_topk,
+    select_response_topk,
+)
+from skyrl_train.inference_engines.vllm.compact_chat import CompactChatEngineClient
 from skyrl_train.inference_engines.chat_continuation import EXACT_PROMPT_TOKEN_IDS_KEY
 from marinskyrl.inference_placement import InferenceWorkerPlacement
 from skyrl_train.inference_engines.placement import inference_worker_placement
@@ -146,7 +157,9 @@ def _create_async_engine_with_port_collision_retries(engine_args, stat_loggers):
 
 
 class SkyRLOpenAIServingChat(OpenAIServingChat):
-    """Substitute exact prompt token IDs while retaining vLLM's chat response parser."""
+    """Serve exact chat tokens and ID-only internal candidate heads."""
+
+    id_only_logprob_requests: set[str]
 
     async def render_chat_request(self, request):
         rendered = await super().render_chat_request(request)
@@ -164,11 +177,34 @@ class SkyRLOpenAIServingChat(OpenAIServingChat):
         raw_request: "_MinimalRequest",
         prompt_token_ids: list[int],
     ) -> ChatCompletionResponse | ErrorResponse | AsyncGenerator[str, None]:
+        id_only = (
+            request.logprobs
+            and request.top_logprobs is not None
+            and request.top_logprobs > 0
+            and request.return_tokens_as_token_ids
+            and request.n == 1
+        )
+        capture_id = f"chatcmpl-{self._base_request_id(raw_request, request.request_id)}" if id_only else None
         token = _exact_chat_prompt_token_ids.set(prompt_token_ids)
         try:
+            if capture_id is not None:
+                self.id_only_logprob_requests.add(capture_id)
             return await super().create_chat_completion(request, raw_request)
         finally:
+            if capture_id is not None:
+                self.id_only_logprob_requests.discard(capture_id)
             _exact_chat_prompt_token_ids.reset(token)
+
+    def _get_top_logprobs(self, logprobs, top_logprobs, tokenizer, should_return_as_token_id, return_all=False):
+        if _exact_chat_prompt_token_ids.get() is None or not should_return_as_token_id:
+            return super()._get_top_logprobs(logprobs, top_logprobs, tokenizer, should_return_as_token_id, return_all)
+        # Internal captures consume exact IDs and scores. Token-ID placeholders
+        # already identify candidates; a byte array for each placeholder is unused.
+        return [
+            ChatCompletionLogProb(token=f"token_id:{token_id}", logprob=max(value.logprob, -9999.0), bytes=None)
+            for index, (token_id, value) in enumerate(logprobs.items())
+            if return_all or top_logprobs == -1 or (top_logprobs is not None and index < top_logprobs)
+        ]
 
 
 def _build_error_response(message: str, type_phrase: str, code: int) -> Dict[str, Any]:
@@ -1400,9 +1436,11 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
         if "rope_scaling" in kwargs:
             kwargs.pop("rope_scaling")
+        self._id_only_logprob_requests: set[str] = set()
         self.llm = self._create_engine(*args, **kwargs)
         self._weight_loader = VLLMWeightLoader(self.llm)
         self._policy_steps = PolicyStepStamps()
+        self.openai_serving_chat.id_only_logprob_requests = self._id_only_logprob_requests
         self._stamp_engine_steps()
 
     def _stamp_engine_steps(self) -> None:
@@ -1415,6 +1453,10 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 # vLLM keys its state by an internal id and drops outputs of requests it already aborted.
                 state = output_processor.request_states.get(output.request_id)
                 if state is not None:
+                    if state.external_req_id in self._id_only_logprob_requests:
+                        # ID-only captures expose IDs and numeric scores only. The
+                        # separate response detokenizer still produces the text.
+                        state.logprobs_processor.tokenizer = None
                     self._policy_steps.observe(state.external_req_id, len(output.new_token_ids), engine_core_timestamp)
             return process_outputs(engine_core_outputs, engine_core_timestamp, iteration_stats)
 
@@ -1452,7 +1494,9 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             "The vLLM engine only accepts `prompt_token_ids`, not `prompts`."
         )
 
-        base_params = request_sampling_params or {}
+        base_params = dict(request_sampling_params or {})
+        if base_params.get("logprobs", 0) and base_params["logprobs"] > 0:
+            base_params.setdefault("flat_logprobs", True)
         if per_prompt_sampling_params is None:
             sampling_params = SamplingParams(**base_params)
         else:
@@ -1480,8 +1524,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         stop_reasons: List[str] = []
         response_ids: List[List[int]] = []
         response_logprobs: Optional[List[List[float]]] = []
-        student_topk_indices: List[List[List[int]]] = []
-        behavior_topk_logprobs: List[List[List[float]]] = []
+        student_topk_indices: List[np.ndarray | List[List[int]]] = []
+        behavior_topk_logprobs: List[np.ndarray | List[List[float]]] = []
         routed_experts_rows: list[np.ndarray | None] = []
         all_prompt_logprobs: Optional[List] = None
         params_by_prompt = sampling_params if isinstance(sampling_params, list) else [sampling_params] * len(outputs)
@@ -1500,7 +1544,14 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             _logprobs = None
             selected_ids = []
             selected_scores = []
-            if resp.logprobs:
+            if isinstance(resp.logprobs, FlatLogprobs) and response_top_k is not None and response_top_k > 0:
+                _logprobs, selected_ids, selected_scores = select_flat_response_topk(
+                    resp.logprobs,
+                    resp.token_ids,
+                    response_top_k,
+                    row_params.logprob_token_ids if row_params is not None else None,
+                )
+            elif resp.logprobs:
                 _logprobs = []
                 for i, token_logprobs in enumerate(resp.logprobs):
                     token_logprobs: Dict[str, Logprob]
@@ -1669,8 +1720,9 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             **wrapper_kwargs,
         )
         online_renderer.warmup()
+        self._compact_chat_engine = CompactChatEngineClient(engine, self._id_only_logprob_requests)
         self.openai_serving_chat = SkyRLOpenAIServingChat(
-            engine_client=engine,
+            engine_client=self._compact_chat_engine,
             models=models,
             response_role="assistant",
             online_renderer=online_renderer,
@@ -1718,13 +1770,18 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                     lora_name=f"{lora_int_id}", lora_int_id=lora_int_id, lora_path="/dummy_lora_path"
                 )
 
-        async for request_output in self.llm.generate(
-            prompt=TokensPrompt(prompt_token_ids=prompt_token_ids),
-            sampling_params=sampling_params,
-            request_id=request_id,
-            lora_request=lora_request,
-        ):
-            final_output = request_output
+        if sampling_params.flat_logprobs and sampling_params.logprobs and sampling_params.logprobs > 0:
+            self._id_only_logprob_requests.add(request_id)
+        try:
+            async for request_output in self.llm.generate(
+                prompt=TokensPrompt(prompt_token_ids=prompt_token_ids),
+                sampling_params=sampling_params,
+                request_id=request_id,
+                lora_request=lora_request,
+            ):
+                final_output = request_output
+        finally:
+            self._id_only_logprob_requests.discard(request_id)
 
         return final_output, self._policy_steps.finish(request_id, len(final_output.outputs[0].token_ids))
 
@@ -1942,6 +1999,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         headers = request_payload.get("headers", {})
         request_id = headers.get("x-request-id") or uuid4().hex
         exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
+        compact_top_k = request_payload.get(CHAT_TOPK_WIDTH_KEY)
 
         # Apply configured sampling params from generator config.
         # Harbor requests may include their own sampling params; we override
@@ -1955,6 +2013,21 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             else:
                 request = CompletionRequest(**body)
             assert request.stream is False, "Streaming is not supported in SkyRL yet, please set stream to False."
+            if compact_top_k is not None:
+                if (
+                    endpoint != "/chat/completions"
+                    or exact_prompt_token_ids is None
+                    or (request.n or 1) != 1
+                    or not isinstance(compact_top_k, int)
+                    or compact_top_k <= 0
+                    or not request.logprobs
+                    or request.logprob_token_ids
+                    or request.use_beam_search
+                ):
+                    raise ValueError("Compact heads require an exact-token, single-response native chat request")
+                # vLLM still renders and parses the complete chat response. Its
+                # public engine client collects the head without display objects.
+                request = request.model_copy(update={"logprobs": False, "top_logprobs": 0})
         except Exception as e:
             return _build_error_response(str(e), HTTPStatus.BAD_REQUEST.phrase, HTTPStatus.BAD_REQUEST.value)
 
@@ -1966,9 +2039,15 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 if exact_prompt_token_ids is None:
                     generator = await self.openai_serving_chat.create_chat_completion(request, minimal_request)
                 else:
-                    generator = await self.openai_serving_chat.create_chat_completion_with_exact_prompt(
-                        request, minimal_request, exact_prompt_token_ids
-                    )
+                    if compact_top_k is None:
+                        generator = await self.openai_serving_chat.create_chat_completion_with_exact_prompt(
+                            request, minimal_request, exact_prompt_token_ids
+                        )
+                    else:
+                        with self._compact_chat_engine.capture(compact_top_k) as capture:
+                            generator = await self.openai_serving_chat.create_chat_completion_with_exact_prompt(
+                                request, minimal_request, exact_prompt_token_ids
+                            )
                 assert isinstance(generator, (ChatCompletionResponse, ErrorResponse))
             else:
                 generator = await self.openai_serving_completion.create_completion(request, minimal_request)
@@ -1979,6 +2058,10 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 response["error_category"] = "server_error"
                 return response
             choice = response["choices"][0]
+            if compact_top_k is not None:
+                if capture.response is None or capture.response[0] != choice.get("token_ids"):
+                    raise ValueError("Compact chat evidence does not match the served response token IDs")
+                choice[CHOICE_TOPK_KEY] = capture.response[1]
             # vLLM generates a chat completion under its response id, which parallel samples share.
             if (
                 endpoint == "/chat/completions"

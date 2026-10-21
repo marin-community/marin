@@ -201,6 +201,8 @@ def collate_student_selected_rollout(
     response_token_ids: list[list[int]],
     response_mask: torch.Tensor,
     top_k: int | None,
+    *,
+    index_dtype: torch.dtype = torch.long,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     index_rows = trajectory_batch.get("student_topk_indices")
     behavior_rows = trajectory_batch.get("behavior_topk_logprobs")
@@ -220,7 +222,7 @@ def collate_student_selected_rollout(
     if padded_loss_masks.shape != response_mask.shape:
         raise ValueError("student-selected loss masks must align with response tokens")
     selected_mask = padded_loss_masks.to(torch.bool)
-    indices = torch.full((*response_mask.shape, top_k), INVALID_TOPK_INDEX, dtype=torch.long)
+    indices = torch.full((*response_mask.shape, top_k), INVALID_TOPK_INDEX, dtype=index_dtype)
     behavior = torch.full((*response_mask.shape, top_k), torch.nan, dtype=torch.float32)
     for row, (selected, scores, response) in enumerate(zip(index_rows, behavior_rows, response_token_ids, strict=True)):
         if len(selected) != len(response) or len(scores) != len(response):

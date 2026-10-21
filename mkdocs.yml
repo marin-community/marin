@@ -102,6 +102,7 @@ nav:
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md
+      - PPO/TIS score centering: references/score-centering.md
       - RL Data Atlas: references/rl-data-atlas.md
       - Snowball Model Family Tree: references/snowball-family-tree.md
       - Building Marina apps: references/marina.md

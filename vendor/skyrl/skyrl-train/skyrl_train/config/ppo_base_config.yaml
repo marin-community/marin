@@ -221,6 +221,18 @@ trainer:
     clip_ratio_c: 3.0
     off_policy_correction: null
     off_policy_correction_rules: null
+    # Add PPO/TIS score centering on the captured behavior top-K support. Zero disables it.
+    score_centering_topk: 0
+    # Retain capture and candidate rescoring in matched controls while zeroing the correction.
+    score_centering_enabled: false
+    # Opt-in loss and probability-mass diagnostics; sample at most this many valid tokens per microbatch.
+    score_centering_diagnostic_tokens: 0
+    # One bounded hypothetical correction probe per interval of published policy steps.
+    # Unsupported objectives/backends report probe availability and keep their normal requests.
+    score_centering_probe:
+      interval: 10
+      topk: 128
+      tokens_per_response: 32
     tis_splice: true
     tis_lcs_alert_threshold: 0.005
     enable_token_reward_channel: false

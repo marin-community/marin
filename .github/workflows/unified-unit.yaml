@@ -531,7 +531,7 @@ jobs:
       - name: Exercise the isolated source bundle, launchers, and verifier
         working-directory: vendor/skyrl
         run: |
-          uv run --isolated --frozen --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
+          uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
             cloud/iris/tests/test_vendored_runtime_bundle.py \
             cloud/iris/tests/test_ray_spill_policy.py \
             cloud/iris/tests/test_task_runtime_source_selection.py \
@@ -540,6 +540,12 @@ jobs:
             cloud/iris/tests/test_checkpoint_export_config.py \
             cloud/iris/tests/test_open_mopd_fidelity.py \
             cloud/iris/tests/test_open_mopd_evaluation.py \
+            skyrl-train/tests/cpu/objective/test_score_centering.py \
+            skyrl-train/tests/cpu/test_score_centering_megatron_positions.py \
+            skyrl-train/tests/cpu/test_score_centering_transport.py \
+            skyrl-train/tests/cpu/test_score_centering_dispatch.py \
+            skyrl-train/tests/cpu/inf_engines/test_response_topk.py \
+            skyrl-train/tests/cpu/inf_engines/vllm/test_compact_chat.py \
             skyrl-gym/tests/test_aime_answer_normalization.py \
             skyrl-gym/tests/test_nemotron_judge_assets.py
 

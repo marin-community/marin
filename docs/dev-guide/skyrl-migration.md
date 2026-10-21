@@ -1,5 +1,10 @@
 # Maintain the vendored SkyRL runtime
 
+The optional SC feature from archived SkyRL #968 is adapted in the active
+vendor runtime. See [PPO/TIS score centering](../references/score-centering.md)
+for controls, retained evidence and the separate Marin #10394 grader release
+dependency. The snapshot report remains the historical cutover dry run.
+
 `scripts/skyrl_migration.py` prepares a pruned source candidate at `vendor/skyrl`,
 builds a `marinskyrl` wheel, and prepares open work for transfer from
 `marin-community/MarinSkyRL`. Vendoring changes source ownership. Marin invokes
