@@ -950,7 +950,8 @@ class GrugModelConfig:
     hero width) alive through the MoE backward; split, the two working sets never overlap, for 36 GiB more host
     residuals and two phase-1 block mixes per layer. With any split position the reverse scan also copies the
     residuals per sublayer phase (mid partial and routed output for an MLP phase, the incoming partial for an
-    attention phase, all three for an unsplit layer), each one phase ahead, instead of a unit's at once. Needs
+    attention phase, all three for an unsplit layer) instead of a unit's at once; XLA places those copies, so the
+    plan relies on a memory limit that binds (a moderate ``--xla_gpu_memory_limit_slop_factor``). Needs
     ``scan_offload_partials``. Same math."""
     scan_release_weight_grads: bool = False
     """``scan_layers`` backward: each layer's end barrier holds the previous layer's weight gradients instead of its
@@ -5580,9 +5581,11 @@ def _scan_forward(
             stats.append(layer_stats)
         if not save_partials:
             return history, (tuple(stats), None)
-        saved = (jnp.stack(partials), tuple(routed))
         if args.split_layers:
-            saved = (*saved, tuple(mids))
+            # One host array per unit position, so the reverse scan slices each one by its own index.
+            saved = (tuple(partials), tuple(routed), tuple(mids))
+        else:
+            saved = (jnp.stack(partials), tuple(routed))
         # Offloaded per unit as the scan produces it, so the stacked residuals live in pinned host memory.
         return history, (tuple(stats), _to_memory_kind(saved, "pinned_host") if args.offload_partials else saved)
 
@@ -5737,41 +5740,29 @@ def _scan_phases(unit_size: int, split_layers: tuple[int, ...]) -> tuple[_ScanPh
     return tuple(phases)
 
 
-def _load_phase_residuals(store, split_layers: tuple[int, ...], u: jax.Array, phase: _ScanPhase) -> dict[str, jax.Array]:
-    """Copy the pinned-host residuals ``phase`` reads to HBM: the incoming partial for an attention or unsplit
-    phase, the routed output (``scan_save_routed_output``) and the mid partial for an MLP or unsplit phase."""
-    partials, routed, mids = store
+def _phase_residuals(unit_store, split_layers: tuple[int, ...], phase: _ScanPhase) -> dict[str, jax.Array]:
+    """The pinned-host slices ``phase`` reads: the incoming partial for an attention or unsplit phase, the routed
+    output (``scan_save_routed_output``) and the mid partial for an MLP or unsplit phase."""
+    partials, routed, mids = unit_store
     half, j = phase
-
-    def take(a: jax.Array, *index: jax.Array | int) -> jax.Array:
-        starts = (u, *index) + (0,) * (a.ndim - 1 - len(index))
-        sizes = (1,) * (1 + len(index)) + a.shape[1 + len(index) :]
-        on_device = _to_memory_kind(jax.lax.dynamic_slice(a, starts, sizes), "device")
-        return jax.lax.squeeze(on_device, tuple(range(1 + len(index))))
-
     out = {}
     if half != _ScanHalf.MLP:
-        out["partial"] = take(partials, j)
+        out["partial"] = partials[j]
     if half != _ScanHalf.ATTN and routed:
-        out["routed"] = take(routed[j])
+        out["routed"] = routed[j]
     if half == _ScanHalf.MLP:
-        out["mid"] = take(mids[sorted(split_layers).index(j)])
+        out["mid"] = mids[sorted(split_layers).index(j)]
     return out
 
 
 def _planned_scan_bwd(sources, logits, store, d_history, units_diff, queries, args: _ScanArgs):
     """``_scan_layers_bwd`` under ``scan_split_backward_layers``: per unit position, the joint layer VJP or (split)
     the MLP sublayer's VJP from the saved mid partial followed, behind a barrier, by the attention sublayer's, so
-    their residuals are never alive together. Each phase's residuals are copied from pinned host one phase ahead
-    (the host store passes through the previous phase's start barrier, so the copy cannot be hoisted further), and the
-    next unit's first phase rides in the carry. The copy offsets stay functions of the scan index (the host store,
-    not the index, passes through the barrier), which XLA needs to run a host-to-device dynamic slice as a DMA copy
-    rather than as a kernel reading pinned host memory."""
+    their residuals are never alive together. The scan slices each unit's pinned-host residuals (one array per unit
+    position and kind) by its own index, which XLA turns into DMA copies; a phase copies only the slices it reads,
+    and the latency-hiding scheduler places the copies."""
     plan = args.plan
     phases = _scan_phases(len(plan.unit), args.split_layers)
-
-    def load(host_store, u, phase):
-        return _load_phase_residuals(host_store, args.split_layers, u, phase)
 
     def layer_fn(layer_static, unit_layer, layer_index, saved_routed, half):
         return functools.partial(
@@ -5786,8 +5777,10 @@ def _planned_scan_bwd(sources, logits, store, d_history, units_diff, queries, ar
         )
 
     def unit_step(carry, xs):
-        d_history, d_queries, res = carry
-        unit_diff, unit_static, u = xs
+        d_history, d_queries = carry
+        unit_diff, unit_static, unit_store, u = xs
+        # The unit's first phase reads its slices at the start of the step.
+        res = _to_memory_kind(_phase_residuals(unit_store, args.split_layers, phases[0]), "device")
         d_unit: dict[bool, list[Block | None]] = {kind: [None] * plan.kind_count(kind) for kind in unit_diff}
         mlp_part = None
         for k, (half, j) in enumerate(phases):
@@ -5797,19 +5790,20 @@ def _planned_scan_bwd(sources, logits, store, d_history, units_diff, queries, ar
             layer_index = len(plan.unit) * u + j
             num_gates = 2 + (layer_diff.attn_res_query_shared is not None)
             with jax.named_scope(f"attn_res_scan_bwd_{half}{j}"):
+                # The next phase's host slices ride through this phase's start barrier. XLA's host offloader still
+                # moves each copy's start to the step start, so the scheduler's memory limit is what bounds how many
+                # are in flight (GB200 S6/S7: --xla_gpu_memory_limit_slop_factor=110-115; 140 hoists them all).
+                upcoming = _phase_residuals(unit_store, args.split_layers, phases[k + 1]) if k + 1 < len(phases) else {}
                 if half == _ScanHalf.ATTN:
                     # The MLP phase's cotangents (weight gradients included) are done before this phase's recompute.
-                    mlp_part, layer_diff, res, d_history, host_store = jax.lax.optimization_barrier(
-                        (mlp_part, layer_diff, res, d_history, store)
+                    mlp_part, layer_diff, res, d_history, upcoming = jax.lax.optimization_barrier(
+                        (mlp_part, layer_diff, res, d_history, upcoming)
                     )
                 else:
-                    layer_diff, res, d_history, host_store = jax.lax.optimization_barrier(
-                        (layer_diff, res, d_history, store)
+                    layer_diff, res, d_history, upcoming = jax.lax.optimization_barrier(
+                        (layer_diff, res, d_history, upcoming)
                     )
-                if k + 1 < len(phases):
-                    next_res = load(host_store, u, phases[k + 1])
-                else:
-                    next_res = load(host_store, jnp.maximum(u - 1, 0), phases[0])
+                next_res = _to_memory_kind(upcoming, "device")
                 if half == _ScanHalf.MLP:
                     fn = layer_fn(layer_static, unit_layer, layer_index, res.get("routed"), half)
                     probes = tuple(jnp.zeros_like(res["mid"]) for _ in range(num_gates - 1))
@@ -5850,14 +5844,11 @@ def _planned_scan_bwd(sources, logits, store, d_history, units_diff, queries, ar
             d_unit[unit_layer.is_kda][unit_layer.index] = d_layer
             res = next_res
         stacked = {kind: jax.tree.map(lambda *xs: jnp.stack(xs), *layers) for kind, layers in d_unit.items()}
-        return (d_history, d_queries, res), stacked
+        return (d_history, d_queries), stacked
 
     units = jnp.arange(plan.num_units, dtype=jnp.int32)
-    first = load(store, jnp.asarray(plan.num_units - 1, jnp.int32), phases[0])
-    xs = (units_diff, args.units_static, units)
-    (d_history, d_queries, _), d_units = jax.lax.scan(
-        unit_step, (d_history, jnp.zeros_like(queries), first), xs, reverse=True
-    )
+    xs = (units_diff, args.units_static, store, units)
+    (d_history, d_queries), d_units = jax.lax.scan(unit_step, (d_history, jnp.zeros_like(queries)), xs, reverse=True)
     return d_units, d_queries, d_history
 
 
