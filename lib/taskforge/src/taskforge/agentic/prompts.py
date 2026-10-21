@@ -71,8 +71,8 @@ probably ambiguous: correct the prompt, not the difficulty.
 - Prefer one computed value, a number or a short text, graded with a NumericSpec or an ExactSpec without substring \
 matching. Do not grade free text by its keywords. Avoid multiple \
 choice: a model can often find the correct option by its form. If you give options, make them similar in length and \
-detail. A JSON answer with many fields fails as a whole on one slip, so its pass rate jumps between 0 and 1 and is \
-hard to bring into the band.
+detail, and put each correct option at a random place in its list. A JSON answer with many fields fails as a whole \
+on one slip, so its pass rate jumps between 0 and 1 and is hard to bring into the band.
 - Find the difficulty with few rollouts. Let the build program take a difficulty level, write versions of a task \
 at several levels, and probe them in one rollout call with 2 solver rollouts each. Measure more only for a version \
 that is probably in the band. A version whose pass rate stays near a limit of the band after 8 solver rollouts does \
@@ -106,8 +106,9 @@ REVIEW_TASK_PROMPT = """\
 You review a task that trains a language-model agent on a capability. You get the capability, the task's prompt \
 and files, the blind solution of an expert who solved the task without its reference answer, its grader with the \
 reference answer, the solver evidence with the failed answers, the adversary rollouts with their answers and \
-commands, and the prompts of the tasks that are already accepted for the capability. Accept the task only if all \
-of these are true:
+commands, and the tasks that are already accepted for the capability. The accepted tasks are only for the check \
+that this task is different: they are not examples of good tasks, and other reviews can be wrong. Accept the task \
+only if all of these are true:
 - The task tests the capability, and its difficulty comes from the capability, not from tools that the solver's \
 shell does not have, for example an exp function.
 - The prompt is unambiguous, and it has one correct answer, which the grader accepts. An exact answer that depends \
@@ -131,5 +132,5 @@ with files without reading them got the answer from the prompt alone.
 - A format example in the prompt contains no part of the answer.
 - In a multiple-choice question, the correct option does not stand out, for example by its length or detail, and \
 one question does not give away the answer of another.
-- The task is different from the accepted tasks.
+- The task is different from the accepted tasks: not the same text, story or data with new labels or numbers.
 Give each problem that you find."""
