@@ -1593,6 +1593,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             first_step_watchdog.daemon = True
                             first_step_watchdog.start()
                     dispatch_start = time.perf_counter()
+                    post_step.dispatching()
                     state_leaves, metrics, inline_watch_stats = train_step(state_leaves, batch)
                     state = jax.tree.unflatten(state_treedef, state_leaves)
                     if (
@@ -1987,6 +1988,8 @@ HOST_STALL_SAMPLE_THRESHOLD = 0.3
 
 
 GC_EVERY_STEPS = 50
+# How long after the next step's dispatch starts the post-step thread begins a lagged step's host work (_PostStepThread).
+POST_STEP_START_DELAY = 0.05
 # The pipelined loop finishes a step with its state (for the checkpointer's time-based saves) at least this often.
 CHECKPOINT_POLL_STEPS = 25
 
@@ -2004,11 +2007,24 @@ class _LaggedStateView:
 
 class _PostStepThread:
     """One background thread for lagged steps' host work (``pipeline_depth`` 1). ``wait`` blocks until the submitted
-    work is done and re-raises its exception on the caller's thread."""
+    work is done and re-raises its exception on the caller's thread.
+
+    Submitted work starts ``POST_STEP_START_DELAY`` after ``dispatching``: the next step's dispatch builds its buffer
+    allocations first, and a device-to-host copy started alongside held that up by 50-130 ms (GPU idle) on GB200."""
 
     def __init__(self):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="post-step")
         self._future: concurrent.futures.Future | None = None
+        self._dispatched = threading.Event()
+
+    def dispatching(self) -> None:
+        """The caller is about to dispatch the next step."""
+        self._dispatched.set()
+
+    def _run_after_dispatch(self, fn: Callable[..., None], *args) -> None:
+        self._dispatched.wait()
+        time.sleep(POST_STEP_START_DELAY)
+        fn(*args)
 
     def __enter__(self) -> "_PostStepThread":
         return self
@@ -2019,7 +2035,8 @@ class _PostStepThread:
 
     def submit(self, fn: Callable[..., None], *args) -> None:
         assert self._future is None, "wait for the previous post-step work first"
-        self._future = self._executor.submit(fn, *args)
+        self._dispatched.clear()
+        self._future = self._executor.submit(self._run_after_dispatch, fn, *args)
 
     def wait(self) -> None:
         future, self._future = self._future, None
