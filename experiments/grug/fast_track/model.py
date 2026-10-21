@@ -5706,13 +5706,15 @@ def _planned_scan_bwd(sources, logits, store, d_history, units_diff, queries, ar
     """``_scan_layers_bwd`` under ``scan_split_backward_layers``: per unit position, the joint layer VJP or (split)
     the MLP sublayer's VJP from the saved mid partial followed, behind a barrier, by the attention sublayer's, so
     their residuals are never alive together. Each phase's residuals are copied from pinned host one phase ahead
-    (the copy's index passes through the previous phase's start barrier, so it cannot be hoisted further), and the
-    next unit's first phase rides in the carry."""
+    (the host store passes through the previous phase's start barrier, so the copy cannot be hoisted further), and the
+    next unit's first phase rides in the carry. The copy offsets stay functions of the scan index (the host store,
+    not the index, passes through the barrier), which XLA needs to run a host-to-device dynamic slice as a DMA copy
+    rather than as a kernel reading pinned host memory."""
     plan = args.plan
     phases = _scan_phases(len(plan.unit), args.split_layers)
 
-    def load(u, phase):
-        return _load_phase_residuals(store, args.split_layers, u, phase)
+    def load(host_store, u, phase):
+        return _load_phase_residuals(host_store, args.split_layers, u, phase)
 
     def layer_fn(layer_static, unit_layer, layer_index, saved_routed, half):
         return functools.partial(
@@ -5740,15 +5742,17 @@ def _planned_scan_bwd(sources, logits, store, d_history, units_diff, queries, ar
             with jax.named_scope(f"attn_res_scan_bwd_{half}{j}"):
                 if half == _ScanHalf.ATTN:
                     # The MLP phase's cotangents (weight gradients included) are done before this phase's recompute.
-                    mlp_part, layer_diff, res, d_history, u_now = jax.lax.optimization_barrier(
-                        (mlp_part, layer_diff, res, d_history, u)
+                    mlp_part, layer_diff, res, d_history, host_store = jax.lax.optimization_barrier(
+                        (mlp_part, layer_diff, res, d_history, store)
                     )
                 else:
-                    layer_diff, res, d_history, u_now = jax.lax.optimization_barrier((layer_diff, res, d_history, u))
+                    layer_diff, res, d_history, host_store = jax.lax.optimization_barrier(
+                        (layer_diff, res, d_history, store)
+                    )
                 if k + 1 < len(phases):
-                    next_res = load(u_now, phases[k + 1])
+                    next_res = load(host_store, u, phases[k + 1])
                 else:
-                    next_res = load(jnp.maximum(u_now - 1, 0), phases[0])
+                    next_res = load(host_store, jnp.maximum(u - 1, 0), phases[0])
                 if half == _ScanHalf.MLP:
                     fn = layer_fn(layer_static, unit_layer, layer_index, res.get("routed"), half)
                     probes = tuple(jnp.zeros_like(res["mid"]) for _ in range(num_gates - 1))
@@ -5791,7 +5795,7 @@ def _planned_scan_bwd(sources, logits, store, d_history, units_diff, queries, ar
         return (d_history, d_queries, res), stacked
 
     units = jnp.arange(plan.num_units, dtype=jnp.int32)
-    first = load(jnp.asarray(plan.num_units - 1, jnp.int32), phases[0])
+    first = load(store, jnp.asarray(plan.num_units - 1, jnp.int32), phases[0])
     xs = (units_diff, args.units_static, units)
     (d_history, d_queries, _), d_units = jax.lax.scan(
         unit_step, (d_history, jnp.zeros_like(queries), first), xs, reverse=True
