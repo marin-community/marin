@@ -180,6 +180,14 @@ version with `resume_mode=latest` can load private Torch or distributed state se
 runtime. Reuse a version across a runtime repin only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.
 
+Megatron S3 checkpoints store each FP32 master weight once. When a BF16 model tensor has a
+matching master with the same global shape, both logical tensor names point to the master's
+storage records. Restore and model-only export cast those records to the model dtype. Model
+buffers and weights without a matching master keep their own records. For BF16 weights with
+FP32 masters and Adam moments, this reduces tensor storage from 14 to 12 bytes per parameter.
+Model-only loads read FP32 records before casting to BF16, doubling the weight bytes read for
+the shared tensors.
+
 ## Pre-launch review
 
 Before submitting a large run:

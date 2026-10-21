@@ -542,6 +542,9 @@ jobs:
             cloud/iris/tests/test_open_mopd_evaluation.py \
             skyrl-gym/tests/test_aime_answer_normalization.py \
             skyrl-gym/tests/test_nemotron_judge_assets.py
+      - name: Exercise distributed checkpoint storage on CPU
+        working-directory: vendor/skyrl
+        run: uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 pytest -q cloud/iris/tests/test_checkpoint_storage.py
 
   unit_tests:
     name: unit-tests
