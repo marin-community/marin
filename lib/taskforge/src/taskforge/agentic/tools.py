@@ -65,6 +65,7 @@ from taskforge.agentic.gate import Evidence, Gate, missing_evidence
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, REVIEW_TASK_PROMPT
 from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
+from taskforge.llm.client import ContextExhausted
 from taskforge.llm.policy import Message
 from taskforge.llm.structured import StructuredOutputError
 
@@ -514,6 +515,10 @@ class ToolSession:
             result = await self.config.judge.complete_structured(messages, output_type, self.config.judge_policy)
         except StructuredOutputError as error:
             raise ToolError(f"The reviewer gave no valid reply; try again: {error}") from error
+        except ContextExhausted as error:
+            raise ToolError(
+                "The reviewer cannot read this task: its prompt and files are too long. Make them shorter."
+            ) from error
         self.tools.spend.judge_tokens += sum(
             completion.usage.prompt_tokens + completion.usage.completion_tokens for completion in result.completions
         )

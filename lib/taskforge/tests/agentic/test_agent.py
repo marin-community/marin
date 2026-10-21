@@ -23,7 +23,7 @@ from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT
 from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, BlindSolution, OptionList, TaskReview
 from taskforge.capability import CapabilityIdea
-from taskforge.llm.client import Completion, StructuredResult
+from taskforge.llm.client import Completion, ContextExhausted, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 
 TASK_ID = "ledger--00"
@@ -188,6 +188,28 @@ async def test_submit_refuses_a_task_whose_correct_option_is_the_longest():
     assert not submit["accepted"]
     assert any("longer than any other option" in problem for problem in submit["review"]["problems"])
     assert result.tasks == ()
+
+
+class OverflowJudge(AcceptingJudge):
+    """Rejects every request as too long for its context."""
+
+    async def complete_structured[T: BaseModel](
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
+    ) -> StructuredResult[T]:
+        raise ContextExhausted("prompt too long", ())
+
+
+async def test_a_task_too_long_for_the_reviewer_is_refused_and_the_session_continues():
+    script = (*SCRIPT, call("finish", report="done"))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=OverflowJudge()))
+
+    [submit] = [
+        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-10"
+    ]
+    assert "too long" in submit["error"]
+    assert (result.failure, result.report) == (None, "done")
 
 
 @dataclass
