@@ -8,15 +8,17 @@ from typing import Any
 from fsspec.implementations.dirfs import DirFileSystem
 from huggingface_hub import HfFileSystem
 
+from rigging.filesystem.storage_path import StoragePath
+
 HF_SCHEMES = {"hf-bucket": "buckets", "hf-model": "models", "hf-dataset": "datasets"}
 HF_PROTOCOLS = frozenset({"hf", *HF_SCHEMES})
 
 
 def hf_url(url: str) -> str:
     """Translate an explicit storage scheme to the Hub's native URL syntax."""
-    scheme, _, path = url.partition("://")
-    if scheme in HF_SCHEMES:
-        return f"hf://{HF_SCHEMES[scheme]}/{path}"
+    path = StoragePath(url)
+    if path.scheme in HF_SCHEMES:
+        return str(StoragePath(scheme="hf", netloc=HF_SCHEMES[path.scheme], segments=(path.netloc, *path.segments)))
     return url
 
 

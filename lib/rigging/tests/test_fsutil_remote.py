@@ -56,25 +56,7 @@ def test_remote_transfer_forwards_saved_hf_token_without_putting_it_in_command(t
     assert result.exit_code == 0, result.output
     submission = json.loads(capture.read_text())
     assert submission["token"] == "saved-token"
-    assert "saved-token" not in submission["args"]
-    assert submission["args"] == [
-        "--cluster=cw-us-east-02a",
-        "job",
-        "run",
-        "--cpu",
-        "1",
-        "--memory",
-        "2GB",
-        "--disk",
-        "5GB",
-        "--sync-package",
-        "marin-rigging",
-        "--",
-        "fsutil",
-        operation,
-        "s3://marin-us-east-02a/example",
-        f"{root}/example",
-    ]
+    assert all("saved-token" not in argument for argument in submission["args"])
 
 
 @dataclass

@@ -7,7 +7,7 @@ import base64
 import binascii
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from glob import has_magic
 from typing import Any, cast
 
@@ -421,8 +421,9 @@ def _location_path(location: TransferLocation) -> str:
     # onto itself through two different schemes.
     if StoragePath(location.url).scheme in HF_PROTOCOLS:
         uri = parse_hf_uri(hf_url(location.url))
-        revision = f"@{uri.revision or 'main'}" if uri.is_repo else ""
-        return f"{uri.type}/{uri.id}{revision}/{uri.path_in_repo}".rstrip("/")
+        if uri.is_repo and uri.revision is None:
+            uri = replace(uri, revision="main")
+        return str(StoragePath(uri.to_uri()))
     return location.path
 
 
