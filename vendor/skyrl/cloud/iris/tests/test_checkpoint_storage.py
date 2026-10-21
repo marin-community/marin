@@ -13,7 +13,8 @@ from torch.distributed._shard.sharded_tensor import Shard, init_from_local_shard
 import torch.multiprocessing as mp
 
 from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
-from skyrl_train.io.torch_distributed_checkpoint import MasterWeightsWriter, StreamingFsspecWriter
+from skyrl_train.distributed.megatron.checkpoint_writer import MasterWeightsWriter
+from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
 
 
 MODEL_KEY = "decoder.layers.mlp.experts.weight"

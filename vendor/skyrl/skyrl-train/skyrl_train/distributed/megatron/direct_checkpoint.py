@@ -18,7 +18,7 @@ from torch.distributed import checkpoint
 from torch.distributed.checkpoint._fsspec_filesystem import FileSystem as FsspecFileSystem
 
 from marinskyrl.remote_io import create_s3_filesystem
-from skyrl_train.io.torch_distributed_checkpoint import MasterWeightsWriter
+from skyrl_train.distributed.megatron.checkpoint_writer import MasterWeightsWriter
 from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
 
 
