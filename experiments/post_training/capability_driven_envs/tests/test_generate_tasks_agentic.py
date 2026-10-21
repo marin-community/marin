@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
+# These tests run in the marin-taskforge package environment; environments without it skip them.
+pytest.importorskip("taskforge")
+
 import httpx
 import openai
 from rolloutengine.models import ModelRequest, ModelTurn, TokenUsage
