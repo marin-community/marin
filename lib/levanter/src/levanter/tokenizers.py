@@ -19,6 +19,7 @@ import dataclasses
 import functools
 import json
 import logging
+import math
 import os
 import pathlib
 import re
@@ -646,39 +647,22 @@ class HfMarinTokenizer:
 
         # Padding is batch-wide, and dropout draws depend on native batch order,
         # so these tokenizer configurations encode all parts in one native call.
-        if self._tokenizer.padding is not None or native_dropout:
-            flat_parts: list[str] = []
-            origins: list[int] = []
-            for orig_idx, text in enumerate(texts):
-                for part in _safe_split_for_tokenizer(text):
-                    flat_parts.append(part)
-                    origins.append(orig_idx)
-            _encode_part_batch(self._tokenizer, flat_parts, origins, results)
-        else:
-            batch_parts: list[str] = []
-            batch_origins: list[int] = []
-            batch_chars = 0
-
-            def flush_batch() -> None:
-                nonlocal batch_chars
-                if not batch_parts:
-                    return
-                _encode_part_batch(self._tokenizer, batch_parts, batch_origins, results)
-                batch_parts.clear()
-                batch_origins.clear()
-                batch_chars = 0
-
-            for orig_idx, text in enumerate(texts):
-                for part in _safe_split_for_tokenizer(text):
-                    if batch_parts and (
-                        len(batch_parts) == _MAX_ENCODE_BATCH_PARTS
-                        or batch_chars + len(part) > _MAX_ENCODE_BATCH_CHARS
-                    ):
-                        flush_batch()
-                    batch_parts.append(part)
-                    batch_origins.append(orig_idx)
-                    batch_chars += len(part)
-            flush_batch()
+        one_call = self._tokenizer.padding is not None or native_dropout
+        max_parts = math.inf if one_call else _MAX_ENCODE_BATCH_PARTS
+        max_chars = math.inf if one_call else _MAX_ENCODE_BATCH_CHARS
+        batch_parts: list[str] = []
+        batch_origins: list[int] = []
+        batch_chars = 0
+        for orig_idx, text in enumerate(texts):
+            for part in _safe_split_for_tokenizer(text):
+                if batch_parts and (len(batch_parts) == max_parts or batch_chars + len(part) > max_chars):
+                    _encode_part_batch(self._tokenizer, batch_parts, batch_origins, results)
+                    batch_parts, batch_origins, batch_chars = [], [], 0
+                batch_parts.append(part)
+                batch_origins.append(orig_idx)
+                batch_chars += len(part)
+        if batch_parts:
+            _encode_part_batch(self._tokenizer, batch_parts, batch_origins, results)
 
         if add_special_tokens and self._bos_id is not None:
             results = [[self._bos_id, *r] for r in results]
@@ -779,7 +763,7 @@ def load_tokenizer(
 
 
 def tokenizer_content_hash(name_or_path: str) -> str:
-    """Return a SHA-256 identity for the tokenizer files used by the loader."""
+    """Return a SHA-256 of every file in the directory that ``load_tokenizer`` reads for ``name_or_path``."""
     local_dir = _local_tokenizer_path(name_or_path)
     return f"sha256:{directory_content_hash(pathlib.Path(local_dir))}"
 

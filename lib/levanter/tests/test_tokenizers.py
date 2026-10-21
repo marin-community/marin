@@ -50,6 +50,12 @@ def _clone_tokenizer(tokenizer: HfMarinTokenizer, *, bos_id: int | None = None) 
     )
 
 
+def _cap_homogeneous_runs(monkeypatch: pytest.MonkeyPatch, chars: int) -> None:
+    """Split homogeneous runs at ``chars`` characters, as the production split does at its own limit."""
+    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", chars)
+    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(rf"\s{{{chars},}}|\S{{{chars},}}"))
+
+
 def _can_load_model() -> bool:
     """Check if we can authenticate and load the gated model."""
     try:
@@ -689,8 +695,7 @@ def test_multi_chunk_path_preserves_bos(backend_tokenizer, monkeypatch):
     assert len(tk._safe_split_for_tokenizer(text)) == 1
 
     # Force the multi-chunk path by capping homogeneous runs at 100 chars.
-    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
-    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{100,}|\S{100,}"))
+    _cap_homogeneous_runs(monkeypatch, 100)
     parts = tk._safe_split_for_tokenizer(text)
     assert len(parts) > 1, "Expected multi-chunk path to activate"
     assert "".join(parts) == text
@@ -747,8 +752,7 @@ def test_encode_batch_scatters_parts_back_to_originals(backend_tokenizer, monkey
     """encode_batch must reassemble per-text token sequences correctly when
     some texts are split into multiple parts and others aren't."""
 
-    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
-    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{100,}|\S{100,}"))
+    _cap_homogeneous_runs(monkeypatch, 100)
 
     short = "The quick brown fox."
     pathological = "start" + (" " * 500) + "end"
@@ -1316,8 +1320,7 @@ def test_local_encode_batch_matches_individual_ids(
         local_gpt2_tokenizer,
         bos_id=local_gpt2_tokenizer.eos_token_id if add_special_tokens else None,
     )
-    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", split_size)
-    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(rf"\s{{{split_size},}}|\S{{{split_size},}}"))
+    _cap_homogeneous_runs(monkeypatch, split_size)
 
     expected = []
     for text in texts:
@@ -1349,8 +1352,7 @@ def test_local_encode_batch_preserves_native_padding(local_gpt2_marin_tokenizer)
 def test_local_encode_batch_with_truncation_matches_individual_ids(local_gpt2_marin_tokenizer, monkeypatch):
     tokenizer = _clone_tokenizer(local_gpt2_marin_tokenizer)
     tokenizer._tokenizer.enable_truncation(max_length=4)
-    monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 16)
-    monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{16,}|\S{16,}"))
+    _cap_homogeneous_runs(monkeypatch, 16)
     texts = ["short", "x" * (16 * 70), "最後の文書"]
 
     expected = []
