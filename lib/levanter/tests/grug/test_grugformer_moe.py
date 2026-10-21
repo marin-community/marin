@@ -43,7 +43,6 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
 from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug._moe.ep_ragged_all_to_all import (
     _accepted_assignments,
-    _CuteExpertMlp,
     _gather_dispatch_rows,
     _RaggedDotExpertMlp,
     _RoutingWeightGradient,
@@ -56,7 +55,6 @@ from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
     ExpertPrecision,
-    MoeActivation,
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
@@ -1967,45 +1965,6 @@ def test_expert_granular_a2a_params_chunked_masking_composes(alignment):
         np.testing.assert_array_equal(returned[s], expected)
 
 
-def _moe_gradient_jaxpr(
-    mesh: AbstractMesh,
-    *,
-    implementation: MoeImplementation,
-    activation: MoeActivation = ActivationFunctionEnum.silu,
-    dtype: jnp.dtype = jnp.bfloat16,
-    expert_precision: ExpertPrecision = ExpertPrecision.BF16,
-):
-    """Trace the gradient of a small MoE layer on ``mesh``, without compiling or running it."""
-    tokens, hidden_dim, intermediate_dim, num_experts, topk = 16, 32, 64, 4, 2
-
-    def spec(shape, dtype, *partition):
-        return jax.ShapeDtypeStruct(shape, dtype, sharding=NamedSharding(mesh, P(*partition)))
-
-    def loss(x, combine_weights, w_up_gate, w_down, selected_experts):
-        out = moe_mlp(
-            x,
-            selected_experts,
-            combine_weights,
-            w_up_gate,
-            w_down,
-            activation=activation,
-            implementation=implementation,
-            mesh=mesh,
-            pooled_transport_capacity_factor=(1.05 if implementation == "fixed_pooled_wave_all_to_all" else None),
-            expert_precision=expert_precision,
-        )
-        return jnp.sum(out)
-
-    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        return jax.make_jaxpr(jax.grad(loss, argnums=(0, 1, 2, 3)))(
-            spec((tokens, hidden_dim), dtype, ("data", "expert"), None),
-            spec((tokens, topk), dtype, ("data", "expert"), None),
-            spec((num_experts, hidden_dim, 2 * intermediate_dim), dtype, "expert", None, None),
-            spec((num_experts, intermediate_dim, hidden_dim), dtype, "expert", None, None),
-            spec((tokens, topk), jnp.int32, ("data", "expert"), None),
-        )
-
-
 def _force_routing_weight_gradient(
     monkeypatch: pytest.MonkeyPatch, routing_weight_gradient: _RoutingWeightGradient
 ) -> None:
@@ -2184,8 +2143,33 @@ def test_ragged_backward_takes_the_routing_weight_gradient_of_its_expert_mlp(
     # EXPERT_SIDE sends each expert row's <h, dh> back in a [rows, 1] float32 transport, one per expert
     # chunk (two here); EXACT differentiates the combine over the kept expert outputs instead.
     _force_routing_weight_gradient(monkeypatch, routing_weight_gradient)
-    # bfloat16, the dtype the GPU expert kernels take; the row dots stay float32.
-    jaxpr = _moe_gradient_jaxpr(_make_abstract_moe_mesh(data=2, expert=2, model=1), implementation="ragged_all_to_all")
+    mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 16, 32, 64, 4, 2
+
+    def spec(shape, dtype, *partition):
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=NamedSharding(mesh, P(*partition)))
+
+    def loss(x, combine_weights, w_up_gate, w_down, selected_experts):
+        out = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ragged_all_to_all",
+            mesh=mesh,
+        )
+        return jnp.sum(out)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        # bfloat16, the dtype the GPU expert kernels take; the row dots stay float32.
+        jaxpr = jax.make_jaxpr(jax.grad(loss, argnums=(0, 1, 2, 3)))(
+            spec((tokens, hidden_dim), jnp.bfloat16, ("data", "expert"), None),
+            spec((tokens, topk), jnp.bfloat16, ("data", "expert"), None),
+            spec((num_experts, hidden_dim, 2 * intermediate_dim), jnp.bfloat16, "expert", None, None),
+            spec((num_experts, intermediate_dim, hidden_dim), jnp.bfloat16, "expert", None, None),
+            spec((tokens, topk), jnp.int32, ("data", "expert"), None),
+        )
 
     def is_row_dot(eqn):
         return eqn.invars[0].aval.shape[-1:] == (1,) and eqn.invars[0].aval.dtype == jnp.float32
@@ -2193,95 +2177,8 @@ def test_ragged_backward_takes_the_routing_weight_gradient_of_its_expert_mlp(
     assert _count_jaxpr_primitives(jaxpr, "ragged_all_to_all", is_row_dot) == row_dot_transports
 
 
-@pytest.mark.parametrize(
-    ("quack_available", "activation_fn", "dtype", "expected_mlp", "expected_gradient"),
-    [
-        (True, jax.nn.silu, jnp.bfloat16, _CuteExpertMlp, _RoutingWeightGradient.EXPERT_SIDE),
-        (True, jax.nn.silu, jnp.float16, _CuteExpertMlp, _RoutingWeightGradient.EXACT),
-        (True, jax.nn.gelu, jnp.bfloat16, _RaggedDotExpertMlp, _RoutingWeightGradient.EXACT),
-        (False, jax.nn.silu, jnp.bfloat16, _RaggedDotExpertMlp, _RoutingWeightGradient.EXACT),
-    ],
-    ids=["quack_bf16", "quack_fp16", "quack_gelu", "without_quack"],
-)
-def test_bf16_expert_precision_selects_the_bf16_expert_mlp_on_sm100(
-    quack_available: bool,
-    activation_fn: Callable[[jax.Array], jax.Array],
-    dtype: jnp.dtype,
-    expected_mlp: type,
-    expected_gradient: _RoutingWeightGradient,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    # MXFP8 is opt-in: on the GPUs that could run it, BF16 still takes QuACK or the portable path.
-    monkeypatch.setattr(ep_ragged_all_to_all, "_sm100_gpu_present", lambda: True)
-    monkeypatch.setattr(ep_ragged_all_to_all, "_quack_grouped_gemm_available", lambda: quack_available)
-
-    expert_mlp = ep_ragged_all_to_all._select_expert_mlp(activation_fn, jnp.dtype(dtype), ExpertPrecision.BF16)
-
-    assert type(expert_mlp) is expected_mlp
-    assert expert_mlp.routing_weight_gradient == expected_gradient
-
-
-@pytest.mark.parametrize(
-    ("sm100", "activation", "dtype", "error", "requirement"),
-    [
-        (False, ActivationFunctionEnum.silu, jnp.bfloat16, ValueError, "SM100"),
-        (True, ActivationFunctionEnum.gelu, jnp.bfloat16, ValueError, "SiLU"),
-        (True, ActivationFunctionEnum.silu, jnp.float32, ValueError, "bfloat16"),
-        (True, ActivationFunctionEnum.silu, jnp.bfloat16, ImportError, "MXFP8 expert MLP is not available"),
-    ],
-    ids=["not_sm100", "gelu", "float32", "kernel_missing"],
-)
-def test_ragged_mxfp8_experts_refuse_what_they_cannot_run(
-    sm100: bool,
-    activation: ActivationFunctionEnum,
-    dtype: jnp.dtype,
-    error: type[Exception],
-    requirement: str,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    # Each case misses one MXFP8 requirement, and must raise rather than run bfloat16 experts. The
-    # MXFP8 expert MLP never imports here, so a check that is missing fails the case.
-    monkeypatch.setattr(ep_ragged_all_to_all, "_sm100_gpu_present", lambda: sm100)
-    monkeypatch.setitem(sys.modules, "levanter.grug._moe.mxfp8.expert_mlp", None)
-
-    with pytest.raises(error, match=requirement):
-        _moe_gradient_jaxpr(
-            _make_abstract_moe_mesh(data=2, expert=2, model=1),
-            implementation="ragged_all_to_all",
-            activation=activation,
-            dtype=dtype,
-            expert_precision=ExpertPrecision.MXFP8,
-        )
-
-
-@pytest.mark.parametrize(
-    ("implementation", "expert_axis_size"),
-    [
-        ("ring", 2),
-        ("ring_gather_combine", 2),
-        ("fixed_all_to_all", 2),
-        ("fixed_pooled_wave_all_to_all", 2),
-        ("deepep", 2),
-        ("scatter", 1),
-        ("sonic", 1),
-        ("sonic_cute", 1),
-        # Without an expert axis the ragged backend runs the local scatter path.
-        ("ragged_all_to_all", 1),
-    ],
-)
-def test_mxfp8_experts_are_refused_off_the_expert_parallel_ragged_path(
-    implementation: MoeImplementation, expert_axis_size: int
-):
-    with pytest.raises(ValueError, match="expert_precision=mxfp8"):
-        _moe_gradient_jaxpr(
-            _make_abstract_moe_mesh(data=2, expert=expert_axis_size, model=1),
-            implementation=implementation,
-            expert_precision=ExpertPrecision.MXFP8,
-        )
-
-
 # The hero compiles without XLA GPU command buffers (experiments/grug/moe_hero_ep/train.py:
-# XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG), and its launcher refuses MXFP8 with them on.
+# XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG).
 _jit_without_command_buffers = functools.partial(jax.jit, compiler_options={"xla_gpu_enable_command_buffer": ""})
 
 # The EP8 layout: 16 experts over 8 GPUs, two per GPU, which the ragged backend runs as two

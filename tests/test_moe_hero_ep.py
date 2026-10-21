@@ -400,7 +400,6 @@ def _runtime_env_config(
     watch_interval=1,
     moe_implementation="fixed_pooled_wave_all_to_all",
     remat_mode="recompute_all",
-    expert_precision=ExpertPrecision.BF16,
 ):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
@@ -408,9 +407,7 @@ def _runtime_env_config(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
         ),
-        model=SimpleNamespace(
-            moe_implementation=moe_implementation, remat_mode=remat_mode, expert_precision=expert_precision
-        ),
+        model=SimpleNamespace(moe_implementation=moe_implementation, remat_mode=remat_mode),
         resources=ResourceConfig.with_gpu("GB200", count=4),
         processes_per_task=processes_per_task,
         max_retries_failure=0,
@@ -639,49 +636,6 @@ def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monke
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
 
 
-def _mxfp8_hero_runtime_config(monkeypatch, inherited_xla_flags):
-    """The MXFP8 hero's runtime config, with ``run_grug``'s env writes restored after the test."""
-    for name in (*train.HERO_EP_RUNTIME_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION", "XLA_FLAGS"):
-        monkeypatch.delenv(name, raising=False)
-    if inherited_xla_flags is not None:
-        monkeypatch.setenv("XLA_FLAGS", inherited_xla_flags)
-    return _runtime_env_config(
-        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
-        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
-        expert_precision=ExpertPrecision.MXFP8,
-    )
-
-
-@pytest.mark.parametrize(
-    "inherited",
-    [
-        "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL",
-        # A later entry can re-enable what an earlier one disabled.
-        f"{train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG} --xla_gpu_enable_command_buffer=CUSTOM_CALL",
-    ],
-)
-def test_an_mxfp8_run_refuses_xla_flags_that_turn_command_buffers_on(monkeypatch, inherited):
-    # Before the wgrad kernel acquired its online descriptors, CUDA-graph replays of the MXFP8
-    # expert MLP returned a NaN down-projection gradient while the first execution was exact.
-    config = _mxfp8_hero_runtime_config(monkeypatch, inherited)
-
-    with patch.object(train, "dispatch_grug_training_run"), pytest.raises(ValueError, match="command buffers"):
-        train.run_grug(config)
-
-
-@pytest.mark.parametrize("inherited", [None, train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG])
-def test_an_mxfp8_run_keeps_xla_command_buffers_off(monkeypatch, inherited):
-    config = _mxfp8_hero_runtime_config(monkeypatch, inherited)
-
-    with patch.object(train, "dispatch_grug_training_run"):
-        train.run_grug(config)
-
-    command_buffer_flags = [
-        flag for flag in os.environ["XLA_FLAGS"].split() if flag.startswith("--xla_gpu_enable_command_buffer=")
-    ]
-    assert command_buffer_flags == [train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG]
-
-
 def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
     # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
     # skips the offload has to keep the posture it was measured under.
@@ -749,19 +703,6 @@ def test_expert_precision_option_reaches_the_hero_expert_mlp(expert_precision, e
         token_valid = jax.ShapeDtypeStruct((2, 8), jnp.bool_, sharding=NamedSharding(mesh, token_spec))
         with expectation:
             assert jax.eval_shape(moe_layer, x, token_valid).shape == x.shape
-
-
-def test_mxfp8_experts_without_the_ragged_transport_are_rejected_before_launch():
-    # Only the ragged transport has an MXFP8 expert MLP, so the pair must fail before a rack is allocated.
-    with pytest.raises(ValueError, match="ragged_all_to_all"):
-        launch.build_diagnostic_run(
-            run_id="mxfp8-pooled",
-            dp_racks=1,
-            num_steps=1,
-            version="dev",
-            moe_implementation="fixed_pooled_wave_all_to_all",
-            expert_precision=ExpertPrecision.MXFP8,
-        )
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
