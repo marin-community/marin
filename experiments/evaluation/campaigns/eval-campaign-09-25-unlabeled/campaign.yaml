@@ -45,74 +45,115 @@ harbor_eval_harness_profiles:
 # refill manager changes the serving settings in these canonical YAML files.
 model_config_overrides:
   open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.yaml
   Aleph-Alpha-Kolibri-1:
+    swebench-verified: model-configs/swebench-verified/Aleph-Alpha-Kolibri-1.yaml
     tau3-pi: model-configs/tau3/Aleph-Alpha-Kolibri-1.yaml
   IFM-K2-Horizon-MoVA-36B-A4B:
+    swebench-verified: model-configs/swebench-verified/IFM-K2-Horizon-MoVA-36B-A4B.yaml
     tau3-pi: model-configs/tau3/IFM-K2-Horizon-MoVA-36B-A4B.yaml
     tb2-recovery: ablations/k2/model-recommended-tb2.yaml
   Qwen-Qwen3-Coder-30B-A3B-Instruct:
+    swebench-verified: model-configs/swebench-verified/Qwen-Qwen3-Coder-30B-A3B-Instruct.yaml
     tau3-pi: model-configs/tau3/Qwen-Qwen3-Coder-30B-A3B-Instruct.yaml
   Qwen-Qwen3-Next-80B-A3B-Instruct:
+    swebench-verified: model-configs/swebench-verified/Qwen-Qwen3-Next-80B-A3B-Instruct.yaml
     tau3-pi: model-configs/tau3/Qwen-Qwen3-Next-80B-A3B-Instruct.yaml
   Qwen-Qwen3.6-35B-A3B:
+    swebench-verified: model-configs/swebench-verified/Qwen-Qwen3.6-35B-A3B.yaml
     tau3-pi: model-configs/tau3/Qwen-Qwen3.6-35B-A3B.yaml
   arcee-ai-Trinity-Mini:
+    swebench-verified: model-configs/swebench-verified/arcee-ai-Trinity-Mini.yaml
     tau3-pi: model-configs/tau3/arcee-ai-Trinity-Mini.yaml
   google-gemma-4-26B-A4B-it:
+    swebench-verified: model-configs/swebench-verified/google-gemma-4-26B-A4B-it.yaml
     tau3-pi: model-configs/tau3/google-gemma-4-26B-A4B-it.yaml
   laion-snowball-67b-a2b-relay-sft-acont-step999:
+    swebench-verified: model-configs/swebench-verified/laion-snowball-67b-a2b-relay-sft-acont-step999.yaml
     tau3-pi: model-configs/tau3/laion-snowball-67b-a2b-relay-sft-acont-step999.yaml
   laion-snowball-67b-a2b-relay-sft-allkimi-step1203:
+    swebench-verified: model-configs/swebench-verified/laion-snowball-67b-a2b-relay-sft-allkimi-step1203.yaml
     tau3-pi: model-configs/tau3/laion-snowball-67b-a2b-relay-sft-allkimi-step1203.yaml
   marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465:
+    swebench-verified: model-configs/swebench-verified/marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465.yaml
     tau3-pi: model-configs/tau3/marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465.yaml
   moonshotai-Kimi-Linear-48B-A3B-Instruct:
+    swebench-verified: model-configs/swebench-verified/moonshotai-Kimi-Linear-48B-A3B-Instruct.yaml
     tau3-pi: model-configs/tau3/moonshotai-Kimi-Linear-48B-A3B-Instruct.yaml
   nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16:
+    swebench-verified: model-configs/swebench-verified/nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.yaml
     tau3-pi: model-configs/tau3/nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.yaml
   nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16:
+    swebench-verified: model-configs/swebench-verified/nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.yaml
     tau3-pi: model-configs/tau3/nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.yaml
   open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04.yaml
   open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.yaml
   open-athena-Grug-67B-A2B-BFCL-Recovery:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-BFCL-Recovery.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-BFCL-Recovery.yaml
     triviaqa: model-configs/triviaqa/open-athena-Grug-67B-A2B-BFCL-Recovery.yaml
   open-athena-Grug-67B-A2B-BFCL-Protocol-FTPO:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-BFCL-Protocol-FTPO.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-BFCL-Protocol-FTPO.yaml
   open-athena-Grug-67B-A2B-Continuation-Tool-Retention:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Continuation-Tool-Retention.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Continuation-Tool-Retention.yaml
   open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom.yaml
   open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10.yaml
   open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.yaml
   open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13.yaml
   open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14.yaml
   open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14.yaml
   open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14.yaml
   open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14.yaml
   open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09.yaml
   open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21:
+    swebench-verified: model-configs/swebench-verified/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21.yaml
     tau3-pi: model-configs/tau3/open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21.yaml
   open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92:
+    swebench-verified: model-configs/swebench-verified/open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92.yaml
     tau3-pi: model-configs/tau3/open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92.yaml
   open-athena-Snowball-Smartie-RL-2026.10.15.32-step14:
+    swebench-verified: model-configs/swebench-verified/open-athena-Snowball-Smartie-RL-2026.10.15.32-step14.yaml
     tau3-pi: model-configs/tau3/open-athena-Snowball-Smartie-RL-2026.10.15.32-step14.yaml
   open-athena-Snowball-Smartie-RL-2026.10.17.49-step12:
+    swebench-verified: model-configs/swebench-verified/open-athena-Snowball-Smartie-RL-2026.10.17.49-step12.yaml
     tau3-pi: model-configs/tau3/open-athena-Snowball-Smartie-RL-2026.10.17.49-step12.yaml
   open-athena-Snowball-Smartie-RL-2026.10.19.57-step8:
+    swebench-verified: model-configs/swebench-verified/open-athena-Snowball-Smartie-RL-2026.10.19.57-step8.yaml
     tau3-pi: model-configs/tau3/open-athena-Snowball-Smartie-RL-2026.10.19.57-step8.yaml
   openai-gpt-oss-20b:
+    swebench-verified: model-configs/swebench-verified/openai-gpt-oss-20b.yaml
     tau3-pi: model-configs/tau3/openai-gpt-oss-20b.yaml
   zai-org-GLM-4.7-Flash:
+    swebench-verified: model-configs/swebench-verified/zai-org-GLM-4.7-Flash.yaml
     tau3-pi: model-configs/tau3/zai-org-GLM-4.7-Flash.yaml
+
+  inclusionAI-Ling-lite-1.5:
+    swebench-verified: model-configs/swebench-verified/inclusionAI-Ling-lite-1.5.yaml
+
+  open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
+    swebench-verified: model-configs/swebench-verified/open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38.yaml
