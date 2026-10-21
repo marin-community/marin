@@ -356,6 +356,8 @@ uv run --no-project --python config/external/harbor/.venv/bin/python \
 
 The comparison runs the same empty and available oracle checks in offline Docker containers and fresh QEMU guests. It records one JSON result per check and fails on a verdict mismatch.
 
+`benchmarks/iris_machine_probe.py` measures the Iris machine backend from inside an Iris task: `IrisMachineFactory.create` latency, DNS and TCP egress under each network policy, which submitter environment variables reach a sandbox, upload and download of 512 KiB at the transfer chunk size with per-command latency, a short `job_ttl` until the sandbox terminates, a sandbox from a private registry image, and, with `--grader-image`, the tools on a grader base image. It prints one `PROBE {...}` JSON line per check, so the job's logs are the evidence. Submit it from the repository root as a small Iris job with `PYTHONPATH=lib/shellbox/src`, placed with `job run --zone` in a zone that starts gVisor sandboxes, since sandboxes inherit the job's zone; the script's docstring gives the full `iris job run` command.
+
 ## Current support boundary
 
 The guest has persistent files for a trial. A minimal bundle uses BusyBox `ash` for one-shot commands; an OCI bundle uses its image shell. Harbor setup and verifier commands still run as root in separate shell processes. The agent's `Bash` calls use one interactive `/bin/bash` per trial, so cwd, exports, functions, and jobs persist across calls. The verifier does not inherit that shell state. The guest has no network interface.

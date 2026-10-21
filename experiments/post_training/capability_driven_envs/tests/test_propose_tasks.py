@@ -98,19 +98,27 @@ def test_a_plan_invalid_after_its_repair_fails_only_its_capability(tmp_path: Pat
     assert list((output / CAPABILITY_ID).iterdir()) == []
 
 
-def test_a_slot_whose_model_runs_out_of_retries_fails_only_its_capability(tmp_path: Path):
+def test_a_slot_whose_model_runs_out_of_retries_fails_alone_and_keeps_the_plan_and_its_sibling(tmp_path: Path):
     ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
+    unavailable = ModelUnavailable("the router answered 503 on every retry", ())
     model = ScriptedModel()
-    model.reply(json.dumps(PLAN))
-    model.fail(ModelUnavailable("the router answered 503 on every retry", ()))
+    model.reply(json.dumps({**PLAN, "slots": [SLOT, {**SLOT, "slot": 2, "verification": "llm_as_judge"}]}))
+    model.reply(proposal_document(ideas[CAPABILITY_ID].capability_hash))
+    model.fail(unavailable)
     output = tmp_path / "run"
     output.mkdir()
 
-    proposed = asyncio.run(propose_tasks(model, ideas, 1, REASONING_ONLY, LLMPolicy()))
+    proposed = asyncio.run(propose_tasks(model, ideas, 2, REASONING_ONLY, LLMPolicy()))
     write_outputs(output, proposed)
 
-    assert "503 on every retry" in json.loads((output / SUMMARY_FILE).read_text())[CAPABILITY_ID]
-    assert list((output / CAPABILITY_ID).iterdir()) == []
+    summary = json.loads((output / SUMMARY_FILE).read_text())
+    assert summary == {CAPABILITY_ID: {"1": TriageDecision.ACCEPT, "2": str(unavailable)}}
+    directory = output / CAPABILITY_ID
+    assert len(json.loads((directory / "plan.completions.json").read_text())) == 1
+    assert parse((directory / "slot-01.md").read_text()).header.id == f"{CAPABILITY_ID}/1"
+    assert (directory / "slot-02.failure.txt").read_text() == str(unavailable)
+    assert json.loads((directory / "slot-02.completions.json").read_text()) == []
+    assert not (directory / "slot-02.md").exists()
 
 
 def test_an_unknown_capability_is_refused_before_the_run_starts():

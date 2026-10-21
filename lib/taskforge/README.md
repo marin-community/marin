@@ -67,7 +67,6 @@ with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time a
 and step over JSONL ledgers. The cluster scripts run on Iris and document their submit commands in
 their docstrings: `scripts/build_image_job.py` builds a directory's `DockerBuild` context with
 `taskforge.sandbox.image_builder` and prints the pinned registry digest, and
-`scripts/iris_machine_probe.py` probes the shellbox Iris backend, and
 `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved from
 a relay job.
 
@@ -84,7 +83,8 @@ non-null body cites every item, and only listed items, as `research[i]`. `solver
 solver's machine: `null` for a container proposal, which runs in the image its build publishes, and
 `none`, `shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one, where
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
-The proposer writes it, and the build keeps it.
+The proposer writes it, and the build keeps it. `parse` also refuses a `resources` entry that is
+not a relative path inside the build root and a `build` name that repeats.
 `document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
 field that constrains a completion to the canonical layout for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
@@ -95,16 +95,19 @@ source for catalog capabilities, which takes its model, sampling policy and host
 construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a solver
 machine and a research decision, then writes each document under the regex with GLM thinking first.
 `propose_tasks` in the same package proposes the catalog's capabilities from the command line and
-triages each proposal with `preflight`.
+triages each proposal with `preflight`. A slot whose model call runs out of retries or is rejected
+is a `SlotFailure` like any other, so the capability keeps its plan and its other slots; only a
+failed planning call fails the whole capability.
 
 ## Triage
 
 The default triage is `stage20_triage.preflight.preflight(proposal) -> Verdict`, a deterministic
-preflight that makes no model call. It runs the checks in `stage20_triage.checks.CHECKS`: the
-canonical rendering parses back to the same header, the environment and verification pair is
-allowed, the declared solver machine fits the environment, the required sections have content, and
-a null proposal carries only its reason. A fatal failure rejects the proposal with each failing
-check as a reason, and so does a null proposal. Anything else is accepted and goes to build.
+preflight that makes no model call. Header validity is `parse`'s job, which runs before triage, so
+the checks in `stage20_triage.checks.CHECKS` read the body and what the header promises. One is
+fatal: the required sections have content. Three are advisory: the grader section is consistent with
+the declared verification, every research item states a purpose, and the build plan names every
+declared resource. A fatal failure rejects the proposal with the failing check as the reason, and a
+null proposal is rejected with its `null_reason`. Anything else is accepted and goes to build.
 Advisory failures are recorded on the verdict and decide nothing. Whether the host can provide the
 declared machine is checked by the build (`infrastructure.machine_available`) before any model
 call, and a host that cannot ends the workpiece as the host's failure.

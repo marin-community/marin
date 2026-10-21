@@ -15,8 +15,10 @@ capability, the driver:
 
 Building accepted proposals with ``stage40_build_with_program`` and validating the drafts belong to
 Taskforge's stage coordinator (``taskforge.stage_coordinator``), so the driver stops after the
-verdicts. When a capability's plan stays invalid or its model calls run out of retries, the driver
-records the error as that capability's failure and still writes the run's outputs:
+verdicts. When a capability's plan stays invalid, or its planning call runs out of retries or is
+rejected, the driver records the error as that capability's failure. A slot whose own model call
+fails is a slot failure, and the capability keeps its plan and its other slots. Either way the
+driver still writes the run's outputs:
 
 * ``OUTPUT_DIR/<capability id>/`` with ``plan.request.json`` and ``plan.completions.json``, and per
   slot ``slot-NN.request.json``, ``slot-NN.completions.json``, then ``slot-NN.md`` and
@@ -69,15 +71,15 @@ from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_
 
 logger = logging.getLogger(__name__)
 
-MODEL_ERRORS = (StructuredOutputError, ModelRequestRejected, ModelUnavailable)
-"""The errors that fail one capability's proposals, rather than the run."""
+PLAN_ERRORS = (StructuredOutputError, ModelRequestRejected, ModelUnavailable)
+"""The planning-call errors that fail one capability's proposals, rather than the run."""
 
 
 @dataclass(frozen=True)
 class ProposedCapability:
     """A capability's proposal batch and the verdict of each proposal, by slot, or the error that stopped it.
 
-    ``batch`` is ``None``, and ``verdicts`` empty, when proposing failed.
+    ``batch`` is ``None``, and ``verdicts`` empty, when planning failed.
     """
 
     capability_id: str
@@ -89,12 +91,13 @@ class ProposedCapability:
 async def propose_capability(source: CapabilitySource, idea: CapabilityIdea, slots: int) -> ProposedCapability:
     """Propose ``slots`` slots for ``idea`` and triage every proposal with ``preflight``.
 
-    A model error or a plan still invalid after its repair becomes the capability's ``failure``. The
-    function returns it in place of raising it, so the other capabilities proceed.
+    A planning call that fails, or a plan still invalid after its repair, becomes the capability's
+    ``failure``. The function returns it in place of raising it, so the other capabilities proceed.
+    A slot's model errors are already slot failures in the batch.
     """
     try:
         batch = await source.propose(idea, slots)
-    except MODEL_ERRORS as error:
+    except PLAN_ERRORS as error:
         return ProposedCapability(idea.capability_id, None, {}, str(error))
     verdicts = {s.slot: await preflight(s.proposal) for s in batch.slots if isinstance(s, SlotProposal)}
     return ProposedCapability(idea.capability_id, batch, verdicts, None)

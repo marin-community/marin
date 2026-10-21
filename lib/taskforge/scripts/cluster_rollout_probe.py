@@ -32,15 +32,11 @@ after writing its results when any of those names looks like a credential (``sec
 CoreWeave, cluster ``task_env`` object-store keys reach every sandbox, which a model-controlled
 machine with network must not see.
 
-Everything goes to ``--results-dir`` (default ``$IRIS_OUTPUT_DIR/cluster_rollout_probe``, which
-Iris archives with the attempt): ``summary.json``, the trial evidence ``run_trials`` writes, and
-``ledger/<workpiece>.jsonl``. Each file is printed as ``RESULT_FILE <path> <index>/<count> <chunk>``
-lines, where ``<chunk>`` is a JSON string of at most ``PRINT_CHUNK`` characters, and the summary as
-``RESULT_SUMMARY``. ``--reassemble <logs> --results-dir <dir>`` rebuilds the directory from saved
-``iris job logs`` output: chunks are grouped by path, ordered by index, ``json.loads``-ed and
-concatenated. The directory is also copied to ``--upload-prefix`` (default
-``$MARIN_PREFIX/taskforge/cluster_rollout_probe/<run>``) only when the task already holds
-credentials for that store; this script adds none.
+Everything goes to ``$IRIS_OUTPUT_DIR/cluster_rollout_probe``: ``summary.json``, and under
+``<phase>/`` the trial evidence ``run_trials`` writes and ``ledger/<workpiece>.jsonl``. Iris
+archives that directory once per task attempt, and the archive is how the results come back:
+``iris attempt describe`` names it (``lib/iris/docs/task-outputs.md``). The summary is also
+printed as one ``RESULT_SUMMARY`` log line.
 """
 
 import argparse
@@ -54,9 +50,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from iris.client.client import iris_ctx
-from iris.cluster.types import JobName
-from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import ExponentialBackoff
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.image import RegistryImage
@@ -81,7 +74,7 @@ from taskcompendium.models import (
 from verifyit.spec import NumericSpec
 
 from taskforge.ledger.jsonl import JsonlLedger, ledger_files, read_entries
-from taskforge.llm.glm_client import API_ROOT, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.glm_client import GLM_MODEL, GlmClient, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
@@ -101,12 +94,13 @@ from taskforge.stage50_validate.evidence import Complete, Evidence
 from taskforge.stage50_validate.outcome import Graded, Outcome, TrialKind
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, rollout_steps, run_trials
 
-GLM_MODEL = "glm-5.3"
 GLM_TOKEN_ENV = "GLM_HIGH_TOKEN"
 IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
 # Iris copies these from the submitting process into every child job (iris.cluster.types.EnvironmentSpec).
 SUBMITTER_KEYS = ("HF_TOKEN", "WANDB_API_KEY")
 IRIS_JOB_ENV = "IRIS_JOB_ENV"
+IRIS_OUTPUT_DIR_ENV = "IRIS_OUTPUT_DIR"
+RESULTS_DIR = "cluster_rollout_probe"
 IMAGE = "docker.io/library/python@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d"
 IMAGE_TAG = "python:3.12-slim (OCI index digest, resolved 2026-10-05)"
 MATH_ANSWER = "395"
@@ -153,36 +147,11 @@ LIMITS = rollout_limits(
     verifier_timeout=VERIFIER_TIMEOUT,
     cleanup_timeout=CLEANUP_TIMEOUT,
 )
-# Characters of a result file per log line, so log storage keeps each line whole.
-PRINT_CHUNK = 4000
 
 
 class Phase(StrEnum):
     MATH = "math"
     DOCKER = "docker"
-
-
-@dataclass(frozen=True)
-class RelayEndpoint:
-    """The endpoint an Iris GLM relay job registers, looked up through this task's Iris client.
-
-    The client asks again only while it recovers from a missing route, an empty pool or a refused
-    connection, so it follows a relay that moved.
-    """
-
-    relay_job: str
-    token: str = field(repr=False)
-    pool: Pool
-
-    def current(self) -> GlmEndpoint:
-        client = iris_ctx().client
-        if client is None:
-            raise RuntimeError("Iris client is unavailable inside the task")
-        endpoints = client.resolver_for_job(JobName.from_string(self.relay_job)).resolve(GLM_MODEL).endpoints
-        if not endpoints:
-            raise RuntimeError(f"The GLM relay {self.relay_job} has no registered endpoint")
-        base_url = endpoints[0].url.rstrip("/")
-        return GlmEndpoint(base_url if base_url.endswith(API_ROOT) else f"{base_url}{API_ROOT}", self.token, self.pool)
 
 
 @dataclass
@@ -426,47 +395,6 @@ def secret_names(names: list[str]) -> list[str]:
     return [name for name in names if SECRET_WORDS & set(name.split("_")) or name.endswith(SECRET_SUFFIXES)]
 
 
-def upload(results: Path, prefix: str) -> str:
-    """Copy ``results`` under ``prefix`` when this task already holds credentials for that store."""
-    if prefix.startswith("s3://") and not os.environ.get("AWS_ACCESS_KEY_ID"):
-        return "skipped: no AWS credentials in the task environment"
-    if not prefix.startswith(("s3://", "gs://")):
-        return f"skipped: unsupported prefix {prefix}"
-    destination = StoragePath(prefix)
-    for path in sorted(p for p in results.rglob("*") if p.is_file()):
-        (destination / path.relative_to(results).as_posix()).upload_from(str(path))
-    return f"uploaded to {prefix}"
-
-
-def print_results(results: Path) -> None:
-    """Print every file as ``RESULT_FILE <path> <index>/<count> <JSON string chunk>`` lines."""
-    for path in sorted(p for p in results.rglob("*") if p.is_file()):
-        text = path.read_text()
-        chunks = [text[offset : offset + PRINT_CHUNK] for offset in range(0, len(text), PRINT_CHUNK)] or [""]
-        for index, chunk in enumerate(chunks):
-            print(f"RESULT_FILE {path.relative_to(results)} {index}/{len(chunks)} {json.dumps(chunk)}", flush=True)
-
-
-def reassemble(logs: Path, results: Path) -> None:
-    """Rebuild the results directory from ``RESULT_FILE`` lines in saved ``iris job logs`` output."""
-    chunks: dict[str, dict[int, str]] = {}
-    counts: dict[str, int] = {}
-    for line in logs.read_text().splitlines():
-        if "RESULT_FILE " not in line:
-            continue
-        name, position, payload = line.split("RESULT_FILE ", 1)[1].split(" ", 2)
-        index, count = (int(part) for part in position.split("/"))
-        chunks.setdefault(name, {})[index] = json.loads(payload)
-        counts[name] = count
-    for name, parts in chunks.items():
-        if sorted(parts) != list(range(counts[name])):
-            raise ValueError(f"{name}: have chunks {sorted(parts)} of {counts[name]}")
-        target = results / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("".join(parts[index] for index in range(counts[name])))
-    print(f"reassembled {len(chunks)} files into {results}")
-
-
 async def probe(args: argparse.Namespace, token: str, controller_url: str, results: Path) -> dict[str, Any]:
     relay = RelayEndpoint(args.relay_job, token, Pool.HIGH)
     endpoint = relay.current()
@@ -495,40 +423,25 @@ async def probe(args: argparse.Namespace, token: str, controller_url: str, resul
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--relay-job", help="Iris job that registers the glm-5.3 endpoint")
-    mode.add_argument("--reassemble", type=Path, help="saved `iris job logs` output to rebuild results from")
+    parser.add_argument("--relay-job", required=True, help=f"Iris job that registers the {GLM_MODEL} endpoint")
     parser.add_argument("--k", type=int, default=3)
-    parser.add_argument("--results-dir", type=Path, default=None)
-    parser.add_argument("--upload-prefix", default=None)
     args = parser.parse_args()
-    if args.reassemble is not None:
-        if args.results_dir is None:
-            raise SystemExit("--reassemble needs --results-dir")
-        reassemble(args.reassemble, args.results_dir)
-        return
     controller_url = os.environ.get(IRIS_CONTROLLER_URL_ENV)
-    if not controller_url:
-        raise SystemExit(f"{IRIS_CONTROLLER_URL_ENV} is unset; the probe runs only inside an Iris task")
+    output_dir = os.environ.get(IRIS_OUTPUT_DIR_ENV)
+    if not controller_url or not output_dir:
+        raise SystemExit(
+            f"{IRIS_CONTROLLER_URL_ENV} or {IRIS_OUTPUT_DIR_ENV} is unset; the probe runs only inside an Iris task"
+        )
     token = scrub_child_environment()
     run = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    results = args.results_dir
-    if results is None:
-        output_dir = os.environ.get("IRIS_OUTPUT_DIR")
-        if output_dir is None:
-            raise SystemExit("--results-dir is required outside an Iris task with IRIS_OUTPUT_DIR")
-        results = Path(output_dir) / "cluster_rollout_probe"
+    results = Path(output_dir) / RESULTS_DIR
     results.mkdir(parents=True, exist_ok=True)
-    marin_prefix = os.environ.get("MARIN_PREFIX")
-    prefix = args.upload_prefix or (marin_prefix and prefix_join(marin_prefix, f"taskforge/cluster_rollout_probe/{run}"))
     started = time.monotonic()
     summary = asyncio.run(probe(args, token, controller_url, results))
     summary["wall_time"] = time.monotonic() - started
     summary["run"] = run
     (results / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
-    print_results(results)
     print("RESULT_SUMMARY " + json.dumps(summary, default=str), flush=True)
-    print("UPLOAD " + (upload(results, prefix) if prefix else "skipped: no prefix"), flush=True)
     leaked = summary["sandbox_environment"]["secret_names"]
     if leaked:
         raise SystemExit(f"SANDBOX_SECRETS credential-like names reach model-controlled sandboxes: {leaked}")

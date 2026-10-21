@@ -34,6 +34,8 @@ in the image its build publishes, and one of ``SolverMachine`` for any other, so
 it. ``none``, no machine at all, is legal only for a reasoning proposal.
 ``composite`` lists the parts of a ``composite`` verification, each another kind with its share of the
 reward, and is empty for every other kind (``check_composite``).
+Every ``resources`` entry is a relative path inside the build root (no leading ``/``, no ``..`` part),
+and no two ``build`` items share a name.
 ``research_need`` must agree with ``research``: ``needed`` lists at least one item and ``not_needed``
 none, and the body of a non-null proposal cites every item, and only listed items, as ``research[i]``.
 ``render`` produces the canonical bytes: string scalars are JSON-quoted (valid YAML), keys appear
@@ -51,6 +53,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import PurePosixPath
 
 import yaml
 
@@ -425,8 +428,8 @@ def _header(raw: object) -> ProposalHeader:
         research_need=_enum(ResearchNeed, raw["research_need"], "research_need"),
         research_reason=_text(raw["research_reason"], "research_reason"),
         research=tuple(_research(item, f"research[{i}]") for i, item in enumerate(_list(raw["research"], "research"))),
-        build=tuple(_build(item, f"build[{i}]") for i, item in enumerate(_list(raw["build"], "build"))),
-        resources=tuple(_text(item, f"resources[{i}]") for i, item in enumerate(_list(raw["resources"], "resources"))),
+        build=_build_items(raw["build"]),
+        resources=_resources(raw["resources"]),
         null_reason=None if null_reason is None else _text(null_reason, "null_reason"),
     )
 
@@ -452,10 +455,6 @@ def solver_machine_violation(environment: Environment, machine: SolverMachine | 
 
 
 def _solver_machine(value: object, environment: Environment) -> SolverMachine | None:
-    if environment is Environment.CONTAINER and value is not None:
-        raise ProposalFormatError(
-            f"solver_machine: a container proposal runs in its own image and declares null, got {value!r}"
-        )
     machine = None if value is None else _enum(SolverMachine, value, "solver_machine")
     violation = solver_machine_violation(environment, machine)
     if violation is not None:
@@ -520,6 +519,23 @@ def _build(value: object, field: str) -> BuildItem:
         raise ProposalFormatError(f"{field}: expected a one-entry mapping 'name: description', got {value!r}")
     ((name, description),) = value.items()
     return BuildItem(name=_text(name, f"{field} name"), description=_text(description, f"{field}.{name}"))
+
+
+def _build_items(value: object) -> tuple[BuildItem, ...]:
+    items = tuple(_build(item, f"build[{i}]") for i, item in enumerate(_list(value, "build")))
+    names = [item.name for item in items]
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        raise ProposalFormatError(f"build: names repeat: {repeated}")
+    return items
+
+
+def _resources(value: object) -> tuple[str, ...]:
+    resources = tuple(_text(item, f"resources[{i}]") for i, item in enumerate(_list(value, "resources")))
+    escaping = [r for r in resources if PurePosixPath(r).is_absolute() or ".." in PurePosixPath(r).parts]
+    if escaping:
+        raise ProposalFormatError(f"resources: must be relative paths inside the build root: {escaping}")
+    return resources
 
 
 # The document regex. The server's regex dialect rejects escapes of non-metacharacters (``\ ``, ``\-``), so

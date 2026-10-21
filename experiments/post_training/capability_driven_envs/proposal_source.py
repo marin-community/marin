@@ -16,11 +16,13 @@
    the enum values, the id and source lines and the body's headings. Continuations stay off, since
    a continuation would restart the regex in the middle of the document.
 
-A slot fails alone when the output limit cuts its document off. When the parser refuses a document
-on a rule outside the regex, such as the research citations or the research decision against its
-list, GLM gets one repair request under the same regex. The repair request keeps the prior reply as
-the assistant turn and quotes the parse error. A slot the plan marks null becomes a proposal with
-``null_reason`` set and costs no model call.
+A slot fails alone, as a ``SlotFailure``, when the output limit cuts its document off or when its
+model call runs out of retries or is rejected (``ModelUnavailable``, ``ModelRequestRejected``); the
+batch keeps the plan and every other slot. When the parser refuses a document on a rule outside the
+regex, such as the research citations or the research decision against its list, GLM gets one
+repair request under the same regex. The repair request keeps the prior reply as the assistant turn
+and quotes the parse error. A slot the plan marks null becomes a proposal with ``null_reason`` set
+and costs no model call.
 
 Both prompts quote ``catalog.capability_idea_record(idea)``.
 """
@@ -34,7 +36,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from taskforge.content_hash import pretty_json
-from taskforge.llm.client import Completion, FinishReason, ModelClient
+from taskforge.llm.client import Completion, FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import ERROR_TEXT_LIMIT, schema_instruction
 from taskforge.stage10_proposal.model import (
@@ -54,6 +56,7 @@ from taskforge.stage10_proposal.model import (
     document_request_fields,
     parse,
     render,
+    solver_machine_violation,
     source_text,
 )
 from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOutcome, SlotProposal
@@ -61,6 +64,8 @@ from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOu
 from experiments.post_training.capability_driven_envs.catalog import CapabilityIdea, capability_idea_record
 
 CUT_OFF = "cut off by the output limit"
+SLOT_MODEL_ERRORS = (ModelUnavailable, ModelRequestRejected)
+"""The model errors that fail one slot, rather than the batch."""
 
 
 class SlotStatus(StrEnum):
@@ -137,15 +142,9 @@ class SlotPlan(BaseModel):
         if len(set(excluded)) != len(excluded):
             raise ValueError("excluded_combinations lists a pairing twice")
         for s in self.slots:
-            if (s.solver_machine is None) != (s.environment is Environment.CONTAINER):
-                raise ValueError(
-                    f"slot {s.slot} is {s.environment} with solver_machine {s.solver_machine}; solver_machine is "
-                    "null exactly for a container slot"
-                )
-            if s.solver_machine is SolverMachine.NONE and s.environment is not Environment.REASONING:
-                raise ValueError(
-                    f"slot {s.slot} is {s.environment} with solver_machine none; only a reasoning slot has no machine"
-                )
+            violation = solver_machine_violation(s.environment, s.solver_machine)
+            if violation is not None:
+                raise ValueError(f"slot {s.slot}: {violation}")
             if s.status is SlotStatus.NULL and not (s.reason and s.reason.strip()):
                 raise ValueError(f"slot {s.slot} is null and needs a substantive reason")
             if s.status is SlotStatus.PROPOSE and not (s.title.strip() and s.workflow.strip()):
@@ -496,7 +495,8 @@ async def author_proposal(
     """Have GLM write the proposal document of ``slot`` under the document regex, repairing it once.
 
     Both requests carry ``document_request_fields`` and run with continuations off, so a reply the
-    output limit cuts off comes back as a ``SlotFailure``.
+    output limit cuts off comes back as a ``SlotFailure``. So does a request that raises one of
+    ``SLOT_MODEL_ERRORS``, with the error's text and the completions received before it.
     """
     slot_id = proposal_id(idea, slot.slot)
     fields = document_request_fields(slot_id, source_ref(idea))
@@ -506,7 +506,10 @@ async def author_proposal(
         {"role": "user", "content": proposal_prompt(idea, plan, slot, slot_id)},
     ]
     request = tuple(messages)
-    first = await model.complete(messages, single, fields)
+    try:
+        first = await model.complete(messages, single, fields)
+    except SLOT_MODEL_ERRORS as error:
+        return SlotFailure(slot.slot, str(error), request, ())
     if first.finish_reason is FinishReason.LENGTH:
         return SlotFailure(slot.slot, CUT_OFF, request, (first,))
     try:
@@ -517,7 +520,10 @@ async def author_proposal(
             {"role": "assistant", "content": first.content},
             {"role": "user", "content": DOCUMENT_REPAIR_PROMPT.format(error=str(error)[:ERROR_TEXT_LIMIT])},
         ]
-        repair = await model.complete(repair_messages, single, fields)
+        try:
+            repair = await model.complete(repair_messages, single, fields)
+        except SLOT_MODEL_ERRORS as repair_error:
+            return SlotFailure(slot.slot, f"repair: {repair_error}", request, (first,))
         if repair.finish_reason is FinishReason.LENGTH:
             return SlotFailure(slot.slot, f"repair {CUT_OFF}", request, (first, repair))
         try:
@@ -544,28 +550,22 @@ class CapabilitySource:
     async def propose(self, idea: CapabilityIdea, n: int) -> ProposalBatch:
         """Plan ``n`` slots for ``idea`` and write a proposal per slot, returning the outcomes in slot order.
 
-        A slot whose document the output limit cuts off, or whose repair still fails the parser,
-        comes back as a ``SlotFailure`` while its siblings carry on.
+        A slot whose document the output limit cuts off, whose repair still fails the parser, or
+        whose model call raises one of ``SLOT_MODEL_ERRORS`` comes back as a ``SlotFailure`` while
+        its siblings carry on.
 
         Raises:
             StructuredOutputError: the plan stayed invalid after its repair.
-            ModelUnavailable: the model ran out of retries. The source cancels the slots still
-                running and raises the first slot's error itself, not in an ``ExceptionGroup``, as
-                for any other error a slot raises.
+            ModelUnavailable: the planning call ran out of retries.
+            ModelRequestRejected: the server rejected the planning call.
         """
         planned = await plan_slots(self.model, self.policy, idea, n, self.environments)
-        try:
-            async with asyncio.TaskGroup() as group:
-                tasks = {
-                    s.slot: group.create_task(author_proposal(self.model, self.policy, idea, planned.plan, s))
-                    for s in planned.plan.slots
-                    if s.status is SlotStatus.PROPOSE
-                }
-        except ExceptionGroup as failures:
-            # The group cancelled the other slots. Raise the failure as one slot would, with its own
-            # cause chain and without the group as context, so callers catch it by type.
-            failure = failures.exceptions[0]
-            raise failure from failure.__cause__
+        async with asyncio.TaskGroup() as group:
+            tasks = {
+                s.slot: group.create_task(author_proposal(self.model, self.policy, idea, planned.plan, s))
+                for s in planned.plan.slots
+                if s.status is SlotStatus.PROPOSE
+            }
         slots = tuple(
             tasks[s.slot].result() if s.slot in tasks else null_slot_proposal(idea, s) for s in planned.plan.slots
         )
