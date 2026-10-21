@@ -19,7 +19,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec
 from iris.resources.state import TERMINAL_JOB_STATES, JobState
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_rank
-from marin.training.training import resolve_training_env
+from marin.training.levanter import resolve_training_env
 from rigging.timing import Duration
 
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleRequest, SampleStore, SamplingSpec

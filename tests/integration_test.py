@@ -39,7 +39,8 @@ from marin.processing.classification.deduplication.exact import dedup_exact_para
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.levanter import run_levanter_train_lm
+from marin.training.training import TrainLmOnPodConfig
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
