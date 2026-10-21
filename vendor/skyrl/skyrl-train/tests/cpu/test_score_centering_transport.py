@@ -193,7 +193,6 @@ async def test_chat_completion_retry_accumulates_and_sends_continuations(exact_p
 
     out = await client.chat_completion(original)
 
-    # Verify engine received 3 calls
     assert len(engines[0].calls) == 3
     first_call = engines[0].calls[0]
     second_call = engines[0].calls[1]

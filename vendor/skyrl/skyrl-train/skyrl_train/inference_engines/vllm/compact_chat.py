@@ -34,6 +34,8 @@ class CompactChatEngineClient:
     """
 
     def __init__(self, engine: Any, id_only_requests: set[str]):
+        # Forward vLLM's wider client surface without importing its optional CUDA
+        # stack on CPU. Chat serving also consumes attributes through __getattr__.
         self._engine = engine
         self._id_only_requests = id_only_requests
         self._capture: ContextVar[ChatTopKCapture | None] = ContextVar("chat_topk_capture", default=None)

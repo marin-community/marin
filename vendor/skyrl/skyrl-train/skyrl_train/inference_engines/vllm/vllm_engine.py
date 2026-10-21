@@ -70,6 +70,7 @@ from skyrl_train.inference_engines.base import (
     LORA_DISK_PATH_KEY,
 )
 from skyrl_train.inference_engines.response_topk import (
+    CHAT_LOGPROB_FLOOR,
     CHAT_TOPK_WIDTH_KEY,
     CHOICE_TOPK_KEY,
     select_flat_response_topk,
@@ -201,7 +202,7 @@ class SkyRLOpenAIServingChat(OpenAIServingChat):
         # Internal captures consume exact IDs and scores. Token-ID placeholders
         # already identify candidates; a byte array for each placeholder is unused.
         return [
-            ChatCompletionLogProb(token=f"token_id:{token_id}", logprob=max(value.logprob, -9999.0), bytes=None)
+            ChatCompletionLogProb(token=f"token_id:{token_id}", logprob=max(value.logprob, CHAT_LOGPROB_FLOOR), bytes=None)
             for index, (token_id, value) in enumerate(logprobs.items())
             if return_all or top_logprobs == -1 or (top_logprobs is not None and index < top_logprobs)
         ]
