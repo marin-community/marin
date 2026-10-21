@@ -88,7 +88,7 @@ def test_frozen_pool_projection_retains_lineage_without_grading_evidence(tmp_pat
     (tmp_path / "tasks.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
     queries = []
 
-    def query(sql, parameters):
+    def query(sql, _parameters):
         queries.append(sql)
         raise AssertionError("A corrupted artifact reached the serving database")
 

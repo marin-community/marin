@@ -13,11 +13,13 @@ from typing import Any
 import click
 import pyarrow.parquet as pq
 from marina.client import DEFAULT_MARINA_URL
+from marina.table_load import json_row_batches
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 
-from infra.marina.applets.rl_data_catalog.load import Query, applet_query, batches, insert_rows
+from infra.marina.applets.rl_data_catalog import load as catalog_load
+from infra.marina.applets.rl_data_catalog.load import Query, applet_query, insert_rows
 
 DELETE_BATCH_SIZE = 10_000
 TABLE_COLUMNS = {
@@ -163,7 +165,7 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: Query) -> dict[s
 
     counts["tasks"] = 0
     counts["matches"] = 0
-    for body in batches(checked_tasks()):
+    for body in json_row_batches(checked_tasks(), max_bytes=catalog_load.MAX_BATCH_BYTES):
         rows = json.loads(body)
         counts["tasks"] += insert("tasks", rows)
         counts["matches"] += insert(

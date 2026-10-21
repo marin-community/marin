@@ -9,17 +9,19 @@ import hashlib
 import json
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import requests
 from marina.client import DEFAULT_MARINA_URL, LOCAL_HOSTS, marina_request, marina_token_provider
+from marina.table_load import json_row_batches
 from rigging.auth import TokenProvider
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.snowball_curriculum.bundle import verify_manifest
+from experiments.post_training.snowball_curriculum.native import NATIVE_CONTRACT_KIND
 
 MAX_BATCH_BYTES = 900_000
 Query = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -55,7 +57,7 @@ def public_record(row: dict[str, Any], families: dict[str, str], aliases: list[d
     """Project model-visible fields without verifier resources or reference answers."""
     contract_kind = row.get("contract_kind", "task_spec")
     native = None
-    if contract_kind == "native-structure_closure":
+    if contract_kind == NATIVE_CONTRACT_KIND:
         lowered = json.loads(row["lowered_task_spec"])
         task = lowered["task"]
         native = native_structure_contract(lowered, row)
@@ -164,23 +166,6 @@ def read_pool(
     return metadata, tasks
 
 
-def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
-    batch = []
-    size = 2
-    for row in rows:
-        encoded = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
-        length = len(json.dumps(encoded).encode()) + 1
-        if length + 2 > MAX_BATCH_BYTES:
-            raise ValueError("One public task exceeds the SQL request budget")
-        if size + length > MAX_BATCH_BYTES:
-            yield "[" + ",".join(batch) + "]"
-            batch, size = [], 2
-        batch.append(encoded)
-        size += length
-    if batch:
-        yield "[" + ",".join(batch) + "]"
-
-
 def load_pool(
     root: Path, query: Query, *, expected_manifest_sha256: str, artifact_uri: str | None = None
 ) -> dict[str, Any]:
@@ -197,7 +182,7 @@ def load_pool(
         },
     )
     columns = ", ".join(column.strip().split()[0] for column in TASK_COLUMNS.split(","))
-    for body in batches(tasks):
+    for body in json_row_batches(tasks, max_bytes=MAX_BATCH_BYTES):
         query(
             f"INSERT INTO pool_tasks (load_id, {columns}) SELECT :load_id, {columns} "
             f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({TASK_COLUMNS})",

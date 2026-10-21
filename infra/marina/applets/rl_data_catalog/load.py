@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import click
 from finestore.rl.curation import CurationCatalog, JudgmentStatus, validate_items
 from marina.client import DEFAULT_MARINA_URL, marina_request
+from marina.table_load import json_row_batches
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 MAX_BATCH_BYTES = 1_000_000
@@ -37,30 +38,11 @@ TABLE_COLUMNS = {
 Query = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
-def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
-    """Bound SQL request bodies by encoded bytes, including packet escaping."""
-    batch: list[str] = []
-    size = 2
-    for row in rows:
-        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        # The SQL API carries the row array as a JSON string, adding another escape layer.
-        length = len(json.dumps(encoded).encode()) + 1
-        if length + 2 > MAX_BATCH_BYTES:
-            raise ValueError("One catalog row exceeds the SQL batch budget")
-        if size + length > MAX_BATCH_BYTES:
-            yield "[" + ",".join(batch) + "]"
-            batch, size = [], 2
-        batch.append(encoded)
-        size += length
-    if batch:
-        yield "[" + ",".join(batch) + "]"
-
-
 def insert_rows(query: Query, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
     """Insert byte-bounded batches and return the stored row count."""
     names = ", ".join(column.strip().split()[0] for column in columns.split(","))
     count = 0
-    for body in batches(rows):
+    for body in json_row_batches(rows, max_bytes=MAX_BATCH_BYTES):
         result = query(
             f"INSERT INTO {table} (load_id, {names}) SELECT :load_id, {names} "
             f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
