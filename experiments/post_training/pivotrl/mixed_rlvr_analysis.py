@@ -283,17 +283,21 @@ def report(data_dir: Path, series: Sequence[str], steps: Sequence[int]) -> None:
 
 def paired_points(
     scores: dict[str, dict[str, dict[str, float]]], series: Sequence[str], steps: Sequence[int]
-) -> tuple[dict[tuple[str, str], list[PairedDelta]], list[str]]:
-    """Paired deltas per benchmark and arm label across steps, with the CSV rows that describe them."""
+) -> tuple[dict[tuple[str, str], list[tuple[int, PairedDelta]]], list[str]]:
+    """Paired deltas per benchmark and arm label at each evaluated step, with the CSV rows that describe them.
+
+    A label whose later checkpoints are not evaluated yet contributes only the steps it has.
+    """
     rng = np.random.default_rng(0)
-    points: dict[tuple[str, str], list[PairedDelta]] = {}
+    points: dict[tuple[str, str], list[tuple[int, PairedDelta]]] = {}
     rows = ["benchmark,arm,step,n,reference_accuracy,arm_accuracy,delta_points,ci80_low,ci80_high"]
     for bench, _ in PANELS:
         ref = scores[bench][REF]
         for label in series:
-            deltas = [paired_delta(scores[bench][run_key(label, step)], ref, rng) for step in steps]
+            evaluated = [step for step in steps if run_key(label, step) in scores[bench]]
+            deltas = [(step, paired_delta(scores[bench][run_key(label, step)], ref, rng)) for step in evaluated]
             points[(bench, label)] = deltas
-            for step, delta in zip(steps, deltas, strict=True):
+            for step, delta in deltas:
                 items = set(scores[bench][run_key(label, step)]) & set(ref)
                 ref_acc = 100 * np.mean([ref[i] for i in items])
                 rows.append(
@@ -327,29 +331,36 @@ def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequenc
         ref = scores[bench][REF]
         ax.axhline(0, color="#222222", lw=0.8, ls=(0, (4, 3)), zorder=1)
         for label in series:
-            description, color = ARM_LABELS[label.split("-")[0]]
+            # A replicate label such as ``b-seed43`` shares arm B's colour and is drawn dashed with hollow markers.
+            base, _, seed = label.partition("-seed")
+            description, color = ARM_LABELS[base]
             deltas = points[(bench, label)]
-            emphasis = not label.startswith("a")
+            if not deltas:
+                continue
+            evaluated = [step for step, _ in deltas]
+            emphasis = base != "a"
             ax.fill_between(
-                steps,
-                [d.low for d in deltas],
-                [d.high for d in deltas],
+                evaluated,
+                [d.low for _, d in deltas],
+                [d.high for _, d in deltas],
                 color=color,
-                alpha=0.16 if emphasis else 0.13,
+                alpha=(0.16 if emphasis else 0.13) * (0.5 if seed else 1.0),
                 lw=0,
                 zorder=2,
             )
             ax.plot(
-                steps,
-                [d.mean for d in deltas],
-                "o-",
+                evaluated,
+                [d.mean for _, d in deltas],
+                marker="o",
+                linestyle="--" if seed else "-",
                 color=color,
                 lw=1.9 if emphasis else 1.3,
                 ms=5 if emphasis else 4,
-                mec="white",
-                mew=0.7,
+                mfc="white" if seed else color,
+                mec=color if seed else "white",
+                mew=1.2 if seed else 0.7,
                 zorder=3,
-                label=f"{label.upper()} · {description}",
+                label=f"{base.upper()} · {description}" + (f" (seed {seed})" if seed else ""),
             )
         ax.set_title(f"{title}  ", loc="left", fontsize=10, fontweight="bold", color="#111111")
         ax.text(
@@ -372,7 +383,7 @@ def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequenc
         ax.set_ylabel("Δ accuracy vs reference (pts, 80% CI)")
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 1.0), fontsize=9)
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.tight_layout(rect=(0, 0, 1, 0.95 if len(series) <= 3 else 0.91))
     for extension in ("png", "pdf", "svg"):
         fig.savefig(f"{out_prefix}.{extension}", dpi=220, bbox_inches="tight")
     Path(f"{out_prefix}.csv").write_text("\n".join(rows) + "\n")
