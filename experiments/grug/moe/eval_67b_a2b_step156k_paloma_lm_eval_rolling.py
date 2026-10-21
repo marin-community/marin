@@ -135,7 +135,7 @@ def _read_docs(pattern: str) -> list[str]:
     return texts
 
 
-def _check_model_matches_training_run(model: GrugModelConfig, checkpoint_path: str) -> None:
+def check_model_matches_training_run(model: GrugModelConfig, checkpoint_path: str) -> None:
     """Fail fast if the eval model disagrees with the config the checkpoint was trained with."""
     run_root = checkpoint_path.split("/checkpoints/")[0]
     with fsspec.open(f"{run_root}/.executor_info", "r") as f:
@@ -148,7 +148,7 @@ def _check_model_matches_training_run(model: GrugModelConfig, checkpoint_path: s
 
 
 def _run_eval_local(config: RollingEvalConfig) -> None:
-    _check_model_matches_training_run(config.model, config.checkpoint_path)
+    check_model_matches_training_run(config.model, config.checkpoint_path)
     assert config.window_len == window_len(config.max_length)
     buckets = row_buckets(config.max_length)
     trainer = TrainerConfig(
