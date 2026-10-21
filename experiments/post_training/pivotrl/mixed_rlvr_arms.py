@@ -33,17 +33,17 @@ from pathlib import Path
 
 import yaml
 from dotenv import dotenv_values
+from marin.rl.nemotron_pivot import SWE_AGENT, TERMINAL_AGENT
 
-from experiments.post_training.pivotrl.mixed_rlvr import ARMS, Route, domain_weights
+from experiments.post_training.pivotrl.mixed_rlvr import ARMS, DATASET_VERSION, Route, domain_weights
+from experiments.post_training.pivotrl.runs import GRUG_SFT
 
 REPO = Path(__file__).resolve().parents[3]
 RUNTIME_COMMIT = "bfef1308"
 BUCKET = "s3://marin-us-east-02a/marin"
-DATA_VERSION = "2026.10.16.3"
-MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05"
-MODEL_REVISION = "8c76b22afc38f5e95360c83ca88008f00b5ae1e0"
-SWE_PIVOT_AGENT = "swe_pivot_single_step_tool_use_with_argument_comparison_agent"
-TERMINUS_AGENT = "terminus_judge_string_only_simple_agent"
+COREWEAVE_ENDPOINT = "https://cwobject.com"
+COREWEAVE_REGION = "US-EAST-02A"
+WANDB_ENTITY = "marin-community"
 ORIGINAL_SEED = 42
 # The smoke run keeps arm B's composition at an eighth of the batch.
 SMOKE_WEIGHTS = {Route.RLVR: 51, Route.SWE: 7, Route.TERMINAL: 6}
@@ -183,7 +183,7 @@ def recipe(run_id: str, weights: dict[Route, int], *, smoke: bool, seed: int) ->
             "engine_init_kwargs": {
                 "enable_auto_tool_choice": True,
                 "tool_call_parser": "hermes",
-                "served_model_name": "Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+                "served_model_name": GRUG_SFT.location.split("/")[-1],
                 "enable_return_routed_experts": True,
             },
         },
@@ -201,7 +201,7 @@ def recipe(run_id: str, weights: dict[Route, int], *, smoke: bool, seed: int) ->
                         "group_answer_length_penalty_coeff": 0.0,
                     },
                     # #9933's graders, as #10000 uses them.
-                    "pivot_reward": {SWE_PIVOT_AGENT: "nemo", TERMINUS_AGENT: "string_90"},
+                    "pivot_reward": {SWE_AGENT: "nemo", TERMINAL_AGENT: "string_90"},
                 },
             },
         },
@@ -239,10 +239,10 @@ def data_input(dataset: str, filename: str) -> dict:
     name = f"users/dml/pivotrl/mixed-rlvr/{dataset}"
     return {
         "kind": "directory",
-        "identity": f"{name}@{DATA_VERSION}",
-        "local_path": f"/tmp/marinskyrl/data/mixed-rlvr-{dataset}-{DATA_VERSION}",
+        "identity": f"{name}@{DATASET_VERSION}",
+        "local_path": f"/tmp/marinskyrl/data/mixed-rlvr-{dataset}-{DATASET_VERSION}",
         "relative_path": filename,
-        "uri": f"{BUCKET}/{name}/{DATA_VERSION}",
+        "uri": f"{BUCKET}/{name}/{DATASET_VERSION}",
     }
 
 
@@ -273,7 +273,7 @@ def launch_config(
             "cluster": yaml.safe_load(cluster_config.read_text())["name"],
             "cluster_config": str(cluster_config),
             "job_name": run_id,
-            "wandb_entity": "marin-community",
+            "wandb_entity": WANDB_ENTITY,
             "allocation": {
                 "num_nodes": nodes,
                 "gpus_per_node": 8,
@@ -302,11 +302,11 @@ def launch_config(
         },
         "inputs": {
             "model": {
-                "uri": MODEL,
-                "identity": MODEL_REVISION,
-                "local_path": MODEL,
-                "tokenizer_uri": MODEL,
-                "tokenizer_revision": MODEL_REVISION,
+                "uri": GRUG_SFT.location,
+                "identity": GRUG_SFT.revision,
+                "local_path": GRUG_SFT.location,
+                "tokenizer_uri": GRUG_SFT.location,
+                "tokenizer_revision": GRUG_SFT.revision,
                 "chat_template": None,
             },
             "data_kind": "parquet",
@@ -317,21 +317,30 @@ def launch_config(
     }
 
 
-def load_environment(runtime: Path) -> None:
-    """Export the credentials the launcher and the training job read, and import the runtime's launcher package."""
-    values = dotenv_values(REPO / ".env")
-    for key in ("HF_TOKEN", "CW_KEY_ID", "CW_KEY_SECRET", "TOGETHER_API_KEY"):
-        if values.get(key):
-            os.environ[key] = values[key]
-    os.environ["WANDB_API_KEY"] = netrc.netrc(Path.home() / ".netrc").authenticators("api.wandb.ai")[2]
-    os.environ.update(
-        WANDB_ENTITY="marin-community",
+def credentials(repo: Path) -> dict[str, str]:
+    """Environment for the launcher, the training job and the evaluation CLI: CoreWeave storage, Hub, judge and W&B.
+
+    Reads ``<repo>/.env`` for the Hub, CoreWeave and Together keys and ``~/.netrc`` for the W&B key.
+    """
+    values = dotenv_values(repo / ".env")
+    env = {key: values[key] for key in ("HF_TOKEN", "CW_KEY_ID", "CW_KEY_SECRET", "TOGETHER_API_KEY") if values.get(key)}
+    env.update(
+        WANDB_API_KEY=netrc.netrc(Path.home() / ".netrc").authenticators("api.wandb.ai")[2],
+        WANDB_ENTITY=WANDB_ENTITY,
         AWS_ACCESS_KEY_ID=values["CW_KEY_ID"],
         AWS_SECRET_ACCESS_KEY=values["CW_KEY_SECRET"],
-        AWS_ENDPOINT_URL="https://cwobject.com",
-        AWS_DEFAULT_REGION="US-EAST-02A",
-        FSSPEC_S3='{"endpoint_url":"https://cwobject.com","config_kwargs":{"s3":{"addressing_style":"virtual"}}}',
+        AWS_ENDPOINT_URL=COREWEAVE_ENDPOINT,
+        AWS_DEFAULT_REGION=COREWEAVE_REGION,
+        FSSPEC_S3=json.dumps(
+            {"endpoint_url": COREWEAVE_ENDPOINT, "config_kwargs": {"s3": {"addressing_style": "virtual"}}}
+        ),
     )
+    return env
+
+
+def load_environment(runtime: Path) -> None:
+    """Export the credentials the launcher and the training job read, and import the runtime's launcher package."""
+    os.environ.update(credentials(REPO))
     for part in ("skyrl-train", "skyrl-gym", "."):
         sys.path.insert(0, str(runtime / part))
 

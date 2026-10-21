@@ -22,23 +22,28 @@ import argparse
 import collections
 import io
 import json
+import logging
 import math
 import os
 import re
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow.parquet as pq
-import s3fs
+from dotenv import dotenv_values
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-HERE = Path(__file__).resolve().parent
-REFERENCE = json.loads((HERE / "mixed_rlvr_evals" / "reference.json").read_text())
-EVALS_ROOT = "marin-us-east-02a/marin/evals"
-HARBOR = ("swebench-verified", "ot-tblite-recovery")
-EVALCHEMY = ("aime24", "gpqa-diamond", "math500", "mmlu-pro")
+from experiments.post_training.pivotrl.mixed_rlvr_evals import EVALCHEMY, HARBOR, REFERENCE
+
+logger = logging.getLogger(__name__)
+
+REPO = Path(__file__).resolve().parents[3]
+EVALS_ROOT = "s3://marin-us-east-02a/marin/evals"
 REF = "REF"
 RUN_PATTERN = re.compile(r"pivot-mixed-rlvr-([a-z0-9-]+?)-\d{8}-\d{6}-step(\d+)")
 ARM_LABELS = {
@@ -111,29 +116,37 @@ def sample_scores(runs: dict[str, dict[str, bool | None]]) -> dict[str, dict[str
     return out
 
 
-def paired_delta(
-    arm: dict[str, float], ref: dict[str, float], rng: np.random.Generator
-) -> tuple[float, float, float, int]:
+@dataclass(frozen=True)
+class PairedDelta:
     """Mean arm-minus-reference difference in points over shared items, with its 80% bootstrap interval."""
+
+    mean: float
+    low: float
+    high: float
+    n: int
+
+
+def paired_delta(arm: dict[str, float], ref: dict[str, float], rng: np.random.Generator) -> PairedDelta:
     items = sorted(set(arm) & set(ref))
     diffs = np.array([arm[i] - ref[i] for i in items])
     boot = diffs[rng.integers(0, len(diffs), size=(BOOTSTRAP, len(diffs)))].mean(axis=1)
     low, high = np.percentile(boot, [10, 90])
-    return 100 * diffs.mean(), 100 * low, 100 * high, len(items)
+    return PairedDelta(100 * diffs.mean(), 100 * low, 100 * high, len(items))
 
 
-def _filesystem() -> s3fs.S3FileSystem:
-    return s3fs.S3FileSystem(
-        key=os.environ["AWS_ACCESS_KEY_ID"],
-        secret=os.environ["AWS_SECRET_ACCESS_KEY"],
-        client_kwargs={"endpoint_url": os.environ.get("AWS_ENDPOINT_URL", "https://cwobject.com")},
-        config_kwargs={"s3": {"addressing_style": "virtual"}},
-    )
+def _filesystem():
+    """CoreWeave object storage through Marin's fsspec factory, with the keys from ``<repo>/.env`` when unset."""
+    for key, value in dotenv_values(REPO / ".env").items():
+        if value and key.startswith("CW_KEY_"):
+            os.environ.setdefault(key, value)
+    configure_coreweave_s3()
+    fs, _ = url_to_fs(EVALS_ROOT)
+    return fs
 
 
 def _records(fs) -> list[dict]:
     records = []
-    for directory in fs.ls(EVALS_ROOT):
+    for directory in fs.ls(EVALS_ROOT.removeprefix("s3://")):
         if "pivot-mixed-rlvr" not in directory or not fs.exists(directory + "/record.json"):
             continue
         record = json.loads(fs.cat(directory + "/record.json"))
@@ -161,7 +174,15 @@ def _harbor_rewards(fs, base: str) -> dict[str, list[float | None]]:
         return out
     depth = jobs.count("/") + 3
     files = [p for p in fs.find(jobs) if p.endswith("/result.json") and p.count("/") == depth]
-    for raw in fs.cat(files, on_error="omit").values():
+    contents = fs.cat(files, on_error="return")
+    unreadable = [path for path, raw in contents.items() if isinstance(raw, BaseException)]
+    if unreadable:
+        logger.warning(
+            "%d of %d trial results under %s could not be read: %s", len(unreadable), len(files), jobs, unreadable[:3]
+        )
+    for raw in contents.values():
+        if isinstance(raw, BaseException):
+            continue
         result = json.loads(raw)
         verifier = result.get("verifier_result")
         reward = ((verifier or {}).get("rewards") or {}).get("reward")
@@ -260,9 +281,29 @@ def report(data_dir: Path, series: Sequence[str], steps: Sequence[int]) -> None:
                 print(f"   {x:>12} vs {y:<12} {detail} diff {mean:+5.1f}  p={p:.4f}" + ("  *" if p < 0.05 else ""))
 
 
-def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequence[int]) -> None:
-    scores = load_scores(data_dir)
+def paired_points(
+    scores: dict[str, dict[str, dict[str, float]]], series: Sequence[str], steps: Sequence[int]
+) -> tuple[dict[tuple[str, str], list[PairedDelta]], list[str]]:
+    """Paired deltas per benchmark and arm label across steps, with the CSV rows that describe them."""
     rng = np.random.default_rng(0)
+    points: dict[tuple[str, str], list[PairedDelta]] = {}
+    rows = ["benchmark,arm,step,n,reference_accuracy,arm_accuracy,delta_points,ci80_low,ci80_high"]
+    for bench, _ in PANELS:
+        ref = scores[bench][REF]
+        for label in series:
+            deltas = [paired_delta(scores[bench][run_key(label, step)], ref, rng) for step in steps]
+            points[(bench, label)] = deltas
+            for step, delta in zip(steps, deltas, strict=True):
+                items = set(scores[bench][run_key(label, step)]) & set(ref)
+                ref_acc = 100 * np.mean([ref[i] for i in items])
+                rows.append(
+                    f"{bench},{label},{step},{delta.n},{ref_acc:.2f},{ref_acc + delta.mean:.2f},"
+                    f"{delta.mean:.2f},{delta.low:.2f},{delta.high:.2f}"
+                )
+    return points, rows
+
+
+def _style() -> None:
     plt.rcParams.update(
         {
             "font.family": "Helvetica Neue",
@@ -275,25 +316,24 @@ def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequenc
             "ytick.color": "#444444",
         }
     )
+
+
+def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequence[int]) -> None:
+    scores = load_scores(data_dir)
+    points, rows = paired_points(scores, series, steps)
+    _style()
     fig, axes = plt.subplots(2, 3, figsize=(10, 5.6), sharex=True, sharey=True)
-    rows = ["benchmark,arm,step,n,reference_accuracy,arm_accuracy,delta_points,ci80_low,ci80_high"]
     for ax, (bench, title) in zip(axes.flat, PANELS, strict=True):
         ref = scores[bench][REF]
         ax.axhline(0, color="#222222", lw=0.8, ls=(0, (4, 3)), zorder=1)
         for label in series:
             description, color = ARM_LABELS[label.split("-")[0]]
-            points = [paired_delta(scores[bench][run_key(label, step)], ref, rng) for step in steps]
-            for step, (delta, low, high, n) in zip(steps, points, strict=True):
-                items = set(scores[bench][run_key(label, step)]) & set(ref)
-                ref_acc = 100 * np.mean([ref[i] for i in items])
-                rows.append(
-                    f"{bench},{label},{step},{n},{ref_acc:.2f},{ref_acc + delta:.2f},{delta:.2f},{low:.2f},{high:.2f}"
-                )
+            deltas = points[(bench, label)]
             emphasis = not label.startswith("a")
             ax.fill_between(
                 steps,
-                [p[1] for p in points],
-                [p[2] for p in points],
+                [d.low for d in deltas],
+                [d.high for d in deltas],
                 color=color,
                 alpha=0.16 if emphasis else 0.13,
                 lw=0,
@@ -301,7 +341,7 @@ def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequenc
             )
             ax.plot(
                 steps,
-                [p[0] for p in points],
+                [d.mean for d in deltas],
                 "o-",
                 color=color,
                 lw=1.9 if emphasis else 1.3,

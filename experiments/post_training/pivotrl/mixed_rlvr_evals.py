@@ -30,7 +30,9 @@ import sys
 from pathlib import Path
 
 import yaml
-from dotenv import dotenv_values
+
+from experiments.post_training.pivotrl.mixed_rlvr_arms import credentials
+from experiments.post_training.pivotrl.runs import GRUG_SFT
 
 HERE = Path(__file__).resolve().parent
 CONFIGS = HERE / "mixed_rlvr_evals"
@@ -38,8 +40,6 @@ REFERENCE = json.loads((CONFIGS / "reference.json").read_text())
 EVAL_VERSION = "eval-policy-2026-10-05-verified"
 EVALCHEMY = ["aime24", "gpqa-diamond", "mmlu-pro", "math500"]
 HARBOR = ["swebench-verified", "ot-tblite-recovery"]
-TOKENIZER = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05"
-TOKENIZER_REVISION = "8c76b22afc38f5e95360c83ca88008f00b5ae1e0"
 DAYTONA_SECRET = "DAYTONA_EVAL_API_KEY"
 
 
@@ -62,21 +62,6 @@ def export_target(config: dict, step: int) -> str:
 
 def export_job_name(config: dict, step: int) -> str:
     return f"{config['run']['id']}-step{step}-hf-export"
-
-
-def credentials(repo: Path) -> dict[str, str]:
-    values = dotenv_values(repo / ".env")
-    env = {key: value for key, value in values.items() if value}
-    env.update(
-        GOOGLE_APPLICATION_CREDENTIALS=str(Path.home() / ".config/gcloud/application_default_credentials.json"),
-        WANDB_ENTITY="marin-community",
-        AWS_ACCESS_KEY_ID=values["CW_KEY_ID"],
-        AWS_SECRET_ACCESS_KEY=values["CW_KEY_SECRET"],
-        AWS_ENDPOINT_URL="https://cwobject.com",
-        AWS_DEFAULT_REGION="US-EAST-02A",
-        FSSPEC_S3='{"endpoint_url":"https://cwobject.com","config_kwargs":{"s3":{"addressing_style":"virtual"}}}',
-    )
-    return env
 
 
 def runtime_imports(runtime: Path, repo: Path) -> None:
@@ -208,8 +193,8 @@ def eval_commands(out: Path, arm: str, step: int, dependency: str, cluster: str 
             name=f"{config['run']['id']}-step{step}",
             location=export_target(config, step),
             revision=None,
-            tokenizer=TOKENIZER,
-            tokenizer_revision=TOKENIZER_REVISION,
+            tokenizer=GRUG_SFT.location,
+            tokenizer_revision=GRUG_SFT.revision,
         )
         model["resource_hint"] = {**model["resource_hint"], "disk": "500g", "memory": "256g"}
         model_path = directory / f"{group}-model.yaml"
@@ -293,7 +278,11 @@ def evaluate(
     if submit and dependency == "@UNSUBMITTED@":
         raise SystemExit("submit the export first")
     env = {**os.environ, **credentials(repo)}
-    env.update(PYTHONPATH=f"{workspace}:{workspace}/lib/marin/src", UV_PROJECT_ENVIRONMENT=str(venv))
+    env.update(
+        GOOGLE_APPLICATION_CREDENTIALS=str(Path.home() / ".config/gcloud/application_default_credentials.json"),
+        PYTHONPATH=f"{workspace}:{workspace}/lib/marin/src",
+        UV_PROJECT_ENVIRONMENT=str(venv),
+    )
     if submit and (only_group is None or only_group in HARBOR):
         env["DAYTONA_API_KEY"] = daytona_key()
     for item in eval_commands(out, arm, step, dependency, cluster, workspace):

@@ -47,7 +47,7 @@ def test_paired_delta_uses_shared_items_only():
     rng = np.random.default_rng(0)
     ref = {"a": 0.0, "b": 1.0, "c": 1.0, "d": 0.0}
     arm = {"a": 1.0, "b": 1.0, "c": 0.0, "e": 1.0}
-    mean, low, high, n = paired_delta(arm, ref, rng)
-    assert n == 3
-    assert mean == pytest.approx(0.0)
-    assert low <= mean <= high
+    delta = paired_delta(arm, ref, rng)
+    assert delta.n == 3
+    assert delta.mean == pytest.approx(0.0)
+    assert delta.low <= delta.mean <= delta.high
