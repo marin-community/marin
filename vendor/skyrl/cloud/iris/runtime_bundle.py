@@ -88,6 +88,10 @@ def _bundle_paths(root: Path) -> tuple[Path, ...]:
         path = _bundle_relative_path(name)
         if {"tests", "__pycache__"}.intersection(path.parts) or path.suffix in {".pyc", ".pyo"}:
             continue
+        # Iris excludes docs/ even inside installed packages. Hash only files
+        # the workspace uploader will actually transfer to the worker.
+        if path.parts[0] == "harbor" and "docs" in path.parts:
+            continue
         original = root / path
         allowed_root = (
             (root.parent / "harbor") if path.parts[0] == "harbor" and (root / "harbor").is_symlink() else root
