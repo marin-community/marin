@@ -151,6 +151,16 @@ except md.PackageNotFoundError:
     pass
 PY
 }}
+reinstall_package() {{
+  _package="$1"
+  _version="$2"
+  shift 2
+  uv pip install --python "$IRIS_VENV/bin/python" \
+    {_UV_LINK_MODE_FLAG} \
+    "$@" \
+    --reinstall-package "$_package" \
+    "$_package==$_version"
+}}
 for _cuda13_package in {cuda_13_library_packages}; do
   _cuda13_version=""
   if [ -x "$IRIS_VENV/bin/python" ]; then
@@ -158,10 +168,7 @@ for _cuda13_package in {cuda_13_library_packages}; do
   fi
   if [ -n "$_cuda13_version" ]; then
     echo "restoring CUDA 13 library precedence for $_cuda13_package"
-    uv pip install --python "$IRIS_VENV/bin/python" \
-      {_UV_LINK_MODE_FLAG} \
-      --reinstall-package "$_cuda13_package" \
-      "$_cuda13_package==$_cuda13_version"
+    reinstall_package "$_cuda13_package" "$_cuda13_version"
   fi
 done
 find_cuda_bin() {{
@@ -174,11 +181,7 @@ if [ -z "$cuda_bin" ] && [ -x "$IRIS_VENV/bin/python" ]; then
   _toolchain_version="$(installed_package_version "{CUDA_TOOLCHAIN_PACKAGE}")"
   if [ -n "$_toolchain_version" ]; then
     echo 'repairing missing CUDA toolchain files'
-    uv pip install --python "$IRIS_VENV/bin/python" \
-      --no-cache \
-      {_UV_LINK_MODE_FLAG} \
-      --reinstall-package "{CUDA_TOOLCHAIN_PACKAGE}" \
-      "{CUDA_TOOLCHAIN_PACKAGE}==$_toolchain_version"
+    reinstall_package "{CUDA_TOOLCHAIN_PACKAGE}" "$_toolchain_version" --no-cache
     cuda_bin="$(find_cuda_bin)"
     if [ -z "$cuda_bin" ]; then
       echo 'CUDA toolchain repair did not restore ptxas' >&2
