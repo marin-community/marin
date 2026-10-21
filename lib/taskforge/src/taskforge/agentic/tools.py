@@ -17,7 +17,6 @@ error result. A failure of the host, for example an unavailable judge model, rai
 import asyncio
 import json
 import logging
-import re
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Mapping
@@ -59,7 +58,7 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskforge.agentic.config import AgenticConfig
 from taskforge.agentic.gate import Evidence, Gate, missing_evidence
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, REVIEW_TASK_PROMPT
-from taskforge.capability import CapabilityIdea, capability_idea_record
+from taskforge.capability import FILE_SAFE_ID, CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.client import ContextExhausted
 from taskforge.llm.policy import Message
@@ -72,9 +71,9 @@ AGENT_TOOLS = "taskforge-agentic:v1"
 SOLVER_HARNESS = "solver"
 WORKDIR = PurePosixPath("/workspace")
 ROLLOUTS_DIR = "rollouts"
-NOT_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
-MAX_NAME_CHARS = 64
-"""The most characters of a task id in a directory name: a task id is free text, and a file name has at most 255."""
+MAX_ID_CHARS = 128
+"""The most characters of a task id. The tools and the driver name directories after it, and a file name has at most
+255 characters."""
 WEB_DIR = "web"
 
 
@@ -361,8 +360,7 @@ class ToolSession:
     ) -> dict[str, Any]:
         """Run ``n`` rollouts of ``spec``, record their evidence for ``task``, and save their transcripts."""
         key = _task_digest(task)
-        name = NOT_NAME_CHARS.sub("_", task.id)[:MAX_NAME_CHARS]
-        directory = _absolute(f"{ROLLOUTS_DIR}/{name}/{key[:12]}")
+        directory = _absolute(f"{ROLLOUTS_DIR}/{task.id}/{key[:12]}")
         # Take the transcript numbers before the rollouts, so that concurrent calls for one task do not share them.
         first = self.tools.transcripts[f"{directory}/{role}"]
         self.tools.transcripts[f"{directory}/{role}"] += n
@@ -513,10 +511,21 @@ class ToolSession:
             await self.machine.upload(source, _absolute(path))
 
     async def _load(self, path: str) -> TaskSpec:
+        """The TaskSpec at ``path``, refused at once when its id cannot name its output directory, so that no
+        evidence goes to a task that ``submit`` cannot accept."""
         try:
-            return TaskSpec.model_validate_json(await self._read(path))
+            task = TaskSpec.model_validate_json(await self._read(path))
         except ValidationError as error:
             raise ToolError(f"{path} is not a valid TaskSpec: {_clip(str(error))}") from error
+        if FILE_SAFE_ID.match(task.id) is None or len(task.id) > MAX_ID_CHARS:
+            raise ToolError(
+                f"The task id {_clip(task.id, limit=200)!r} must be at most {MAX_ID_CHARS} letters, digits, dots, "
+                "dashes and underscores, starting with a letter or a digit"
+            )
+        key = _task_digest(task)
+        if any(accepted.task.id == task.id and _task_digest(accepted.task) != key for accepted in self.tools.accepted):
+            raise ToolError(f"An accepted task already has the id {task.id!r}: give this task another id")
+        return task
 
 
 @dataclass
@@ -647,6 +656,11 @@ def _problems(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -> l
     requirements = task.environment_requirements
     if _needs_machine(task) and requirements.command_semantics != CommandSemantics.SHELL_SIMULATOR:
         problems.append("A task with a shell or files must use command_semantics shell_simulator")
+    if task.resources.all:
+        problems.append(
+            "Put the solver's files in resources.worker and the grader's files in resources.verifier, not in "
+            "resources.all: the review reads only the worker files"
+        )
     if requirements.tool_providers or task.interaction_tools or task.final_tools:
         problems.append("Tools other than the shell are not supported")
     if not problems:

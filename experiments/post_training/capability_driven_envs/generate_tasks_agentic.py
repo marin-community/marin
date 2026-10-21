@@ -24,14 +24,15 @@ spend), ``<capability id>/agent.json`` (the agent's conversations), and ``<capab
 
 import asyncio
 import dataclasses
+import functools
 import json
 import logging
 import os
 import sys
 import time
 import uuid
-from collections.abc import Sequence
-from dataclasses import asdict
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -40,14 +41,14 @@ import openai
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rolloutengine.chat import ChatModel
-from rolloutengine.models import RolloutLimits
+from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits
 from shellbox.backends.local.machine import LocalMachineFactory
 from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
 from taskforge.capability import CapabilityIdea
-from taskforge.llm.glm_client import EndpointSource, GlmClient, Pool
+from taskforge.llm.glm_client import EndpointSource, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
 
 from experiments.post_training.capability_driven_envs.catalog import example_catalog_path
@@ -116,14 +117,48 @@ def workspace_factory() -> LocalMachineFactory:
     return LocalMachineFactory(read_only=(venv.parent,), bin_dirs=(venv / "bin",))
 
 
-def chat_model(base_url: str, token: str, model: str, reasoning_effort: str) -> ChatModel:
-    """A chat model on the relay. GLM sets an effort, and DeepSeek thinks unless the effort is ``NO_REASONING``."""
-    client = openai.AsyncOpenAI(base_url=base_url, api_key=token, timeout=1800, max_retries=5)
+def chat_model(endpoint: GlmEndpoint, *, model: str, reasoning_effort: str, cache_key: str | None) -> ChatModel:
+    """A chat model on ``endpoint``. GLM sets an effort, and DeepSeek thinks unless the effort is ``NO_REASONING``.
+
+    A ``cache_key`` lets the relay reuse the prompt prefix of one conversation.
+    """
+    client = openai.AsyncOpenAI(base_url=endpoint.base_url, api_key=endpoint.token, timeout=1800, max_retries=5)
     if model == DEEPSEEK_MODEL:
         template: dict[str, object] = {"thinking": reasoning_effort != NO_REASONING}
     else:
         template = {"reasoning_effort": reasoning_effort}
-    return ChatModel(client, model, MAX_OUTPUT_TOKENS, extra_body={"chat_template_kwargs": template})
+    extra_body: dict[str, object] = {"chat_template_kwargs": template}
+    if cache_key is not None:
+        extra_body["prompt_cache_key"] = cache_key
+    return ChatModel(client, model, MAX_OUTPUT_TOKENS, extra_body=extra_body)
+
+
+Model = Callable[[ModelRequest], Awaitable[ModelTurn]]
+
+
+@dataclass
+class RelayModel:
+    """A model on the endpoint of ``source`` that follows a relay that moved.
+
+    After a connection error it asks ``source`` for the endpoint again, connects to it with ``connect``, and sends the
+    request once more. The agents and the solver of all sessions use these, so a moved relay does not end them.
+    """
+
+    source: EndpointSource
+    connect: Callable[[GlmEndpoint], Model]
+    _model: Model | None = field(default=None, init=False, repr=False)
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        model = self._model or self._reconnect()
+        try:
+            return await model(request)
+        except openai.APIConnectionError as error:
+            logger.warning("The relay connection failed (%s); resolving the relay again", error)
+            return await self._reconnect()(request)
+
+    def _reconnect(self) -> Model:
+        self._model = self.connect(self.source.current())
+        return self._model
 
 
 async def generate_all(
@@ -140,13 +175,16 @@ async def generate_all(
     parallel_api_key: str,
 ) -> list[dict[str, Any]]:
     """Run one agent for each idea, at most ``concurrency`` at a time, and write each result when it finishes."""
-    endpoint = source.current()
-    agent = chat_model(endpoint.base_url, endpoint.token, GLM_MODEL, agent_reasoning_effort)
-    solver = chat_model(endpoint.base_url, endpoint.token, solver_model, solver_reasoning_effort)
+
+    def relay_model(model: str, reasoning_effort: str, cache_key: str | None) -> RelayModel:
+        connect = functools.partial(chat_model, model=model, reasoning_effort=reasoning_effort, cache_key=cache_key)
+        return RelayModel(source, connect)
+
+    solver = relay_model(solver_model, solver_reasoning_effort, None)
     slots = asyncio.Semaphore(concurrency)
     async with GlmClient(source, GLM_PROVIDER) as judge, ParallelWeb(parallel_api_key) as web:
         config = AgenticConfig(
-            agent_model=agent,
+            agent_model=relay_model(GLM_MODEL, agent_reasoning_effort, None),
             workspace_factory=workspace_factory(),
             solver_model=solver,
             judge=judge,
@@ -163,8 +201,8 @@ async def generate_all(
         async def one(idea: CapabilityIdea) -> dict[str, Any]:
             # Each session sends its whole conversation on every turn, so a cache key of its own lets the relay
             # reuse the prefix.
-            cache_key = {"prompt_cache_key": f"taskforge-agentic-{idea.capability_id}-{uuid.uuid4().hex[:8]}"}
-            model = dataclasses.replace(agent, extra_body={**agent.extra_body, **cache_key})
+            cache_key = f"taskforge-agentic-{idea.capability_id}-{uuid.uuid4().hex[:8]}"
+            model = relay_model(GLM_MODEL, agent_reasoning_effort, cache_key)
             async with slots:
                 started = time.monotonic()
                 result = await generate_tasks(idea, tasks, dataclasses.replace(config, agent_model=model))
