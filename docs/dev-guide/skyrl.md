@@ -7,7 +7,7 @@ Marin's workspace and root dependency resolution.
 Marin invokes the nested `marinskyrl` executable in an isolated child process:
 
 ```bash
-uv run --isolated --project vendor/skyrl --frozen --no-group dev marinskyrl --help
+uv run --isolated --project vendor/skyrl --frozen --extra cpu --no-group dev marinskyrl --help
 ```
 
 The launcher clears the parent's Python environment selection. SkyRL installs
@@ -15,6 +15,12 @@ Marin libraries and Harbor as editable dependencies from this checkout, using
 the paths in `vendor/skyrl/pyproject.toml`. Marin calls SkyRL through the executable.
 See [launching RL experiments](../references/rl-launching.md)
 for the artifact entry point, launch document, and resource configuration.
+
+The Marin CLI uses SkyRL's `cpu` extra. Set `environment.task_sessions.local: {}`
+to enable the local task backend, which probes Linux bubblewrap before task
+admission. Omitting this key or setting it to `null` disables the backend.
+The launcher forwards `iris.container_profile` to the coordinator and trainer;
+local execution requires a successful sandbox capability check.
 
 ## Runtime and dependencies
 
