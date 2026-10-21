@@ -130,6 +130,8 @@ class ConversationRecord:
 
     messages: tuple[dict[str, Any], ...]
     """The chat of this conversation, through its last model response. The grader reads the last one with a turn."""
+    options: dict[str, Any]
+    """The model options of the prompt that started this conversation, including its advertised tools."""
     prompt_token_ids: tuple[int, ...]
     """The tokens of the first prompt of this conversation."""
     response_token_ids: tuple[int, ...]
@@ -152,6 +154,8 @@ class Rollout:
 
     run_id: str
     """The ID of the attempt, the same as in its events."""
+    task_id: str
+    """The ID of the task attempted by this rollout."""
     conversations: tuple[ConversationRecord, ...]
     """One record for each conversation that the harness started, in order."""
     stop_reason: str

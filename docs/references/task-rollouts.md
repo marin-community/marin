@@ -586,8 +586,9 @@ Optional log probabilities align with response tokens.
 A continuation prompt preserves the full served prefix, including earlier response tokens.
 The engine rejects changed prefixes, empty response evidence, and misaligned log probabilities.
 
-`Rollout` contains the run ID, the conversations, the stop reason, metrics, and run outputs. Each
-`ConversationRecord` holds its chat, token IDs, loss mask, optional log probabilities, and per-step records.
+`Rollout` contains the run and task IDs, the conversations, the stop reason, metrics, and run outputs. Each
+`ConversationRecord` holds its chat, the starting prompt's model options (including advertised tools and tool choice),
+token IDs, loss mask, optional log probabilities, and per-step records.
 `GradedRollout` pairs the rollout with the grade.
 `prompt_token_ids` contains the conversation's first prompt. `response_token_ids` contains subsequent model responses and intervening observation tokens.
 The loss mask and log probabilities align with `response_token_ids`, which excludes the initial prompt.

@@ -23,10 +23,10 @@ attempt at a task: the task's messages, the agent's turns and tool calls, and th
 Find the general capabilities, at most {IDEAS_PER_ROLLOUT}, whose absence explains the failure, or none if the \
 rollout shows no gap. {CAPABILITY_RULES}
 
-The first line of the rollout is a JSON object with its run ID, task, grade, stop reason, the operation that \
-interrupted it if any, and counts of turns and tool calls. The second line is a JSON object with the tools that the \
-task gave. The policy's harness can also give a shell tool and the functions of the tool providers. After it, each \
-message starts a new line with its number, for example [0]."""
+The first line of the rollout is a JSON object with its run ID, task messages, grade, stop reason, the operation that \
+interrupted it if any, and counts of turns and tool calls. Each conversation starts with a JSON line containing its \
+model options, including the tools it saw and its tool choice. Its messages follow, each starting with a number \
+such as [0]."""
 
 MERGE_PROMPT = f"""\
 Each line is a capability that failed rollouts of a language-model agent lack, with the ID of the line and the \

@@ -7,6 +7,7 @@ pytest.importorskip("taskforge")
 
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 
 from pydantic import BaseModel
 from rolloutengine.models import (
@@ -18,9 +19,7 @@ from rolloutengine.models import (
     RolloutStep,
     Transition,
 )
-from rolloutengine.test_support import arithmetic_task
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import AnswerCall, TaskSpec
 from taskforge.llm.client import StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
@@ -45,7 +44,6 @@ from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollou
 from experiments.post_training.capability_driven_envs.generate_tasks import task_workpieces
 from experiments.post_training.capability_driven_envs.tests.test_generate_tasks import COMPLETION
 
-LOOKUP_CALL = {"id": "call", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "six"}'}}
 STOP_LOOPS = Capability(
     id="failed-runs.tool-use.stop-loops",
     name="Stop repeating a call",
@@ -63,48 +61,56 @@ CUT_OFF = StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION
 
 
 def evaluated(
-    run_id: str, status: Outcome, reward: float | None, *turns: dict, failure=None, task_id: str | None = None
-) -> tuple[TaskSpec, GradedRollout]:
+    run_id: str,
+    status: Outcome,
+    reward: float | None,
+    *turns: dict,
+    options=None,
+    failure=None,
+    task_id: str | None = None,
+) -> GradedRollout:
     """A rollout of an arithmetic task whose policy produced ``turns``, graded with ``status`` and ``reward``.
 
     Each rollout has its own task unless ``task_id`` names a task that other rollouts share.
     """
     steps = tuple(RolloutStep(ModelTurn(turn, (), (), None, "stop"), Transition(done=False), 0, ()) for turn in turns)
     prompt = {"role": "user", "content": "What is six plus six?"}
-    conversation = ConversationRecord((prompt, *turns), (), (), (), None, steps)
-    rollout = Rollout(run_id, (conversation,), "stop", failure=failure)
-    return arithmetic_task(id=task_id or f"task-{run_id}"), GradedRollout(rollout, GradeResult(status, reward))
+    conversation = ConversationRecord((prompt, *turns), options or {}, (), (), (), None, steps)
+    rollout = Rollout(run_id, task_id or f"task-{run_id}", (conversation,), "stop", failure=failure)
+    return GradedRollout(rollout, GradeResult(status, reward))
 
 
-def loop(run_id: str, task_id: str | None = None) -> tuple[TaskSpec, GradedRollout]:
-    turn = {"role": "assistant", "tool_calls": [LOOKUP_CALL]}
+def loop(run_id: str, task_id: str | None = None) -> GradedRollout:
+    call = {"id": "call", "type": "function", "function": {"name": "lookup", "arguments": '{"key": "six"}'}}
+    turn = {"role": "assistant", "tool_calls": [call]}
     return evaluated(run_id, Outcome.SUBMISSION_FAILURE, None, turn, turn, task_id=task_id)
 
 
-def wrong(run_id: str, answer: str = "13") -> tuple[TaskSpec, GradedRollout]:
+def wrong(run_id: str, answer: str = "13") -> GradedRollout:
     return evaluated(run_id, Outcome.GRADED, 0.0, {"role": "assistant", "content": answer})
 
 
-ROLLOUTS = [
-    evaluated("pass", Outcome.GRADED, 1.0, {"role": "assistant", "content": "12"}),
-    wrong("wrong"),
-    loop("loop"),
-    evaluated("infra", Outcome.INFRA_ERROR, None, {"role": "assistant", "content": "12"}),
-    evaluated(
-        "model-error",
-        Outcome.GRADED,
-        0.0,
-        {"role": "assistant", "content": "1"},
-        failure=RolloutFailure("ConnectionError", {FAILURE_OPERATION: "model"}),
-    ),
-    evaluated(
-        "deadline",
-        Outcome.UNAVAILABLE,
-        None,
-        {"role": "assistant", "content": "Let me count: one, two, three"},
-        failure=RolloutFailure("TimeoutError", {FAILURE_OPERATION: "attempt"}),
-    ),
-]
+def sample_rollouts() -> list[GradedRollout]:
+    return [
+        evaluated("pass", Outcome.GRADED, 1.0, {"role": "assistant", "content": "12"}),
+        wrong("wrong"),
+        loop("loop"),
+        evaluated("infra", Outcome.INFRA_ERROR, None, {"role": "assistant", "content": "12"}),
+        evaluated(
+            "model-error",
+            Outcome.GRADED,
+            0.0,
+            {"role": "assistant", "content": "1"},
+            failure=RolloutFailure("ConnectionError", {FAILURE_OPERATION: "model"}),
+        ),
+        evaluated(
+            "deadline",
+            Outcome.UNAVAILABLE,
+            None,
+            {"role": "assistant", "content": "Let me count: one, two, three"},
+            failure=RolloutFailure("TimeoutError", {FAILURE_OPERATION: "attempt"}),
+        ),
+    ]
 
 
 class Analyst:
@@ -126,11 +132,13 @@ class Analyst:
         return None
 
     async def complete(self, messages: Sequence[Message], policy: LLMPolicy):
+        del messages, policy  # Parameter names match the ModelClient protocol.
         raise AssertionError("the analysis asks only for structured output")
 
     async def complete_structured[T: BaseModel](
         self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
+        del policy
         text = str(messages[-1]["content"])
         self.requests.append(text)
         if output_type is RolloutIdeas:
@@ -191,7 +199,7 @@ def names_and_evidence(ideas) -> list[tuple[str, list[str]]]:
 
 
 def test_each_idea_cites_the_failed_rollouts_of_its_skills_and_becomes_a_catalog_idea(ctx):
-    ideas = analyze(ctx, [*ROLLOUTS, loop("loop-2"), loop("loop-3")]).results
+    ideas = analyze(ctx, [*sample_rollouts(), loop("loop-2"), loop("loop-3")]).results
 
     assert names_and_evidence(ideas) == [
         (STOP_LOOPS.name, ["loop", "loop-2", "loop-3"]),
@@ -234,21 +242,35 @@ def test_an_idea_needs_rollouts_of_two_tasks_unless_one_task_failed(ctx):
 
 
 def test_no_failed_rollout_needs_no_model_call(ctx):
-    assert analyze(ctx, ROLLOUTS[:1], make_client=no_client).results == []
+    assert analyze(ctx, sample_rollouts()[:1], make_client=no_client).results == []
 
 
-def test_the_rollout_shows_the_tools_that_the_task_gave_and_a_malformed_tool_call():
+def test_a_rollout_shows_recorded_options_for_each_conversation_and_a_malformed_tool_call():
     turn = {"role": "assistant", "tool_calls": [{"id": "bad", "type": "function"}]}
-    _, graded = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, turn)
+    options = {"tools": [{"type": "function", "function": {"name": "lookup"}}], "tool_choice": "required"}
+    graded = evaluated("malformed", Outcome.SUBMISSION_FAILURE, None, turn, options=options)
+    first = graded.rollout.conversations[0]
+    revised = replace(
+        first, messages=({"role": "user", "content": "Try another tool."}, turn), options={"tool_choice": "none"}
+    )
+    graded = replace(graded, rollout=replace(graded.rollout, conversations=(first, revised)))
     analyst = Analyst()
 
-    rollout = (arithmetic_task(id="task-malformed", answer_format=AnswerCall()), graded)
-    [maybe] = yield_ideas(rollout, make_client=lambda: analyst, policy=LLMPolicy())
+    [maybe] = yield_ideas(graded, make_client=lambda: analyst, policy=LLMPolicy())
 
-    summary, tools, *messages = analyst.requests[0].splitlines()
-    assert json.loads(summary)["run_id"] == "malformed" and maybe.evidence == {"malformed"}
-    assert [tool["function"]["name"] for tool in json.loads(tools)["tools"]] == ["submit_answer"]
-    assert messages[-1] == '[1] assistant: <tool call> malformed {"id": "bad", "type": "function"}'
+    summary, first_header, first_message, _, revised_header, revised_message, last_message = analyst.requests[
+        0
+    ].splitlines()
+    assert (json.loads(summary)["run_id"], json.loads(summary)["task_id"], maybe.evidence) == (
+        "malformed",
+        "task-malformed",
+        {"malformed"},
+    )
+    assert json.loads(first_header) == {"conversation": 0, "options": options}
+    assert json.loads(revised_header) == {"conversation": 1, "options": {"tool_choice": "none"}}
+    assert "What is six plus six?" in first_message
+    assert "Try another tool." in revised_message
+    assert "malformed" in last_message and "bad" in last_message
 
 
 def test_a_merge_samples_again_after_a_cut_off_reply():
@@ -262,7 +284,7 @@ def test_a_merge_samples_again_after_a_cut_off_reply():
         ideas, make_client=lambda: analyst, max_new_ideas=8, max_ideas_per_merge=100, min_tasks=1, policy=LLMPolicy()
     )
 
-    assert (merged.idea.name, merged.num_rollouts, merged.num_tasks, len(analyst.requests)) == (STOP_LOOPS.name, 2, 2, 3)
+    assert (merged.idea.name, merged.num_rollouts, merged.num_tasks) == (STOP_LOOPS.name, 2, 2)
 
 
 def test_more_ideas_than_one_merge_call_holds_merge_in_rounds_and_keep_their_evidence():

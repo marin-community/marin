@@ -123,7 +123,13 @@ class _Conversation:
             steps = (*steps, replace(self.pending, transition=incomplete))
         prompt = self.trace.prompt if self.unserved_prompt is None else self.unserved_prompt
         return ConversationRecord(
-            tuple(self.messages), prompt, self.trace.response, self.trace.loss_mask, self.trace.logprobs, steps
+            tuple(self.messages),
+            self.options,
+            prompt,
+            self.trace.response,
+            self.trace.loss_mask,
+            self.trace.logprobs,
+            steps,
         )
 
 
@@ -459,7 +465,7 @@ class _Recorder:
         if not self.has_response:
             self.no_response_reason = "Turn deadline expired before the first response"
 
-    def rollout(self, run_id: str, outputs: dict[str, bytes]) -> Rollout:
+    def rollout(self, run_id: str, task_id: str, outputs: dict[str, bytes]) -> Rollout:
         conversations = list(self.earlier)
         if self.conversation is not None:
             conversations.append(self.conversation.record(self._incomplete()))
@@ -468,7 +474,7 @@ class _Recorder:
         metrics = dict(steps[-1].transition.metrics) if steps else {}
         if self.mode == TraceMode.MESSAGES:
             metrics[TRACE_METRIC] = TraceMode.MESSAGES.value
-        return Rollout(run_id, tuple(conversations), self.stop_reason, metrics, outputs)
+        return Rollout(run_id, task_id, tuple(conversations), self.stop_reason, metrics, outputs)
 
 
 async def _run_harness(
@@ -544,7 +550,7 @@ async def harness_rollout(
     async with AsyncExitStack() as resources:
         context = HarnessContext(task, limits, machine, events, _CleanupScope(resources, cleanup), run_id)
         failure = await _run_harness(harness, context, recorder, attempt_deadline=None)
-    rollout = recorder.rollout(run_id, {})
+    rollout = recorder.rollout(run_id, task.id, {})
     if cleanup.errors:
         rollout = replace(rollout, metrics={**rollout.metrics, "cleanup_error_count": float(len(cleanup.errors))})
     if failure is None:
