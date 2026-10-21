@@ -3,6 +3,7 @@
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -189,6 +190,13 @@ def _calculate_bytes_per_token_type(tokenizer: MarinTokenizer) -> Optional[Int[A
     for i in range(vocab_size):
         byte_lengths[i] = byte_length_of_token(tokenizer, i)
 
+    logger.info(
+        "BPB byte table for %s: %d tokens, %d bytes in total, sha256 %s",
+        tokenizer.name_or_path,
+        vocab_size,
+        int(byte_lengths.sum()),
+        hashlib.sha256(byte_lengths.tobytes()).hexdigest()[:16],
+    )
     return jnp.array(byte_lengths)
 
 
