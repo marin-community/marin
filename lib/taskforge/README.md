@@ -67,7 +67,6 @@ with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time a
 and step over JSONL ledgers. The cluster scripts run on Iris and document their submit commands in
 their docstrings: `scripts/build_image_job.py` builds a directory's `DockerBuild` context with
 `taskforge.sandbox.image_builder` and prints the pinned registry digest, and
-`scripts/iris_machine_probe.py` probes the shellbox Iris backend, and
 `scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved from
 a relay job.
 
@@ -95,7 +94,9 @@ source for catalog capabilities, which takes its model, sampling policy and host
 construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a solver
 machine and a research decision, then writes each document under the regex with GLM thinking first.
 `propose_tasks` in the same package proposes the catalog's capabilities from the command line and
-triages each proposal with `preflight`.
+triages each proposal with `preflight`. A slot whose model call runs out of retries or is rejected
+is a `SlotFailure` like any other, so the capability keeps its plan and its other slots; only a
+failed planning call fails the whole capability.
 
 ## Triage
 

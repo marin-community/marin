@@ -33,7 +33,8 @@ After a failed attempt, the client handles the failure by kind:
 The client asks its ``EndpointSource`` for the endpoint when a hold starts, on each hold poll and
 after a connection error, since a moved relay shows up as a refused connection. When the answer
 changes, the client rebuilds the SDK client on the same connection pool and sends the next attempt to
-the new endpoint.
+the new endpoint. ``FixedEndpoint`` supplies one endpoint throughout; ``RelayEndpoint`` looks up the
+endpoint an Iris GLM relay job registers, from inside an Iris task.
 
 vLLM's GLM tool parser reports a reply cut off by ``max_tokens`` inside a tool call as
 ``finish_reason == "tool_calls"`` with partial arguments (measured live). The client reports a
@@ -62,6 +63,8 @@ from typing import Any, Protocol, Self
 
 import httpx
 import openai
+from iris.client.client import iris_ctx
+from iris.cluster.types import JobName
 from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionChunk
@@ -93,6 +96,8 @@ from taskforge.llm.structured import complete_structured, response_format
 
 logger = logging.getLogger(__name__)
 
+GLM_MODEL = "glm-5.3"
+"""The model id the router serves, and the name a GLM relay job registers its endpoint under."""
 API_ROOT = "/v1"
 """The path suffix of an OpenAI-compatible base URL. The router serves ``/health`` at the URL without it."""
 CONTEXT_LIMIT_PATTERN = re.compile(r"maximum context length is (\d+) tokens")
@@ -151,6 +156,35 @@ class FixedEndpoint:
 
     def current(self) -> GlmEndpoint:
         return self.endpoint
+
+
+@dataclass(frozen=True)
+class RelayEndpoint:
+    """The endpoint an Iris GLM relay job registers, looked up through the current Iris task's client.
+
+    The client calls ``current`` at construction, then again only while it recovers from a missing
+    route, an empty pool or a refused connection, so it follows a relay that moved. Requests in
+    normal operation skip the lookup, which works only inside an Iris task.
+    """
+
+    relay_job: str
+    token: str = field(repr=False)
+    pool: Pool
+
+    def current(self) -> GlmEndpoint:
+        """Resolve the relay's first registered endpoint, with its base URL ending in ``/v1``.
+
+        Raises:
+            RuntimeError: the Iris context has no client, or the relay has no registered endpoint.
+        """
+        client = iris_ctx().client
+        if client is None:
+            raise RuntimeError("Iris client is unavailable inside the task")
+        endpoints = client.resolver_for_job(JobName.from_string(self.relay_job)).resolve(GLM_MODEL).endpoints
+        if not endpoints:
+            raise RuntimeError(f"The GLM relay {self.relay_job} has no registered endpoint")
+        base_url = endpoints[0].url.rstrip("/")
+        return GlmEndpoint(base_url if base_url.endswith(API_ROOT) else f"{base_url}{API_ROOT}", self.token, self.pool)
 
 
 class _AttemptFailed(Exception):

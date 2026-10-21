@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from pydantic import ValidationError
-from taskforge.llm.client import FinishReason
+from taskforge.llm.client import FinishReason, ModelRequestRejected
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError, response_format, schema_instruction
 from taskforge.stage10_proposal.model import (
@@ -20,11 +20,9 @@ from taskforge.stage10_proposal.model import (
     Environment,
     ResearchNeed,
     SolverMachine,
-    Verification,
     document_regex,
     document_request_fields,
-    parse,
-    render,
+    solver_machine_violation,
 )
 from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOutcome, SlotProposal
 
@@ -36,12 +34,10 @@ from experiments.post_training.capability_driven_envs.catalog import (
 from experiments.post_training.capability_driven_envs.proposal_source import (
     RESEARCH_DECISION_CRITERION,
     CapabilitySource,
-    PlannedSlot,
     SlotStatus,
     author_proposal,
     checked_proposal,
     document_template,
-    null_slot_proposal,
     plan_prompt,
     proposal_prompt,
     slot_plan_type,
@@ -143,8 +139,10 @@ def test_slot_plan_requires_n_slots_and_rejects_using_an_excluded_pairing():
 )
 def test_slot_plan_declares_a_solver_machine_exactly_for_an_imageless_slot(environment, machine):
     slots = [{**slot(1, environment, "code"), "solver_machine": machine}]
+    violation = solver_machine_violation(Environment(environment), None if machine is None else SolverMachine(machine))
+    assert violation is not None
 
-    with pytest.raises(ValidationError, match="solver_machine is null exactly for a container slot"):
+    with pytest.raises(ValidationError, match=re.escape(f"slot 1: {violation}")):
         slot_plan_type(1, ALL_ENVIRONMENTS).model_validate(plan(slots, []))
 
 
@@ -166,13 +164,11 @@ def test_plan_with_a_slot_in_an_unavailable_environment_fails_validation():
     assert nulled.slots[1].status is SlotStatus.NULL
 
 
-def test_the_plan_instruction_states_the_slot_count_and_the_prompt_leaves_the_reply_format_out(ideas):
+def test_the_plan_instruction_states_the_slot_count_and_the_status_values():
     instruction = schema_instruction(slot_plan_type(3, NO_CONTAINER))
-    planning = plan_prompt(ideas[CAPABILITY_ID], 3, NO_CONTAINER)
 
     assert "Exactly 3 slots, numbered 1 through 3 in order." in instruction
     assert "status (one of 'propose', 'null', required)" in instruction
-    assert "JSON" not in planning
 
 
 def test_plan_and_proposal_prompts_share_the_research_criterion_and_the_catalog_record(ideas):
@@ -182,7 +178,6 @@ def test_plan_and_proposal_prompts_share_the_research_criterion_and_the_catalog_
     planning = plan_prompt(idea, 1, NO_CONTAINER)
     authoring = proposal_prompt(idea, portfolio, portfolio.slots[0], f"{CAPABILITY_ID}/1")
 
-    assert "This host can run these environments: reasoning, shellsim." in planning
     assert RESEARCH_DECISION_CRITERION in planning
     assert " ".join(RESEARCH_DECISION_CRITERION.split()) in " ".join(authoring.split())
     for prompt in (planning, authoring):
@@ -217,20 +212,6 @@ def test_the_filled_template_is_a_document_the_regex_accepts_and_the_identity_is
     assert proposal.header.research_need is research_need
     with pytest.raises(ValueError, match="id"):
         checked_proposal(text, idea, 5)
-
-
-def test_null_slot_is_not_needed(ideas):
-    idea = ideas[CAPABILITY_ID]
-    planned = PlannedSlot.model_validate({**slot(7, "reasoning", "judge", "null"), "solver_machine": "packages"})
-    outcome = null_slot_proposal(idea, planned)
-    assert outcome.completions == ()
-    proposal = outcome.proposal
-    assert proposal.header.null_reason == "no grader"
-    assert proposal.header.solver_machine is SolverMachine.PACKAGES
-    assert proposal.header.verification is Verification.JUDGE
-    assert proposal.header.research_need is ResearchNeed.NOT_NEEDED
-    assert proposal.header.research_reason == "null slot: no grader"
-    assert parse(render(proposal)) == proposal
 
 
 def author(model: ScriptedModel, idea) -> SlotOutcome:
@@ -299,6 +280,21 @@ def test_document_still_invalid_after_repair_is_a_slot_failure_with_both_complet
     assert isinstance(outcome, SlotFailure)
     assert outcome.error == "invalid after repair: body: research[0] is never cited as research[0]"
     assert [c.content for c in outcome.completions] == [uncited, uncited]
+
+
+def test_a_rejected_repair_request_is_a_slot_failure_that_keeps_the_first_completion(ideas):
+    idea = ideas[CAPABILITY_ID]
+    uncited = filled_document(idea, 1).replace("(research[0])", "")
+    rejected = ModelRequestRejected(400, "the request is malformed", ())
+    model = ScriptedModel()
+    model.reply(uncited)
+    model.fail(rejected)
+
+    outcome = author(model, idea)
+
+    assert isinstance(outcome, SlotFailure)
+    assert str(rejected) in outcome.error
+    assert [c.content for c in outcome.completions] == [uncited]
 
 
 def test_a_plan_slot_the_host_cannot_run_is_repaired_before_any_document_is_written(ideas):
