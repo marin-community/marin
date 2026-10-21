@@ -38,7 +38,7 @@ terminal_bench:
     env_network_policy:
       mode: unrestricted
     max_retries: 3
-    n_concurrent_trials: 32
+    n_concurrent_trials: 512
     enable_reward_shaping: false
     enable_error_classification: true
     default_error_treatment: zero
@@ -119,7 +119,6 @@ generator:
   num_inference_engines: 2
   n_samples_per_prompt: 4
   gpu_memory_utilization: 0.8
-  max_num_seqs: 16
   max_num_batched_tokens: 16384
   enable_prefix_caching: true
   enable_chunked_prefill: true
