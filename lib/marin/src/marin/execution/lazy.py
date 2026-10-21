@@ -304,12 +304,8 @@ def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
 
 
 def _output_path_spec(handle: "ArtifactStep") -> str:
-    """The relative output path StepSpec should use: the pin if set, else ``{name}/{version}``."""
-    if handle.override_path is not None:
-        return handle.override_path
-    if handle.output_path_route is not None:
-        return handle.path()
-    return f"{handle.name}/{handle.version}"
+    """The pin if set, else ``{name}/{version}`` relative to the step's output prefix."""
+    return handle.override_path or f"{handle.name}/{handle.version}"
 
 
 def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepSpec] | None = None) -> StepSpec:
@@ -411,6 +407,7 @@ def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepS
     step_fn = replace(handle.run, fn=fn) if isinstance(handle.run, RemoteCallable) else fn
     spec = StepSpec(
         name=handle.name,
+        output_path_prefix=handle.output_path_route(marin_prefix()) if handle.output_path_route is not None else None,
         override_output_path=_output_path_spec(handle),
         deps=dep_specs,
         hash_attrs=hash_attrs,
