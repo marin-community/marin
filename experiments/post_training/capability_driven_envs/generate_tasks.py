@@ -32,33 +32,24 @@ connection, following a relay that moved.
 """
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
-import signal
-import sys
-import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import click
-from pydantic import ValidationError
 from rigging.log_setup import configure_logging
-from taskcompendium.models import TaskSpec
+from taskforge.capability import FILE_SAFE_ID, CapabilityIdea
 from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
+from taskforge.task_program import PROGRAM_FILE, TASK_FILE, ProgramRun, run_program
 
-from experiments.post_training.capability_driven_envs.catalog import (
-    FILE_SAFE_ID,
-    CapabilityIdea,
-    example_catalog_path,
-    load_capability_ideas,
-)
+from experiments.post_training.capability_driven_envs.catalog import example_catalog_path, load_capability_ideas
 from experiments.post_training.capability_driven_envs.program_prompt import (
     ProgramSubmission,
     program_messages,
@@ -75,13 +66,8 @@ logger = logging.getLogger(__name__)
 GLM_HIGH_TOKEN_ENV = "GLM_HIGH_TOKEN"
 POOL_TOKEN_ENV = {Pool.BULK: GLM_BULK_TOKEN_ENV, Pool.HIGH: GLM_HIGH_TOKEN_ENV}
 """The environment variable holding each pool's bearer token; the token selects the pool."""
-PROGRAM_FILE = "program.py"
-TASK_FILE = "task.json"
 SUMMARY_FILE = "summary.json"
 TASK_STATUS = "task"
-PROGRAM_ENV = {"PATH": os.defpath}
-"""The program's entire environment, ``PATH`` alone, so the driver's variables and credentials stay in the driver."""
-
 GLM_PROVIDER = LLMProviderConfig(
     model=GLM_MODEL,
     max_attempts=8,
@@ -95,22 +81,6 @@ GLM_PROVIDER = LLMProviderConfig(
 )
 
 
-# NOTE: The driver holds stdout and stderr in memory and writes them into run.json, so a program printing
-# without limit can exhaust memory. Truncate them or stream them to files if that happens.
-@dataclass(frozen=True)
-class ProgramRun:
-    """A run of a task program.
-
-    ``exit_code`` is None after a timeout. ``failure`` is None exactly when ``task`` is set.
-    """
-
-    exit_code: int | None
-    stdout: str
-    stderr: str
-    task: TaskSpec | None
-    failure: str | None
-
-
 @dataclass(frozen=True)
 class GeneratedTask:
     """A workpiece's request and completions, with the program and its run when GLM submitted a valid program."""
@@ -121,47 +91,6 @@ class GeneratedTask:
     source: str | None
     run: ProgramRun | None
     failure: str | None
-
-
-async def run_program(source: str, task_id: str, timeout: float) -> ProgramRun:
-    """Run ``source`` as ``python3 program.py <task_id> <output path>`` and parse the TaskSpec it writes.
-
-    The program starts in a new session. On timeout the driver kills the whole process group, taking
-    the program's own children down with it.
-    """
-    with tempfile.TemporaryDirectory(prefix="task-program-") as workdir:
-        program, output = Path(workdir) / PROGRAM_FILE, Path(workdir) / TASK_FILE
-        program.write_text(source)
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            str(program),
-            task_id,
-            str(output),
-            cwd=workdir,
-            env=PROGRAM_ENV,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
-        except TimeoutError:
-            # The group may have exited between the timeout and the kill; that is still a timeout.
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            await process.wait()
-            return ProgramRun(None, "", "", None, f"the program did not finish within {timeout}s")
-        code = process.returncode
-        out, err = stdout.decode(errors="replace"), stderr.decode(errors="replace")
-        if code != 0:
-            return ProgramRun(code, out, err, None, f"the program exited with status {code}")
-        if not output.is_file():
-            return ProgramRun(code, out, err, None, "the program wrote no file at the output path")
-        try:
-            task = TaskSpec.model_validate_json(output.read_bytes())
-        except ValidationError as error:
-            return ProgramRun(code, out, err, None, f"the output is not a TaskSpec: {error}")
-        return ProgramRun(code, out, err, task, None)
 
 
 async def generate_task(
