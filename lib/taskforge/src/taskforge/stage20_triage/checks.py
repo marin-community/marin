@@ -3,42 +3,36 @@
 
 """Deterministic proposal checks, what triage's preflight decides on (``preflight.preflight``).
 
-Each check reports PASS (the property holds), FAIL (it does not; a fact about the document, not an
-opinion), or SKIP (the property does not apply to this proposal). SKIP never counts as PASS. A FATAL
-failure rejects the proposal; an ADVISORY failure is recorded on the verdict and decides nothing.
+The checks read what ``stage10_proposal.model.parse`` leaves open: the header's validity is
+``parse``'s job and holds for every proposal that reaches triage. ``required_sections`` is FATAL;
+``grader_matches_verification``, ``research_has_purpose`` and ``resources_in_build_plan`` are ADVISORY.
+
+Each check reports PASS (the property holds), FAIL (it does not), or SKIP (the property does not
+apply to this proposal, such as a body check on a null proposal or a resource check on a proposal
+with no resources). SKIP never counts as PASS. A FATAL failure rejects the proposal; an ADVISORY
+failure is recorded on the verdict and decides nothing.
 
 Every check carries a comment recording the false positives and false negatives it is expected to
 have, so a reader knows how far to trust a FAIL. Grounded proposals (``Grounding.GROUNDED``) run
 the same checks; none yet verifies their citations against the cited repository.
 """
 
-import itertools
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Protocol
 
-from taskforge.stage10_proposal.model import (
-    REQUIRED_HEADINGS,
-    Environment,
-    ProposalFormatError,
-    TaskProposal,
-    Verification,
-    body_sections,
-    parse,
-    render,
-    solver_machine_violation,
-)
+from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, Verification, body_sections
 
 GRADER_HEADING = "Grader design and controls"
 BUILD_HEADING = "Build plan"
 MIN_SECTION_WORDS = 40
 MIN_PURPOSE_WORDS = 5
-MIN_NULL_REASON_WORDS = 5
 # The template's section placeholder; angle-bracket answer formats such as "<yes|no>" are legitimate.
 SECTION_PLACEHOLDER = re.compile(r"<\s*(?:\.\.\.|\u2026)\s*>")
+# A header value that is still one template "<...>" slot, such as "<what to find and why>", not content.
+VALUE_PLACEHOLDER = re.compile(r"<[^<>]*>")
 GLOB_CHARACTERS = "*?["
 
 CODE_FILE = re.compile(r"\.(?:py|sh|js|ts|rs|go|rb|jl)\b")
@@ -54,8 +48,6 @@ RUBRIC = re.compile(r"\brubric\b|\bjudge[ds]?\b|\bcriteri(?:on|a)\b", re.IGNOREC
 SIMPLE_MATCH = re.compile(
     r"\bexact\b|\bmatch(?:es|ing)?\b|\btolerance\b|\bnumeric(?:al)?\b|\bnormali[sz]", re.IGNORECASE
 )
-
-ALL_COMBINATIONS = frozenset(itertools.product(Environment, Verification))
 
 
 class Severity(StrEnum):
@@ -82,40 +74,19 @@ class CheckResult:
         return self.status is CheckStatus.FAIL and self.severity is Severity.FATAL
 
 
-@dataclass(frozen=True)
-class CheckContext:
-    """What checks need beyond the proposal.
-
-    Attributes:
-        allowed_combinations: Environment x verification pairings the downstream stages accept.
-    """
-
-    allowed_combinations: frozenset[tuple[Environment, Verification]]
-
-
-class Check(Protocol):
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def severity(self) -> Severity: ...
-
-    def run(self, p: TaskProposal, ctx: CheckContext) -> CheckResult: ...
-
-
 Outcome = tuple[CheckStatus, str]
 
 
 @dataclass(frozen=True)
 class RuleCheck:
-    """A ``Check`` whose logic is a function returning a status and its reason."""
+    """A named check whose logic is a function returning a status and its reason."""
 
     name: str
     severity: Severity
-    rule: Callable[[TaskProposal, CheckContext], Outcome]
+    rule: Callable[[TaskProposal], Outcome]
 
-    def run(self, p: TaskProposal, ctx: CheckContext) -> CheckResult:
-        status, reason = self.rule(p, ctx)
+    def run(self, p: TaskProposal) -> CheckResult:
+        status, reason = self.rule(p)
         return CheckResult(name=self.name, severity=self.severity, status=status, reason=reason)
 
 
@@ -127,58 +98,6 @@ def word_count(text: str) -> int:
     return len(text.split())
 
 
-def is_template_placeholder(value: str) -> bool:
-    """Whether a header value is still the template's "<...>" slot rather than content."""
-    return value.startswith("<") and value.endswith(">")
-
-
-# Expected false positives: none for documents produced by ``parse``; this fires on proposals built
-# in code (or edited after parsing) whose canonical rendering no longer parses or no longer means the
-# same thing, and on resource paths that escape the build root. Expected false negatives: anything
-# the strict parser accepts, e.g. a well-formed id that names the wrong slot.
-def header_schema_valid(p: TaskProposal, ctx: CheckContext) -> Outcome:
-    try:
-        reparsed = parse(render(p))
-    except ProposalFormatError as error:
-        return CheckStatus.FAIL, f"canonical rendering does not parse: {error}"
-    if reparsed.header != p.header:
-        return CheckStatus.FAIL, "header changes when rendered and re-parsed"
-    escaping = [r for r in p.header.resources if PurePosixPath(r).is_absolute() or ".." in PurePosixPath(r).parts]
-    if escaping:
-        return CheckStatus.FAIL, f"resources must be relative paths inside the build root: {escaping}"
-    names = [item.name for item in p.header.build]
-    duplicates = sorted({n for n in names if names.count(n) > 1})
-    if duplicates:
-        return CheckStatus.FAIL, f"build names repeat: {duplicates}"
-    return CheckStatus.PASS, "header renders and re-parses to the same value"
-
-
-# Expected false positives: none; the allowed set is configuration, so a FAIL means the caller's
-# stages cannot take this pairing. Expected false negatives: a pairing that is allowed in general but
-# wrong for this task (a judge where an exact match suffices), which no check here can judge. Null
-# proposals SKIP: they build nothing, so their pairing is moot.
-def combination_allowed(p: TaskProposal, ctx: CheckContext) -> Outcome:
-    if is_null(p):
-        return CheckStatus.SKIP, "null proposal"
-    pair = (p.header.environment, p.header.verification)
-    if pair not in ctx.allowed_combinations:
-        return CheckStatus.FAIL, f"{pair[0]} x {pair[1]} is not an allowed combination"
-    return CheckStatus.PASS, f"{pair[0]} x {pair[1]} is allowed"
-
-
-# Expected false positives: none; the rule is ``stage10_proposal.model.solver_machine_violation``,
-# the one ``parse`` enforces, so only a proposal built in code (or edited after parsing) fails it.
-# Expected false negatives: a machine that fits the environment but cannot run the task (ShellSim for
-# a task that needs a real clock), and a machine the host cannot provide, which is the host's failure
-# and not the proposal's: the build stage checks it before any model call.
-def solver_machine_fits(p: TaskProposal, ctx: CheckContext) -> Outcome:
-    violation = solver_machine_violation(p.header.environment, p.header.solver_machine)
-    if violation is not None:
-        return CheckStatus.FAIL, violation
-    machine = "no machine" if p.header.solver_machine is None else f"solver_machine {p.header.solver_machine}"
-    return CheckStatus.PASS, f"{machine} fits a {p.header.environment} proposal"
-
-
 # Keyword evidence in the grader section (and, for executable checks, a code file among the
 # resources). Expected false positives: a section that describes mechanical checks in none of the
 # EXECUTABLE_CHECK words, or a rubric only as "scored items". The vocabulary goes beyond
@@ -187,7 +106,7 @@ def solver_machine_fits(p: TaskProposal, ctx: CheckContext) -> Outcome:
 # Expected false negatives: the vocabulary is broad ("parse", "criteria"), so a judge-only design
 # that parses the answer passes as code, and keywords cannot read negation ("no rubric is used").
 # Advisory for that reason.
-def grader_matches_verification(p: TaskProposal, ctx: CheckContext) -> Outcome:
+def grader_matches_verification(p: TaskProposal) -> Outcome:
     if is_null(p):
         return CheckStatus.SKIP, "null proposal"
     grader = body_sections(p.body).get(GRADER_HEADING)
@@ -212,7 +131,7 @@ def grader_matches_verification(p: TaskProposal, ctx: CheckContext) -> Outcome:
 # task's Build plan can be a few lines); MIN_SECTION_WORDS is set well below what GLM writes (its
 # documents run 20-30 KB). A FAIL on a template placeholder such as "<...>" is never a false positive.
 # Expected false negatives: long but empty prose. Null proposals SKIP: their body may be abbreviated.
-def required_sections(p: TaskProposal, ctx: CheckContext) -> Outcome:
+def required_sections(p: TaskProposal) -> Outcome:
     if is_null(p):
         return CheckStatus.SKIP, "null proposal"
     sections = body_sections(p.body)
@@ -233,13 +152,13 @@ def required_sections(p: TaskProposal, ctx: CheckContext) -> Outcome:
 # Expected false positives: a terse but real purpose ("CODATA constants table") under
 # MIN_PURPOSE_WORDS. Expected false negatives: a long purpose that is vague. A proposal with no
 # research items SKIPs: needing no lookup is legitimate for synthetic tasks.
-def research_has_purpose(p: TaskProposal, ctx: CheckContext) -> Outcome:
+def research_has_purpose(p: TaskProposal) -> Outcome:
     if not p.header.research:
         return CheckStatus.SKIP, "no research items"
     weak = [
         f"research[{i}]"
         for i, item in enumerate(p.header.research)
-        if is_template_placeholder(item.purpose) or word_count(item.purpose) < MIN_PURPOSE_WORDS
+        if VALUE_PLACEHOLDER.fullmatch(item.purpose) or word_count(item.purpose) < MIN_PURPOSE_WORDS
     ]
     if weak:
         return (
@@ -271,7 +190,7 @@ def resource_mentions(resource: str) -> tuple[str, ...]:
 # rather than by path or file name. Expected false negatives: a common file name (README.md,
 # task.md) mentioned in the build plan for a different file, and globs whose directory is mentioned
 # for another reason. Advisory: a missing reference is a specificity gap, not an invalid task.
-def resources_in_build_plan(p: TaskProposal, ctx: CheckContext) -> Outcome:
+def resources_in_build_plan(p: TaskProposal) -> Outcome:
     if not p.header.resources:
         return CheckStatus.SKIP, "no resources declared"
     build_plan = body_sections(p.body).get(BUILD_HEADING)
@@ -286,39 +205,13 @@ def resources_in_build_plan(p: TaskProposal, ctx: CheckContext) -> Outcome:
     return CheckStatus.PASS, f"all {len(p.header.resources)} resources named in the build plan"
 
 
-# Expected false positives: a null proposal that keeps a research or build note explaining why the
-# slot failed; the format asks for empty lists, so this is a format violation, not an opinion.
-# Expected false negatives: a reason of five or more words that is still not substantive. Non-null
-# proposals SKIP.
-def null_reason_only(p: TaskProposal, ctx: CheckContext) -> Outcome:
-    if not is_null(p):
-        return CheckStatus.SKIP, "not a null proposal"
-    h = p.header
-    reason = h.null_reason
-    assert reason is not None
-    extras = [
-        name for name, value in (("research", h.research), ("build", h.build), ("resources", h.resources)) if value
-    ]
-    if extras:
-        return CheckStatus.FAIL, f"null proposal still declares {extras}"
-    if word_count(reason) < MIN_NULL_REASON_WORDS:
-        return CheckStatus.FAIL, f"null_reason has fewer than {MIN_NULL_REASON_WORDS} words: {reason!r}"
-    return CheckStatus.PASS, "null proposal carries a reason and nothing else"
-
-
-CHECKS: tuple[Check, ...] = (
-    RuleCheck("header_schema_valid", Severity.FATAL, header_schema_valid),
-    RuleCheck("combination_allowed", Severity.FATAL, combination_allowed),
-    RuleCheck("solver_machine_fits", Severity.FATAL, solver_machine_fits),
-    RuleCheck("grader_matches_verification", Severity.ADVISORY, grader_matches_verification),
+CHECKS: tuple[RuleCheck, ...] = (
     RuleCheck("required_sections", Severity.FATAL, required_sections),
+    RuleCheck("grader_matches_verification", Severity.ADVISORY, grader_matches_verification),
     RuleCheck("research_has_purpose", Severity.ADVISORY, research_has_purpose),
     RuleCheck("resources_in_build_plan", Severity.ADVISORY, resources_in_build_plan),
-    RuleCheck("null_reason_only", Severity.FATAL, null_reason_only),
 )
 
-CHECKS_BY_NAME: Mapping[str, Check] = {c.name: c for c in CHECKS}
 
-
-def run_checks(p: TaskProposal, checks: Sequence[Check], ctx: CheckContext) -> tuple[CheckResult, ...]:
-    return tuple(check.run(p, ctx) for check in checks)
+def run_checks(p: TaskProposal, checks: Sequence[RuleCheck]) -> tuple[CheckResult, ...]:
+    return tuple(check.run(p) for check in checks)
