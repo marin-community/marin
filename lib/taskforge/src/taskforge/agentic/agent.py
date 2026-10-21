@@ -80,7 +80,7 @@ class AgentResult:
 
 
 async def generate_tasks(idea: CapabilityIdea, n: int, config: AgenticConfig) -> AgentResult:
-    """Make up to ``n`` different tasks for ``idea``. A session that makes fewer gives a report that says why."""
+    """Make up to ``n`` different tasks for ``idea`` with one agent session."""
     tools = TaskforgeTools(idea, n, config)
     harness = ShellHarness(
         command_timeout=config.command_timeout, output_limit_bytes=SHELL_OUTPUT_BYTES, tools={AGENT_TOOLS: tools}
