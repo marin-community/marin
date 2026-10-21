@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Run Iris integration tests against the always-on CoreWeave CI cluster.
+# Run the Marin integration pipeline against the always-on CoreWeave CI cluster.
 #
 # Prerequisites:
 #   - ~/.kube/coreweave-iris kubeconfig exists
-#   - R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY set (for S3-backed tests)
+#   - CW_KEY_ID / CW_KEY_SECRET set (for S3-backed tests)
 #
 # Usage:
-#   ./scripts/iris/run_smoke_cw.sh              # run integration tests
-#   ./scripts/iris/run_smoke_cw.sh --full       # also run the full pipeline test
+#   ./scripts/iris/run_smoke_cw.sh
 
 set -euo pipefail
 
@@ -29,7 +28,7 @@ kubectl port-forward -n "$NAMESPACE" "svc/${SVC}" "${LOCAL_PORT}:10000" &
 PF_PID=$!
 trap 'kill $PF_PID 2>/dev/null || true' EXIT
 
-CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
+export IRIS_CONTROLLER_URL="http://localhost:${LOCAL_PORT}"
 
 HEALTHY=false
 for i in $(seq 1 30); do
@@ -37,7 +36,7 @@ for i in $(seq 1 30); do
         echo "ERROR: port-forward process died" >&2
         exit 1
     fi
-    if curl -sf "${CONTROLLER_URL}/health" > /dev/null 2>&1; then
+    if curl -sf "${IRIS_CONTROLLER_URL}/health" > /dev/null 2>&1; then
         HEALTHY=true
         break
     fi
@@ -47,33 +46,22 @@ if [ "$HEALTHY" != "true" ]; then
     echo "ERROR: controller did not become healthy" >&2
     exit 1
 fi
-echo "Controller healthy at ${CONTROLLER_URL}"
+echo "Controller healthy at ${IRIS_CONTROLLER_URL}"
 
 # --- S3 env setup ---
-if [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ]; then
-    export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
-    export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-    export AWS_ENDPOINT_URL="https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"
-    export FSSPEC_S3="{\"endpoint_url\": \"${AWS_ENDPOINT_URL}\"}"
-    export MARIN_CI_S3_PREFIX="s3://marin-na/tmp/ttl=3d/ci"
-fi
+export AWS_ACCESS_KEY_ID="${CW_KEY_ID:?CW_KEY_ID must be set}"
+export AWS_SECRET_ACCESS_KEY="${CW_KEY_SECRET:?CW_KEY_SECRET must be set}"
+export AWS_ENDPOINT_URL="https://cwobject.com"
+export FSSPEC_S3="{\"endpoint_url\": \"${AWS_ENDPOINT_URL}\", \"client_kwargs\": {\"region_name\": \"auto\"}, \"config_kwargs\": {\"s3\": {\"addressing_style\": \"virtual\"}}}"
+export MARIN_CI_S3_PREFIX="s3://marin-us-east-08a/tmp/ttl=3d/ci"
 
 export WANDB_MODE=disabled
 export JAX_TRACEBACK_FILTERING=off
 
-# --- Run tests ---
-echo "=== Running integration tests ==="
+# --- Run pipeline ---
+echo "=== Running Marin integration pipeline ==="
 cd "$REPO_ROOT"
-uv run pytest tests/integration/iris/ \
-    --controller-url "$CONTROLLER_URL" \
-    -v --tb=short --timeout=600 \
-    -o "addopts=" \
-    -x
-
-if [ "${1:-}" = "--full" ]; then
-    echo "=== Running full integration pipeline ==="
-    timeout 600 uv run tests/integration_test.py \
-        --controller-url "$CONTROLLER_URL"
-fi
+timeout 1800 uv run pytest tests/test_integration_test.py \
+    -m integration -o "addopts=" --timeout=900 -v -s
 
 echo "=== Done ==="

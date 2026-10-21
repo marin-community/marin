@@ -1,0 +1,12 @@
+version = "1.0"
+
+[metadata]
+
+[agent]
+timeout_sec = 120.0
+
+[verifier]
+timeout_sec = 120.0
+
+[environment]
+allow_internet = false

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trace Pulumi Diff"
+  short_description: "Trace pending Pulumi changes to merged PRs"
+  default_prompt: "Use $trace-pulumi-diff to preview a Marin stack and identify the pull requests responsible for each pending change."

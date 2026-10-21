@@ -12,16 +12,18 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler, Table
-from rigging.auth import BearerTokenInjector, StaticTokenProvider
+from rigging.auth import BearerTokenInjector, RefreshingTokenProvider
 from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.config import WorkerConfig as WorkerWireConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
+    DEFAULT_PROFILE_DURATION_SECONDS,
     build_profile_row,
     profile_local_process,
 )
@@ -39,6 +41,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
+from iris.cluster.worker.auth import worker_token_provider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
@@ -87,6 +90,7 @@ class WorkerConfig:
     capacity_type: CapacityType | None = None
     cpu_millicores: int = 0
     storage_prefix: str = ""
+    task_outputs: TaskOutputPolicy | None = None
     auth_token: str = ""
 
 
@@ -127,6 +131,7 @@ def worker_config_from_wire(
         capacity_type=wire.capacity_type,
         cpu_millicores=wire.cpu_millicores,
         storage_prefix=wire.storage_prefix,
+        task_outputs=wire.task_outputs.model_copy(deep=True) if wire.task_outputs is not None else None,
         auth_token=wire.auth_token,
     )
 
@@ -145,7 +150,7 @@ class Worker:
         worker_metadata: job_pb2.WorkerMetadata | None = None,
         log_client: LogClient | None = None,
         profile_interval: Duration = Duration.from_seconds(600),
-        profile_duration_seconds: int = 10,
+        profile_duration_seconds: int = DEFAULT_PROFILE_DURATION_SECONDS,
     ):
         self._config = config
         self._profile_interval = profile_interval
@@ -204,6 +209,7 @@ class Worker:
         # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
         # case where the controller assigns the id is handled by re-attaching
         # post-register.
+        self._token_provider: RefreshingTokenProvider | None = None
         self._log_client: LogClient | None = log_client
         self._log_handler: RemoteLogHandler | None = None
         # Stats tables are registered as soon as a LogClient is available.
@@ -256,7 +262,12 @@ class Worker:
         #      worker. Lifecycle thread is spawned last for that reason.
         interceptors: tuple[BearerTokenInjector, ...] = ()
         if self._config.controller_address and self._config.auth_token:
-            interceptors = (BearerTokenInjector(StaticTokenProvider(self._config.auth_token), "authorization"),)
+            self._token_provider = worker_token_provider(
+                self._config.controller_address,
+                self._config.auth_token,
+                self._cache_dir,
+            )
+            interceptors = (BearerTokenInjector(self._token_provider, "authorization"),)
 
         if self._config.controller_address:
             if self._log_client is None:
@@ -310,6 +321,9 @@ class Worker:
             lambda: self._server.started,
             timeout=Duration.from_seconds(5.0),
         )
+
+        if self._token_provider is not None:
+            self._threads.spawn(target=self._token_provider.run, name="credential-renewal")
 
         # Start lifecycle thread: register + serve + reset loop
         if self._config.controller_address:
@@ -372,6 +386,8 @@ class Worker:
                 log_client=self._log_client,
                 port_allocator=self._port_allocator,
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
+                task_outputs=self._config.task_outputs,
+                task_env=self._config.task_env,
             )
 
             with self._lock:
@@ -754,6 +770,7 @@ class Worker:
             port_allocator=self._port_allocator,
             log_client=self._log_client,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
+            task_outputs=self._config.task_outputs,
         )
 
         with self._lock:
@@ -1007,7 +1024,10 @@ class Worker:
             exit_code=task.exit_code or 0,
             error=task.error or "",
             container_id=task.platform_container_id or "",
+            status_message=task.status_message or "",
         )
+        if task.output_archive is not None:
+            obs.output_archive.CopyFrom(task.output_archive)
         if task.status in self._TERMINAL_STATES and task.finished_at is not None:
             obs.finished_at.CopyFrom(timestamp_to_proto(task.finished_at))
         return obs

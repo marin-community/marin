@@ -3,29 +3,42 @@
 
 """Evaluate configured tasks through an OpenAI-compatible endpoint.
 
-Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG`` (the parent builds it in
-:mod:`marin.evaluation.evalchemy.runner`), so nothing else in Marin needs to import here.
-Each task runs through the evalchemy fork's ``evalchemy`` CLI once (one invocation per task so each
-carries its own ``num_fewshot``) with lm-eval's ``local-completions`` (or ``local-chat-completions``)
-API model pointed at the served URL. Its ``results_*.json`` tree is uploaded to ``out_path/<dir>/``
-for :class:`~marin.evaluation.evalchemy.result.EvalchemyResult` to read back. ``out_path`` is an
-object-store URL the parent resolved under ``marin_prefix()``; for an ``s3://`` destination the pod's
-injected ``FSSPEC_S3`` (endpoint + virtual-host addressing) is applied by fsspec automatically.
+Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG``; the parent builds it in
+:mod:`marin.evaluation.evalchemy.runner`. Each task runs through the vendored ``evalchemy``
+CLI once (one invocation per task so each carries its own ``num_fewshot``) with lm-eval's
+``local-completions`` (or ``local-chat-completions``) API model pointed at the served URL. Evalchemy
+writes result documents and normalized sample rows directly to FineStore tables at ``out_path``.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
 import sys
-import tempfile
 import urllib.request
+from importlib.util import find_spec
 from pathlib import Path
 
-import fsspec
+from finestore.reader import ReadView
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
+# Historical result-tree readers still use these names for pre-FineStore artifacts.
+EVALCHEMY_RESULTS_PREFIX = "results_"
+EVALCHEMY_RESULTS_SUFFIX = ".json"
+_EVALCHEMY_RESULTS_TABLE = "evalchemy_results"
+EVALCHEMY_REQUEST_TIMEOUT_SECONDS = 1800
+_REQUEST_TIMEOUT = EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+
+# Without a configured cap, an lm-eval-native generation task gets the served context minus this
+# prompt reserve, so the model config's context window sets its budget the way Evalchemy's own
+# derivation does for its chat benchmarks. Few-shot prompts on these tasks (5-shot TriviaQA, 3-shot
+# DROP) stay well inside it; lm-eval would otherwise fall back to its 256-token API default.
+_NATIVE_PROMPT_RESERVE = 4096
+
+# Smallest budget either context-derived clamp will request.
+_MIN_GENERATION_BUDGET = 256
 
 # vLLM returns HTTP 400 when prompt_tokens + max_tokens exceeds the served context window. Reserve
 # this many tokens for the prompt when shrinking a generation budget to fit a small served context.
@@ -38,16 +51,61 @@ _CONTEXT_PROMPT_RESERVE = 1024
 _CONTEXT_MARGIN = 64
 
 
-def generation_budget(max_gen_toks: int, max_length: int | None) -> int:
+def generation_budget(max_gen_toks: int | None, max_length: int | None) -> int | None:
     """The per-request generation cap, shrunk to fit a served context smaller than the budget.
 
     A model whose context is smaller than the suite's generation budget (e.g. a 4k-context model
     under an 8k chat budget) 400s every request unless the requested ``max_tokens`` leaves room for
-    the prompt within the context window.
+    the prompt within the context window. ``None`` (no configured cap) stays ``None``: Evalchemy then
+    derives each benchmark's budget from the served context and its stored longest prompt.
     """
-    if max_length is None or max_gen_toks + _CONTEXT_PROMPT_RESERVE <= max_length:
+    if max_gen_toks is None or max_length is None or max_gen_toks + _CONTEXT_PROMPT_RESERVE <= max_length:
         return max_gen_toks
-    return max(256, max_length - _CONTEXT_PROMPT_RESERVE)
+    return max(_MIN_GENERATION_BUDGET, max_length - _CONTEXT_PROMPT_RESERVE)
+
+
+def is_evalchemy_benchmark(task_name: str) -> bool:
+    """Whether ``task_name`` is one of Evalchemy's own chat benchmarks rather than an lm-eval task.
+
+    Evalchemy registers each chat benchmark from a directory of the same name under
+    ``eval/chat_benchmarks``; everything else on ``--tasks`` resolves through lm-eval's registry.
+    """
+    spec = find_spec("eval")
+    if spec is None or not spec.submodule_search_locations:
+        raise RuntimeError("the evalchemy package (`eval`) is not installed beside this client")
+    return any((Path(root) / "chat_benchmarks" / task_name).is_dir() for root in spec.submodule_search_locations)
+
+
+def native_generation_budget(max_length: int | None) -> int | None:
+    """The served-context budget for an lm-eval-native generation task with no configured cap."""
+    if max_length is None:
+        return None
+    return max(_MIN_GENERATION_BUDGET, max_length - _NATIVE_PROMPT_RESERVE)
+
+
+def budget_arguments(config: dict, task: dict, max_length: int | None) -> tuple[list[str], list[str]]:
+    """The ``--gen_kwargs`` entries and extra argv that set one task's generation budget.
+
+    A configured cap goes out as both ``max_gen_toks`` (read by lm-eval-native tasks) and
+    ``--max_tokens`` (read by Evalchemy's chat benchmarks). Without one, a chat benchmark gets neither
+    and sizes its own responses from the served context and its stored longest prompt, while an
+    lm-eval-native generation task gets the served context minus a prompt reserve as ``max_gen_toks``.
+    """
+    gen_budget = generation_budget(config["max_gen_toks"], max_length)
+    if gen_budget != config["max_gen_toks"]:
+        print(
+            f"clamped max_gen_toks {config['max_gen_toks']} -> {gen_budget} to fit served context {max_length}",
+            flush=True,
+        )
+    if gen_budget is not None:
+        return [f"max_gen_toks={gen_budget}"], ["--max_tokens", str(gen_budget)]
+    if not task["generation"] or is_evalchemy_benchmark(task["name"]):
+        return [], []
+    native_budget = native_generation_budget(max_length)
+    if native_budget is None:
+        return [], []
+    print(f"native task {task['name']}: max_gen_toks={native_budget} from served context {max_length}", flush=True)
+    return [f"max_gen_toks={native_budget}"], []
 
 
 def served_max_length(base_url: str) -> int | None:
@@ -72,29 +130,50 @@ def served_max_length(base_url: str) -> int | None:
 def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> str:
     """lm-eval ``--model_args`` for the served OpenAI endpoint (comma-joined ``key=value`` list)."""
     endpoint_path = "chat/completions" if use_chat else "completions"
+    if use_chat:
+        tokenizer_backend = config["chat_tokenizer_backend"]
+        tokenizer_args: dict[str, object] = {"tokenizer_backend": tokenizer_backend}
+        if tokenizer_backend == "huggingface":
+            # The tokenizer is used only to preflight the fully rendered prompt; messages still go
+            # to the endpoint, which applies the canonical serving template.
+            tokenizer_args.update(tokenizer=config["tokenizer"], trust_remote_code=True)
+    else:
+        # Loglikelihood scoring needs local token IDs, so load the checkpoint tokenizer and allow
+        # its custom code.
+        tokenizer_args = {
+            "tokenizer": config["tokenizer"],
+            "tokenizer_backend": "huggingface",
+            "trust_remote_code": True,
+        }
     args: dict[str, object] = {
         "model": config["model_id"],
         "base_url": f"{config['base_url'].rstrip('/')}/{endpoint_path}",
-        "tokenizer": config["tokenizer"],
-        "tokenizer_backend": "huggingface",
+        **tokenizer_args,
         "tokenized_requests": False,
         "num_concurrent": config["num_concurrent"],
         # The TPU vLLM prompt-logprobs path 500s in whole-batch bursts (every in-flight request at
         # once); one request exhausting its retries mid-burst closes lm-eval's shared session and
         # fails the whole task, so give each request enough headroom to ride out a burst.
         "max_retries": 8,
-        # lm-eval's per-request client timeout defaults to 300s; a long reasoning generation
-        # (multi-thousand-token chat benchmark) can exceed that, and a spurious timeout retry-storms
-        # the endpoint. 1800s covers a full max_gen_toks generation on a slow serve.
-        "timeout": 1800,
+        # A long reasoning generation can legitimately need the full policy window. Cutting an
+        # active request off earlier restarts its generation and can saturate the endpoint with
+        # abandoned work; the retry budget still bounds each trial to the policy window.
+        "timeout": _REQUEST_TIMEOUT,
     }
     args.update(config.get("extra_model_args", {}))
+    # The total retry budget must cover a valid long generation and leave room for retries.
+    args.setdefault("transport_retry_budget", 3 * float(args["timeout"]))
+    args.setdefault("transport_attempt_timeout", float(args["timeout"]))
+    if use_chat and config["chat_template_kwargs"]:
+        # lm-eval splits model args at every comma; Evalchemy decodes this before building the HTTP payload.
+        encoded = base64.urlsafe_b64encode(json.dumps(config["chat_template_kwargs"]).encode("utf-8")).decode("ascii")
+        args["chat_template_kwargs"] = f"base64:{encoded}"
     if max_length is not None:
         args["max_length"] = max_length
     return ",".join(f"{key}={value}" for key, value in args.items())
 
 
-def build_command(config: dict, task: dict, output_path: str, python: str, max_length: int | None) -> list[str]:
+def build_command(config: dict, task: dict, python: str, max_length: int | None) -> list[str]:
     """The ``evalchemy`` argv for one task. ``python`` identifies the evaluator virtualenv.
 
     One invocation per task so each carries its own ``num_fewshot`` (lm-eval's ``--num_fewshot`` is a
@@ -105,19 +184,12 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     # completion_only: code-infilling tasks score a raw continuation, which chat formatting breaks.
     use_chat = config["apply_chat_template"] and task["generation"] and not task["completion_only"]
     model = "local-chat-completions" if use_chat else "local-completions"
-    gen_budget = generation_budget(config["max_gen_toks"], max_length)
-    if gen_budget != config["max_gen_toks"]:
-        print(
-            f"clamped max_gen_toks {config['max_gen_toks']} -> {gen_budget} to fit served context {max_length}",
-            flush=True,
-        )
     # Model-level extra sampler kwargs (skip_special_tokens, repetition_penalty, ...) ride on the same
     # --gen_kwargs list as the generation budget; lm-eval forwards them on both the completions and chat
     # routes (MCQ tasks ignore gen_kwargs). A per-model value overrides the max_gen_toks default only if
     # it keys "max_gen_toks", which the registry does not.
-    gen_kwargs = ",".join(
-        [f"max_gen_toks={gen_budget}", *(f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items())]
-    )
+    budget_kwargs, budget_args = budget_arguments(config, task, max_length)
+    gen_kwargs = budget_kwargs + [f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items()]
     cmd = [
         str(Path(python).with_name("evalchemy")),
         "--model",
@@ -126,17 +198,14 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         build_model_args(config, use_chat, max_length),
         "--tasks",
         task["name"],
-        "--gen_kwargs",
-        gen_kwargs,
-        # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
-        # gen_kwargs; lm-eval-native tasks ignore it.
-        "--max_tokens",
-        str(gen_budget),
-        "--output_path",
-        output_path,
-        # Per-question jsonl (doc, prompt, responses, per-sample scores) next to the results JSON;
-        # the parent converts each to parquet for drill-down analysis.
-        "--log_samples",
+        *(["--gen_kwargs", ",".join(gen_kwargs)] if gen_kwargs else []),
+        *budget_args,
+        # FineStore owns the aggregate result and normalized sample rows. Evalchemy treats
+        # --output_path as an alias for this option; passing both leaves no local output to inspect.
+        "--finestore_output_path",
+        config["out_path"],
+        "--finestore_output_prefix",
+        task["dir"],
         "--verbosity",
         "INFO",
     ]
@@ -146,6 +215,8 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         cmd += ["--num_fewshot", str(task["num_fewshot"])]
     if config.get("batch_size") is not None:
         cmd += ["--batch_size", str(config["batch_size"])]
+    if config.get("dataset_cache") is not None:
+        cmd += ["--dataset_cache", config["dataset_cache"]]
     if config.get("seed") is not None:
         cmd += ["--seed", str(config["seed"])]
     if task["unsafe_code"]:
@@ -155,23 +226,20 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         cmd += ["--limit", str(config["max_eval_instances"])]
     if use_chat:
         cmd.append("--apply_chat_template")
+    if config.get("debug", False):
+        cmd.append("--debug")
     return cmd
 
 
-def scored_results(local_out: str) -> bool:
-    """Whether any ``results_*.json`` under ``local_out`` holds a non-empty ``results`` payload.
-
-    lm-eval exits 0 and writes an empty ``results`` dict when every request to the endpoint failed
-    (e.g. the server crashed mid-task), so exit code and file presence alone cannot vouch for a task.
-    """
-    for dirpath, _, filenames in os.walk(local_out):
-        for filename in filenames:
-            if not (filename.startswith("results_") and filename.endswith(".json")):
-                continue
-            with open(os.path.join(dirpath, filename)) as handle:
-                if json.load(handle).get("results"):
-                    return True
-    return False
+def completed_result(root: str, source_prefix: str) -> bool:
+    """Whether Evalchemy committed a successful aggregate result to FineStore."""
+    table = ReadView(root).scan(_EVALCHEMY_RESULTS_TABLE)
+    if table is None:
+        return False
+    return any(
+        row.get("source_prefix") == source_prefix and row.get("scored") is True
+        for row in table.to_pylist(maps_as_pydicts="strict")
+    )
 
 
 def main() -> None:
@@ -181,11 +249,6 @@ def main() -> None:
         raise SystemExit("run_evalchemy_client requires at least one task")
 
     out_path = config["out_path"].rstrip("/")
-    # Raw fsspec, not rigging's StoragePath: the uvx environment carries fsspec + s3fs/gcsfs, not rigging.
-    # For an s3:// destination the pod's injected FSSPEC_S3 (endpoint + virtual-host addressing) is
-    # applied by fsspec, so url_to_fs needs no extra config. out_path is region-local (the eval child
-    # is pinned to the serve region), so no cross-region copy.
-    out_fs, _ = fsspec.core.url_to_fs(out_path)
     served = served_max_length(config["base_url"])
     available_context = served - _CONTEXT_MARGIN if served is not None else None
     configured_context = config.get("max_length")
@@ -194,26 +257,15 @@ def main() -> None:
     print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
     failures: list[str] = []
     for task in tasks:
-        dest = f"{out_path}/{task['dir']}"
-        with tempfile.TemporaryDirectory() as local_out:
-            # Evalchemy is installed beside the uvx environment's interpreter.
-            cmd = build_command(config, task, local_out, sys.executable, max_length)
-            print(f"running evalchemy: {' '.join(cmd)}", flush=True)
-            # Upload whatever the task produced before reacting to its exit code, so one task's failure
-            # does not discard another task's already-scored output.
-            result = subprocess.run(cmd)
-            produced = os.listdir(local_out)
-            scored = scored_results(local_out)
-            if produced:
-                out_fs.put(local_out, dest, recursive=True)
-                print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
+        # Evalchemy is installed beside the independent project's interpreter.
+        cmd = build_command(config, task, sys.executable, max_length)
+        print(f"running evalchemy: {' '.join(cmd)}", flush=True)
+        result = subprocess.run(cmd)
         if result.returncode != 0:
             failures.append(f"{task['name']}: evalchemy exited {result.returncode}")
-        elif not produced:
-            failures.append(f"{task['name']}: produced no artifacts")
-        elif not scored:
-            failures.append(f"{task['name']}: results are empty (every request to the endpoint failed?)")
-    print(f"evalchemy client wrote results for {len(tasks)} task(s) to {out_path}", flush=True)
+        elif not completed_result(out_path, task["dir"]):
+            failures.append(f"{task['name']}: FineStore has no completed scored result")
+    print(f"evalchemy client wrote {len(tasks)} task result(s) to FineStore at {out_path}", flush=True)
     if failures:
         raise SystemExit("evalchemy task failures: " + "; ".join(failures))
 

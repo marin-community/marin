@@ -13,7 +13,7 @@ PDF subset is ``dolma4pdfs.py``.
 default ``ram="10g"``; tokenize it with more.
 """
 
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.datakit.download.dolma3_5 import (
     DATA_FILE_EXTENSION,

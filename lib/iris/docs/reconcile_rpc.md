@@ -18,43 +18,56 @@ defines `ReconcileRequest` (`worker_id`, repeated `DesiredAttempt`) and
 keyed by a 16-hex-char `attempt_uid`. `AttemptSpec.request` is populated only
 on the dispatch tick for an `ASSIGNED` attempt; subsequent ticks omit it and
 the worker pulls from its local cache (see
-[`reconcile.py`](../src/iris/cluster/controller/reconcile.py),
-`reconcile_workers`). `AttemptObservation` echoes the same `attempt_uid`, so
+[`reconcile/worker.py`](../src/iris/cluster/controller/reconcile/worker.py),
+`build_reconcile_plans`). `AttemptObservation` echoes the same `attempt_uid`, so
 routing is purely UID-based — there is no (task_id, attempt_id) fallback.
 
 ## Control flow
 
 ```mermaid
 sequenceDiagram
-    participant Loop as Controller<br/>_reconcile_worker_batch
-    participant Pure as reconcile.py<br/>reconcile_workers()
+    participant Loop as Controller loop
+    participant DB as Controller DB
+    participant Pure as reconcile/worker.py<br/>build_reconcile_plans()
     participant Prov as RpcTaskBackend<br/>reconcile()
     participant W as Worker
-    participant Apply as transitions<br/>apply_reconcile_result
+    participant Apply as Controller reconcile operation
+    participant State as ReconcileState
 
+    Loop->>DB: read workers + desired attempts + templates
     Loop->>Pure: ReconcileInputs (rows + job_specs)
     Pure-->>Loop: list[WorkerReconcilePlan]
-    Loop->>Prov: plans, addresses
+    Loop->>Prov: WorkerFleetReconcileRequest<br/>(plan + address targets)
     Prov->>W: Reconcile(ReconcileRequest)
     W-->>Prov: ReconcileResponse(observed, health)
-    Prov-->>Loop: list[ReconcileResult]
-    Loop->>Apply: per-worker (plan, result)
+    Prov-->>Loop: ReconcileObservation<br/>(exact task updates + health events)
+    Loop->>Apply: apply_observation()
+    Apply->>DB: fresh transition snapshot
+    Apply->>State: exact task updates
+    State-->>Apply: transition effects
+    Apply->>Apply: apply health events
+    Apply-->>Loop: effects + reaped workers
+    Loop->>Prov: remove_capacity(reaped workers), after commit
 ```
 
 ## Pure compute vs. transport
 
-`controller._reconcile_worker_batch`
-([`controller.py`](../src/iris/cluster/controller/controller.py)) snapshots DB
-rows and calls `reconcile_workers(inputs)`
-([`reconcile.py`](../src/iris/cluster/controller/reconcile.py),
-`reconcile_workers`) to produce one `WorkerReconcilePlan` per worker (the
-`ReconcileRequest` proto is built once inside the plan). The plans flow
-through `RpcTaskBackend.reconcile`
+The controller loads worker rows and run templates, then `plans_from_snapshot`
+([`backend.py`](../src/iris/cluster/controller/backend.py)) calls
+`build_reconcile_plans(inputs)`
+([`reconcile/worker.py`](../src/iris/cluster/controller/reconcile/worker.py))
+to produce one `WorkerReconcilePlan` per worker (the
+`ReconcileRequest` proto is built once inside the plan). The controller pairs
+each plan with its worker address and passes the complete target list through
+`RpcTaskBackend.reconcile`
 ([`backends/rpc/backend.py`](../src/iris/cluster/backends/rpc/backend.py))
-which fans them out under a single `asyncio.gather` capped by
-`self.parallelism` and returns a `ReconcileResult` per worker. The apply layer
-([`transitions.apply_reconcile_result`](../src/iris/cluster/controller/transitions.py))
-consumes those results.
+which fans them out concurrently, capped by `self.parallelism`. The backend
+translates worker-protocol responses into the same `TaskUpdate` records returned
+by a direct provider and returns `ReconcileObservation`. The controller-owned
+[`apply_observation`](../src/iris/cluster/controller/ops/reconcile.py) applies
+task and worker-health facts once; its task operation reloads current state after
+that I/O, and exact Attempt UIDs prevent late observations from mutating a
+recreated workload.
 
 ## Worker side
 
@@ -72,7 +85,7 @@ attempt) or for zombies it is killing this tick (so the controller can confirm
 the implicit kill). Terminal local history outside the desired set is
 suppressed — otherwise a worker could emit hundreds of stale terminal
 observations per tick, each driving a DB write. The controller mirrors this
-in `_filter_observations_to_plan`
-([`transitions.py`](../src/iris/cluster/controller/transitions.py)):
+in `filter_observations_to_plan`
+([`reconcile/worker.py`](../src/iris/cluster/controller/reconcile/worker.py)):
 observations whose attempt is not in the per-worker `WorkerReconcilePlan` are
 dropped (DEBUG-logged) before any work is done.

@@ -31,12 +31,14 @@ resource_hint:                  # ResourceHint -> experiment fleet placement
   hbm_gb: 84                    # serving HBM budget the hardware selector sizes a slice from
   gpu: {}                       # alternatively, accepted exact GPU shapes, e.g. {H100: 8}
   cpu: null                     # optional inference-worker host CPU override
-  memory: null                  # optional inference-worker host memory override
+  memory: null                  # override; the default is sized from the checkpoint's weight files
   disk: null                    # optional inference-worker host disk override
 
 serve:                          # ServeConfig -> model-server behavior
   tensor_parallel_size: 2
   data_parallel_size: null
+  pipeline_parallel_size: 1
+  gpu_memory_utilization: null
   max_model_len: 32768
   max_num_batched_tokens: null  # vLLM prefill-token budget
   max_num_seqs: null            # concurrent sequence limit
@@ -44,14 +46,21 @@ serve:                          # ServeConfig -> model-server behavior
   limit_mm_per_prompt: null     # JSON string, e.g. '{"image":0,"video":0}' for text-only eval
   tool_call_parser: hermes      # enables --enable-auto-tool-choice + --tool-call-parser
   reasoning_parser: qwen3
+  vllm_batch_invariant: null    # VLLM_BATCH_INVARIANT; true/false is preserved
+  vllm_use_flashinfer_sampler: null # VLLM_USE_FLASHINFER_SAMPLER; false uses the built-in sampler
+  vllm_source: null             # GPU default is marin_fork; upstream requires vllm_version
+  vllm_version: null            # exact upstream PyPI version, e.g. "0.29.0"
+  vllm_plugin_requirements: []  # pinned packages installed with GPU vLLM in its isolated environment
   vllm_extra_args: ["--enable-prefix-caching"]   # escape hatch for flags without a typed field
   chat_template: null           # jinja served in place of the tokenizer's own
   auto_overrides: true          # derive remaining flags + clamp max_model_len from config.json
 
-generation:                     # GenerationConfig -> evalchemy --gen_kwargs
-  max_gen_toks: null            # per-model generation budget override
-  extra_gen_kwargs:             # forwarded verbatim, e.g. for a thinking model
+generation:                     # per-model generation behavior
+  max_gen_toks: null            # Evalchemy generation limit and Harbor agent output budget
+  extra_gen_kwargs:             # forwarded to Evalchemy, e.g. for a thinking model
     skip_special_tokens: "false"
+  chat_template_kwargs:         # boolean or string template arguments on Evalchemy chat requests
+    enable_thinking: false
 
 agent:                          # AgentConfig -> the Harbor/agentic agent
   agent_kwargs:                 # forwarded to the agent's request against the served endpoint
@@ -61,3 +70,60 @@ agent:                          # AgentConfig -> the Harbor/agentic agent
 `auto_serve_overrides` fills unset serve fields from the model's `config.json` and may clamp
 `max_model_len` to the model's native limit. `resource_hint.hbm_gb` is portable across TPU and GPU;
 `resource_hint.gpu` declares that the model requires one of the listed exact GPU shapes.
+
+For a GPU model whose architecture is supplied by a vLLM plugin, set `vllm_source: upstream`,
+an exact `vllm_version`, and a plugin requirement pinned to a release or commit. These fields are
+part of the model catalog and the recorded effective serving configuration. The plugin is installed
+in the same isolated environment as vLLM; TPU serving does not accept these GPU-specific settings.
+
+## vLLM eager execution
+
+vLLM defaults `enforce_eager` to false. `--enforce-eager` disables both `torch.compile` and CUDA
+graphs. In a controlled Snowball Grug-67B run on eight H100s, eager execution took 44.025 ms per
+decode token, versus 6.523 ms with the vLLM default (6.75x faster). See [issue #9339](https://github.com/marin-community/marin/issues/9339)
+for the setup, startup costs, and limits of that measurement.
+
+Use eager execution when a specific model needs it for compatibility or correctness, or during
+development when shorter startup matters more than steady-state throughput. Record that reason next
+to the model configuration. Marin requires a separate acknowledgement in `vllm_extra_args`:
+
+```yaml
+serve:
+  vllm_extra_args:
+    - --enforce-eager
+    - --i-know-i-am-making-vllm-slow
+```
+
+Marin removes the acknowledgement before launching vLLM. `--no-enforce-eager` keeps the vLLM default
+and needs no acknowledgement. Pass the full flag spelling in `vllm_extra_args`; Marin rejects vLLM
+`--config` files and abbreviated eager flags so eager mode cannot be hidden from this check.
+
+## Multi-node GPU serving
+
+Set `serve.instances` to start independent model servers behind Marin's inference broker. Each
+instance receives the configured `resource_hint`, tensor/data parallelism, and pipeline task count.
+For example, `resource_hint.gpu: {H100: 8}`, `data_parallel_size: 8`, and `instances: 2` starts two
+DP8 servers on two H100x8 Iris tasks and exposes one load-balanced endpoint. This provides 16
+independent data-parallel replicas; it does not create one 16-GPU model replica.
+
+Set `serve.pipeline_parallel_size` to the number of Iris tasks in one vLLM serving gang.
+Each task runs one pipeline stage. For example, `resource_hint.gpu: {H100: 8}` with
+`tensor_parallel_size: 8`, `pipeline_parallel_size: 2`, and `data_parallel_size: 1`
+requests 16 GPUs across two tasks and exposes one endpoint.
+
+Multi-node serving requires the vLLM backend, an explicit GPU resource hint, and an explicit
+tensor parallel size. Tensor parallel size times data parallel size must equal GPUs per task.
+Set `serve.backend: vllm` (the default); an unset `data_parallel_size` means 1.
+Pipeline parallelism requires `serve.instances: 1`; the inference API also requires `broker=None`.
+Host memory and CPU hints apply to each task; automatic host memory sizing budgets the full
+checkpoint on each task.
+
+For multi-node serving, the launcher owns topology flags; do not put tensor, data, or pipeline
+parallel sizes, node ranks, device IDs, rendezvous addresses, or `--headless` in `vllm_extra_args`.
+`gpu_memory_utilization` accepts values in `(0, 1]` for vLLM. Set either the typed field or its
+raw flag, not both. Unset values retain vLLM's default.
+
+Dry runs show per-task hardware and serving geometry. `record.json` retains requested model settings
+and reports resolved settings under `serving` after endpoint startup; `serving.effective` is false
+when startup did not produce an endpoint. Multi-node support and context capacity depend on the
+pinned vLLM version and model architecture and must be checked on the target hardware.

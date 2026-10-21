@@ -37,15 +37,18 @@ platform:
     region: US-WEST-04A
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris
-    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    object_storage_endpoint: http://cwlota.com
+    external_object_storage_endpoint: https://cwobject.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/coreweave/state
+  remote_state_dir: s3://marin-us-east-02a/iris/coreweave/state
 
 kubernetes_provider:
   namespace: iris
   host_network: true              # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
+  cache_max_age:
+    seconds: 604800
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
   kueue:
     # Mandatory on the K8s backend: every pod is admitted through Kueue. Pulumi
@@ -68,7 +71,7 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    MARIN_PREFIX: s3://marin-na/marin
+    MARIN_PREFIX: s3://marin-us-east-02a/marin
   # inject_env captures named environment variables from the operator's shell at
   # `iris cluster start` and injects them into every task (and the controller).
   # A missing variable aborts the launch. On Kubernetes the values are written to

@@ -4,6 +4,7 @@
 """Model YAML validation and serving-option rendering."""
 
 import textwrap
+from dataclasses import replace
 
 import pytest
 from draccus.utils import ParsingError
@@ -18,7 +19,9 @@ from marin.evaluation.model_config import (
     scan_model_configs,
     serve_config_vllm_args,
 )
-from marin.evaluation.serving_config import inference_config_for_model
+from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
+from marin.inference.config import BrokerConfig, LevanterEngineConfig, VllmSource
+from marin.inference.vllm_backend import vllm_launcher
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -40,6 +43,10 @@ _CATALOG_YAML = textwrap.dedent(
     generation:
       extra_gen_kwargs:
         skip_special_tokens: "false"
+      chat_template_kwargs:
+        enable_thinking: false
+      thinking_off_template_kwargs:
+        reasoning_effort: low
     agent:
       agent_kwargs:
         extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
@@ -63,6 +70,8 @@ def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
     assert config.resource_hint.gpu == {"H100": 2}
     assert config.serve.vllm_extra_args == ("--enable-prefix-caching",)
     assert dict(config.generation.extra_gen_kwargs) == {"skip_special_tokens": "false"}
+    assert dict(config.generation.chat_template_kwargs) == {"enable_thinking": False}
+    assert dict(config.generation.thinking_off_template_kwargs) == {"reasoning_effort": "low"}
     assert "enable_thinking" in config.agent.agent_kwargs["extra_body"]
 
 
@@ -137,14 +146,16 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     model = ModelConfig(
         name="qwen3-32b",
         location="Qwen/Qwen3-32B",
-        resource_hint=ResourceHint(gpu={"H100": 2}),
+        # The memory hint keeps the lowering offline: it skips the checkpoint measurement the same
+        # way auto_overrides=False skips the config.json fetch. This test covers flag rendering.
+        resource_hint=ResourceHint(gpu={"H100": 2}, memory="128g"),
         serve=ServeConfig(
             tensor_parallel_size=2,
             max_model_len=32768,
             tool_call_parser="hermes",
             reasoning_parser="qwen3",
             vllm_extra_args=("--enable-prefix-caching",),
-            auto_overrides=False,  # skip the config.json fetch; this test covers flag rendering
+            auto_overrides=False,
         ),
     )
     choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=2)
@@ -156,6 +167,177 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     ).engine.extra_args
     assert "--swap-space" not in engine_args
     assert "--trust-remote-code" not in engine_args
+
+
+def test_gpu_catalog_can_pin_upstream_vllm_with_model_plugin(tmp_path):
+    model = load_model_config(
+        _write(
+            tmp_path,
+            "kolibri.yaml",
+            """\
+name: kolibri-smoke
+location: Aleph-Alpha/Kolibri-1
+resource_hint:
+  gpu:
+    H100: 2
+  memory: 128g
+serve:
+  tensor_parallel_size: 2
+  auto_overrides: false
+  vllm_source: upstream
+  vllm_version: 0.29.0
+  vllm_plugin_requirements:
+  - aleph-alpha-inference==1.0.0
+""",
+        )
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=2)
+    engine = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT).engine
+
+    assert engine.source is VllmSource.UPSTREAM
+    launcher = vllm_launcher(engine)
+    command = launcher.command()
+    assert command[command.index("--from") + 1] == "vllm[runai]==0.29.0"
+    requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
+    assert "aleph-alpha-inference==1.0.0" in requirements
+    assert launcher.cache_identity() != vllm_launcher(replace(engine, extra_requirements=())).cache_identity()
+
+
+def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
+    model = ModelConfig(
+        name="large-s3-model",
+        location="s3://models/large",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(
+            runai_streamer_concurrency=4,
+            runai_streamer_s3_request_timeout_ms=60_000,
+            auto_overrides=False,
+        ),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+
+    assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_CONCURRENCY"] == "4"
+    assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "60000"
+
+
+def test_gpu_lowering_can_disable_xet_for_weight_mirror():
+    model = ModelConfig(
+        name="xet-rate-limited-model",
+        location="org/model",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(hf_hub_disable_xet=True, auto_overrides=False),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+
+    assert lowered.iris.worker_environment.env_vars["HF_HUB_DISABLE_XET"] == "1"
+
+
+def test_gpu_lowering_preserves_independent_serving_instances():
+    model = ModelConfig(
+        name="brokered-model",
+        location="org/model",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(
+            tensor_parallel_size=1,
+            data_parallel_size=8,
+            instances=2,
+            auto_overrides=False,
+        ),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+
+    assert lowered.instances == 2
+    assert lowered.iris.worker_resources.replicas == 1
+    assert lowered.iris.worker_resources.chip_count() == 8
+
+
+@pytest.mark.parametrize(
+    ("serve", "accelerator"),
+    [
+        (
+            ServeConfig(backend=ServeBackend.LEVANTER, vllm_batch_invariant=True),
+            AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1),
+        ),
+        (
+            ServeConfig(vllm_use_flashinfer_sampler=False, auto_overrides=False),
+            AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4"),
+        ),
+    ],
+    ids=("levanter-gpu", "vllm-tpu"),
+)
+def test_vllm_process_settings_reject_unsupported_lowering(serve, accelerator):
+    model = ModelConfig(
+        name="unsupported-vllm-settings",
+        location="org/model",
+        resource_hint=ResourceHint(memory="32g"),
+        serve=serve,
+    )
+
+    with pytest.raises(ValueError, match="require the vLLM backend on GPU"):
+        inference_config_for_model(
+            model,
+            accelerator,
+            env_vars={},
+            priority=job_pb2.PRIORITY_BAND_INHERIT,
+        )
+
+
+def _gib(memory: str) -> int:
+    return int(memory.removesuffix("g"))
+
+
+def test_serve_host_memory_covers_a_checkpoint_larger_than_the_flat_default():
+    # Regression for the H100 serve killed with SIGKILL while loading: every model got a flat 64g
+    # host-memory request, so a checkpoint bigger than that was OOM-killed mid-load. The request has
+    # to leave room for the checkpoint the loader pulls through host memory.
+    shards = {f"model-0000{shard}-of-00002.safetensors": 34 * 1024**3 for shard in (1, 2)}
+
+    assert _gib(_serve_host_memory(shards, ranks=4)) > 68
+
+
+def test_serve_host_memory_grows_with_the_rank_count():
+    # Every rank on the host carries its own CUDA context and torch runtime, so the same checkpoint
+    # spread over more devices needs more host memory than it does on one.
+    files = {"model.safetensors": 40 * 1024**3}
+
+    assert _gib(_serve_host_memory(files, ranks=8)) > _gib(_serve_host_memory(files, ranks=1))
+
+
+def test_serve_host_memory_ignores_a_duplicate_subdirectory_copy():
+    # The Llama repos ship a second copy of the weights under original/ that vLLM never reads.
+    # Counting it would roughly double every request sized from such a checkpoint.
+    plain = {"model.safetensors": 15 * 1024**3, "tokenizer.json": 11 * 1024**2}
+    duplicated = plain | {"original/consolidated.00.safetensors": 15 * 1024**3}
+
+    assert _serve_host_memory(duplicated, ranks=1) == _serve_host_memory(plain, ranks=1)
+
+
+def test_serve_host_memory_rejects_a_checkpoint_with_no_weight_file():
+    # An unreadable layout would otherwise sum to zero and hand a large model the floor -- the
+    # failure this sizing exists to prevent. Fail instead, and say which knob resolves it.
+    with pytest.raises(ValueError, match=r"resource_hint\.memory"):
+        _serve_host_memory({"model.gguf": 40 * 1024**3, "config.json": 1024}, ranks=1)
+
+
+def test_explicit_memory_hint_wins_without_measuring_the_checkpoint():
+    # The override is the escape hatch for a model needing more than its weights imply, and it has
+    # to work for a location the launcher cannot list (an object-store export needing credentials).
+    model = ModelConfig(
+        name="hinted",
+        location="s3://marin-us-east-02a/marin/exports/absent/",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(auto_overrides=False),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+    assert lowered.iris.worker_resources.ram == "512g"
 
 
 def test_scan_model_configs_keys_by_name_and_skips_underscored(tmp_path):
@@ -204,3 +386,82 @@ def test_explicit_gpu_override_respects_fleet_limits():
 
     with pytest.raises(ValueError, match="positive power of two"):
         MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x3")
+
+
+@pytest.mark.parametrize("auto_overrides", [False, True])
+def test_pipeline_catalog_lowers_a_gang_and_rejects_incompatible_overrides(tmp_path, auto_overrides):
+    body = _CATALOG_YAML.replace("H100: 2", "H100: 8").replace(
+        "tensor_parallel_size: 2", "tensor_parallel_size: 8\n  pipeline_parallel_size: 2\n  gpu_memory_utilization: 0.92"
+    )
+    model = load_model_config(_write(tmp_path, "pipeline.yaml", body))
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_text('{"max_position_embeddings": 4096}')
+    model = replace(
+        model,
+        location=str(checkpoint),
+        resource_hint=replace(model.resource_hint, memory="512g"),
+        serve=replace(model.serve, auto_overrides=auto_overrides),
+    )
+    choice = MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override=None)
+    config = inference_config_for_model(model, choice, env_vars={}, priority=0)
+    assert config.iris.worker_resources.chip_count() == 16
+    assert config.iris.serving_geometry is not None
+    assert config.iris.worker_resources.replicas == config.iris.serving_geometry.task_count == 2
+    assert config.iris.worker_resources.ram == "512g"
+    with pytest.raises(ValueError, match="requiring 8 GPUs"):
+        MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x4")
+    with pytest.raises(ValueError, match="requires GPU"):
+        MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="v6e-4")
+    with pytest.raises(ValueError, match="one instance and no broker"):
+        replace(config, broker=BrokerConfig())
+    with pytest.raises(ValueError, match="one instance and no broker"):
+        replace(config, instances=2)
+    with pytest.raises(ValueError, match="vLLM backend"):
+        replace(config, engine=LevanterEngineConfig())
+
+
+@pytest.mark.parametrize("instances", [1, 8])
+def test_broker_deadlines_allow_the_configured_evaluation_request_timeout(instances):
+    model = ModelConfig(
+        name="test",
+        location="test/model",
+        serve=ServeConfig(auto_overrides=False),
+        resource_hint=ResourceHint(memory="32g"),
+    )
+    choice = MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x1")
+
+    config = inference_config_for_model(
+        model, choice, env_vars={}, priority=0, instances=instances, request_timeout_seconds=3600
+    )
+
+    assert config.broker is not None
+    assert (
+        3600
+        < config.broker.worker.request_timeout_seconds
+        < config.broker.request_lease_timeout_seconds
+        < config.broker.proxy.request_timeout_seconds
+    )
+
+
+@pytest.mark.parametrize("flag", ["--tensor-parallel-size", "--pipeline-parallel-size", "--headless"])
+@pytest.mark.parametrize("equals", [False, True])
+def test_pipeline_rejects_raw_topology_overrides(flag, equals):
+    extra_args = (f"{flag}=2",) if equals else (flag, "2")
+    with pytest.raises(ValueError, match="pipeline parallelism owns"):
+        ServeConfig(tensor_parallel_size=8, pipeline_parallel_size=2, vllm_extra_args=extra_args)
+
+
+@pytest.mark.parametrize(
+    "serve",
+    [
+        {"pipeline_parallel_size": 2},
+        {"pipeline_parallel_size": 0},
+        {"tensor_parallel_size": 8, "pipeline_parallel_size": 2, "backend": ServeBackend.LEVANTER},
+        {"gpu_memory_utilization": 1.1},
+        {"gpu_memory_utilization": 0.9, "vllm_extra_args": ("--gpu-memory-utilization=0.8",)},
+    ],
+)
+def test_invalid_pipeline_or_memory_settings_fail_before_submission(serve):
+    with pytest.raises(ValueError):
+        ServeConfig(**serve)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior of the pinned Harbor policy boundary."""
+"""Behavior of the vendored Harbor policy boundary."""
 
 import json
 import os
@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 import yaml
-from marin.evaluation.harbor.dataset import materialize_harbor_dataset
-from marin.evaluation.harbor.driver_config import preflight_harbor_configs
+from marin.evaluation.harbor.dataset import local_harbor_dataset_path
+from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, _driver_environment, preflight_harbor_configs
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 
 _ROOT = Path(__file__).parents[2]
 _DRIVER = _ROOT / "lib/marin/src/marin/evaluation/harbor/trial_driver.py"
-_EXTERNAL_PROJECT = _ROOT / "config/external/harbor"
+_RUNTIME_PROJECT = _ROOT / "vendor/harbor"
 _POLICIES = _ROOT / "experiments/evaluation/configs/harbor"
 _INVALID_SOURCE_DOCUMENTS = {
     "hf-uri-in-path": {
@@ -46,25 +46,117 @@ _INVALID_SOURCE_DOCUMENTS = {
 }
 
 
-def _external_python(*args: str, hash_seed: str = "0", check: bool = True) -> subprocess.CompletedProcess[str]:
-    environment = dict(os.environ)
+def _external_python(
+    *args: str,
+    hash_seed: str = "0",
+    check: bool = True,
+    extra_python_path: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    environment = _driver_environment()
     environment["PYTHONHASHSEED"] = hash_seed
-    environment["PYTHONPATH"] = str(_ROOT / "lib/marin/src")
-    return subprocess.run(
+    if extra_python_path is not None:
+        environment["PYTHONPATH"] = os.pathsep.join((str(extra_python_path), environment["PYTHONPATH"]))
+    completed = subprocess.run(
         [
             "uv",
             "run",
+            "--isolated",
             "--project",
-            str(_EXTERNAL_PROJECT),
+            str(_RUNTIME_PROJECT),
+            "--extra",
+            "runtime",
+            "--no-default-groups",
             "--frozen",
             "python",
             *args,
         ],
-        check=check,
+        check=False,
         capture_output=True,
         text=True,
         env=environment,
     )
+    if check:
+        completed.check_returncode()
+    return completed
+
+
+def test_selected_runtime_imports_vendored_harbor_and_local_marin_packages():
+    script = textwrap.dedent(
+        """
+        import inspect
+        import json
+        import finestore
+        import harbor_config
+        import rigging
+        from marin.evaluation.harbor.trial_driver import _harbor_config_commit
+
+        print(json.dumps({
+            "harbor_config": inspect.getfile(harbor_config.JobConfig),
+            "rigging": rigging.__file__,
+            "finestore": finestore.__file__,
+            "commit": _harbor_config_commit(),
+        }))
+        """
+    )
+
+    imported = json.loads(_external_python("-c", script).stdout)
+
+    assert Path(imported["harbor_config"]).is_relative_to(_ROOT / "vendor/harbor/src")
+    assert Path(imported["rigging"]).is_relative_to(_ROOT / "lib/rigging/src")
+    assert Path(imported["finestore"]).is_relative_to(_ROOT / "lib/finestore/src")
+    assert imported["commit"] == HARBOR_SOURCE.commit
+
+
+def test_external_driver_uses_locked_archive_dependencies():
+    _external_python(
+        "-c",
+        textwrap.dedent(
+            f"""
+            from pathlib import Path
+
+            import finestore
+            import rigging
+            from harbor import archive
+            from marin.evaluation.harbor import trial_driver
+
+            assert archive.EvaluationStore is not None
+            assert trial_driver.RuntimeOverlay is not None
+            assert Path(finestore.__file__).resolve().is_relative_to(Path({str(_ROOT / "lib/finestore/src")!r}))
+            assert Path(rigging.__file__).resolve().is_relative_to(Path({str(_ROOT / "lib/rigging/src")!r}))
+            """
+        ),
+    )
+
+
+def test_external_driver_retries_spurious_path_style_response():
+    result = _external_python(
+        "-c",
+        textwrap.dedent(
+            """
+            from io import BytesIO
+            from unittest.mock import MagicMock, patch
+
+            from botocore.exceptions import ClientError
+            from rigging.filesystem.conditional_object import S3ConditionalObject
+
+            client = MagicMock()
+            client.get_object.side_effect = [
+                ClientError(
+                    {"Error": {"Code": "PathStyleRequestNotAllowed", "Message": "use virtual-host addressing"}},
+                    "GetObject",
+                ),
+                {"Body": BytesIO(b"one"), "ETag": '"v1"'},
+            ]
+            S3ConditionalObject._client = staticmethod(lambda _endpoint: client)
+            with patch("rigging.timing.time.sleep", lambda _delay: None):
+                result = S3ConditionalObject("s3://bucket/HEAD").read()
+            assert result is not None
+            assert result.data == b"one"
+            """
+        ),
+    )
+
+    assert result.returncode == 0
 
 
 def _preflight(
@@ -73,6 +165,7 @@ def _preflight(
     *,
     hash_seed: str = "0",
     check: bool = True,
+    extra_python_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     request_path = tmp_path / f"requests-{hash_seed}.json"
     request_path.write_text(
@@ -81,7 +174,14 @@ def _preflight(
             separators=(",", ":"),
         )
     )
-    return _external_python(str(_DRIVER), "preflight", str(request_path), hash_seed=hash_seed, check=check)
+    return _external_python(
+        str(_DRIVER),
+        "preflight",
+        str(request_path),
+        hash_seed=hash_seed,
+        check=check,
+        extra_python_path=extra_python_path,
+    )
 
 
 def _run_single_turn_aime_agent(
@@ -155,7 +255,16 @@ def _run_single_turn_aime_agent(
             max_tokens=256,
             request_retry_initial=0.001,
         )
-        asyncio.run(agent.run("Solve this AIME problem", Environment(), object()))
+        async def drive_agent():
+            environment = Environment()
+            await agent.setup(environment=environment)
+            await agent.run(
+                instruction="Solve this AIME problem",
+                environment=environment,
+                context=object(),
+            )
+
+        asyncio.run(drive_agent())
         print(json.dumps({{
             "answer": agent_module.Path({str(answer_path)!r}).read_text(),
             "response": agent_module.Path({str(logs_dir / "response.txt")!r}).read_text(),
@@ -175,13 +284,163 @@ def checked_policies(tmp_path_factory):
 
 
 def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies):
-    path = _POLICIES / "grug-opencode-id.yaml"
+    path = _POLICIES / "ot-tblite.yaml"
 
     seeded = [json.loads(_preflight(tmp_path, [(path, {})], hash_seed=seed).stdout)[0] for seed in ("1", "8675309")]
 
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
+    assert expected["trials_per_task"] == 3
+
+
+def test_preflight_resolves_hugging_face_datasets_in_harbor(tmp_path):
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "swebench-recovery.yaml", {})]).stdout)
+    assert result["dataset_kind"] == "hugging_face"
+    assert result["dataset_selector"] == "DCAgent2/swebench-verified-random-100-folders"
+    assert result["benchmark_metadata"]["task"] == "hf://DCAgent2/swebench-verified-random-100-folders"
+    assert result["benchmark_metadata"]["n_benchmark"] == 100
+
+
+def test_preflight_accepts_pinned_harbor_acp_registry_agent(tmp_path):
+    policy_path = tmp_path / "acp.yaml"
+    policy_path.write_text(
+        """
+environment:
+  type: daytona
+agents:
+  - name: acp:pi-acp@0.0.33
+datasets:
+  - name: aime
+"""
+    )
+
+    (result,) = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)
+    assert json.loads(result["stable_policy_json"])["agents"][0]["name"] == "acp:pi-acp@0.0.33"
+
+
+def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
+    policy_path = tmp_path / "external-judge.yaml"
+    policy_path.write_text(
+        """
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: simpleqa
+    version: "1.0"
+verifier:
+  env:
+    OPENAI_API_KEY: "${TOGETHER_API_KEY}"
+    OPENAI_BASE_URL: "https://api.together.xyz/v1"
+    MODEL_NAME: "openai/gpt-oss-120b"
+"""
+    )
+
+    payload = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)[0]
+    stable_policy = json.loads(payload["stable_policy_json"])
+
+    assert payload["verifier_env_keys"] == ["TOGETHER_API_KEY"]
+    assert stable_policy["verifier"]["env"] == {
+        "MODEL_NAME": "openai/gpt-oss-120b",
+        "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
+        "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+    }
+    assert stable_policy["agents"][0]["env"] == {}
+
+
+def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
+    taxonomies = [payload["error_taxonomy"] for payload in checked_policies.values()]
+
+    assert all(taxonomy == taxonomies[0] for taxonomy in taxonomies)
+    assert "LLMRequestTimeoutError" in taxonomies[0]["infrastructure"]
+    assert {"AgentTimeoutError", "ContextLengthExceededError"} <= set(taxonomies[0]["agent"])
+    assert "OutputLengthExceededError" in taxonomies[0]["passthrough"]
+    assert set(taxonomies[0]["undecided"]) == {
+        "TrialNotScoredError",
+        "VerificationNotCompletedError",
+        "VerifierTimeoutError",
+    }
+    assert taxonomies[0]["commit"] == HARBOR_SOURCE.commit
+
+
+def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path):
+    served = {"model_info": {"max_input_tokens": 1048576, "max_output_tokens": 393216}}
+
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "tb2.yaml", served)]).stdout)
+
+    assert result["max_input_tokens"] == 1048576
+    assert result["max_output_tokens"] == 393216
+
+
+def test_preflight_keeps_a_policy_agent_context_below_the_served_window(tmp_path):
+    served = {"model_info": {"max_input_tokens": 65536}}
+
+    (result,) = json.loads(_preflight(tmp_path, [(_POLICIES / "ot-tblite.yaml", served)]).stdout)
+
+    assert result["max_input_tokens"] == 64512
+
+
+def test_preflight_rejects_a_policy_agent_context_above_the_served_window(tmp_path):
+    served = {"model_info": {"max_input_tokens": 32768}}
+
+    completed = _preflight(tmp_path, [(_POLICIES / "ot-tblite.yaml", served)], check=False)
+
+    assert completed.returncode == 2
+    assert "64512" in completed.stderr
+    assert "32768" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("setup_parameters", "run_parameters", "callback", "keywords"),
+    [
+        ("_environment", "instruction, environment, context", "setup", "environment"),
+        ("environment", "instruction, environment, _context", "run", "instruction, environment, context"),
+        (
+            "environment",
+            "instruction, environment, context, scratch_dir",
+            "run",
+            "instruction, environment, context",
+        ),
+    ],
+)
+def test_preflight_rejects_agent_callback_keyword_mismatch(
+    tmp_path,
+    setup_parameters,
+    run_parameters,
+    callback,
+    keywords,
+):
+    module_path = tmp_path / "keyword_mismatched_agent.py"
+    module_path.write_text(
+        textwrap.dedent(
+            f"""
+            class KeywordMismatchedAgent:
+                async def setup(self, {setup_parameters}):
+                    pass
+
+                async def run(self, {run_parameters}):
+                    pass
+            """
+        )
+    )
+    document = yaml.safe_load((_POLICIES / "aime-smoke.yaml").read_text())
+    document["agents"][0]["import_path"] = "keyword_mismatched_agent:KeywordMismatchedAgent"
+    policy_path = tmp_path / "keyword-mismatched-agent.yaml"
+    policy_path.write_text(yaml.safe_dump(document))
+
+    completed = _preflight(
+        tmp_path,
+        [(policy_path, {})],
+        check=False,
+        extra_python_path=tmp_path,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert f"keyword_mismatched_agent:KeywordMismatchedAgent.{callback}()" in completed.stderr
+    assert all(keyword in completed.stderr for keyword in keywords.split(", "))
 
 
 def test_single_turn_aime_agent_grades_length_finished_response(tmp_path):
@@ -285,9 +544,16 @@ datasets:
   - path: tasks
 """
         )
-        (launch_dir / "tasks").mkdir()
+        task_dir = launch_dir / "tasks" / "task-one"
+        task_dir.mkdir(parents=True)
+        (task_dir / "task.toml").write_text('version = "1.0"\n[task]\nname = "marin/task-one"\n[environment]\n')
+        (task_dir / "instruction.md").write_text("Solve the task.")
+        (task_dir / "environment").mkdir()
+        (task_dir / "tests").mkdir()
+        (task_dir / "tests/test.sh").write_text("exit 0\n")
 
         (config,) = preflight_harbor_configs([(policy_path, {})])
+        assert config.benchmark.n_benchmark == 1
 
         worker_workspace = tmp_path / "worker"
         worker_dataset = worker_workspace / launch_dir.relative_to(_ROOT) / "tasks"
@@ -297,42 +563,54 @@ datasets:
             lambda: worker_workspace,
         )
 
-        assert materialize_harbor_dataset(config, tmp_path / "workdir", hf_token=None) == worker_dataset
+        assert local_harbor_dataset_path(config) == worker_dataset
 
 
 def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(tmp_path, checked_policies):
     policy_path = tmp_path / "policy.json"
-    policy_path.write_text(checked_policies["grug-opencode-id.yaml"]["stable_policy_json"])
+    policy_path.write_text(checked_policies["ot-tblite.yaml"]["stable_policy_json"])
     overlay_path = tmp_path / "overlay.json"
     overlay_path.write_text(
         json.dumps(
             {
                 "job_name": "runtime-job",
                 "jobs_dir": str(tmp_path / "jobs"),
-                "dataset_path": str(tmp_path / "tasks"),
+                "dataset_path": None,
                 "endpoint_url": "https://iris.example/capability/v1",
                 "served_model": "served-grug",
                 "task_limit": 3,
                 "model_agent_kwargs": {
                     "extra_body": '{"chat_template_kwargs":{"enable_thinking":true}}',
-                    "model_info": {"max_input_tokens": 123},
+                    "model_info": {"max_input_tokens": 64512, "max_output_tokens": 16384},
                     "trajectory_config": {"raw_content": True},
                 },
+                "verifier_env": {
+                    "OPENAI_API_KEY": "EMPTY",
+                    "OPENAI_BASE_URL": "https://judge.example/capability/v1",
+                    "MODEL_NAME": "judge-model",
+                },
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "hf://DCAgent/dev_set_v2",
             }
         )
     )
     script = (
+        "import json; "
         "from pathlib import Path; "
+        "from pydantic import SecretStr; "
         "from marin.evaluation.harbor.trial_driver import effective_job_config; "
         f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
-        "print(config.model_dump_json())"
+        "payload=config.model_dump(mode='json'); "
+        "payload['verifier']['env']={key: (value.get_secret_value() if isinstance(value, SecretStr) else value) "
+        "for key, value in config.verifier.env.items()}; "
+        "print(json.dumps(payload))"
     )
 
     effective = json.loads(_external_python("-c", script).stdout)
 
     assert effective["job_name"] == "runtime-job"
     assert effective["jobs_dir"] == str(tmp_path / "jobs")
-    assert effective["datasets"][0]["path"] == str(tmp_path / "tasks")
+    assert effective["datasets"][0]["name"] == "hf://DCAgent/dev_set_v2"
     assert effective["datasets"][0]["n_tasks"] == 3
     agent = effective["agents"][0]
     assert agent["model_name"] == "hosted_vllm/served-grug"
@@ -348,6 +626,261 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     assert agent["kwargs"]["opencode_config"]["provider"]["hosted_vllm"]["options"] == {
         "baseURL": "https://iris.example/capability/v1"
     }
+    assert effective["verifier"]["env"] == {
+        "OPENAI_API_KEY": "EMPTY",
+        "OPENAI_BASE_URL": "https://judge.example/capability/v1",
+        "MODEL_NAME": "judge-model",
+    }
+
+
+def test_effective_acp_job_routes_model_requests_to_served_endpoint(tmp_path):
+    task_dir = tmp_path / "tasks" / "task-one"
+    task_dir.mkdir(parents=True)
+    (task_dir / "task.toml").write_text('version = "1.0"\n[task]\nname = "test/task-one"\n[environment]\n')
+    (task_dir / "instruction.md").write_text("Solve the task.")
+    (task_dir / "environment").mkdir()
+    (task_dir / "environment" / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    (task_dir / "tests").mkdir()
+    (task_dir / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [
+                    {
+                        "name": "acp:pi-acp@0.0.33",
+                        "env": {
+                            "OPENAI_API_KEY": "test-key",
+                            "OPENAI_BASE_URL": "https://stale.example/v1",
+                        },
+                    }
+                ],
+                "datasets": [{"path": "tasks"}],
+            }
+        )
+    )
+
+    preflight = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)
+    assert preflight[0]["agent"] == "acp:pi-acp@0.0.33"
+
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "runtime-job",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": None,
+                "endpoint_url": "https://iris.example/capability/v1",
+                "served_model": "served-pi",
+                "task_limit": 1,
+                "model_agent_kwargs": {},
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "tau3-pi",
+                "verifier_env": {},
+            }
+        )
+    )
+    script = (
+        "from pathlib import Path; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
+        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        "print(config.model_dump_json())"
+    )
+    effective = json.loads(_external_python("-c", script).stdout)
+
+    assert effective["agents"][0]["name"] == "acp:pi-acp@0.0.33"
+    assert effective["agents"][0]["env"] == {
+        "OPENAI_API_KEY": "****",
+        "OPENAI_BASE_URL": "https://iris.example/capability/v1",
+    }
+
+
+def test_packaged_sotopia_agent_resolves_in_vendored_runtime():
+    script = (
+        "from harbor.agents.installed.sotopia import SotopiaAgent; "
+        "from marin.evaluation.harbor.trial_driver import _validate_agent_callbacks; "
+        '_validate_agent_callbacks(SotopiaAgent, "harbor.agents.installed.sotopia:SotopiaAgent"); '
+        "print(SotopiaAgent.name())"
+    )
+
+    completed = _external_python("-c", script)
+
+    assert completed.stdout.strip() == "sotopia"
+
+
+@pytest.mark.parametrize(
+    ("model_kwargs", "policy_kwargs", "expected_format"),
+    [
+        ({"thinking_format": "chat-template"}, {}, "chat-template"),
+        ({"thinking_format": "qwen-chat-template"}, {}, "qwen-chat-template"),
+        ({"thinking_format": "qwen-chat-template"}, {"thinking_format": "chat-template"}, "chat-template"),
+    ],
+)
+def test_hosted_pi_accepts_effective_thinking_format(tmp_path, model_kwargs, policy_kwargs, expected_format):
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [{"name": "pi", "kwargs": policy_kwargs}],
+                "datasets": [{"name": "terminal-bench", "version": "2.0"}],
+            }
+        )
+    )
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "runtime-job",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": None,
+                "endpoint_url": "https://iris.example/capability/v1",
+                "served_model": "served-qwen",
+                "task_limit": 1,
+                "model_agent_kwargs": {
+                    **model_kwargs,
+                    "model_info": {"max_input_tokens": 65536, "max_output_tokens": 32768},
+                },
+                "verifier_env": {},
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "terminal-bench",
+            }
+        )
+    )
+    script = textwrap.dedent(
+        f"""
+        from pathlib import Path
+        from harbor.agents.factory import AgentFactory
+        from harbor_config.models.agent.name import AgentName
+        from marin.evaluation.harbor.trial_driver import effective_job_config
+
+        config = effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r}))
+        agent = config.agents[0]
+        AgentFactory.create_agent_from_name(
+            AgentName.PI,
+            logs_dir=Path({str(tmp_path / "logs")!r}),
+            model_name=agent.model_name,
+            **agent.kwargs,
+        )
+        print(config.model_dump_json())
+        """
+    )
+
+    effective = json.loads(_external_python("-c", script).stdout)
+
+    assert effective["agents"][0]["kwargs"]["thinking_format"] == expected_format
+
+
+@pytest.mark.parametrize("thinking_format", [None, "unsupported"])
+def test_pi_preflight_rejects_missing_or_invalid_thinking_format_before_dataset_access(tmp_path, thinking_format):
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        yaml.safe_dump(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [{"name": "pi"}],
+                "datasets": [{"name": "hf://unavailable/dataset"}],
+            }
+        )
+    )
+    kwargs = {} if thinking_format is None else {"thinking_format": thinking_format}
+
+    result = _preflight(tmp_path, [(policy_path, kwargs)], check=False)
+
+    assert result.returncode != 0
+    assert "thinking_format" in result.stderr
+
+
+@pytest.mark.parametrize(("policy_max_tokens", "expected_max_tokens"), [(None, 32768), (16384, 16384)])
+def test_effective_terminus_job_applies_output_limit_to_llm_requests(tmp_path, policy_max_tokens, expected_max_tokens):
+    agent: dict[str, object] = {"name": "terminus-2"}
+    if policy_max_tokens is not None:
+        agent["kwargs"] = {"llm_call_kwargs": {"max_tokens": policy_max_tokens}}
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [agent],
+                "datasets": [{"name": "terminal-bench", "version": "2.0"}],
+            }
+        )
+    )
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "runtime-job",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": None,
+                "endpoint_url": "https://iris.example/capability/v1",
+                "served_model": "served-glm",
+                "task_limit": 1,
+                "model_agent_kwargs": {
+                    "model_info": {"max_input_tokens": 65536, "max_output_tokens": 32768},
+                },
+                "verifier_env": {},
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "terminal-bench",
+            }
+        )
+    )
+    script = (
+        "from pathlib import Path; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
+        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        "print(config.model_dump_json())"
+    )
+
+    effective = json.loads(_external_python("-c", script).stdout)
+
+    assert effective["agents"][0]["kwargs"]["llm_call_kwargs"]["max_tokens"] == expected_max_tokens
+
+
+def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_dump(tmp_path, checked_policies):
+    capability_token = "dummy-capability-token"
+    capability_url = f"https://iris.example/proxy/t/{capability_token}/serve.inference-test/v1"
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(checked_policies["aime-smoke.yaml"]["stable_policy_json"])
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "runtime-job",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": str(tmp_path / "tasks"),
+                "endpoint_url": capability_url,
+                "served_model": "served-qwen",
+                "task_limit": 3,
+                "model_agent_kwargs": {},
+                "verifier_env": {},
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "aime",
+            }
+        )
+    )
+    script = (
+        "import json; "
+        "from pathlib import Path; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
+        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        'print(json.dumps({"api_base": config.agents[0].kwargs["api_base"], '
+        '"job_dir": str(config.jobs_dir / config.job_name), '
+        '"serialized": config.model_dump(mode="json")}))'
+    )
+
+    result = json.loads(_external_python("-c", script).stdout)
+
+    assert result["api_base"] == capability_url
+    assert result["job_dir"] == str(tmp_path / "jobs" / "runtime-job")
+    serialized = result["serialized"]
+    assert serialized["agents"][0]["kwargs"]["api_base"] == (
+        "https://iris.example/proxy/t/<redacted>/serve.inference-test/v1"
+    )
+    serialized_json = json.dumps(serialized)
+    assert capability_token not in serialized_json
+    assert "<redacted>" in serialized_json
 
 
 @pytest.mark.parametrize(

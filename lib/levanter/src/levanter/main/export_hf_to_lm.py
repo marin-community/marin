@@ -13,9 +13,10 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 
 import jax.numpy as jnp
+from jax.sharding import AxisType
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 import levanter
 import levanter.config
@@ -23,7 +24,7 @@ from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
-from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.jax_utils import local_cpu_mesh
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,8 @@ def main(config: ImportHfConfig):
     converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
 
     logger.info("Loading HF model...")
-    with use_cpu_device():
+    mesh_axis_type = AxisType.Explicit if config.model.requires_explicit_mesh_axes else AxisType.Auto
+    with local_cpu_mesh(mesh_axis_type):
         model = converter.load_pretrained(
             config.model.model_type,
             config=config.model if not config.use_hf_model_config else None,

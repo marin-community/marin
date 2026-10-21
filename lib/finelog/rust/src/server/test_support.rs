@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use axum::response::IntoResponse;
 use connectrpc::client::{ClientBody, ClientConfig, ServiceTransport};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client as HyperClient;
@@ -42,6 +43,8 @@ pub type TestTransport = ServiceTransport<HyperClient<HttpConnector, ClientBody>
 pub struct RequestStats {
     total: AtomicUsize,
     zstd: AtomicUsize,
+    register_table: AtomicUsize,
+    write_rows: AtomicUsize,
     in_flight: AtomicUsize,
     max_in_flight: AtomicUsize,
 }
@@ -61,6 +64,12 @@ impl RequestStats {
         {
             self.zstd.fetch_add(1, Ordering::SeqCst);
         }
+        if request.uri().path().ends_with("/RegisterTable") {
+            self.register_table.fetch_add(1, Ordering::SeqCst);
+        }
+        if request.uri().path().ends_with("/WriteRows") {
+            self.write_rows.fetch_add(1, Ordering::SeqCst);
+        }
         let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
         true
@@ -78,6 +87,14 @@ impl RequestStats {
         self.zstd.load(Ordering::SeqCst)
     }
 
+    pub fn register_table_requests(&self) -> usize {
+        self.register_table.load(Ordering::SeqCst)
+    }
+
+    pub fn write_rows_requests(&self) -> usize {
+        self.write_rows.load(Ordering::SeqCst)
+    }
+
     pub fn max_in_flight(&self) -> usize {
         self.max_in_flight.load(Ordering::SeqCst)
     }
@@ -90,7 +107,7 @@ pub fn disk_store(tag: &str) -> Arc<Store> {
         Store::new(
             Some(unique_dir(tag)),
             String::new(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             crate::store::ServeMode::Live,
         )
         .unwrap(),
@@ -153,11 +170,102 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<Re
     (addr, requests)
 }
 
-/// A hub that answers every RPC with `invalid_argument`, as the real one does for a
-/// structurally malformed entry (an empty key). Retrying such a request can never
-/// succeed, so this fixture lets a test prove the forwarder skips the batch instead of
-/// livelocking on it. Returns the address and a count of the requests it served.
+/// Serve `store` behind an outage switch: while the returned flag is `true`,
+/// every request is answered `unavailable` before it reaches the store,
+/// modeling a hub that loses contact and later recovers at the same address.
+pub async fn serve_with_outage(
+    store: Arc<Store>,
+    policy: AuthPolicy,
+) -> (
+    SocketAddr,
+    Arc<RequestStats>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
+    let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let outage = Arc::clone(&down);
+    let requests = Arc::new(RequestStats::default());
+    let counted = Arc::clone(&requests);
+    let app = build_app_with_config(store, ServerConfig::default().with_auth(policy)).layer(
+        axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let counted = Arc::clone(&counted);
+                let down = Arc::clone(&down);
+                async move {
+                    let observed = counted.begin(&req);
+                    let response = if down.load(Ordering::SeqCst) {
+                        let error = connectrpc::ConnectError::new(
+                            connectrpc::ErrorCode::Unavailable,
+                            "hub outage",
+                        );
+                        (
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                            [(axum::http::header::CONTENT_TYPE, "application/json")],
+                            error.to_json(),
+                        )
+                            .into_response()
+                    } else {
+                        next.run(req).await
+                    };
+                    if observed {
+                        counted.finish();
+                    }
+                    response
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    (addr, requests, outage)
+}
+
+/// A hub that answers every RPC with `invalid_argument`, as the real one does for
+/// structurally malformed content. Returns the address and a count of the requests it
+/// served.
 pub async fn serve_rejecting() -> (SocketAddr, Arc<RequestStats>) {
+    serve_error(
+        connectrpc::ErrorCode::InvalidArgument,
+        axum::http::StatusCode::BAD_REQUEST,
+        "empty key",
+    )
+    .await
+}
+
+/// A hub that answers every RPC with `failed_precondition`, as a real hub does when a
+/// well-formed batch conflicts with its registered schema.
+pub async fn serve_schema_conflict() -> (SocketAddr, Arc<RequestStats>) {
+    serve_error(
+        connectrpc::ErrorCode::FailedPrecondition,
+        axum::http::StatusCode::BAD_REQUEST,
+        "batch conflicts with registered schema",
+    )
+    .await
+}
+
+/// A hub that answers every RPC with `unavailable`, modeling an outage that may clear
+/// without changing the request.
+pub async fn serve_unavailable() -> (SocketAddr, Arc<RequestStats>) {
+    serve_error(
+        connectrpc::ErrorCode::Unavailable,
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "hub unavailable",
+    )
+    .await
+}
+
+async fn serve_error(
+    code: connectrpc::ErrorCode,
+    status: axum::http::StatusCode,
+    message: &'static str,
+) -> (SocketAddr, Arc<RequestStats>) {
     let requests = Arc::new(RequestStats::default());
     let counted = Arc::clone(&requests);
     let app = axum::Router::new().fallback(axum::routing::any(
@@ -165,12 +273,9 @@ pub async fn serve_rejecting() -> (SocketAddr, Arc<RequestStats>) {
             let counted = Arc::clone(&counted);
             async move {
                 let observed = counted.begin(&request);
-                let error = connectrpc::ConnectError::new(
-                    connectrpc::ErrorCode::InvalidArgument,
-                    "empty key",
-                );
+                let error = connectrpc::ConnectError::new(code, message);
                 let response = (
-                    axum::http::StatusCode::BAD_REQUEST,
+                    status,
                     [(axum::http::header::CONTENT_TYPE, "application/json")],
                     error.to_json(),
                 );

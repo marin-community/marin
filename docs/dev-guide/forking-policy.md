@@ -1,53 +1,147 @@
 # Forking Policy
 
 When Marin needs a modified version of an upstream package, we maintain a fork
-under the `marin-community` GitHub organization rather than vendoring code into
-the Marin monorepo. This page documents the requirements for creating and
-maintaining such forks.
+under the `marin-community` GitHub organization. Each fork carries Marin's
+patches on top of an upstream base, and an automated weekly process keeps it
+close to upstream. SkyRL is maintained under `vendor/skyrl` with an independent
+lock and executable boundary; see the [SkyRL migration guide](skyrl-migration.md).
+This page describes
+how Marin pins the remaining forks and how the refresh runs.
 
-## Requirements
+Evalchemy and Harbor are maintained in `vendor/evalchemy` and `vendor/harbor`,
+each with an independent uv lock and local FineStore and Rigging sources. Both
+are excluded from the workspace and this fork-refresh process; evaluator changes
+land in the same Marin pull request as their callers.
 
-1. **Host the fork in `marin-community/<package>`.**
-   Do not pull the forked source tree into the Marin repo. Keep it as a
-   standalone repository under the organization (e.g.
-   `marin-community/harbor`, `marin-community/vllm-tpu`).
+## How Marin pins a fork
 
-2. **Set up CI to autobuild wheels on push to main.**
-   Every push to the fork's `main` branch must produce a versioned wheel via
-   GitHub Actions (or equivalent CI). There should be no manual "run this
-   script to get new wheels" step.
+Forks except XLA are pinned under `config/external/`. Those pins feed
+`config/update-external.py`, which regenerates
+`lib/marin/src/marin/external_dependencies.py`; nothing else imports a fork
+revision directly. XLA uses the workspace wheel pin described below. There
+are three pin kinds:
 
-3. **Pin by version hash in Marin's `pyproject.toml`.**
-   Marin should depend on the fork via a wheel URL or a git dependency with a
-   pinned revision, so that `uv sync` runs quickly and results are cacheable.
-   Example from `pyproject.toml`:
+- Descriptor SHA (`vllm` TPU source, `tpu-inference`): the exact pair lives in
+  `config/external/vllm/tpu.toml`. Its vLLM commit comes from the same maintained
+  `main` lineage as GPU releases. The stack runs from an isolated `uvx`
+  environment, so its `jax`/`jaxlib`/`libtpu`/`torch` come from the forks' own
+  dependencies and there is no workspace lock change.
+- Release wheel (`vllm` GPU): `config/external/vllm/gpu.toml` records a
+  promoted, immutable wheel per architecture. See the GPU release pipeline below.
+- Pinned wheel URL (`xla`): the `gpu` extra's `jax-cuda13-pjrt` source in
+  `lib/marin/pyproject.toml` points at a promoted wheel from the fork's release,
+  and `uv.lock` records its hash. This fork sits outside the weekly refresh; see
+  the XLA fork section below.
 
-   ```toml
-   harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d..." }
-   ```
+Prefer the same exact vLLM source commit for GPU and TPU when that commit passes
+both device gates. This is not a lockstep rule: the lanes keep separate wheels,
+dependency environments, manifests, gates, promotion inputs, and release
+cadences. A lane may use a different source for compatibility or qualification;
+record the reason and prefer reconverging at a later commit that passes both
+gates. Never delay one lane solely to keep the source SHAs equal.
 
-## Existing Forks
+## The weekly refresh
 
-| Package | Repository | How Marin depends on it |
-|---------|-----------|------------------------|
-| Harbor  | [`marin-community/harbor`](https://github.com/marin-community/harbor) | Git dependency pinned to a commit rev in the root `pyproject.toml` |
-| vllm-tpu | [`marin-community/vllm-tpu`](https://github.com/marin-community/vllm-tpu) | PyPI version pin (`vllm-tpu==0.19.0`) in `lib/marin/pyproject.toml` |
+`.github/workflows/ops-fork-ferry.yaml` runs every Monday at 08:00 UTC. It has one
+matrix leg per fork unit (`tpu-vllm`, `vllm-gpu`). Each leg
+mints a GitHub OIDC token, exchanges it for a short-lived Loom token, and launches
+one Weaver session for that unit. The `fork-ferry` Loom profile admits both
+scheduled units; a test keeps its concurrency limit at or above the matrix size.
+There is no stored PAT.
 
-## When to Fork
+A human can run the skill for a single fork on demand.
 
-Fork only when:
+The session follows `.agents/skills/refresh-fork/SKILL.md` and the fork's guide.
+It selects a source, replays Marin's patches when needed, and runs the declared
+tests before opening one adoption PR. The GPU guide requires source approval
+on `main` before building wheels. For other rebased forks, the admin reviews
+the adoption PR before moving `main`. An unresolved external blocker gets an
+issue assigned to the descriptor's owner.
 
-- You need patches that upstream has not (or will not) accept.
-- The upstream release cadence is too slow for a fix you need now.
-- You need a custom build (e.g. TPU-specific wheels).
+`config/external/migration.toml` is the per-fork descriptor. It records the
+upstream repository, the pin kind, the fork branch the pin tracks, how to select a
+new base, the validating e2e, the blocker assignee, and the nuances a refresh must
+respect (a held torch revision or a CUDA/torch/stable-ABI boundary that turns a
+bump into a migration).
 
-Prefer upstreaming changes when possible. A fork is ongoing maintenance
-overhead — even with agents helping, keeping it in sync takes effort.
+## Validation
 
-## Maintaining a Fork
+Each descriptor names one required e2e that runs before the PR opens:
 
-- Keep the fork's `main` branch rebased or merged regularly against upstream.
-- Tag releases that correspond to the pinned revisions in Marin so the
-  provenance is clear.
-- When bumping the pinned revision in Marin, update the rev in
-  `pyproject.toml` and run `uv sync` to verify resolution.
+| Fork | End-to-end |
+|------|------------|
+| `vllm` TPU source, `tpu-inference` | `marin-community/vllm:.github/workflows/marin-gpu-release.yaml#tpu` (Qwen3-0.6B TP8 on `v6e-8`) |
+| `vllm` (GPU) | `tests/cluster/vllm/test_snowball_backend_parity.py` |
+
+When an e2e fails, the refresh reruns the same workload against Marin's current
+pins on the old fork stack. It fixes only failures that pass on the old stack and
+regress on the refreshed one. A workload already broken on the old stack is
+recorded as a baseline failure and left for its own fix.
+
+## The vLLM GPU release pipeline
+
+Review source on the vLLM fork's `main`, build both wheels, run the existing
+H100 and GB200 tests, and publish once. A developer or agent then tests those
+published wheels in Marin and opens one adoption PR. Marin uses the wheels
+after that PR merges.
+
+The [GPU guide](https://github.com/marin-community/marin/blob/main/.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
+contains the trigger table, exact commands, and admin handoff for upstream
+rebases. The same build and adoption process applies to ordinary fork patches.
+
+## Promotion
+
+The refresh agent never force-moves a protected stable branch. For descriptor
+and isolated-project rebases, `main-next` stays separate until the e2e passes
+and an admin reviews the draft Marin PR. That admin performs the backed-up
+hard swap to `main` before the PR merges. Descriptor pins already name the exact
+validated SHA; isolated projects restore their uv source to `main` and relock
+at that same SHA.
+
+For a vLLM GPU rebase, follow the GPU guide above. It uses the rollback tags
+and source swap in `.agents/skills/refresh-fork/docs/promotion-protocol.md`
+before wheel builds.
+
+The vLLM TPU selector is the exception: it reuses an exact commit already on
+the fork's `main` lineage, so it has no vLLM staging branch or protected-branch
+promotion. Its paired tpu-inference refresh still follows the normal
+`main-next` promotion protocol.
+
+## Existing forks
+
+| Fork | Repository | Tracks upstream | Pin |
+|------|-----------|-----------------|-----|
+| vLLM TPU source | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | exact `main`-line SHA (`tpu.toml`) |
+| vllm (GPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | release wheel from `main` (`gpu.toml`) |
+| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | descriptor SHA (`tpu.toml`) |
+| xla | [`marin-community/xla`](https://github.com/marin-community/xla) | [`openxla/xla`](https://github.com/openxla/xla) | wheel URL in `lib/marin/pyproject.toml` (gpu extra) |
+
+## The XLA fork
+
+The fork exists to carry two ragged all-to-all device-kernel patches on the GPU
+PJRT plugin, which only that plugin binary embeds. It is not in
+`config/external/migration.toml` and the weekly refresh never advances it,
+because its base is not a refreshable choice: jax pins an exact XLA revision by
+integrity hash, so the fork must sit on the XLA commit that the workspace's
+pinned `jax[cuda13]` release names, and it moves only when that pin moves. Every
+sibling package (`jax`, `jaxlib`, `jax-cuda13-plugin`) installs stock at the
+pin, and the wheel's `+marin.<sha>` local version still satisfies the stock
+`jax-cuda13-pjrt==` requirement.
+
+A refresh happens only after a jax bump; the step-by-step rebuild-and-re-pin
+procedure is the refresh-fork skill's `.agents/skills/refresh-fork/docs/xla.md`.
+The pin gate is
+policy: do not pin a wheel whose manifest's `validation` block is not
+`status: passed`. A patch can compile in and still be inert, and an inert patch
+passes ordinary correctness tests, including the e2e
+(`tests/cluster/grug/test_ragged_ep_check.py`, `cluster`-marked), so the
+promote job's validation proves the patched behaviors are live, and a patch
+that adds another required behavior adds its own check there.
+
+## When to fork
+
+Fork only when upstream has not accepted patches you need, the upstream release
+cadence is too slow for a fix you need now, or you need a custom build such as
+TPU-specific or GPU-specific wheels. Prefer upstreaming changes. A fork is ongoing
+maintenance overhead even with the weekly refresh, and every retained patch needs
+a reason and a drop condition so the overlay shrinks as upstream absorbs it.

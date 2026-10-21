@@ -14,12 +14,12 @@ import haliax
 
 import levanter.main.export_hf_to_lm as export_hf_to_lm
 import levanter.main.export_lm_to_hf as export_lm_to_hf
-import tiny_test_corpus
+from levanter.testing import tiny_corpus
 from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.utils.jax_utils import is_inexact_arrayish
-from test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
 # Pad the model embedding past the tokenizer vocab (as Qwen does for TPU efficiency), so the
 # emit_padded_tokenizer path has something to pad.
@@ -35,7 +35,7 @@ def test_import_hf_to_lm_saves_model_under_subpath_and_emits_padded_tokenizer():
     model_config = Gpt2Config(num_layers=2, num_heads=2, max_seq_len=32, hidden_dim=32, use_flash_attention=True)
 
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
-        tokenizer = tiny_test_corpus.tiny_corpus_config(tmpdir).the_tokenizer
+        tokenizer = tiny_corpus.tiny_corpus_config(tmpdir).the_tokenizer
         vocab_size = len(tokenizer) + _VOCAB_PAD
         Vocab = haliax.Axis("vocab", vocab_size)
         model = Gpt2LMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))

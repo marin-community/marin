@@ -166,6 +166,9 @@ def all_sources() -> dict[str, DatakitSource]:
         # Canonical token-count-viewer estimate for the pinned b78a5c1 revision
         # (10,005 files / 4.49 TB); not yet measured with the Marin tokenizer.
         ("common_corpus/english", common_corpus_normalize_steps, 1015.39),
+        # Counted over the jusText extraction, before normalize dedups it. A
+        # 24-shard sample carried 12.2% duplicate rows, so the normalized total
+        # lands lower; replace this once that cache is tokenized.
         ("common-crawl-focus-2026-22", common_crawl_focus_normalize_steps, 49.702569456),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),

@@ -22,8 +22,8 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.composer import make_backends
-from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends, resolve_config_secrets
+from iris.cluster.composer import make_backend
+from iris.cluster.config import IrisClusterConfig, load_config, resolve_config_secrets, resolve_principal_references
 from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import (
@@ -38,6 +38,7 @@ from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.rollout import RolloutPhase, read_rollout_record, write_rollout_record
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.provenance import provenance_from_env
+from iris.cluster.types import UserBudgetDefaults
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,7 @@ def run_controller_serve(
     This is the shared implementation used by both the standalone daemon
     entrypoint and the ``iris cluster controller serve`` CLI command.
     """
+    cluster_config = resolve_principal_references(resolve_config_secrets(cluster_config))
     logger.info("Initializing Iris controller (%s)", provenance_from_env())
 
     remote_state_dir = cluster_config.storage.remote_state_dir
@@ -226,10 +228,6 @@ def run_controller_serve(
 
     db = ControllerDB(db_dir=db_dir)
 
-    # Resolve reference-based secrets (SecretRefSpec fields) at the controller
-    # runtime — the deploy/render path renders references verbatim and never
-    # resolves. A configured-but-erroring source fails fast here.
-    cluster_config = resolve_config_secrets(cluster_config)
     signing_key_pem = (
         cluster_config.auth.signing_key if (cluster_config.auth and cluster_config.auth.signing_key) else None
     )
@@ -248,7 +246,7 @@ def run_controller_serve(
         log_service_address=log_service_address,
         local_log_dir=local_state_dir / "log-server",
         host=host,
-        worker_token=auth.worker_token if auth.worker_token else None,
+        worker_token_provider=auth.worker_token_provider,
     )
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
@@ -270,18 +268,18 @@ def run_controller_serve(
         dashboard_url=cluster_config.dashboard_url,
         federation_public_parent=cluster_config.federation_public_parent,
         peers=cluster_config.peers,
+        user_budget_defaults=UserBudgetDefaults(
+            budget_limit=cluster_config.user_budget_defaults.budget_limit,
+            max_band=cluster_config.user_budget_defaults.max_band,
+        ),
     )
 
-    # Each worker-daemon backend constructs and owns its liveness tracker, sized by
-    # the controller config's worker-unreachable grace.
-    backends = make_backends(
+    backend = make_backend(
         cluster_config,
-        db=db,
         auth=auth,
         remote_state_dir=remote_state_dir,
         dry_run=dry_run,
         log_stack=log_stack,
-        unreachable_grace=config.worker_unreachable_grace,
     )
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
@@ -295,11 +293,10 @@ def run_controller_serve(
 
     controller = Controller(
         config=config,
-        backends=backends,
         log_stack=log_stack,
         db=db,
-        backend_configs=resolve_backends(cluster_config),
     )
+    controller.register_backend(backend)
     logger.info("Controller instance created")
 
     controller.start()
@@ -320,6 +317,7 @@ def run_controller_serve(
         # a full cluster teardown, `iris cluster stop` handles VM cleanup via
         # stop_all(), so the SIGTERM handler never needs to delete VMs itself.
         logger.info("Shutdown signal received")
+        controller.begin_shutdown()
         if not config.dry_run:
             try:
                 path, result = controller.begin_checkpoint()

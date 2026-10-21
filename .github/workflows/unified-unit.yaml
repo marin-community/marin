@@ -4,10 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 8 * * *"
   workflow_dispatch:
 
 concurrency:
-  group: unified-unit-${{ github.event.pull_request.number || github.ref }}
+  group: unified-unit-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -19,6 +21,8 @@ jobs:
     outputs:
       matrix: ${{ steps.analyze.outputs.matrix }}
       suites: ${{ steps.analyze.outputs.suites }}
+      levanter_torch_test_paths: ${{ steps.analyze.outputs.levanter_torch_test_paths }}
+      levanter_tpu_test_paths: ${{ steps.analyze.outputs.levanter_tpu_test_paths }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -32,22 +36,26 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          # A pull request selects tests from its diff. A push to main re-runs every unit
-          # test, which is what catches anything the import graph failed to select on the
-          # pull request that introduced it; it still gates the accelerator and browser
-          # suites on the diff, because those are chosen by directory and never by import.
-          # A manual run, and a push whose base is unknown, run everything.
+          # Pull requests and pushes select tests from their diff. Scheduled and manual
+          # runs exercise every test as a backstop for missing import-graph edges.
           ARGS=()
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ARGS+=(--run-all-tests)
           fi
           if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
             ARGS+=(--base-ref "$BASE_SHA")
+          elif [ "${{ github.event_name }}" != "schedule" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            ARGS+=(--run-all-tests)
           fi
           result=$(python3 infra/ci/select_tests.py "${ARGS[@]}")
           echo "$result"
           echo "matrix=$(jq -c .matrix <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "suites=$(jq -c .suites <<<"$result")" >> "$GITHUB_OUTPUT"
+          # Pull requests use the workflow from the merge ref but run the selector from
+          # the checked-out head. Accelerator jobs fall back to their full suite when an
+          # older head predates these path outputs.
+          echo "levanter_torch_test_paths=$(jq -r '[.suite_test_paths["levanter-torch"][]? | sub("^lib/levanter/"; "")] | join(" ")' <<<"$result")" >> "$GITHUB_OUTPUT"
+          echo "levanter_tpu_test_paths=$(jq -r '.suite_test_paths["levanter-tpu"] // [] | join(" ")' <<<"$result")" >> "$GITHUB_OUTPUT"
 
   unit:
     needs: select
@@ -96,16 +104,62 @@ jobs:
         # which is not a failure. Those tests run in their own dedicated workflow. Treat
         # exit 5 as success; every other non-zero status still fails the lane.
         run: |
+          if [ "${{ matrix.package }}" = "marin-haliax" ]; then
+            export JAX_NUM_CPU_DEVICES=8
+          fi
           status=0
           uv run \
-            --python 3.12 \
+            --python ${{ matrix.python }} \
             --package ${{ matrix.package }} \
             ${{ matrix.extras }} \
             --group test \
-            pytest --durations=5 -n auto --dist=worksteal --tb=short \
+            pytest ${{ matrix.pytest_args }} \
             ${{ matrix.test_paths }} || status=$?
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
+
+  slow:
+    if: ${{ github.event_name == 'schedule' }}
+    name: slow
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Run slow CPU tests
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PYTHONPATH: lib/zephyr/tests:lib/levanter/tests
+        run: |
+          status=0
+          uv run \
+            --python 3.12 \
+            --all-packages \
+            --no-default-groups \
+            --extra cpu \
+            --extra dedup \
+            --group test \
+            pytest --durations=20 -n auto --dist=worksteal --tb=short \
+            -m "slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not torch" \
+            tests experiments lib/*/tests || status=$?
+          [ "$status" -eq 5 ] && exit 0
+          exit "$status"
+
+  notify_slow_tests:
+    needs: slow
+    if: ${{ always() && github.event_name == 'schedule' && needs.slow.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":red_circle: *Nightly slow tests failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
   levanter_torch:
     name: levanter-torch
@@ -159,14 +213,44 @@ jobs:
           uv pip install \
             "https://download.pytorch.org/whl/cpu/torch-${TORCH_CPU_VERSION/+/%2B}-${CP_TAG}-${CP_TAG}-manylinux_2_28_x86_64.whl"
 
-      - name: Install FFmpeg runtime
+      - name: Resolve FFmpeg package cache
+        id: apt-cache
         run: |
+          echo "key=apt-ffmpeg-$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+          echo "dir=$HOME/apt-archives" >> "$GITHUB_OUTPUT"
+
+      # The Ubuntu mirror sometimes serves the ~100 MB of FFmpeg packages at a few
+      # hundred kB/s, which alone can push this job past its timeout. Packages already
+      # in the cached archive directory are not downloaded again.
+      - name: Cache FFmpeg packages
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.apt-cache.outputs.dir }}
+          key: ${{ steps.apt-cache.outputs.key }}
+          restore-keys: apt-ffmpeg-
+
+      - name: Install FFmpeg runtime
+        env:
+          APT_ARCHIVES: ${{ steps.apt-cache.outputs.dir }}
+        run: |
+          mkdir -p "$APT_ARCHIVES/partial"
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y -o Dir::Cache::Archives="$APT_ARCHIVES" -o APT::Sandbox::User=root ffmpeg
+          # Drop packages superseded since an older runner image's cache was restored.
+          sudo apt-get autoclean -o Dir::Cache::Archives="$APT_ARCHIVES"
+          # apt leaves root-owned lock and partial files that the cache step cannot archive.
+          sudo rm -rf "$APT_ARCHIVES/lock" "$APT_ARCHIVES/partial"
+          sudo chown -R "$(id -u):$(id -g)" "$APT_ARCHIVES"
 
       - name: Test torch-marked suite
         # Run directly on CPU to avoid GPU dependency issues.
-        run: CUDA_VISIBLE_DEVICES="" ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
+        run: |
+          status=0
+          CUDA_VISIBLE_DEVICES="" ../../.venv/bin/python -m pytest \
+            ${{ needs.select.outputs.levanter_torch_test_paths || 'tests' }} \
+            -m "torch" --durations=20 || status=$?
+          [ "$status" -eq 5 ] && exit 0
+          exit "$status"
 
   levanter_tpu:
     name: levanter-tpu
@@ -176,7 +260,7 @@ jobs:
       && (github.event_name != 'pull_request'
           || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: [tpu-ci]
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
 
@@ -188,11 +272,25 @@ jobs:
           bash infra/tpu-ci/clean-tpu.sh
           DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
-          mkdir -p /tmp/uv-cache
-          chmod 777 /tmp/uv-cache
+          # The runner's startup script (infra/tpu-ci/vm_manager.py) creates this cache,
+          # owned by the container user, and pre-populates it with the locked TPU
+          # dependencies, so a fresh VM's first job does not download every package.
+          UV_CACHE_HOST=/var/cache/uv
+          if [ ! -d "$UV_CACHE_HOST" ]; then
+            echo "::error::$UV_CACHE_HOST is missing; the runner VM was not set up by infra/tpu-ci/vm_manager.py"
+            exit 1
+          fi
+          du -sh "$UV_CACHE_HOST"
+          TPU_TEST_PATHS="${{ needs.select.outputs.levanter_tpu_test_paths }}"
+          # The selector includes only files with tpu-marked tests, including full runs.
+          # Never fall back to repeating the entire CPU suite on the TPU runner.
+          test -n "$TPU_TEST_PATHS"
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
+          # The venv lives on the uv cache mount so uv can hardlink packages instead of
+          # copying them across filesystems. Each run deletes it first, so a crashed or
+          # cancelled run never leaves a partial venv behind.
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
@@ -210,28 +308,157 @@ jobs:
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
             -e UV_CACHE_DIR=/tmp/uv-cache \
+            -e UV_PROJECT_ENVIRONMENT=/tmp/uv-cache/levanter-tpu-venv \
             -v ${{ github.workspace }}:/workspace-src:ro \
-            -v /tmp/uv-cache:/tmp/uv-cache:rw \
+            -v "$UV_CACHE_HOST":/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
             bash -c "\
-              # Install Node.js in userspace if not present (needed for protobuf generation during uv sync)
-              if ! command -v npx >/dev/null 2>&1; then \
-                echo '::group::Installing Node.js in userspace'; \
-                curl -fsSL https://nodejs.org/dist/v22.16.0/node-v22.16.0-linux-x64.tar.xz | tar -xJ -C /tmp && \
-                export PATH=/tmp/node-v22.16.0-linux-x64/bin:\$PATH; \
-                echo '::endgroup::'; \
-              fi && \
+              rm -rf \"\$UV_PROJECT_ENVIRONMENT\" && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
-              timeout --kill-after=5 --signal=TERM 1490 \
-              uv run --package marin-levanter --frozen --group test --extra tpu \
-              pytest -n 0 lib/levanter/tests \
-              --ignore=lib/levanter/tests/test_audio.py \
-              --ignore=lib/levanter/tests/test_new_cache.py \
-              --ignore=lib/levanter/tests/test_hf_checkpoints.py \
-              --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py \
-              --ignore=lib/levanter/tests/test_gdn_layer.py \
-              -v --tb=short --log-cli-level=WARNING --durations=20"
+              ( status=0; \
+                timeout --kill-after=5 --signal=TERM 2090 \
+                uv run --package marin-levanter --frozen --group test --extra tpu \
+                pytest -n 0 $TPU_TEST_PATHS \
+                -m 'tpu and not slow and not torch and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' \
+                -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
+                [ "\$status" -eq 5 ] && exit 0; \
+                exit "\$status" )"
+
+  evalchemy:
+    name: evalchemy-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'evalchemy-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "vendor/evalchemy/uv.lock"
+      - name: Check evaluator lock freshness
+        run: uv lock --project vendor/evalchemy --check
+      - name: Test vendored Evalchemy
+        working-directory: vendor/evalchemy
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/vendor/evalchemy/.venv
+        run: >-
+          uv run --frozen --all-extras --group test pytest -q
+
+  harbor:
+    name: harbor-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'harbor-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "vendor/harbor/uv.lock"
+      - name: Check Harbor lock and offline runtime
+        run: uv run --no-project infra/ci/run_harbor_tests.py
+
+  shellbox:
+    name: shellbox-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'shellbox-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      # TaskCompendium supplies the locked Shellbox base package. Backend extras
+      # remain optional; tests skip the SDK-dependent adapters when absent.
+      - name: Test Shellbox
+        run: uv run --package marin-taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
+
+  taskcompendium:
+    name: taskcompendium-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'taskcompendium-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Test TaskCompendium
+        run: uv run --package marin-taskcompendium --frozen --extra pipeline --group test pytest lib/taskcompendium/tests -q
+
+      - name: Type-check TaskCompendium
+        working-directory: lib/taskcompendium
+        run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+
+  rolloutengine:
+    name: rolloutengine-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'rolloutengine-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Test rollout execution and private grading
+        run: >-
+          uv run --package marin-rolloutengine --frozen --group test pytest
+          -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
+          lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py -q
+
+      - name: Test Docker and Daytona guest execution
+        # Pull through Google's Docker Hub mirror: unauthenticated Docker Hub pulls from
+        # shared runner addresses hit its rate limit. The tag keeps the names the tests use.
+        run: |
+          for image in busybox:1.36 ubuntu:24.04; do
+            docker pull "mirror.gcr.io/library/$image"
+            docker tag "mirror.gcr.io/library/$image" "$image"
+          done
+          uv run --package marin-rolloutengine --frozen --group test pytest \
+            -c lib/rolloutengine/pyproject.toml lib/shellbox/tests/test_docker_machine.py \
+            lib/shellbox/tests/test_daytona_machine.py \
+            lib/rolloutengine/tests/test_rollout.py -m docker -q
+
+      - name: Type-check RolloutEngine
+        working-directory: lib/rolloutengine
+        run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+
+  taskforge:
+    name: taskforge-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'taskforge-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - name: Test Taskforge and its capability environments
+        run: >-
+          uv run --package marin-taskforge --frozen --group test pytest
+          -c lib/taskforge/pyproject.toml lib/taskforge/tests
+          experiments/post_training/capability_driven_envs/tests -q
+
+      - name: Type-check Taskforge
+        working-directory: lib/taskforge
+        run: uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 
   iris_e2e_smoke:
     name: iris-e2e-smoke
@@ -239,14 +466,8 @@ jobs:
     if: ${{ contains(fromJSON(needs.select.outputs.suites), 'iris-e2e-smoke') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -283,15 +504,6 @@ jobs:
             lib/iris/tests/e2e/test_smoke.py \
             -m requires_cluster -o "addopts=" --tb=short -v
 
-      - name: Verify screenshots with Claude
-        # Skip on PRs without secrets access (forks, dependabot): no token means
-        # the claude CLI can't authenticate, so the step would only error out.
-        if: always() && env.CLAUDE_CODE_OAUTH_TOKEN != '' && hashFiles('iris-screenshots/*.txt') != ''
-        run: |
-          npm install -g @anthropic-ai/claude-code
-          python -m lib.iris.scripts.verify_screenshots \
-            --screenshot-dir ${{ github.workspace }}/iris-screenshots
-
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v7
@@ -301,9 +513,39 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  skyrl:
+    name: skyrl-wheel
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'skyrl-wheel') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "vendor/skyrl/uv.lock"
+      - name: Check independent lock, Marin contract, and built wheel
+        run: uv run --no-project python -m scripts.skyrl_migration check-vendor
+      - name: Exercise the isolated source bundle, launchers, and verifier
+        working-directory: vendor/skyrl
+        run: |
+          uv run --isolated --frozen --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
+            cloud/iris/tests/test_vendored_runtime_bundle.py \
+            cloud/iris/tests/test_ray_spill_policy.py \
+            cloud/iris/tests/test_task_runtime_source_selection.py \
+            cloud/iris/tests/test_task_runtime_debug_artifacts.py \
+            cloud/iris/tests/test_launch_config.py \
+            cloud/iris/tests/test_checkpoint_export_config.py \
+            cloud/iris/tests/test_open_mopd_fidelity.py \
+            cloud/iris/tests/test_open_mopd_evaluation.py \
+            skyrl-gym/tests/test_aime_answer_normalization.py \
+            skyrl-gym/tests/test_nemotron_judge_assets.py
+
   unit_tests:
     name: unit-tests
-    needs: [select, unit, levanter_torch, levanter_tpu, iris_e2e_smoke]
+    needs: [select, unit, levanter_torch, levanter_tpu, evalchemy, harbor, shellbox, taskcompendium, rolloutengine, taskforge, iris_e2e_smoke, skyrl]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -313,6 +555,13 @@ jobs:
             "${{ needs.unit.result }}" \
             "${{ needs.levanter_torch.result }}" \
             "${{ needs.levanter_tpu.result }}" \
+            "${{ needs.evalchemy.result }}" \
+            "${{ needs.harbor.result }}" \
+            "${{ needs.shellbox.result }}" \
+            "${{ needs.taskcompendium.result }}" \
+            "${{ needs.rolloutengine.result }}" \
+            "${{ needs.taskforge.result }}" \
+            "${{ needs.skyrl.result }}" \
             "${{ needs.iris_e2e_smoke.result }}"
           do
             case "$result" in

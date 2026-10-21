@@ -93,7 +93,7 @@ class GrugMoeLaunchConfig:
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     processes_per_task: int = 1
     """GPU processes per task. > 1 fans each node into one JAX process per GPU
-    (multi-controller) via the iris.hooks.multigpu_main supervisor; 1 keeps the
+    (multi-controller) via the iris.jax.multigpu_main supervisor; 1 keeps the
     single-process-per-node model."""
     checkpointer: CheckpointerConfig | None = None
     """Override the checkpointer. None builds the default (periodic + final saves
@@ -197,11 +197,6 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
     hidden_dim=_BASELINE_HIDDEN_DIM,
     target_steps=_BASELINE_TARGET_STEPS,
 )
-
-# Public alias for the heuristic-derived baseline GrugModelConfig. Kept
-# because consumers (e.g. experiments/ferries/canary_ferry.py) import it by
-# name.
-GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
 
 def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:

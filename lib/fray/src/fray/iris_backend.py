@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import cloudpickle
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
@@ -41,11 +42,12 @@ from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
     ResourceSpec,
-    is_job_finished,
     tpu_device,
 )
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.hooks.multigpu import build_multigpu_hook
+from iris.jax.multigpu import build_multigpu_hook
+from iris.resources.state import JobState as IrisJobState
+from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
 from iris.rpc.errors import is_retryable_error
 from rigging.timing import ExponentialBackoff
@@ -161,6 +163,13 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     return constraints
 
 
+def convert_container_profile(resources: ResourceConfig) -> int:
+    """The Iris profile enum value for ``resources.container_profile``, UNSPECIFIED when unset."""
+    if resources.container_profile is None:
+        return job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+    return job_pb2.ContainerProfile.Value(resources.container_profile)
+
+
 def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
     """Convert fray Entrypoint to Iris Entrypoint."""
     if entrypoint.callable_entrypoint is not None:
@@ -235,19 +244,17 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
     )
 
 
-def map_iris_job_state(iris_state: int) -> JobStatus:
-    """Map Iris protobuf JobState enum to fray JobStatus."""
-
-    _STATE_MAP = {
-        job_pb2.JOB_STATE_PENDING: JobStatus.PENDING,
-        job_pb2.JOB_STATE_RUNNING: JobStatus.RUNNING,
-        job_pb2.JOB_STATE_SUCCEEDED: JobStatus.SUCCEEDED,
-        job_pb2.JOB_STATE_FAILED: JobStatus.FAILED,
-        job_pb2.JOB_STATE_KILLED: JobStatus.STOPPED,
-        job_pb2.JOB_STATE_WORKER_FAILED: JobStatus.FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE: JobStatus.FAILED,
-    }
-    return _STATE_MAP.get(iris_state, JobStatus.PENDING)
+def map_iris_job_state(iris_state: IrisJobState) -> JobStatus:
+    """Map an Iris workload state to Fray's smaller lifecycle."""
+    if iris_state is IrisJobState.RUNNING:
+        return JobStatus.RUNNING
+    if iris_state is IrisJobState.SUCCEEDED:
+        return JobStatus.SUCCEEDED
+    if iris_state is IrisJobState.KILLED:
+        return JobStatus.STOPPED
+    if is_job_finished(iris_state):
+        return JobStatus.FAILED
+    return JobStatus.PENDING
 
 
 class IrisJobHandle:
@@ -283,10 +290,10 @@ class IrisJobHandle:
         return tuple(entry.data.rstrip("\n") for entry in self._job.logs(max_lines=max_lines, tail=True))
 
     def terminate(self) -> None:
-        self._job.terminate()
+        self._job.cancel()
 
 
-def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
+def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str, max_concurrency: int) -> None:
     """Entrypoint for actor-hosting Iris jobs.
 
     Instantiates the actor class, creates an ActorServer, registers the
@@ -321,7 +328,9 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     finally:
         _reset_current_actor(token)
 
-    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"))
+    # Size the method executor from ActorConfig.max_concurrency, as the Fray
+    # contract says. An actor that serves calls during a long method must set it.
+    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"), max_concurrency=max_concurrency)
     server.register(actor_name, instance)
     actual_port = server.serve_background()
 
@@ -329,7 +338,15 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     # XXX: this should be handled by the actor server?
     address = f"http://{advertise_host}:{actual_port}"
     logger.info(f"Registering endpoint: {actor_name} -> {address}")
-    ctx.registry.register(actor_name, address)
+    try:
+        ctx.registry.register(actor_name, address)
+    except ConnectError as exc:
+        if exc.code == Code.FAILED_PRECONDITION:
+            logger.error("Actor %s stopped before endpoint registration: %s", actor_name, exc)
+            server.stop()
+            return
+        server.stop()
+        raise
     logger.info(f"Actor {actor_name} ready and listening")
 
     # Block until the actor signals shutdown via shutdown_event
@@ -402,7 +419,12 @@ class OperationFuture:
     def result(self, timeout: float | None = None) -> Any:
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
-            op = self._client.poll_operation_status(self._op_id)
+            try:
+                op = self._client.poll_operation_status(self._op_id)
+            except ConnectError as exc:
+                if exc.code is Code.NOT_FOUND:
+                    raise ActorUnavailableError(f"Operation {self._op_id} was lost") from exc
+                raise
 
             if op.state == actor_pb2.Operation.SUCCEEDED:
                 return cloudpickle.loads(op.serialized_result)
@@ -600,7 +622,7 @@ class IrisActorGroup:
             client = self._get_client()
             state = client.job_state(self._job_id)
             if is_job_finished(state):
-                error = client.status(self._job_id).error or "unknown error"
+                error = client.job_status(self._job_id).error_message or "unknown error"
                 raise RuntimeError(
                     f"Actor job {self._job_id} finished before all actors registered "
                     f"({len(self._discovered_names)}/{target} ready). "
@@ -621,7 +643,7 @@ class IrisActorGroup:
     def shutdown(self) -> None:
         """Terminate the actor job."""
         client = self._get_client()
-        client.terminate(self._job_id)
+        client.cancel_job(self._job_id)
 
 
 class FrayIrisClient:
@@ -684,7 +706,9 @@ class FrayIrisClient:
                 max_task_failures=request.max_task_failures,
                 existing_job_policy=policy,
                 task_image=request.resources.image,
+                container_profile=convert_container_profile(request.resources),
                 priority_band=request.priority,
+                timeout=request.timeout,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e
@@ -713,7 +737,9 @@ class FrayIrisClient:
         finally:
             _reset_current_actor(token)
 
-        server = ActorServer(host="0.0.0.0", port=0)
+        # host_actor runs in the submitting process, so it must apply the same
+        # ActorConfig contract as actors submitted through create_actor_group.
+        server = ActorServer(host="0.0.0.0", port=0, max_concurrency=actor_config.max_concurrency)
         server.register(actor_name, instance)
         actual_port = server.serve_background()
 
@@ -770,7 +796,14 @@ class FrayIrisClient:
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
-        entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
+        entrypoint = IrisEntrypoint.from_callable(
+            _host_actor,
+            actor_class,
+            args,
+            kwargs,
+            name,
+            actor_config.max_concurrency,
+        )
 
         retry_kwargs: dict[str, Any] = {}
         if actor_config.max_task_retries is not None:
@@ -791,6 +824,7 @@ class FrayIrisClient:
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
             task_image=resources.image,
+            container_profile=convert_container_profile(resources),
             priority_band=actor_config.priority,
             **retry_kwargs,
         )

@@ -11,7 +11,15 @@ from enum import StrEnum
 from pathlib import Path
 
 import draccus
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
+
+from marin.inference.config import (
+    ObjectStoreLoadMode,
+    SpeculativeServingConfig,
+    VllmSource,
+    resolve_tokenizer_revision,
+    validate_pipeline_args,
+)
 
 
 class ServeBackend(StrEnum):
@@ -31,7 +39,9 @@ class ResourceHint:
     ``{"H100": 8}``. A CLI accelerator override may change the GPU shape but cannot move a
     GPU-required model onto TPU.
 
-    ``cpu``, ``memory``, and ``disk`` override the inference worker's host-resource defaults.
+    ``cpu``, ``memory``, and ``disk`` override the inference worker's host-resource defaults. Leave
+    ``memory`` unset unless the model needs more than its checkpoint implies: the lowering path
+    otherwise sizes host memory from the checkpoint's weight files and the slice's rank count.
     """
 
     hbm_gb: int | None = None
@@ -63,9 +73,13 @@ class ServeConfig:
     """Model-server behavior independent of scheduler placement.
 
     ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
-    inference settings. The remaining typed vLLM fields map onto ``vllm serve`` flags through
-    :func:`serve_config_vllm_args`; ``vllm_extra_args`` is the escape hatch for flags without a typed
-    field and wins when it names the same option.
+    inference settings. ``instances`` starts independent servers behind Marin's inference broker;
+    it is distinct from pipeline parallelism, which splits one server across multiple Iris tasks.
+    The remaining typed vLLM fields map onto command-line flags or process settings.
+    ``hf_hub_disable_xet`` selects regular HTTP for the worker's Hugging Face weight mirror when Xet
+    is rate-limited. ``vllm_extra_args`` is the escape hatch for flags without a typed field.
+    Multi-node topology flags are owned by the launcher; a typed GPU memory limit cannot also appear
+    in the escape hatch.
 
     When ``auto_overrides`` is true, the lowering path inspects the Hugging Face ``config.json`` to
     fill portable architecture-specific vLLM flags and clamp an explicit context length to the
@@ -75,6 +89,9 @@ class ServeConfig:
     backend: ServeBackend = ServeBackend.VLLM
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
+    pipeline_parallel_size: int = 1
+    instances: int = 1
+    gpu_memory_utilization: float | None = None
     max_model_len: int | None = None
     max_num_batched_tokens: int | None = None
     max_num_seqs: int | None = None
@@ -82,17 +99,82 @@ class ServeConfig:
     limit_mm_per_prompt: str | None = None
     tool_call_parser: str | None = None
     reasoning_parser: str | None = None
+    vllm_batch_invariant: bool | None = None
+    vllm_use_flashinfer_sampler: bool | None = None
+    runai_streamer_concurrency: int | None = None
+    runai_streamer_s3_request_timeout_ms: int | None = None
+    hf_hub_disable_xet: bool = False
+    vllm_source: VllmSource | None = None
+    vllm_version: str | None = None
+    vllm_plugin_requirements: tuple[str, ...] = ()
+    object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
     vllm_extra_args: tuple[str, ...] = ()
+    speculative: SpeculativeServingConfig | None = None
     chat_template: str | None = None
     auto_overrides: bool = True
+
+    def __post_init__(self) -> None:
+        if self.vllm_source is VllmSource.UPSTREAM and not self.vllm_version:
+            raise ValueError("upstream vLLM serving requires an exact vllm_version")
+        if self.vllm_version is not None and self.vllm_source is not VllmSource.UPSTREAM:
+            raise ValueError("vllm_version requires vllm_source=upstream")
+        if self.backend is not ServeBackend.VLLM and (self.vllm_source is not None or self.vllm_plugin_requirements):
+            raise ValueError("vLLM source and plugins require the vLLM backend")
+        if self.pipeline_parallel_size < 1:
+            raise ValueError("pipeline_parallel_size must be >= 1")
+        if self.instances < 1:
+            raise ValueError("instances must be >= 1")
+        for name in ("tensor_parallel_size", "data_parallel_size"):
+            value = getattr(self, name)
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be positive")
+        if self.pipeline_parallel_size > 1:
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("pipeline parallelism requires the vLLM backend")
+            if self.tensor_parallel_size is None:
+                raise ValueError("pipeline parallelism requires an explicit tensor_parallel_size")
+            if self.instances > 1:
+                raise ValueError("pipeline parallelism requires instances=1")
+            validate_pipeline_args(self.vllm_extra_args)
+        if self.gpu_memory_utilization is not None:
+            if not 0 < self.gpu_memory_utilization <= 1:
+                raise ValueError("gpu_memory_utilization must be in (0, 1]")
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("gpu_memory_utilization requires the vLLM backend")
+            if has_vllm_option(self.vllm_extra_args, "--gpu-memory-utilization"):
+                raise ValueError("gpu_memory_utilization conflicts with --gpu-memory-utilization in extra args")
+        if self.speculative is not None:
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("speculative serving requires the vLLM backend")
+            if has_vllm_option(self.vllm_extra_args, "--speculative-config"):
+                raise ValueError("speculative serving conflicts with --speculative-config in extra args")
+        if self.runai_streamer_s3_request_timeout_ms is not None:
+            if self.runai_streamer_s3_request_timeout_ms <= 0:
+                raise ValueError("runai_streamer_s3_request_timeout_ms must be positive")
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("runai_streamer_s3_request_timeout_ms requires the vLLM backend")
+        if self.runai_streamer_concurrency is not None:
+            if self.runai_streamer_concurrency <= 0:
+                raise ValueError("runai_streamer_concurrency must be positive")
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("runai_streamer_concurrency requires the vLLM backend")
 
 
 @dataclass(frozen=True)
 class GenerationConfig:
-    """Generation overrides applied when an experiment resolves an Evalchemy definition."""
+    """Per-model generation settings for evaluation clients.
+
+    ``max_gen_toks`` sets the Evalchemy generation limit and Harbor agent output budget.
+    ``extra_gen_kwargs`` apply only to Evalchemy. ``chat_template_kwargs`` are render-time template
+    arguments forwarded on the Evalchemy chat route; an Evalchemy launch file overrides these per
+    key. ``thinking_off_template_kwargs`` translates a benchmark's ``enable_thinking=false`` into
+    the model's lowest supported reasoning setting when its template cannot disable reasoning.
+    """
 
     max_gen_toks: int | None = None
     extra_gen_kwargs: Mapping[str, str] = field(default_factory=dict)
+    chat_template_kwargs: Mapping[str, bool | str] = field(default_factory=dict)
+    thinking_off_template_kwargs: Mapping[str, bool | str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -107,27 +189,43 @@ class ModelConfig:
     """A model the launcher can serve and evaluate: where its weights live and how to serve/query it.
 
     ``name`` is the slash-free launch identity used in Iris job names and record paths. ``location``
-    is an HF repo id or an object-store (``gs://``/``s3://``) HF-format export directory; an
-    object-store location requires ``tokenizer`` (the eval client loads its tokenizer through HF).
-    ``revision`` pins an immutable checkpoint for a base HF model. ``apply_chat_template`` controls
-    whether Evalchemy formats requests with the tokenizer's chat template. ``resource_hint`` states
-    where the model is compatible; ``serve`` states how its inference server behaves. ``generation``
-    and ``agent`` are experiment-definition inputs and never affect inference placement.
+    is an HF repo id or an object-store (``gs://``/``s3://``) HF-format export directory, while
+    ``identity`` pins the producer of a resolved artifact. An object-store location requires
+    ``tokenizer`` because the eval client loads its tokenizer through HF. ``revision`` pins an
+    immutable checkpoint for a base HF model. ``tokenizer_revision`` pins the tokenizer repository.
+    When ``tokenizer`` is omitted, it defaults to ``location`` and its revision defaults to
+    ``revision``. ``apply_chat_template`` controls whether Evalchemy formats requests with the
+    tokenizer's chat template. ``resource_hint`` states where the model is compatible; ``serve``
+    states how its inference server behaves. ``generation`` and ``agent`` are experiment-definition
+    inputs and never affect inference placement. ``evalchemy_num_concurrent`` limits the number of
+    in-flight Evalchemy requests to this model's endpoint without changing benchmark semantics.
     """
 
     name: str
     location: str
+    identity: str | None = None
     revision: str | None = None
     tokenizer: str | None = None
+    tokenizer_revision: str | None = None
     apply_chat_template: bool = True
     resource_hint: ResourceHint = field(default_factory=ResourceHint)
     serve: ServeConfig = field(default_factory=ServeConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    evalchemy_num_concurrent: int | None = None
 
     def __post_init__(self) -> None:
         if "/" in self.name:
             raise ValueError("model name cannot contain '/'")
+        if self.evalchemy_num_concurrent is not None and self.evalchemy_num_concurrent <= 0:
+            raise ValueError("evalchemy_num_concurrent must be positive")
+        if self.serve.pipeline_parallel_size > 1 and not self.resource_hint.gpu:
+            raise ValueError("pipeline parallelism requires resource_hint.gpu")
+
+    @property
+    def effective_tokenizer_revision(self) -> str | None:
+        """Revision owned by the configured or default tokenizer repository."""
+        return resolve_tokenizer_revision(self.revision, self.tokenizer, self.tokenizer_revision)
 
 
 def has_vllm_option(args: tuple[str, ...], option: str) -> bool:
@@ -144,8 +242,9 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
     already present there, so a hand-tuned value is never duplicated. ``tensor_parallel_size``,
     ``max_model_len``, ``max_num_batched_tokens``, ``max_num_seqs``, ``chat_template``, and
     ``auto_overrides`` are consumed by serving configuration or lowering rather than rendered as
-    extra flags. ``--trust-remote-code`` is not rendered here: the native server forces it on for
-    every evaluated model.
+    extra flags. ``vllm_batch_invariant`` and ``vllm_use_flashinfer_sampler`` become GPU-worker
+    process settings. ``--trust-remote-code`` is not rendered here: the native server forces it on
+    for every evaluated model.
     """
     explicit = tuple(serve.vllm_extra_args)
     derived: list[str] = []
@@ -154,8 +253,10 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
         if not has_vllm_option(explicit, option):
             derived.extend((option, *values))
 
-    if serve.data_parallel_size is not None:
+    if serve.data_parallel_size is not None and serve.pipeline_parallel_size == 1:
         add("--data-parallel-size", str(serve.data_parallel_size))
+    if serve.gpu_memory_utilization is not None:
+        add("--gpu-memory-utilization", str(serve.gpu_memory_utilization))
     if serve.hf_overrides is not None:
         add("--hf-overrides", serve.hf_overrides)
     if serve.limit_mm_per_prompt is not None:

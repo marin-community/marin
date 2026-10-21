@@ -32,6 +32,7 @@ from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
+from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import cache_host_dirname, write_workdir_files
 from iris.cluster.runtime.profile import (
     LocalProfileDispatch,
@@ -289,8 +290,8 @@ def _read_proc_cpu_millicores(
         return (0, prev_total, prev_utime)
     try:
         with open(f"/proc/{pid}/stat") as f:
-            fields = f.read().split()
-        utime = int(fields[13]) + int(fields[14])
+            fields = stat_fields_after_comm(f.read())
+        utime = int(fields[11]) + int(fields[12])
 
         with open("/proc/stat") as f:
             cpu_line = f.readline()
@@ -358,6 +359,7 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
     """Build container_path -> host_path mapping for process runtime.
 
     WORKDIR mounts resolve to config.workdir_host_path (set by task_attempt).
+    OUTPUT mounts resolve to config.output_host_path.
     CACHE mounts resolve to shared subdirectories under cache_dir.
     TMPFS mounts resolve to per-task temp directories under cache_dir for isolation.
     """
@@ -366,6 +368,10 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
         if mount.kind == MountKind.WORKDIR:
             if config.workdir_host_path:
                 result[mount.container_path] = str(config.workdir_host_path)
+        elif mount.kind == MountKind.OUTPUT:
+            if config.output_host_path:
+                config.output_host_path.mkdir(parents=True, exist_ok=True)
+                result[mount.container_path] = str(config.output_host_path)
         elif mount.kind == MountKind.CACHE:
             if cache_dir:
                 host_dir = cache_dir / cache_host_dirname(mount.container_path)
@@ -527,7 +533,12 @@ class ProcessContainerHandle:
         dispatch = LocalProfileDispatch(resume_pid=pid)
 
         if profile_type.HasField("threads"):
-            return capture_threads(dispatch, pid=str(pid), include_locals=profile_type.threads.locals)
+            return capture_threads(
+                dispatch,
+                pid=str(pid),
+                include_locals=profile_type.threads.locals,
+                include_native=profile_type.threads.native,
+            )
         elif profile_type.HasField("cpu"):
             return self._profile_cpu(dispatch, pid, duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):
@@ -587,9 +598,6 @@ class ProcessRuntime:
         handle = ProcessContainerHandle(config=config, runtime=self)
         self._handles.append(handle)
         return handle
-
-    def prepare_workdir(self, workdir: Path, disk_bytes: int) -> None:
-        pass
 
     def stage_bundle(
         self,

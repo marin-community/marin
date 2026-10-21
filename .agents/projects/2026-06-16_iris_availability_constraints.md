@@ -102,7 +102,7 @@ Caller audit confirms nothing depends on the hold:
 - The only `--reserve` users are **CPU orchestrators** that co-locate accelerator
   work: the canary ferry and `experiments/grug/moe/agent.md`. Both want the *hint*,
   not the hold — the hold is exactly what broke the canary for 8 days.
-- `dev_tpu.py` (the `reserve-tpu` skill) does **not** use `--reserve`; it submits a
+- `dev_tpu.py` (covered by the `use-iris` skill) does **not** use `--reserve`; it submits a
   normal job with a `zone_constraint` and an accelerator resource spec
   (`scripts/iris/dev_tpu.py:747`). Unaffected.
 

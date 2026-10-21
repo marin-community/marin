@@ -27,7 +27,8 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import StoragePath, open_url
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, QUANT_SCALE, dequantize_to_fp32
 

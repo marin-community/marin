@@ -8,7 +8,7 @@ from typing import Any, Protocol
 import jax
 from haliax.jax_utils import is_jax_array_like
 from levanter.tracker import current_tracker
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 GRUG_SHARDING_ARTIFACT_NAME = "grug_sharding_spec"
 GRUG_SHARDING_DUMP_FILENAME = f"{GRUG_SHARDING_ARTIFACT_NAME}.json"
