@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``fsutil`` command line: list, read, size, copy, and remove across Marin's buckets.
+"""The ``fsutil`` command line: list, read, size, copy, and remove across Marin's buckets and HF.
 
 Every path is a full URL (``gs://``, ``s3://``, or a local path). There is no implicit
 current bucket, so the same command means the same thing from any shell, and a copy can
@@ -23,6 +23,8 @@ from rigging.filesystem.hashing import file_md5
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import (
+    CopyAction,
+    CopyPlan,
     TransferError,
     copy_plan,
     execute_copy_plan,
@@ -36,6 +38,7 @@ from rigging.fsutil.deletion import (
     DeleteProgress,
     delete_prefix,
 )
+from rigging.fsutil.huggingface import ensure_private_hf_destination
 from rigging.fsutil.listing import (
     ROOT,
     Entry,
@@ -46,6 +49,7 @@ from rigging.fsutil.listing import (
     total_size,
 )
 from rigging.fsutil.parquet import PREVIEW_ROWS, MissingParquetReader, is_parquet, parquet_lines
+from rigging.fsutil.remote import run_remote_transfer
 from rigging.fsutil.render import aligned_lines, file_lines, format_digest, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
 from rigging.fsutil.tui import show as show_viewer
@@ -116,9 +120,9 @@ class _AutoOpenGroup(click.Group):
 @click.option("-v", "--verbose", is_flag=True, help="Log fsspec/botocore activity.")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool) -> None:
-    """Browse and manipulate Marin's object storage (GCS, CoreWeave, R2).
+    """Browse and manipulate Marin's object storage (GCS, CoreWeave, R2, HF).
 
-    Paths are full URLs: gs://bucket/key, s3://bucket/key, or a local path.
+    Paths are full URLs: gs://bucket/key, s3://bucket/key, hf://..., or a local path.
     A bare URL opens the browser on a directory or the viewer on a file.
     """
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
@@ -318,12 +322,17 @@ def find(pattern: str) -> None:
 @click.argument("urls", nargs=-1, required=True)
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Copy a prefix and everything under it.")
 @click.option("-n", "--no-clobber", is_flag=True, help="Skip files that already exist at the destination.")
-def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool) -> None:
+@click.option("--remote", is_flag=True, help="Run on the cw-us-east-02a Iris cluster.")
+def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool, remote: bool) -> None:
     """Copy one or more sources to a file, directory, or object prefix."""
     source_urls, destination_url = _transfer_arguments(urls)
+    if remote:
+        run_remote_transfer("cp", urls, recursive=recursive, no_clobber=no_clobber)
+        return
     try:
         plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=no_clobber)
-        execute_copy_plan(plan)
+        ensure_private_hf_destination(destination_url)
+        _execute_transfer(plan)
     except TransferError as error:
         raise click.ClickException(str(error)) from error
     for action in plan.copies:
@@ -335,17 +344,33 @@ def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool) -> None:
 @click.command()
 @click.argument("urls", nargs=-1, required=True)
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Move a prefix and everything under it.")
-def mv(urls: tuple[str, ...], recursive: bool) -> None:
+@click.option("--remote", is_flag=True, help="Run on the cw-us-east-02a Iris cluster.")
+def mv(urls: tuple[str, ...], recursive: bool, remote: bool) -> None:
     """Move or rename one or more sources, including across backends."""
     source_urls, destination_url = _transfer_arguments(urls)
+    if remote:
+        run_remote_transfer("mv", urls, recursive=recursive)
+        return
     try:
         plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=False)
-        execute_copy_plan(plan)
+        ensure_private_hf_destination(destination_url)
+        _execute_transfer(plan)
         remove_sources(plan.sources)
     except TransferError as error:
         raise click.ClickException(str(error)) from error
     for action in plan.copies:
         click.echo(f"{action.source.url} -> {action.destination.url}")
+
+
+def _execute_transfer(plan: CopyPlan) -> None:
+    display = _ProgressDisplay()
+
+    def progress(action: CopyAction, copied_bytes: int) -> None:
+        display.update(f"Copying {action.source.url} -> {action.destination.url}: {format_size(copied_bytes)}")
+
+    execute_copy_plan(plan, progress=progress)
+    if plan.copies:
+        display.finish(f"Copied {len(plan.copies)} file(s)")
 
 
 @click.command()

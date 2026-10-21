@@ -6,6 +6,7 @@
 import base64
 import binascii
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from glob import has_magic
 from typing import Any, cast
@@ -164,19 +165,21 @@ def copy_plan(
     return CopyPlan(sources, tuple(directories), tuple(copies), tuple(skipped))
 
 
-def execute_copy_plan(plan: CopyPlan) -> None:
+def execute_copy_plan(plan: CopyPlan, *, progress: Callable[[CopyAction, int], None] | None = None) -> None:
     """Create real directories and execute every file copy in a validated plan."""
     for action in plan.directories:
         action.destination.filesystem.makedirs(action.destination.path, exist_ok=True)
-    execute_copies(plan.copies)
+    execute_copies(plan.copies, progress=progress)
 
 
-def execute_copies(actions: tuple[CopyAction, ...]) -> None:
+def execute_copies(
+    actions: tuple[CopyAction, ...], *, progress: Callable[[CopyAction, int], None] | None = None
+) -> None:
     """Execute a validated sequence of copies."""
     for action in actions:
         if _same_location(action.source, action.destination):
             raise TransferError(f"source and destination are the same: {action.source.url}")
-        _copy_file(action.source, action.destination)
+        _copy_file(action, progress=progress)
 
 
 def remove_sources(sources: tuple[TransferSource, ...]) -> None:
@@ -380,7 +383,8 @@ def _md5(location: TransferLocation) -> bytes:
     return file_md5_for_path(location.filesystem, location.path)
 
 
-def _copy_file(source: TransferLocation, destination: TransferLocation) -> None:
+def _copy_file(action: CopyAction, *, progress: Callable[[CopyAction, int], None] | None = None) -> None:
+    source, destination = action.source, action.destination
     parent, separator, _ = destination.path.rpartition("/")
     if separator:
         destination.filesystem.makedirs(parent, exist_ok=True)
@@ -388,7 +392,15 @@ def _copy_file(source: TransferLocation, destination: TransferLocation) -> None:
         source.filesystem.open(source.path, "rb") as source_file,
         destination.filesystem.open(destination.path, "wb") as destination_file,
     ):
-        shutil.copyfileobj(source_file, destination_file, COPY_CHUNK_BYTES)
+        if progress is None:
+            shutil.copyfileobj(source_file, destination_file, COPY_CHUNK_BYTES)
+            return
+        copied_bytes = 0
+        progress(action, copied_bytes)
+        while chunk := source_file.read(COPY_CHUNK_BYTES):
+            destination_file.write(chunk)
+            copied_bytes += len(chunk)
+            progress(action, copied_bytes)
 
 
 def _backend(location: TransferLocation) -> str:
