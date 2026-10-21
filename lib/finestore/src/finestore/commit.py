@@ -36,6 +36,8 @@ from finestore.layout import (
 # The retry budget is wall time, so many writers can share one HEAD without a flush failing.
 _COMMIT_BACKOFF_INITIAL = 0.5
 _COMMIT_BACKOFF_MAXIMUM = 5.0
+_RETRY_BACKOFF_FACTOR = 2.0
+_RETRY_BACKOFF_JITTER = 0.25
 _COMMIT_RETRY_BUDGET = 60 * 60.0
 _MAX_COMMIT_ATTEMPTS = 100_000
 _SCHEMA_RETRY_BUDGET = 60.0
@@ -155,7 +157,7 @@ def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
         retryable=lambda exc: isinstance(exc, ConditionalWriteError),
         max_attempts=_MAX_SCHEMA_ATTEMPTS,
         max_elapsed=_SCHEMA_RETRY_BUDGET,
-        backoff=ExponentialBackoff(initial=0.1, maximum=1.0, factor=2.0, jitter=0.25),
+        backoff=ExponentialBackoff(initial=0.1, maximum=1.0, factor=_RETRY_BACKOFF_FACTOR, jitter=_RETRY_BACKOFF_JITTER),
         operation=f"FineStore schema publication at {path}",
     )
 
@@ -333,8 +335,8 @@ class CommitCoordinator:
                     backoff=ExponentialBackoff(
                         initial=_COMMIT_BACKOFF_INITIAL,
                         maximum=_COMMIT_BACKOFF_MAXIMUM,
-                        factor=2.0,
-                        jitter=0.25,
+                        factor=_RETRY_BACKOFF_FACTOR,
+                        jitter=_RETRY_BACKOFF_JITTER,
                     ),
                     operation=f"FineStore commit at {self._layout.root}",
                 )
