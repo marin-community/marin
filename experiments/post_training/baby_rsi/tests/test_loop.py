@@ -3,6 +3,11 @@
 
 """The RSI loop with scripted boxes: failed rollouts become ideas, ideas become tasks, and training gets them."""
 
+import pytest
+
+# The loop runs in the marin-taskforge environment; other suites skip it.
+pytest.importorskip("taskforge")
+
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
 
