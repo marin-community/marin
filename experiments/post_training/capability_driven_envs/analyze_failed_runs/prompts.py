@@ -20,7 +20,8 @@ EXTRACT_PROMPT = f"""\
 You analyze one failed rollout of a language-model agent to decide what the agent must learn next. A rollout is one \
 attempt at a task: the task's messages, the agent's turns and tool calls, and the tool results.
 
-Find the general capabilities, at most {IDEAS_PER_ROLLOUT}, whose absence explains the failure. {CAPABILITY_RULES}
+Find the general capabilities, at most {IDEAS_PER_ROLLOUT}, whose absence explains the failure, or none if the \
+rollout shows no gap. {CAPABILITY_RULES}
 
 The first line of the rollout is a JSON object with its run ID, task messages, grade, stop reason, the operation that \
 interrupted it if any, and counts of turns and tool calls. Each conversation starts with a JSON line containing its \
@@ -30,5 +31,5 @@ such as [0]."""
 MERGE_PROMPT = f"""\
 Each line is a capability that failed rollouts of a language-model agent lack, with the ID of the line and the \
 number of rollouts that show the gap. Merge the capabilities into at most {{count}}: merge the capabilities that are \
-about the same skill, and keep the capabilities that explain the most rollouts. Give the IDs of the lines that each \
-merged capability holds. {CAPABILITY_RULES}"""
+about the same skill, and keep the capabilities that explain the most rollouts. Give each merged capability a \
+different ID and the IDs of the lines that it holds. {CAPABILITY_RULES}"""

@@ -22,9 +22,9 @@ from zephyr.dataset import Dataset
 
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.models import (
     Capability,
-    Groups,
     MaybeIdea,
     RolloutIdeas,
+    groups_of,
 )
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.prompts import EXTRACT_PROMPT, MERGE_PROMPT
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollouts import policy_failed, rollout_text
@@ -33,8 +33,10 @@ from experiments.post_training.capability_driven_envs.catalog import CAPABILITY_
 SUBJECT_ID = "failed-runs"
 SUBJECT_NAME = "Capabilities that failed runs lack"
 MERGE_ATTEMPTS = 3
-ROLLOUTS_WITHOUT_IDEAS = "failed_runs.rollouts_without_ideas"
+INVALID_REPLIES = "failed_runs.invalid_replies"
 """The pipeline counter of the failed rollouts whose reply stayed invalid."""
+DROPPED_ROLLOUTS = "failed_runs.dropped_rollouts"
+"""The pipeline counter of the failed rollouts that no merged idea cites after a merge."""
 
 logger = logging.getLogger(__name__)
 
@@ -53,19 +55,30 @@ def analyze_failed_runs(
     merge_ideas_llm_policy: LLMPolicy,
     catalog_version: str,
     min_tasks_per_idea: int = 2,
+    max_ideas_per_merge: int = 1000,
 ) -> Dataset[CapabilityIdea]:
     """Build a pipeline of capability ideas from the policy's failed rollouts.
 
-    Recorded conversations supply the model options and messages seen by the policy. Keep ``shard_size`` at about
-    1,000 rollouts or fewer so merge prompts fit the model context. Run the plan outside an event loop, for example
-    ``ctx.execute(plan).results``.
+    Recorded conversations supply the model options and messages seen by the policy. Each shard has ``shard_size``
+    rollouts. Merge calls see at most ``max_ideas_per_merge`` ideas, with larger sets merged in rounds. Run the plan
+    outside an event loop, for example ``ctx.execute(plan).results``.
 
     An idea must cite failed rollouts of at least ``min_tasks_per_idea`` tasks, or of every failed task when there are
     fewer. Otherwise one defective grader, on a task with many samples, can make an idea by itself.
     """
+    if 2 * max_new_ideas > max_ideas_per_merge:
+        raise ValueError(
+            "max_ideas_per_merge must be at least 2 * max_new_ideas, so that each round of merges has fewer ideas"
+        )
     failed_tasks = {graded.rollout.task_id for graded in rollouts if policy_failed(graded, pass_threshold)}
     min_tasks = min(min_tasks_per_idea, len(failed_tasks))
-    merge = partial(merge_ideas, make_client=make_client, max_new_ideas=max_new_ideas, policy=merge_ideas_llm_policy)
+    merge = partial(
+        merge_ideas,
+        make_client=make_client,
+        max_new_ideas=max_new_ideas,
+        max_ideas_per_merge=max_ideas_per_merge,
+        policy=merge_ideas_llm_policy,
+    )
     return (
         Dataset.from_list(list(batched(rollouts, shard_size)))
         .flat_map(lambda shard: shard)
@@ -77,9 +90,9 @@ def analyze_failed_runs(
 
 
 def yield_ideas(graded: GradedRollout, *, make_client: MakeClient, policy: LLMPolicy) -> Iterator[MaybeIdea]:
-    """The ideas that one structured call finds in one failed rollout.
+    """Yield ideas from one failed rollout.
 
-    A reply that stays invalid gives no ideas and adds 1 to the pipeline counter ``ROLLOUTS_WITHOUT_IDEAS``, which the
+    A reply that stays invalid also gives no ideas, and adds 1 to the pipeline counter ``INVALID_REPLIES``, which the
     execution result reports.
     """
     messages: list[Message] = [
@@ -91,14 +104,39 @@ def yield_ideas(graded: GradedRollout, *, make_client: MakeClient, policy: LLMPo
     except StructuredOutputError as error:
         # One rollout that the model cannot answer for, for example at the output limit, does not stop the others.
         logger.warning("No ideas for rollout %s: %s", graded.rollout.run_id, error)
-        counters.pipeline.update_counter(ROLLOUTS_WITHOUT_IDEAS, 1)
+        counters.pipeline.update_counter(INVALID_REPLIES, 1)
         return
     for idea in reply.ideas:
         yield MaybeIdea(idea, frozenset({graded.rollout.run_id}), frozenset({graded.rollout.task_id}))
 
 
 def merge_ideas(
-    ideas: Iterable[MaybeIdea], *, make_client: MakeClient, max_new_ideas: int, policy: LLMPolicy
+    ideas: Iterable[MaybeIdea],
+    *,
+    make_client: MakeClient,
+    max_new_ideas: int,
+    max_ideas_per_merge: int,
+    policy: LLMPolicy,
+) -> list[MaybeIdea]:
+    """At most ``max_new_ideas`` ideas that structured calls merge from ``ideas``, with more rollouts first.
+
+    One call merges at most ``max_ideas_per_merge`` ideas. Thus more ideas merge in rounds: each round merges batches
+    of that size, and the next round merges the results. The merge keeps the capabilities that explain the most
+    rollouts, and the pipeline counter ``DROPPED_ROLLOUTS`` adds the rollouts that the merged ideas no longer cite.
+    """
+    merge = partial(_merged_batch, make_client=make_client, max_new_ideas=max_new_ideas, policy=policy)
+    candidates = list(ideas)
+    rollouts = frozenset().union(*(candidate.evidence for candidate in candidates))
+    while len(candidates) > max_ideas_per_merge:
+        candidates = list(chain.from_iterable(map(merge, batched(candidates, max_ideas_per_merge))))
+    merged = merge(candidates)
+    cited = frozenset().union(*(candidate.evidence for candidate in merged))
+    counters.pipeline.update_counter(DROPPED_ROLLOUTS, len(rollouts - cited))
+    return merged
+
+
+def _merged_batch(
+    ideas: Sequence[MaybeIdea], *, make_client: MakeClient, max_new_ideas: int, policy: LLMPolicy
 ) -> list[MaybeIdea]:
     """Return at most ``max_new_ideas`` merged ideas, ordered by rollout count.
 
@@ -122,15 +160,16 @@ def merge_ideas(
         {"role": "system", "content": MERGE_PROMPT.format(count=max_new_ideas)},
         {"role": "user", "content": listing},
     ]
-    reply = _complete(make_client, messages, Groups, policy, attempts=MERGE_ATTEMPTS)
-    merged: dict[str, MaybeIdea] = {}
-    for group in reply.capabilities:
-        members = [lines[key] for key in group.members if key in lines]
-        if members and group.id not in merged:
-            idea = Capability(**group.model_dump(exclude={"members"}))
-            evidence = frozenset().union(*(member.evidence for member in members))
-            merged[group.id] = MaybeIdea(idea, evidence, frozenset().union(*(member.tasks for member in members)))
-    return sorted(merged.values(), key=lambda candidate: -candidate.num_rollouts)[:max_new_ideas]
+    reply = _complete(make_client, messages, groups_of(frozenset(lines)), policy, attempts=MERGE_ATTEMPTS)
+    merged = [
+        MaybeIdea(
+            Capability(**group.model_dump(exclude={"members"})),
+            frozenset().union(*(lines[key].evidence for key in group.members)),
+            frozenset().union(*(lines[key].tasks for key in group.members)),
+        )
+        for group in reply.capabilities
+    ]
+    return sorted(merged, key=lambda candidate: -candidate.num_rollouts)[:max_new_ideas]
 
 
 def merge_idea_lists(

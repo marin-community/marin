@@ -9,6 +9,7 @@ with a ``subject_id``, a ``subject_name`` and ``sections``. The loader turns eve
 ``capability`` into an idea and attaches the prerequisite edges leading into it.
 """
 
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -16,6 +17,7 @@ from taskforge.content_hash import digest
 
 CAPABILITY_KIND = "capability"
 EXAMPLE_CATALOG_FILE = "example_catalog.json"
+FILE_SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 class Section(BaseModel):

@@ -29,12 +29,13 @@ from zephyr.coordinator import ZephyrExecutionResult
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.models import (
     Capability,
     Group,
-    Groups,
     MaybeIdea,
     RolloutIdeas,
+    groups_of,
 )
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.pipeline import (
-    ROLLOUTS_WITHOUT_IDEAS,
+    DROPPED_ROLLOUTS,
+    INVALID_REPLIES,
     analyze_failed_runs,
     merge_ideas,
     yield_ideas,
@@ -55,6 +56,7 @@ CHECK_WORK = Capability(
     outcome="Verify an answer before it is final.",
     includes=("Recompute",),
 )
+RARE = Capability(id="failed-runs.rare.rare-skill", name="A rare skill", outcome="A rare outcome.", includes=("Rare",))
 CUT_OFF = StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION,))
 
 
@@ -112,9 +114,10 @@ def sample_rollouts() -> list[GradedRollout]:
 
 
 class Analyst:
-    """Names the loop skill for a rollout with a lookup call and the check skill for the others, and merges the lines
-    with the same name. A rollout that says "cut off", and the first ``failed_merges`` merges, fail as a reply at the
-    output limit does. It keeps the messages of its calls."""
+    """Names no skill for a rollout that says "no gap", the rare skill for a rollout that says "rare", the loop skill for
+    a rollout with a lookup call, and the check skill for the others. It merges the lines with the same name, and it
+    leaves out the rare lines. A rollout that says "cut off", and the first ``failed_merges`` merges, fail as a reply at
+    the output limit does. It keeps the messages of its calls."""
 
     model = "fake"
 
@@ -141,13 +144,15 @@ class Analyst:
         if output_type is RolloutIdeas:
             if "cut off" in text:
                 raise CUT_OFF
-            value = RolloutIdeas(ideas=(STOP_LOOPS if "lookup" in text else CHECK_WORK,))
+            skill = RARE if "rare" in text else STOP_LOOPS if "lookup" in text else CHECK_WORK
+            skills = () if "no gap" in text else (skill,)
+            value = RolloutIdeas(ideas=skills)
         else:
             if self.failed_merges:
                 self.failed_merges -= 1
                 raise CUT_OFF
             lines = [json.loads(line) for line in text.splitlines()]
-            names = dict.fromkeys(line["name"] for line in lines)
+            names = dict.fromkeys(line["name"] for line in lines if line["name"] != RARE.name)
             groups = (
                 Group(
                     id=f"failed-runs.general.skill-{i}",
@@ -158,7 +163,7 @@ class Analyst:
                 )
                 for i, name in enumerate(names)
             )
-            value = Groups(capabilities=tuple(groups))
+            value = output_type(capabilities=tuple(groups))
         assert isinstance(value, output_type)
         return StructuredResult(value, (COMPLETION,))
 
@@ -214,11 +219,12 @@ def test_the_ideas_of_several_shards_merge_again(ctx):
     ]
 
 
-def test_a_rollout_whose_reply_stays_invalid_gives_no_ideas_and_is_counted(ctx):
-    result = analyze(ctx, [loop("loop-1"), loop("loop-2"), wrong("cut", "cut off")])
+def test_the_counters_report_the_invalid_replies_and_the_rollouts_that_a_merge_drops(ctx):
+    rollouts = [loop("loop-1"), loop("loop-2"), wrong("cut", "cut off"), wrong("calm", "no gap"), wrong("rare")]
+    result = analyze(ctx, rollouts)
 
     assert names_and_evidence(result.results) == [(STOP_LOOPS.name, ["loop-1", "loop-2"])]
-    assert result.counters[ROLLOUTS_WITHOUT_IDEAS] == 1
+    assert (result.counters[INVALID_REPLIES], result.counters[DROPPED_ROLLOUTS]) == (1, 1)
 
 
 def test_an_idea_needs_rollouts_of_two_tasks_unless_one_task_failed(ctx):
@@ -269,9 +275,37 @@ def test_a_merge_samples_again_after_a_cut_off_reply():
         MaybeIdea(STOP_LOOPS, frozenset({"a", "b"}), frozenset({"task-a", "task-b"})),
     ]
 
-    [merged] = merge_ideas(ideas, make_client=lambda: analyst, max_new_ideas=8, policy=LLMPolicy())
+    [merged] = merge_ideas(
+        ideas, make_client=lambda: analyst, max_new_ideas=8, max_ideas_per_merge=100, policy=LLMPolicy()
+    )
 
     assert (merged.idea.name, merged.num_rollouts, merged.num_tasks) == (STOP_LOOPS.name, 2, 2)
+
+
+def test_more_ideas_than_one_merge_call_holds_merge_in_rounds_and_keep_their_evidence():
+    analyst = Analyst()
+    ideas = [MaybeIdea(STOP_LOOPS, frozenset({f"loop-{i}"}), frozenset({f"task-{i}"})) for i in range(5)]
+    ideas.append(MaybeIdea(CHECK_WORK, frozenset({"wrong"}), frozenset({"task-wrong"})))
+
+    merged = merge_ideas(ideas, make_client=lambda: analyst, max_new_ideas=2, max_ideas_per_merge=4, policy=LLMPolicy())
+
+    assert [(candidate.idea.name, candidate.num_rollouts) for candidate in merged] == [
+        (STOP_LOOPS.name, 5),
+        (CHECK_WORK.name, 1),
+    ]
+    assert max(len(request.splitlines()) for request in analyst.requests) == 4
+
+
+def test_a_merge_reply_names_only_its_lines_and_gives_each_capability_its_own_id():
+    reply_type = groups_of(frozenset({"k0", "k1", "k2"}))
+
+    def group(capability_id: str, *members: str) -> Group:
+        return Group(id=capability_id, name="A", outcome="B.", includes=("C",), members=members)
+
+    assert len(reply_type(capabilities=(group("a", "k0", "k1"), group("b", "k1"))).capabilities) == 2
+    for invalid in [(group("a", "k0", "k3"),), (group("a", "k0"), group("a", "k1"))]:
+        with pytest.raises(ValueError):
+            reply_type(capabilities=invalid)
 
 
 def test_a_merged_capability_cannot_give_its_member_ids_as_behaviors():
