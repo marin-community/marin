@@ -14,14 +14,18 @@ CONTEXT_LENGTH=32768
 while (( $# )); do
   case "$1" in
     --run) MODE=--run; shift ;;
-    --data-variant) DATA_VARIANT=${2:?data variant: high or low}; shift 2 ;;
+    --data-variant) DATA_VARIANT=${2:?data variant: high, low or matched-relay}; shift 2 ;;
     --context-length) CONTEXT_LENGTH=${2:?training context length}; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
 case "$PARENT" in v0|v0.1) ;; *) echo "Unknown parent: $PARENT" >&2; exit 1 ;; esac
 case "$ARM" in plain|rs-multi|relay|recovery|plateau) ;; *) echo "Unknown arm: $ARM" >&2; exit 1 ;; esac
-case "$DATA_VARIANT" in high|low) ;; *) echo "Unknown data variant: $DATA_VARIANT" >&2; exit 1 ;; esac
+case "$DATA_VARIANT" in high|low|matched-relay) ;; *) echo "Unknown data variant: $DATA_VARIANT" >&2; exit 1 ;; esac
+if [[ "$DATA_VARIANT" == matched-relay && "$ARM" != plain ]]; then
+  echo "The matched-relay comparator uses plain training" >&2
+  exit 1
+fi
 CLUSTER=${CLUSTER:-cw-rno2a}
 case "$CLUSTER" in cw-rno2a|cw-us-east-02a) ;; *) echo "Unsupported cluster: $CLUSTER" >&2; exit 1 ;; esac
 
@@ -41,8 +45,8 @@ else
   COMMAND+=(--arm "$ARM")
 fi
 METHOD=$ARM
-if [[ "$DATA_VARIANT" == low ]]; then
-  METHOD="$METHOD-low"
+if [[ "$DATA_VARIANT" != high ]]; then
+  METHOD="$METHOD-$DATA_VARIANT"
 fi
 NAME="arm-train-$METHOD-${PARENT//./p}-v7-$RUN_DATE-$CLUSTER"
 if [[ "$CONTEXT_LENGTH" != 32768 ]]; then
