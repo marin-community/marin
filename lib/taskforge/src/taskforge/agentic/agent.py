@@ -59,6 +59,8 @@ WORKSPACE_SEMANTICS = {Backend.LOCAL: CommandSemantics.LINUX_PROCESS, Backend.SH
 SHELL_OUTPUT_BYTES = 32 * 1024
 """The most stdout, and stderr, of one agent shell command. A larger output, for example a whole TaskSpec, fills the
 agent's context and ends the session."""
+STOP_NOTE_CHARS = 1500
+"""The most characters of the agent's last note in the report of a session that stopped before ``finish``."""
 NOT_TEXT_MODES = frozenset({"predicted_action", "structure_closure"})
 """In-process verifyit modes that grade function calls or a prefill continuation, not a final answer."""
 
@@ -70,7 +72,8 @@ class AgentResult:
     idea: CapabilityIdea
     tasks: tuple[AcceptedTask, ...]
     report: str | None
-    """The agent's report from ``finish``, or ``None`` when the session stopped otherwise."""
+    """The agent's report from ``finish``. A session that stopped otherwise with fewer than n tasks gets a report of
+    the tools: why it stopped, what it used and the agent's last note. A session with n tasks needs no report."""
     rollout: Rollout
     """The agent's attempt: its conversation and its tool calls."""
     agent_tokens: int
@@ -102,7 +105,25 @@ async def generate_tasks(idea: CapabilityIdea, n: int, config: AgenticConfig) ->
         # A failed session, for example at a model outage, keeps the tasks that the gate accepted before it.
         rollout = error.rollout
         failure = f"{error.operation}: {error.rollout.failure}"
-    return AgentResult(idea, tuple(tools.accepted), tools.report, rollout, rollout_tokens(rollout), tools.spend, failure)
+    report = tools.report
+    if report is None and len(tools.accepted) < n:
+        report = _stop_report(rollout, tools, n)
+    return AgentResult(idea, tuple(tools.accepted), report, rollout, rollout_tokens(rollout), tools.spend, failure)
+
+
+def _stop_report(rollout: Rollout, tools: TaskforgeTools, n: int) -> str:
+    """The report of a session that stopped with fewer than ``n`` tasks before the agent called ``finish``."""
+    messages = rollout.conversations[-1].messages if rollout.conversations else ()
+    notes = [
+        str(message["content"]) for message in messages if message.get("role") == "assistant" and message.get("content")
+    ]
+    note = notes[-1][-STOP_NOTE_CHARS:] if notes else "none"
+    budget = tools.config.budget.solver_rollouts
+    return (
+        f"The session stopped ({rollout.stop_reason}) before the agent wrote a report, with {len(tools.accepted)} of "
+        f"{n} tasks accepted and {tools.spend.solver_rollouts} of {budget} solver rollouts used. "
+        f"The last note of the agent: {note}"
+    )
 
 
 def agent_task(idea: CapabilityIdea, n: int, config: AgenticConfig) -> TaskSpec:

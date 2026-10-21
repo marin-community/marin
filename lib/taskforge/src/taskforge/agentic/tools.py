@@ -49,6 +49,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
+    EnvironmentRequirements,
     FunctionDefinition,
     InlineFile,
     ProviderRequirement,
@@ -62,7 +63,7 @@ from verifyit.spec import ExactSpec, IfevalSpec, NumericSpec, spec_from_table
 
 from taskforge.agentic.config import AgenticConfig
 from taskforge.agentic.gate import Evidence, Gate, missing_evidence
-from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, REVIEW_TASK_PROMPT
+from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, GUESS_PROMPT, REVIEW_TASK_PROMPT
 from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.client import ContextExhausted
@@ -122,6 +123,11 @@ MIN_LONG_OPTION_CHARS = 30
 """Options of text, not of codes or numbers: the length of an option tells only in a list of such options."""
 MAX_CORRECT_LENGTH_RATIO = 1.2
 """The most that the correct option can exceed the longest other option in length before it stands out."""
+GUESS_RUNS = 4
+"""Rollouts of ``submit`` in which the solver model guesses the answer of a task with files from its prompt alone."""
+MAX_GUESS_PASSES = 2
+"""The most guesses that can pass: more show an answer that the prompt gives away, for example by an option that
+stands out. Random guesses among four options pass three of four times in 5% of tasks."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
 
@@ -458,6 +464,13 @@ class ToolSession:
         missing = missing_evidence(evidence, self.config.gate)
         if missing:
             return _result({"accepted": False, "missing": missing, "evidence": asdict(evidence)})
+        guessed = await self._guesses(task)
+        if guessed > MAX_GUESS_PASSES:
+            problem = (
+                f"A solver with the prompt alone and no files guessed the answer in {guessed} of {GUESS_RUNS} attempts: "
+                "the prompt gives the answer away, for example by an option that stands out or by a cue."
+            )
+            return _result({"accepted": False, "problems": [problem]})
         # The review comes last, so it sees all the evidence of this version of the task.
         review = await self._review(task, key, evidence)
         if not review.accept:
@@ -467,6 +480,17 @@ class ToolSession:
         count = len(self.tools.accepted)
         reply = {"accepted": True, "accepted_tasks": count, "remaining": self.tools.n - count, "review": review.summary}
         return _result(reply, done=count >= self.tools.n)
+
+    async def _guesses(self, task: TaskSpec) -> int:
+        """How many of ``GUESS_RUNS`` solvers with the prompt alone guess the answer of a task with files.
+
+        The guesses are a part of ``submit``, so they do not use the rollout budget of the agent.
+        """
+        if not task.resources.worker:
+            return 0
+        spec = _solver_spec(_guess_task(task), self.config)
+        outcomes = await asyncio.gather(*(self._solve(spec) for _ in range(GUESS_RUNS)))
+        return sum(isinstance(outcome, GradedRollout) and _passed(outcome.grade) for outcome in outcomes)
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
         # The judge first solves the task without its reference answer, as a check that is not anchored on it.
@@ -842,13 +866,24 @@ def _public_task(task: TaskSpec, file_chars: int = OUTPUT_CHARS) -> dict[str, An
 
 
 def _adversary_task(task: TaskSpec) -> TaskSpec:
-    """``task`` with the adversary prompt as its system message, before any system message of its own."""
+    return _with_system_prompt(task, ADVERSARY_PROMPT)
+
+
+def _guess_task(task: TaskSpec) -> TaskSpec:
+    """``task`` with no files and no shell, and the guess prompt as its system message."""
+    resources = task.resources.model_copy(update={"worker": ()})
+    task = task.model_copy(update={"environment_requirements": EnvironmentRequirements(), "resources": resources})
+    return _with_system_prompt(task, GUESS_PROMPT)
+
+
+def _with_system_prompt(task: TaskSpec, prompt: str) -> TaskSpec:
+    """``task`` with ``prompt`` as its system message, before any system message of its own."""
     events = list(task.context.events)
     first = events[0] if events else None
     if isinstance(first, TextMessage) and first.role == "system":
-        events[0] = TextMessage(role="system", content=f"{ADVERSARY_PROMPT}\n\n{first.content}")
+        events[0] = TextMessage(role="system", content=f"{prompt}\n\n{first.content}")
     else:
-        events.insert(0, TextMessage(role="system", content=ADVERSARY_PROMPT))
+        events.insert(0, TextMessage(role="system", content=prompt))
     return task.model_copy(update={"context": task.context.model_copy(update={"events": tuple(events)})})
 
 

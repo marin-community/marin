@@ -63,7 +63,10 @@ evidence and the blind solution, and decides. Before it decides, it names the re
 this reading breaks, so that a failed answer from another reasonable reading refuses the task as
 ambiguous. The reviewer also quotes each list of options that the answer selects from, and code refuses a
 correct option that is clearly the longest, or a place that the correct options of the idea's tasks all
-share. After three calls on an empty budget, the tools stop the session. The experiment driver is
+share. Before the review, `submit` lets the solver model guess the answer of a task with files from its
+prompt alone, four times, and refuses the task when three guesses pass. After three calls on an empty budget,
+the tools stop the session, and a session that stops before `finish` with fewer than n tasks gets a report of
+the tools. The experiment driver is
 `experiments/post_training/capability_driven_envs/generate_tasks_agentic.py`.
 
 ## The build DAG

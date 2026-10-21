@@ -20,7 +20,7 @@ from taskforge.agentic.agent import generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
-from taskforge.agentic.prompts import ADVERSARY_PROMPT
+from taskforge.agentic.prompts import ADVERSARY_PROMPT, GUESS_PROMPT
 from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, BlindSolution, OptionList, TaskReview
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.client import Completion, ContextExhausted, StructuredResult
@@ -94,13 +94,21 @@ class ScriptedAgent:
 
 @dataclass
 class Solver:
-    """Solves every second task attempt. The adversary role always answers 0."""
+    """Solves every second task attempt. The adversary role answers 0, and a guess answers 0 or the reference."""
 
+    guesses_right: bool = False
     attempts: itertools.count = field(default_factory=itertools.count)
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
-        adversary = any(ADVERSARY_PROMPT in str(message.get("content")) for message in request.messages)
-        answer = "0" if adversary else (EXPECTED if next(self.attempts) % 2 == 0 else "1")
+        def told(prompt: str) -> bool:
+            return any(prompt in str(message.get("content")) for message in request.messages)
+
+        if told(GUESS_PROMPT):
+            answer = EXPECTED if self.guesses_right else "0"
+        elif told(ADVERSARY_PROMPT):
+            answer = "0"
+        else:
+            answer = EXPECTED if next(self.attempts) % 2 == 0 else "1"
         return ModelTurn({"role": "assistant", "content": answer}, (), (), None, "stop", usage=TokenUsage(5, 1))
 
 
@@ -190,6 +198,19 @@ async def test_submit_refuses_a_task_whose_correct_option_is_the_longest():
     assert result.tasks == ()
 
 
+async def test_submit_refuses_a_task_whose_answer_the_prompt_alone_gives():
+    script = (*SCRIPT, call("finish", report="done"))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=Solver(guesses_right=True)))
+
+    [submit] = [
+        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-10"
+    ]
+    assert any("guessed the answer in 4 of 4" in problem for problem in submit["problems"])
+    assert result.tasks == ()
+
+
 class OverflowJudge(AcceptingJudge):
     """Rejects every request as too long for its context."""
 
@@ -239,6 +260,16 @@ async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
     assert agent.turns == MAX_EMPTY_BUDGET_CALLS
     assert result.tasks == ()
     assert result.report is not None and "empty budget" in result.report
+
+
+async def test_a_session_at_its_turn_limit_gets_a_report_of_the_tools():
+    script = tuple(call("shell", command="echo still working") for _ in range(LIMITS.max_turns))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    assert result.report is not None
+    assert result.report.startswith("The session stopped (max_turns) before the agent wrote a report, with 0 of 1")
 
 
 async def test_finish_refuses_once_while_most_of_the_budget_is_left():

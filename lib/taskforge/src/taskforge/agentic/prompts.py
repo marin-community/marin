@@ -101,6 +101,10 @@ Try to get full credit with a shortcut only, for example: find the answer in the
 the task text, use a weakness of the answer format or of the grader, or give an answer that a weak grader accepts. \
 Give your final answer in the format that the task asks for."""
 
+GUESS_PROMPT = """\
+You cannot read the files or use the tools that this task names. Do not explain. Give your best guess of the answer, \
+in the format that the task asks for."""
+
 BLIND_SOLVE_PROMPT = """\
 You check a task that trains a language-model agent on a capability. You get the task's prompt and files, but not \
 its reference answer. Solve the task as an expert would. Note each place where the prompt or the files allow more \
