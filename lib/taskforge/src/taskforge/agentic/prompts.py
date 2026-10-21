@@ -13,10 +13,14 @@ A task is a TaskSpec: a prompt, optional files for the solver, an answer format,
 answer.
 - A solver model gets the prompt. If the task declares the capabilities "shell" and "filesystem", the solver also \
 gets a shell and the task's files in /workspace on a ShellSim machine: a simulated shell with ls, cat, grep, sed, \
-awk, jq, sort, wc, find and similar tools, but with no Python and no network. Its arithmetic is limited: awk has \
-log but no exp, sqrt or ^, and bc has no -l math library. Do not make a task hard only because the solver must \
-compute such functions by hand. Its awk reads a field separator of one regular-expression character, for example | \
-or ., as a regular expression, with no error: separate the fields of the solver's files with commas, tabs or spaces.
+awk, jq, sort, wc, find and similar tools, and no network.
+- The solver has python3 with the standard library only when the task sets environment_requirements.package_spec \
+to a PackageSpec with pypi_packages, and declares the capability "python", as /workspace/example_build.py does. \
+List a PyPI package, for example "numpy", in pypi_packages to install it. Without Python, the solver's arithmetic is \
+limited: awk has log but no exp, sqrt or ^, and bc has no -l math library. Do not make a task hard only because the \
+solver must compute such functions by hand. ShellSim awk reads a field separator of one regular-expression \
+character, for example | or ., as a regular expression, with no error: separate the fields of the solver's files \
+with commas, tabs or spaces.
 - The solver answers with its final message. The answer type is "text", "number" or "json". The grader is a \
 verifyit spec that grades the answer in process, for example a NumericSpec or an ExactSpec, made with \
 taskcompendium.grader.verifyit_package. The solver never sees the grader or its reference answer.
