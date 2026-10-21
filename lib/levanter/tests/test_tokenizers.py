@@ -20,6 +20,7 @@ from unittest.mock import patch
 import jinja2.exceptions
 import pytest
 from huggingface_hub import __version__ as _hf_hub_version
+from rigging.cache import directory_content_hash
 from tokenizers import Tokenizer as HfBaseTokenizer
 
 import levanter.tokenizers as tk
@@ -1639,3 +1640,20 @@ def test_tokenizer_content_hash_tracks_staged_files(tmp_path):
 
     assert first.startswith("sha256:")
     assert second != first
+
+
+def test_tokenizer_content_hash_ignores_checkpoint_weights(tmp_path):
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    (tokenizer_dir / "tokenizer.json").write_text('{"version":"1.0"}')
+    staged = tokenizer_content_hash(str(tokenizer_dir))
+
+    checkpoint_dir = tmp_path / "checkpoint"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "tokenizer.json").write_text('{"version":"1.0"}')
+    (checkpoint_dir / "model.safetensors").write_bytes(b"weights")
+    (checkpoint_dir / "shards").mkdir()
+    (checkpoint_dir / "shards" / "tokenizer.json").write_text("{}")
+
+    assert tokenizer_content_hash(str(checkpoint_dir)) == staged
+    assert staged == f"sha256:{directory_content_hash(tokenizer_dir)}"

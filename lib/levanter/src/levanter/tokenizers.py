@@ -762,10 +762,20 @@ def load_tokenizer(
     raise ValueError(f"Unknown backend: {backend}")
 
 
+def _is_tokenizer_file(relative: pathlib.Path) -> bool:
+    return len(relative.parts) == 1 and any(
+        fnmatchcase(relative.name, pattern) for pattern in _TOKENIZER_ALLOW_PATTERNS
+    )
+
+
 def tokenizer_content_hash(name_or_path: str) -> str:
-    """Return a SHA-256 of every file in the directory that ``load_tokenizer`` reads for ``name_or_path``."""
+    """Return a SHA-256 of the tokenizer files that ``load_tokenizer`` reads for ``name_or_path``.
+
+    Only the top-level files that match ``_TOKENIZER_ALLOW_PATTERNS`` count, so model weights in a
+    checkpoint directory do not change the identity. A staged tokenizer directory holds only these files.
+    """
     local_dir = _local_tokenizer_path(name_or_path)
-    return f"sha256:{directory_content_hash(pathlib.Path(local_dir))}"
+    return f"sha256:{directory_content_hash(pathlib.Path(local_dir), include=_is_tokenizer_file)}"
 
 
 def _collect_special_ids(
