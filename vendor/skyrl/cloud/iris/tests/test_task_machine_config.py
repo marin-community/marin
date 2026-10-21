@@ -48,25 +48,20 @@ def test_empty_settings_do_not_clear_existing_mapping_defaults(tmp_path):
     assert config.environment.task_sessions.session == baseline.environment.task_sessions.session
 
 
-def test_empty_mapping_cannot_replace_a_scalar_config_value(tmp_path):
+@pytest.mark.parametrize(
+    "key,error",
+    [
+        ("seed", "trainer.seed.*not a mapping"),
+        ("unknown_backend", "unknown key.*trainer.unknown_backend"),
+    ],
+)
+def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):
     recipe = Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml"
     raw = yaml.safe_load(recipe.read_text())
-    raw["trainer"]["seed"] = {}
+    raw["trainer"][key] = {}
     path = tmp_path / "recipe.yaml"
     path.write_text(yaml.safe_dump(raw))
-    with pytest.raises(ValueError, match="trainer.seed.*not a mapping"):
-        compose_skyrl_config(
-            parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
-        )
-
-
-def test_empty_mapping_keeps_unknown_config_keys_rejected(tmp_path):
-    recipe = Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml"
-    raw = yaml.safe_load(recipe.read_text())
-    raw["trainer"]["unknown_backend"] = {}
-    path = tmp_path / "recipe.yaml"
-    path.write_text(yaml.safe_dump(raw))
-    with pytest.raises(ValueError, match="unknown key.*trainer.unknown_backend"):
+    with pytest.raises(ValueError, match=error):
         compose_skyrl_config(
             parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
         )
