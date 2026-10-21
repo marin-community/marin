@@ -9,22 +9,19 @@ import hashlib
 import json
 import uuid
 from collections import Counter
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import requests
-from marina.client import DEFAULT_MARINA_URL, LOCAL_HOSTS, marina_request, marina_token_provider
+from marina.client import DEFAULT_MARINA_URL, LOCAL_HOSTS, AppletQuery, applet_query, marina_token_provider
 from marina.table_load import json_row_batches
-from rigging.auth import TokenProvider
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.snowball_curriculum.bundle import verify_manifest
 from experiments.post_training.snowball_curriculum.native import NATIVE_CONTRACT_KIND
 
 MAX_BATCH_BYTES = 900_000
-Query = Callable[[str, dict[str, Any]], dict[str, Any]]
 TASK_COLUMNS = (
     "contract_id TEXT, task_id TEXT, source_id TEXT, family TEXT, difficulty TEXT, "
     "preview TEXT, search_text TEXT, detail TEXT"
@@ -167,7 +164,7 @@ def read_pool(
 
 
 def load_pool(
-    root: Path, query: Query, *, expected_manifest_sha256: str, artifact_uri: str | None = None
+    root: Path, query: AppletQuery, *, expected_manifest_sha256: str, artifact_uri: str | None = None
 ) -> dict[str, Any]:
     """Stage a complete snapshot, verify counts, then atomically select it."""
     metadata, tasks = read_pool(root, expected_manifest_sha256=expected_manifest_sha256, artifact_uri=artifact_uri)
@@ -200,39 +197,6 @@ def load_pool(
     if selected["row_count"] != 1:
         raise RuntimeError("Serving snapshot changed during load; staged data has not been selected")
     return {"load_id": load_id, "selected_count": count, "tasks_sha256": metadata["tasks_sha256"]}
-
-
-def applet_query(
-    service_url: str,
-    applet_id: str,
-    *,
-    session: requests.Session | None = None,
-    token_provider: TokenProvider | None = None,
-) -> Query:
-    details = marina_request(
-        service_url,
-        "GET",
-        f"/api/marina/applets/{applet_id}",
-        session=session,
-        token_provider=token_provider,
-    )
-    assert isinstance(details, dict)
-    parsed = urlparse(details["authenticated_url"])
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
-
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        result = marina_request(
-            origin,
-            "POST",
-            f"/a/{applet_id}/query",
-            json_body={"sql": sql, "parameters": parameters},
-            session=session,
-            token_provider=token_provider,
-        )
-        assert isinstance(result, dict)
-        return result
-
-    return query
 
 
 def main() -> None:

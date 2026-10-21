@@ -13,6 +13,8 @@ from taskcompendium.runtime.shell import resolve_shell_tool
 from skyrl_train.inference_engines.base import ConversationType
 from skyrl_train.rollouts.group_grader import GroupGraderSpec
 
+PREFILL_HARNESS = "prefill"
+
 
 @dataclass(frozen=True)
 class TrajectoryMetadata:
@@ -38,7 +40,7 @@ class PreferenceInput:
 
 
 def task_messages(spec: TaskRolloutSpec) -> ConversationType:
-    if spec.harness == "prefill":
+    if spec.harness == PREFILL_HARNESS:
         return list(prefill_prompt(spec.task).messages)
     if not is_shell_harness(spec.harness):
         return list(episode_prompt(spec.task).messages)
