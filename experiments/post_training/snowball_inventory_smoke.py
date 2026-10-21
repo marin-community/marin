@@ -61,6 +61,8 @@ class InventoryRunConfig:
     validation_sha256: str | None = None
     validation_family_counts: dict[str, int] | None = None
     model_source: ModelSourceIdentity | None = None
+    expected_model_manifest_identity: str | None = None
+    expected_tokenizer_template_sha256: str | None = None
 
 
 def inventory_training_execution() -> IrisSkyRLExecution:
@@ -97,6 +99,8 @@ def verify_pool_runtime(
     validation_sha256: str | None,
     validation_family_counts: dict[str, int] | None = None,
     model_source: ModelSourceIdentity | None = None,
+    expected_model_manifest_identity: str | None = None,
+    expected_tokenizer_template_sha256: str | None = None,
 ) -> None:
     with TemporaryDirectory(prefix="snowball-launch-preflight-") as directory:
         path = Path(directory) / "launch.yaml"
@@ -126,6 +130,10 @@ def verify_pool_runtime(
             command.extend(["--validation-family-counts", json.dumps(validation_family_counts, sort_keys=True)])
         if model_source is not None:
             command.extend(["--model-repository", model_source.repository, "--model-revision", model_source.revision])
+        if expected_model_manifest_identity is not None:
+            command.extend(["--expected-model-manifest-identity", expected_model_manifest_identity])
+        if expected_tokenizer_template_sha256 is not None:
+            command.extend(["--expected-tokenizer-template-sha256", expected_tokenizer_template_sha256])
         subprocess.run(
             command,
             cwd=Path(__file__).resolve().parents[2],
@@ -147,6 +155,8 @@ def run_inventory(config: InventoryRunConfig) -> SkyRLRun:
         config.validation_sha256,
         config.validation_family_counts,
         config.model_source,
+        config.expected_model_manifest_identity,
+        config.expected_tokenizer_template_sha256,
     )
     return run_skyrl(config.training)
 

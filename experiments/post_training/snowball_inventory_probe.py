@@ -77,6 +77,7 @@ class ProbeReport:
     launch_config_sha256: str | None = None
     runtime_source_digest: str | None = None
     model_manifest_identity: str | None = None
+    tokenizer_template_sha256: str | None = None
     model_repository: str | None = None
     model_revision: str | None = None
     row_count: int = 0
@@ -132,7 +133,9 @@ def validated_probe_config(path: Path, report: ProbeReport) -> DictConfig:
     return config
 
 
-def verify_initializer_model(model_uri: str, repository: str, revision: str) -> ModelManifest:
+def verify_initializer_model(
+    model_uri: str, repository: str, revision: str, expected_identity: str | None = None
+) -> ModelManifest:
     """Reject a named initializer whose immutable model manifest names another source.
 
     This checks manifest provenance, without rehashing model weights or proving
@@ -143,7 +146,17 @@ def verify_initializer_model(model_uri: str, repository: str, revision: str) -> 
         manifest = ModelManifest.from_mapping(json.load(source), uri)
     if (manifest.model_id, manifest.revision) != (repository, revision):
         raise ValueError("Model manifest source differs from the selected initializer")
+    if expected_identity is not None and manifest.identity != expected_identity:
+        raise ValueError("Model manifest content differs from the pinned initializer")
     return manifest
+
+
+def verify_tokenizer_template(tokenizer: PreTrainedTokenizerBase, expected_sha256: str | None) -> str:
+    """Identify the active serving template and reject drift from the frozen baseline."""
+    actual = hashlib.sha256(tokenizer.get_chat_template().encode()).hexdigest()
+    if expected_sha256 is not None and actual != expected_sha256:
+        raise ValueError("Active tokenizer template differs from the pinned initializer")
+    return actual
 
 
 def preflight_tokenizer(config: DictConfig) -> PreTrainedTokenizerBase:
@@ -223,15 +236,21 @@ async def probe(
     validation_family_counts: dict[str, int] | None = None,
     model_repository: str | None = None,
     model_revision: str | None = None,
+    expected_model_manifest_identity: str | None = None,
+    expected_tokenizer_template_sha256: str | None = None,
 ) -> None:
     report.phase = "launch_configuration"
     config = validated_probe_config(launch_config, report)
     if (model_repository is None) != (model_revision is None):
         raise ValueError("Named initializer admission requires both repository and revision")
+    if expected_model_manifest_identity is not None and model_repository is None:
+        raise ValueError("Pinned initializer content requires its named repository and revision")
     if model_repository is not None:
         assert model_revision is not None
         report.phase = "initializer_identity"
-        manifest = verify_initializer_model(str(config.inputs.model.uri), model_repository, model_revision)
+        manifest = verify_initializer_model(
+            str(config.inputs.model.uri), model_repository, model_revision, expected_model_manifest_identity
+        )
         report.model_manifest_identity = manifest.identity
         report.model_repository = manifest.model_id
         report.model_revision = manifest.revision
@@ -269,6 +288,9 @@ async def probe(
         scripts, native = inventory_representatives(path, report, factories, prefill, judge_connection)
         validation_canaries = {}
         tokenizer = preflight_tokenizer(config)
+        if expected_tokenizer_template_sha256 is not None:
+            report.phase = "tokenizer_identity"
+            report.tokenizer_template_sha256 = verify_tokenizer_template(tokenizer, expected_tokenizer_template_sha256)
         training_dataset = TaskDataset(
             [str(path)],
             tokenizer,
@@ -405,6 +427,8 @@ def write_report(output_uri: str, report: ProbeReport) -> None:
 @click.option("--output-uri", required=True, help="Destination JSON report URI.")
 @click.option("--model-repository")
 @click.option("--model-revision")
+@click.option("--expected-model-manifest-identity")
+@click.option("--expected-tokenizer-template-sha256")
 def main(
     launch_config: Path,
     expected_sha256: str,
@@ -413,6 +437,8 @@ def main(
     output_uri: str,
     model_repository: str | None,
     model_revision: str | None,
+    expected_model_manifest_identity: str | None,
+    expected_tokenizer_template_sha256: str | None,
 ) -> None:
     report = ProbeReport()
     try:
@@ -426,6 +452,8 @@ def main(
                 counts,
                 model_repository,
                 model_revision,
+                expected_model_manifest_identity,
+                expected_tokenizer_template_sha256,
             )
         )
     except Exception as error:
