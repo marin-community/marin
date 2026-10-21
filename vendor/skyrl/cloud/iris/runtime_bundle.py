@@ -16,6 +16,8 @@ from cloud.iris.paths import PROJECT_ROOT
 BUNDLE_FILE_MANIFEST = Path("cloud/iris/runtime_bundle_files.txt")
 BUNDLE_IDENTITY_FILE = ".marinskyrl-runtime.json"
 PROVENANCE_FILE = Path("marinskyrl/_vendor_provenance.json")
+HARBOR_SOURCE_DIR = "harbor"
+HARBOR_LINK_TARGET = Path("../harbor")
 RUNTIME_SOURCE_PREFIXES = (
     "cloud/",
     "marinskyrl/",
@@ -23,7 +25,7 @@ RUNTIME_SOURCE_PREFIXES = (
     "skyrl-train/skyrl_train/",
     "skyrl-gym/skyrl_gym/",
     "open_mopd_versions.py",
-    "harbor/src/",
+    f"{HARBOR_SOURCE_DIR}/src/",
 )
 
 
@@ -79,14 +81,14 @@ def _bundle_paths(root: Path) -> tuple[Path, ...]:
             PROVENANCE_FILE.as_posix(),
             "pyproject.toml",
             "uv.lock",
-            "harbor/pyproject.toml",
-            "harbor/README.md",
-            "harbor/LICENSE",
+            f"{HARBOR_SOURCE_DIR}/pyproject.toml",
+            f"{HARBOR_SOURCE_DIR}/README.md",
+            f"{HARBOR_SOURCE_DIR}/LICENSE",
         }
     )
-    harbor_root = root / "harbor"
-    if harbor_root.is_symlink() and harbor_root.readlink() != Path("../harbor"):
-        raise ValueError("Vendored Harbor source must point to ../harbor")
+    harbor_root = root / HARBOR_SOURCE_DIR
+    if harbor_root.is_symlink() and harbor_root.readlink() != HARBOR_LINK_TARGET:
+        raise ValueError(f"Vendored Harbor source must point to {HARBOR_LINK_TARGET}")
     for prefix in RUNTIME_SOURCE_PREFIXES:
         source = root / prefix
         if source.is_dir():
@@ -99,7 +101,7 @@ def _bundle_paths(root: Path) -> tuple[Path, ...]:
         if {"tests", "__pycache__"}.intersection(path.parts) or path.suffix in {".pyc", ".pyo"}:
             continue
         original = root / path
-        allowed_root = harbor_root.resolve() if path.parts[0] == "harbor" else root.resolve()
+        allowed_root = harbor_root.resolve() if path.parts[0] == HARBOR_SOURCE_DIR else root.resolve()
         original.resolve().relative_to(allowed_root)
         if not original.is_file():
             raise FileNotFoundError(f"Runtime source file is missing: {name}")

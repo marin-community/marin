@@ -116,7 +116,7 @@ async def test_worker_preserves_task_download_stderr(tmp_path):
         with pytest.raises(RuntimeError, match="Subprocess stderr:") as caught:
             await client.run(cohort, 0)
     stderr = str(caught.value).split("Subprocess stderr:", 1)[1]
-    assert "does not appear to be a git repository" in stderr
+    assert "missing-repository" in stderr
 
 
 @pytest.mark.asyncio
