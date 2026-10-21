@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 import yaml
-from iris.rpc import job_pb2
 from omegaconf import OmegaConf
 from rolloutengine.harness.prefill import prefill_prompt
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutContractError
