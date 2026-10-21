@@ -1498,23 +1498,28 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if step % GC_EVERY_STEPS == 0:
                 gc.collect()
                 gc.freeze()
-            host_gap_start = time.perf_counter()
+            work_end = time.perf_counter()
             stall_sampler.disarm(step)
-            if host_gap_start - ready_time > HOST_GAP_WARN:
+            if step_state is not None:
+                host_gap_start = work_end
+            # A lagged step's host work runs on the post-step thread while the next step runs on the devices, so
+            # only a stretch long enough to delay that step's successor is worth a warning.
+            if work_end - ready_time > (HOST_GAP_WARN if step_state is not None else HOST_STALL_SAMPLE_THRESHOLD):
                 logger.warning(
-                    "post-step host work %.3f s after step %d on process %d",
-                    host_gap_start - ready_time,
+                    "post-step host work %.3f s after step %d on process %d%s",
+                    work_end - ready_time,
                     step,
                     jax.process_index(),
+                    "" if step_state is not None else " (overlapped with the next step)",
                 )
 
         # Main optimization loop.
         try:
-            with HostStallSampler(HOST_STALL_SAMPLE_THRESHOLD) as stall_sampler:
-                # Pipelined loop: step n+1 is dispatched before step n's loss is waited on, so the host's dispatch
-                # and logging overlap the devices' work. A step whose follow-up needs its state (an eval, a
-                # checkpoint poll, the router-tie release, the HLO dump, the last step) is finished before the
-                # next dispatch, since that dispatch donates the state.
+            with HostStallSampler(HOST_STALL_SAMPLE_THRESHOLD) as stall_sampler, _PostStepThread() as post_step:
+                # Pipelined loop (pipeline_depth 1): step n's host work (loss wait, logging, callbacks) runs on the
+                # post-step thread while step n+1 is dispatched and runs. A step whose follow-up needs its state (an
+                # eval, a checkpoint poll, the HLO dump, the last step) is finished on this thread before the next
+                # dispatch, since that dispatch donates the state.
                 host_step = int(state.step)
                 pending: _PendingStep | None = None
                 if config.trainer.pipeline_depth not in (0, 1):
@@ -1522,8 +1527,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 while host_step < stop_step:
                     with jax.profiler.TraceAnnotation("load_batch"):
                         batch = next(iterator)
-                    if pending is not None and pending.needs_state:
-                        finish_step(pending, state)
+                    if pending is not None:
+                        # The previous lagged step's host work must be done first: the callbacks run in step order.
+                        post_step.wait()
+                        if pending.needs_state:
+                            finish_step(pending, state)
+                        else:
+                            # Lagged: the host work runs on the post-step thread while this thread is inside the
+                            # next step's dispatch. That call returns only once the devices are nearly through
+                            # the step (host syncs at every lax.cond, and the GPU launch queue), so host work
+                            # after it would leave the devices idle.
+                            post_step.submit(finish_step, pending, None)
+                            host_gap_start = time.perf_counter()
                         pending = None
                     current_step = host_step
                     watch_due = (
@@ -1592,9 +1607,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if inline_watch_stats is not None and watch_due:
                         watch_stats = inline_watch_stats
                     host_step += 1
-                    if pending is not None:
-                        # The previous step, finished while this one runs on the devices.
-                        finish_step(pending, None)
                     pending = _PendingStep(
                         step=current_step,
                         metrics=metrics,
@@ -1606,10 +1618,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             host_step >= stop_step
                             or config.trainer.pipeline_depth == 0
                             or (eval_interval is not None and host_step % eval_interval == 0)
-                            or host_step % CHECKPOINT_POLL_STEPS == 0
+                            or (checkpointer is not None and host_step % CHECKPOINT_POLL_STEPS == 0)
                             or (config.trainer.hlo_dump_path is not None and not hlo_written)
                         ),
                     )
+                post_step.wait()
                 if pending is not None:
                     finish_step(pending, state)
                     pending = None
@@ -1987,6 +2000,31 @@ class _LaggedStateView:
     params: None = None
     ema_params: None = None
     opt_state: None = None
+
+
+class _PostStepThread:
+    """One background thread for lagged steps' host work (``pipeline_depth`` 1). ``wait`` blocks until the submitted
+    work is done and re-raises its exception on the caller's thread."""
+
+    def __init__(self):
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="post-step")
+        self._future: concurrent.futures.Future | None = None
+
+    def __enter__(self) -> "_PostStepThread":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        # On an error elsewhere the queued work is dropped; the running one finishes on its own.
+        self._executor.shutdown(wait=exc[0] is None, cancel_futures=True)
+
+    def submit(self, fn: Callable[..., None], *args) -> None:
+        assert self._future is None, "wait for the previous post-step work first"
+        self._future = self._executor.submit(fn, *args)
+
+    def wait(self) -> None:
+        future, self._future = self._future, None
+        if future is not None:
+            future.result()
 
 
 @dataclasses.dataclass
