@@ -17,7 +17,9 @@ import pytest
 
 # MLX only installs on Apple Silicon; root CI collects experiments/ on Linux.
 mx = pytest.importorskip("mlx.core")
+import mlx_lm.server  # noqa: E402  (imported first so the model file patches the server)
 from mlx.utils import tree_map  # noqa: E402
+from mlx_lm.generate import TextStateMachine, make_text_state_machine  # noqa: E402
 
 MODEL_FILE = Path(__file__).resolve().parent / "grug_moe_mlx.py"
 
@@ -271,3 +273,45 @@ def test_think_markers_inferred_from_vocab():
             return {"<|start_think|>": 11, "<|end_think|>": 12, "hello": 3}
 
     assert mod.tokenizer_utils._infer_thinking(Tokenizer()) == ("<|start_think|>", "<|end_think|>", (11,), (12,))
+
+
+class GrugTokenizerStub:
+    """The attributes make_text_state_machine reads, for a Grug tokenizer with json_tools."""
+
+    has_thinking = True
+    think_start, think_end = mod._GRUG_THINK
+    has_tool_calling = True
+    tool_call_start, tool_call_end = "<tool_call>", "</tool_call>"
+    structural_markers = ()
+
+    @property
+    def _response_format(self):
+        return {}
+
+    @property
+    def response_transitions(self):
+        return mod.tokenizer_utils.TokenizerWrapper.response_transitions.fget(self)
+
+
+def _parse(text: str, initial: str) -> dict[str, str]:
+    machine = make_text_state_machine(GrugTokenizerStub())
+    _, segments = TextStateMachine.split(machine.make_state(initial), text)
+    parsed: dict[str, str] = {}
+    for state, chunk in segments:
+        parsed[state] = parsed.get(state, "") + chunk
+    return parsed
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["plan the email<|end_think|>Dear landlord", "<|start_think|>plan the email<|end_think|>Dear landlord"],
+)
+def test_thinking_mode_parses_reasoning_with_or_without_start_marker(text):
+    assert mlx_lm.server.ResponseGenerator._tokenize._grug_patch
+    assert _parse(text, "reasoning") == {"reasoning": "plan the email", "normal": "Dear landlord"}
+
+
+def test_reasoning_before_tool_call_without_end_marker():
+    parsed = _parse('check files first<tool_call>{"name": "bash"}</tool_call>', "reasoning")
+    assert parsed["reasoning"] == "check files first"
+    assert parsed["tool"] == '{"name": "bash"}'

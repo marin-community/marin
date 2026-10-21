@@ -18,8 +18,11 @@ latent experts, split local/global KV heads, fused RoPE, schema version 2
 As a side effect of being imported (which ``mlx_lm.load`` does before building
 the tokenizer) this module teaches ``mlx-lm`` the model's thinking markers
 ``<|start_think|>``/``<|end_think|>``; see ``_install_grug_think_markers``.
+Under ``mlx_lm.server`` it also treats text before a bare ``<|end_think|>`` as
+reasoning; see ``_install_grug_bare_think_end``.
 """
 
+import sys
 from dataclasses import dataclass
 
 import mlx.core as mx
@@ -66,6 +69,55 @@ def _install_grug_think_markers() -> None:
 
 
 _install_grug_think_markers()
+
+
+def _grug_thinking_enabled(template_kwargs: dict) -> bool:
+    """Mirror the chat template: thinking is on unless enable_thinking is False or "/nothink"."""
+    return template_kwargs.get("enable_thinking", True) not in (False, "/nothink")
+
+
+def _install_grug_bare_think_end() -> None:
+    """Parse thinking-mode responses as reasoning until <|end_think|>.
+
+    With thinking on, the model sometimes reasons without first emitting
+    <|start_think|> and then closes with <|end_think|>. mlx-lm 0.32.2 starts the
+    response parser in "normal" unless the prompt ends inside a think block, so
+    that reasoning and the bare marker land in the content. Start in
+    "reasoning" for thinking-mode chat requests instead, and strip a
+    <|start_think|> the model does emit. Remove once mlx-lm supports a
+    per-request initial reasoning state. Applies only when mlx_lm.server is
+    already imported, which it is when the server loads the model.
+    """
+    server = sys.modules.get("mlx_lm.server")
+    if server is None or getattr(server.ResponseGenerator._tokenize, "_grug_patch", False):
+        return
+    stock_tokenize = server.ResponseGenerator._tokenize
+    stock_transitions = tokenizer_utils.TokenizerWrapper.response_transitions.fget
+
+    def _tokenize(self, tokenizer, request, args):
+        prompt, segments, segment_types, initial_state, vision = stock_tokenize(self, tokenizer, request, args)
+        template_kwargs = {**self.model_provider.cli_args.chat_template_args, **(args.chat_template_kwargs or {})}
+        if (
+            request.request_type == "chat"
+            and tokenizer.think_start == _GRUG_THINK[0]
+            and initial_state == "normal"
+            and _grug_thinking_enabled(template_kwargs)
+        ):
+            initial_state = "reasoning"
+        return prompt, segments, segment_types, initial_state, vision
+
+    def response_transitions(self):
+        transitions = stock_transitions(self)
+        if self.think_start != _GRUG_THINK[0]:
+            return transitions
+        return {**transitions, "reasoning": [*transitions.get("reasoning", []), (_GRUG_THINK[0], "reasoning")]}
+
+    _tokenize._grug_patch = True
+    server.ResponseGenerator._tokenize = _tokenize
+    tokenizer_utils.TokenizerWrapper.response_transitions = property(response_transitions)
+
+
+_install_grug_bare_think_end()
 
 
 @dataclass

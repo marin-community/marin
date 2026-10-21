@@ -105,16 +105,19 @@ A position is decisive when vLLM's top token leads the runner-up by at least 0.2
   more than one shared expert, tied embeddings). Port it, add a test, and rerun parity.
 - `convert.py` asserts on quantization overrides: module names in `grug_moe_mlx.py` changed, and the
   `.mlp.experts.` match in `quant_params` needs updating.
-- Thinking missing from `reasoning`: `mlx-lm` is not 0.32.2. The thinking-marker patch in
-  `grug_moe_mlx.py` replaces `mlx_lm.tokenizer_utils._infer_thinking`. Re-check it before bumping the
-  pin.
+- Thinking missing from `reasoning`: `mlx-lm` is not 0.32.2. `grug_moe_mlx.py` replaces
+  `mlx_lm.tokenizer_utils._infer_thinking`, `TokenizerWrapper.response_transitions`, and
+  `mlx_lm.server.ResponseGenerator._tokenize`. Re-check all three before bumping the pin.
 
 ## Running a build
 
 ```bash
-uvx --from mlx-lm==0.32.2 mlx_lm.server --model <mlx repo or dir> --trust-remote-code --max-tokens 32768
+uvx --from mlx-lm==0.32.2 mlx_lm.server --model <mlx repo or dir> --trust-remote-code \
+  --max-tokens 32768 --temp 1.0 --top-p 1.0
 ```
 
-Requests must use `"model": "default_model"`. Without `--max-tokens` the server stops at 512 tokens,
+Requests must use `"model": "default_model"`. `--temp 1.0 --top-p 1.0` matches vLLM, which samples at
+temperature 1.0 when the request and `generation_config.json` set none; `mlx_lm.server` is greedy by
+default, and Evalchemy omits temperature so the server default applies. Without `--max-tokens` the server stops at 512 tokens,
 mid-thought. pi needs `compat.chatTemplateKwargs: {"enable_thinking": {"$var": "thinking.enabled"}}`
 in `models.json` for its thinking toggle to reach the template.
