@@ -548,12 +548,15 @@ def dummy_config():
     return get_default_config()
 
 
-class FixtureRunner:
+class DummyRunner:
     trajectory_runner_cfg = {}
     trajectory_sink = None
 
+    def __init__(self, outputs: dict[str, TrajectoryBatch]):
+        self.outputs = outputs
+
     async def run(self, input_batch) -> TrajectoryBatch:
-        output = await self._run(input_batch)
+        output = {**self.outputs[input_batch.metadata[0].uid], "trajectory_ids": list(input_batch.trajectory_ids)}
         return await finalize_trajectory_batch(input_batch, output, self.trajectory_runner_cfg, self.trajectory_sink)
 
     async def run_task(self, task, writer) -> int:
@@ -563,9 +566,6 @@ class FixtureRunner:
     def set_trajectory_sink(self, sink) -> None:
         sink.bind_runner(type(self).__name__)
         self.trajectory_sink = sink
-
-    async def _run(self, input_batch) -> TrajectoryBatch:
-        raise NotImplementedError
 
     async def start_eval_session(self, *, run_name: str, eval_step: int, val_set_name: str | None = None) -> None:
         pass
@@ -609,16 +609,6 @@ class DummyStatefulDataLoader:
 
     def __iter__(self):
         return iter(self._batches)
-
-
-class DummyRunner(FixtureRunner):
-    def __init__(self, outputs: dict[str, TrajectoryBatch]):
-        self.outputs = outputs
-        self.seen_inputs = []
-
-    async def _run(self, input_batch):
-        self.seen_inputs.append(input_batch)
-        return {**self.outputs[input_batch.metadata[0].uid], "trajectory_ids": list(input_batch.trajectory_ids)}
 
 
 @pytest.mark.asyncio
