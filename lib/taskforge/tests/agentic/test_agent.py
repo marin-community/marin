@@ -272,6 +272,24 @@ async def test_a_session_at_its_turn_limit_gets_a_report_of_the_tools():
     assert result.report.startswith("The session stopped (max_turns) before the agent wrote a report, with 0 of 1")
 
 
+async def test_rollout_runs_a_task_whose_id_is_too_long_for_a_file_name():
+    task = example_build.task_spec("x" * 300)
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
+        call("rollout", paths=[TASK], n=1, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [rollout] = [
+        json.loads(m["content"]) for m in result.rollout.conversations[-1].messages if m.get("tool_call_id") == "call-2"
+    ]
+    assert rollout["results"][TASK]["graded"] == 1
+    assert (result.failure, result.report) == (None, "done")
+
+
 async def test_finish_refuses_once_while_most_of_the_budget_is_left():
     script = (call("finish", report="too easy"), call("finish", report="too easy"))
     async with ParallelWeb("unused") as web:

@@ -77,6 +77,9 @@ AGENT_TOOLS = "taskforge-agentic:v1"
 SOLVER_HARNESS = "solver"
 WORKDIR = PurePosixPath("/workspace")
 ROLLOUTS_DIR = "rollouts"
+NOT_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+MAX_NAME_CHARS = 64
+"""The most characters of a task id in a directory name: a task id is free text, and a file name has at most 255."""
 WEB_DIR = "web"
 
 
@@ -403,7 +406,8 @@ class ToolSession:
     ) -> dict[str, Any]:
         """Run ``n`` rollouts of ``spec``, record their evidence for ``task``, and save their transcripts."""
         key = _task_digest(task)
-        directory = _absolute(f"{ROLLOUTS_DIR}/{task.id}/{key[:12]}")
+        name = NOT_NAME_CHARS.sub("_", task.id)[:MAX_NAME_CHARS]
+        directory = _absolute(f"{ROLLOUTS_DIR}/{name}/{key[:12]}")
         # Take the transcript numbers before the rollouts, so that concurrent calls for one task do not share them.
         first = self.tools.transcripts[f"{directory}/{role}"]
         self.tools.transcripts[f"{directory}/{role}"] += n
