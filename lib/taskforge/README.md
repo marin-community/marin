@@ -74,9 +74,6 @@ token budget, which Taskforge leaves unset. Every request of a rollout carries `
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
 
-`llm.store.CallStore` caches `complete` and `complete_structured` calls on disk by the digest of
-the request and does not record to the ledger.
-
 ## The build DAG
 
 An author writes a build program as `async def` steps decorated with `@rl_env_build_step`, each
