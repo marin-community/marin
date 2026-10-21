@@ -82,8 +82,11 @@ semantic changes. Each row has one output; conversion failures abort export.
 
 `derive` creates a fresh artifact for declared grader dependency lock replacements,
 verifier startup budgets and outer rollout deadlines. Lock replacement requires
-the environment provenance SHA256. Task payload changes beyond that whitelist
-fail. The source manifest and artifact remain immutable.
+the environment provenance SHA256 and applies to sandbox graders. Host-side judge
+environment metadata remains unchanged. Task payload changes beyond that whitelist
+fail. The source manifest and artifact remain immutable. Derivation writes
+`train.parquet` by default; select `--output-filename validation.parquet` when the
+derived artifact will supply validation data.
 
 ```sh
 uv run python -m experiments.post_training.snowball_curriculum.export derive \
