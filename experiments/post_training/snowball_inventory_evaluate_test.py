@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+from dataclasses import replace
+
 import pytest
 import yaml
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
@@ -124,3 +127,78 @@ def test_runtime_subprocess_isolates_parent_python_environment_and_inherits_judg
         "parent_python_leaked": False,
         "judge_inherited": True,
     }
+
+
+def test_scoring_retry_reuses_first_launch_despite_fresh_artifact_attempt_id(tmp_path, monkeypatch):
+    from marin.execution.lazy import ArtifactStep  # noqa: PLC0415
+    from marin.training.training import LevanterCheckpoint  # noqa: PLC0415
+
+    from experiments.post_training import snowball_inventory_evaluate as evaluator  # noqa: PLC0415
+
+    model = ArtifactStep.adopt("tests/baseline", "2026.10.21", str(tmp_path / "model"), kind=LevanterCheckpoint)
+    panel = ArtifactStep.adopt("tests/panel", "2026.10.21", str(tmp_path / "panel"))
+    with build_context(BuildContext(versions=VersionCodex(default="2026.10.21"))):
+        step = evaluator.recoverable_evaluation_step(
+            name="tests/recoverable-score",
+            version="2026.10.21",
+            model=model,
+            panel=panel,
+            panel_sha256="a" * 64,
+            family_counts={"structural": 1},
+            tokenizer_uri="fixture/model",
+            tokenizer_revision="b" * 40,
+            recovery=evaluator.SavedAnswerRecovery(10, 20),
+            judge_base_url="https://judge.invalid/v1",
+            judge_model="fixture-judge",
+            relative_path="",
+        )
+    context = StepContext.for_run(
+        output_path=str(tmp_path / "score"),
+        prefix=str(tmp_path),
+        runtime_args=step.runtime_args,
+        deps=step.deps,
+    )
+    first, rebuilt = step.build_config(context), step.build_config(context)
+    assert first.launch.attempt_id != rebuilt.launch.attempt_id
+    inference = []
+    scoring = []
+    admitted_document = None
+
+    def run_inference(config):
+        nonlocal admitted_document
+        inference.append(config.attempt_id)
+        admitted_document = yaml.safe_load(config.launch_config_yaml)
+
+    def runtime(action, request, **kwargs):
+        document = yaml.safe_load(request["launch_config_yaml"])
+        if action == "preflight":
+            return {
+                "launch_config_yaml": request["launch_config_yaml"],
+                "dataset_uids": {"0": "paired"},
+                "tasks": [{"task_id": "paired", "evaluation_family": "structural", "contract_id": "source"}],
+                "model_manifest_identity": "exact-model",
+                "protocol": "fixed",
+                "pairing_contract_field": "source",
+            }
+        if action == "generation-state":
+            if admitted_document is not None:
+                assert document == admitted_document  # The real terminal reader requires exact equality.
+            return {"complete": admitted_document is not None}
+        assert action == "recover-results"
+        scoring.append(1)
+        if len(scoring) == 1:
+            raise OSError("CPU coordinator failed after successful inference")
+        return {"outcomes": [{"task_id": "paired", "score": 1.0, "stop_reason": "stop"}], "recovery": {}}
+
+    monkeypatch.setattr(evaluator, "remote", lambda function, **kwargs: function)
+    monkeypatch.setattr(evaluator, "runtime_operation", runtime)
+    monkeypatch.setattr(evaluator, "run_skyrl", run_inference)
+    with pytest.raises(OSError, match="coordinator failed"):
+        step.run(first)
+    completed = step.run(rebuilt)
+    assert completed.complete
+    assert inference == [first.launch.attempt_id] and len(scoring) == 2
+    preflight = json.loads((tmp_path / "score" / "preflight.json").read_text())
+    assert yaml.safe_load(preflight["launch_config_yaml"])["run"]["attempt_id"] == first.launch.attempt_id
+    with pytest.raises(ValueError, match="different source, model, panel"):
+        step.run(replace(rebuilt, max_new_tokens=4096))

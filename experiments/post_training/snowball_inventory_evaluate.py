@@ -244,7 +244,11 @@ def preflight_evaluation(config: EvaluationConfig) -> None:
             "recover_saved_answers": config.recovery is not None,
         },
     )
-    with StoragePath(prefix_join(config.output_path, "preflight.json")).open("wt") as target:
+    uri = prefix_join(config.output_path, "preflight.json")
+    if config.recovery is not None:
+        conditional_object(uri).write(json.dumps(report, allow_nan=False).encode(), expected_version=None)
+        return
+    with StoragePath(uri).open("wt") as target:
         json.dump(report, target, indent=2)
 
 
@@ -289,15 +293,52 @@ def run_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
     )
 
 
+def evaluation_contract(config: EvaluationConfig) -> dict:
+    """Bind every scoring input while excluding only the launcher's fresh submission identity."""
+    contract = asdict(config)
+    launch = contract["launch"]
+    document = yaml.safe_load(launch["launch_config_yaml"])
+    document["run"]["attempt_id"] = "<submission-attempt>"
+    document["iris"]["job_name"] = "<submission-job>"
+    launch["attempt_id"] = "<submission-attempt>"
+    launch["launch_config_yaml"] = document
+    return contract
+
+
+def admitted_evaluation(config: EvaluationConfig) -> EvaluationConfig:
+    """Reuse the exact first launch on retries of this scoring artifact."""
+    request = StoragePath(prefix_join(config.output_path, "admitted-request.json"))
+    if not request.exists():
+        conditional_object(str(request)).write(
+            json.dumps(asdict(config), allow_nan=False).encode(), expected_version=None
+        )
+        return config
+    original = json.loads(request.read_text())
+    original_launch = original["launch"]["launch_config_yaml"]
+    admitted = replace(
+        config,
+        launch=replace(
+            config.launch,
+            launch_config_yaml=original_launch,
+            attempt_id=original["launch"]["attempt_id"],
+        ),
+    )
+    if evaluation_contract(admitted) != evaluation_contract(config) or asdict(admitted) != original:
+        raise ValueError("Existing scoring admission has different source, model, panel, protocol or recovery policy")
+    return admitted
+
+
 def run_recoverable_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
     """Score an exported model; grader failures cannot invalidate its upstream training artifact."""
+    config = admitted_evaluation(config)
     assert config.recovery is not None
-    remote(
-        preflight_evaluation,
-        resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
-    )(config)
-    with StoragePath(prefix_join(config.output_path, "preflight.json")).open("rt") as source:
-        preflight = json.load(source)
+    preflight_path = StoragePath(prefix_join(config.output_path, "preflight.json"))
+    if not preflight_path.exists():
+        remote(
+            preflight_evaluation,
+            resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
+        )(config)
+    preflight = json.loads(preflight_path.read_text())
     prepared = replace(config.launch, launch_config_yaml=preflight["launch_config_yaml"])
     completed = runtime_operation("generation-state", {"launch_config_yaml": prepared.launch_config_yaml})
     if not completed["complete"]:
@@ -350,7 +391,6 @@ def recoverable_evaluation_recipe(max_new_tokens: int = 8192, *, judge_base_url:
     recipe = evaluation_recipe(max_new_tokens)
     # The post-generation scorer enforces full coverage after its one saved-answer attempt.
     recipe["trainer"]["eval_required_score_coverage"] = None
-    recipe["trajectory_runner"]["eval_saved_answers_root"] = "${trainer.export_path}/saved_answers"
     recipe["environment"]["task_sessions"]["remote_judge"] = {
         "base_url": judge_base_url,
         "api_key_env": "JUDGE_API_KEY",
@@ -407,8 +447,14 @@ def recoverable_evaluation_step(
     )
 
     def build_config(ctx: StepContext) -> EvaluationConfig:
+        launch_config = launch.build_config(ctx)
+        document = yaml.safe_load(launch_config.launch_config_yaml)
+        document["skyrl"]["trajectory_runner"]["eval_saved_answers_root"] = prefix_join(
+            launch_config.output.export_root, "saved_answers"
+        )
+        launch_config = replace(launch_config, launch_config_yaml=yaml.safe_dump(document, sort_keys=False))
         return EvaluationConfig(
-            launch.build_config(ctx),
+            launch_config,
             panel_sha256,
             ctx.output_path,
             max_new_tokens,

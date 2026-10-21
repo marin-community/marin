@@ -7,7 +7,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import os
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -43,7 +42,6 @@ from skyrl_train.hf_export_schema import HFExportRequest
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ScriptGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
-from verifyit.modes.grade_judge import JudgeConnection
 
 from experiments.post_training.snowball_curriculum.export import DerivedDeployment, derived_record
 from experiments.post_training.snowball_inventory_probe import package_revisions, preflight_tokenizer
@@ -398,12 +396,6 @@ async def recover_results(request: dict) -> dict:
     if len({row["task_id"] for row in outcomes}) != len(outcomes):
         raise ValueError("Recovery cannot choose among duplicate evaluation attempts")
     factories = task_machine_factories(config.skyrl.environment.task_sessions)
-    remote_judge = config.skyrl.environment.task_sessions.get("remote_judge")
-    connection = (
-        None
-        if remote_judge is None
-        else JudgeConnection(remote_judge["base_url"], os.environ[remote_judge["api_key_env"]])
-    )
     saved_root = str(config.skyrl.trajectory_runner.eval_saved_answers_root)
     receipts = []
     timed_out = False
@@ -433,9 +425,7 @@ async def recover_results(request: dict) -> dict:
                 timeout = min(
                     request["per_answer_timeout"], spec.limits.verifier_timeout or request["per_answer_timeout"]
                 )
-                receipt = await regrade_once(
-                    record, admission, spec, factories, connection, str(root / "regrades"), timeout=timeout
-                )
+                receipt = await regrade_once(record, admission, spec, factories, str(root / "regrades"), timeout=timeout)
                 receipts.append({"task_id": row["task_id"], **receipt})
                 if receipt["status"] in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE} and receipt["reward"] is not None:
                     verdict = VerificationResult.verified(

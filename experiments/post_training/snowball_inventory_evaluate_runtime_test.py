@@ -292,9 +292,11 @@ def test_initializer_admission_rejects_wrong_model_or_revision(tmp_path):
 def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_scored_rows(tmp_path, monkeypatch):
     from marinskyrl.saved_answers import admit_answer, save_answer  # noqa: PLC0415
     from omegaconf import OmegaConf  # noqa: PLC0415 - optional frozen runtime dependency
+    from rolloutengine.harness.prefill import prefill_prompt  # noqa: PLC0415
     from rolloutengine.models import ModelRequest, ModelTurn  # noqa: PLC0415
     from taskcompendium.grader import verifyit_package  # noqa: PLC0415
-    from verifyit.spec import NumericSpec  # noqa: PLC0415
+    from verifyit.closure_scoring import ClosureFormat  # noqa: PLC0415
+    from verifyit.spec import StructureClosureSpec  # noqa: PLC0415
 
     from experiments.post_training import snowball_inventory_evaluate_runtime as worker  # noqa: PLC0415
 
@@ -302,17 +304,17 @@ def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_sco
     for index in range(2):
         task = TaskSpec(
             id=f"paired-{index}",
-            context=ConversationInput(events=(TextMessage(role="user", content="Six plus six?"),)),
+            context=ConversationInput(events=(TextMessage(role="assistant", content='{"value":'),)),
             environment_requirements=EnvironmentRequirements(),
-            answer_type="number",
+            answer_type="text",
             answer_format={"kind": "plain_text"},
-            grader=verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0)).grader,
+            grader=verifyit_package(StructureClosureSpec('{"value":', '{"value":12}', ClosureFormat.JSON)).grader,
             source=Source(dataset="original", revision="frozen", row=str(index), importer_revision="1"),
         )
         specs.append(
             TaskRolloutSpec(
                 task=task,
-                harness="single_reply",
+                harness="prefill",
                 task_machine=None,
                 verifier_machine=None,
                 limits=RolloutLimits(
@@ -350,9 +352,9 @@ def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_sco
     original_dump.write_text("".join(json.dumps(row) + "\n" for row in rows))
     original_bytes = original_dump.read_bytes()
     saved = str(export / "saved_answers")
-    messages = ({"role": "user", "content": "Six plus six?"},)
-    turn = ModelTurn({"role": "assistant", "content": "12"}, (1,), (2,), None, "stop", text="12")
-    save_answer(saved, specs[1], "1", 0, ModelRequest(messages, {}), turn)
+    messages = ({"role": "assistant", "content": '{"value":'},)
+    turn = ModelTurn({"role": "assistant", "content": "12}"}, (1,), (2,), None, "stop", text="12}")
+    save_answer(saved, specs[1], "1", 0, ModelRequest(messages, dict(prefill_prompt(specs[1].task).options)), turn)
     admit_answer(saved, "1", 0, (*messages, turn.message), "grade", "RuntimeError", "unavailable")
     config = OmegaConf.create(
         {
