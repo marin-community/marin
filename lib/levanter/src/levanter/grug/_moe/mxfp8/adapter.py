@@ -3,10 +3,11 @@
 
 """JAX entry points for the cudnn-frontend fused MXFP8 MoE grouped kernels (SM100 only).
 
-The kernels come from the nvidia-cudnn-frontend package (``cudnn.gemm.cutedsl.grouped``). Two are
-subclassed in :mod:`levanter.grug._moe.mxfp8.kernels`: the dSwiGLU kernel writes its routing-weight
-gradient as per-tile partials instead of with float32 atomics, so it is deterministic, and the
-SwiGLU kernel gains the forward-only variant.
+The kernels come from the nvidia-cudnn-frontend package (``cudnn.gemm.cutedsl.grouped``). The
+SwiGLU kernel is subclassed in :mod:`levanter.grug._moe.mxfp8.kernels` to gain the forward-only
+variant. The backward runs the unified dGLU kernel in its deterministic mode, which writes the
+routing-weight gradient into one slot per N tile instead of adding across tiles with float32
+atomics.
 
 Four calls cover one gated expert MLP, forward and backward:
 
@@ -52,13 +53,15 @@ import cutlass.cute as cute
 import cutlass.jax as cjax
 import jax
 import jax.numpy as jnp
+from cudnn.gemm.cutedsl.grouped.dglu.moe_blockscaled_grouped_gemm_dglu_dbias import (
+    BlockScaledMoEGroupedGemmDgluDbiasKernel,
+)
 from cudnn.gemm.cutedsl.grouped.moe_utils import MoEWeightMode, WGradInputOrder, WgradSfTensormapConstructor
 from cudnn.gemm.cutedsl.grouped.quant.grouped_gemm_quant import BlockScaledMoEGroupedGemmQuantKernel
 from cudnn.gemm.cutedsl.grouped.wgrad.moe_blockscaled_grouped_gemm_wgrad import BlockScaledMoEGroupedGemmWgradKernel
 from quack.cute_dsl_utils import get_max_active_clusters
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call, gpu_compute_capability
-from levanter.grug._moe.mxfp8.kernels.dswiglu_deterministic import DSwigluKernel
 from levanter.grug._moe.mxfp8.kernels.swiglu_forward_only import SwigluKernel
 from levanter.grug._moe.mxfp8.layout import _GATE_UP_BLOCK, GROUP_PAD
 from levanter.grug._moe.mxfp8.quantize import MXFP8_BLOCK_SIZE, SF_TILE_ROWS
@@ -80,8 +83,13 @@ _TWO_CTA_TILE_M = 256
 # The wgrad operands: both token-major 2D tensors, one dense (E, K, N) output.
 _WGRAD_INPUT_ORDER = WGradInputOrder.Tensor2D
 _WGRAD_WEIGHT_MODE = MoEWeightMode.DENSE
-# The dense, statically scheduled quant GEMM ignores its workspace but still takes a pointer.
-_GEMM_WORKSPACE_BYTES = 16
+# The dense, statically scheduled quant GEMM and dGLU kernels ignore their workspace but still take
+# a pointer.
+_UNUSED_WORKSPACE_BYTES = 16
+# The dGLU kernel adds each routing-gradient partial into its slot, so the slots go in zeroed as the
+# last input and come back as the last output in the same buffer.
+_DPROB_SLOTS_INPUT = 10
+_DPROB_SLOTS_OUTPUT = 5
 
 _SPEC = cjax.TensorSpec()
 # A row-major (L, M, K) buffer presented as the kernels' logical (M, K, L), with L the batch or
@@ -109,9 +117,14 @@ def _sf_col_bytes(rows: int, features: int) -> int:
     return _round_up(features, SF_TILE_ROWS) * _round_up(_ceil_div(rows, MXFP8_BLOCK_SIZE), 4)
 
 
-def _dprob_tile_count(intermediate: int) -> int:
-    """Number of per-N-tile routing-gradient partials the dSwiGLU kernel writes per row."""
-    return _ceil_div(intermediate, _DSWIGLU_TILING[0][1])
+def _dprob_slot_count(intermediate: int) -> int:
+    """Number of routing-gradient slots per row: one per N tile the dGLU scheduler can emit.
+
+    The scheduler counts whole clusters along N, so the count rounds up to a multiple of the
+    cluster's N extent (upstream's ``dsrelu.api._dprob_n_slots``).
+    """
+    (_tile_m, tile_n), (_cluster_m, cluster_n) = _DSWIGLU_TILING
+    return _ceil_div(intermediate, tile_n * cluster_n) * cluster_n
 
 
 def _require_sm100() -> None:
@@ -445,7 +458,7 @@ def mxfp8_fused_gemm(a_q, a_sf, b_q, b_sf, offs):
         launcher,
         output_shape_dtype=(
             jax.ShapeDtypeStruct((1, m, n), jnp.bfloat16),
-            jax.ShapeDtypeStruct((_GEMM_WORKSPACE_BYTES,), jnp.uint8),
+            jax.ShapeDtypeStruct((_UNUSED_WORKSPACE_BYTES,), jnp.uint8),
         ),
         input_spec=(_BATCH_LAST, _BATCH_LAST, _SPEC, _SPEC, _SPEC, _SPEC, _SPEC),
         output_spec=(_BATCH_LAST, _SPEC),
@@ -470,14 +483,30 @@ def mxfp8_fused_gemm(a_q, a_sf, b_q, b_sf, offs):
 
 @cute_launcher_factory
 def _dswiglu_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, vectorized_f32, max_active_clusters):
-    """Signature: (stream, g, w2, c13, sfg, sfw2, offs, alpha, beta, prob, norm, dc, dc_col, sfdc_row,
-    sfdc_col, dprob_partials)."""
+    """Signature: (stream, g, w2, c13, sfg, sfw2, offs, alpha, beta, prob, norm, dprob_slots, dc, dc_col,
+    sfdc_row, sfdc_col, workspace); ``dprob_slots`` is the zeroed input the last output aliases."""
 
     @cute.jit
     def launcher(
-        stream, mA, mB, mC, mSFA, mSFB, mOffs, mAlpha, mBeta, mProb, mNorm, mD, mDCol, mSFDRow, mSFDCol, mDProb
+        stream,
+        mA,
+        mB,
+        mC,
+        mSFA,
+        mSFB,
+        mOffs,
+        mAlpha,
+        mBeta,
+        mProb,
+        mNorm,
+        mDProbSlots,
+        mD,
+        mDCol,
+        mSFDRow,
+        mSFDCol,
+        mWorkspace,
     ):
-        kernel = DSwigluKernel(
+        kernel = BlockScaledMoEGroupedGemmDgluDbiasKernel(
             sf_vec_size=MXFP8_BLOCK_SIZE,
             acc_dtype=cutlass.Float32,
             use_2cta_instrs=mma_tiler_mn[0] == _TWO_CTA_TILE_M,
@@ -486,15 +515,24 @@ def _dswiglu_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, vectorize
             vectorized_f32=vectorized_f32,
             discrete_col_sfd=True,
             expert_cnt=expert_count,
+            weight_mode=MoEWeightMode.DENSE,
+            use_dynamic_sched=False,
+            act_func="dswiglu",
+            deterministic=True,
         )
         kernel(
             mA,
             mB,
+            mSFB,
+            cutlass.Int32(0),  # n: discrete weight mode only
+            cutlass.Int32(0),  # k: discrete weight mode only
+            cutlass.Int64(0),  # b_stride_size: discrete weight mode only
+            cute.nvgpu.OperandMajorMode.K,  # b_major_mode: discrete weight mode only
+            mWorkspace.iterator,
             mC,
             mD,
             mDCol,
             mSFA,
-            mSFB,
             mSFDRow,
             mSFDCol,
             None,  # amax: only produced on the bf16-output path
@@ -503,7 +541,8 @@ def _dswiglu_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, vectorize
             mAlpha,
             mBeta,
             mProb,
-            mDProb,
+            mDProbSlots,
+            None,  # dbias: the expert MLP has no bias
             max_active_clusters,
             stream,
         )
@@ -524,9 +563,9 @@ def mxfp8_fused_dswiglu(g_q, g_sf, w2_q, w2_sf, c13, offs) -> DSwigluOutputs:
 
     Returns:
         Both quantized copies of the interleaved pre-activation's gradient, their scales, and each
-        row's routing-weight gradient; see :class:`DSwigluOutputs`. The kernel writes one
-        routing-gradient partial per 256-column tile of ``dh`` with plain stores and the partials
-        are summed here, so the row dot is deterministic.
+        row's routing-weight gradient; see :class:`DSwigluOutputs`. The kernel adds each N tile's
+        routing-gradient partial into that tile's zeroed slot, the only write to the slot, and the
+        slots are summed here, so the row dot is deterministic.
     """
     _require_sm100()
     m, hidden = g_q.shape
@@ -540,7 +579,7 @@ def mxfp8_fused_dswiglu(g_q, g_sf, w2_q, w2_sf, c13, offs) -> DSwigluOutputs:
     _check_quantized(g_q, w2_q)
     _check_scales(g_sf, w2_sf)
     mma_tiler_mn, cluster_shape_mn = _DSWIGLU_TILING
-    tiles = _dprob_tile_count(intermediate)
+    slots = _dprob_slot_count(intermediate)
     launcher = _dswiglu_launcher(
         expert_count=experts,
         mma_tiler_mn=mma_tiler_mn,
@@ -555,13 +594,15 @@ def mxfp8_fused_dswiglu(g_q, g_sf, w2_q, w2_sf, c13, offs) -> DSwigluOutputs:
             jax.ShapeDtypeStruct((1, m, n2), jnp.float8_e4m3fn),
             jax.ShapeDtypeStruct((_sf_row_bytes(m, n2),), jnp.float8_e8m0fnu),
             jax.ShapeDtypeStruct((_sf_col_bytes(m, n2),), jnp.float8_e8m0fnu),
-            jax.ShapeDtypeStruct((m, tiles, 1), jnp.float32),
+            jax.ShapeDtypeStruct((_UNUSED_WORKSPACE_BYTES,), jnp.uint8),
+            jax.ShapeDtypeStruct((m, slots, 1), jnp.float32),
         ),
-        input_spec=(_BATCH_LAST, _BATCH_LAST, _BATCH_LAST, _SPEC, _SPEC, _SPEC, _SPEC, _SPEC, _SPEC, _SPEC),
-        output_spec=(_BATCH_LAST, _BATCH_LAST, _SPEC, _SPEC, _SPEC),
+        input_spec=(_BATCH_LAST, _BATCH_LAST, _BATCH_LAST, _SPEC, _SPEC, _SPEC, _SPEC, _SPEC, _SPEC, _SPEC, _SPEC),
+        output_spec=(_BATCH_LAST, _BATCH_LAST, _SPEC, _SPEC, _SPEC, _SPEC),
+        input_output_aliases=((_DPROB_SLOTS_INPUT, _DPROB_SLOTS_OUTPUT),),
         use_static_tensors=True,
     )
-    dc, dc_col, sfdc_row, sfdc_col, dprob_partials = call(
+    dc, dc_col, sfdc_row, sfdc_col, _workspace, dprob_slots = call(
         _as_batch_last(g_q),
         w2_q,
         _as_batch_last(c13),
@@ -572,8 +613,9 @@ def mxfp8_fused_dswiglu(g_q, g_sf, w2_q, w2_sf, c13, offs) -> DSwigluOutputs:
         _unit_vector(experts),
         jnp.ones((m, 1, 1), jnp.float32),
         _unit_vector(1),
+        jnp.zeros((m, slots, 1), jnp.float32),
     )
-    return DSwigluOutputs(dc[0], dc_col[0], sfdc_row, sfdc_col, jnp.sum(dprob_partials[:, :, 0], axis=-1))
+    return DSwigluOutputs(dc[0], dc_col[0], sfdc_row, sfdc_col, jnp.sum(dprob_slots[:, :, 0], axis=-1))
 
 
 # --------------------------------------------------------------------------- #
