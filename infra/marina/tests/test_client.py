@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 import requests
-from marina.client import MarinaRequestError, marina_request
+from marina.client import MarinaRequestError, applet_query, marina_request
 
 
 class RotatingTokens:
@@ -78,3 +78,47 @@ def test_local_request_does_not_send_shared_credentials(monkeypatch):
     assert "Authorization" not in observed[0].headers
     assert observed[0].headers["Content-Type"] == "application/gzip"
     assert observed[0].body == b"package"
+
+
+@pytest.mark.parametrize(
+    "authenticated_url,query_origin",
+    [("https://applet.example/a/catalog", "https://applet.example"), ("/a/catalog", "https://marina.example")],
+)
+def test_applet_queries_follow_authenticated_origin_and_refresh_shared_credentials(
+    monkeypatch, authenticated_url, query_origin
+):
+    observed = []
+
+    def send(_session, request, **_kwargs):
+        observed.append(request)
+        response = requests.Response()
+        response.status_code = 200
+        response.headers["Content-Type"] = "application/json"
+        response._content = json.dumps(
+            {"authenticated_url": authenticated_url} if request.method == "GET" else {"rows": [{"value": 7}]}
+        ).encode()
+        return response
+
+    monkeypatch.setattr(requests.Session, "send", send)
+    provider = RotatingTokens(iter(("lookup-token", "first-query-token", "renewed-query-token")))
+    with requests.Session() as session:
+        session.headers["X-Catalog-Client"] = "shared-session"
+        query = applet_query("https://marina.example/", "catalog", session=session, token_provider=provider)
+        assert query("SELECT :value", {"value": 7}) == {"rows": [{"value": 7}]}
+        assert query("SELECT :next", {"next": 8}) == {"rows": [{"value": 7}]}
+
+    assert [request.url for request in observed] == [
+        "https://marina.example/api/marina/applets/catalog",
+        query_origin + "/a/catalog/query",
+        query_origin + "/a/catalog/query",
+    ]
+    assert [request.headers["Authorization"] for request in observed] == [
+        "Bearer lookup-token",
+        "Bearer first-query-token",
+        "Bearer renewed-query-token",
+    ]
+    assert all(request.headers["X-Catalog-Client"] == "shared-session" for request in observed)
+    assert [json.loads(request.body) for request in observed[1:]] == [
+        {"sql": "SELECT :value", "parameters": {"value": 7}},
+        {"sql": "SELECT :next", "parameters": {"next": 8}},
+    ]
