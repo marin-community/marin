@@ -1,7 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build paired tool-closure probes for declaration and serialization effects."""
+"""Test whether tool declarations or chat-template formatting affect tool closure.
+
+Each case produces four prompts with the same tool-call content: declared versus
+undeclared tools, crossed with compact JSON versus the supplied tokenizer's
+native chat-template serialization. Declared prompts pass the tool schema to
+that template. Only the closing tool delimiter is missing. The four arms let
+you compare closure success across both factors and their interaction.
+"""
 
 import argparse
 import hashlib
