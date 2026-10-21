@@ -10,10 +10,12 @@ RUN_DATE=${6:?run date YYYYMMDD}
 shift 6
 MODE=
 DATA_VARIANT=high
+CONTEXT_LENGTH=32768
 while (( $# )); do
   case "$1" in
     --run) MODE=--run; shift ;;
     --data-variant) DATA_VARIANT=${2:?data variant: high or low}; shift 2 ;;
+    --context-length) CONTEXT_LENGTH=${2:?training context length}; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -29,6 +31,7 @@ export MARIN_PREFIX=s3://marin-us-east-02a/marin
 export NCCL_DEBUG=WARN NCCL_DEBUG_SUBSYS=
 COMMAND=(python -m experiments.post_training.agentic_sweep.arms
   --parent "$PARENT" --run-date "$RUN_DATE" --data-variant "$DATA_VARIANT"
+  --context-length "$CONTEXT_LENGTH"
   --arm-data "$ROWS" --manifest-sha256 "$SHA" --plain-data "$PLAIN"
   --learning-rate 1e-6 --epochs 3 --only train
   --preemption-retries "${PREEMPTION_RETRIES:-2}")
@@ -42,6 +45,9 @@ if [[ "$DATA_VARIANT" == low ]]; then
   METHOD="$METHOD-low"
 fi
 NAME="arm-train-$METHOD-${PARENT//./p}-v7-$RUN_DATE-$CLUSTER"
+if [[ "$CONTEXT_LENGTH" != 32768 ]]; then
+  NAME="$NAME-ctx$CONTEXT_LENGTH"
+fi
 COMMAND+=(--resume-checkpoint "${RESUME:-auto}")
 if [[ -z "$MODE" ]]; then
   exec uv run --frozen "${COMMAND[@]}"
