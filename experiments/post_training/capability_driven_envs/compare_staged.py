@@ -187,7 +187,9 @@ async def compare_all(
             solver_limits=SOLVER_LIMITS,
             gate=GATE,
             budget=ToolBudget(
-                solver_rollouts=(GATE.min_solver_runs + GATE.min_adversary_runs) * tasks, judge_calls=tasks, web_calls=0
+                solver_rollouts=(GATE.min_solver_runs + GATE.min_adversary_runs) * tasks,
+                judge_calls=2 * tasks,
+                web_calls=0,
             ),
             command_timeout=COMMAND_TIMEOUT,
             max_concurrent_rollouts=8,

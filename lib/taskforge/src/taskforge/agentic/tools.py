@@ -62,7 +62,7 @@ from verifyit.spec import ExactSpec, IfevalSpec, NumericSpec, spec_from_table
 
 from taskforge.agentic.config import AgenticConfig
 from taskforge.agentic.gate import Evidence, Gate, missing_evidence
-from taskforge.agentic.prompts import ADVERSARY_PROMPT, REVIEW_TASK_PROMPT
+from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, REVIEW_TASK_PROMPT
 from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.policy import Message
@@ -107,6 +107,8 @@ PLAIN_DECIMAL = re.compile(r"[+-]?\d+(\.\d+)?")
 OUTPUT_CHARS = 2000
 """The most characters of a program output, an answer, a page or a file that one tool result shows."""
 REVIEW_ANSWERS = 20
+REVIEW_FILE_CHARS = 20_000
+"""The most characters of each solver file that the judge reads: it must see a synopsis or a table to judge it."""
 MAX_EMPTY_BUDGET_CALLS = 3
 """Calls on an empty budget after which the tools stop the session, so that an agent cannot loop on the refusal."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
@@ -119,6 +121,18 @@ class ToolError(Exception):
 
 class BudgetExhausted(ToolError):
     """A call that needs a budget with nothing left."""
+
+
+class BlindSolution(BaseModel):
+    """A judge's own solution of a task, made without its reference answer."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    readings: tuple[str, ...] = Field(
+        description="Each place where the prompt or the files allow more than one reasonable reading, with the "
+        "answer of each reading, or none."
+    )
+    answer: str = Field(description="Your answer to the task, in the task's answer format.")
 
 
 class TaskReview(BaseModel):
@@ -423,6 +437,8 @@ class ToolSession:
         return _result(reply, done=count >= self.tools.n)
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
+        # The judge first solves the task without its reference answer, as a check that is not anchored on it.
+        blind = await self._judge(BLIND_SOLVE_PROMPT, pretty_json(blind_content(self.tools.idea, task)), BlindSolution)
         content = review_content(
             self.tools.idea,
             task,
@@ -430,6 +446,7 @@ class ToolSession:
             self.tools.failed_answers[key],
             self.tools.adversary_runs[key],
             [accepted.task for accepted in self.tools.accepted],
+            blind,
         )
         return await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
 
@@ -524,6 +541,11 @@ def _next_step(evidence: Evidence, gate: Gate) -> dict[str, str]:
     return {"next": f"This version is in the band so far. Get {'; '.join(missing)}, then submit it."}
 
 
+def blind_content(idea: CapabilityIdea, task: TaskSpec) -> dict[str, Any]:
+    """What the blind solve of a review reads: the capability and the public task, with no reference answer."""
+    return {"capability": capability_idea_record(idea), "task": _public_task(task, file_chars=REVIEW_FILE_CHARS)}
+
+
 def review_content(
     idea: CapabilityIdea,
     task: TaskSpec,
@@ -531,8 +553,10 @@ def review_content(
     failed_answers: list[str],
     adversary_runs: list[dict[str, Any]],
     accepted: list[TaskSpec],
+    blind: BlindSolution,
 ) -> dict[str, Any]:
-    """What the reviewer of ``submit`` reads: the public task, the grader, the evidence and the accepted prompts.
+    """What the reviewer of ``submit`` reads: the public task, the grader, the evidence, the blind solution of the
+    task, and the accepted prompts.
 
     ``shared_failed_answers`` counts the failed answers that repeat, because a repeated wrong answer usually comes
     from one other reading of the task.
@@ -540,7 +564,8 @@ def review_content(
     shared = Counter(_normal_answer(answer) for answer in failed_answers)
     return {
         "capability": capability_idea_record(idea),
-        "task": _public_task(task),
+        "task": _public_task(task, file_chars=REVIEW_FILE_CHARS),
+        "blind_solution": blind.model_dump(mode="json"),
         "grader": task.grader.model_dump(mode="json"),
         "solver_evidence": {
             "runs": evidence.solver_runs,
@@ -719,10 +744,10 @@ def _answer_values(value: Any, key: str | None = None) -> list[str]:
     return []
 
 
-def _public_task(task: TaskSpec) -> dict[str, Any]:
+def _public_task(task: TaskSpec, file_chars: int = OUTPUT_CHARS) -> dict[str, Any]:
     """What the solver sees: the prompt messages, the answer format, and the start of each of its files."""
     files = {
-        resource.path: _clip(resource_bytes(resource).decode(errors="replace"))
+        resource.path: _clip(resource_bytes(resource).decode(errors="replace"), limit=file_chars)
         for resource in task.resources.worker
         if isinstance(resource.source, InlineFile)
     }

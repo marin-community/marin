@@ -20,7 +20,7 @@ from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT
-from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, TaskReview
+from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, BlindSolution, TaskReview
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
@@ -112,10 +112,11 @@ class AcceptingJudge:
     async def complete_structured[T: BaseModel](
         self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
-        assert output_type is TaskReview
-        return StructuredResult(
-            output_type.model_validate({"failure_causes": [], "problems": [], "summary": "ok", "accept": True}), ()
-        )
+        replies = {
+            BlindSolution: {"readings": [], "answer": EXPECTED},
+            TaskReview: {"failure_causes": [], "problems": [], "summary": "ok", "accept": True},
+        }
+        return StructuredResult(output_type.model_validate(replies[output_type]), ())
 
 
 def agentic_config(agent_model: Callable[[ModelRequest], Awaitable[ModelTurn]], budget: ToolBudget, web: ParallelWeb):
@@ -137,7 +138,7 @@ def agentic_config(agent_model: Callable[[ModelRequest], Awaitable[ModelTurn]], 
 
 async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(), ToolBudget(solver_rollouts=20, judge_calls=1, web_calls=0), web)
+        config = agentic_config(ScriptedAgent(), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
 
     assert result.failure is None
@@ -157,7 +158,8 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     assert (accepted.evidence.adversary_runs, accepted.evidence.adversary_passes) == (4, 0)
     assert accepted.evidence.controls == [(True, False), (True, True), (False, False)]
     assert accepted.review.accept
-    assert (result.spend.solver_rollouts, result.spend.judge_calls) == (12, 1)
+    # A review is a blind solve and the review itself.
+    assert (result.spend.solver_rollouts, result.spend.judge_calls) == (12, 2)
 
 
 @dataclass
