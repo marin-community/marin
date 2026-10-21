@@ -60,8 +60,8 @@ from quack.cute_dsl_utils import get_max_active_clusters
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call, gpu_compute_capability
 from levanter.grug._moe.mxfp8.kernels.dswiglu_deterministic import DSwigluKernel
 from levanter.grug._moe.mxfp8.kernels.swiglu_forward_only import SwigluKernel
-from levanter.grug._moe.mxfp8.layout import _GATE_UP_BLOCK, _SF_TILE, GROUP_PAD
-from levanter.grug._moe.mxfp8.quantize import MXFP8_BLOCK_SIZE
+from levanter.grug._moe.mxfp8.layout import _GATE_UP_BLOCK, GROUP_PAD
+from levanter.grug._moe.mxfp8.quantize import MXFP8_BLOCK_SIZE, SF_TILE_ROWS
 
 # (mma_tiler_mn, cluster_shape_mn) per kernel: the winners of the research ablations in
 # c3cb334f8e:experiments/grug/moe/mxfp8.py. A sweep of tile and
@@ -74,6 +74,8 @@ _WGRAD_TILING = ((256, 256), (2, 2))
 # The scalar dSwiGLU epilogue takes 3.98 ms at that chunk against 4.52 ms for the packed-f32 one.
 # Its rounding differs, so dc13 bytes differ from the packed epilogue's.
 _DSWIGLU_VECTORIZED_F32 = False
+# An MMA tile this many rows tall runs as a 2-CTA instruction over a pair of SMs.
+_TWO_CTA_TILE_M = 256
 
 # The wgrad operands: both token-major 2D tensors, one dense (E, K, N) output.
 _WGRAD_INPUT_ORDER = WGradInputOrder.Tensor2D
@@ -99,12 +101,12 @@ def _round_up(a: int, b: int) -> int:
 
 def _sf_row_bytes(rows: int, features: int) -> int:
     """Byte count of a row-orientation swizzled scale tensor for a ``(rows, features)`` operand."""
-    return _round_up(rows, _SF_TILE) * _round_up(_ceil_div(features, MXFP8_BLOCK_SIZE), 4)
+    return _round_up(rows, SF_TILE_ROWS) * _round_up(_ceil_div(features, MXFP8_BLOCK_SIZE), 4)
 
 
 def _sf_col_bytes(rows: int, features: int) -> int:
     """Byte count of a column-orientation (per-expert, token-axis) scale tensor for ``(rows, features)``."""
-    return _round_up(features, _SF_TILE) * _round_up(_ceil_div(rows, MXFP8_BLOCK_SIZE), 4)
+    return _round_up(features, SF_TILE_ROWS) * _round_up(_ceil_div(rows, MXFP8_BLOCK_SIZE), 4)
 
 
 def _dprob_tile_count(intermediate: int) -> int:
@@ -193,7 +195,7 @@ def _swiglu_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, max_active
         kernel = SwigluKernel(
             sf_vec_size=MXFP8_BLOCK_SIZE,
             acc_dtype=cutlass.Float32,
-            use_2cta_instrs=mma_tiler_mn[0] == 256,
+            use_2cta_instrs=mma_tiler_mn[0] == _TWO_CTA_TILE_M,
             mma_tiler_mn=mma_tiler_mn,
             cluster_shape_mn=cluster_shape_mn,
             vector_f32=False,
@@ -233,7 +235,7 @@ def _swiglu_forward_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, ma
         kernel = SwigluKernel(
             sf_vec_size=MXFP8_BLOCK_SIZE,
             acc_dtype=cutlass.Float32,
-            use_2cta_instrs=mma_tiler_mn[0] == 256,
+            use_2cta_instrs=mma_tiler_mn[0] == _TWO_CTA_TILE_M,
             mma_tiler_mn=mma_tiler_mn,
             cluster_shape_mn=cluster_shape_mn,
             vector_f32=False,
@@ -375,7 +377,7 @@ def _gemm_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, max_active_c
         kernel = BlockScaledMoEGroupedGemmQuantKernel(
             sf_vec_size=MXFP8_BLOCK_SIZE,
             acc_dtype=cutlass.Float32,
-            use_2cta_instrs=mma_tiler_mn[0] == 256,
+            use_2cta_instrs=mma_tiler_mn[0] == _TWO_CTA_TILE_M,
             mma_tiler_mn=mma_tiler_mn,
             cluster_shape_mn=cluster_shape_mn,
             vectorized_f32=False,
@@ -478,7 +480,7 @@ def _dswiglu_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, vectorize
         kernel = DSwigluKernel(
             sf_vec_size=MXFP8_BLOCK_SIZE,
             acc_dtype=cutlass.Float32,
-            use_2cta_instrs=mma_tiler_mn[0] == 256,
+            use_2cta_instrs=mma_tiler_mn[0] == _TWO_CTA_TILE_M,
             mma_tiler_mn=mma_tiler_mn,
             cluster_shape_mn=cluster_shape_mn,
             vectorized_f32=vectorized_f32,
@@ -588,7 +590,7 @@ def _wgrad_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, max_active_
         kernel = BlockScaledMoEGroupedGemmWgradKernel(
             sf_vec_size=MXFP8_BLOCK_SIZE,
             acc_dtype=cutlass.Float32,
-            use_2cta_instrs=mma_tiler_mn[0] == 256,
+            use_2cta_instrs=mma_tiler_mn[0] == _TWO_CTA_TILE_M,
             mma_tiler_mn=mma_tiler_mn,
             cluster_shape_mn=cluster_shape_mn,
             accumulate_on_output=False,
@@ -623,8 +625,10 @@ def mxfp8_fused_wgrad(x_q, x_sf, g_q, g_sf, offs):
     (experts,) = offs.shape
     _check_quantized(x_q, g_q)
     _check_scales(x_sf, g_sf)
-    if x_sf.shape[0] != _round_up(k, _SF_TILE) or g_sf.shape[0] != _round_up(n, _SF_TILE):
-        raise ValueError(f"scale rows must be the {_SF_TILE}-padded feature counts, got {x_sf.shape} and {g_sf.shape}")
+    if x_sf.shape[0] != _round_up(k, SF_TILE_ROWS) or g_sf.shape[0] != _round_up(n, SF_TILE_ROWS):
+        raise ValueError(
+            f"scale rows must be the {SF_TILE_ROWS}-padded feature counts, got {x_sf.shape} and {g_sf.shape}"
+        )
     if x_sf.shape[1] != g_sf.shape[1]:
         raise ValueError(f"x_sf and g_sf must cover the same token columns, got {x_sf.shape} and {g_sf.shape}")
     mma_tiler_mn, cluster_shape_mn = _WGRAD_TILING

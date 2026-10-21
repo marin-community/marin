@@ -19,6 +19,8 @@ in tiles of 128 rows by 4 scale columns, 512 bytes each.
 Ported from c3cb334f8e:experiments/grug/moe/standalone/mxfp8_grouped/quantize.py.
 """
 
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int, UInt8
@@ -29,8 +31,9 @@ E4M3_MAX = 448.0
 # blocks get a finite scale and E8M0 byte 0 is never produced.
 _AMAX_FLOOR = 1e-4
 _F32_MANTISSA_BITS = 23
-# One swizzle tile of the SM100 scale-factor layout: 128 rows by 4 scale columns, 512 bytes.
-_TILE_ROWS = 128
+# One swizzle tile of the SM100 scale-factor layout: 128 rows by 4 scale columns, 512 bytes. Every
+# dimension a scale matrix tiles must be a multiple of the 128 rows.
+SF_TILE_ROWS = 128
 _TILE_COLS = 4
 
 
@@ -106,12 +109,12 @@ def _swizzle_tiles(scales: UInt8[Array, "... R C"]) -> UInt8[Array, "... tiles 5
     Row ``r`` and column ``c`` of a tile go to byte ``(r % 32) * 16 + (r // 32) * 4 + c``.
     """
     *lead, rows, cols = scales.shape
-    assert rows % _TILE_ROWS == 0, f"scale rows {rows} are not a multiple of {_TILE_ROWS}"
+    assert rows % SF_TILE_ROWS == 0, f"scale rows {rows} are not a multiple of {SF_TILE_ROWS}"
     assert cols % _TILE_COLS == 0, f"scale columns {cols} are not a multiple of {_TILE_COLS}"
-    tile_grid = (rows // _TILE_ROWS) * (cols // _TILE_COLS)
-    tiles = scales.reshape(*lead, rows // _TILE_ROWS, _TILE_ROWS, cols // _TILE_COLS, _TILE_COLS)
-    tiles = jnp.swapaxes(tiles, -3, -2).reshape(*lead, tile_grid, _TILE_ROWS // 32, 32, _TILE_COLS)
-    return jnp.swapaxes(tiles, -3, -2).reshape(*lead, tile_grid, _TILE_ROWS * _TILE_COLS)
+    tile_grid = (rows // SF_TILE_ROWS) * (cols // _TILE_COLS)
+    tiles = scales.reshape(*lead, rows // SF_TILE_ROWS, SF_TILE_ROWS, cols // _TILE_COLS, _TILE_COLS)
+    tiles = jnp.swapaxes(tiles, -3, -2).reshape(*lead, tile_grid, SF_TILE_ROWS // 32, 32, _TILE_COLS)
+    return jnp.swapaxes(tiles, -3, -2).reshape(*lead, tile_grid, SF_TILE_ROWS * _TILE_COLS)
 
 
 def build_sfa(row_scales: UInt8[Array, "M K/32"]) -> Array:
@@ -143,15 +146,21 @@ def build_sf_wgrad(token_scales: UInt8[Array, "T/32 R"], block_perm: Int[Array, 
     return jax.lax.bitcast_convert_type(swizzled.reshape(scales.shape), jnp.float8_e8m0fnu)
 
 
-def dual_quantize_activation(
-    t: Float[Array, "M D"], block_perm: Int[Array, "tiles"]
-) -> tuple[Float[Array, "M D"], Array, Float[Array, "M D"], Array]:
-    """Both MXFP8 copies of an activation or cotangent in the padded dispatch layout.
+class DualQuantized(NamedTuple):
+    """Both MXFP8 copies of an ``[M, D]`` activation or cotangent, with their swizzled scales."""
 
-    Returns ``(q_rows, sfa, q_tokens, sf_wgrad)``: the row-quantized copy with `build_sfa` scales
-    for the forward and data-gradient GEMMs, and the token-quantized copy with `build_sf_wgrad`
-    scales for the weight-gradient GEMMs.
-    """
+    q_rows: Array
+    """E4M3 values quantized along features, the forward and data-gradient GEMMs' operand."""
+    sfa: Array
+    """E8M0 `build_sfa` scales of ``q_rows``."""
+    q_tokens: Array
+    """E4M3 values quantized along tokens, the weight-gradient GEMMs' operand."""
+    sf_wgrad: Array
+    """E8M0 `build_sf_wgrad` scales of ``q_tokens``."""
+
+
+def dual_quantize_activation(t: Float[Array, "M D"], block_perm: Int[Array, "tiles"]) -> DualQuantized:
+    """Both MXFP8 copies of an activation or cotangent in the padded dispatch layout."""
     q_rows, row_scales = quantize_mxfp8(t)
     q_tokens, token_scales = quantize_mxfp8_tokens(t)
-    return q_rows, build_sfa(row_scales), q_tokens, build_sf_wgrad(token_scales, block_perm)
+    return DualQuantized(q_rows, build_sfa(row_scales), q_tokens, build_sf_wgrad(token_scales, block_perm))
