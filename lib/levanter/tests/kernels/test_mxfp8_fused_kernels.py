@@ -18,11 +18,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from levanter.grug._moe.mxfp8.layout import GROUP_PAD
+
 _SF_VEC = 32
 _E4M3_MAX = 448.0
 # The fused epilogues scale by amax times 1/448 rounded to f32; multiplying (not dividing) matches them.
 _RCP_E4M3_MAX = np.float32(1.0 / 448.0)
-_GROUP_PAD = 256
 _GATE_UP_BLOCK = 32
 _HIGHEST = jax.lax.Precision.HIGHEST
 # experiments/grug/moe_hero_ep/train.py: XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG, as the hero compiles.
@@ -71,7 +72,7 @@ def _require_sm100():
 
 
 def _padded_sizes(problem: _Problem) -> tuple[int, ...]:
-    return tuple(-(-size // _GROUP_PAD) * _GROUP_PAD for size in problem.group_sizes)
+    return tuple(-(-size // GROUP_PAD) * GROUP_PAD for size in problem.group_sizes)
 
 
 # --------------------------------------------------------------------------- #

@@ -40,6 +40,8 @@ Launchers are memoized through :func:`levanter.cutlass_kernel_cache.cute_launche
 shape-identical calls share one CuTeDSL compile and the persistent kernel cache can serve them.
 """
 
+from typing import NamedTuple
+
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
@@ -57,13 +59,11 @@ from levanter.grug._moe.mxfp8.kernels.grouped_gemm_swiglu_quant import (
 )
 from levanter.grug._moe.mxfp8.kernels.moe_blockscaled_grouped_gemm_wgrad import BlockScaledMoEGroupedGemmWgradKernel
 from levanter.grug._moe.mxfp8.kernels.moe_utils import MoEWeightMode, WGradInputOrder
-from levanter.grug._moe.mxfp8.layout import GROUP_PAD
+from levanter.grug._moe.mxfp8.layout import _GATE_UP_BLOCK, _SF_TILE, GROUP_PAD
 from levanter.grug._moe.mxfp8.quantize import MXFP8_BLOCK_SIZE
 
-_GATE_UP_BLOCK = 32
-
-# (mma_tiler_mn, cluster_shape_mn) per kernel: the winners of the research ablations
-# (c3cb334f8e:experiments/grug/moe/mxfp8.py, jobs mxfp8-004a-g6..g11). A sweep of tile and
+# (mma_tiler_mn, cluster_shape_mn) per kernel: the winners of the research ablations in
+# c3cb334f8e:experiments/grug/moe/mxfp8.py. A sweep of tile and
 # cluster shapes at the hero expert chunk (H = I = 3072, 3 experts, 302,336 rows) on one B200
 # found no other configuration more than 3% faster for any kernel.
 _SWIGLU_TILING = ((256, 256), (2, 1))
@@ -98,12 +98,12 @@ def _round_up(a: int, b: int) -> int:
 
 def _sf_row_bytes(rows: int, features: int) -> int:
     """Byte count of a row-orientation swizzled scale tensor for a ``(rows, features)`` operand."""
-    return _round_up(rows, 128) * _round_up(_ceil_div(features, MXFP8_BLOCK_SIZE), 4)
+    return _round_up(rows, _SF_TILE) * _round_up(_ceil_div(features, MXFP8_BLOCK_SIZE), 4)
 
 
 def _sf_col_bytes(rows: int, features: int) -> int:
     """Byte count of a column-orientation (per-expert, token-axis) scale tensor for ``(rows, features)``."""
-    return _round_up(features, 128) * _round_up(_ceil_div(rows, MXFP8_BLOCK_SIZE), 4)
+    return _round_up(features, _SF_TILE) * _round_up(_ceil_div(rows, MXFP8_BLOCK_SIZE), 4)
 
 
 def _dprob_tile_count(intermediate: int) -> int:
@@ -146,6 +146,36 @@ def _as_batch_last(t: jax.Array) -> jax.Array:
 
 def _unit_vector(n: int) -> jax.Array:
     return jnp.ones((n,), jnp.float32)
+
+
+class SwigluOutputs(NamedTuple):
+    """:func:`mxfp8_fused_swiglu`'s outputs for ``M`` rows and intermediate size ``I``."""
+
+    c13: jax.Array
+    """(M, 2I) bf16 pre-activation, gate and up interleaved in 32-column blocks."""
+    h: jax.Array
+    """(M, I) e4m3 SwiGLU output quantized along features, the down GEMM's operand."""
+    h_col: jax.Array
+    """(M, I) e4m3 SwiGLU output quantized along tokens, the down weight gradient's operand."""
+    h_scales: jax.Array
+    """Flat row-orientation scales of ``h``."""
+    h_col_scales: jax.Array
+    """Flat column-orientation scales of ``h_col``."""
+
+
+class DSwigluOutputs(NamedTuple):
+    """:func:`mxfp8_fused_dswiglu`'s outputs for ``M`` rows and intermediate size ``I``."""
+
+    dc13: jax.Array
+    """(M, 2I) e4m3 gradient of the interleaved pre-activation, quantized along features."""
+    dc13_col: jax.Array
+    """(M, 2I) e4m3 gradient of the interleaved pre-activation, quantized along tokens."""
+    dc13_scales: jax.Array
+    """Flat row-orientation scales of ``dc13``."""
+    dc13_col_scales: jax.Array
+    """Flat column-orientation scales of ``dc13_col``."""
+    row_dot: jax.Array
+    """(M,) float32 routing-weight gradient ``<swiglu(c13), dh>`` with ``dh = g @ w2^T``."""
 
 
 # --------------------------------------------------------------------------- #
@@ -275,7 +305,7 @@ def _swiglu_launcher_config(experts: int) -> dict:
     }
 
 
-def mxfp8_fused_swiglu(x_q, x_sf, w13i_q, w13i_sf, offs):
+def mxfp8_fused_swiglu(x_q, x_sf, w13i_q, w13i_sf, offs) -> SwigluOutputs:
     """Fused forward w13: ``swiglu(x @ w13)`` with a dual-orientation MXFP8 epilogue.
 
     Args:
@@ -287,9 +317,8 @@ def mxfp8_fused_swiglu(x_q, x_sf, w13i_q, w13i_sf, offs):
         offs: (E,) int32 padded END offsets, each a multiple of ``GROUP_PAD``.
 
     Returns:
-        ``(c13, h, h_col, sfh_row, sfh_col)``: the (M, 2I) bf16 interleaved pre-activation; the
-        (M, I) e4m3 SwiGLU output quantized along features (``h``) and along tokens (``h_col``);
-        and their flat scales in the row and column orientations.
+        The interleaved pre-activation, both quantized copies of the SwiGLU output, and their
+        scales; see :class:`SwigluOutputs`.
     """
     m, experts, intermediate = _swiglu_problem(x_q, x_sf, w13i_q, w13i_sf, offs)
     call = cutlass_call(
@@ -306,11 +335,11 @@ def mxfp8_fused_swiglu(x_q, x_sf, w13i_q, w13i_sf, offs):
         use_static_tensors=True,
     )
     c13, h, h_col, sfh_row, sfh_col = call(*_swiglu_inputs(x_q, x_sf, w13i_q, w13i_sf, offs, rows=m, experts=experts))
-    return c13[0], h[0], h_col[0], sfh_row, sfh_col
+    return SwigluOutputs(c13[0], h[0], h_col[0], sfh_row, sfh_col)
 
 
 def mxfp8_fused_swiglu_forward(x_q, x_sf, w13i_q, w13i_sf, offs):
-    """:func:`mxfp8_fused_swiglu` storing only ``(h, sfh_row)``, the down GEMM's operand, bit for bit.
+    """:func:`mxfp8_fused_swiglu`'s ``(h, h_scales)``, the down GEMM's operand, bit for bit.
 
     The same kernel skips the pre-activation and the token-quantized copy, which only the backward
     reads, so a forward pass whose backward recomputes it writes neither. Arguments as for
@@ -479,7 +508,7 @@ def _dswiglu_launcher(*, expert_count, mma_tiler_mn, cluster_shape_mn, vectorize
     return launcher
 
 
-def mxfp8_fused_dswiglu(g_q, g_sf, w2_q, w2_sf, c13, offs):
+def mxfp8_fused_dswiglu(g_q, g_sf, w2_q, w2_sf, c13, offs) -> DSwigluOutputs:
     """Fused backward: ``dc13 = dSwiGLU(g @ w2^T, c13)`` with a dual MXFP8 epilogue.
 
     Args:
@@ -491,11 +520,10 @@ def mxfp8_fused_dswiglu(g_q, g_sf, w2_q, w2_sf, c13, offs):
         offs: (E,) int32 padded END offsets, each a multiple of ``GROUP_PAD``.
 
     Returns:
-        ``(dc, dc_col, sfdc_row, sfdc_col, dprob)``: the (M, 2I) e4m3 gradient of the interleaved
-        pre-activation quantized along features and along tokens, their flat scales in the row and
-        column orientations, and the (M,) float32 routing-weight gradient ``<swiglu(c13), dh>``
-        with ``dh = g @ w2^T``. The kernel writes one partial per 256-column tile of ``dh`` with
-        plain stores and the partials are summed here, so ``dprob`` is deterministic.
+        Both quantized copies of the interleaved pre-activation's gradient, their scales, and each
+        row's routing-weight gradient; see :class:`DSwigluOutputs`. The kernel writes one
+        routing-gradient partial per 256-column tile of ``dh`` with plain stores and the partials
+        are summed here, so the row dot is deterministic.
     """
     _require_sm100()
     m, hidden = g_q.shape
@@ -542,7 +570,7 @@ def mxfp8_fused_dswiglu(g_q, g_sf, w2_q, w2_sf, c13, offs):
         jnp.ones((m, 1, 1), jnp.float32),
         _unit_vector(1),
     )
-    return dc[0], dc_col[0], sfdc_row, sfdc_col, jnp.sum(dprob_partials[:, :, 0], axis=-1)
+    return DSwigluOutputs(dc[0], dc_col[0], sfdc_row, sfdc_col, jnp.sum(dprob_partials[:, :, 0], axis=-1))
 
 
 # --------------------------------------------------------------------------- #
@@ -594,8 +622,8 @@ def mxfp8_fused_wgrad(x_q, x_sf, g_q, g_sf, offs):
     (experts,) = offs.shape
     _check_quantized(x_q, g_q)
     _check_scales(x_sf, g_sf)
-    if x_sf.shape[0] != _round_up(k, 128) or g_sf.shape[0] != _round_up(n, 128):
-        raise ValueError(f"scale rows must be the 128-padded feature counts, got {x_sf.shape} and {g_sf.shape}")
+    if x_sf.shape[0] != _round_up(k, _SF_TILE) or g_sf.shape[0] != _round_up(n, _SF_TILE):
+        raise ValueError(f"scale rows must be the {_SF_TILE}-padded feature counts, got {x_sf.shape} and {g_sf.shape}")
     if x_sf.shape[1] != g_sf.shape[1]:
         raise ValueError(f"x_sf and g_sf must cover the same token columns, got {x_sf.shape} and {g_sf.shape}")
     mma_tiler_mn, cluster_shape_mn = _WGRAD_TILING

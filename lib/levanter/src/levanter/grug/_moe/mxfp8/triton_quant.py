@@ -179,6 +179,19 @@ else:
     _dual_quantize_padded_kernel = None
 
 
+class DualQuantized(NamedTuple):
+    """Both MXFP8 copies of an ``[Mp, H]`` buffer, in `quantize.dual_quantize_activation`'s order."""
+
+    q_rows: Array
+    """E4M3 values quantized along features, the forward and data-gradient GEMMs' operand."""
+    sfa: Array
+    """E8M0 `build_sfa` scales of ``q_rows``."""
+    q_tokens: Array
+    """E4M3 values quantized along tokens, the weight-gradient GEMMs' operand."""
+    sf_wgrad: Array
+    """E8M0 `build_sf_wgrad` scales of ``q_tokens``."""
+
+
 def mxfp8_triton_quant_available() -> bool:
     """Whether the Triton producer can run in this process: Triton imports and a GPU default device."""
     return jt is not None and _dual_quantize_padded_kernel is not None and jax.devices()[0].platform == "gpu"
@@ -186,16 +199,15 @@ def mxfp8_triton_quant_available() -> bool:
 
 def dual_quantize_padded(
     x: Float[Array, "Mp H"], layout: PaddedDispatch, block_perm: Int[Array, "tiles"]
-) -> tuple[Array, Array, Array, Array]:
+) -> DualQuantized:
     """``dual_quantize_activation`` of ``x`` with its unreceived rows zeroed, bit for bit, in one kernel.
 
     ``x`` is the bf16 aligned receiver buffer ``layout`` maps; rows it does not mark as received
-    may hold anything, including NaN. Returns ``(q_rows, sfa, q_tokens, sf_wgrad)`` with the
-    reference's shapes and dtypes. Raises unless Triton and a GPU are available. The kernel has no
+    may hold anything, including NaN. Returns both copies and their scales with the reference's
+    shapes and dtypes. Raises unless Triton and a GPU are available. The kernel has no
     partitioning rule, so under a sharded mesh call it inside ``shard_map``.
     """
-    q_rows, sfa, q_tokens, sf_wgrad = _quantize_padded(x, layout, block_perm, _DEFAULT_TILE)
-    return q_rows, sfa, q_tokens, sf_wgrad
+    return DualQuantized(*_quantize_padded(x, layout, block_perm, _DEFAULT_TILE))
 
 
 def quantize_rows_padded(x: Float[Array, "Mp H"], layout: PaddedDispatch) -> tuple[Array, Array]:
