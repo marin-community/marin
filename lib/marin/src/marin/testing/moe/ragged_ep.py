@@ -38,7 +38,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _quack_grouped_gemm_available,
     _select_expert_mlp,
 )
-from levanter.grug.grug_moe import moe_mlp
+from levanter.grug.grug_moe import ExpertPrecision, moe_mlp
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
 
@@ -168,8 +168,8 @@ def _runtime_row() -> RuntimeRow:
         jax_version=jax.__version__,
         device_kind=jax.devices()[0].device_kind,
         quack_grouped_gemm_available=_quack_grouped_gemm_available(),
-        expert_mlp_silu=type(_select_expert_mlp(jax.nn.silu, jnp.dtype(jnp.bfloat16))).__name__,
-        expert_mlp_gelu=type(_select_expert_mlp(jax.nn.gelu, jnp.dtype(jnp.bfloat16))).__name__,
+        expert_mlp_silu=type(_select_expert_mlp(jax.nn.silu, jnp.dtype(jnp.bfloat16), ExpertPrecision.BF16)).__name__,
+        expert_mlp_gelu=type(_select_expert_mlp(jax.nn.gelu, jnp.dtype(jnp.bfloat16), ExpertPrecision.BF16)).__name__,
         xla_flags=os.environ.get("XLA_FLAGS", ""),
     )
 

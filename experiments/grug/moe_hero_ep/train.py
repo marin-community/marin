@@ -45,6 +45,7 @@ from levanter.grug.grug_moe import (
     MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
+    ExpertPrecision,
     MoeImplementation,
 )
 from levanter.grug.sharding import compact_grug_mesh
@@ -125,6 +126,7 @@ RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+_XLA_COMMAND_BUFFER_FLAG_NAME = XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG.partition("=")[0]
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
 PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
@@ -210,6 +212,7 @@ def _apply_hero_ep_runtime_defaults(
     inline_watch_enabled: bool,
     moe_implementation: MoeImplementation | None,
     remat_mode: RematMode,
+    expert_precision: ExpertPrecision,
     processes_per_task: int = 1,
 ) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
@@ -250,6 +253,23 @@ def _apply_hero_ep_runtime_defaults(
         flag_defaults += (f"{XLA_HOST_MEMORY_OFFLOADING_FLAG}=true",)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
+    if expert_precision == ExpertPrecision.MXFP8:
+        # MXFP8 runs only with command buffers off. Its fused kernels are custom calls that XLA
+        # captures into CUDA graphs, where replays returned a partly NaN down-projection gradient
+        # until the wgrad kernel acquired its online scale-factor descriptors. That fix is verified
+        # on the expert MLP alone, not on the hero step under CUDA graphs (#5675). Like the ragged
+        # flags, the caller does not choose this; unlike them, a conflicting entry fails rather
+        # than being dropped, because whoever set it expected command buffers on.
+        enabling = [
+            flag
+            for flag in xla_flags
+            if flag.partition("=")[0] == _XLA_COMMAND_BUFFER_FLAG_NAME and flag != XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG
+        ]
+        if enabling:
+            raise ValueError(
+                f"expert_precision={expert_precision} requires XLA GPU command buffers off "
+                f"({XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG}), but XLA_FLAGS enables them with {enabling}"
+            )
     if ragged or offload_carry:
         # A wrong overlap limit corrupts training silently, so these configurations take the flag
         # away from the caller instead of defaulting it. With the carry offload, a reloaded
@@ -520,9 +540,14 @@ def _to_dropless_local(
     so one replacement covers every layer. The forward reads ``self.expert_mlp.implementation``
     (not the model config), so this alone routes the eval dropless. Must run on an expert-collapsed
     mesh: the local backend raises when the mesh expert axis is larger than one.
+
+    The local backends run bf16 experts only, so this also resets ``expert_precision``: a model
+    trained with MXFP8 experts is evaluated dropless with bf16 experts.
     """
     expert_mlp = model.stacked_blocks.stacked.mlp.expert_mlp
-    dropless = dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
+    dropless = dataclasses.replace(
+        expert_mlp, implementation=implementation, expert_chunks=1, expert_precision=ExpertPrecision.BF16
+    )
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
 
 
@@ -1370,6 +1395,7 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         moe_implementation=config.model.moe_implementation,
         remat_mode=config.model.remat_mode,
+        expert_precision=config.model.expert_precision,
     )
     dispatch_grug_training_run(
         run_id=trainer.id,

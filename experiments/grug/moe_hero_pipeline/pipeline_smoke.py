@@ -278,6 +278,7 @@ def main() -> None:
             inline_watch_enabled=False,
             moe_implementation=model_config.moe_implementation,
             remat_mode=model_config.remat_mode,
+            expert_precision=model_config.expert_precision,
             processes_per_task=args.processes_per_task,
         )
         if model_config.moe_implementation == RAGGED_MOE_IMPLEMENTATION:

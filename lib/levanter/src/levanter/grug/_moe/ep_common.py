@@ -151,6 +151,7 @@ def _expert_granular_a2a_params(
     shard_id: Int[Array, ""],
     *,
     local_expert_size: int,
+    receiver_alignment: int,
 ) -> tuple[ExpertA2aParams, ExpertA2aParams]:
     """Build dispatch and return ``ragged_all_to_all`` parameters at (peer, expert) granularity.
 
@@ -161,6 +162,13 @@ def _expert_granular_a2a_params(
     permute before the grouped MLP. The return direction is the exact mirror: it reads the
     expert-major receiver buffer and writes valid prefixes back to the sender's unclipped
     positions, leaving dropped rows at the output operand's values.
+
+    Each local expert's rows start at a multiple of ``receiver_alignment`` in the receiver
+    buffer, and the rows between one expert's last arrival and the next expert's start are left
+    unwritten. With alignment 1 the experts are packed back to back. The return reads the same
+    aligned starts, so it never reads those gap rows. A receiver buffer of
+    ``_aligned_receiver_rows(capacity, local_expert_size, receiver_alignment)`` rows holds any
+    clipping to ``capacity`` rows.
     """
     num_shards = all_group_sizes.shape[0]
 
@@ -174,7 +182,8 @@ def _expert_granular_a2a_params(
 
     # Receiver side: expert-major segment starts on each destination, sender-major within.
     dest_totals = jnp.sum(clipped, axis=0)  # [dest, e]
-    expert_starts = jnp.cumsum(dest_totals, axis=1) - dest_totals
+    dest_spans = _aligned_group_sizes(dest_totals, receiver_alignment)  # [dest, e]
+    expert_starts = jnp.cumsum(dest_spans, axis=1) - dest_spans
     senders_before_me = (jnp.cumsum(clipped, axis=0) - clipped)[shard_id]  # [dest, e]
     dispatch_output_offsets = expert_starts + senders_before_me
 

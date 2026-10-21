@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import dataclasses
 import math
 import os
@@ -28,6 +29,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import save_checkpoint
+from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
@@ -35,6 +37,7 @@ from levanter.grug.grug_moe import (
     MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
+    ExpertPrecision,
 )
 from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.utils.mesh import MeshConfig
@@ -397,6 +400,7 @@ def _runtime_env_config(
     watch_interval=1,
     moe_implementation="fixed_pooled_wave_all_to_all",
     remat_mode="recompute_all",
+    expert_precision=ExpertPrecision.BF16,
 ):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
@@ -404,7 +408,9 @@ def _runtime_env_config(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
         ),
-        model=SimpleNamespace(moe_implementation=moe_implementation, remat_mode=remat_mode),
+        model=SimpleNamespace(
+            moe_implementation=moe_implementation, remat_mode=remat_mode, expert_precision=expert_precision
+        ),
         resources=ResourceConfig.with_gpu("GB200", count=4),
         processes_per_task=processes_per_task,
         max_retries_failure=0,
@@ -633,6 +639,49 @@ def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monke
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
 
 
+def _mxfp8_hero_runtime_config(monkeypatch, inherited_xla_flags):
+    """The MXFP8 hero's runtime config, with ``run_grug``'s env writes restored after the test."""
+    for name in (*train.HERO_EP_RUNTIME_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION", "XLA_FLAGS"):
+        monkeypatch.delenv(name, raising=False)
+    if inherited_xla_flags is not None:
+        monkeypatch.setenv("XLA_FLAGS", inherited_xla_flags)
+    return _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+        expert_precision=ExpertPrecision.MXFP8,
+    )
+
+
+@pytest.mark.parametrize(
+    "inherited",
+    [
+        "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL",
+        # A later entry can re-enable what an earlier one disabled.
+        f"{train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG} --xla_gpu_enable_command_buffer=CUSTOM_CALL",
+    ],
+)
+def test_an_mxfp8_run_refuses_xla_flags_that_turn_command_buffers_on(monkeypatch, inherited):
+    # Before the wgrad kernel acquired its online descriptors, CUDA-graph replays of the MXFP8
+    # expert MLP returned a NaN down-projection gradient while the first execution was exact.
+    config = _mxfp8_hero_runtime_config(monkeypatch, inherited)
+
+    with patch.object(train, "dispatch_grug_training_run"), pytest.raises(ValueError, match="command buffers"):
+        train.run_grug(config)
+
+
+@pytest.mark.parametrize("inherited", [None, train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG])
+def test_an_mxfp8_run_keeps_xla_command_buffers_off(monkeypatch, inherited):
+    config = _mxfp8_hero_runtime_config(monkeypatch, inherited)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    command_buffer_flags = [
+        flag for flag in os.environ["XLA_FLAGS"].split() if flag.startswith("--xla_gpu_enable_command_buffer=")
+    ]
+    assert command_buffer_flags == [train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG]
+
+
 def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
     # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
     # skips the offload has to keep the posture it was measured under.
@@ -664,6 +713,55 @@ def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, 
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.model.remat_mode == expected_remat_mode
+
+
+@pytest.mark.parametrize(
+    ("expert_precision", "expectation"),
+    [
+        # The hero default keeps bf16 experts, which run on any device.
+        (None, contextlib.nullcontext()),
+        # MXFP8 reaches the ragged expert-MLP selector, which refuses to run bf16 experts in its place.
+        (ExpertPrecision.MXFP8, pytest.raises(ValueError, match="SM100")),
+    ],
+    ids=["hero_default", "mxfp8"],
+)
+def test_expert_precision_option_reaches_the_hero_expert_mlp(expert_precision, expectation, monkeypatch):
+    monkeypatch.setattr(ep_ragged_all_to_all, "_sm100_gpu_present", lambda: False)
+    step = launch.build_diagnostic_run(
+        run_id="expert-precision", dp_racks=1, num_steps=1, version="dev", expert_precision=expert_precision
+    )
+    cfg = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).model
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 1, 2, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    compute = jmp.get_policy("params=float32,compute=bfloat16")
+    token_spec = P(("replica_dcn", "data", "expert"), None)
+
+    def moe_layer(x, token_valid):
+        return compute.cast_to_compute(model.MoEMLP.init(cfg, key=jax.random.key(0)))(x, token_valid)[0]
+
+    with use_abstract_mesh(mesh):
+        x = jax.ShapeDtypeStruct(
+            (2, 8, cfg.hidden_dim), jnp.bfloat16, sharding=NamedSharding(mesh, P(*token_spec, None))
+        )
+        token_valid = jax.ShapeDtypeStruct((2, 8), jnp.bool_, sharding=NamedSharding(mesh, token_spec))
+        with expectation:
+            assert jax.eval_shape(moe_layer, x, token_valid).shape == x.shape
+
+
+def test_mxfp8_experts_without_the_ragged_transport_are_rejected_before_launch():
+    # Only the ragged transport has an MXFP8 expert MLP, so the pair must fail before a rack is allocated.
+    with pytest.raises(ValueError, match="ragged_all_to_all"):
+        launch.build_diagnostic_run(
+            run_id="mxfp8-pooled",
+            dp_racks=1,
+            num_steps=1,
+            version="dev",
+            moe_implementation="fixed_pooled_wave_all_to_all",
+            expert_precision=ExpertPrecision.MXFP8,
+        )
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
@@ -888,6 +986,27 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
     swapped_leaves = jax.tree_util.tree_leaves(swapped)
     assert len(orig_leaves) == len(swapped_leaves)
     assert all(a is b for a, b in zip(orig_leaves, swapped_leaves, strict=True))
+
+
+def test_dropless_eval_of_mxfp8_experts_computes_the_bf16_expert_function():
+    # The local dropless backends have no MXFP8 expert MLP and refuse MXFP8, so the dropless eval
+    # scores an MXFP8-trained model's weights with bf16 experts: the function a bf16 model's
+    # dropless eval computes from the same weights.
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    bf16_config = dataclasses.replace(_latent_config(), moe_implementation="ragged_all_to_all")
+    mxfp8_config = dataclasses.replace(bf16_config, expert_precision=ExpertPrecision.MXFP8)
+    tokens = jax.random.randint(jax.random.key(1), (2, bf16_config.max_seq_len), 0, bf16_config.vocab_size)
+    dropless_logits = eqx.filter_jit(lambda m, t: train._to_dropless_local(m, implementation="scatter").logits(t))
+
+    with set_mesh(mesh):
+        expected = dropless_logits(model.Transformer.init(bf16_config, key=jax.random.key(0)), tokens)
+        actual = dropless_logits(model.Transformer.init(mxfp8_config, key=jax.random.key(0)), tokens)
+
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 
 def test_eval_every_adds_the_held_out_suites_as_dependencies():

@@ -5,6 +5,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal, NamedTuple, TypeAlias, cast, get_args
 
 import jax
@@ -121,6 +122,17 @@ _LOCAL_MOE_IMPLEMENTATIONS = (
     "sonic",
     "sonic_cute",
 )
+
+
+class ExpertPrecision(StrEnum):
+    """Number format of the routed-expert matmuls."""
+
+    # Operands in the token dtype, bfloat16 for the hero.
+    BF16 = "bf16"
+    # MXFP8 operands: E4M3 values with one E8M0 scale per 32 elements. Only the
+    # `ragged_all_to_all` backend runs it, on SM100 GPUs, for SiLU experts and bfloat16 tokens.
+    MXFP8 = "mxfp8"
+
 
 _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
 _CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"

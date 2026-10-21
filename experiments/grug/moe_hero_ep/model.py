@@ -49,6 +49,7 @@ from levanter.grug.grug_moe import (
     MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
+    ExpertPrecision,
     MoeActivation,
     MoEExpertMlp,
     MoEExpertMlpPspecs,
@@ -305,6 +306,9 @@ class GrugModelConfig:
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    expert_precision: ExpertPrecision = ExpertPrecision.BF16
+    """Number format of the routed-expert matmuls. MXFP8 requires the ragged_all_to_all backend on
+    SM100 GPUs; parameters stay in the same dtype and layout either way."""
     expert_chunks: int = 1
     pooled_transport_capacity_factor: float | None = None
     num_expert_waves: int = 1
@@ -361,6 +365,12 @@ class GrugModelConfig:
         if self.moe_implementation == "fixed_pooled_wave_all_to_all":
             if self.pooled_transport_capacity_factor is None:
                 raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
+        if self.expert_precision != ExpertPrecision.BF16 and self.moe_implementation != "ragged_all_to_all":
+            # `moe_mlp` rejects this too, but only once the model is traced on the allocated devices.
+            raise ValueError(
+                f"expert_precision={self.expert_precision} requires moe_implementation='ragged_all_to_all', "
+                f"got {self.moe_implementation!r}"
+            )
         if self.num_expert_waves <= 0:
             raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:
@@ -1040,6 +1050,7 @@ class MoEMLP(eqx.Module):
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
                 num_expert_waves=cfg.num_expert_waves,
+                expert_precision=cfg.expert_precision,
                 pspecs=MoEExpertMlpPspecs(expert=_EXPERT_WEIGHT_AXES),
             ),
             cfg=cfg,
