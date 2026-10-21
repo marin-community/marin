@@ -17,13 +17,16 @@ that composes QuACK's SM100 kernel with an epilogue, then wrap it with
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
+
 import jax
 import jax.numpy as jnp
 
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
-from quack.cute_dsl_utils import get_max_active_clusters
+from quack.cute_dsl_utils import get_device_multiprocessor_count, get_max_active_clusters
 from quack.epilogue.library import dact_mod, linear_act_mod
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
@@ -52,15 +55,46 @@ def _cute_dtype(dt):
     return _JAX_TO_CUTE[jnp.dtype(dt)]
 
 
+# SMs the QuACK GEMMs traced inside `reserved_sms` leave free. Set at trace time, read when a launcher is built.
+_RESERVED_SMS: contextvars.ContextVar[int] = contextvars.ContextVar("levanter_quack_reserved_sms", default=0)
+
+
+@contextlib.contextmanager
+def reserved_sms(count: int):
+    """Launch the QuACK GEMMs traced in this context on at most ``SM count - count`` SMs.
+
+    The GEMMs are persistent: their grid is one CTA per SM, each CTA owns a fixed share of the tiles,
+    and a GEMM CTA cannot share an SM with the ragged all-to-all's 512-thread CTAs. A GEMM that starts
+    while the all-to-all holds its SMs therefore leaves those CTAs' tiles waiting until the all-to-all
+    ends, and an all-to-all that starts under a full-width GEMM waits for its SMs. Keeping ``count``
+    SMs free (the all-to-all's grid) lets the two run side by side. The computed function is unchanged.
+    """
+    if count < 0:
+        raise ValueError(f"reserved SM count must be non-negative, got {count}")
+    token = _RESERVED_SMS.set(count)
+    try:
+        yield
+    finally:
+        _RESERVED_SMS.reset(token)
+
+
 def _max_active_clusters(cluster_mnk) -> int:
-    """Clusters the device can hold, or a fixed stand-in when there is no device to ask.
+    """Clusters the device can hold less the `reserved_sms`, or a fixed stand-in when there is no device to ask.
 
     `get_max_active_clusters` needs a GPU. CPU tracing must still build the launcher, so it gets
     a constant: the value only sizes the tile scheduler and never changes the computed function.
     """
     if jax.default_backend() == "cpu":
         return _FALLBACK_MAX_ACTIVE_CLUSTERS
-    return get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
+    cluster_size = cluster_mnk[0] * cluster_mnk[1]
+    clusters = get_max_active_clusters(cluster_size)
+    reserved = _RESERVED_SMS.get()
+    if reserved == 0:
+        return clusters
+    free_sms = get_device_multiprocessor_count() - reserved
+    if free_sms < cluster_size:
+        raise ValueError(f"reserving {reserved} SMs leaves no room for a {cluster_size}-CTA cluster")
+    return min(clusters, free_sms // cluster_size)
 
 
 def _mint_epilogue_gemm(epilogue, *, kind_sig, paired_acc):
