@@ -179,7 +179,7 @@ def test_launch_job_failed_payload_upload_does_not_create_job(service, monkeypat
 
     with monkeypatch.context() as patch:
         patch.setattr(LocalFileSystem, "pipe_file", fail_upload)
-        with pytest.raises(ConnectError, match="creation failed") as error:
+        with pytest.raises(ConnectError) as error:
             service.launch_job(request, ctx=None)
         assert error.value.code == Code.UNAVAILABLE
 

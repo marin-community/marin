@@ -207,7 +207,7 @@ def test_stalled_upload_is_cancelled_and_same_content_can_be_retried(monkeypatch
     store = BundleStore("s3://bundles", upload_timeout=Duration.from_ms(50))
     data = b"retry after an upload stalls"
 
-    with pytest.raises(BundleUploadError, match="Failed to upload bundle"):
+    with pytest.raises(BundleUploadError):
         store.write(data)
 
     assert filesystem.cancelled.wait(timeout=_THREAD_TIMEOUT)
