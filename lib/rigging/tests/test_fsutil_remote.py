@@ -104,7 +104,7 @@ def hub(monkeypatch):
     def upload_file(_api, *, path_or_fileobj, path_in_repo, **kwargs):
         storage.files[path_in_repo] = Path(path_or_fileobj).read_bytes()
 
-    def batch_bucket_files(_api, bucket_id, *, add):
+    def batch_bucket_files(_api, _bucket_id, *, add):
         for source, destination in add:
             storage.files[destination] = Path(source).read_bytes()
 

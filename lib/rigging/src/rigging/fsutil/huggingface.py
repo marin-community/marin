@@ -3,14 +3,11 @@
 
 """Create new Hugging Face transfer destinations with private visibility."""
 
-from huggingface_hub import bucket_info, create_bucket, create_repo, repo_exists
-from huggingface_hub.errors import BucketNotFoundError
+from huggingface_hub import bucket_info, create_bucket, create_repo, parse_hf_uri, repo_exists
+from huggingface_hub.errors import BucketNotFoundError, HfUriError
 
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import TransferError
-
-_HF_BUCKET_KIND = "buckets"
-_HF_REPO_TYPES = {"models": "model", "datasets": "dataset", "spaces": "space"}
 
 
 def prepare_hf_destination(url: str) -> None:
@@ -18,31 +15,19 @@ def prepare_hf_destination(url: str) -> None:
 
     Existing destinations retain their visibility.
     """
-    path = StoragePath(url)
-    if path.scheme != "hf":
+    if StoragePath(url).scheme != "hf":
         return
 
-    if path.netloc == _HF_BUCKET_KIND or path.netloc in _HF_REPO_TYPES:
-        if len(path.segments) < 2:
-            raise TransferError(f"HF destination must name an owner and bucket or repository: {url}")
-        owner, name = path.segments[:2]
-        kind = path.netloc
-    else:
-        if not path.netloc or not path.segments:
-            raise TransferError(f"HF destination must name an owner and repository: {url}")
-        owner, name = path.netloc, path.segments[0]
-        kind = "models"
-
-    if kind != _HF_BUCKET_KIND:
-        name = name.split("@", 1)[0]
-    identifier = f"{owner}/{name}"
-    if kind == _HF_BUCKET_KIND:
+    try:
+        uri = parse_hf_uri(url)
+    except HfUriError as error:
+        raise TransferError(f"Invalid HF destination: {error}") from error
+    if uri.is_bucket:
         try:
-            bucket_info(identifier)
+            bucket_info(uri.id)
         except BucketNotFoundError:
-            create_bucket(identifier, private=True, exist_ok=True)
+            create_bucket(uri.id, private=True, exist_ok=True)
         return
 
-    repo_type = _HF_REPO_TYPES[kind]
-    if not repo_exists(identifier, repo_type=repo_type):
-        create_repo(identifier, repo_type=repo_type, private=True, exist_ok=True)
+    if not repo_exists(uri.id, repo_type=uri.type):
+        create_repo(uri.id, repo_type=uri.type, private=True, exist_ok=True)
