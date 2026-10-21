@@ -35,6 +35,7 @@ from experiments.post_training.capability_driven_envs.analyze_failed_runs.models
     groups_of,
 )
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.pipeline import (
+    DROPPED_ROLLOUTS,
     INVALID_REPLIES,
     analyze_failed_runs,
     merge_ideas,
@@ -57,6 +58,7 @@ CHECK_WORK = Capability(
     outcome="Verify an answer before it is final.",
     includes=("Recompute",),
 )
+RARE = Capability(id="failed-runs.rare.rare-skill", name="A rare skill", outcome="A rare outcome.", includes=("Rare",))
 CUT_OFF = StructuredOutputError(ValueError("the reply was cut off"), (COMPLETION,))
 
 
@@ -106,9 +108,10 @@ ROLLOUTS = [
 
 
 class Analyst:
-    """Names no skill for a rollout that says "no gap", the loop skill for a rollout with a lookup call, and the check
-    skill for the others, and merges the lines with the same name. A rollout that says "cut off", and the first
-    ``failed_merges`` merges, fail as a reply at the output limit does. It keeps the messages of its calls."""
+    """Names no skill for a rollout that says "no gap", the rare skill for a rollout that says "rare", the loop skill for
+    a rollout with a lookup call, and the check skill for the others. It merges the lines with the same name, and it
+    leaves out the rare lines. A rollout that says "cut off", and the first ``failed_merges`` merges, fail as a reply at
+    the output limit does. It keeps the messages of its calls."""
 
     model = "fake"
 
@@ -133,14 +136,15 @@ class Analyst:
         if output_type is RolloutIdeas:
             if "cut off" in text:
                 raise CUT_OFF
-            skills = () if "no gap" in text else (STOP_LOOPS if "lookup" in text else CHECK_WORK,)
+            skill = RARE if "rare" in text else STOP_LOOPS if "lookup" in text else CHECK_WORK
+            skills = () if "no gap" in text else (skill,)
             value = RolloutIdeas(ideas=skills)
         else:
             if self.failed_merges:
                 self.failed_merges -= 1
                 raise CUT_OFF
             lines = [json.loads(line) for line in text.splitlines()]
-            names = dict.fromkeys(line["name"] for line in lines)
+            names = dict.fromkeys(line["name"] for line in lines if line["name"] != RARE.name)
             groups = (
                 Group(
                     id=f"failed-runs.general.skill-{i}",
@@ -207,11 +211,12 @@ def test_the_ideas_of_several_shards_merge_again(ctx):
     ]
 
 
-def test_a_rollout_without_a_gap_gives_no_ideas_and_only_an_invalid_reply_is_counted(ctx):
-    result = analyze(ctx, [loop("loop-1"), loop("loop-2"), wrong("cut", "cut off"), wrong("calm", "no gap")])
+def test_the_counters_report_the_invalid_replies_and_the_rollouts_that_a_merge_drops(ctx):
+    rollouts = [loop("loop-1"), loop("loop-2"), wrong("cut", "cut off"), wrong("calm", "no gap"), wrong("rare")]
+    result = analyze(ctx, rollouts)
 
     assert names_and_evidence(result.results) == [(STOP_LOOPS.name, ["loop-1", "loop-2"])]
-    assert result.counters[INVALID_REPLIES] == 1
+    assert (result.counters[INVALID_REPLIES], result.counters[DROPPED_ROLLOUTS]) == (1, 1)
 
 
 def test_an_idea_needs_rollouts_of_two_tasks_unless_one_task_failed(ctx):
@@ -269,19 +274,14 @@ def test_more_ideas_than_one_merge_call_holds_merge_in_rounds_and_keep_their_evi
     assert max(len(request.splitlines()) for request in analyst.requests) == 4
 
 
-def test_a_merge_reply_puts_each_line_in_exactly_one_capability_with_its_own_id():
+def test_a_merge_reply_names_only_its_lines_and_gives_each_capability_its_own_id():
     reply_type = groups_of(frozenset({"k0", "k1", "k2"}))
 
     def group(capability_id: str, *members: str) -> Group:
         return Group(id=capability_id, name="A", outcome="B.", includes=("C",), members=members)
 
-    assert len(reply_type(capabilities=(group("a", "k0", "k1"), group("b", "k2"))).capabilities) == 2
-    for invalid in [
-        (group("a", "k0", "k1"),),
-        (group("a", "k0", "k1"), group("b", "k1", "k2")),
-        (group("a", "k0", "k1", "k2", "k3"),),
-        (group("a", "k0", "k1"), group("a", "k2")),
-    ]:
+    assert len(reply_type(capabilities=(group("a", "k0", "k1"), group("b", "k1"))).capabilities) == 2
+    for invalid in [(group("a", "k0", "k3"),), (group("a", "k0"), group("a", "k1"))]:
         with pytest.raises(ValueError):
             reply_type(capabilities=invalid)
 

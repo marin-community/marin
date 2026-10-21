@@ -62,23 +62,20 @@ class Groups(BaseModel):
 
 
 def groups_of(lines: Set[str]) -> type[Groups]:
-    """The reply type of a merge of ``lines``: each line is in exactly one group, and the groups have different IDs.
+    """The reply type of a merge of ``lines``: each group holds only these lines, and the groups have different IDs.
 
-    The structured call sends an invalid reply back to the model with the error, so that a merge keeps the evidence of
-    each line.
+    The structured call sends an invalid reply back to the model with the error. A reply can leave out the lines of the
+    capabilities that the merge does not keep, and a line can be in two groups.
     """
 
     class LineGroups(Groups):
         """The merged capabilities."""
 
         @model_validator(mode="after")
-        def hold_each_line_once(self) -> Self:
-            held = Counter(key for group in self.capabilities for key in group.members)
+        def hold_known_lines(self) -> Self:
             ids = Counter(group.id for group in self.capabilities)
             problems = {
-                "These IDs are not lines": set(held) - lines,
-                "No merged capability holds these lines": lines - set(held),
-                "These lines occur more than once": {key for key, count in held.items() if count > 1},
+                "These IDs are not lines": {key for group in self.capabilities for key in group.members} - lines,
                 "These capability IDs occur more than once": {key for key, count in ids.items() if count > 1},
             }
             errors = [f"{problem}: {', '.join(sorted(keys))}." for problem, keys in problems.items() if keys]
