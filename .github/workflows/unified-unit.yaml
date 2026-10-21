@@ -464,7 +464,8 @@ jobs:
     name: iris-e2e-smoke
     needs: select
     if: ${{ contains(fromJSON(needs.select.outputs.suites), 'iris-e2e-smoke') }}
-    runs-on: ubuntu-latest
+    # The locked Playwright release supports Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -485,7 +486,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          key: playwright-ubuntu-24.04-${{ runner.arch }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Playwright browsers
         # Always run: `playwright install` only downloads browsers it does not already

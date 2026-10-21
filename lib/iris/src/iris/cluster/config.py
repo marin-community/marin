@@ -511,6 +511,7 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
+    hostname: str = ""  # pins node-local controller state across restarts
     # IngressClass the operator-managed federation ingress binds to; see
     # scripts/install_cw_network.py and docs/coreweave.md.
     ingress_class: str = "traefik"

@@ -16,7 +16,7 @@ from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import Row, bindparam, func, select
 
-from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
+from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore, BundleUploadError
 from iris.cluster.config import user_admitted
 from iris.cluster.constraints import (
     Constraint,
@@ -904,7 +904,10 @@ def launch_job(
     if existing is not None:
         return existing
 
-    request = _store_launch_payload(dependencies, request)
+    try:
+        request = _store_launch_payload(dependencies, request)
+    except BundleUploadError as exc:
+        raise ConnectError(Code.UNAVAILABLE, f"Job {launch.job_id} creation failed: {exc}") from exc
     request = _inject_resource_constraints(request)
     routed = _route_launch(dependencies, request, launch)
     if routed is not None:
