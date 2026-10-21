@@ -91,21 +91,6 @@ Parsed reasoning or tool-call channels interrupt the attempt without a score.
 Ordinary tasks retain the production `shellbox:{settings}` discriminator and
 restore `ToolHarness` with its serialized command timeout and shell tool.
 
-Evaluation-only `skyrl_train.entrypoints.main_generate` runs with
-`trainer.evaluation_runner=task` load prelowered TaskRolloutSpec Parquet rows
-from `data.val_data`. This preserves each task's private grader and serialized
-harness settings. The same entrypoint retains source-row loading for
-`trainer.evaluation_runner=training` and its Harbor dataset loader for
-`trainer.evaluation_runner=harbor`.
-
-`trajectory_runner.eval_max_concurrent_tasks` bounds the shared evaluation pool
-independently of training. A null value inherits `max_concurrent_tasks`.
-`trainer.eval_required_score_coverage` accepts a fraction in `[0, 1]` and stops
-an evaluation when verifier coverage falls below it. Null permits partial
-grading. A valid scored zero counts toward coverage. When
-`trainer.dump_eval_results` is enabled, results and failure diagnostics are
-written before the coverage check raises.
-
 The `skyrl-wheel` lane exercises these CPU contracts in the independent nested
 environment. This does not establish sandbox isolation or serving/GPU correctness.
 
