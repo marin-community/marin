@@ -117,6 +117,7 @@ class IrisConfig:
     timeout: int = 0
     target_cluster: str | None = None
     parent_cluster_config: str | None = None
+    container_profile: str | None = None
 
 
 @dataclass
