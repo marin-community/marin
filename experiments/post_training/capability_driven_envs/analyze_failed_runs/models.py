@@ -3,11 +3,14 @@
 
 """The values of the analysis: the replies of its model calls, and the ideas between the merges."""
 
+from collections import Counter
+from collections.abc import Set
 from dataclasses import dataclass
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from experiments.post_training.capability_driven_envs.generate_tasks import FILE_SAFE_ID
+from experiments.post_training.capability_driven_envs.catalog import FILE_SAFE_ID
 
 IDEAS_PER_ROLLOUT = 3
 
@@ -32,11 +35,11 @@ class Capability(BaseModel):
 
 
 class RolloutIdeas(BaseModel):
-    """The general skills whose absence explains one failed rollout."""
+    """The general skills whose absence explains one failed rollout, or none if the rollout shows no gap."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    ideas: tuple[Capability, ...] = Field(min_length=1, max_length=IDEAS_PER_ROLLOUT)
+    ideas: tuple[Capability, ...] = Field(max_length=IDEAS_PER_ROLLOUT)
 
 
 class Group(Capability):
@@ -56,6 +59,34 @@ class Groups(BaseModel):
     """The merged capabilities."""
 
     capabilities: tuple[Group, ...] = Field(min_length=1)
+
+
+def groups_of(lines: Set[str]) -> type[Groups]:
+    """The reply type of a merge of ``lines``: each line is in exactly one group, and the groups have different IDs.
+
+    The structured call sends an invalid reply back to the model with the error, so that a merge keeps the evidence of
+    each line.
+    """
+
+    class LineGroups(Groups):
+        """The merged capabilities."""
+
+        @model_validator(mode="after")
+        def hold_each_line_once(self) -> Self:
+            held = Counter(key for group in self.capabilities for key in group.members)
+            ids = Counter(group.id for group in self.capabilities)
+            problems = {
+                "These IDs are not lines": set(held) - lines,
+                "No merged capability holds these lines": lines - set(held),
+                "These lines occur more than once": {key for key, count in held.items() if count > 1},
+                "These capability IDs occur more than once": {key for key, count in ids.items() if count > 1},
+            }
+            errors = [f"{problem}: {', '.join(sorted(keys))}." for problem, keys in problems.items() if keys]
+            if errors:
+                raise ValueError(" ".join(errors))
+            return self
+
+    return LineGroups
 
 
 @dataclass(frozen=True)
