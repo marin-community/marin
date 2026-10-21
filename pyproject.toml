@@ -441,6 +441,9 @@ ignore-missing-imports = [
     "lm_eval.*",
     "memray",
     "memray.*",
+    # The Baby RSI trainer's LoRA adapters; its GPU task installs peft beside torch.
+    "peft",
+    "peft.*",
     "prompt_toolkit",
     "prompt_toolkit.*",
     "quack",

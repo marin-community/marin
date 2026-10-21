@@ -14,12 +14,13 @@ from typing import Any
 from pydantic import BaseModel
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.models import VerifyitGrader
+from taskcompendium.models import TextMessage, VerifyitGrader
 
 from taskforge.agentic import example_build
 from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
+from taskforge.agentic.instances import task_instances
 from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, GUESS_PROMPT
 from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, OPTION_PROBLEM, BlindSolution, OptionList, TaskReview
@@ -34,6 +35,13 @@ CHANGED = "tasks/changed.json"
 GRADER = example_build.task_spec(TASK_ID).grader
 assert isinstance(GRADER, VerifyitGrader)
 EXPECTED = str(GRADER.parameters["expected"])
+# The build program is a shell script. Other task ids give another prompt and another reference answer: the
+# expected answer followed by the text after the id's last hyphen.
+BUILD = (
+    f'if [ "$1" = {TASK_ID} ]; then cat task.json; '
+    f'else n=${{1##*-}}; sed "s/alone/alone, please/; s/{TASK_ID}/$1/g; '
+    f's/\\"expected\\":\\"{EXPECTED}\\"/\\"expected\\":\\"{EXPECTED}$n\\"/" task.json; fi > "$2"'
+)
 IDEA = CapabilityIdea(
     capability_id="example.stock-ledger",
     subject_id="example",
@@ -66,17 +74,20 @@ def tool_replies(result: AgentResult, call_id: str) -> list[dict[str, Any]]:
 
 
 SCRIPT = (
-    # The test workspace is ShellSim, which has no Python, so the agent writes the TaskSpec with the shell.
-    call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
-    call("submit", path=TASK),
+    call(
+        "shell",
+        command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > task.json; cp task.json {TASK}; "
+        f"printf '%s\\n' {shlex.quote(BUILD)} > build.sh",
+    ),
+    call("submit", path=TASK, program="build.sh"),
     call("grade", path=TASK, answer="1", expect="pass"),  # A wrong control of the agent's own does not block.
     call("grade", path=TASK, answer=EXPECTED, expect="pass"),
     call("grade", path=TASK, answer="999999", expect="fail"),
     call("rollout", paths=[TASK], n=8, role="solver"),
     call("rollout", paths=[TASK], n=4, role="adversary"),
     call("shell", command=f"sed 's/Reply with the number alone/Reply with a number/' {TASK} > {CHANGED}"),
-    call("submit", path=CHANGED),
-    call("submit", path=TASK),
+    call("submit", path=CHANGED, program="build.sh"),
+    call("submit", path=TASK, program="build.sh"),
 )
 
 
@@ -230,12 +241,19 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     assert replies["call-9"]["missing"] == ["controls", "solver band", "adversary"]
     [accepted] = result.tasks
     assert accepted.task == example_build.task_spec(TASK_ID)
+    assert accepted.program == "build.sh"
     assert (accepted.evidence.solver_runs, accepted.evidence.solver_passes) == (8, 4)
     assert (accepted.evidence.adversary_runs, accepted.evidence.adversary_passes) == (4, 0)
     assert accepted.evidence.controls == [(True, False), (True, True), (False, False)]
     assert accepted.review.accept
     # A review is a blind solve and the review itself.
     assert (result.spend.solver_rollouts, result.spend.judge_calls) == (12, 2)
+
+    [instance] = await task_instances(accepted, ["ledger--07"], ShellSimMachineFactory(), timeout=10)
+    assert instance.id == "ledger--07"
+    prompt, grader = instance.context.events[0], instance.grader
+    assert isinstance(prompt, TextMessage) and prompt.content.endswith("Reply with the number alone, please.")
+    assert isinstance(grader, VerifyitGrader) and grader.parameters["expected"] == f"{EXPECTED}07"
 
 
 async def test_submit_refuses_a_task_whose_answer_selects_an_option():
@@ -338,7 +356,7 @@ async def test_a_control_that_the_answer_format_rejects_is_no_control():
         call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
         call("grade", path=TASK, answer="", expect="fail"),
         call("grade", path=TASK, answer=EXPECTED, expect="pass"),
-        call("submit", path=TASK),
+        call("submit", path=TASK, program="build.sh"),
         call("finish", report="done"),
     )
     async with ParallelWeb("unused") as web:
@@ -503,7 +521,7 @@ async def test_submit_refuses_a_grader_that_accepts_a_wrong_answer_made_from_the
         call("grade", path=TASK, answer="999999", expect="fail"),
         call("rollout", paths=[TASK], n=8, role="solver"),
         call("rollout", paths=[TASK], n=4, role="adversary"),
-        call("submit", path=TASK),
+        call("submit", path=TASK, program="build.sh"),
         call("finish", report="done"),
     )
     async with ParallelWeb("unused") as web:
