@@ -17,6 +17,7 @@ Recipe of the #203 sweep: AdamW, constant LR, betas 0.9/0.999, WD 0, clip 1.0, r
 mean loss over supervised tokens, no in-loop validation, NCCL WARN. A permanent checkpoint at every epoch end, HF
 exports after epoch 2 and at the end, and per-epoch supervised and context tokens checked against the manifest
 within 0.1% (epoch-metrics.jsonl). ``--plateau`` turns on plateau dropping (task #226).
+``--hf-export-schedule final-only`` skips the epoch-2 HF export without changing native epoch checkpoints.
 ``--context-length`` changes the padded training length only with a matching manifest row cap. Nondefault
 lengths receive separate cache, checkpoint and tracker identities; existing rows are never cropped or padded.
 
@@ -292,8 +293,11 @@ def arm_settings(
     pad_token_id: int,
     plateau: bool,
     start_step: int = 0,
+    hf_export_schedule: str = "epoch2-and-final",
 ) -> TrainLmConfig:
-    """Epoch accounting, a checkpoint per epoch, HF exports after epoch 2 and at the end, optional plateau dropping."""
+    """Keep native epoch checkpoints and configure HF export cadence independently."""
+    if hf_export_schedule not in ("epoch2-and-final", "final-only"):
+        raise ValueError(f"Unknown HF export schedule: {hf_export_schedule}")
     updates = [epoch.updates for epoch in epochs]
     tracker = EpochTrackerConfig(
         output_path,
@@ -311,7 +315,12 @@ def arm_settings(
             tracker=(*trackers, tracker),
             checkpointer=replace(config.trainer.checkpointer, keep=[], save_interval=None),
         ),
-        adapter=SweepExportsConfig(None, updates, config.train_seq_len or CONTEXT, EXPORT_EPOCHS),
+        adapter=SweepExportsConfig(
+            None,
+            updates,
+            config.train_seq_len or CONTEXT,
+            EXPORT_EPOCHS if hf_export_schedule == "epoch2-and-final" else [],
+        ),
         context_pad_token_id=pad_token_id,
         plateau_dropping=PlateauDroppingConfig() if plateau else None,
     )
@@ -400,6 +409,7 @@ def pipeline(
     *,
     data_variant: str = "high",
     context_length: int = CONTEXT,
+    hf_export_schedule: str = "epoch2-and-final",
 ) -> dict[str, ArtifactStep | list[ArtifactStep]]:
     selected_parent = manifest_parent(manifest, parent_name)
     if context_length <= 0 or manifest["max_sequence_tokens"] != context_length:
@@ -512,7 +522,14 @@ def pipeline(
             ),
             data_seed=42,
         )
-        config = arm_settings(config, epochs, ctx.output_path, manifest["pad_token_id"], plateau)
+        config = arm_settings(
+            config,
+            epochs,
+            ctx.output_path,
+            manifest["pad_token_id"],
+            plateau,
+            hf_export_schedule=hf_export_schedule,
+        )
         return replace(pod, train_config=config, env_vars={"WANDB_MODE": "online", **GPU_LOG_ENV})
 
     def train(config: TrainLmOnPodConfig) -> None:
@@ -542,6 +559,7 @@ def main() -> None:
     parser.add_argument("--run-date", required=True, help="YYYYMMDD, part of every output identity")
     parser.add_argument("--data-variant", choices=("high", "low", "matched-relay"), default="high")
     parser.add_argument("--context-length", type=int, default=CONTEXT)
+    parser.add_argument("--hf-export-schedule", choices=("epoch2-and-final", "final-only"), default="epoch2-and-final")
     parser.add_argument("--learning-rate", type=float, required=True)
     parser.add_argument("--epochs", type=int, required=True)
     parser.add_argument("--plateau", action="store_true")
@@ -571,6 +589,7 @@ def main() -> None:
             args.plateau,
             data_variant=args.data_variant,
             context_length=args.context_length,
+            hf_export_schedule=args.hf_export_schedule,
         )
         print(lower(cast(ArtifactStep, artifacts["train"])))
         print(json.dumps({"arm": manifest["arm"], "epochs": [asdict(epoch) for epoch in epochs]}, indent=1))
@@ -598,6 +617,7 @@ def main() -> None:
         args.preemption_retries,
         data_variant=args.data_variant,
         context_length=args.context_length,
+        hf_export_schedule=args.hf_export_schedule,
     )
     info = get_job_info()
     assert info is not None and info.controller_address is not None

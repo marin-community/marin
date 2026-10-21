@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from copy import deepcopy
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from marin.execution.lazy import StepContext
@@ -23,7 +25,9 @@ def manifest(parent_name, arm):
     }
 
 
-def graph(rows, parent_name, plateau=False, data_variant="high", context_length=32768):
+def graph(
+    rows, parent_name, plateau=False, data_variant="high", context_length=32768, hf_export_schedule="epoch2-and-final"
+):
     return pipeline(
         rows,
         "a" * 64,
@@ -35,7 +39,51 @@ def graph(rows, parent_name, plateau=False, data_variant="high", context_length=
         plateau,
         data_variant=data_variant,
         context_length=context_length,
+        hf_export_schedule=hf_export_schedule,
     )
+
+
+@pytest.mark.parametrize("plateau", (False, True))
+def test_final_only_export_keeps_training_and_native_epoch_checkpoints(plateau):
+    rows = manifest("v0.1", "plain")
+    configurations = []
+    paths = []
+    for schedule in ("epoch2-and-final", "final-only"):
+        trained = graph(rows, "v0.1", plateau=plateau, hf_export_schedule=schedule)["train"]
+        paths.append(trained.path("/outputs"))
+        configurations.append(
+            trained.build_config(StepContext.for_run(paths[-1], "/outputs", deps=trained.deps)).train_config
+        )
+    default, terminal = configurations
+    assert paths[0] == paths[1]
+    assert replace(terminal, adapter=default.adapter) == default
+    assert default.adapter.export_epochs == [2]
+    assert terminal.adapter.export_epochs == []
+    for config, expected_exports in zip(configurations, ([7, 11], [11]), strict=True):
+        hooks, native_requests, exports = [], [], []
+        trainer = SimpleNamespace(
+            config=SimpleNamespace(microbatch_size=16, train_batch_size=16, num_train_steps=12),
+            add_hook=lambda hook, every, hooks=hooks: hooks.append(hook),
+            request_checkpoint=native_requests.append,
+        )
+        converter = SimpleNamespace(save_pretrained=lambda model, path, exports=exports, **kwargs: exports.append(path))
+        replace(config.adapter, epoch_updates=[4, 4, 4]).install_export_hooks(
+            trainer=trainer,
+            converter=converter,
+            tokenizer=None,
+            export=SimpleNamespace(hf_save_path="/hf", generation_config=None),
+        )
+        request_steps = []
+        for completed in range(1, 13):
+            info = SimpleNamespace(next_step=completed, step=completed - 1, eval_model=None)
+            previous_requests = len(native_requests)
+            hooks[0](info)
+            if len(native_requests) != previous_requests:
+                request_steps.append(completed)
+        hooks[0](info, force=True)
+        assert request_steps == [3, 7, 11]
+        assert len(native_requests) == 3
+        assert exports == [f"/hf/step-{step}" for step in expected_exports]
 
 
 def test_parent_and_plateau_outputs_are_disjoint_and_use_the_selected_weights():

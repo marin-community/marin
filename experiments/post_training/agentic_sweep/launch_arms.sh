@@ -11,11 +11,13 @@ shift 6
 MODE=
 DATA_VARIANT=high
 CONTEXT_LENGTH=32768
+HF_EXPORT_SCHEDULE=epoch2-and-final
 while (( $# )); do
   case "$1" in
     --run) MODE=--run; shift ;;
     --data-variant) DATA_VARIANT=${2:?data variant: high, low or matched-relay}; shift 2 ;;
     --context-length) CONTEXT_LENGTH=${2:?training context length}; shift 2 ;;
+    --hf-export-schedule) HF_EXPORT_SCHEDULE=${2:?HF export schedule}; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -36,6 +38,7 @@ export NCCL_DEBUG=WARN NCCL_DEBUG_SUBSYS=
 COMMAND=(python -m experiments.post_training.agentic_sweep.arms
   --parent "$PARENT" --run-date "$RUN_DATE" --data-variant "$DATA_VARIANT"
   --context-length "$CONTEXT_LENGTH"
+  --hf-export-schedule "$HF_EXPORT_SCHEDULE"
   --arm-data "$ROWS" --manifest-sha256 "$SHA" --plain-data "$PLAIN"
   --learning-rate 1e-6 --epochs 3 --only train
   --preemption-retries "${PREEMPTION_RETRIES:-2}")
