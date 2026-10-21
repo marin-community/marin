@@ -36,7 +36,7 @@ from skyrl_train.teacher_routing import PlanTeacherRouter, route_trajectory_batc
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
-from skyrl_train.rollouts.task_worker import PiTrainingRollout, TaskRolloutWorker
+from skyrl_train.rollouts.task_worker import PiTrainingRollout, TaskRolloutWorker, _pi_training_payload
 from skyrl_train.trajectory_runners.trajectory_processing import concatenate_trajectory_batches
 from skyrl_train.trajectory_runners.types import BatchMetadata, TaskRequestBatch, TrajectoryID
 from tests.cpu.rollouts.engine_fakes import InferenceClient
@@ -361,6 +361,30 @@ def test_multiturn_grpo_keeps_exact_sampled_turns_without_fabricating_prefix(sec
     assert batch["is_last_step"] == [False, True]
     assert batch["rollout_logprobs"][0].tolist() == [-0.25]
     assert batch["loss_masks"] == [[1], [1]]
+
+
+def test_pi_capture_and_rollout_failure_are_distinct_admission_errors():
+    failed = PiTrainingRollout(
+        task_id="task",
+        messages=(),
+        prompt_token_ids=(1,),
+        response_token_ids=(2,),
+        loss_mask=(1,),
+        logprobs=(-0.5,),
+        grade=GradeResult(Outcome.GRADED, 0.0, passed=False),
+        stop_reason="error",
+        failure=RolloutFailure("VerifierRuntimeError"),
+    )
+    with pytest.raises(ValueError, match=r"VerifierRuntimeError .*grade_status=graded, capture_present=True"):
+        _pi_training_payload({"capture": "private"}, failed)
+    with pytest.raises(ValueError, match="capture_present=False"):
+        _pi_training_payload(None, failed)
+    with pytest.raises(ValueError, match="InvalidFailureType"):
+        _pi_training_payload({}, replace(failed, failure=RolloutFailure("private raw text\\n")))
+    successful = replace(failed, failure=None)
+    with pytest.raises(ValueError, match="did not return a validated in-memory trajectory"):
+        _pi_training_payload(None, successful)
+    assert _pi_training_payload({}, successful) == {}
 
 
 @pytest.mark.asyncio

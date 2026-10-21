@@ -146,6 +146,21 @@ class PiTrainingRollout(TrainingRollout):
 SKYRL_AGENT_HARNESS = "skyrl_agent"
 
 
+def _pi_training_payload(payload: dict[str, Any] | None, result: TrainingRollout) -> dict[str, Any]:
+    """Reject failed trials without conflating failed grading and absent Pi capture."""
+    if result.failure is not None:
+        failure_type = result.failure.exception_type
+        if not failure_type.isidentifier() or len(failure_type) > 80:
+            failure_type = "InvalidFailureType"
+        raise ValueError(
+            f"Installed Pi trial failed before admission: {failure_type} "
+            f"(grade_status={result.grade.status.value}, capture_present={payload is not None})"
+        )
+    if payload is None:
+        raise ValueError("Installed Pi trial did not return a validated in-memory trajectory")
+    return payload
+
+
 async def _model_turn(
     client: ModelClient,
     request: ModelRequest,
@@ -545,9 +560,7 @@ class TaskRolloutWorker:
                 if delay is None:
                     if self.pi_scenario is not None and phase != "eval":
                         assert self.installed_agents is not None
-                        payload = self.installed_agents.take_pi_trajectory(session_id)
-                        if payload is None or result.failure is not None:
-                            raise ValueError("Installed Pi trial did not return a validated in-memory trajectory")
+                        payload = _pi_training_payload(self.installed_agents.take_pi_trajectory(session_id), result)
                         result = PiTrainingRollout(
                             **{item.name: getattr(result, item.name) for item in fields(TrainingRollout)},
                             pi_trajectory=payload,

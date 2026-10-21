@@ -39,9 +39,9 @@ trainer:
   epochs: 1
   max_steps: 1
   update_epochs_per_batch: 1
-  train_batch_size: 8
-  policy_mini_batch_size: 8
-  eval_batch_size: 8
+  train_batch_size: 4
+  policy_mini_batch_size: 4
+  eval_batch_size: 4
   micro_forward_batch_size_per_gpu: 1
   micro_train_batch_size_per_gpu: 1
   eval_before_train: false
@@ -66,6 +66,8 @@ trainer:
     policy_num_nodes: 1
     policy_num_gpus_per_node: 8
 generator:
+  # Four independent physical trials per task improve the chance of a mixed-reward group.
+  n_samples_per_prompt: 4
   backend: vllm
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN

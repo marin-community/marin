@@ -429,7 +429,8 @@ def test_pi_smoke_recipe_survives_staged_model_and_role_plan(tmp_path: Path, mon
     assert not resolved.skyrl.data.terminal_bench_data
     if recipe == "pi_verifier_grpo_smoke":
         assert resolved.skyrl.terminal_bench_config.installed_agent.agent.get("model_name") is None
-        assert resolved.skyrl.generator.n_samples_per_prompt == 2
+        assert resolved.skyrl.generator.n_samples_per_prompt == 4
+        assert resolved.skyrl.trainer.train_batch_size == 4
     else:
         assert resolved.skyrl.terminal_bench_config.installed_agent.teacher.student_model == "/tmp/models/qwen"
         assert resolved.skyrl.terminal_bench_config.harbor.verifier_disable is True
