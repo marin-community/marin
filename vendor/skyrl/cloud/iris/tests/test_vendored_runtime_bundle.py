@@ -100,6 +100,9 @@ def test_unrecorded_file_added_to_a_built_bundle_is_rejected(bundled_source):
 
 def test_worker_bundle_installs_local_modules_without_the_checkout(tmp_path):
     source = runtime_bundle.resolve_launcher_source()
+    local_source = runtime_bundle.local_module_source(
+        "marin-rolloutengine", source.root.parents[1] / "lib/rolloutengine", source.digest
+    )
     workspace = tmp_path / "worker"
     with runtime_bundle.build_runtime_bundle(source.digest) as built:
         shutil.copytree(built, workspace)
@@ -124,8 +127,11 @@ def test_worker_bundle_installs_local_modules_without_the_checkout(tmp_path):
             "import json; from pathlib import Path; "
             "import rolloutengine, taskcompendium, verifyit; "
             "import marinskyrl.task_machine_factories as factory; "
-            "print(json.dumps({module.__name__: str(Path(module.__file__).resolve()) "
-            "for module in (rolloutengine, taskcompendium, verifyit, factory)}))",
+            "from cloud.iris.runtime_bundle import local_module_source; "
+            f"source = local_module_source('marin-rolloutengine', Path(rolloutengine.__file__).parents[2], {source.digest!r}); "
+            "records = {module.__name__: str(Path(module.__file__).resolve()) "
+            "for module in (rolloutengine, taskcompendium, verifyit, factory)}; "
+            "records['module_digest'] = source.digest; print(json.dumps(records))",
         ],
         cwd=workspace,
         env=environment,
@@ -135,6 +141,7 @@ def test_worker_bundle_installs_local_modules_without_the_checkout(tmp_path):
         timeout=180,
     )
     observed = json.loads(completed.stdout)
+    assert observed["module_digest"] == local_source.digest
     for name in ("rolloutengine", "taskcompendium", "verifyit"):
         assert Path(observed[name]).is_relative_to(workspace / "lib" / name / "src" / name)
     assert observed["marinskyrl.task_machine_factories"] == str(

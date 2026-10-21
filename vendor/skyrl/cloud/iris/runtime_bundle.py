@@ -168,7 +168,7 @@ def local_module_source(distribution_name: str, installed_root: Path, expected_s
     source = resolve_launcher_source()
     if source.digest != expected_source_digest:
         raise ValueError("Local module source no longer matches the selected runtime identity")
-    workspace = source.root.parents[1]
+    workspace = source.root.parents[1].resolve()
     if (workspace / BUNDLE_IDENTITY_FILE).is_file():
         validate_bundled_runtime(workspace)
     project = tomllib.loads((source.root / "pyproject.toml").read_text())
@@ -176,9 +176,7 @@ def local_module_source(distribution_name: str, installed_root: Path, expected_s
     module = (source.root / configured["path"]).resolve()
     if installed_root.resolve() != module:
         raise ValueError(f"Installed {distribution_name} does not come from the selected module source")
-    paths = sorted(
-        path for path in _module_bundle_paths(source.root) if path.is_relative_to(module.relative_to(workspace))
-    )
+    paths = sorted(path for path in _bundle_paths(source.root) if path.is_relative_to(module.relative_to(workspace)))
     files = tuple(RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(workspace / path)) for path in paths)
     return LauncherSource(root=module, digest=_files_digest(files))
 
