@@ -15,7 +15,7 @@ src/taskforge/
   capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
-                               output, call cache, ledger recording, agent loop, web tools, the
+                               output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
   stage20_triage/              verdict.py: TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
