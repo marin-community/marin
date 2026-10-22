@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from taskforge.stage10_proposal.model import (
+    OFFERED_VERIFICATIONS,
     BuildItem,
     CompositePart,
     Environment,
@@ -74,6 +75,15 @@ AUTHORED = (
     "null_reason: null\n"
     "---\n\n" + BODY.replace("\n", "\r\n") + "\n\n"
 )
+AUTHORED_COMPOSITE = (
+    "verification: composite\n"
+    "composite:\n"
+    "  - kind: decision_model\n"
+    "    weight: 0.75\n"
+    "  - {kind: code, weight: 0.25}\n"
+)
+# The same document with an offered verification, which the document regex admits.
+AUTHORED_OFFERED = AUTHORED.replace(AUTHORED_COMPOSITE, "verification: decision_model\ncomposite: []\n")
 
 PARTS = (CompositePart(Verification.DECISION_MODEL, 0.75), CompositePart(Verification.CODE, 0.25))
 PROPOSAL_ID = "d01.algebra.linear-transformations/3"
@@ -94,8 +104,8 @@ def _proposal(
         null_reason=null_reason,
         environment=Environment.CONTAINER,
         solver_machine=None,
-        verification=Verification.COMPOSITE,
-        composite=PARTS,
+        verification=Verification.DECISION_MODEL,
+        composite=(),
         research_need=research_need,
         research_reason="the deliverable should follow real handouts",
         research=research,
@@ -137,7 +147,7 @@ def test_authored_document_parses_to_typed_header_and_canonical_form_is_stable()
     ],
 )
 def test_an_imageless_proposal_declares_its_solver_machine(environment, machine):
-    text = AUTHORED.replace("environment: container", f"environment: {environment}").replace(
+    text = AUTHORED_OFFERED.replace("environment: container", f"environment: {environment}").replace(
         "solver_machine: null", f"solver_machine: {machine}"
     )
 
@@ -150,7 +160,7 @@ def test_an_imageless_proposal_declares_its_solver_machine(environment, machine)
 
 
 def test_only_a_reasoning_proposal_declares_no_machine():
-    text = AUTHORED.replace("environment: container", "environment: shellsim").replace(
+    text = AUTHORED_OFFERED.replace("environment: container", "environment: shellsim").replace(
         "solver_machine: null", "solver_machine: none"
     )
 
@@ -220,7 +230,7 @@ FENCED_EXAMPLE = "Find the kernel of the map.\nThe deliverable looks like:\n```m
 
 
 def test_headings_inside_code_fences_are_not_section_headings():
-    proposal = parse(AUTHORED.replace("Find the kernel of the map.\r\n", FENCED_EXAMPLE))
+    proposal = parse(AUTHORED_OFFERED.replace("Find the kernel of the map.\r\n", FENCED_EXAMPLE))
     assert "## Build plan\n```" in proposal.body
     assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), render(proposal))
 
@@ -287,21 +297,21 @@ def test_document_regex_matches_canonical_render(variant):
 
 
 @pytest.mark.parametrize("verification", list(Verification), ids=str)
-def test_every_verification_kind_parses_and_the_regex_admits_it(verification):
+def test_every_verification_kind_parses_and_the_regex_admits_only_the_offered_kinds(verification):
     proposal = _proposal()
     parts = PARTS if verification is Verification.COMPOSITE else ()
     proposal = TaskProposal(replace(proposal.header, verification=verification, composite=parts), proposal.body)
     text = render(proposal)
     assert parse(text).header.verification is verification
-    assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), text)
+    admitted = re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), text) is not None
+    assert admitted == (verification in OFFERED_VERIFICATIONS)
 
 
 def test_a_composite_may_repeat_a_kind():
     repeated = (CompositePart(Verification.DECISION_MODEL, 0.5), CompositePart(Verification.DECISION_MODEL, 0.5))
     proposal = _proposal()
-    text = render(TaskProposal(replace(proposal.header, composite=repeated), proposal.body))
-    assert parse(text).header.composite == repeated
-    assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), text)
+    header = replace(proposal.header, verification=Verification.COMPOSITE, composite=repeated)
+    assert parse(render(TaskProposal(header, proposal.body))).header.composite == repeated
 
 
 @pytest.mark.parametrize(
@@ -331,7 +341,7 @@ def test_a_composite_is_a_weighted_list_of_other_kinds(edit, message):
         ('"grader/*.py"]\n---\n', '"grader/*.py"]\n'),
         ('research:\n  - {kind: web, purpose: "two real lab handouts"}\n', "research: []\n"),
         ("## Build plan\n", ""),
-        ("  - {kind: code, weight: 0.25}\n", "  - {kind: composite, weight: 0.25}\n"),
+        ("verification: decision_model\ncomposite: []\n", "verification: composite\ncomposite: []\n"),
     ],
     ids=[
         "quoted-enum",
@@ -342,7 +352,7 @@ def test_a_composite_is_a_weighted_list_of_other_kinds(edit, message):
         "missing-closing-delimiter",
         "needed-with-empty-research",
         "missing-heading",
-        "nested-composite",
+        "reserved-composite",
     ],
 )
 def test_document_regex_rejects_drift(edit: tuple[str, str]):

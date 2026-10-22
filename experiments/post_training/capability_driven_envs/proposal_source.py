@@ -6,8 +6,9 @@
 ``CapabilitySource.propose(idea, n)`` works in two passes:
 
 1. A structured call plans ``n`` slots. Each slot gets a workflow, an environment the host can run,
-   the solver's machine (``null`` for a container slot), a verification and a research decision.
-   The validators of the plan's output type reject a portfolio with the wrong slot count, a solver
+   the solver's machine (``null`` for a container slot), a verification (one of
+   ``OFFERED_VERIFICATIONS``, so never the reserved ``composite``) and a research decision. The
+   validators of the plan's output type reject a portfolio with the wrong slot count, a solver
    machine that does not fit its environment, a slot in an environment the host lacks, or too many
    slots on one environment x verification pairing, and the model gets one repair.
 2. For each proposed slot, concurrently, GLM writes a proposal document in the
@@ -41,10 +42,12 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import ERROR_TEXT_LIMIT, schema_instruction
 from taskforge.stage10_proposal.model import (
     DOCUMENT_REPAIR_PROMPT,
+    OFFERED_VERIFICATIONS,
     REQUIRED_HEADINGS,
     SOLVER_MACHINE_RULE,
     Environment,
     Grounding,
+    OfferedVerification,
     ProposalFormatError,
     ProposalHeader,
     ResearchNeed,
@@ -79,7 +82,7 @@ class ExcludedCombination(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     environment: Environment
-    verification: Verification
+    verification: OfferedVerification
     reason: str = Field(min_length=1, description="Why no slot of the portfolio can use this pairing.")
 
 
@@ -96,7 +99,7 @@ class PlannedSlot(BaseModel):
         description="The solver's machine for a reasoning or shellsim slot (none, no machine, for reasoning only); "
         "null for a container slot."
     )
-    verification: Verification = Field(
+    verification: OfferedVerification = Field(
         description="How the private evaluator grades the task, by the verification rule."
     )
     distinctive_challenge: str = Field(description="What sets this task apart from the other slots.")
@@ -201,19 +204,20 @@ answer from a wrong one, use decision_model. If nothing gradable is left, or onl
 headline (a yes/no verdict, an accept/reject, a letter), the prose is the product: use llm_as_judge.
 Use answer_in_box only when the whole answer is one value whose format is unambiguous without any
 stated answer block (an integer, an option letter). Use code only for what only code can probe:
-tests of solver-written code, a running system, files whose behaviour must be executed. composite
-is a weighted list of at least two of the other kinds (a kind may repeat), each part chosen by the
-same rule, with weights that sum to 1. decision_model is the default. Its evaluator compares the
-answer as written with the build's reference answer, against a rubric, so the task needs no answer
-block, labelled fields or fixed format: the solver delivers what a real requester would ask for. For
-decision_model and llm_as_judge, and for each such part of a composite, state the rubric: one item
-per property a correct deliverable has, each with its intent, its pass criterion (the meaning, with
-reference values, tolerances and units, never a keyword), the equivalent forms it accepts (notation,
-units, wording, order), how negated, hedged or retracted statements count, its weight, and any gate
-or cap. Never name a model, service or endpoint; the evaluator selects them. For every kind, state
-each control's construction and the reward band it must receive, and distinguish partial-credit
-cases from severe-error negatives; never hand-derive control rewards or numeric anchors in the
-proposal: the build computes them with code."""
+tests of solver-written code, a running system, files whose behaviour must be executed. A task
+whose grading would mix kinds declares the dominant part's kind (code when executing the
+deliverable decides most of the reward, decision_model when its content does) and designs one
+grader of that kind. decision_model is the default. Its evaluator compares the answer as written
+with the build's reference answer, against a rubric, so the task needs no answer block, labelled
+fields or fixed format: the solver delivers what a real requester would ask for. For
+decision_model and llm_as_judge, state the rubric: one item per property a correct deliverable
+has, each with its intent, its pass criterion (the meaning, with reference values, tolerances and
+units, never a keyword), the equivalent forms it accepts (notation, units, wording, order), how
+negated, hedged or retracted statements count, its weight, and any gate or cap. Never name a
+model, service or endpoint; the evaluator selects them. For every kind, state each control's
+construction and the reward band it must receive, and distinguish partial-credit cases from
+severe-error negatives; never hand-derive control rewards or numeric anchors in the proposal: the
+build computes them with code."""
 """How a proposal chooses its verification kind, the same in the plan and proposal prompts."""
 
 SYSTEM_PROMPT = f"""You are GLM-5.3, an expert designer of realistic reinforcement-learning tasks.
@@ -291,7 +295,7 @@ grounding: unverified
 null_reason: null
 environment: <reasoning | shellsim | container>
 solver_machine: <none (reasoning only) | shellsim | cpython | packages, or null for container>
-verification: <decision_model | answer_in_box | code | llm_as_judge | composite>
+verification: <{verifications}>
 composite: []
 research_need: <needed | not_needed>
 research_reason: "<one line: what does or does not require looking anything up>"
@@ -311,7 +315,12 @@ def document_template(proposal_id: str, idea: CapabilityIdea) -> str:
     for the other values and for each section's text.
     """
     headings = "\n".join(f"## {h}\n<...>\n" for h in REQUIRED_HEADINGS)
-    header = TEMPLATE_HEADER.format(id=proposal_id, ref=idea.capability_id, hash=idea.capability_hash)
+    header = TEMPLATE_HEADER.format(
+        id=proposal_id,
+        ref=idea.capability_id,
+        hash=idea.capability_hash,
+        verifications=" | ".join(OFFERED_VERIFICATIONS),
+    )
     return header + headings
 
 
@@ -335,8 +344,7 @@ SECTION_GUIDE = """- Task: the realistic user request as the solver sees it; the
   resource estimates (to be measured).
 - Grader design and controls: the observable success condition; the verification kind and why the
   rule above selects it; the grader design (for decision_model and llm_as_judge: the rubric items
-  with intent, pass criterion, equivalences, negation handling, weights, gates and caps; for
-  composite: each part's kind, its weight and its own design, matching the composite header);
+  with intent, pass criterion, equivalences, negation handling, weights, gates and caps);
   positive and negative controls with the reward band each must receive (the build
   computes exact values); anti-shortcut and
   prompt-injection controls; and how hidden evidence stays private (no answer leakage).
@@ -361,9 +369,7 @@ Format rules:
   `null` for a proposed task.
 - The front matter has exactly these twelve keys, all required, in this order. Write every key,
   including composite, research, build, and resources when a list is empty (`[]`).
-- composite: `[]` unless verification is composite. For composite, one entry per part, at least
-  two, as `  - {{kind: <decision_model | answer_in_box | code | llm_as_judge>, weight: <number>}}`,
-  a kind repeated when two parts grade differently; the weights sum to 1.
+- composite: always `[]`.
 - Double-quote every string value. Inside a quoted value use single quotes, never a double
   quote or a backslash, and keep the value on one line.
 - {SOLVER_MACHINE_RULE}

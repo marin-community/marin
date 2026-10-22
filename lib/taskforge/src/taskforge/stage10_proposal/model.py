@@ -12,10 +12,8 @@ A proposal is written as::
     null_reason: null
     environment: container
     solver_machine: null
-    verification: composite
-    composite:
-      - {kind: decision_model, weight: 0.7}
-      - {kind: code, weight: 0.3}
+    verification: decision_model
+    composite: []
     research_need: needed
     research_reason: "the deliverable should follow real lab handouts"
     research:
@@ -33,7 +31,8 @@ in that order, unless ``null_reason`` is set, in which case the body may be abbr
 in the image its build publishes, and one of ``SolverMachine`` for any other, so no later stage chooses
 it. ``none``, no machine at all, is legal only for a reasoning proposal.
 ``composite`` lists the parts of a ``composite`` verification, each another kind with its share of the
-reward, and is empty for every other kind (``check_composite``).
+reward, and is empty for every other kind (``check_composite``). ``composite`` is a reserved kind (see
+``Verification``): ``parse`` accepts it, but ``document_regex`` admits only ``OFFERED_VERIFICATIONS``.
 Every ``resources`` entry is a relative path inside the build root (no leading ``/``, no ``..`` part),
 and no two ``build`` items share a name.
 ``research_need`` must agree with ``research``: ``needed`` lists at least one item and ``not_needed``
@@ -43,7 +42,8 @@ in a fixed order, and the body is stripped of trailing whitespace. ``digest`` ha
 so a proposal's identity does not depend on how its author formatted the header.
 
 ``document_regex`` constrains generation to that canonical layout: a ``structured_outputs.regex``
-that fully matches ``render(p)`` for every valid ``p`` whose string values hold no ``"``, backslash
+that fully matches ``render(p)`` for every valid ``p`` whose verification is one of
+``OFFERED_VERIFICATIONS``, whose string values hold no ``"``, backslash
 or newline and whose body, outside fenced code, starts with the first required heading, has no other
 level-two heading, and has a line under every required heading but the last.
 """
@@ -54,6 +54,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
+from typing import Literal, get_args
 
 import yaml
 
@@ -141,7 +142,9 @@ class Verification(StrEnum):
     choice). ``decision_model``: a decision model compares the answer with the reference answer against a
     rubric; the default, since it needs no format restriction. ``code``: what only code can probe
     (behavioural tests, running systems). ``llm_as_judge``: a model judge for deliverables whose prose is the
-    product. ``composite``: a weighted list of the other kinds (``CompositePart``).
+    product. ``composite``: a weighted list of the other kinds (``CompositePart``). ``composite`` is
+    reserved: documents that carry it parse, but it is not offered to proposers (``OFFERED_VERIFICATIONS``)
+    until a composite grader type exists, since a TaskSpec holds one grader.
     """
 
     ANSWER_IN_BOX = "answer_in_box"
@@ -150,6 +153,12 @@ class Verification(StrEnum):
     LLM_AS_JUDGE = "llm_as_judge"
     COMPOSITE = "composite"
 
+
+OfferedVerification = Literal[
+    Verification.DECISION_MODEL, Verification.ANSWER_IN_BOX, Verification.CODE, Verification.LLM_AS_JUDGE
+]
+"""The kinds a proposer may choose: every kind but the reserved ``composite``."""
+OFFERED_VERIFICATIONS: tuple[Verification, ...] = get_args(OfferedVerification)
 
 COMPOSITE_PART_KINDS = tuple(kind for kind in Verification if kind is not Verification.COMPOSITE)
 """The kinds a composite part may be: every kind but composite, each as often as the proposal needs."""
@@ -542,7 +551,6 @@ def _resources(value: object) -> tuple[str, ...]:
 # literals escape only REGEX_META rather than going through ``re.escape``.
 REGEX_META = frozenset("\\.+*?()|[]{}^$")
 QUOTED = r'"[^"\\\n]+"'
-NUMBER = r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:e-?[0-9]+)?"
 
 
 def _not_fence(char: str) -> str:
@@ -584,13 +592,11 @@ def _header_rest() -> str:
     """The front matter after ``null_reason``, through the closing delimiter."""
     item = rf"  - \{{kind: {_alternation(ResearchKind)}, purpose: {QUOTED}\}}\n"
     with_machine = "(?:" + "|".join(_literal(str(m)) for m in SolverMachine if m is not SolverMachine.NONE) + ")"
-    part = rf"  - \{{kind: {_alternation(COMPOSITE_PART_KINDS)}, weight: {NUMBER}\}}\n"
     return (
         rf"(?:environment: {_literal(Environment.CONTAINER)}\nsolver_machine: null\n"
         rf"|environment: {_literal(Environment.REASONING)}\nsolver_machine: {_alternation(SolverMachine)}\n"
         rf"|environment: {_literal(Environment.SHELLSIM)}\nsolver_machine: {with_machine}\n)"
-        rf"(?:verification: {_alternation(COMPOSITE_PART_KINDS)}\ncomposite: \[\]\n"
-        rf"|verification: {Verification.COMPOSITE}\ncomposite:(?: \[\]\n|\n(?:{part})+))"
+        rf"verification: {_alternation(OFFERED_VERIFICATIONS)}\ncomposite: \[\]\n"
         rf"(?:research_need: {ResearchNeed.NEEDED}\nresearch_reason: {QUOTED}\nresearch:\n(?:{item})+"
         rf"|research_need: {ResearchNeed.NOT_NEEDED}\nresearch_reason: {QUOTED}\nresearch: \[\]\n)"
         rf"build:(?: \[\]\n|\n(?:  - {QUOTED}: {QUOTED}\n)+)"
@@ -604,6 +610,7 @@ def document_regex(proposal_id: str, source: SourceRef) -> str:
 
     Front-matter keys, their order and enum values are pinned and the ``id`` and ``source`` lines are literal;
     ``solver_machine`` is ``null`` exactly for a container proposal, and ``none`` only for a reasoning proposal.
+    ``verification`` is one of ``OFFERED_VERIFICATIONS`` and ``composite`` is ``[]``.
     A proposed document (``null_reason: null``) has every required heading, in order, each but the last with
     at least one line under it; a null document has a free body. Bodies are free text in which a level-two
     heading line appears only inside fenced code, and EOS is allowed after any line of the last section.

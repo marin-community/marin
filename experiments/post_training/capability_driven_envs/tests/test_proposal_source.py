@@ -135,6 +135,18 @@ def test_slot_plan_requires_n_slots_and_rejects_using_an_excluded_pairing():
         plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "llm_as_judge")], excluded))
 
 
+def test_the_slot_plan_does_not_offer_or_accept_the_reserved_composite_verification():
+    plan_type = slot_plan_type(1, ALL_ENVIRONMENTS)
+    schema = json.dumps(response_format(plan_type))
+
+    assert '"decision_model"' in schema and '"composite"' not in schema
+    with pytest.raises(ValidationError, match="verification"):
+        plan_type.model_validate(plan([slot(1, "reasoning", "composite")], []))
+    excluded = [{"environment": "reasoning", "verification": "composite", "reason": "x"}]
+    with pytest.raises(ValidationError, match="verification"):
+        plan_type.model_validate(plan([slot(1, "reasoning", "code")], excluded))
+
+
 @pytest.mark.parametrize(
     ("environment", "machine"), [("container", "cpython"), ("reasoning", None)], ids=["container", "imageless"]
 )
@@ -203,7 +215,7 @@ def filled_document(idea, number: int, research_need: ResearchNeed = ResearchNee
         document_template(f"{CAPABILITY_ID}/{number}", idea)
         .replace("<reasoning | shellsim | container>", "shellsim")
         .replace("<none (reasoning only) | shellsim | cpython | packages, or null for container>", "cpython")
-        .replace("<decision_model | answer_in_box | code | llm_as_judge | composite>", "decision_model")
+        .replace("<decision_model | answer_in_box | code | llm_as_judge>", "decision_model")
         .replace("<needed | not_needed>", str(research_need))
         .replace("<web | github>", "github")
     )

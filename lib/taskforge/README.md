@@ -85,15 +85,21 @@ solver's machine: `null` for a container proposal, which runs in the image its b
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
 The proposer writes it, and the build keeps it. `parse` also refuses a `resources` entry that is
 not a relative path inside the build root and a `build` name that repeats.
+`verification` is one of `Verification`. `composite` is a reserved kind: `parse` accepts a document
+that declares it, but proposers are offered only `OFFERED_VERIFICATIONS` (`decision_model`,
+`answer_in_box`, `code`, `llm_as_judge`) until a composite grader type exists, and a task whose
+grading would mix kinds declares its dominant part.
 `document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
-field that constrains a completion to the canonical layout for that id and source. A reply cut off
+field that constrains a completion to the canonical layout for that id and source, with an offered
+verification and `composite: []`. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
 
 `experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
 source for catalog capabilities, which takes its model, sampling policy and host environments at
 construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a solver
-machine and a research decision, then writes each document under the regex with GLM thinking first.
+machine, an offered verification and a research decision, then writes each document under the regex
+with GLM thinking first.
 `propose_tasks` in the same package proposes the catalog's capabilities from the command line and
 triages each proposal with `preflight`. A slot whose model call runs out of retries or is rejected
 is a `SlotFailure` like any other, so the capability keeps its plan and its other slots; only a
