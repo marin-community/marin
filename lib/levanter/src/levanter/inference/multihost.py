@@ -32,15 +32,24 @@ logger = logging.getLogger(__name__)
 def _broadcast_command(command):
     source = jax.process_index() == 0
     payload = json.dumps(command).encode() if source else b""
-    length = np.array([len(payload)], dtype=np.int32)
-    length = int(multihost_utils.broadcast_one_to_all(length, is_source=source)[0])
-    data = np.frombuffer(payload, dtype=np.uint8).copy() if source else np.zeros(length, dtype=np.uint8)
-    data = multihost_utils.broadcast_one_to_all(data, is_source=source)
-    return json.loads(data.tobytes())
+    try:
+        length = np.array([len(payload)], dtype=np.int32)
+        length = int(multihost_utils.broadcast_one_to_all(length, is_source=source)[0])
+        data = np.frombuffer(payload, dtype=np.uint8).copy() if source else np.zeros(length, dtype=np.uint8)
+        data = multihost_utils.broadcast_one_to_all(data, is_source=source)
+        return json.loads(data.tobytes())
+    except Exception:
+        logger.exception("Distributed inference command broadcast failed; terminating this rank")
+        os._exit(1)
 
 
 def _encode_request(request):
     params = request.decode_params
+    values = (params.max_num_tokens, params.temperature, params.top_p, params.key)
+    if params.stop_tokens is not None:
+        values += (params.stop_tokens.array,)
+    if any(isinstance(value, jax.Array) for value in values):
+        raise ValueError("Multi-host request metadata must remain host-backed until broadcast")
     return dict(
         prompt_tokens=request.prompt_tokens,
         request_id=request.request_id,
@@ -120,7 +129,9 @@ class MultiHostInferenceEngine(InferenceEngine):
             if any(t < 0 or t >= self.model.Vocab.size for t in request.prompt_tokens):
                 raise ValueError("Prompt contains a token outside the model vocabulary")
         with self._command_lock:
-            command = _broadcast_command(dict(op="generate", requests=[_encode_request(r) for r in requests]))
+            encoded = [_encode_request(r) for r in requests]
+            logger.info("Broadcasting %d host-materialized inference requests", len(encoded))
+            command = _broadcast_command(dict(op="generate", requests=encoded))
             result = self._execute_or_abort(command)
             assert isinstance(result, GenerationResult)
             return result

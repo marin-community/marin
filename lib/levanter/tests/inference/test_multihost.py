@@ -22,8 +22,9 @@ def test_malformed_requests_do_not_strand_workers_before_valid_scoring_and_shutd
         import jax
         import numpy as np
         from levanter.grug.sharding import compact_grug_mesh
-        from levanter.inference.engine import InferenceEngineConfig
+        from levanter.inference.engine import InferenceEngineConfig, Request
         from levanter.inference.multihost import MultiHostInferenceEngine
+        from levanter.inference.jit_scheduler import SeqDecodingParams
         from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
         rank = int(sys.argv[1])
@@ -59,6 +60,12 @@ def test_malformed_requests_do_not_strand_workers_before_valid_scoring_and_shutd
                     scores = engine.score_token_logprobs([0, 1, 2, 3], 1)
                     assert len(scores.token_logprobs) == 4
                     assert np.isfinite(scores.token_logprobs).all()
+                    request = Request([0, 1], 0, SeqDecodingParams(
+                        max_num_tokens=np.array(4, np.int32), stop_tokens=None,
+                        temperature=np.array(0, np.float32), top_p=np.array(1, np.float32),
+                        key=np.array([0, 19311], np.uint32)), 1)
+                    result = engine.generate([request])
+                    assert result.total_generated > 0
                     engine.shutdown_workers()
                 else:
                     engine.worker_loop()

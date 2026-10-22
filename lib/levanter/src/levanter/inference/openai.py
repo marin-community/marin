@@ -21,8 +21,7 @@ from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Union
 
 import haliax as hax
-import jax.numpy as jnp
-import jax.random as jrandom
+import jax
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -160,6 +159,14 @@ def _strip_stop_suffix(tokens: List[int], stops: List[List[int]]) -> tuple[List[
         if stop and len(tokens) >= len(stop) and tokens[-len(stop) :] == stop:
             return tokens[: -len(stop)], True
     return tokens, False
+
+
+def _host_prng_key(seed: int) -> np.ndarray:
+    """Match legacy threefry PRNGKey without dispatching device work on the HTTP rank."""
+    if jax.config.jax_default_prng_impl != "threefry2x32":
+        raise ValueError("HTTP inference requires the threefry2x32 PRNG implementation")
+    high = (seed >> 32) & 0xFFFFFFFF if jax.config.x64_enabled else 0
+    return np.array([high, seed & 0xFFFFFFFF], dtype=np.uint32)
 
 
 class InferenceContext:
@@ -356,18 +363,18 @@ class InferenceContext:
                 padded = np.full((len(stops), width), INVALID, dtype=np.int32)
                 for row, stop in enumerate(stops):
                     padded[row, -len(stop) :] = stop
-                stop_ids = hax.named(jnp.asarray(padded), ("stop_seq", "position"))
+                stop_ids = hax.NamedArray(padded, ("stop_seq", "position"))
 
             # dumb fallback seed if none provided
             if req.seed is None:
                 req.seed = np.random.default_rng().integers(0, 2**32 - 1)
 
             seq_params = SeqDecodingParams(
-                max_num_tokens=jnp.array(len(req.prompt_tokens) + req.max_tokens, dtype=jnp.int32),
+                max_num_tokens=np.array(len(req.prompt_tokens) + req.max_tokens, dtype=np.int32),
                 stop_tokens=stop_ids,
-                temperature=jnp.array(req.temperature, dtype=jnp.float32),
-                top_p=jnp.array(1.0 if req.top_p is None else req.top_p, dtype=jnp.float32),
-                key=jrandom.PRNGKey(req.seed if req.seed is not None else i),
+                temperature=np.array(req.temperature, dtype=np.float32),
+                top_p=np.array(1.0 if req.top_p is None else req.top_p, dtype=np.float32),
+                key=_host_prng_key(int(req.seed)),
             )
 
             service_req = Request(

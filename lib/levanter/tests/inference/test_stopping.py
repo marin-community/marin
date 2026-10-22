@@ -5,8 +5,12 @@ import asyncio
 
 import equinox as eqx
 import haliax as hax
+import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+
+pytest.importorskip("openai")
 
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
 from levanter.inference.openai import (
@@ -15,7 +19,9 @@ from levanter.inference.openai import (
     InferenceRequest,
     InferenceServerConfig,
     _encode_stop_tokens,
+    _host_prng_key,
 )
+from levanter.inference.multihost import _encode_request
 from levanter.layers.kv_cache import KvPageCache
 from levanter.testing.helpers import use_test_mesh
 
@@ -70,7 +76,14 @@ async def test_server_stops_and_strips_independent_sequences(schedule, eos, stop
                 max_rounds=1,
             ),
         )
-        engine = InferenceEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
+
+        class HostOnlyEngine(InferenceEngine):
+            def generate(self, requests, step_callback=None):
+                for request in requests:
+                    _encode_request(request)  # Reject any device-backed HTTP metadata before generation.
+                return super().generate(requests, step_callback=step_callback)
+
+        engine = HostOnlyEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
         context = InferenceContext(model, tokenizer, engine, config)
         future = asyncio.get_running_loop().create_future()
         request = InferenceRequest(
@@ -90,3 +103,10 @@ async def test_server_stops_and_strips_independent_sequences(schedule, eos, stop
         assert result.finish_reason == reason
         assert result.text == tokenizer.decode(visible)
         assert len(result.logprobs) == len(visible)
+
+
+@pytest.mark.parametrize("x64", [False, True])
+def test_host_prng_key_matches_legacy_threefry_seed_mapping(x64):
+    with jax.enable_x64(x64):
+        for seed in (0, 17, 19311, 2**32 - 1, 2**32 + 7, -1):
+            np.testing.assert_array_equal(_host_prng_key(seed), jax.random.PRNGKey(seed))
