@@ -11,10 +11,11 @@ structured repair request, with the loader's message. A reply cut off by the out
 repair: the call raises ``StructuredOutputError`` at once.
 
 The author lives with the build stage because its prompt documents the build SDK and the template.
-It keeps each request as sent, ending with the field instruction ``complete_structured`` appends,
-and its completions under ``<workpiece_dir>/author/<n>/``, including the completions of a call that
-raised ``StructuredOutputError``. It writes the accepted source to ``<workpiece_dir>/program.py`` before
-it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
+It keeps each request as sent, ending with the field instruction ``complete_structured``
+appends, and its completions under ``author/<n>/`` in the workpiece's directory
+(``AuthorContext.workpiece_dir``), including the completions of a call that raised
+``StructuredOutputError``. It writes the accepted source to ``program.py`` in that directory
+before it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
 no source, and continues the conversation with the previous program as the model's turn and the
 revision as the next user turn.
 """
@@ -35,6 +36,7 @@ from taskcompendium import models as task_models
 from taskcompendium.runtime import resources
 from verifyit import spec as verifyit_spec
 
+from taskforge.ledger.records import Ledger
 from taskforge.llm.agent import shell_tool
 from taskforge.llm.client import Completion, ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
@@ -44,7 +46,7 @@ from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft, verdict
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author import program as program_module
-from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision
+from taskforge.stage30_author.author import PROGRAM_FILE, AuthorContext, AuthoredProgram, Revision
 from taskforge.stage30_author.loader import ALLOWED_IMPORTS, GRADER_STEP
 from taskforge.stage40_build_with_program import context as context_module
 from taskforge.stage40_build_with_program import outputs, sandbox_effects, sdk
@@ -53,6 +55,8 @@ from taskforge.stage40_build_with_program.step_store import SDK_VERSION
 from taskforge.stage40_build_with_program.template import standard
 
 AUTHOR_DIR = "author"
+AUTHOR_STEP = "author"
+"""The ledger step of every author call."""
 REQUEST_FILE = "request.json"
 COMPLETIONS_FILE = "completions.json"
 RECORD_FILE = "record.json"
@@ -323,40 +327,45 @@ def author_messages(proposal: TaskProposal) -> list[Message]:
 
 @dataclass(frozen=True)
 class GlmAuthor:
-    """An ``Author`` for one workpiece and round that asks ``model`` for the program.
+    """An ``Author`` that asks ``model`` for the program.
 
     Attributes:
         model: The model that writes the program.
         sampling: Its sampling policy.
-        workpiece_dir: The workpiece's directory: ``program.py`` and the ``author/`` records live here.
-        record: Where the author's calls are recorded.
+        ledger: Where the author's calls are recorded, under the call's workpiece and round and the
+            step ``AUTHOR_STEP``.
     """
 
     model: ModelClient
     sampling: LLMPolicy
-    workpiece_dir: Path
-    record: CallLedger
+    ledger: Ledger
 
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
         """Author the program for ``proposal``, revising the workpiece's ``program.py`` when ``revision`` is given.
 
-        The prompt does not carry ``author_state``.
+        ``program.py`` and the ``author/`` records live in ``context.workpiece_dir``. The prompt does
+        not carry ``author_state``.
 
         Raises:
             FileNotFoundError: ``revision`` is given and the workpiece has no ``program.py`` to revise.
             StructuredOutputError: the output limit cut a reply off, or every submission, repairs
                 included, failed to load.
         """
+        workpiece_dir = context.workpiece_dir
         messages = author_messages(proposal)
         if revision is not None:
             follow_up: list[Message] = [
-                {"role": "assistant", "content": (self.workpiece_dir / PROGRAM_FILE).read_text()},
+                {"role": "assistant", "content": (workpiece_dir / PROGRAM_FILE).read_text()},
                 {"role": "user", "content": REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)},
             ]
             messages += follow_up
-        attempts = self.workpiece_dir / AUTHOR_DIR
+        attempts = workpiece_dir / AUTHOR_DIR
         attempts.mkdir(parents=True, exist_ok=True)
         record_dir = attempts / f"{len(list(attempts.iterdir())):02d}"
         record_dir.mkdir()
@@ -369,7 +378,7 @@ class GlmAuthor:
                 messages,
                 ProgramSubmission,
                 self.sampling,
-                self.record,
+                CallLedger(self.ledger, context.workpiece_id, context.round, AUTHOR_STEP),
                 {"revision": "none" if revision is None else str(revision.kind)},
             )
         except StructuredOutputError as error:
@@ -377,7 +386,7 @@ class GlmAuthor:
             raise
         _write(record_dir / COMPLETIONS_FILE, _COMPLETIONS.dump_json(result.completions, indent=2))
         source = result.value.source
-        _write(self.workpiece_dir / PROGRAM_FILE, source.encode())
+        _write(workpiece_dir / PROGRAM_FILE, source.encode())
         program = load_program(source)
         record = {
             "program_digest": program.digest,

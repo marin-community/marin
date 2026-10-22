@@ -11,6 +11,7 @@ restricted loader.
 import asyncio
 import base64
 import inspect
+import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -56,6 +57,7 @@ from taskforge.stage30_author.program import (
     rl_env_build_sink,
     rl_env_build_step,
 )
+from taskforge.stage40_build_with_program.agentic_author import AgenticAuthor, SessionBuild
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
     BuildFailure,
@@ -65,6 +67,7 @@ from taskforge.stage40_build_with_program.context import (
 )
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.outputs import Grader
+from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import (
     DRAFT_DIR,
     TASK_FILE,
@@ -91,6 +94,8 @@ from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventSto
 from taskforge.stage_coordinator.run import InfrastructureRetry, run_workpieces
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import EXIT, Stage, Terminal, WorkpieceEvent, derive_state
+from tests.stage40_build_with_program.scripted_author import CONFIG, ScriptedModel, in_process_loader, turn
+from tests.stage40_build_with_program.scripted_author import PROGRAM as AGENTIC_SOURCE
 
 WORKPIECE = "toy-0"
 PROPOSAL = parse(
@@ -1169,3 +1174,90 @@ async def test_run_workpieces_refuses_a_repeated_workpiece_id_before_starting_it
     assert triage.proposals == [PROPOSAL]
     assert exits(stored_log(tmp_path, WORKPIECE)) == ACCEPTED_EXITS
     assert JsonEventStore(tmp_path).load("toy-1") is None
+
+
+def agentic_author(model: ScriptedModel, root: Path) -> AgenticAuthor:
+    """The agentic author driving ``model``, whose sessions build as the coordinator under ``root`` builds.
+
+    A session's builds run ``run_build`` in process on the coordinator's step store, with its model,
+    services, research requirement and model digest, so the build stage serves the submitted program's
+    steps from memo hits alone.
+    """
+    store = str(root / STORE_DIR)
+
+    def builds(context: AuthorContext, proposal: TaskProposal) -> SessionBuild:
+        async def builder(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
+            return await run_build(
+                load_program(source),
+                proposal,
+                context.workpiece_id,
+                run_dir,
+                store,
+                UnusedModel(),
+                SAMPLING,
+                SERVICES,
+                context.round,
+                research=ResearchRequirement.OFF,
+                invalidate=invalidate,
+                model_digest=UNUSED_MODEL_DIGEST,
+            )
+
+        return SessionBuild(
+            builder, store, UnusedModel(), SAMPLING, SERVICES, root / "sessions.jsonl", in_process_loader
+        )
+
+    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.recording, builds)
+
+
+class RecordingValidate:
+    """Returns ``SUMMARY`` for every draft and keeps the drafts it validated."""
+
+    def __init__(self) -> None:
+        self.drafts: list[TaskDraft] = []
+
+    async def __call__(self, draft: TaskDraft) -> dict[str, int]:
+        self.drafts.append(draft)
+        return SUMMARY
+
+
+async def test_the_coordinator_runs_the_agentic_author_as_its_author_stage_through_build_and_validation(tmp_path):
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": AGENTIC_SOURCE})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
+    )
+    validate_drafts = RecordingValidate()
+    stages = replace(STAGES, author=agentic_author(model, tmp_path), load_program=load_program, validate=validate_drafts)
+    log = InMemoryEventLog()
+
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    assert exits(log) == ACCEPTED_EXITS and not model.replies
+    round_dir = tmp_path / "workpieces" / WORKPIECE / "rounds" / "0"
+    assert (round_dir / AUTHORED_DIR / "0" / PROGRAM_FILE).read_text() == AGENTIC_SOURCE
+    assert (round_dir / "agentic" / "0" / "workspace" / PROGRAM_FILE).read_text() == AGENTIC_SOURCE
+    built = next(event for event in log.events() if event.kind == "built")
+    assert built.attrs["hits"] == built.attrs["steps"] == "3", "the build stage reran no step the session built"
+    [draft] = validate_drafts.drafts
+    assert draft.task.id == WORKPIECE
+
+
+async def test_a_build_failure_returns_to_the_agentic_session_that_submitted_the_program(tmp_path):
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": AGENTIC_SOURCE})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "the grader holds"})),
+    )
+    failure = BuildFailure("the reference reply does not parse", "grader")
+    stages = replace(STAGES, author=agentic_author(model, tmp_path), load_program=load_program, build=FailsOnce(failure))
+    log = InMemoryEventLog()
+
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    assert exits(log) == [*ACCEPTED_EXITS[:3], ("build_failed", "revise"), *ACCEPTED_EXITS[2:]]
+    revision_turn = str(model.requests[3].messages[-1]["content"])
+    assert "grader: the reference reply does not parse" in revision_turn
+    round_dir = tmp_path / "workpieces" / WORKPIECE / "rounds" / "0"
+    session = json.loads((round_dir / "agentic" / "1" / "session.json").read_text())
+    assert (session["mode"], session["continued_from"]) == ("same_session", "rounds/0/agentic/0")
+    assert (round_dir / AUTHORED_DIR / "1" / PROGRAM_FILE).read_text() == AGENTIC_SOURCE

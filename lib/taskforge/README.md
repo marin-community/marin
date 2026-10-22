@@ -31,11 +31,11 @@ src/taskforge/
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
                                verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
-                               author.py: Revision, AuthoredProgram, AuthorContext, the Author protocol,
-                               `static_author`, the program manifest;
+                               author.py: Revision, AuthoredProgram, AuthorContext, AuthorFailure, the
+                               Author protocol, `static_author`, the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
-  stage40_build_with_program/  agentic_author.py: `author_round`, the agent session that writes, loads,
-                               builds and grades a build program;
+  stage40_build_with_program/  agentic_author.py: `AgenticAuthor`, the author whose agent sessions write,
+                               load, build and grade a build program;
                                context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure,
                                BuildExpired;
                                services.py: RLEnvBuildServices, AgentLimits;
@@ -343,7 +343,7 @@ a package machine and no files for `none`, and `requirements` builds that machin
 for `none`). `run_build` refuses a task whose machine is not the declared one (`check_solver_machine`)
 as a `BuildFailure`, the program's, so no revision can move the solver between no machine, ShellSim,
 CPython and a container. Nor can the host: before anything runs,
-`run_build` and the agentic author's `author_round` call `infrastructure.machine_available`, which
+`run_build` and every call of the agentic author call `infrastructure.machine_available`, which
 raises `NO_IMAGE_BUILDER` for a container proposal on a host without an image builder and `NO_FACTORY`
 for a package machine on a host without the local backend, so the workpiece ends as the host's, with no
 revision spent and no author adapting the task to the host.
@@ -371,8 +371,11 @@ refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `
 program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
 the author receives.
 
-`stage40_build_with_program.agentic_author.author_round` is the agentic author: one agent session (`run_agent`,
-reasoning replay KEEP) per program round, working in a workspace that starts with the template as
+`stage40_build_with_program.agentic_author.AgenticAuthor` is the agentic author, an `Author` the
+coordinator calls as its author stage. Each call runs agent sessions (`run_agent`, reasoning replay
+KEEP) in the context's round until one submits, and returns the submitted file as the program's
+source. `AgenticAuthor.builds` gives the sessions of a call their `SessionBuild` for the call's
+workpiece, round and proposal. A session works in a workspace that starts with the template as
 `program.py`, the proposal, the SDK reference and the template under the read-only `reference/`, and
 an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`, `read_reference`,
 `write_file`, `edit_file`, `list_files`), run the loader (`run_loader`), build the program with the
@@ -397,33 +400,34 @@ program that never built in the session is refused once and handed in untested w
 an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
 when a turn's prompt and output plus `turn_max_tokens` exceed `session_token_cap`, at the turn budget,
 or after a third reply without a tool call (a reply cut at the output limit is nudged to take a
-smaller step instead). It writes, under the workpiece's directory:
+smaller step instead). Each session writes, under the workpiece's directory, with `k` counting the
+round's sessions across its author calls:
 
 ```
-rounds/<n>/authored/<k>/
-  author.json        author_kind, status (accepted, handed_off, author_failed), revision, session_dir,
-                     mode, stop_reason, wall; accepted adds program_digest and tested
+rounds/<n>/agentic/<k>/
+  author.json        author_kind, status (accepted, handed_off, author_failed), revision, mode,
+                     stop_reason, wall; accepted adds program_digest and tested
   session.json       turns, tool calls by tool, tokens, cached share, prompts, stop reason, nudges,
                      submissions, in-session builds
   transcript.json    the opening and user turns, then each assistant turn with its tool calls and results
   submit.json        accepted and every submit call with its outcome
-  program.py         accepted only: the submitted file's bytes
-  program.json       accepted only: program_manifest
   record.json        accepted only: GlmAuthor's record fields, with author_kind and turns
-rounds/<n>/agentic/<k>/
   conversation.json  the messages as sent, read by a same-session revision
   workspace/         program.py, proposal.md, notes.md, reference/
   runs/<j>/          one per in-session build: draft/ and run.json (status built, build_failure,
                      crash, infrastructure, storage, or expired with its clock)
 ```
 
-Round 0 starts a fresh session. After a build failure, the session that submitted the program
-continues with the failure as its next user turn when it ended by `submit` within
-`revision_same_session` (its last prompt and its turns used); any other revision starts a fresh session
-from a copy of its workspace. A session that ends without a submission hands its workspace to a fresh
-session in the same round once (`handed_off`), and the next unsubmitted one ends the round
-`author_failed`; a session stopped by the context guard hands off up to four sessions per round. A
-relaunch never resumes a session mid-way: a session directory without an `author.json` starts a handoff.
+The coordinator writes the submitted program to `authored/<k>/`. A call reads the last session of its
+round, or of the round before when its own has none. With no session yet, it starts a fresh one. After
+a build failure, the session that submitted the program continues with the failure as its next user
+turn when it ended by `submit` within `revision_same_session` (its last prompt and its turns used); any
+other revision starts a fresh session from a copy of its workspace. A last session that ended without
+a submission hands its workspace to a fresh session. Within one call, a session that ends without a
+submission hands off once (`handed_off`), and the next unsubmitted one (`author_failed`) makes the call
+raise `AuthorFailure`, which spends a revision; a session stopped by the context guard hands off up to
+four sessions per call. A relaunch never resumes a session mid-way: a session directory without an
+`author.json` starts a handoff.
 
 ## The stage machine
 
@@ -474,9 +478,10 @@ package's authors ignore it.
 
 A build error costs a revision, except `BuildInfrastructureFailure`, `BuildExpired`,
 `ModelUnavailable` and `OSError`, which fail the workpiece at the build stage. An author call
-raising `StructuredOutputError` costs a revision from the same budget. Its structured reply stayed
-invalid through the repair turns, as when the output limit cut it, and the next author call samples
-again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
+raising `StructuredOutputError` or `AuthorFailure` costs a revision from the same budget. Its
+structured reply stayed invalid through the repair turns, as when the output limit cut it, or it ended
+without a program to hand in, as when the agentic author's sessions did not submit, and the next author
+call tries again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
 author stage.
 
 The coordinator calls the author with an `AuthorContext` (the workpiece id, the round and the

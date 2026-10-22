@@ -1,46 +1,36 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The agentic author offline: a scripted model drives whole sessions against the real loader and ``run_build``.
+"""The agentic author offline: a scripted model drives whole author calls against the real loader and ``run_build``.
 
-``ScriptedModel`` is an in-process ``ModelClient`` that answers each request with the next queued
-``Completion`` and keeps every request, so a test sets each turn's tool calls and token usage exactly.
-The session's ``ProgramBuilder`` runs ``run_build`` in process on a step store under ``tmp_path``,
+``ScriptedModel`` (``scripted_author``) answers each request with the next queued ``Completion``, so a test
+sets each turn's tool calls and token usage exactly; one author call runs as many sessions as its replies
+reach. The sessions' ``ProgramBuilder`` runs ``run_build`` in process on a step store under ``tmp_path``,
 recording its step spans to a ``JsonlLedger``; the toy ``PROGRAM`` grades in process and calls no model.
 """
 
 import inspect
-import itertools
 import json
-from collections import deque
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
 from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
-from taskforge.ledger.records import EntryKind
-from taskforge.llm.client import Completion, FinishReason, StructuredResult, ToolCall, Usage
-from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.llm.recording import CallLedger
-from taskforge.llm.structured import complete_structured, response_format
+from taskforge.ledger.records import EntryKind, Ledger
+from taskforge.llm.client import Completion, FinishReason, Usage
+from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author import load_process
-from taskforge.stage30_author.author import Revision, RevisionKind, program_manifest
+from taskforge.stage30_author.author import AuthorContext, AuthoredProgram, AuthorFailure, Revision, RevisionKind
 from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
 from taskforge.stage40_build_with_program import agentic_author as aa
 from taskforge.stage40_build_with_program.agentic_author import (
-    AgenticAuthorConfig,
-    AuthorOutcome,
-    AuthorStatus,
+    AgenticAuthor,
     ProgramBuilder,
-    SameSessionBounds,
     SessionBuild,
     SessionMode,
-    author_round,
     plan_session,
 )
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildInfrastructureFailure, ExpiredClock
@@ -52,120 +42,22 @@ from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import StoreCorruption
 from taskforge.stage40_build_with_program.template import standard
 from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE, declaring
-
-PROGRAM = '''"""Grades 6 * 7 in process."""
-
-from taskcompendium.grading_result import Outcome
-from taskcompendium.models import AnswerType, Source, TaskSpec
-from verifyit.spec import ExactSpec
-
-from taskforge.spec import draft
-from taskforge.stage10_proposal.model import TaskProposal
-from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
-from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext
-from taskforge.stage40_build_with_program.outputs import Grader, Sources
-from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate
-from taskforge.stage40_build_with_program.sdk import ANSWER_FORMAT, graded_candidate
-
-
-@rl_env_build_step
-async def sources(context: RLEnvBuildContext, proposal: TaskProposal) -> Sources:
-    return Sources(notes="", findings=())
-
-
-@rl_env_build_step
-async def grader(context: RLEnvBuildContext, sources: Sources) -> Grader:
-    package = draft.answer_grader(ExactSpec(expected=("42",)))
-    reference = await grade_candidate(context, None, package, AnswerType.TEXT, ANSWER_FORMAT, "(instruction)", "42")
-    if reference.status != Outcome.GRADED:
-        raise BuildFailure(f"the reference was graded {reference.status}")
-    return Grader(
-        package, "Reply with the number.", "42", (), ("42",), 0.0, (graded_candidate("42", (), reference),)
-    )
-
-
-@rl_env_build_sink
-async def assemble(context: RLEnvBuildContext, grader: Grader) -> TaskSpec:
-    return draft.assemble(
-        context.workpiece_id,
-        "What is 6 * 7?",
-        AnswerType.TEXT,
-        ANSWER_FORMAT,
-        grader.package,
-        Source(dataset="test", revision="r", row="0", importer_revision="test"),
-        environment=draft.requirements(image=None),
-    )
-
-
-PROGRAM = rl_env_build_program(sources, grader, sink=assemble)
-'''
-CONFIG = AgenticAuthorConfig(
-    turns=48,
-    turn_max_tokens=49_152,
-    session_token_cap=262_144,
-    revision_same_session=SameSessionBounds(150_000, 36),
-    max_continuations=0,
+from tests.stage40_build_with_program.scripted_author import (
+    CONFIG,
+    PROGRAM,
+    ScriptedModel,
+    answer,
+    in_process_loader,
+    turn,
 )
-CALL_IDS = itertools.count()
-STRUCTURED_REPAIRS = 1
+
 FAILURE = Revision(RevisionKind.BUILD_FAILURE, "fixtures: KeyError 'rows'")
 SCHEDULING = BuildInfrastructureFailure(InfrastructureCause.SCHEDULING_TIMEOUT, "the machine factory gave up waiting")
 NO_FACTORY = BuildInfrastructureFailure(InfrastructureCause.NO_FACTORY, "this host has no docker machine factory")
 ALWAYS = 1_000
 """A failure count no session reaches: the host fails every build."""
-
-
-@dataclass(frozen=True)
-class ScriptedRequest:
-    messages: list[Message]
-    policy: LLMPolicy
-    fields: dict[str, object]
-
-
-class ScriptedModel:
-    """Answers each request with the next queued completion; structured calls go through ``complete``."""
-
-    model = "scripted"
-
-    def __init__(self, *replies: Completion) -> None:
-        self.replies: deque[Completion] = deque(replies)
-        self.requests: list[ScriptedRequest] = []
-
-    async def complete(
-        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
-    ) -> Completion:
-        self.requests.append(ScriptedRequest(list(messages), policy, dict(request_fields or {})))
-        return self.replies.popleft()
-
-    async def complete_schema(
-        self, messages: Sequence[Message], output_type: type[BaseModel], policy: LLMPolicy
-    ) -> Completion:
-        return await self.complete(messages, policy, {"response_format": response_format(output_type)})
-
-    async def complete_structured[T: BaseModel](
-        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
-    ) -> StructuredResult[T]:
-        return await complete_structured(self, messages, output_type, policy, STRUCTURED_REPAIRS)
-
-
-def turn(*calls: tuple[str, Mapping[str, object]], prompt: int = 30_000, out: int = 2_000) -> Completion:
-    """An assistant turn making ``calls`` (tool name, arguments)."""
-    return Completion(
-        content="",
-        reasoning="thinking",
-        tool_calls=tuple(ToolCall(f"call-{next(CALL_IDS)}", name, json.dumps(args)) for name, args in calls),
-        finish_reason=FinishReason.TOOL_CALLS,
-        usage=Usage(prompt_tokens=prompt, completion_tokens=out, reasoning_tokens=out // 2, cached_tokens=prompt - 1000),
-        wall_time=2.0,
-        ttft=0.1,
-        decode_time=1.9,
-        continuations=0,
-        attempts=(),
-    )
-
-
-def answer(text: str) -> Completion:
-    return Completion(text, "", (), FinishReason.STOP, Usage(30_000, 100, 50, 29_000), 1.0, 0.1, 0.9, 0, ())
+GIVE_UP = (answer("no"), answer("no"), answer("no"))
+"""A session's replies without a tool call: it ends unsubmitted after its nudges."""
 
 
 def cut(reasoning_tokens: int = 49_152) -> Completion:
@@ -176,11 +68,6 @@ def cut(reasoning_tokens: int = 49_152) -> Completion:
 
 def session_ledger(root: Path) -> JsonlLedger:
     return JsonlLedger(root / "ledger" / "author_session")
-
-
-async def in_process_loader(source: str) -> ProgramManifest:
-    """Loads in this process: the tests check the session, and the child loader has its own tests."""
-    return ProgramManifest.model_validate(program_manifest(load_program(source)))
 
 
 def session_build(
@@ -210,26 +97,38 @@ def session_build(
     return SessionBuild(builder, store, model, SAMPLING, services, ledger.path_for(WORKPIECE), in_process_loader)
 
 
+async def author_call(
+    build: SessionBuild,
+    model: ScriptedModel,
+    ledger: Ledger,
+    workpiece: Path,
+    proposal: TaskProposal,
+    round_no: int = 0,
+    revision: Revision | None = None,
+) -> AuthoredProgram:
+    """One ``AgenticAuthor`` call for ``WORKPIECE`` in ``workpiece``, whose sessions build with ``build``."""
+
+    def builds(context: AuthorContext, proposal: TaskProposal) -> SessionBuild:
+        return build
+
+    author = AgenticAuthor(CONFIG, model, LLMPolicy(), ledger, builds)
+    return await author(AuthorContext(WORKPIECE, round_no, workpiece), proposal, revision, {})
+
+
 @pytest.fixture
 def author(services, proposal, ledger):
-    """``author(workpiece_dir, model, round_no=0, revision=None)``: one ``author_round``.
+    """``author(workpiece_dir, model, round_no=0, revision=None)``: one author call on the in-process builds.
 
-    The round runs under ``workpiece_dir``'s parent.
+    The call's sessions build under ``workpiece_dir``'s parent.
     """
 
     async def run(
         workpiece_dir: Path, model: ScriptedModel, round_no: int = 0, revision: Revision | None = None
-    ) -> AuthorOutcome:
+    ) -> AuthoredProgram:
         build = session_build(workpiece_dir.parent, model, services, proposal, round_no)
-        return await author_round(
-            CONFIG, model, LLMPolicy(), ledger, build, workpiece_dir, WORKPIECE, round_no, proposal, revision
-        )
+        return await author_call(build, model, ledger, workpiece_dir, proposal, round_no, revision)
 
     return run
-
-
-def authored(workpiece: Path, round_no: int, k: int) -> Path:
-    return workpiece / "rounds" / str(round_no) / "authored" / str(k)
 
 
 def agentic(workpiece: Path, round_no: int, k: int) -> Path:
@@ -248,6 +147,12 @@ def tool_outputs(model: ScriptedModel) -> list[str]:
 def tool_texts(model: ScriptedModel) -> list[str]:
     """Every tool result any request of the session carried."""
     return [str(m["content"]) for request in model.requests for m in request.messages if m["role"] == "tool"]
+
+
+def session_outputs(workpiece: Path, k: int) -> list[str]:
+    """The tool results of round 0's session ``k``, in order, as its transcript keeps them."""
+    transcript = json.loads((agentic(workpiece, 0, k) / "transcript.json").read_text())
+    return [result["output"] for entry in transcript for result in entry.get("tool_results", [])]
 
 
 @dataclass
@@ -279,9 +184,9 @@ async def test_a_candidate_file_at_an_absolute_path_is_refused_and_the_session_g
         turn(("run_grade_candidate", {"reply": "41", "files": [{**absolute, "path": "workspace/report.md"}]})),
         turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
     )
-    outcome = await author(tmp_path / "workpiece", model)
+    authored = await author(tmp_path / "workpiece", model)
 
-    assert outcome.status is AuthorStatus.ACCEPTED
+    assert authored.source == PROGRAM
     refused, graded = tool_outputs(model)[2:4]
     assert refused.startswith("error: grading refused: '/workspace/report.md'") and "workspace/report.md" in refused
     assert graded.startswith("status graded, reward 0.0")
@@ -296,9 +201,10 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
         turn(("run_grade_candidate", {"reply": "41"})),
         turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
     )
-    outcome = await author(workpiece, model)
+    authored = await author(workpiece, model)
 
-    assert outcome.status is AuthorStatus.ACCEPTED and outcome.source == PROGRAM
+    program = load_program(PROGRAM)
+    assert authored.source == PROGRAM and authored.program is program
     wrote, loader, refused, built, graded = tool_outputs(model)
     assert wrote == f"wrote {len(PROGRAM.encode())} bytes to program.py"
     assert loader.startswith("loads: program ")
@@ -309,10 +215,8 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
     assert graded.startswith("status graded, reward 0.0")
     assert not model.replies, "the session stopped at the accepted submit"
 
-    target = authored(workpiece, 0, 0)
-    assert (target / "program.py").read_bytes() == (agentic(workpiece, 0, 0) / "workspace" / "program.py").read_bytes()
-    program = load_program(PROGRAM)
-    assert read(target / "program.json") == json.loads(json.dumps(program_manifest(program)))
+    target = agentic(workpiece, 0, 0)
+    assert (target / "workspace" / "program.py").read_text() == authored.source
     record = read(target / "author.json")
     assert record["author_kind"] == "agentic" and record["status"] == "accepted" and record["tested"] is True
     assert record["program_digest"] == program.digest and record["stop_reason"] == "submitted"
@@ -355,14 +259,14 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
 
     # The in-session build ran on the shared store under the workpiece's id, recording to the session ledger; the
     # build stage's build of the submitted program loads every step from the store.
-    run_dir = agentic(workpiece, 0, 0) / "runs" / "0"
+    run_dir = target / "runs" / "0"
     assert {p.name for p in run_dir.iterdir()} == {"draft", "run.json"}
     assert read(run_dir / "run.json")["status"] == "built"
     misses = [("sources", "miss"), ("grader", "miss"), ("assemble", "miss")]
     assert step_statuses(session_ledger(tmp_path).path_for(WORKPIECE)) == misses
     stage_ledger = JsonlLedger(tmp_path / "ledger")
     await run_build(
-        load_program(outcome.source or ""),
+        authored.program,
         proposal,
         WORKPIECE,
         workpiece / "rounds" / "0",
@@ -396,14 +300,13 @@ async def test_a_grader_crediting_the_empty_answer_fails_the_build_in_the_grader
         turn(("submit", {"path": "program.py", "notes": "ships anyway"})),
         turn(("submit", {"path": "program.py", "notes": "ships anyway"})),
     )
-    outcome = await author(workpiece, model)
+    await author(workpiece, model)
 
     _, built, refused = tool_outputs(model)
     assert built.startswith("build failed (build_failure in step grader)")
     assert "the empty answer is graded with reward 1.0, above the grader's declared rejection_ceiling 0.0" in built
     assert "never built in this session" in refused
-    assert outcome.status is AuthorStatus.ACCEPTED
-    assert read(authored(workpiece, 0, 0) / "submit.json")["tested"] is False
+    assert read(agentic(workpiece, 0, 0) / "submit.json")["tested"] is False
     run = read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")
     assert (run["status"], run["step"]) == ("build_failure", "grader")
 
@@ -411,8 +314,8 @@ async def test_a_grader_crediting_the_empty_answer_fails_the_build_in_the_grader
 async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, proposal, ledger):
     one_shot_workpiece, agentic_workpiece = tmp_path / "one_shot" / "workpiece", tmp_path / "agentic" / "workpiece"
     one_shot_model = ScriptedModel(answer(json.dumps({"notes": "n", "source": PROGRAM})))
-    await GlmAuthor(one_shot_model, SAMPLING, one_shot_workpiece, CallLedger(ledger, WORKPIECE, 0, "author"))(
-        proposal, None, {}
+    await GlmAuthor(one_shot_model, SAMPLING, ledger)(
+        AuthorContext(WORKPIECE, 0, one_shot_workpiece), proposal, None, {}
     )
     await author(
         agentic_workpiece,
@@ -423,8 +326,8 @@ async def test_agentic_record_has_the_one_shot_record_shape(tmp_path, author, pr
         ),
     )
 
-    target = authored(agentic_workpiece, 0, 0)
-    assert (one_shot_workpiece / "program.py").read_bytes() == (target / "program.py").read_bytes()
+    target = agentic(agentic_workpiece, 0, 0)
+    assert (one_shot_workpiece / "program.py").read_bytes() == (target / "workspace" / "program.py").read_bytes()
     one_shot, agentic_record = read(one_shot_workpiece / AUTHOR_DIR / "00" / "record.json"), read(target / "record.json")
     shared = {"program_digest", "sdk_version", "model", "revision", "notes"}
     assert {k: one_shot[k] for k in shared} == {k: agentic_record[k] for k in shared}
@@ -451,13 +354,14 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
         answer("giving up"),
         answer("still nothing"),
         answer("done"),
+        *GIVE_UP,
     )
     build = replace(session_build(workpiece.parent, model, services, proposal, 0), loader=bounded)
 
-    outcome = await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
+    with pytest.raises(AuthorFailure):
+        await author_call(build, model, ledger, workpiece, proposal)
 
-    assert outcome.status is not AuthorStatus.ACCEPTED
-    _, loader, submitted = tool_outputs(model)[:3]
+    _, loader, submitted = session_outputs(workpiece, 0)[:3]
     cut = "the program's module body ran for more than 2 seconds without returning"
     assert loader.startswith(f"refused by the loader: {cut}")
     assert submitted.startswith(f"refused by the loader, nothing handed in: {cut}")
@@ -473,7 +377,7 @@ async def test_a_loader_child_the_host_killed_ends_the_round_as_infrastructure(
     build = replace(session_build(tmp_path, model, services, proposal, 0), loader=aa.load_in_child)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
+        await author_call(build, model, ledger, workpiece, proposal)
 
     assert raised.value.cause == InfrastructureCause.BUILD_PROCESS
     assert "the program loader process exited with status 1" in raised.value.message
@@ -493,11 +397,9 @@ async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(
     build = session_build(tmp_path, model, services, proposal, 0)
     flaky = HostFailingBuilder(build.builder, SCHEDULING, failures=1)
 
-    outcome = await author_round(
-        CONFIG, model, LLMPolicy(), ledger, replace(build, builder=flaky), workpiece, WORKPIECE, 0, proposal, None
-    )
+    authored = await author_call(replace(build, builder=flaky), model, ledger, workpiece, proposal)
 
-    assert outcome.status is AuthorStatus.ACCEPTED and flaky.calls == 2
+    assert authored.source == PROGRAM and flaky.calls == 2
     assert tool_outputs(model)[1].startswith("built: program ")
     assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "built"
 
@@ -511,7 +413,7 @@ async def test_a_container_proposal_on_a_host_without_an_image_builder_ends_befo
     build = session_build(tmp_path, model, services, container, 0)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, container, None)
+        await author_call(build, model, ledger, workpiece, container)
 
     assert raised.value.cause == InfrastructureCause.NO_IMAGE_BUILDER
     assert not model.requests, "the author never ran"
@@ -535,15 +437,13 @@ async def test_a_build_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
     failing = HostFailingBuilder(build.builder, failure, failures=ALWAYS)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_round(
-            CONFIG, model, LLMPolicy(), ledger, replace(build, builder=failing), workpiece, WORKPIECE, 0, proposal, None
-        )
+        await author_call(replace(build, builder=failing), model, ledger, workpiece, proposal)
 
     assert raised.value.cause == failure.cause and failing.calls == builds
     assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "infrastructure"
     assert len(model.replies) == 1, "the session ended at the build"
     assert not any("infrastructure" in text for text in tool_texts(model))
-    assert not (authored(workpiece, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+    assert not (agentic(workpiece, 0, 0) / "author.json").exists(), "the call wrote no record and spent no revision"
 
 
 async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_author(
@@ -573,9 +473,7 @@ async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
     build = session_build(tmp_path, model, services, proposal, 0)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
-        await author_round(
-            CONFIG, model, LLMPolicy(), ledger, build, tmp_path / "workpiece", WORKPIECE, 0, proposal, None
-        )
+        await author_call(build, model, ledger, tmp_path / "workpiece", proposal)
 
     assert raised.value.cause == InfrastructureCause.HOST_UNREACHABLE
     assert graded == ["41"] * (1 + aa.HOST_RETRIES)
@@ -601,7 +499,7 @@ async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_un
     build = replace(session_build(tmp_path, model, services, proposal, 0), builder=expiring)
 
     with pytest.raises(BuildExpired) as raised:
-        await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
+        await author_call(build, model, ledger, workpiece, proposal)
 
     assert (raised.value.clock, raised.value.step) == (ExpiredClock.STEP, "grader") and len(builds) == 1
     run = read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")
@@ -609,7 +507,7 @@ async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_un
     assert run["text"] == "ran for more than 1800 seconds without returning"
     assert len(model.replies) == 1, "the session ended at the build"
     assert not any("ran for more than" in text for text in tool_texts(model))
-    assert not (authored(workpiece, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+    assert not (agentic(workpiece, 0, 0) / "author.json").exists(), "the call wrote no record and spent no revision"
 
 
 async def test_a_storage_fault_in_a_build_ends_the_round_unseen_by_the_author(tmp_path, services, proposal, ledger):
@@ -625,12 +523,12 @@ async def test_a_storage_fault_in_a_build_ends_the_round_unseen_by_the_author(tm
     build = replace(session_build(tmp_path, model, services, proposal, 0), builder=corrupt_store)
 
     with pytest.raises(StoreCorruption):
-        await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
+        await author_call(build, model, ledger, workpiece, proposal)
 
     assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "storage"
     assert len(model.replies) == 1, "the session ended at the build"
     assert not any("does not match its digest" in text for text in tool_texts(model))
-    assert not (authored(workpiece, 0, 0) / "author.json").exists(), "the round wrote no record and spent no revision"
+    assert not (agentic(workpiece, 0, 0) / "author.json").exists(), "the call wrote no record and spent no revision"
 
 
 async def test_an_os_error_the_program_raises_reaches_the_author(tmp_path, author):
@@ -660,11 +558,14 @@ async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_refere
         answer("done"),
         answer("done"),
         answer("done"),
+        *GIVE_UP,
     )
-    outcome = await author(tmp_path / "workpiece", model)
+    workpiece = tmp_path / "workpiece"
+    with pytest.raises(AuthorFailure):
+        await author(workpiece, model)
 
-    assert outcome.status is AuthorStatus.HANDED_OFF
-    escape, reference, edit, window, missing = tool_outputs(model)[:5]
+    assert read(agentic(workpiece, 0, 0) / "author.json")["status"] == "handed_off"
+    escape, reference, edit, window, missing = session_outputs(workpiece, 0)[:5]
     assert escape.startswith("error: '../workpiece.json' is not a path inside the workspace")
     assert reference == "error: reference/ is read-only"
     assert edit.startswith("error: old text has ") and edit.endswith(" matches in program.py")
@@ -672,41 +573,42 @@ async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_refere
     assert missing.startswith("error: no file 'missing.py'")
 
 
-async def test_unsubmitted_session_hands_off_once_then_the_round_spends_a_revision(tmp_path, author):
+async def test_unsubmitted_session_hands_off_once_then_the_call_fails_and_spends_a_revision(tmp_path, author):
     workpiece = tmp_path / "workpiece"
-    first = ScriptedModel(
-        turn(("edit_file", {"path": "notes.md", "old_string": "", "new_string": "x"})),
+    model = ScriptedModel(
+        turn(("write_file", {"path": "notes.md", "content": "fixtures step is next"})),
         answer("I think it is done."),
         answer("Done."),
         answer("Still done."),
+        *GIVE_UP,
     )
-    assert (await author(workpiece, first)).status is AuthorStatus.HANDED_OFF
-    assert [m["content"] for m in first.requests[-1].messages if m["role"] == "user"][-2:] == [aa.NUDGE, aa.NUDGE]
-    session = read(authored(workpiece, 0, 0) / "session.json")
-    assert session["stop_reason"] == "unsubmitted" and session["nudges"] == 2
-    assert read(authored(workpiece, 0, 0) / "author.json")["status"] == "handed_off"
+    with pytest.raises(AuthorFailure, match="2 agentic sessions of round 0 ended without a submission"):
+        await author(workpiece, model)
 
-    (agentic(workpiece, 0, 0) / "workspace" / "notes.md").write_text("fixtures step is next")
-    second = ScriptedModel(answer("no"), answer("no"), answer("no"))
-    assert (await author(workpiece, second)).status is AuthorStatus.AUTHOR_FAILED
-    opening = second.requests[0].messages
+    first_session_last = model.requests[3].messages
+    assert [m["content"] for m in first_session_last if m["role"] == "user"][-2:] == [aa.NUDGE, aa.NUDGE]
+    session = read(agentic(workpiece, 0, 0) / "session.json")
+    assert session["stop_reason"] == "unsubmitted" and session["nudges"] == 2
+    assert read(agentic(workpiece, 0, 0) / "author.json")["status"] == "handed_off"
+    opening = model.requests[4].messages
     assert opening[-1]["role"] == "user" and "ended without a submission (unsubmitted)" in str(opening[-1]["content"])
     assert (agentic(workpiece, 0, 1) / "workspace" / "notes.md").read_text() == "fixtures step is next"
-    assert read(authored(workpiece, 0, 1) / "session.json")["mode"] == "handoff"
-    assert read(authored(workpiece, 0, 1) / "author.json")["status"] == "author_failed"
+    assert read(agentic(workpiece, 0, 1) / "session.json")["mode"] == "handoff"
+    assert read(agentic(workpiece, 0, 1) / "author.json")["status"] == "author_failed"
 
 
-async def test_context_guard_hands_off_to_fresh_sessions_until_the_round_cap(tmp_path, author):
-    """A session over the context cap after any turn hands off, a handoff session included; the round stops at
-    MAX_SESSIONS_PER_ROUND."""
+async def test_context_guard_hands_off_to_fresh_sessions_until_the_call_cap(tmp_path, author):
+    """A session over the context cap after any turn hands off, a handoff session included; the call stops at
+    MAX_SESSIONS_PER_CALL."""
     workpiece = tmp_path / "workpiece"
-    statuses = []
-    for _ in range(aa.MAX_SESSIONS_PER_ROUND):
-        model = ScriptedModel(turn(("list_files", {}), prompt=220_000, out=1_000))
-        statuses.append((await author(workpiece, model)).status)
-    stops = [read(authored(workpiece, 0, k) / "session.json")["stop_reason"] for k in range(aa.MAX_SESSIONS_PER_ROUND)]
-    assert stops == ["context"] * aa.MAX_SESSIONS_PER_ROUND
-    assert statuses == [AuthorStatus.HANDED_OFF] * (aa.MAX_SESSIONS_PER_ROUND - 1) + [AuthorStatus.AUTHOR_FAILED]
+    sessions = aa.MAX_SESSIONS_PER_CALL
+    model = ScriptedModel(*[turn(("list_files", {}), prompt=220_000, out=1_000)] * sessions)
+    with pytest.raises(AuthorFailure):
+        await author(workpiece, model)
+
+    records = [read(agentic(workpiece, 0, k) / "author.json") for k in range(sessions)]
+    assert [record["stop_reason"] for record in records] == ["context"] * sessions
+    assert [record["status"] for record in records] == ["handed_off"] * (sessions - 1) + ["author_failed"]
     assert (agentic(workpiece, 0, 1) / "workspace" / "program.py").exists()
 
 
@@ -719,30 +621,38 @@ async def test_a_cut_turn_is_nudged_to_a_smaller_step_and_never_continued(tmp_pa
         turn(("submit", {"path": "program.py", "notes": ""})),
         turn(("submit", {"path": "program.py", "notes": ""})),
     )
-    outcome = await author(workpiece, model)
+    await author(workpiece, model)
 
-    assert outcome.status is AuthorStatus.ACCEPTED
     assert {r.policy.max_continuations for r in model.requests} == {0}
     assert {r.policy.max_tokens for r in model.requests} == {49_152}
     second = model.requests[1].messages
     assert second[-1]["role"] == "user" and str(second[-1]["content"]).startswith(
         "Your reply was cut off at the 49152-token output limit"
     )
-    session = read(authored(workpiece, 0, 0) / "session.json")
+    session = read(agentic(workpiece, 0, 0) / "session.json")
     assert session["length_nudges"] == 2 and session["nudges"] == 0 and session["length_turns"] == 2
     assert session["turns"] == 5 and session["continuations"] == 0
 
 
-async def test_cut_turns_past_the_context_cap_hand_off(tmp_path, author):
+async def test_cut_turns_past_the_context_cap_hand_off_to_a_session_that_submits(tmp_path, author):
+    workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
-        cut(), Completion("", "", (), FinishReason.LENGTH, Usage(215_000, 1_000, 1_000, 0), 1.0, 0.1, 0.9, 0, ())
+        cut(),
+        Completion("", "", (), FinishReason.LENGTH, Usage(215_000, 1_000, 1_000, 0), 1.0, 0.1, 0.9, 0, ()),
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("submit", {"path": "program.py", "notes": ""})),
+        turn(("submit", {"path": "program.py", "notes": ""})),
     )
-    outcome = await author(tmp_path / "workpiece", model)
-    assert outcome.status is AuthorStatus.HANDED_OFF and not model.replies
+    authored = await author(workpiece, model)
+
+    first = read(agentic(workpiece, 0, 0) / "author.json")
+    assert (first["status"], first["stop_reason"]) == ("handed_off", "context")
+    assert read(agentic(workpiece, 0, 1) / "session.json")["mode"] == "handoff"
+    assert authored.source == PROGRAM and not model.replies
 
 
 def prior_session(workpiece: Path, stop: str, last_prompt: int, turns_total: int) -> Path:
-    """Round 0's accepted agentic session as ``author_round`` leaves it, for a build failure on its program."""
+    """Round 0's accepted agentic session as an author call leaves it, for a build failure on its program."""
     session_dir = agentic(workpiece, 0, 0)
     (session_dir / "workspace").mkdir(parents=True)
     (session_dir / "workspace" / "program.py").write_text("# edited\n")
@@ -752,14 +662,12 @@ def prior_session(workpiece: Path, stop: str, last_prompt: int, turns_total: int
         {"role": "assistant", "content": "a"},
     ]
     (session_dir / "conversation.json").write_text(json.dumps(conversation))
-    target = authored(workpiece, 0, 0)
-    target.mkdir(parents=True)
     session = {"stop_reason": stop, "last_prompt_tokens": last_prompt, "turns_total": turns_total}
-    (target / "session.json").write_text(json.dumps(session))
-    (target / "author.json").write_text(
+    (session_dir / "session.json").write_text(json.dumps(session))
+    (session_dir / "author.json").write_text(
         json.dumps({"author_kind": "agentic", "status": "accepted", "stop_reason": stop})
     )
-    (target / "submit.json").write_text(json.dumps({"notes": "split the fixtures"}))
+    (session_dir / "submit.json").write_text(json.dumps({"notes": "split the fixtures"}))
     return session_dir
 
 
@@ -773,12 +681,14 @@ def prior_session(workpiece: Path, stop: str, last_prompt: int, turns_total: int
     ],
     ids=["within-bounds", "prompt-too-long", "too-many-turns", "not-ended-by-submit"],
 )
+@pytest.mark.parametrize("round_no", [0, 1], ids=["same-round", "next-round"])
 def test_build_failure_reenters_the_session_only_within_its_bounds(
-    tmp_path, proposal, stop, last_prompt, turns_total, mode
+    tmp_path, proposal, stop, last_prompt, turns_total, mode, round_no
 ):
+    """The coordinator revises a build failure in the same round; a revision in the next round reads round 0."""
     workpiece = tmp_path / "workpiece"
     previous = prior_session(workpiece, stop, last_prompt, turns_total)
-    plan = plan_session(workpiece, 1, proposal, FAILURE, CONFIG)
+    plan = plan_session(workpiece, round_no, proposal, FAILURE, CONFIG)
     assert plan.mode is mode and plan.seed == previous / "workspace"
     revision_turn = str(plan.messages[-1]["content"])
     assert plan.messages[-1]["role"] == "user" and "fixtures: KeyError 'rows'" in revision_turn
@@ -798,12 +708,11 @@ async def test_same_session_revision_continues_the_conversation(tmp_path, author
         turn(("submit", {"path": "program.py", "notes": ""})),
         turn(("submit", {"path": "program.py", "notes": ""})),
     )
-    outcome = await author(workpiece, model, round_no=1, revision=FAILURE)
+    await author(workpiece, model, round_no=1, revision=FAILURE)
 
-    assert outcome.status is AuthorStatus.ACCEPTED
     sent = model.requests[0].messages
     assert [m["content"] for m in sent[:3]] == ["s", "u", "a"] and "KeyError 'rows'" in str(sent[3]["content"])
-    session = read(authored(workpiece, 1, 0) / "session.json")
+    session = read(agentic(workpiece, 1, 0) / "session.json")
     assert session["mode"] == "same_session" and session["turns_total"] == 33
     assert (agentic(workpiece, 1, 0) / "workspace" / "program.py").read_text() == PROGRAM
 
@@ -837,13 +746,15 @@ async def test_an_overlong_write_is_refused_briefly_and_counts_as_executed(tmp_p
         answer("done"),
         answer("done"),
         answer("done"),
+        *GIVE_UP,
     )
-    await author(workpiece, model)
+    with pytest.raises(AuthorFailure):
+        await author(workpiece, model)
 
-    write, notes = tool_outputs(model)
+    write, notes = session_outputs(workpiece, 0)
     assert write == f"error: content holds {aa.WRITE_CHARS + 2961} characters, more than {aa.WRITE_CHARS}; use edit_file"
     assert notes.startswith("error: notes hold 4001 characters, more than 4000; nothing handed in (the loader accepts")
-    target = authored(workpiece, 0, 0)
+    target = agentic(workpiece, 0, 0)
     session = read(target / "session.json")
     assert session["rejected_tool_calls"] == 0
     assert [s["outcome"] for s in session["submissions"]] == ["refused_notes"]

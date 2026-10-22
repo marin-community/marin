@@ -13,7 +13,9 @@ source it loaded the program from. The coordinator writes that source to ``PROGR
 ``PROGRAM_MANIFEST_FILE``, in a directory of the author call, and the build stage loads the program
 back from the file through ``loader.load_program_source``. A revision carries no program source:
 an author that revises its own program reads the ``PROGRAM_FILE`` it wrote. ``static_author``
-turns a program written by hand into an author returning no source.
+turns a program written by hand into an author returning no source. An author call that ends
+without a program it can hand in raises ``AuthorFailure``, and the coordinator asks again with
+the failure as an ``AUTHOR_FAILURE`` revision.
 """
 
 from collections.abc import Mapping
@@ -59,6 +61,15 @@ class AuthoredProgram:
 
     program: RLEnvBuildProgram
     source: str | None
+
+
+class AuthorFailure(Exception):
+    """The author call ended without a program to hand in; the next call revises with this failure.
+
+    The coordinator records ``AUTHOR_FAILED`` and spends a build revision on it, as on a
+    ``StructuredOutputError``, so an author raises it for a failure another call may repair, as
+    when its sessions ran out without a submission.
+    """
 
 
 @dataclass(frozen=True)
