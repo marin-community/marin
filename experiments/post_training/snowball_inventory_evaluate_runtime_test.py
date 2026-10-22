@@ -63,7 +63,7 @@ def test_reference_panel_preparation_changes_only_outer_deadlines_and_refuses_ov
         spec = TaskRolloutSpec(
             task=task,
             harness=(
-                "prefill"
+                "assistant_prefix"
                 if index
                 else 'shellbox:{"command_timeout":null,"shell_tool":{"name":"shell","command_parameter":"command"}}'
             ),
@@ -426,7 +426,7 @@ def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_sco
 ):
     from marinskyrl.saved_answers import admit_answer, save_answer  # noqa: PLC0415
     from omegaconf import OmegaConf  # noqa: PLC0415 - optional frozen runtime dependency
-    from rolloutengine.harness.prefill import prefill_prompt  # noqa: PLC0415
+    from rolloutengine.harness.assistant_prefix import assistant_prefix_prompt  # noqa: PLC0415
     from rolloutengine.models import ModelRequest, ModelTurn  # noqa: PLC0415
     from taskcompendium.grader import verifyit_package  # noqa: PLC0415
     from verifyit.closure_scoring import ClosureFormat  # noqa: PLC0415
@@ -448,7 +448,7 @@ def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_sco
         specs.append(
             TaskRolloutSpec(
                 task=task,
-                harness="prefill",
+                harness="assistant_prefix",
                 task_machine=None,
                 verifier_machine=None,
                 limits=RolloutLimits(
@@ -488,7 +488,9 @@ def test_saved_answer_scoring_preserves_original_failures_and_never_regrades_sco
     saved = str(export / "saved_answers")
     messages = ({"role": "assistant", "content": '{"value":'},)
     turn = ModelTurn({"role": "assistant", "content": "12}"}, (1,), (2,), None, "stop", text="12}")
-    save_answer(saved, specs[1], "1", 0, ModelRequest(messages, dict(prefill_prompt(specs[1].task).options)), turn)
+    save_answer(
+        saved, specs[1], "1", 0, ModelRequest(messages, dict(assistant_prefix_prompt(specs[1].task).options)), turn
+    )
     admit_answer(saved, "1", 0, (*messages, turn.message), "grade", "RuntimeError", "unavailable")
     config = OmegaConf.create(
         {

@@ -6,13 +6,12 @@ from typing import Any
 
 from pydantic import BaseModel
 from rolloutengine.harness.core import Harness
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from rolloutengine.harness.tools import ToolHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec, TraceMode
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.shell import ShellToolConfig
 
-PREFILL_HARNESS = "prefill"
 SHELLBOX_HARNESS = "shellbox"
 _SHELLBOX_PREFIX = SHELLBOX_HARNESS + ":"
 
@@ -69,9 +68,9 @@ def is_shell_harness(name: str) -> bool:
 
 
 def restore_harness(name: str) -> Harness:
-    """Restore a text prefill or the shell configuration encoded in its name."""
-    if name == PREFILL_HARNESS:
-        return PrefillHarness()
+    """Restore an assistant prefix or the shell configuration encoded in its name."""
+    if name == ASSISTANT_PREFIX_HARNESS:
+        return AssistantPrefixHarness()
     if is_shell_harness(name):
         return shell_harness(name)
     raise ValueError(f"Unknown rollout harness: {name}")

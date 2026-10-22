@@ -16,8 +16,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
-from skyrl_gym.rollout_specs import PREFILL_HARNESS, restore_harness, rollout_spec
+from skyrl_gym.rollout_specs import restore_harness, rollout_spec
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ResourceGroups, ScriptGrader, Source, TaskSpec, VerifyitGrader, grades_with_judge
@@ -118,7 +119,7 @@ def selected_task(row: Mapping[str, Any]) -> SelectedTask:
         raise ValueError("Native private verifier resources changed")
     # This deliberately changes conditioning and grading: historical token IDs and
     # terminal normalization remain source audit, not requirements of current tasks.
-    return SelectedTask(task, PREFILL_HARNESS, ("context", "grader"))
+    return SelectedTask(task, ASSISTANT_PREFIX_HARNESS, ("context", "grader"))
 
 
 def rollout_record(row: dict, deployment: Deployment) -> tuple[dict, dict]:
@@ -295,7 +296,7 @@ def _write_runtime_bundle(
                     raise ValueError("Duplicate selected logical task ID")
                 seen.add(record["task_id"])
                 serialized = TaskRolloutSpec.model_validate_json(record["task_rollout_spec"])
-                counts[PREFILL_HARNESS if serialized.harness == PREFILL_HARNESS else TOOLS] += 1
+                counts[ASSISTANT_PREFIX_HARNESS if serialized.harness == ASSISTANT_PREFIX_HARNESS else TOOLS] += 1
                 audit.write(
                     json.dumps(
                         {"source_row_index": len(seen) - 1, "task_id": record["task_id"], **mapping}, sort_keys=True

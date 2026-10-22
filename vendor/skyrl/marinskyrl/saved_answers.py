@@ -22,7 +22,8 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from verifyit.spec import StructureClosureSpec
-from skyrl_gym.rollout_specs import PREFILL_HARNESS, is_shell_harness, restore_harness
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
+from skyrl_gym.rollout_specs import is_shell_harness, restore_harness
 
 
 def spec_digest(spec: TaskRolloutSpec) -> str:
@@ -35,7 +36,7 @@ def require_regradable(spec: TaskRolloutSpec) -> None:
     if (
         spec.limits.max_turns != 1
         or spec.task_machine is not None
-        or not (spec.harness == PREFILL_HARNESS or is_shell_harness(spec.harness))
+        or not (spec.harness == ASSISTANT_PREFIX_HARNESS or is_shell_harness(spec.harness))
         or spec.task.interaction_tools
         or spec.task.tool_bindings
         or spec.task.environment_requirements.tool_providers
@@ -198,10 +199,10 @@ async def regrade_once(
         raise ValueError("Saved answer was not admitted by the original rollout harness")
     if admission.failure_operation != "grade" and admission.grade_status != Outcome.INFRA_ERROR:
         raise ValueError("Only an original grader infrastructure failure can consume the saved-answer attempt")
-    if original_spec.harness == PREFILL_HARNESS and any(
+    if original_spec.harness == ASSISTANT_PREFIX_HARNESS and any(
         record.messages[-1].get(channel) for channel in ("reasoning_content", "reasoning", "tool_calls")
     ):
-        raise ValueError("A parsed prefill channel cannot become a plain-text saved answer")
+        raise ValueError("A parsed assistant-prefix channel cannot become a plain-text saved answer")
     root = (
         StoragePath(receipt_root) / hashlib.sha256(json_bytes([record.instance_id, record.repetition_id])).hexdigest()
     )

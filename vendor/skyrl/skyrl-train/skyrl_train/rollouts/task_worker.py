@@ -33,7 +33,8 @@ from rolloutengine.models import (
     TaskRolloutSpec,
 )
 from rolloutengine.engine import RolloutEngine
-from skyrl_gym.rollout_specs import PREFILL_HARNESS, is_shell_harness, restore_harness
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
+from skyrl_gym.rollout_specs import is_shell_harness, restore_harness
 from marinskyrl.task_machine_factories import task_machine_factories
 from marinskyrl.saved_answers import admit_answer, require_regradable, save_answer
 from skyrl_train.config.utils import generation_context_limit
@@ -402,7 +403,7 @@ class TaskRolloutWorker:
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
-        if lowered.harness == PREFILL_HARNESS or is_shell_harness(lowered.harness):
+        if lowered.harness == ASSISTANT_PREFIX_HARNESS or is_shell_harness(lowered.harness):
             harnesses[lowered.harness] = restore_harness(lowered.harness)
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:

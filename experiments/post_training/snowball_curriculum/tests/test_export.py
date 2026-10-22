@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
 from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import ReplayModel, arithmetic_task, machine_runtime, rollout_limits
 from taskcompendium.grader import verifyit_package
@@ -113,7 +113,7 @@ async def test_mixed_export_preserves_payload_lineage_and_runs_explicit_harnesse
     assert ordinary.task.model_dump_json() == rows[0]["task_json"]
     assert runtime.shell_harness(ordinary.harness).command_timeout == 30
     assert runtime.shell_harness(ordinary.harness).shell_tool.name == "bash"
-    assert native.harness == "prefill"
+    assert native.harness == "assistant_prefix"
     assert native.task.context.events[-1].content == '{"a":'
     original_native = json.loads(rows[1]["lowered_task_spec"])["task"]
     assert native.task.resources.model_dump(mode="json") == original_native["resources"] | {
@@ -125,7 +125,7 @@ async def test_mixed_export_preserves_payload_lineage_and_runs_explicit_harnesse
     assert audits[1]["historical_equivalence_claimed"] is False
     assert audits[1]["source_payload_sha256"] == hashlib.sha256(rows[1]["lowered_task_spec"].encode()).hexdigest()
     model = ReplayModel([{"role": "assistant", "content": "1} trailing"}])
-    result = await RolloutEngine({}, {"prefill": PrefillHarness()}).run_task(native, model.complete)
+    result = await RolloutEngine({}, {"assistant_prefix": AssistantPrefixHarness()}).run_task(native, model.complete)
     assert result.grade.reward == 1
     assert model.requests[0].prompt_token_ids is None
     assert model.requests[0].options["extra_body"] == {"continue_final_message": True, "add_generation_prompt": False}

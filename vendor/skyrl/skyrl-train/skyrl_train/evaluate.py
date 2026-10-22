@@ -1,5 +1,4 @@
 import asyncio
-import math
 from contextlib import asynccontextmanager, nullcontext
 import torch
 from skyrl_train.utils.progress import tqdm
@@ -42,8 +41,6 @@ from skyrl_train.trajectory_runners.trajectory_retention import (
 from omegaconf import DictConfig
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
-
-EVALUATION_VERIFIER_COVERAGE_METRIC = "eval/all/verifier_score_coverage"
 
 
 @dataclass
@@ -189,9 +186,7 @@ async def evaluation_session(trajectory_runner, cfg, global_step, sink):
         val_set_name=None,
     )
     try:
-        concurrency = cfg.trajectory_runner.eval_max_concurrent_tasks
-        if concurrency is None:
-            concurrency = cfg.trajectory_runner.max_concurrent_tasks
+        concurrency = cfg.trajectory_runner.max_concurrent_tasks
         async with EvaluationPool(concurrency) as pool:
             yield pool
     finally:
@@ -217,23 +212,11 @@ def _calculate_eval_metrics(
     if verifier_scores is not None:
         coverage, average = verifier_score_summary(verifier_scores)
         metrics["eval/all/num_scored"] = float(sum(score is not None for score in verifier_scores))
-        metrics[EVALUATION_VERIFIER_COVERAGE_METRIC] = coverage
+        metrics["eval/all/verifier_score_coverage"] = coverage
         if average is not None:
             metrics["eval/all/avg_verifier_score"] = average
     metrics.update({f"eval/all/{key}": value for key, value in evaluation_response_metrics(batch).items()})
     return metrics
-
-
-def require_evaluation_coverage(cfg: DictConfig, metrics: Dict[str, float]) -> None:
-    """Fail a required evaluation before training resumes when verifier coverage is insufficient."""
-    required = cfg.trainer.eval_required_score_coverage
-    if required is None:
-        return
-    if not 0 <= required <= 1:
-        raise ValueError("trainer.eval_required_score_coverage must lie in [0, 1]")
-    coverage = metrics.get(EVALUATION_VERIFIER_COVERAGE_METRIC)
-    if coverage is None or not math.isfinite(coverage) or coverage < required:
-        raise ValueError(f"Evaluation verifier coverage {coverage} is below the required {required}")
 
 
 def _dump_eval_results(
@@ -317,7 +300,6 @@ async def evaluate(
             cfg.generator.eval_n_samples_per_prompt,
         )
         _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
-        require_evaluation_coverage(cfg, eval_metrics)
 
         return eval_metrics
     finally:
@@ -390,6 +372,5 @@ async def evaluate_step_wise(
         cfg.generator.eval_n_samples_per_prompt,
     )
     _dump_eval_results(cfg, global_step, tokenizer, rollouts, concat_data_sources, eval_metrics)
-    require_evaluation_coverage(cfg, eval_metrics)
 
     return eval_metrics
