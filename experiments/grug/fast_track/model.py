@@ -688,6 +688,11 @@ class GrugModelConfig:
     intermediate_dim: int = 256
     shared_expert_intermediate_dim: int = 256
     num_shared_experts: int = 2
+    shared_expert_mult_mla: float = 1.0
+    """Multiplier on ``shared_expert_intermediate_dim`` in the softmax-attention (MLA) layers; 0: no shared expert
+    there. The resulting width must be a multiple of 128."""
+    shared_expert_mult_kda: float = 1.0
+    """``shared_expert_mult_mla`` for the KDA layers."""
     num_experts: int = 384
     num_experts_per_token: int = 8
     moe_dynamic: "MoeDynamicK" = dataclasses.field(default_factory=lambda: MoeDynamicK.NONE)
@@ -5391,6 +5396,7 @@ class Transformer(eqx.Module):
         ) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
             layer_index = jnp.asarray(layers, dtype=jnp.int32)
+            layer_cfg = _shared_width_stack_config(layer_cfg, use_kda)
             if not use_kda:
                 layer_cfg = _value_embed_stack_config(layer_cfg, layers)
             return ArrayStacked.init(len(layers), Block)(layer_cfg, key=keys, layer_index=layer_index, use_kda=use_kda)
@@ -6774,6 +6780,28 @@ def _final_layer_config(cfg: GrugModelConfig, tail_cfg: GrugModelConfig) -> Grug
     ``final_shared_only`` apply to it."""
     out = tail_cfg
     return out
+
+
+SHARED_EXPERT_WIDTH_MULTIPLE = 128
+
+
+def _shared_width_stack_config(cfg: GrugModelConfig, use_kda: bool) -> GrugModelConfig:
+    """A layer stack's config under ``shared_expert_mult_mla`` / ``shared_expert_mult_kda``: the shared-expert
+    width scaled for the stack's mixer kind (0: no shared expert); unchanged at 1."""
+    mult = cfg.shared_expert_mult_kda if use_kda else cfg.shared_expert_mult_mla
+    if mult == 1.0:
+        return cfg
+    if cfg.dense_mlp or mult < 0:
+        raise ValueError(f"shared_expert_mult_* needs a MoE model and a multiplier >= 0, got {mult}")
+    width = mult * cfg.shared_expert_intermediate_dim
+    if width != int(width) or int(width) % SHARED_EXPERT_WIDTH_MULTIPLE:
+        raise ValueError(
+            f"shared expert width {width} (x{mult} of {cfg.shared_expert_intermediate_dim}) must be a multiple of "
+            f"{SHARED_EXPERT_WIDTH_MULTIPLE}"
+        )
+    return dataclasses.replace(
+        cfg, shared_expert_intermediate_dim=int(width), shared_expert_mult_mla=1.0, shared_expert_mult_kda=1.0
+    )
 
 
 def _value_embed_stack_config(cfg: GrugModelConfig, layers: tuple[int, ...]) -> GrugModelConfig:
