@@ -32,7 +32,6 @@ ID_RE = re.compile(r"^X\d{4}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # A trial id is local to its experiment; elsewhere a trial is cited as "<experiment id>.<trial id>", e.g. X0014.t005.
 TRIAL_ID_RE = re.compile(r"^t\d{3}$")
-# A git commit SHA, full or abbreviated to at least 10 characters.
 COMMIT_RE = re.compile(r"[0-9a-f]{10,40}")
 # A control id is local to its recipe; a trial cites it as "<recipe id>.<control id>", e.g. ckpt1.c001.
 CONTROL_ID_RE = re.compile(r"^c\d{3}$")
@@ -233,16 +232,21 @@ def _plain(value):
     return value
 
 
-def load_experiment(path: Path) -> Experiment:
+def _load(cls, path: Path):
+    """``cls`` from the YAML file at ``path``, whose name must match the record's ``filename``."""
     with open(path) as f:
         data = yaml.safe_load(f)
     try:
-        experiment = _build(Experiment, data)
+        record = _build(cls, data)
     except ValueError as e:
         raise ValueError(f"{path.name}: {e}") from e
-    if path.name != experiment.filename:
-        raise ValueError(f"{path.name}: file must be named {experiment.filename}")
-    return experiment
+    if path.name != record.filename:
+        raise ValueError(f"{path.name}: file must be named {record.filename}")
+    return record
+
+
+def load_experiment(path: Path) -> Experiment:
+    return _load(Experiment, path)
 
 
 def load_registry(directory: Path = REGISTRY_DIR) -> list[Experiment]:
@@ -255,15 +259,7 @@ def load_registry(directory: Path = REGISTRY_DIR) -> list[Experiment]:
 
 
 def load_recipe(path: Path) -> Recipe:
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    try:
-        recipe = _build(Recipe, data)
-    except ValueError as e:
-        raise ValueError(f"{path.name}: {e}") from e
-    if path.name != recipe.filename:
-        raise ValueError(f"{path.name}: file must be named {recipe.filename}")
-    return recipe
+    return _load(Recipe, path)
 
 
 def load_recipes(directory: Path = RECIPES_DIR) -> list[Recipe]:
@@ -295,19 +291,28 @@ def validate_recipes(recipes: list[Recipe]) -> None:
         if len(set(control_ids)) != len(control_ids):
             raise ValueError(f"{r.id}: duplicate control ids")
         for c in r.controls:
-            if len(c.loss) != len(c.wandb):
-                raise ValueError(f"{r.id}.{c.id}: needs one loss per W&B run")
+            if not c.wandb or len(c.loss) != len(c.wandb):
+                raise ValueError(f"{r.id}.{c.id}: needs at least one W&B run and one loss per run")
             if c.commit is not None:
                 _check_commit(f"{r.id}.{c.id}", c.commit)
 
 
 def check_baseline_controls(experiments: list[Experiment], recipes: list[Recipe]) -> None:
-    """Raise ValueError if a trial's ``baseline_control`` names a control no recipe has."""
-    controls = {f"{r.id}.{c.id}" for r in recipes for c in r.controls}
+    """Raise ValueError if a trial's ``baseline_control`` names a control no recipe has, or one run at a different rung
+    or step count than the trial."""
+    controls = {f"{r.id}.{c.id}": c for r in recipes for c in r.controls}
     for e in experiments:
         for t in e.trials:
-            if t.baseline_control is not None and t.baseline_control not in controls:
+            if t.baseline_control is None:
+                continue
+            control = controls.get(t.baseline_control)
+            if control is None:
                 raise ValueError(f"{e.id}.{t.id}: baseline_control {t.baseline_control!r} is not a recipe control")
+            if control.rung != t.rung or (t.steps is not None and control.steps != t.steps):
+                raise ValueError(
+                    f"{e.id}.{t.id}: baseline_control {t.baseline_control!r} ran {control.rung} for {control.steps} "
+                    f"steps, but the trial ran {t.rung} for {t.steps}"
+                )
 
 
 def validate(experiments: list[Experiment]) -> None:
