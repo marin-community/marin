@@ -16,6 +16,9 @@ both semantics.
 """
 
 LEARNING_RATE = 5e-6
+# One Stage 0 seed for every architecture: the run is a shared control, not a
+# seed replicate (Phase 1a varies seeds).
+STAGE0_SEED = 0
 ADAM_BETA1 = 0.9
 ADAM_BETA2 = 0.95
 LR_SCHEDULE = "cosine"
