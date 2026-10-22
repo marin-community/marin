@@ -44,11 +44,11 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.coreweave import COREWEAVE_STORAGE_ENV_VARS
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
+    COREWEAVE_STORAGE_ENV_VARS,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,

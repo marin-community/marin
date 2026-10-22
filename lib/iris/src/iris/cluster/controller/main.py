@@ -22,6 +22,7 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.backends.k8s.tasks import coreweave_storage_error
 from iris.cluster.composer import make_backend
 from iris.cluster.config import IrisClusterConfig, load_config, resolve_config_secrets, resolve_principal_references
 from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
@@ -36,7 +37,6 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.rollout import RolloutPhase, read_rollout_record, write_rollout_record
-from iris.cluster.coreweave import coreweave_storage_error
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.provenance import provenance_from_env
 from iris.cluster.types import UserBudgetDefaults

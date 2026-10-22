@@ -15,7 +15,7 @@ import re
 import shlex
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -56,7 +56,6 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.coreweave import COREWEAVE_STORAGE_ENV_VARS, coreweave_storage_error
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
@@ -133,14 +132,28 @@ from iris.cluster.stats.tables import (
     TaskEventSeverity,
     stats_timestamp,
 )
-from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
+from iris.cluster.types import COREWEAVE_STORAGE_ENV_VARS, AttemptUid, JobName, WellKnownAttribute, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
+COREWEAVE_ACCESS_KEYS_URL = "https://console.coreweave.com/object-storage/access-keys"
+
 _ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
+
+
+def coreweave_storage_error(env: Mapping[str, str]) -> str | None:
+    """Return an actionable error when a job lacks personal storage credentials."""
+    missing = [name for name in COREWEAVE_STORAGE_ENV_VARS if not env.get(name)]
+    if not missing:
+        return None
+    return (
+        f"CoreWeave jobs require your own object-storage credentials. Missing: {', '.join(missing)}. "
+        f"Create an access key at {COREWEAVE_ACCESS_KEYS_URL}, "
+        "then export CW_KEY_ID and CW_KEY_SECRET before submitting, or set both in the job environment."
+    )
 
 
 class PodManifestError(ValueError):

@@ -15,6 +15,7 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fsspec.implementations.local import LocalFileSystem
+from iris.cluster.backends.k8s.tasks import coreweave_storage_error
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     Constraint,
@@ -32,7 +33,6 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.coreweave import coreweave_storage_error
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2, worker_pb2

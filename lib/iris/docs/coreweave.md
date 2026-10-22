@@ -350,30 +350,12 @@ export CW_KEY_SECRET=<key-secret>
 uv run fsutil buckets
 ```
 
-The CLI and SDK forward `CW_KEY_ID` and `CW_KEY_SECRET` from the submitting
-process. Explicit job environment values override individual variables; supply
-both together when overriding a pair. Normal CoreWeave jobs require both
-nonempty values; submission fails with the console link when either
-is missing. SDK callers can also set them in `EnvironmentSpec.env_vars`; CLI
-callers can use `.marin.yaml` or `-e`. Child jobs inherit the parent's job
-credentials, and federated submissions carry them to the receiving controller.
-Sandbox (`CONTAINER_PROFILE_SANDBOX`) jobs use only their explicit environment
-and do not require storage keys. All other CoreWeave profiles require them.
-
-Task Pods expose the submitted pair under both `CW_KEY_ID` / `CW_KEY_SECRET`
-and `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. Task-output uploaders use the
-same pair. Iris checks presence, while object storage checks validity and bucket
-permissions. Choose a key lifetime that covers the job; Iris does not refresh it.
-
-Controller deployment still requires the operator's pair for checkpoints and node
-storage-health probes. Those values go into `iris-storage-env`, mounted only by
-the controller and node agents. `iris-task-env` contains endpoint defaults and
-explicit `defaults.inject_env` values. Job credentials take precedence over
-operator-injected storage keys, which do not satisfy the per-job requirement.
-Deployment replaces the task Secret's previous contents,
-removing automatically shared keys. Existing Pods retain their startup environment;
-queued jobs without personal credentials fail before a Pod is created and need
-to be resubmitted.
+The CLI and SDK forward these keys; explicit job environment values override them.
+Non-sandbox CoreWeave jobs require both. Tasks and output uploaders receive the
+submitted pair under both `CW_*` and `AWS_*` names. Operator keys stay in the
+infrastructure-only `iris-storage-env` Secret for checkpoints and node health
+probes. Existing Pods retain their environment; queued jobs missing personal keys
+must be resubmitted.
 
 Task working directories and caches are node-local:
 

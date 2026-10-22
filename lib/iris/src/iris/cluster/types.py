@@ -29,7 +29,6 @@ from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
-from iris.cluster.coreweave import COREWEAVE_STORAGE_ENV_VARS
 from iris.cluster.setup_scripts import (
     cuda_toolchain_setup_script,
     default_setup_script,
@@ -722,6 +721,9 @@ except BaseException as exc:
         sys.last_exc = exc
     raise
 """
+
+
+COREWEAVE_STORAGE_ENV_VARS = ("CW_KEY_ID", "CW_KEY_SECRET")
 
 
 @dataclass
