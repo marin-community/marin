@@ -36,6 +36,7 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.rollout import RolloutPhase, read_rollout_record, write_rollout_record
+from iris.cluster.coreweave import coreweave_storage_error
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.provenance import provenance_from_env
 from iris.cluster.types import UserBudgetDefaults
@@ -265,7 +266,7 @@ def run_controller_serve(
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
         cluster_id=cluster_config.name,
-        require_coreweave_credentials=cluster_config.platform.coreweave is not None,
+        job_environment_check=coreweave_storage_error if cluster_config.platform.coreweave is not None else None,
         dashboard_url=cluster_config.dashboard_url,
         federation_public_parent=cluster_config.federation_public_parent,
         peers=cluster_config.peers,

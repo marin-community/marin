@@ -56,7 +56,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.coreweave import coreweave_storage_error
+from iris.cluster.coreweave import COREWEAVE_STORAGE_ENV_VARS, coreweave_storage_error
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
@@ -869,11 +869,12 @@ def _build_pod_manifest(
         storage_error = coreweave_storage_error(run_req.environment.env_vars)
         if storage_error:
             raise PodManifestError(storage_error)
+        key_id_env, key_secret_env = COREWEAVE_STORAGE_ENV_VARS
         storage_env = {
-            "CW_KEY_ID": combined["CW_KEY_ID"],
-            "CW_KEY_SECRET": combined["CW_KEY_SECRET"],
-            "AWS_ACCESS_KEY_ID": combined["CW_KEY_ID"],
-            "AWS_SECRET_ACCESS_KEY": combined["CW_KEY_SECRET"],
+            key_id_env: combined[key_id_env],
+            key_secret_env: combined[key_secret_env],
+            "AWS_ACCESS_KEY_ID": combined[key_id_env],
+            "AWS_SECRET_ACCESS_KEY": combined[key_secret_env],
         }
         combined.update(storage_env)
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]

@@ -31,7 +31,7 @@ from iris.cluster.stats.tables import (
     IrisProfile,
     TaskEventRow,
 )
-from iris.cluster.types import UserBudgetDefaults
+from iris.cluster.types import JobEnvironmentCheck, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2, query_pb2
 
 
@@ -56,7 +56,7 @@ class ControllerServiceImpl:
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
         capability_url_config: attempts.CapabilityUrlConfig | None = None,
-        require_coreweave_credentials: bool = False,
+        job_environment_check: JobEnvironmentCheck | None = None,
     ):
         self._db = db
         self._controller = controller
@@ -80,7 +80,7 @@ class ControllerServiceImpl:
             bundles=bundle_store,
             auth=resolved_auth,
             user_budget_defaults=resolved_budget_defaults,
-            require_coreweave_credentials=require_coreweave_credentials,
+            job_environment_check=job_environment_check,
         )
         self._federation = federation_service.FederationDependencies(db=db, runtime=controller)
         self._attempts = attempts.AttemptDependencies(

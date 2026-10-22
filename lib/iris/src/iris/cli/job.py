@@ -44,6 +44,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.coreweave import COREWEAVE_STORAGE_ENV_VARS
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
@@ -134,7 +135,7 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
             for k, v in cfg["env"].items():
                 env_vars[str(k)] = "" if v is None else str(v)
 
-    for key in ("HF_TOKEN", "WANDB_API_KEY", "CW_KEY_ID", "CW_KEY_SECRET"):
+    for key in ("HF_TOKEN", "WANDB_API_KEY", *COREWEAVE_STORAGE_ENV_VARS):
         if key not in env_vars and os.environ.get(key):
             env_vars[key] = os.environ[key]
 

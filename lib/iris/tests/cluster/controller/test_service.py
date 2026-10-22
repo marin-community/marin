@@ -32,6 +32,7 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.coreweave import coreweave_storage_error
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -1602,7 +1603,7 @@ def test_coreweave_launch_rejects_missing_user_keys(state, log_client, mock_cont
         log_client=log_client,
         db=state._db,
         endpoint_service=EndpointServiceImpl(db=state._db),
-        require_coreweave_credentials=True,
+        job_environment_check=coreweave_storage_error,
     )
     request = make_job_request("missing-cw-keys")
     request.environment.env_vars.update(env)

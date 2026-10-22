@@ -17,7 +17,7 @@ import hashlib
 import os
 import sys
 import urllib.parse
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -29,6 +29,7 @@ from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
+from iris.cluster.coreweave import COREWEAVE_STORAGE_ENV_VARS
 from iris.cluster.setup_scripts import (
     cuda_toolchain_setup_script,
     default_setup_script,
@@ -42,6 +43,8 @@ from iris.resources.state import (
     TERMINAL_TASK_STATES as NATIVE_TERMINAL_TASK_STATES,
 )
 from iris.rpc import controller_pb2, job_pb2
+
+type JobEnvironmentCheck = Callable[[Mapping[str, str]], str | None]
 
 
 class AcceleratorType(StrEnum):
@@ -769,8 +772,7 @@ class EnvironmentSpec:
             "TOKENIZERS_PARALLELISM": "false",
             "HF_TOKEN": os.getenv("HF_TOKEN"),
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
-            "CW_KEY_ID": os.getenv("CW_KEY_ID"),
-            "CW_KEY_SECRET": os.getenv("CW_KEY_SECRET"),
+            **{name: os.getenv(name) for name in COREWEAVE_STORAGE_ENV_VARS},
             # Launch provenance: a task running from a git-less bundle inherits the
             # submitter's identity via Provenance.capture(); transitive, since a task
             # re-submitting captures this same env value.
