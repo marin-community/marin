@@ -270,6 +270,23 @@ def step_statuses(path: Path) -> list[tuple[str, str]]:
     return [(e.step, e.attrs["cache"]) for e in read_entries(path) if e.kind is EntryKind.STEP and "tool" not in e.attrs]
 
 
+async def test_a_candidate_file_at_an_absolute_path_is_refused_and_the_session_goes_on(tmp_path, author):
+    absolute = {"path": "/workspace/report.md", "content": "the report"}
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("run_grade_candidate", {"reply": "41", "files": [absolute]})),
+        turn(("run_grade_candidate", {"reply": "41", "files": [{**absolute, "path": "workspace/report.md"}]})),
+        turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
+    )
+    outcome = await author(tmp_path / "workpiece", model)
+
+    assert outcome.status is AuthorStatus.ACCEPTED
+    refused, graded = tool_outputs(model)[2:4]
+    assert refused.startswith("error: grading refused: '/workspace/report.md'") and "workspace/report.md" in refused
+    assert graded.startswith("status graded, reward 0.0")
+
+
 async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_step(tmp_path, author, proposal, services):
     workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
