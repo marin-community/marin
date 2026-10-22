@@ -1,9 +1,12 @@
 import json
+import multiprocessing
 import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from multiprocessing.context import ForkServerContext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -21,8 +24,27 @@ from marinskyrl.environment_contract import TrainingType  # noqa: E402
 from skyrl_train import telemetry as training_telemetry  # noqa: E402
 from skyrl_train.distillation import ChosenTokenTeacherEvidence  # noqa: E402
 from skyrl_train.trajectory_runners.types import TrajectoryID, VerifierTestCollection  # noqa: E402
+from tests.cpu.cat_count_policy import download_policy  # noqa: E402
 from tests.cpu.task_specs import lowered_task  # noqa: E402
 from tests.cpu.util import stub_megatron_modules  # noqa: E402
+
+
+@pytest.fixture(scope="session")
+def cat_count_policy(pytestconfig) -> Path:
+    if not os.environ.get("AWS_ACCESS_KEY_ID"):
+        pytest.skip("CatCount CPU canary: S3 credentials unavailable (e.g. fork PR); policy is not pretrained in CI")
+    directory = Path(pytestconfig.cache.mkdir("cat_count_policy")) / "llama-530k-v1"
+    directory.mkdir(exist_ok=True)
+    download_policy(directory)
+    print("CAT_COUNT_POLICY source=s3")
+    return directory
+
+
+@pytest.fixture(scope="module")
+def runs() -> ForkServerContext:
+    context = multiprocessing.get_context("forkserver")
+    context.set_forkserver_preload(["tests.cpu.tiny_training.cat_count"])
+    return context
 
 
 @pytest.fixture
