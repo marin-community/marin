@@ -31,6 +31,7 @@ from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.budget import (
     UserTask,
     compute_effective_band,
+    compute_user_spend,
     interleave_by_user,
     resource_value,
 )
@@ -767,8 +768,9 @@ def build_scheduling_context(
     snap: Tx,
     health: WorkerHealthTracker | None,
     worker_attrs: WorkerAttrsSource,
-    budget_context: BudgetContext,
+    defaults: UserBudgetDefaults,
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    budget_context: BudgetContext | None = None,
 ) -> SchedulingContext:
     """Build the complete scheduling workspace for the controller's backend.
 
@@ -780,11 +782,12 @@ def build_scheduling_context(
     pending = reads.pending_tasks_with_jobs(snap)
     requested_bands = reads.get_priority_bands(snap, {task.job_id for task in pending})
     pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
-    user_spend = budget_context.spend
-    user_budget_limits = budget_context.limits
-    defaults = budget_context.defaults
-    if not budget_context.ready:
-        pending = []
+    user_spend = budget_context.spend if budget_context is not None else compute_user_spend(snap)
+    user_budget_limits = budget_context.limits if budget_context is not None else reads.get_all_user_budget_limits(snap)
+    if budget_context is not None:
+        defaults = budget_context.defaults
+        if not budget_context.ready:
+            pending = []
 
     if health is None or not pending:
         return SchedulingContext(
@@ -897,8 +900,10 @@ def compute_scheduling_order(
     task_band_map: dict[JobName, int] = {
         task.task_id: compute_effective_band(
             requested_bands.get(task.job_id, task.priority_band),
-            user_spend.get(task.job_id.user, 0),
-            user_budget_limits.get(task.job_id.user, defaults.budget_limit),
+            task_budget_users[task.task_id],
+            user_spend,
+            user_budget_limits,
+            defaults,
         )
         for task in ctx.pending_task_rows
     }

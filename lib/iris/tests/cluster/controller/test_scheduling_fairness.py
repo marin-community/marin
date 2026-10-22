@@ -7,7 +7,6 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import (
     compute_user_spend,
 )
-from iris.cluster.controller.federation_budget import read_budget_context
 from iris.cluster.controller.scheduling.policy import (
     _sort_pending_tasks_by_resolved_band,
     apply_scheduling_gates,
@@ -222,7 +221,7 @@ def test_spend_and_worker_scheduler_use_job_owner():
                 snap,
                 health=None,
                 worker_attrs=state._worker_attrs,
-                budget_context=read_budget_context(snap, UserBudgetDefaults(budget_limit=0)),
+                defaults=UserBudgetDefaults(budget_limit=0),
             )
         gated = apply_scheduling_gates(context, max_tasks_per_job_per_cycle=100)
         order = compute_scheduling_order(context, gated)

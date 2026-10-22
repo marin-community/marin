@@ -15,6 +15,7 @@ from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, PRIORITY_BAND_VALUES
 
@@ -64,19 +65,24 @@ def compute_user_spend(tx: Tx) -> dict[str, int]:
 
 def compute_effective_band(
     task_band: int,
-    budget_spent: int,
-    budget_limit: int,
+    user_id: str,
+    user_spend: dict[str, int],
+    user_budgets: dict[str, int],
+    defaults: UserBudgetDefaults,
 ) -> int:
     """Downgrade task to BATCH if its user exceeds their budget.
 
-    SYSTEM and PRODUCTION tasks are never downgraded. A limit of 0 means unlimited.
+    SYSTEM and PRODUCTION tasks are never downgraded. Users without a
+    ``user_budgets`` row fall back to ``defaults.budget_limit``; a limit of 0
+    means unlimited.
 
     ``task_band`` is a real band: ``LaunchJob`` resolves INHERIT once at ingestion (see
     :func:`iris.cluster.controller.ops.job.resolve_priority_band`).
     """
     if task_band in ADMIN_PRIORITY_BAND_VALUES:
         return task_band
-    if budget_limit > 0 and budget_spent > budget_limit:
+    limit = user_budgets.get(user_id, defaults.budget_limit)
+    if limit > 0 and user_spend.get(user_id, 0) > limit:
         return job_pb2.PRIORITY_BAND_BATCH
     return task_band
 

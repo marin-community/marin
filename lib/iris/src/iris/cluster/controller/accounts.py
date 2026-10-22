@@ -133,7 +133,7 @@ def get_user_budget(
     require_identity()
     if not request.user_id:
         raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
-    return dependencies.budgets.check_submission(request.user_id).user(request.user_id).to_proto()
+    return dependencies.budgets.check_submission(request.user_id).user(request.user_id)
 
 
 def list_user_budgets(
@@ -146,7 +146,7 @@ def list_user_budgets(
     require_identity()
     with dependencies.db.read_snapshot() as snapshot:
         budgets = read_budget_context(snapshot, dependencies.budgets.defaults).users.values()
-    return controller_pb2.Controller.ListUserBudgetsResponse(users=[budget.to_proto() for budget in budgets])
+    return controller_pb2.Controller.ListUserBudgetsResponse(users=list(budgets))
 
 
 def _active_job_count(counts: dict[int, int]) -> int:

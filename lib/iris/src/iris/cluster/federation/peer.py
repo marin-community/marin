@@ -38,7 +38,6 @@ _LAUNCH_JOB_TIMEOUT_FLOOR_MS = 180_000
 # inside that interval so a half-open connection cannot preserve stale capacity
 # and reachability forever.
 _HEARTBEAT_TIMEOUT_MS = 10_000
-_BUDGET_RPC_TIMEOUT_MS = 10_000
 
 # A proxied exec/profile does the parent's own local-dispatch work on the peer:
 # the peer resolves task->worker and runs the operation for its full duration.
@@ -119,26 +118,6 @@ def peer_credentials(peer: PeerConfig, federation_token_provider: TokenProvider 
         token_provider=federation_token_provider or base.token_provider,
         iap_provider=base.iap_provider,
     )
-
-
-class ControllerBudgetClient:
-    """Budget reads over the same credentials and transport as federation RPCs."""
-
-    def __init__(self, controller_address: str, credentials: ClientCredentials):
-        self._client = ControllerServiceClientSync(address=controller_address, interceptors=credentials.interceptors())
-
-    def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse:
-        return self._client.get_user_budget(
-            controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id), timeout_ms=_BUDGET_RPC_TIMEOUT_MS
-        )
-
-    def list_user_budgets(self) -> controller_pb2.Controller.ListUserBudgetsResponse:
-        return self._client.list_user_budgets(
-            controller_pb2.Controller.ListUserBudgetsRequest(), timeout_ms=_BUDGET_RPC_TIMEOUT_MS
-        )
-
-    def close(self) -> None:
-        self._client.close()
 
 
 class _PeerRpcConnection:

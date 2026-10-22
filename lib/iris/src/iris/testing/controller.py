@@ -67,7 +67,6 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.federation_budget import read_budget_context
 from iris.cluster.controller.federation_store import build_queued_candidates
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
@@ -101,7 +100,6 @@ from iris.cluster.types import (
     AcceleratorType,
     CapacityType,
     JobName,
-    UserBudgetDefaults,
     WorkerId,
 )
 from iris.managed_thread import get_thread_container
@@ -513,7 +511,7 @@ def promote_queued_federation(manager: FederationManager, state: ControllerTestS
     synchronous handoff produced.
     """
     with state._db.read_snapshot() as tx:
-        candidates = build_queued_candidates(tx, budget_context=read_budget_context(tx, UserBudgetDefaults()))
+        candidates = build_queued_candidates(tx)
     promotions = manager.plan_federation(candidates)
     confirmed = []
     with state._db.transaction() as cur:

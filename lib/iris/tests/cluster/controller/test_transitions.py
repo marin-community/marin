@@ -18,7 +18,6 @@ from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.federation_budget import read_budget_context
 from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointQuery, EndpointRow
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -133,7 +132,7 @@ def _demand_entries(state: ControllerTestState):
             snap,
             state._health,
             state._worker_attrs,
-            read_budget_context(snap, defaults),
+            defaults,
         )
     return compute_demand_entries(ctx, Scheduler(), {})
 
@@ -3436,7 +3435,7 @@ def _task_row_direct(state: ControllerTestState, task_id: JobName):
 def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> None:
     """Drain and transition tasks to RUNNING via direct provider."""
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        dispatch.drain_for_dispatch(cur)
     with state._db.transaction() as cur:
         commit_dispatch_updates(
             cur,
@@ -3451,7 +3450,7 @@ def test_drain_pending_creates_attempt_rows(state):
     task_id = task_ids[0]
 
     with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].task_id == task_id.to_wire()
@@ -3490,14 +3489,14 @@ def test_drain_redrives_assigned_until_executing(state):
 
     # First drain: PENDING -> ASSIGNED, dispatched and polled.
     with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        batch1 = dispatch.drain_for_dispatch(cur)
     assert len(batch1.tasks_to_run) == 1
     assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
     # Second drain (e.g. previous _apply_pod failed or controller crashed):
     # row is still ASSIGNED, redriven in tasks_to_run with same attempt_id.
     with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        batch2 = dispatch.drain_for_dispatch(cur)
     assert len(batch2.tasks_to_run) == 1
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
@@ -3512,7 +3511,7 @@ def test_drain_redrives_assigned_until_executing(state):
             now=Timestamp.now(),
         )
     with state._db.transaction() as cur:
-        batch3 = dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        batch3 = dispatch.drain_for_dispatch(cur)
     assert len(batch3.tasks_to_run) == 0
     assert len(batch3.running_tasks) == 1
     assert batch3.running_tasks[0].task_id == task_id
@@ -3525,18 +3524,14 @@ def test_drain_caps_promotions_per_cycle(state):
     assert _count_pending(state) == 200
 
     with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(
-            cur, max_promotions=128, budget_context=read_budget_context(cur, UserBudgetDefaults())
-        )
+        batch1 = dispatch.drain_for_dispatch(cur, max_promotions=128)
     # All 128 dispatched are freshly promoted (no prior ASSIGNED rows).
     assert len(batch1.tasks_to_run) == 128
     assert _count_pending(state) == 72
 
     # Second drain: 72 newly promoted, 128 redriven.
     with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(
-            cur, max_promotions=128, budget_context=read_budget_context(cur, UserBudgetDefaults())
-        )
+        batch2 = dispatch.drain_for_dispatch(cur, max_promotions=128)
     assert len(batch2.tasks_to_run) == 200
     assert _count_pending(state) == 0
 
@@ -3547,17 +3542,13 @@ def test_drain_max_promotions_limits_batch(state):
     _submit_job_direct(state, "/user/cap-job", replicas=250)
 
     with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(
-            cur, max_promotions=50, budget_context=read_budget_context(cur, UserBudgetDefaults())
-        )
+        batch1 = dispatch.drain_for_dispatch(cur, max_promotions=50)
     assert len(batch1.tasks_to_run) == 50
     assert _count_pending(state) == 200
 
     # 50 newly promoted + 50 prior ASSIGNED redriven.
     with state._db.transaction() as cur:
-        batch2 = dispatch.drain_for_dispatch(
-            cur, max_promotions=50, budget_context=read_budget_context(cur, UserBudgetDefaults())
-        )
+        batch2 = dispatch.drain_for_dispatch(cur, max_promotions=50)
     assert len(batch2.tasks_to_run) == 100
     assert _count_pending(state) == 150
 
@@ -3567,7 +3558,7 @@ def test_apply_running(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -3586,7 +3577,7 @@ def test_apply_succeeded(state):
     task_ids = _submit_job_direct(state, "/user/job1")
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -3616,7 +3607,7 @@ def test_apply_failed_with_retry(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=1, max_task_failures=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -3663,7 +3654,7 @@ def test_apply_failed_with_retry(state):
 
     # Draining again should promote it for a second attempt.
     with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        batch = dispatch.drain_for_dispatch(cur)
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].attempt_id == 1
 
@@ -3673,7 +3664,7 @@ def test_apply_failed_no_retry(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_failure=0)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -3703,7 +3694,7 @@ def test_apply_worker_failed(state):
     task_ids = _submit_job_direct(state, "/user/job1", max_retries_preemption=1)
     task_id = task_ids[0]
     with state._db.transaction() as cur:
-        dispatch.drain_for_dispatch(cur, budget_context=read_budget_context(cur, UserBudgetDefaults()))
+        dispatch.drain_for_dispatch(cur)
 
     with state._db.transaction() as cur:
         commit_dispatch_updates(

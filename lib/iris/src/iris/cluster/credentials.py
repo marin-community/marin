@@ -12,21 +12,7 @@ from iris.cluster.config import AuthConfig, IrisClusterConfig
 
 
 def _bundled_iris_config_dir() -> str | None:
-    """Return the iris package's bundled config/ dir when it ships on disk.
-
-    Probes two layouts because the config directory can physically live in
-    two places depending on how iris was installed:
-
-    1. Wheel installs (site-packages): hatchling force-include places the
-       yamls at ``iris/config/`` inside the package. Resolve that via
-       ``Path(__file__).parent.parent / "config"``.
-    2. Editable workspace installs: the yamls stay at their source location
-       ``lib/iris/config/`` — reachable via ``parents[3] / "config"`` from
-       ``lib/iris/src/iris/cluster/credentials.py``.
-
-    Returns the first directory that exists, or ``None`` for wheel installs
-    that don't ship configs at all.
-    """
+    """Find configs in a wheel install or an editable workspace."""
     here = Path(__file__).resolve()
     wheel_path = here.parent.parent / "config"
     if wheel_path.is_dir():

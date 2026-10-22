@@ -200,46 +200,30 @@ registered endpoint. The `scope=total` counter is exact; per-endpoint series are
 
 ## Shared budgets
 
-Configure limits and priority ceilings on the budget parent. Set `budget_parent`
-to that cluster's name on each child, and list those children in the parent's
-`budget_peers`. Budget peers must also be routing peers. Other routing peers do
-not contribute usage or block budget reads. Production children set
-`budget_parent: marin`; the CI child sets `budget_parent: marin-dev`.
-Peer-local budget changes are rejected.
+Set `budget_parent` on each child and list those children in the parent's
+`budget_peers`. Budget peers must also be routing peers. Production children use
+`marin`; the CI child uses `marin-dev`. Other routing peers do not count against
+that parent's budgets. Configure and edit limits on the parent; child-local
+budget edits are rejected.
 
-The parent polls the existing `ListUserBudgets` RPC for each budget peer's local
-usage. That RPC includes configured and active users and excludes mirrored tasks.
-`GetUserBudget` returns effective policy and combined parent/peer usage, including
-the parent's defaults for a user without an override. Keeping lists local prevents
-recursive reads and double charging.
+The parent polls `ListUserBudgets` for local spend, including direct submissions
+and child jobs. Lists exclude mirrors and include active users without budget
+rows. `GetUserBudget` returns parent policy and combined usage, applying defaults
+for new users. Direct submissions and child jobs query that RPC before admission;
+handoffs from the budget parent reuse its check.
 
-Direct submissions and child jobs call `GetUserBudget` on the parent before
-admission. Handoffs from that parent reuse its check. Parent access uses
-the named cluster manifest and the existing credential resolver. A child behind
-CoreWeave must have ambient service-account credentials authorized for the
-parent's IAP endpoint, such as a Workload Identity Federation ADC file supplied
-through `GOOGLE_APPLICATION_CREDENTIALS`. A parent-to-child federation token alone
-does not provide that reverse access.
-The parent uses its existing federation credentials to read child budgets.
+Parent access uses the existing Iris config and credential resolver. CoreWeave
+controllers need ambient service-account credentials authorized for parent IAP,
+such as a Workload Identity Federation ADC file supplied through
+`GOOGLE_APPLICATION_CREDENTIALS`. The parent reuses federation credentials for
+its child reads. Deploy both sides: older child lists omit unconfigured users.
 
-Both worker scheduling and Kubernetes dispatch use the same budget snapshot.
-Background reads refresh at most every three seconds, with a ten-second timeout
-per RPC. Reconciliation does not wait for these reads. Between reads, a child
-counts at least its current local spend when applying the parent's limit.
-The parent pauses admission and new scheduling when a peer-usage read is over
-30 seconds old. A child pauses new scheduling when its parent-policy read expires
-or the parent reports unavailable usage. Existing attempts continue to reconcile.
-The parent retains a missing peer's last usage until reads recover. After restart,
-the parent blocks admission and new scheduling until every budget peer responds.
-A direct submission fails with `UNAVAILABLE` when its parent cannot be reached.
-
-Spend is current requested resource value, not accumulated compute time:
-`1000 * accelerators + RAM_GiB + 5 * CPU_cores` per active task. Fractional GiB and
-cores are truncated. ASSIGNED, BUILDING, and RUNNING tasks count, including pods
-waiting for Kueue admission. Requested BATCH work is excluded; demoted INTERACTIVE
-work still counts. Over-budget INTERACTIVE work runs at BATCH priority. Concurrent
-starts can exceed limits, and existing attempts retain their assigned band. SYSTEM and
-PRODUCTION work is exempt from budget demotion.
+Reads run in the background with a ten-second RPC timeout. After 30 seconds
+without fresh peer usage, the parent pauses admission and new scheduling. Children
+pause new scheduling on stale parent policy. Existing attempts keep reconciling.
+The parent retains last-known spend and requires fresh reads after restart.
+Budgets remain soft priority limits: over-budget INTERACTIVE work runs as BATCH;
+SYSTEM and PRODUCTION are exempt, and running attempts keep their assigned band.
 
 ## Observing federation
 

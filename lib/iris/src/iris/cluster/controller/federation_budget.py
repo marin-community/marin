@@ -7,8 +7,7 @@ import logging
 import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass, replace
-from types import MappingProxyType
+from dataclasses import dataclass
 from typing import Protocol
 
 from connectrpc.code import Code
@@ -17,7 +16,7 @@ from rigging.auth import IapCredentialsUnavailable
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller import reads
-from iris.cluster.controller.budget import compute_effective_band, compute_user_spend
+from iris.cluster.controller.budget import compute_user_spend
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import controller_pb2
@@ -25,44 +24,28 @@ from iris.rpc import controller_pb2
 logger = logging.getLogger(__name__)
 BUDGET_POLICY_MAX_AGE = Duration.from_seconds(30)
 BUDGET_REFRESH_INTERVAL = Duration.from_seconds(3)
+BUDGET_RPC_TIMEOUT = Duration.from_seconds(10)
 
 
 class BudgetClient(Protocol):
-    def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse: ...
+    def get_user_budget(
+        self, request: controller_pb2.Controller.GetUserBudgetRequest, *, timeout_ms: int
+    ) -> controller_pb2.Controller.GetUserBudgetResponse: ...
 
-    def list_user_budgets(self) -> controller_pb2.Controller.ListUserBudgetsResponse: ...
+    def list_user_budgets(
+        self, request: controller_pb2.Controller.ListUserBudgetsRequest, *, timeout_ms: int
+    ) -> controller_pb2.Controller.ListUserBudgetsResponse: ...
 
     def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
-class UserBudgetSnapshot:
-    """One user's resolved policy and usage, independent of mutable RPC messages."""
-
-    user_id: str
-    budget_limit: int
-    max_band: int
-    budget_spent: int = 0
-
-    def to_proto(self) -> controller_pb2.Controller.GetUserBudgetResponse:
-        return controller_pb2.Controller.GetUserBudgetResponse(
-            user_id=self.user_id,
-            budget_limit=self.budget_limit,
-            max_band=self.max_band,
-            budget_spent=self.budget_spent,
-        )
-
-
-@dataclass(frozen=True)
 class BudgetContext:
-    """Immutable policy and usage from one scheduling snapshot."""
+    """Policy and usage from one scheduling snapshot."""
 
-    users: Mapping[str, UserBudgetSnapshot]
+    users: dict[str, controller_pb2.Controller.GetUserBudgetResponse]
     defaults: UserBudgetDefaults
     ready: bool = True
-
-    def __post_init__(self):
-        object.__setattr__(self, "users", MappingProxyType(dict(self.users)))
 
     @property
     def spend(self) -> dict[str, int]:
@@ -72,14 +55,10 @@ class BudgetContext:
     def limits(self) -> dict[str, int]:
         return {user: row.budget_limit for user, row in self.users.items()}
 
-    def user(self, user_id: str) -> UserBudgetSnapshot:
-        return self.users.get(user_id) or UserBudgetSnapshot(
+    def user(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse:
+        return self.users.get(user_id) or controller_pb2.Controller.GetUserBudgetResponse(
             user_id=user_id, budget_limit=self.defaults.budget_limit, max_band=self.defaults.max_band
         )
-
-    def effective_band(self, requested_band: int, user_id: str) -> int:
-        budget = self.user(user_id)
-        return compute_effective_band(requested_band, budget.budget_spent, budget.budget_limit)
 
 
 def read_budget_context(tx: Tx, defaults: UserBudgetDefaults) -> BudgetContext:
@@ -88,7 +67,7 @@ def read_budget_context(tx: Tx, defaults: UserBudgetDefaults) -> BudgetContext:
     spend = compute_user_spend(tx)
     return BudgetContext(
         {
-            user_id: UserBudgetSnapshot(
+            user_id: controller_pb2.Controller.GetUserBudgetResponse(
                 user_id=user_id,
                 budget_limit=budgets[user_id].budget_limit if user_id in budgets else defaults.budget_limit,
                 max_band=budgets[user_id].max_band if user_id in budgets else defaults.max_band,
@@ -102,12 +81,16 @@ def read_budget_context(tx: Tx, defaults: UserBudgetDefaults) -> BudgetContext:
 
 @dataclass(frozen=True)
 class _BudgetRead:
-    users: tuple[UserBudgetSnapshot, ...]
+    users: tuple[controller_pb2.Controller.GetUserBudgetResponse, ...]
     received_at: Timestamp
 
 
-def _snapshot(budget: controller_pb2.Controller.GetUserBudgetResponse) -> UserBudgetSnapshot:
-    return UserBudgetSnapshot(budget.user_id, budget.budget_limit, budget.max_band, budget.budget_spent)
+def _with_spend(
+    budget: controller_pb2.Controller.GetUserBudgetResponse, spend: int
+) -> controller_pb2.Controller.GetUserBudgetResponse:
+    return controller_pb2.Controller.GetUserBudgetResponse(
+        user_id=budget.user_id, budget_limit=budget.budget_limit, max_band=budget.max_band, budget_spent=spend
+    )
 
 
 class FederationBudgets:
@@ -154,9 +137,7 @@ class FederationBudgets:
             local_spend = compute_user_spend(tx)
             return BudgetContext(
                 {
-                    budget.user_id: replace(
-                        budget, budget_spent=max(budget.budget_spent, local_spend.get(budget.user_id, 0))
-                    )
+                    budget.user_id: _with_spend(budget, max(budget.budget_spent, local_spend.get(budget.user_id, 0)))
                     for read in remote.values()
                     for budget in read.users
                 },
@@ -169,10 +150,7 @@ class FederationBudgets:
             for budget in read.users:
                 spend[budget.user_id] = spend.get(budget.user_id, 0) + budget.budget_spent
         return BudgetContext(
-            {
-                user: replace(local.user(user), budget_spent=spend.get(user, 0))
-                for user in local.users.keys() | spend.keys()
-            },
+            {user: _with_spend(local.user(user), spend.get(user, 0)) for user in local.users.keys() | spend.keys()},
             self.defaults,
             ready=all(peer in remote and self._fresh(remote[peer], BUDGET_POLICY_MAX_AGE) for peer in self._peers),
         )
@@ -180,19 +158,25 @@ class FederationBudgets:
     def _read_parent(self, user_id: str) -> None:
         assert self._parent is not None
         try:
-            budget = self._parent.get_user_budget(user_id)
+            budget = self._parent.get_user_budget(
+                controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id), timeout_ms=BUDGET_RPC_TIMEOUT.to_ms()
+            )
         except ConnectError as error:
             if error.code == Code.UNAVAILABLE:
                 with self._lock:
                     self._reads.pop(user_id, None)
             raise
         with self._lock:
-            self._reads[user_id] = _BudgetRead((_snapshot(budget),), self._now())
+            self._reads[user_id] = _BudgetRead((_with_spend(budget, budget.budget_spent),), self._now())
 
     def _read_peer(self, peer_id: str) -> None:
-        budgets = self._peers[peer_id].list_user_budgets()
+        budgets = self._peers[peer_id].list_user_budgets(
+            controller_pb2.Controller.ListUserBudgetsRequest(), timeout_ms=BUDGET_RPC_TIMEOUT.to_ms()
+        )
         with self._lock:
-            self._reads[peer_id] = _BudgetRead(tuple(_snapshot(budget) for budget in budgets.users), self._now())
+            self._reads[peer_id] = _BudgetRead(
+                tuple(_with_spend(budget, budget.budget_spent) for budget in budgets.users), self._now()
+            )
 
     def refresh(self, stop_event: threading.Event | None = None) -> None:
         """Refresh scheduling inputs with bounded RPCs before opening a DB snapshot."""

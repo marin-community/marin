@@ -120,7 +120,7 @@ from iris.cluster.federation.manager import (
     DEFAULT_MAX_HANDOFFS_PER_CYCLE,
     FederationManager,
 )
-from iris.cluster.federation.peer import ControllerBudgetClient, FederationPeer, build_peers, peer_credentials
+from iris.cluster.federation.peer import FederationPeer, build_peers, peer_credentials
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.runtime.sandbox import task_isolation
@@ -135,6 +135,7 @@ from iris.cluster.types import (
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import SESSION_COOKIE
+from iris.rpc.controller_connect import ControllerServiceClientSync
 
 logger = logging.getLogger(__name__)
 
@@ -471,14 +472,15 @@ class Controller:
             parent_config = load_config(resolve_cluster_config(config.budget_parent, dirs=IRIS_CLUSTER_CONFIG_DIRS))
             if not parent_config.dashboard_url:
                 raise ValueError("The budget parent's cluster config requires dashboard_url")
-            budget_parent_client = ControllerBudgetClient(
-                parent_config.dashboard_url, client_credentials(parent_config, config.budget_parent)
+            budget_parent_client = ControllerServiceClientSync(
+                address=parent_config.dashboard_url,
+                interceptors=client_credentials(parent_config, config.budget_parent).interceptors(),
             )
         if budget_peer_clients is None:
             budget_peer_clients = {
-                peer_id: ControllerBudgetClient(
-                    config.peers[peer_id].controller_address,
-                    peer_credentials(config.peers[peer_id], federation_token_provider),
+                peer_id: ControllerServiceClientSync(
+                    address=config.peers[peer_id].controller_address,
+                    interceptors=peer_credentials(config.peers[peer_id], federation_token_provider).interceptors(),
                 )
                 for peer_id in config.budget_peers
             }
@@ -1189,6 +1191,7 @@ class Controller:
             snap,
             self._worker_health,
             snap.caches[WorkerAttrsProjection],
+            self._config.user_budget_defaults,
             budget_context=budget_context,
         )
         queued: list[QueuedCandidate] = []

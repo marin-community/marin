@@ -19,10 +19,11 @@ from iris.cluster.controller.backend import (
     TaskBackend,
     dashboard_backend_descriptor,
 )
+from iris.cluster.controller.budget import compute_effective_band, compute_user_spend
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.schema import tasks_table, workers_table
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
+from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.rpc.proto_display import priority_band_rank
 
@@ -39,7 +40,7 @@ class BackendStatusRuntime(Protocol):
 class BackendStatusDependencies:
     db: ControllerDB
     runtime: BackendStatusRuntime
-    budgets: FederationBudgets
+    user_budget_defaults: UserBudgetDefaults
 
 
 def get_autoscaler_status(
@@ -81,9 +82,9 @@ def get_scheduler_state(
     del request, context
     require_identity()
     with dependencies.db.read_snapshot() as snapshot:
-        budget_context = dependencies.budgets.context(snapshot)
-        budgets = list(budget_context.users.values())
-        user_spend = budget_context.spend
+        budgets = reads.list_user_budgets(snapshot)
+        budget_limits = {budget.user_id: budget.budget_limit for budget in budgets}
+        user_spend = compute_user_spend(snapshot)
         pending_rows = reads.pending_tasks_with_jobs(snapshot)
         requested_bands = reads.get_priority_bands(snapshot, {row.job_id for row in pending_rows})
         running_rows = snapshot.execute(
@@ -101,9 +102,12 @@ def get_scheduler_state(
     pending_counts: dict[tuple[int, str, str, str], int] = {}
     for row in pending_rows:
         user_id = row.job_id.user
-        band = budget_context.effective_band(
+        band = compute_effective_band(
             requested_bands.get(row.job_id, row.priority_band),
             user_id,
+            user_spend,
+            budget_limits,
+            dependencies.user_budget_defaults,
         )
         job_id = (row.task_id.parent or row.task_id).to_wire()
         key = (band, user_id, job_id, str(row.backend_id or ""))
@@ -116,7 +120,7 @@ def get_scheduler_state(
         key = (row.priority_band, user_id, str(row.worker_id), job_id, str(row.backend_id or ""))
         running_counts[key] = running_counts.get(key, 0) + 1
 
-    defaults = budget_context.defaults
+    defaults = dependencies.user_budget_defaults
     budget_rows = [(budget.user_id, budget.budget_limit, budget.max_band) for budget in budgets]
     configured_users = {budget.user_id for budget in budgets}
     budget_rows.extend(
@@ -131,7 +135,13 @@ def get_scheduler_state(
                 budget_limit=budget_limit,
                 budget_spent=spent,
                 max_band=max_band,
-                effective_band=budget_context.effective_band(job_pb2.PRIORITY_BAND_INTERACTIVE, user_id),
+                effective_band=compute_effective_band(
+                    job_pb2.PRIORITY_BAND_INTERACTIVE,
+                    user_id,
+                    user_spend,
+                    budget_limits,
+                    defaults,
+                ),
                 utilization_percent=(spent / budget_limit * 100.0) if budget_limit > 0 else 0.0,
             )
         )

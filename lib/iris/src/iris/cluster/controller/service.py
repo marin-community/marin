@@ -74,7 +74,7 @@ class ControllerServiceImpl:
         self._backend_status = backend_status.BackendStatusDependencies(
             db=db,
             runtime=controller,
-            budgets=resolved_budgets,
+            user_budget_defaults=resolved_budget_defaults,
         )
         self._jobs = jobs.JobDependencies(
             db=db,

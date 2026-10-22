@@ -3,22 +3,17 @@
 
 """Shared budgets through the existing local-list and parent-get RPCs."""
 
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass
 
-import httpx
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from google.protobuf.json_format import MessageToDict
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import writes
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.federation_budget import FederationBudgets, read_budget_context
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.reconcile.dispatch import drain_for_dispatch
 from iris.cluster.controller.scheduling.policy import (
     apply_scheduling_gates,
@@ -33,7 +28,6 @@ from iris.testing.controller import MockController, make_controller_state, make_
 from iris.testing.journeys.world import ManualClock
 from rigging.auth import IapCredentialsUnavailable
 from rigging.server_auth import VerifiedIdentity, identity_scope
-from starlette.testclient import TestClient
 
 INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
 BATCH = job_pb2.PRIORITY_BAND_BATCH
@@ -98,7 +92,7 @@ def context(budgets):
 def activate(state, name, *, band=INTERACTIVE, replicas=1):
     submit_job(state, name, make_job_request(name=name, priority_band=band, replicas=replicas))
     with state._db.transaction() as tx:
-        drain_for_dispatch(tx, budget_context=read_budget_context(tx, UserBudgetDefaults()))
+        drain_for_dispatch(tx)
 
 
 def test_direct_roots_and_children_share_budget_across_clusters(federation):
@@ -127,11 +121,13 @@ def test_local_budget_lists_do_not_reexport_aggregate_spend(federation):
     activate(federation.states[0], "/alice/local")
     activate(federation.states[1], "/alice/remote")
     federation.refresh()
-    local = federation.peer_clients["a"].list_user_budgets()
+    local = federation.peer_clients["a"].list_user_budgets(
+        controller_pb2.Controller.ListUserBudgetsRequest(), timeout_ms=1000
+    )
     assert [(budget.user_id, budget.budget_spent) for budget in local.users] == [("alice", 6)]
-    assert federation.parent_clients[0].get_user_budget("alice").budget_spent == 12
+    assert federation.children[0].check_submission("alice").user("alice").budget_spent == 12
     federation.refresh()
-    assert federation.parent_clients[0].get_user_budget("alice").budget_spent == 12
+    assert federation.children[0].check_submission("alice").user("alice").budget_spent == 12
 
 
 def test_child_counts_new_local_work_before_the_next_parent_poll(federation):
@@ -195,7 +191,11 @@ def test_worker_scheduler_uses_usage_from_other_peers(federation):
     state = federation.states[1]
     with state._db.read_snapshot() as tx:
         scheduling = build_scheduling_context(
-            tx, state._health, state._worker_attrs, budget_context=federation.children[0].context(tx)
+            tx,
+            state._health,
+            state._worker_attrs,
+            UserBudgetDefaults(),
+            budget_context=federation.children[0].context(tx),
         )
     gated = apply_scheduling_gates(scheduling, max_tasks_per_job_per_cycle=100)
     assert (
@@ -220,7 +220,7 @@ def test_direct_submission_reads_parent_ceiling_and_rejects_local_overrides(fede
 
 
 def test_parent_lookup_returns_defaults_for_a_new_user(federation):
-    budget = federation.parent_clients[0].get_user_budget("new-user")
+    budget = federation.children[0].check_submission("new-user").user("new-user")
     assert (budget.user_id, budget.budget_limit, budget.max_band, budget.budget_spent) == (
         "new-user",
         10,
@@ -253,7 +253,8 @@ def test_handoff_from_another_routing_parent_obeys_the_budget_parent_ceiling(fed
     "parent_error", [ConnectionError("unreachable"), IapCredentialsUnavailable("no machine credentials")]
 )
 def test_direct_submission_fails_when_parent_is_unreachable(federation, monkeypatch, parent_error):
-    def unreachable(_user_id):
+    def unreachable(_request, *, timeout_ms):
+        del timeout_ms
         raise parent_error
 
     monkeypatch.setattr(federation.parent_clients[0], "get_user_budget", unreachable)
@@ -261,36 +262,3 @@ def test_direct_submission_fails_when_parent_is_unreachable(federation, monkeypa
         with pytest.raises(ConnectError) as caught:
             federation.services[1].launch_job(make_job_request(name="/alice/direct-check"), None)
     assert caught.value.code == Code.UNAVAILABLE
-
-
-def test_waiting_submission_leaves_rpc_capacity_for_parent_usage_read(federation, monkeypatch):
-    application = ControllerDashboard(federation.services[1]).app
-    original = federation.parent_clients[0].get_user_budget
-
-    async def scenario():
-        loop = asyncio.get_running_loop()
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=application), base_url="http://controller"
-        ) as client:
-
-            def check_parent(user_id):
-                # A real parent can call back to read this child's local usage.
-                response = asyncio.run_coroutine_threadsafe(
-                    client.post("/iris.cluster.ControllerService/ListUserBudgets", json={}), loop
-                ).result(timeout=2)
-                assert response.status_code == 200
-                return original(user_id)
-
-            monkeypatch.setattr(federation.parent_clients[0], "get_user_budget", check_parent)
-            response = await asyncio.wait_for(
-                client.post(
-                    "/iris.cluster.ControllerService/LaunchJob",
-                    json=MessageToDict(make_job_request(name="/alice/concurrent", priority_band=INTERACTIVE)),
-                ),
-                timeout=3,
-            )
-            assert response.status_code == 200
-
-    with TestClient(application):
-        asyncio.run(scenario())
