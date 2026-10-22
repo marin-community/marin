@@ -262,9 +262,12 @@ engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
 
 ### Shell harness
 
-`ShellHarness(*, command_timeout, shell_tool=ShellToolConfig(), tools={})` from `rolloutengine.harness.shell` serves a
-shell tool on the task machine and host tools from tool providers, and ends on a final response.
+`ShellHarness(*, command_timeout, output_limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, shell_tool=ShellToolConfig(),
+tools={})` from `rolloutengine.harness.shell` serves a shell tool on the task machine and host tools from tool providers,
+and ends on a final response.
 `command_timeout` must be `None` or positive and finite.
+`output_limit_bytes` is the most bytes of stdout, and of stderr, that one shell-tool command returns to the model. It
+must be positive, and its default is the machine output limit, 1 MiB.
 The shell harness exposes `shell(command: string)` when the task declares the shell capability.
 Each command runs through `bash -c`. Files persist between commands; shell variables do not.
 TaskSpec can own the shell interface when its prompt names a particular tool. Declare the
@@ -359,9 +362,11 @@ flowchart LR
 
 RolloutEngine and curation share call decoding, execution, and JSON observations: stdout,
 stderr, exit code, reason, and separate stdout/stderr truncation flags. Each stream holds at most
-the machine output limit, 1 MiB in RolloutEngine; output past it is lost, and its truncation flag is set.
+the machine output limit, 1 MiB in RolloutEngine, or the lower `ShellHarness.output_limit_bytes`; output past it is
+lost, and its truncation flag is set.
 The engine does not keep the rest: a model that expects long output redirects it to a file in the
-workspace and reads it with later commands, and a harness that wants a safety net provides one. The harness
+workspace and reads it with later commands. A harness that runs an agent for its results can set a lower
+`output_limit_bytes` as a safety net, so that one large output cannot fill the agent's context. The harness
 advertises the tools its environment supplies. Trajectories retain the chosen names and call
 IDs. Graders consume the resulting submission independently of the tool interface.
 

@@ -6,13 +6,12 @@
 import json
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from typing import Any
-from urllib.parse import urlparse
 
 import click
 from finestore.rl.curation import CurationCatalog, JudgmentStatus, validate_items
-from marina.client import DEFAULT_MARINA_URL, marina_request
+from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 MAX_BATCH_BYTES = 1_000_000
@@ -34,7 +33,6 @@ TABLE_COLUMNS = {
     ),
     "packets": "pipeline_key TEXT, task_id TEXT, packet TEXT",
 }
-Query = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
 def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
@@ -56,7 +54,7 @@ def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
         yield "[" + ",".join(batch) + "]"
 
 
-def insert_rows(query: Query, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
+def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
     """Insert byte-bounded batches and return the stored row count."""
     names = ", ".join(column.strip().split()[0] for column in columns.split(","))
     count = 0
@@ -70,7 +68,7 @@ def insert_rows(query: Query, table: str, columns: str, load_id: str, rows: Iter
     return count
 
 
-def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
+def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]:
     """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
     started = time.monotonic()
     snapshot = catalog.current()
@@ -182,23 +180,6 @@ def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
         "sql_requests": requests,
         "seconds": time.monotonic() - started,
     }
-
-
-def applet_query(service_url: str, applet_id: str) -> Query:
-    """Return a SQL client for the applet's authenticated origin."""
-    details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
-    assert isinstance(details, dict)
-    parsed = urlparse(details["authenticated_url"])
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
-
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        result = marina_request(
-            origin, "POST", f"/a/{applet_id}/query", json_body={"sql": sql, "parameters": parameters}
-        )
-        assert isinstance(result, dict)
-        return result
-
-    return query
 
 
 @click.command(help=__doc__)

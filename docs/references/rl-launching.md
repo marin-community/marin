@@ -53,22 +53,21 @@ workloads use separate Daytona credentials.
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
-The nested runtime uses its pinned RolloutEngine version for task execution and model requests.
+The nested runtime uses the checkout's RolloutEngine for task execution and model requests.
 Harbor tasks use Shellbox. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 
 The launcher runs `uv run --isolated --project vendor/skyrl --frozen --no-group dev
 marinskyrl` in a child process. SkyRL has its own lock and is excluded from Marin's
 workspace. The child discards the parent's Python environment selection. SkyRL
-may depend on Marin packages inside its own environment; Marin calls SkyRL only
-through the executable.
+installs Marin libraries and Harbor from editable paths in the checkout.
+Marin calls SkyRL through the executable.
 
-The launch document records a hash of the current runtime files, assets, and
-independent lock in `runtime.source_digest`. The isolated executable computes
-it, so ordinary vendor edits change the identity without restaging migration
-provenance. The launcher bundles these files for Iris and workers verify their
-hashes. Workers install the bundled project in editable mode
-with the frozen Megatron/vLLM profile. They do not fetch the fork or require Git.
+Iris submits the Marin repository through its standard workspace bundle.
+Workers run SkyRL from `/app/vendor/skyrl` and install the project in editable
+mode with the frozen Megatron/vLLM profile. Marin artifacts and SkyRL run
+records use `rigging.provenance` for checkout and launch context alongside
+the resolved configuration.
 Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
 
 ```text
@@ -164,20 +163,26 @@ the GPUs assigned to each role.
 
 ## Artifact and runtime boundaries
 
-Identity-bearing inputs belong in `SkyRLSpec`: the vendored SkyRL runtime identity, model and tokenizer,
+Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
+
+`IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
+coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
+which leaves the Iris default in effect. In-pod sandbox graders need namespace capabilities: use
+`job_pb2.CONTAINER_PROFILE_PRIVILEGED` and give CPU preflight children the same profile. Iris requires
+admin authorization for this elevated profile. Grader commands still run inside their own sandbox.
 
 Use artifact dependencies for model and data handoffs. A raw checkpoint path hides provenance and
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
 
-The temporary checkpoint root is derived from the RL artifact name and version, not only from the
-runtime source digest. When `SkyRLRuntime.source_digest` changes, use a fresh RL artifact version. Reusing the old
+The temporary checkpoint root is derived from the RL artifact name and version.
+After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
-runtime. Reuse a version across a runtime repin only after establishing checkpoint compatibility or
+runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.
 
 ## Pre-launch review
@@ -189,7 +194,7 @@ Before submitting a large run:
    Check that explicit forward and training microbatch sizes agree.
    For `fully_async`, confirm the train batch and policy mini-batch are equal.
 3. Confirm the vendored runtime supports the chosen strategy, CUDA stack, model, and vLLM
-   geometry. If its identity changed, use a fresh RL artifact version unless its checkpoints are
+   geometry. After runtime changes, use a fresh RL artifact version unless its checkpoints are
    explicitly compatible.
 4. Confirm request and response token budgets match the dataset and chat template.
 5. Check coordinator and worker CPU, host memory, disk, concurrency, timeout, and credentials.
