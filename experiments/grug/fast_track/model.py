@@ -281,6 +281,16 @@ class UngatedExpertActivation(StrEnum):
     RMS-normalized per token over the expert's hidden units. Fixed coefficients (Motif learns them per expert)."""
 
 
+class RoutedStateRead(StrEnum):
+    """``kda_routed_state_read``: a second read of each KDA layer's recurrent state that feeds its MoE input."""
+
+    NONE = "none"
+    SHARED = "shared"
+    """Query ``W_q x`` from the MoE input ``x`` only (ablation)."""
+    ROUTED = "routed"
+    """Query ``W_q x + sum_e w_e q_e`` over the token's selected experts and combine weights."""
+
+
 class SharedExpertPlacement(StrEnum):
     """Where the shared experts run relative to the routed experts (same math in every placement)."""
 
@@ -809,6 +819,11 @@ class GrugModelConfig:
     """Where the fused KDA state pass's backward forms its per-chunk cotangents (``StateGrads``; same math)."""
     kda_state_block_v: int = 32
     """d_v tile of the fused KDA state pass: 64 with ``kda_state_grads=xla`` is 8% faster on GB200 (same math)."""
+    kda_routed_state_read: RoutedStateRead = RoutedStateRead.NONE
+    """KDA layers read their own state again after routing, with an L2-normed query from the MoE input (plus, under
+    ``routed``, the selected experts' learned queries weighted by the combine weights); the per-head reads,
+    projected by a zero-init ``[N h, D]`` matrix, are added to the routed and shared experts' input (not the
+    router's). The combine weights are not stop-gradiented."""
     moe_shared_placement: SharedExpertPlacement = SharedExpertPlacement.FUSED
     # Block Attention Residuals (Kimi, arXiv 2603.15031): each sublayer's input is a learned per-sublayer
     # softmax over the RMS-normalized residual-block history (embedding, block sums, running partial).
@@ -1112,6 +1127,10 @@ class GrugModelConfig:
                 raise ValueError(f"{name} needs attn_res and must be > 0, got {cap}")
         if self.scan_layers and (not self.attn_res or self.attn_res_layer_backward != AttnResLayerBackward.RECOMPUTE):
             raise ValueError("scan_layers needs attn_res with attn_res_layer_backward=recompute")
+        if self.kda_routed_state_read != RoutedStateRead.NONE and (
+            self.moe_shared_placement == SharedExpertPlacement.OVERLAP or self.dense_mlp
+        ):
+            raise ValueError("kda_routed_state_read needs a routed MoE without the overlap shared placement")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
         if self.moe_drop_renorm and self.moe_implementation != "fixed_pooled_wave_all_to_all":
@@ -1846,6 +1865,12 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         # The write-strength projection's magnitude: pinned under MuonH, free under Adam.
         w_beta = jax.lax.stop_gradient(layer.attn.w_beta).astype(jnp.float32)
         stats[f"attn_res_knob_kda_w_beta_norm_L{i}"] = jnp.linalg.norm(w_beta)
+    if layer.state_read is not None:
+        w_p = jax.lax.stop_gradient(layer.state_read.w_p).astype(jnp.float32)
+        stats[f"attn_res_knob_ksr_p_norm_L{i}"] = jnp.linalg.norm(w_p)
+        if layer.state_read.q_e is not None:
+            q_e = jax.lax.stop_gradient(layer.state_read.q_e).astype(jnp.float32)
+            stats[f"attn_res_knob_ksr_qe_norm_L{i}"] = jnp.linalg.norm(q_e)
     gauss = getattr(layer.attn, "gauss", None)
     if gauss is not None:  # per-head shift and width of the value kernel
         sigma = jax.nn.softplus(gauss.rho.astype(jnp.float32)) + 0.05
@@ -2020,6 +2045,87 @@ def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, options: KdaK
     return jnp.swapaxes(out, 1, 2)
 
 
+class KdaStateInputs(NamedTuple):
+    """Everything but the query of one KDA kernel call: a second query reads the same state (``KdaStateRead``)."""
+
+    k: jax.Array
+    v: jax.Array
+    g: jax.Array
+    beta: jax.Array
+    extras: dict[str, jax.Array]
+
+
+# ``(MoE input [T, D], selected experts [T, K], combine weights [T, K]) -> [T, D]`` term added to the experts' input.
+StateReadFn = Callable[[jax.Array, jax.Array, jax.Array], jax.Array]
+_STATE_READ_DELTA = "state_read_delta"
+
+
+class KdaStateRead(eqx.Module):
+    """``kda_routed_state_read`` parameters of one KDA layer: the shared query projection ``w_q``, the per-expert
+    queries ``q_e`` (``routed`` only) and the zero-init output projection ``w_p`` into the MoE input."""
+
+    w_q: Float[Array, "D NH"]
+    q_e: Float[Array, "E NH"] | None
+    w_p: Float[Array, "NH D"]
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "KdaStateRead":
+        k_q, k_e = random.split(key)
+        d, nh, std = cfg.hidden_dim, cfg.num_heads * cfg.inferred_head_dim, cfg.initializer_std
+        routed = cfg.kda_routed_state_read == RoutedStateRead.ROUTED
+        return KdaStateRead(
+            w_q=reshard(_init_weight(k_q, (d, nh), std), P(_FSDP_AXES, "model")),
+            # ~std per entry against ~std sqrt(D) for W_q x: the expert term starts small.
+            q_e=reshard(_init_weight(k_e, (cfg.num_experts, nh), std), P(None, "model")) if routed else None,
+            w_p=reshard(jnp.zeros((nh, d)), P("model", _FSDP_AXES)),
+        )
+
+    def __call__(
+        self,
+        cfg: GrugModelConfig,
+        state: KdaStateInputs,
+        x_flat: Float[Array, "T D"],
+        selected: Int[Array, "T K"],
+        weights: Float[Array, "T K"],
+    ) -> Float[Array, "T D"]:
+        """``w_p`` of the state read at every token for the query from ``x_flat`` and its routing."""
+        b, s, n, h = state.k.shape
+        q = jnp.einsum("td,de->te", x_flat, self.w_q.astype(x_flat.dtype), out_sharding=P(_BATCH_AXES, "model"))
+        if self.q_e is not None:
+            dense = jnp.einsum("tke,tk->te", jax.nn.one_hot(selected, self.q_e.shape[0], dtype=jnp.float32), weights)
+            dense = reshard(dense, P(_BATCH_AXES, None))
+            q = q + jnp.einsum(
+                "te,en->tn", dense.astype(q.dtype), self.q_e.astype(q.dtype), out_sharding=P(_BATCH_AXES, "model")
+            )
+        q = jnp.reshape(q, (b, s, n, h), out_sharding=P(_BATCH_AXES, None, "model", None))
+        r = _kda_sharded_kernel(cfg, q, state.k, state.v, state.g, state.beta, state.extras)
+        r = jnp.reshape(r.astype(x_flat.dtype), (b * s, n * h), out_sharding=P(_BATCH_AXES, "model"))
+        return jnp.einsum("tn,nd->td", r, self.w_p.astype(r.dtype), out_sharding=_batch_spec())
+
+
+_KDA_EXTRA_SPECS = {
+    "gate_p": P("model", None),
+    "gate_bias": P("model", None),
+    "erase": P(_BATCH_AXES, None, "model", None),
+    "erase_logits": P(_BATCH_AXES, None, "model", None),
+    "segment_ids": P(_BATCH_AXES, None),
+}
+
+
+def _kda_sharded_kernel(
+    cfg: GrugModelConfig, q: jax.Array, k: jax.Array, v: jax.Array, g: jax.Array, beta: jax.Array, extras: dict
+) -> Float[Array, "B S N H"]:
+    """``_kda_kernel`` under ``shard_map`` over the batch and head axes (``extras`` as in ``_kda_kernel``)."""
+    spec4 = P(_BATCH_AXES, None, "model", None)
+    kernel_fn = _kda_kernel_rotating if "rot_rate" in extras else _kda_kernel
+    options = KdaKernelOptions(cfg.kda_chunk_size, cfg.kda_save_chunk_states, cfg.kda_state_grads, cfg.kda_state_block_v)
+    run = functools.partial(kernel_fn, options=options)
+    in_specs = (spec4,) * 4 + (P(_BATCH_AXES, None, "model"), {name: _KDA_EXTRA_SPECS[name] for name in extras})
+    # The Pallas custom VJPs are not vma-annotated, so skip the varying-axes check.
+    kernel = jax.shard_map(run, mesh=get_abstract_mesh(), in_specs=in_specs, out_specs=spec4, check_vma=False)
+    return kernel(q, k, v, g, beta, extras)
+
+
 class KimiDeltaAttention(eqx.Module):
     """KDA linear-attention token mixer for the local layers, following Kimi K3's KDA layer.
 
@@ -2110,8 +2216,10 @@ class KimiDeltaAttention(eqx.Module):
         value_residual: bool = False,
         kv_input: Float[Array, "B S W"] | None = None,
         token_ids: Int[Array, "B S"] | None = None,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``kv_input`` (``kv_stream_dim``) is the normed KV side stream that the ``k`` / ``v`` projections
+        return_kernel_inputs: bool = False,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]] | tuple[Any, ...]:
+        """``return_kernel_inputs`` also returns the kernel's ``KdaStateInputs`` (``kda_routed_state_read``).
+        ``kv_input`` (``kv_stream_dim``) is the normed KV side stream that the ``k`` / ``v`` projections
         (and their SConvs) read instead of ``x``; the erase / write gates, beta and decay stay on ``x``.
         ``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
         ``no_decay`` / ``no_beta`` (static, per layer) replace g with 0 / beta with 1; ``kv_share`` /
@@ -2174,20 +2282,18 @@ class KimiDeltaAttention(eqx.Module):
         q, k, v, g = (reshard(t, spec4) for t in (q, k, v, g))
         beta = reshard(beta, spec3)
         extras: dict[str, jax.Array] = {}
-        extra_specs: dict[str, P] = {}
         if onchip_gate:
             head_spec = P("model", None)
             extras["gate_p"] = reshard(jnp.broadcast_to(scale, self.dt_bias.shape), head_spec)
             extras["gate_bias"] = reshard(self.dt_bias.astype(jnp.float32), head_spec)
-            extra_specs["gate_p"] = extra_specs["gate_bias"] = head_spec
         if self.w_erase is not None:
             z = fused["erase"] if fused else _proj(cfg, proj_inputs.get("k", x), self.w_erase)
             z = rearrange(z, "... (n d) -> ... n d", d=head_dim)
             erase_logits = z.astype(jnp.float32)
             if cfg.kda_onchip_erase_gate:
-                extras["erase_logits"], extra_specs["erase_logits"] = reshard(z, spec4), spec4
+                extras["erase_logits"] = reshard(z, spec4)
             else:
-                extras["erase"], extra_specs["erase"] = reshard(2.0 * jax.nn.sigmoid(erase_logits), spec4), spec4
+                extras["erase"] = reshard(2.0 * jax.nn.sigmoid(erase_logits), spec4)
             # b / 2 = sigmoid(z): H = -p log p - (1 - p) log(1 - p), max log 2 (the zero-init value).
             p_erase = jax.nn.sigmoid(erase_logits)
             entropy = -(p_erase * jax.nn.log_sigmoid(erase_logits) + (1 - p_erase) * jax.nn.log_sigmoid(-erase_logits))
@@ -2195,20 +2301,7 @@ class KimiDeltaAttention(eqx.Module):
             stats[f"{_KDA_ERASE_STAT_PREFIX}entropy"] = jax.lax.stop_gradient(jnp.mean(entropy))
         if segment_ids is not None:
             extras["segment_ids"] = reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None))
-            extra_specs["segment_ids"] = P(_BATCH_AXES, None)
-        if "rot_rate" in extras:
-            kernel_fn = _kda_kernel_rotating
-        else:
-            kernel_fn = _kda_kernel
-        options = KdaKernelOptions(
-            cfg.kda_chunk_size, cfg.kda_save_chunk_states, cfg.kda_state_grads, cfg.kda_state_block_v
-        )
-        run = functools.partial(kernel_fn, options=options)
-        args = (q, k, v, g, beta, extras)
-        in_specs = (spec4,) * 4 + (spec3, extra_specs)
-        # The Pallas custom VJPs are not vma-annotated, so skip the varying-axes check.
-        kernel = jax.shard_map(run, mesh=get_abstract_mesh(), in_specs=in_specs, out_specs=spec4, check_vma=False)
-        o = kernel(*args)
+        o = _kda_sharded_kernel(cfg, q, k, v, g, beta, extras)
         o = self.o_norm(o.astype(x.dtype))
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
         gate = jax.nn.sigmoid(fused["g"] if fused else _proj(cfg, x, self.w_g))
@@ -2219,6 +2312,8 @@ class KimiDeltaAttention(eqx.Module):
             gate = rearrange(gate_heads, "... n d -> ... (n d)")
         o = o * gate
         out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec())
+        if return_kernel_inputs:
+            return out, stats, KdaStateInputs(k, v, g, beta, extras)
         return out, stats
 
 
@@ -2679,8 +2774,11 @@ class MoEMLP(eqx.Module):
         saved_routed: Float[Array, "T L"] | None = None,
         moe_k_keep: Int[Array, "B S"] | None = None,
         moe_dynamic_layer: bool = False,
+        state_read: StateReadFn | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``router_embed`` is the token embedding the router reads under ``router_on_embed``.
+        """``state_read`` (``kda_routed_state_read``) gives a term added to the experts' input ``x`` after routing
+        (the router still reads ``x``); it is returned as ``stats[_STATE_READ_DELTA]`` for the shared experts.
+        ``router_embed`` is the token embedding the router reads under ``router_on_embed``.
         ``moe_k_keep`` (a ``moe_dynamic_layers`` layer) is each token's routed-expert count (``MoeDynamicK``).
         ``saved_routed`` is this call's combined expert output from the forward (``scan_save_routed_output``):
         the recompute returns it, with the gradient still flowing through the experts.
@@ -2831,6 +2929,18 @@ class MoEMLP(eqx.Module):
         router_stats["margin_max"] = margin_max
 
         routed_input = x_flat
+        if state_read is not None:
+            assert not self.latent_selects
+            read_delta = state_read(x_flat, selected_experts, combine_weights_f).astype(x_flat.dtype)
+            router_stats[_STATE_READ_DELTA] = read_delta
+            routed_input = x_flat + read_delta
+            if self.w_latent_down is not None:
+                down = reshard(self.w_latent_down.astype(x_flat.dtype), P(None, None))
+                projected = [
+                    *projected[:1],
+                    projected[1] + jnp.einsum("td,dr->tr", read_delta, down, out_sharding=_batch_spec()),
+                    *projected[2:],
+                ]
         if self.latent_selects:
             assert self.cfg.latent_dim is not None and self.latent_norm is not None
             selected = x_flat[..., : self.cfg.latent_dim]
@@ -2994,6 +3104,7 @@ def moe_and_shared_fused(
     saved_routed: Float[Array, "T L"] | None = None,
     moe_k_keep: Int[Array, "B S"] | None = None,
     moe_dynamic_layer: bool = False,
+    state_read: StateReadFn | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -3064,6 +3175,7 @@ def moe_and_shared_fused(
             saved_routed=saved_routed,
             moe_k_keep=moe_k_keep,
             moe_dynamic_layer=moe_dynamic_layer,
+            state_read=state_read,
         )
 
     routed, stats = routed_mlp()
@@ -3073,6 +3185,18 @@ def moe_and_shared_fused(
         return routed, stats
     if unfused:
         parts = [*parts, *(jnp.einsum("td,de->te", x_flat, w, out_sharding=_batch_spec()) for w in shared_weights)]
+    if state_read is not None:
+        # The shared experts read the same x + delta as the routed experts (the fused GEMM saw only x).
+        stats = dict(stats)
+        read_delta = stats.pop(_STATE_READ_DELTA)
+        n_moe = len(moe_weights)
+        parts = [
+            *parts[:n_moe],
+            *(
+                p + jnp.einsum("td,de->te", read_delta, w.astype(read_delta.dtype), out_sharding=_batch_spec())
+                for p, w in zip(parts[n_moe:], shared_weights, strict=True)
+            ),
+        ]
     if not gated:
         # Ungated shared experts: these parts are their pre-activations (``Transformer.neuron_inputs``).
         stats = {**stats, _SHARED_PRE: jnp.concatenate(parts[len(moe_weights) :], axis=-1)}
@@ -3408,6 +3532,7 @@ class Block(eqx.Module):
     extra_mlp: DenseMLP | None  # cfg.extra_mlp_layers (every layer carries one; those use it)
     extra_mlp_gain: Float[Array, ""] | None
     attn_res_partial_scale: Float[Array, " 2"] | None  # cfg.attn_res_partial_scale: (a_attn, a_mlp)
+    state_read: KdaStateRead | None  # cfg.kda_routed_state_read, KDA layers only
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
@@ -3477,6 +3602,11 @@ class Block(eqx.Module):
             attn_res_partial_scale=(
                 reshard(jnp.ones((2,), jnp.float32), P(None)) if cfg.attn_res and cfg.attn_res_partial_scale else None
             ),
+            state_read=(
+                KdaStateRead.init(cfg, key=random.fold_in(key, 91))
+                if use_kda and cfg.kda_routed_state_read != RoutedStateRead.NONE
+                else None
+            ),
         )
 
     def _attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
@@ -3500,8 +3630,10 @@ class Block(eqx.Module):
         kda_ablation: tuple[bool, bool] = (False, False),
         value_residual: bool = False,
         kv_input: Float[Array, "B S W"] | None = None,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
+        return_kernel_inputs: bool = False,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]] | tuple[Any, ...]:
+        """``return_kernel_inputs`` (KDA only) also returns the kernel's ``KdaStateInputs``.
+        ``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
         stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``; ``kv_input``
         (``kv_stream_dim``) is the normed KV side stream the K/V projections read. Returns the branch output
         and the mixer's logging stats."""
@@ -3513,9 +3645,10 @@ class Block(eqx.Module):
             sum_in = self._attn_input(sum_stream)
             proj_inputs = {c: sum_in for c in attn_components}
         stats: dict[str, jax.Array] = {}
+        state = None
         if isinstance(self.attn, KimiDeltaAttention):
             # KDA has no positional encoding or window; it only needs the document boundaries.
-            out, stats = self.attn(
+            out, stats, *state = self.attn(
                 attn_in,
                 _sconv_segment_ids(mask),
                 proj_inputs=proj_inputs,
@@ -3525,6 +3658,7 @@ class Block(eqx.Module):
                 value_residual=value_residual,
                 kv_input=kv_input,
                 token_ids=token_ids,
+                return_kernel_inputs=return_kernel_inputs,
             )
         else:
             out, stats = self.attn(
@@ -3540,6 +3674,9 @@ class Block(eqx.Module):
             )
         if self.sconv_attn is not None:
             out = self.sconv_attn(out, _sconv_segment_ids(mask))
+        if return_kernel_inputs:
+            assert state, "return_kernel_inputs needs a KDA layer"
+            return out, stats, state[0]
         return out, stats
 
     def mlp_branch(
@@ -3557,8 +3694,10 @@ class Block(eqx.Module):
         saved_routed: Float[Array, "T L"] | None = None,
         moe_k_keep: Int[Array, "B S"] | None = None,
         moe_dynamic_layer: bool = False,
+        state_read: "StateReadFn | None" = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
+        """``state_read`` adds the ``kda_routed_state_read`` term to the experts' input (``MoEMLP``).
+        ``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
         (``moe_hash_layers``, ``moe_gumbel_tau``, ``router_token_bias_rank``, ``router_bias_seed``)."""
         normed = self._mlp_input(_laurel(h, None, None))
@@ -3590,6 +3729,7 @@ class Block(eqx.Module):
                 saved_routed,
                 moe_k_keep=moe_k_keep,
                 moe_dynamic_layer=moe_dynamic_layer,
+                state_read=state_read,
             )
         else:
             out, stats = self.mlp(
@@ -3603,7 +3743,10 @@ class Block(eqx.Module):
                 saved_routed=saved_routed,
                 moe_k_keep=moe_k_keep,
                 moe_dynamic_layer=moe_dynamic_layer,
+                state_read=state_read,
             )
+            if state_read is not None:
+                stats = {k: v for k, v in stats.items() if k != _STATE_READ_DELTA}
             cfg = self.mlp.cfg
             if cfg.shared_ungated_relu2 and cfg.moe_shared_placement != SharedExpertPlacement.OVERLAP:
                 # No shared expert here (shared_expert_mult_*): zero pre-activations, so every layer carries the
@@ -4463,7 +4606,8 @@ def _attn_res_sublayers(
         kv_gate = 2 * cfg.num_layers + (cfg.num_layers if cfg.attn_res_shared_query else 0) + layer_index
         h_kv, _, _ = mix(None, kv_gate, False, leading_sources_only=True)
         kv_input = layer._attn_input(h_kv)
-    attn_out, attn_stats = attn_branch(
+    read_state = layer.state_read is not None
+    attn_out, attn_stats, *kda_state = attn_branch(
         layer,
         h,
         mask,
@@ -4476,6 +4620,7 @@ def _attn_res_sublayers(
         kda_ablation,
         physical in (),
         kv_input,
+        read_state,
     )
     attn_out = _sublayer_dropout(cfg, attn_out, noise_key, _ATTN_DROPOUT_SALT)
     skip_keep = None if logit_bias is None else logit_bias.get(_SKIP_KEEP)
@@ -4497,6 +4642,9 @@ def _attn_res_sublayers(
     route = _route_kwargs(cfg, physical, token_ids, noise_key, logit_bias)
     route["moe_k_keep"] = _moe_k_keep(cfg, physical, mask, attn_out)
     route["moe_dynamic_layer"] = physical in cfg.moe_dynamic_layers
+    if read_state:
+        assert layer.state_read is not None
+        route["state_read"] = functools.partial(layer.state_read, cfg, kda_state[0])
     mlp_out, router_stats = layer.mlp_branch(h, mask, **shared_kwargs, **route)
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:

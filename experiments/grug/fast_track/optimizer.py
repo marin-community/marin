@@ -584,6 +584,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "kda_beta"
             if kda_leaf in _KDA_ADAM_LEAVES:
                 return "kda_decay"
+            # kda_routed_state_read: the zero-init output projection and the per-expert queries (MuonH would pin
+            # their norms at init), Adam without weight decay; the query projection w_q takes the MuonH catch-all.
+            if re.search(r"\.state_read\.(q_e|w_p)$", path_lower):
+                return "kda_decay"
             if re.search(
                 r"null_gain|extra_mlp_gain|entropy_head|mid_conf|final_conf|skip_probe|skip_router", path_lower
             ):
