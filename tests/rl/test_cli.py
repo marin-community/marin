@@ -92,14 +92,14 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
         "DAYTONA_RL_API_KEY": "test-rl-key",
         "DAYTONA_EVAL_API_KEY": "test-eval-key",
         "DAYTONA_API_KEY": "test-other-key",
-        "HF_TOKEN": "test-hf-token",
         "TOGETHER_API_KEY": "test-together-key",
-        "WANDB_API_KEY": "test-wandb-key",
         "JUDGE_KEY": "test-judge-key",
         "EVAL_KEY": "test-custom-eval-key",
     }
     for name, value in expected_env.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("HF_TOKEN", "test-hf-token")
+    monkeypatch.setenv("WANDB_API_KEY", "test-wandb-key")
     if missing_name is not None:
         monkeypatch.delenv(missing_name)
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
@@ -126,7 +126,7 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
     assert result.exit_code == 0, result.output
     environment = client.submit.call_args.kwargs["environment"]
     assert expected_env.items() <= environment.env_vars.items()
-    assert "UNRELATED_SECRET" not in environment.env_vars
+    assert {"HF_TOKEN", "WANDB_API_KEY", "UNRELATED_SECRET"}.isdisjoint(environment.env_vars)
 
 
 def test_execution_requires_a_complete_federated_route() -> None:

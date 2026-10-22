@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 import humanfriendly
+from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
 
 from fray.device_flops import device_flops as _device_flops
@@ -595,6 +596,8 @@ class EnvironmentConfig:
         docker_image: Docker image for containerized execution
         pip_packages: Additional pip packages to install
         env_vars: Environment variables to set
+        secrets: Explicit credentials delivered as files by the Iris backend.
+        secret_behavior: Forward available client secrets, or use only the explicit map.
         extras: Extra dependency groups for uv (e.g., ["tpu", "eval"])
         setup_scripts: Setup scripts run in order before the command. ``None``
             builds the default uv-sync script; a list runs verbatim (``[]`` => no
@@ -607,6 +610,8 @@ class EnvironmentConfig:
     docker_image: str | None = None
     pip_packages: Sequence[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
+    secrets: dict[str, str] = field(default_factory=dict, repr=False)
+    secret_behavior: SecretBehavior = SecretBehavior.INHERIT
     extras: Sequence[str] = field(default_factory=list)
     setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] = field(default_factory=list)
@@ -626,20 +631,16 @@ def create_environment(
     extras: Sequence[str] | None = None,
     setup_scripts: Sequence[str] | None = None,
     sync_packages: Sequence[str] | None = None,
+    secrets: dict[str, str] | None = None,
+    secret_behavior: SecretBehavior = SecretBehavior.INHERIT,
 ) -> EnvironmentConfig:
-    """Create an EnvironmentConfig with sensible defaults.
-
-    Sets HF_DATASETS_TRUST_REMOTE_CODE, TOKENIZERS_PARALLELISM, HF_TOKEN,
-    and WANDB_API_KEY from the current environment by default.
-    """
+    """Create an EnvironmentConfig with explicit credential delivery."""
     if workspace is None and docker_image is None:
         workspace = os.getcwd()
 
     default_env_vars = {
         "HF_DATASETS_TRUST_REMOTE_CODE": "1",
         "TOKENIZERS_PARALLELISM": "false",
-        "HF_TOKEN": os.getenv("HF_TOKEN"),
-        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
         "MARIN_CI_DISABLE_RUNTIME_ENVS": os.getenv("MARIN_CI_DISABLE_RUNTIME_ENVS"),
     }
 
@@ -650,6 +651,8 @@ def create_environment(
         docker_image=docker_image,
         pip_packages=list(pip_packages or []),
         env_vars=merged_env_vars,
+        secrets=dict(secrets or {}),
+        secret_behavior=secret_behavior,
         extras=list(extras or []),
         setup_scripts=setup_scripts,
         sync_packages=list(sync_packages or []),

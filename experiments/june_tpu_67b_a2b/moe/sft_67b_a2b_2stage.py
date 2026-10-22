@@ -39,7 +39,7 @@ checkpoint is read in-cluster from the CW ``s3://marin-us-east-02a`` (LOTA) mirr
 port needed. The coordinator must run in-cluster (the Mac can't reach cwlota.com).
 
 Submit (per stage, cw-us-east-02a, preemptible; MARIN_PREFIX must be s3://marin-us-east-02a/marin;
-AWS creds auto-injected in-pod via the iris-task-env secret -- do not forward AWS_*)::
+AWS credentials arrive through the iris-storage-secrets volume)::
 
     cd ~/Documents/marin && source secrets.env   # or "$DC_AGENT_SECRET_ENV"
     export KUBECONFIG=~/.kube/coreweave-iris-gpu
@@ -164,7 +164,7 @@ _SMOKE_STEPS: int = 8  # validation: clear the first jit_train_step at the targe
 
 # Base checkpoint, read in-cluster from the CoreWeave s3://marin-us-east-02a (LOTA) mirror. No
 # cross-region port needed on CW (contrast the TPU-era mirror:// pre-stage). AWS creds are injected
-# in-pod via the iris-task-env secret; the tensorstore S3 reader lists step-42150 directly.
+# through the iris-storage-secrets volume; the tensorstore S3 reader lists step-42150 directly.
 _BASE_CKPT: str = (
     "s3://marin-us-east-02a/marin/grug/"
     "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step39k-79ebf3/"
