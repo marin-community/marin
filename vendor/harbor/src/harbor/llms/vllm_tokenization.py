@@ -3,9 +3,19 @@ import weakref
 from typing import Any
 
 import httpx
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 
 _ASYNC_TOKENIZE_HTTP_CLIENTS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_TOKENIZE_RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def _is_retryable_tokenize_error(error: BaseException) -> bool:
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in _TOKENIZE_RETRYABLE_STATUS_CODES
+    return isinstance(
+        error, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+    )
 
 
 def shared_async_tokenize_client(timeout: float = 10.0) -> httpx.AsyncClient:
@@ -90,6 +100,12 @@ def completion_budget(
     )
 
 
+@retry(
+    retry=retry_if_exception(_is_retryable_tokenize_error),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, max=4),
+    reraise=True,
+)
 async def tokenize_chat(
     *,
     api_base: str,

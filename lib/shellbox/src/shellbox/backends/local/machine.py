@@ -3,8 +3,8 @@
 
 """Run trusted commands on the host in bubblewrap sandboxes, without a container image.
 
-Each machine's commands see the host's system directories, read-only or copy-on-write, on top of a
-private root directory, which holds every other path they write, from ``/app`` and ``/tmp`` to ``HOME``.
+Each machine's commands see the host's programs, read-only or copy-on-write, and private runtime
+configuration on top of a private root directory, which holds paths from ``/app`` and ``/tmp`` to ``HOME``.
 """
 
 import asyncio
@@ -60,7 +60,7 @@ NPROC_HEADROOM = 256
 FILE_SIZE_LIMIT = 1 << 30
 CPU_GRACE = 5
 """CPU seconds a command may use beyond the most its timeout allows on the CPUs it may run on."""
-# Host directories that commands read and execute; see SystemDirectories for whether they can write them.
+# Reserve program directories and private configuration paths from caller-supplied mounts.
 SYSTEM_DIRECTORIES = (
     "/bin",
     "/etc",
@@ -68,14 +68,26 @@ SYSTEM_DIRECTORIES = (
     "/lib32",
     "/lib64",
     "/libx32",
-    "/opt",
-    "/run/systemd/resolve",  # The target of /etc/resolv.conf on hosts that run systemd-resolved.
     "/sbin",
     "/sys",
     "/usr",
 )
-OVERLAID_DIRECTORIES = ("/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/opt", "/sbin", "/usr")
-"""The system directories that a copy-on-write machine can write; ``/sys`` and the resolver's stay read-only."""
+OVERLAID_DIRECTORIES = ("/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/usr")
+"""The system directories that a copy-on-write machine can write; ``/sys`` stays read-only."""
+PRIVATE_SYSTEM_DIRECTORIES = ("/etc", "/sys")
+# Copy only runtime configuration. Host credentials, shell startup files, /opt and sysfs are not inputs.
+RUNTIME_CONFIGURATION = (
+    "/etc/alternatives",
+    "/etc/group",
+    "/etc/hosts",
+    "/etc/ld.so.cache",
+    "/etc/localtime",
+    "/etc/nsswitch.conf",
+    "/etc/passwd",
+    "/etc/resolv.conf",
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs",
+)
 MOUNTINFO = Path("/proc/self/mountinfo")
 # Transfers that reach an overlaid directory pass through the sandbox as a tar stream, so they see the machine's
 # layer. A file that is a symlink is archived as the file it leads to inside the sandbox, not as the link.
@@ -109,12 +121,12 @@ class SystemDirectories(StrEnum):
     READ_ONLY = "read_only"
     """Bound read-only: a write fails."""
     COPY_ON_WRITE = "copy_on_write"
-    """Overlaid per machine on every directory in ``OVERLAID_DIRECTORIES``.
+    """Writable per machine on every directory in ``OVERLAID_DIRECTORIES``.
 
-    Commands see the host's files and their own machine's writes, which persist between its commands and
-    which ``close`` discards; the host's files never change. Files the host mounts inside these directories,
-    such as a container's ``/etc/resolv.conf``, stay read-only. Needs overlayfs and a temporary directory
-    that is not itself on overlayfs.
+    Commands see the host's programs, private runtime configuration and their own machine's writes,
+    which persist between its commands and which ``close`` discards; the host's files never change.
+    Files the host mounts inside overlaid directories stay read-only. Needs overlayfs and a temporary
+    directory that is not itself on overlayfs.
     """
 
 
@@ -151,7 +163,11 @@ def _remove(path: Path) -> None:
 
 def _overlaid_directories() -> tuple[str, ...]:
     """The overlaid directories this host has; a link into ``/usr`` on a merged-/usr host is not one."""
-    return tuple(path for path in OVERLAID_DIRECTORIES if os.path.isdir(path) and not os.path.islink(path))
+    return tuple(
+        path
+        for path in OVERLAID_DIRECTORIES
+        if path not in PRIVATE_SYSTEM_DIRECTORIES and os.path.isdir(path) and not os.path.islink(path)
+    )
 
 
 def _layer(layers: Path, directory: str) -> Path:
@@ -204,7 +220,10 @@ def _sandbox_argv(
     argv += ["--bind", str(root), "/"]
     overlaid = () if layers is None else _overlaid_directories()
     for path in SYSTEM_DIRECTORIES:
-        if os.path.islink(path):
+        if path in PRIVATE_SYSTEM_DIRECTORIES:
+            if path == "/sys" or layers is None:
+                argv += ["--ro-bind", str(root / path.lstrip("/")), path]
+        elif os.path.islink(path):
             # Merged-/usr hosts link /bin and /lib into /usr; the link keeps paths such as the ELF loader valid.
             argv += ["--symlink", os.readlink(path), path]
         elif path in overlaid:
@@ -213,8 +232,7 @@ def _sandbox_argv(
             argv += ["--overlay-src", path, "--overlay", str(layer / "upper"), str(layer / "work"), path]
         else:
             argv += ["--ro-bind-try", path, path]
-    # An overlay shows only its directory's own filesystem, so files mounted inside it, such as the resolver
-    # configuration a container runtime mounts at /etc/resolv.conf, are bound back read-only.
+    # Overlays hide nested host mounts; preserve those inside shared program directories read-only.
     for point in read_only_system_mounts() if overlaid else ():
         argv += ["--ro-bind", point, point]
     argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
@@ -248,14 +266,26 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
     root = Path(tempfile.mkdtemp(prefix="shellbox-bwrap-probe-"))
     layers = None
     try:
-        root.chmod(ROOT_MODE)
+        _prepare_root(root, None)
         if system_directories == SystemDirectories.COPY_ON_WRITE:
             layers = Path(tempfile.mkdtemp(prefix="shellbox-bwrap-probe-layers-"))
             _prepare_layers(layers)
-        argv = _sandbox_argv(bwrap, root=root, layers=layers, mounts=(), network=NetworkPolicy.DENY, account=None)
+        argv = _sandbox_argv(
+            bwrap,
+            root=root,
+            layers=layers,
+            mounts=(),
+            network=NetworkPolicy.DENY,
+            account=None,
+        )
         try:
             probe = subprocess.run(
-                [*argv, "/bin/sh", "-c", "exit 0"], capture_output=True, text=True, timeout=PROBE_TIMEOUT, check=False
+                [*argv, "/bin/sh", "-c", "exit 0"],
+                capture_output=True,
+                text=True,
+                timeout=PROBE_TIMEOUT,
+                check=False,
+                env=CONTROL_ENVIRONMENT,
             )
         except OSError as error:
             return str(error)
@@ -337,6 +367,12 @@ async def _bounded_output(stream: asyncio.StreamReader, limit: int) -> tuple[byt
 
 def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
     root.chmod(ROOT_MODE)
+    for directory in (*PRIVATE_SYSTEM_DIRECTORIES, "/opt"):
+        (root / directory.lstrip("/")).mkdir(parents=True)
+    for configuration in RUNTIME_CONFIGURATION:
+        source = Path(configuration)
+        if source.exists():
+            _copy(source, root / configuration.lstrip("/"))
     # Any user may write /tmp and HOME, as in a container image.
     for directory in (SCRATCH, HOME):
         path = root / directory.relative_to("/")
@@ -430,7 +466,7 @@ class LocalMachine:
         mount = self._mounted(path)
         if mount is not None:
             return mount.host / path.relative_to(mount.guest)
-        if _within(path, SYSTEM_DIRECTORIES):
+        if _within(path, SYSTEM_DIRECTORIES) and not _within(path, PRIVATE_SYSTEM_DIRECTORIES):
             return Path(path)
         host = self.root / path.relative_to("/")
         if not Path(os.path.realpath(host)).is_relative_to(self.root):
@@ -471,26 +507,41 @@ class LocalMachine:
             network=self.spec.network,
             account=_command_account(command.user),
         )
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-I",
-            "-S",
-            "-c",
-            LAUNCH_SOURCE,
-            json.dumps(_resource_limits(command.timeout)),
-            *sandbox,
-            "/bin/sh",
-            "-c",
-            RUN_SCRIPT,
-            "shellbox-local",
-            command.cwd or self.spec.workdir or "/",
-            *command.argv,
-            env=environment,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
+        arguments = ["--clearenv"]
+        for key, value in environment.items():
+            arguments.extend(("--setenv", key, value))
+        encoded_arguments = [os.fsencode(argument) for argument in arguments]
+        if any(b"\0" in argument for argument in encoded_arguments):
+            raise ValueError("Sandbox arguments cannot contain NUL bytes")
+        # Environment values must stay out of both the host launcher's environment and its public argv.
+        with tempfile.TemporaryFile() as argument_file:
+            argument_file.write(b"\0".join(encoded_arguments) + b"\0")
+            argument_file.seek(0)
+            argument_fd = argument_file.fileno()
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                LAUNCH_SOURCE,
+                json.dumps(_resource_limits(command.timeout)),
+                sandbox[0],
+                "--args",
+                str(argument_fd),
+                *sandbox[1:],
+                "/bin/sh",
+                "-c",
+                RUN_SCRIPT,
+                "shellbox-local",
+                command.cwd or self.spec.workdir or "/",
+                *command.argv,
+                pass_fds=(argument_fd,),
+                env=CONTROL_ENVIRONMENT,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
         assert process.stdin is not None and process.stdout is not None and process.stderr is not None
         limit = command.output_limit_bytes
         try:
@@ -541,7 +592,7 @@ class LocalMachine:
             raise UnsupportedMachineSpec(
                 f"A copy-on-write machine cannot download {source}, which contains its system directories"
             )
-        if self._overlaid(guest):
+        if self._overlaid(guest) or _within(guest, PRIVATE_SYSTEM_DIRECTORIES):
             result = await self._control(ARCHIVE_SCRIPT, guest, output_limit_bytes=ARCHIVE_LIMIT_BYTES)
             if result.exit_code != 0:
                 raise RuntimeError(result.stderr.decode(errors="replace").strip())
@@ -601,11 +652,11 @@ def check_local_environment(requirements: ExecutionRequirements, spec: MachineSp
 class LocalMachineFactory:
     """Run trusted commands on this host in bubblewrap sandboxes, any number of machines at a time.
 
-    A machine's commands see the host's system directories (``/usr``, ``/etc``, ``/opt`` and the like) as
-    ``system_directories`` says: read-only by default, or copy-on-write per machine. They see each directory
+    A machine's commands see the host's programs and private runtime configuration as
+    ``system_directories`` says: read-only by default, or writable per machine. They see each directory
     in ``read_only`` at its own path, read-only, and each ``Mount`` of a ``HostImage`` at its guest path,
     read-only; a guest path inside a system directory is refused. Every other path, including ``/tmp``
-    and ``HOME``, lies in a root directory of the machine's own that starts empty and is removed by
+    and ``HOME``, lies in a root directory of the machine's own that is removed by
     ``close``; no other host file is visible. The caller keeps each ``read_only`` directory self-contained:
     a symlink that leads out of the mounted directories does not resolve in the sandbox.
     ``build_python_environment`` builds such a directory for a Python interpreter and its packages.
