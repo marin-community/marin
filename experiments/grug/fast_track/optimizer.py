@@ -422,7 +422,7 @@ ATTN_RES_QUERY_LR_SCALE = 0.1
 KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
 _ADAM_LEAVES = re.compile(
-    r"(?:^|\.)(value_embed|ve_lambda|ve_gate|bigram_gate_[wb]|bigram_gate_[ab]_lr|qk_mult|attn_res_partial_scale)$"
+    r"(?:^|\.)(value_embed|ve_lambda|ve_gate|bigram_gate_[wb]|bigram_gate_[ab]_lr|qk_mult|attn_res_partial_scale|latent_prev_conv)$"
 )
 
 

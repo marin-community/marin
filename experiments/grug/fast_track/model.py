@@ -740,6 +740,10 @@ class GrugModelConfig:
     latent_dim: int | None = 256
     latent_out_dim: int | None = None
     latent_out_full_layers: tuple[int, ...] = ()
+    moe_latent_prev_conv_layers: tuple[int, ...] = ()
+    """MoE layers whose routed experts read ``z_t + w * z_{t-1}`` on the normed input latent: a causal 1-step
+    depthwise conv with a learned per-channel ``w`` (zero init, so training starts at the plain model), reset at
+    packed-document starts. The router and the shared expert keep reading the unconvolved input."""
     """Layers whose routed experts write the full residual stream (``latent_out_dim = hidden_dim``, no
     ``w_latent_up``) while the others keep the latent write. These layers live in their own stacks
     (``Transformer.stacked_blocks_tail`` / ``kda_blocks_tail``); needs Block AttnRes, whose loop runs layer by layer."""
@@ -1167,6 +1171,14 @@ class GrugModelConfig:
                 raise ValueError("moe_null_layers needs the unrolled layer loop (scan_layers=false)")
             if bad := [i for i in self.moe_null_layers if not 0 <= i < self.num_layers]:
                 raise ValueError(f"moe_null_layers {bad} out of range for {self.num_layers} layers")
+        if self.moe_latent_prev_conv_layers:
+            if self.dense_mlp or self.latent_dim is None:
+                raise ValueError("moe_latent_prev_conv_layers needs MoE layers with a latent (latent_dim)")
+            if not self.attn_res or self.scan_layers:
+                raise ValueError("moe_latent_prev_conv_layers needs attn_res and scan_layers=false")
+            layers = self.moe_latent_prev_conv_layers
+            if len(set(layers)) != len(layers) or not all(0 <= i < self.num_layers for i in layers):
+                raise ValueError(f"moe_latent_prev_conv_layers must be distinct layer indices, got {layers}")
         tail_modes = (self.latent_out_full_layers, (), (), ())
         if sum(bool(x) for x in tail_modes) > 1:
             raise ValueError(
@@ -1875,6 +1887,10 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         stats[f"attn_res_knob_kda_rot_freq_max_L{i}"] = jnp.max(freq)
     if isinstance(layer.mlp, MoEMLP):
         stats.update(_router_knob_stats(layer.mlp, i))
+    if isinstance(layer.mlp, MoEMLP) and layer.mlp.latent_prev_conv is not None:
+        w = jnp.abs(jax.lax.stop_gradient(layer.mlp.latent_prev_conv).astype(jnp.float32))
+        stats[f"attn_res_knob_moe_prev_conv_norm_L{i}"] = jnp.linalg.norm(w)
+        stats[f"attn_res_knob_moe_prev_conv_absmax_L{i}"] = jnp.max(w)
     if isinstance(layer.mlp, MoEMLP) and layer.mlp.cfg.latent_out_dim is not None:
         em = layer.mlp.expert_mlp
         read = [em.w_up] if em.w_gate is None else [em.w_gate, em.w_up]
@@ -2391,6 +2407,7 @@ class MoEMLP(eqx.Module):
     latent_width_bias: Float[Array, " B"] | None  # sign-SGD selection bias balancing the widths
     latent_mix_out_gate: Float[Array, "D E"] | None  # mixture of latents on the experts' output latent
     null_gain: Float[Array, ""] | None  # cfg.moe_null_learned_gain (every layer carries it; null layers read it)
+    latent_prev_conv: Float[Array, " R"] | None  # cfg.moe_latent_prev_conv_layers: per-channel weight on z_{t-1}
     cfg: GrugModelConfig = eqx.field(static=True)
     latent_selects: bool = eqx.field(static=True, default=False)
     """This layer forms its expert input by ``latent_select`` (see ``latent_select_layers``)."""
@@ -2498,6 +2515,7 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             null_gain=jnp.ones((), jnp.float32) if cfg.moe_null_learned_gain else None,
+            latent_prev_conv=jnp.zeros((latent,), jnp.float32) if cfg.moe_latent_prev_conv_layers else None,
             expert_mlp=_expert_mlp_init(
                 _bank_config(cfg, 1),
                 expert_width,
@@ -2679,6 +2697,7 @@ class MoEMLP(eqx.Module):
         saved_routed: Float[Array, "T L"] | None = None,
         moe_k_keep: Int[Array, "B S"] | None = None,
         moe_dynamic_layer: bool = False,
+        segment_ids: Int[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``router_embed`` is the token embedding the router reads under ``router_on_embed``.
         ``moe_k_keep`` (a ``moe_dynamic_layers`` layer) is each token's routed-expert count (``MoeDynamicK``).
@@ -2691,7 +2710,8 @@ class MoEMLP(eqx.Module):
         noise of ``moe_gumbel_tau`` to the expert selection; ``router_tok_rows`` are the tokens' rows of the
         shared ``router_token_bias_rank`` table and ``router_seed_bias`` the ``router_bias_seed`` logit bias.
         ``overlap`` is ``[T, D]`` token-local work run under the first bank's dispatch all-to-all
-        (``SharedExpertPlacement.OVERLAP``) and added to the output."""
+        (``SharedExpertPlacement.OVERLAP``) and added to the output. ``segment_ids`` (packed-document
+        boundaries) reset the ``moe_latent_prev_conv_layers`` conv."""
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
@@ -2844,6 +2864,8 @@ class MoEMLP(eqx.Module):
                 routed_input = self.latent_norm(routed_input)
             else:
                 routed_input = self._mix_latent(routed_input, x_flat, self.latent_norm, self.latent_mix_in_gate)
+        if self.latent_prev_conv is not None:
+            routed_input = _prev_token_conv(routed_input, self.latent_prev_conv, segment_ids, b, s)
         if self.latent_width_gate is not None:
             routed_input = self._matryoshka_latent(routed_input, x_flat, router_stats)
         bank_mlps = [self.expert_mlp]
@@ -2934,6 +2956,21 @@ class MoEMLP(eqx.Module):
         return routed, {**router_stats, **assignments, _ROUTED_INPUT: routed_input}
 
 
+def _prev_token_conv(
+    z_flat: Float[Array, "T R"], w: Float[Array, " R"], segment_ids: Int[Array, "B S"] | None, b: int, s: int
+) -> Float[Array, "T R"]:
+    """``z_t + w * z_{t-1}`` along each of the ``b`` sequences, with ``z_{t-1} = 0`` at position 0 and at every
+    packed-document start."""
+    z = rearrange(z_flat, "(b s) r -> b s r", b=b, s=s)
+    prev = jnp.pad(z[:, :-1], ((0, 0), (1, 0), (0, 0)))
+    if segment_ids is not None:
+        seg = reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None))
+        same_doc = jnp.pad(seg[:, 1:] == seg[:, :-1], ((0, 0), (1, 0)))
+        prev = jnp.where(same_doc[..., None], prev, jnp.zeros_like(prev))
+    out = z + w.astype(z.dtype) * prev
+    return reshard(rearrange(out, "b s r -> (b s) r"), _batch_spec())
+
+
 def _shared_experts_tail(
     cfg: "GrugModelConfig",
     parts: Sequence[jax.Array],
@@ -2994,6 +3031,7 @@ def moe_and_shared_fused(
     saved_routed: Float[Array, "T L"] | None = None,
     moe_k_keep: Int[Array, "B S"] | None = None,
     moe_dynamic_layer: bool = False,
+    segment_ids: Int[Array, "B S"] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -3064,6 +3102,7 @@ def moe_and_shared_fused(
             saved_routed=saved_routed,
             moe_k_keep=moe_k_keep,
             moe_dynamic_layer=moe_dynamic_layer,
+            segment_ids=segment_ids,
         )
 
     routed, stats = routed_mlp()
@@ -3590,6 +3629,7 @@ class Block(eqx.Module):
                 saved_routed,
                 moe_k_keep=moe_k_keep,
                 moe_dynamic_layer=moe_dynamic_layer,
+                segment_ids=_sconv_segment_ids(mask),
             )
         else:
             out, stats = self.mlp(
@@ -3603,6 +3643,7 @@ class Block(eqx.Module):
                 saved_routed=saved_routed,
                 moe_k_keep=moe_k_keep,
                 moe_dynamic_layer=moe_dynamic_layer,
+                segment_ids=_sconv_segment_ids(mask),
             )
             cfg = self.mlp.cfg
             if cfg.shared_ungated_relu2 and cfg.moe_shared_placement != SharedExpertPlacement.OVERLAP:
@@ -5402,6 +5443,7 @@ class Transformer(eqx.Module):
             keys = jnp.stack([block_keys[i] for i in layers])
             layer_index = jnp.asarray(layers, dtype=jnp.int32)
             layer_cfg = _shared_width_stack_config(layer_cfg, use_kda)
+            layer_cfg = _latent_prev_conv_stack_config(layer_cfg, layers)
             if not use_kda:
                 layer_cfg = _value_embed_stack_config(layer_cfg, layers)
             return ArrayStacked.init(len(layers), Block)(layer_cfg, key=keys, layer_index=layer_index, use_kda=use_kda)
@@ -5553,6 +5595,18 @@ class Transformer(eqx.Module):
             if table is None:
                 return layer
             return eqx.tree_at(lambda b: b.attn.value_embed, layer, table, is_leaf=lambda x: x is None)
+
+        return [select(i, layer) for i, layer in enumerate(layers)]
+
+    def _select_latent_prev_conv(self, layers: list[Block]) -> list[Block]:
+        """Apply ``moe_latent_prev_conv_layers`` to the unstacked layers: a layer outside it whose stack carries the
+        conv drops it (its stacked leaf stays an unused parameter)."""
+        chosen = self.config.moe_latent_prev_conv_layers
+
+        def select(i: int, layer: Block) -> Block:
+            if i in chosen or not isinstance(layer.mlp, MoEMLP) or layer.mlp.latent_prev_conv is None:
+                return layer
+            return eqx.tree_at(lambda b: b.mlp.latent_prev_conv, layer, None)
 
         return [select(i, layer) for i, layer in enumerate(layers)]
 
@@ -5793,7 +5847,7 @@ class Transformer(eqx.Module):
         if scan is not None and scan.num_units:
             units, layers = self._split_scanned_units(scan)
         else:
-            units, layers = {}, self._select_value_embeds(self.layers())
+            units, layers = {}, self._select_latent_prev_conv(self._select_value_embeds(self.layers()))
         # Every query in gate order [pass 0: attn_0, mlp_0, ..., mlp_{L-1}; pass 1: ...; final].
         gate_queries = (
             [_cast_floats(_unit_queries(scan, units, "attn_res_query_attn", "attn_res_query_mlp"), dtype)]
@@ -6807,6 +6861,14 @@ def _shared_width_stack_config(cfg: GrugModelConfig, use_kda: bool) -> GrugModel
     return dataclasses.replace(
         cfg, shared_expert_intermediate_dim=int(width), shared_expert_mult_mla=1.0, shared_expert_mult_kda=1.0
     )
+
+
+def _latent_prev_conv_stack_config(cfg: GrugModelConfig, layers: tuple[int, ...]) -> GrugModelConfig:
+    """A layer stack's config under ``moe_latent_prev_conv_layers``: without the conv when none of its layers has
+    it, else unchanged (``Transformer._select_latent_prev_conv`` drops the others')."""
+    if any(i in cfg.moe_latent_prev_conv_layers for i in layers):
+        return cfg
+    return dataclasses.replace(cfg, moe_latent_prev_conv_layers=())
 
 
 def _value_embed_stack_config(cfg: GrugModelConfig, layers: tuple[int, ...]) -> GrugModelConfig:
