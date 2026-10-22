@@ -18,12 +18,13 @@ workpiece to its next stage::
     BUILD     BUILT          built      VALIDATE  task_digest; revision none
     BUILD     BUILD_FAILED   revise     AUTHOR    build_revisions + 1; revision build_failure
     BUILD     BUILD_FAILED   reject     DONE      build_revisions + 1; closing rejected (budget)
-    VALIDATE  VALIDATED      validated  REVIEW
+    VALIDATE  VALIDATED      validated  REVIEW    validation_passes + 1
     REVIEW    DECIDED        accept     DONE      closing accepted (labelled with the band)
     REVIEW    DECIDED        reject     DONE      closing rejected (the event's kind)
     REVIEW    DECIDED        retry      VALIDATE  retries + 1
     REVIEW    DECIDED        abandon    DONE      retries + 1; closing abandoned
-    REVIEW    DECIDED        modify     AUTHOR    round + 1; task_digest cleared; revision modify
+    REVIEW    DECIDED        modify     AUTHOR    round + 1; validation_passes 0; task_digest cleared;
+                                                  revision modify
     DONE      TERMINAL       -          -         terminal = the closing's terminal
     any       TERMINAL       -          (stays)   terminal failed, when ``terminal`` is ``failed``
 
@@ -48,6 +49,11 @@ terminal:
 
 * an abandoned workpiece returns to ``VALIDATE`` with its retry count at zero;
 * a failed workpiece resumes at the stage it failed in.
+
+``retries`` is the budget counter ``max_validation_retries`` bounds, so re-entering an abandoned workpiece
+resets it. ``validation_passes`` counts the round's ``VALIDATED`` events and survives that reset: only a
+modify exit, which starts the next round, sets it back to zero. The validate stage numbers its pass from it,
+and each pass gives the round's trials that ended ungraded for a retryable cause a fresh retry budget.
 """
 
 import json
@@ -217,7 +223,10 @@ class WorkpieceState:
         author_state: The author state triage's accept recorded, which every author call receives;
             empty before the accept.
         build_revisions: The build failures and failed author calls so far.
-        retries: The review ``Retry`` decisions since the workpiece opened or was last abandoned.
+        retries: The review ``Retry`` decisions since the workpiece opened or was last abandoned: the count
+            ``max_validation_retries`` bounds.
+        validation_passes: The ``VALIDATED`` events of the current round, across retries and re-entries after
+            an abandonment; a new round starts it at zero.
         closing: The ``TERMINAL`` event due, while the stage is ``DONE``.
         terminal: The workpiece's terminal, until a later event clears it.
     """
@@ -233,6 +242,7 @@ class WorkpieceState:
     author_state: Mapping[str, JsonValue]
     build_revisions: int
     retries: int
+    validation_passes: int
     closing: Closing | None
     terminal: Terminal | None
 
@@ -254,6 +264,7 @@ def opened(event: WorkpieceEvent) -> WorkpieceState:
         author_state=MappingProxyType({}),
         build_revisions=0,
         retries=0,
+        validation_passes=0,
         closing=None,
         terminal=None,
     )
@@ -291,7 +302,7 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
         case (EventKind.TRIAGED, Exit.ACCEPT):
             return replace(state, author_state=MappingProxyType(json.loads(attrs[AUTHOR_STATE_ATTR])))
         case (EventKind.VALIDATED, Exit.VALIDATED):
-            return state
+            return replace(state, validation_passes=state.validation_passes + 1)
         case (EventKind.TRIAGED, Exit.REPAIR):
             assert event.digest is not None, "a repair exit carries the rewrite's digest"
             return replace(state, proposal_digest=event.digest, triage_repairs=state.triage_repairs + 1)
@@ -320,7 +331,9 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
         case (EventKind.DECIDED, Exit.ABANDON):
             return replace(state, retries=state.retries + 1, closing=Closing(Terminal.ABANDONED, attrs["cause"], None))
         case (EventKind.DECIDED, Exit.MODIFY):
-            return replace(state, round=state.round + 1, task_digest=None, revision=RevisionKind.MODIFY)
+            return replace(
+                state, round=state.round + 1, validation_passes=0, task_digest=None, revision=RevisionKind.MODIFY
+            )
         case _:
             raise ValueError(f"{kind} cannot exit {way}")
 

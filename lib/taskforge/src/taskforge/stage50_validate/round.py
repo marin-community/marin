@@ -41,12 +41,12 @@ the trial runs again after it with its full retries. An adversary attempt is num
 attempt cancelled in flight graded, so its submissions directory is its own.
 
 A trial is done when its last attempt file holds a grade or a cause that is not retryable, or when it holds
-``(max_retries + 1) * (validation_retries + 1)`` attempts: one ``run_trial`` budget for the first validation and
-for each review ``Retry`` since (``ValidationContext.validation_retries``). Otherwise the trial resumes at the next
-attempt number with the retries left in the current budget, so a ``Retry`` reruns exactly the trials that ended
-ungraded for a retryable cause, each with a full budget, and its attempt files follow the ones on disk. An
-attempt cancelled before its outcome writes no file (``trials.write_evidence`` writes whole files only), so a
-cancelled trial is run again rather than counted as ungraded.
+``(max_retries + 1) * validation_pass`` attempts: one ``run_trial`` budget for each validation pass of the round
+(``ValidationContext.validation_pass``). Otherwise the trial resumes at the next attempt number with the retries
+left in the current budget, so a review ``Retry``, or a relaunch of an abandoned workpiece, reruns exactly the
+trials that ended ungraded for a retryable cause, each with a full budget, and its attempt files follow the ones
+on disk. An attempt cancelled before its outcome writes no file (``trials.write_evidence`` writes whole files
+only), so a cancelled trial is run again rather than counted as ungraded.
 
 The result is read back from the unit files, each outcome through ``trials.attempt_outcome``, so a resumed
 round returns what an uninterrupted one would. The result holds every decision input and no rollout, which
@@ -129,8 +129,9 @@ class ValidationContext:
         store_root: The build's step store, holding the draft's grader step output.
         modify_rounds_left: The review ``Modify`` decisions the workpiece may still follow into a new round
             (``WorkpieceBudget.max_modify_rounds`` less the rounds already spent).
-        validation_retries: The review ``Retry`` decisions the workpiece has followed back into this round's
-            validation (``WorkpieceState.retries``). Each one gives every trial that ended ungraded for a
+        validation_pass: This validation's pass of the round, counting from 1: one more than the round's
+            validations already recorded (``WorkpieceState.validation_passes``), across review ``Retry``
+            decisions and re-entries after an abandonment. Each pass gives every trial that ended ungraded for a
             retryable cause a fresh retry budget.
     """
 
@@ -140,7 +141,7 @@ class ValidationContext:
     proposal: TaskProposal
     store_root: str
     modify_rounds_left: int
-    validation_retries: int
+    validation_pass: int
 
 
 @dataclass(frozen=True)
@@ -537,7 +538,7 @@ def _resumed_plan(
 
     Only the attempts whose file ``covers`` accepts belong to this run of the trial and spend its retries; the
     trial is done when the last attempt is one of them and ends it: graded, ungraded for a cause that is not
-    retryable, or the last attempt the validations so far allow, ``max_retries + 1`` for each. The plan's retries
+    retryable, or the last attempt the passes so far allow, ``max_retries + 1`` for each. The plan's retries
     are those left in the current validation's budget. The next attempt is numbered after every attempt on disk
     and at least ``floor``.
     """
@@ -545,7 +546,7 @@ def _resumed_plan(
     payloads = {attempt: _attempt_path(evidence_dir, kind, trial, attempt).read_bytes() for attempt in attempts}
     covered = [attempt for attempt in attempts if covers(payloads[attempt])]
     spent = len(covered) if covered and covered[-1] == attempts[-1] else 0
-    allowed = (settings.max_retries + 1) * (context.validation_retries + 1)
+    allowed = (settings.max_retries + 1) * context.validation_pass
     if spent:
         last = attempt_outcome(payloads[attempts[-1]])
         if isinstance(last, Graded) or not last.retryable or spent >= allowed:

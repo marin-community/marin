@@ -813,7 +813,7 @@ async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     rounds = tmp_path / "workpieces" / WORKPIECE / "rounds"
     first, second = (
-        ValidationContext(WORKPIECE, number, rounds / str(number), PROPOSAL, str(tmp_path / STORE_DIR), left, 0)
+        ValidationContext(WORKPIECE, number, rounds / str(number), PROPOSAL, str(tmp_path / STORE_DIR), left, 1)
         for number, left in ((0, 1), (1, 0))
     )
     assert validate_once.contexts == [first, second, second]
@@ -830,17 +830,18 @@ async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds
     ]
 
 
-class GradedOnRetry:
-    """A validate function whose first pass leaves one solver trial ungraded for a retryable cause and whose later
-    passes grade it, recording each context."""
+class GradedOnPass:
+    """A validate function whose passes before ``graded_from`` leave one solver trial ungraded for a retryable cause
+    and whose later passes grade it, recording each context."""
 
-    def __init__(self) -> None:
+    def __init__(self, graded_from: int) -> None:
+        self.graded_from = graded_from
         self.contexts: list[ValidationContext] = []
 
     async def __call__(self, draft: TaskDraft, context: ValidationContext) -> ValidationResult:
         self.contexts.append(context)
         result = passing_result(context)
-        if context.validation_retries > 0:
+        if context.validation_pass >= self.graded_from:
             return result
         assert result.solver is not None
         ungraded = TrialResult("3", TrialStatus.UNGRADED, None, Cause.MODEL_UNAVAILABLE, "solver/3/attempt-1.json")
@@ -850,7 +851,7 @@ class GradedOnRetry:
 
 
 async def test_a_retry_followed_by_a_graded_rerun_accepts_the_workpiece_within_its_validation_retries(tmp_path):
-    validate_retried = GradedOnRetry()
+    validate_retried = GradedOnPass(graded_from=2)
     log = InMemoryEventLog()
 
     stages = replace(STAGES, validate=validate_retried)
@@ -858,9 +859,34 @@ async def test_a_retry_followed_by_a_graded_rerun_accepts_the_workpiece_within_i
 
     assert BUDGET.max_validation_retries == 1
     assert exits(log) == [*ACCEPTED_EXITS[:5], ("decided", "retry"), *ACCEPTED_EXITS[4:]]
-    assert [context.validation_retries for context in validate_retried.contexts] == [0, 1]
+    assert [context.validation_pass for context in validate_retried.contexts] == [1, 2]
     retry = log.events()[5]
     assert (retry.attrs["cause"], retry.attrs["count"]) == (Cause.MODEL_UNAVAILABLE, "1")
+
+
+async def test_a_relaunch_of_a_workpiece_abandoned_on_its_retries_validates_the_rounds_next_pass_and_can_accept(
+    tmp_path,
+):
+    validate_passes = GradedOnPass(graded_from=3)
+    stages = replace(STAGES, validate=validate_passes)
+    abandoned = InMemoryEventLog()
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, abandoned) is Terminal.ABANDONED
+    assert exits(abandoned) == [
+        *ACCEPTED_EXITS[:5],
+        ("decided", "retry"),
+        ("validated", "validated"),
+        ("decided", "abandon"),
+        ("terminal", "abandoned"),
+    ]
+    state = derive_state(abandoned.events())
+    assert (state.stage, state.retries, state.validation_passes) == (Stage.VALIDATE, 0, 2)
+
+    log = InMemoryEventLog()
+    resumed = replace(stages, triage=no_call, author=no_call, build=no_call)
+    assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+
+    assert [context.validation_pass for context in validate_passes.contexts] == [1, 2, 3]
+    assert exits(log)[len(abandoned.events()) :] == ACCEPTED_EXITS[4:]
 
 
 async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings(tmp_path):

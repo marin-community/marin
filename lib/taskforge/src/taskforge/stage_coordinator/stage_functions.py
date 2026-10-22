@@ -25,7 +25,7 @@ verdict within ``WorkpieceBudget.max_triage_repairs``, and triages the proposal 
 budget of zero it never calls it. The build stage calls ``load_program`` on the source the author
 returned, read back from ``authored/<k>/program.py``. The validate stage passes the draft with the
 round's ``ValidationContext``: the workpiece, the round, its directory, the proposal it built, the step
-store, the MODIFY rounds left and the review ``Retry`` decisions followed back into validation. A
+store, the MODIFY rounds left and the validation pass of the round it runs. A
 caller's validate function closes over what the coordinator does not own, such as the host's
 ``ValidationSettings`` and the trial models::
 

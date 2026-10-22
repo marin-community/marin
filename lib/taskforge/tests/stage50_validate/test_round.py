@@ -141,7 +141,7 @@ def adversary_policy(k: int, submissions: int = 3, mode: AdversaryMode = Adversa
     )
 
 
-def round_context(tmp_path: Path, modify_rounds_left: int = 0, validation_retries: int = 0) -> ValidationContext:
+def round_context(tmp_path: Path, modify_rounds_left: int = 0, validation_pass: int = 1) -> ValidationContext:
     return ValidationContext(
         workpiece_id=WORKPIECE,
         round=0,
@@ -149,7 +149,7 @@ def round_context(tmp_path: Path, modify_rounds_left: int = 0, validation_retrie
         proposal=parse(PROPOSAL),
         store_root=str(tmp_path / "store"),
         modify_rounds_left=modify_rounds_left,
-        validation_retries=validation_retries,
+        validation_pass=validation_pass,
     )
 
 
@@ -726,7 +726,7 @@ async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cau
     ]
     assert first.solver.trials[0].attempt_file.endswith("solver/0/attempt-1.json")
 
-    retried = round_context(tmp_path, validation_retries=1)
+    retried = round_context(tmp_path, validation_pass=2)
     solver = FailingTrials(UNAVAILABLE)
     again = await validate_round(
         built_draft(tmp_path / "store"), retried, settings, solver, UncalledClient(), UncalledClient()
@@ -749,3 +749,18 @@ async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cau
         UncalledClient(),
     )
     assert unchanged == again
+
+    # A relaunch of the workpiece abandoned after that retry validates the round's third pass: trial 0 alone runs
+    # again, with a full budget.
+    relaunched = FailingTrials(UNAVAILABLE)
+    third = await validate_round(
+        built_draft(tmp_path / "store"),
+        round_context(tmp_path, validation_pass=3),
+        settings,
+        relaunched,
+        UncalledClient(),
+        UncalledClient(),
+    )
+    assert relaunched.steps == ["solver/0/4", "solver/0/5"]
+    assert third.solver is not None and third.solver.trials[1:] == first.solver.trials[1:]
+    assert sorted(path.name for path in trial_dir.iterdir()) == [f"attempt-{n}.json" for n in range(6)]

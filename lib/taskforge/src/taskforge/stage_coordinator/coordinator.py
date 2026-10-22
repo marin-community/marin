@@ -561,9 +561,10 @@ def _program_files(program: RLEnvBuildProgram) -> set[str]:
 async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
     """Validate the round's draft in the round's ``ValidationContext`` and write the result to ``validation.json``.
 
-    The context carries the MODIFY rounds the workpiece has left (``_modify_rounds_left``) and the review
-    ``Retry`` decisions it has followed back into validation (``WorkpieceState.retries``, the count
-    ``max_validation_retries`` bounds), so a retried round reruns its ungraded retryable trials.
+    The context carries the MODIFY rounds the workpiece has left (``_modify_rounds_left``) and the pass of
+    the round this validation is, one more than ``WorkpieceState.validation_passes``. That count survives the
+    retry reset of an abandoned workpiece's re-entry, so a review ``Retry`` and a relaunch both rerun the
+    round's ungraded retryable trials with a fresh budget.
     """
     coordinator = workpiece.coordinator
     round_dir = workpiece.round_dir(state.round)
@@ -579,7 +580,7 @@ async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEv
         proposal=workpiece.proposal_at(state),
         store_root=str(coordinator.root / STORE_DIR),
         modify_rounds_left=_modify_rounds_left(workpiece, state),
-        validation_retries=state.retries,
+        validation_pass=state.validation_passes + 1,
     )
     result = await coordinator.stages.validate(draft, context)
     write_validation(round_dir, result)
