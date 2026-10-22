@@ -186,7 +186,9 @@ async def evaluation_session(trajectory_runner, cfg, global_step, sink):
         val_set_name=None,
     )
     try:
-        concurrency = cfg.trajectory_runner.max_concurrent_tasks
+        concurrency = cfg.trajectory_runner.eval_max_concurrent_tasks
+        if concurrency is None:
+            concurrency = cfg.trajectory_runner.max_concurrent_tasks
         async with EvaluationPool(concurrency) as pool:
             yield pool
     finally:
