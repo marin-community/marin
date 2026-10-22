@@ -114,13 +114,10 @@ def main() -> None:
             mask = AttentionMask.causal().with_segment_ids(seg)
             return m.next_token_loss(tokens, jnp.ones(tokens.shape, jnp.float32), mask=mask, reduction="none")
 
-        capacity = forward.default_capacity(TRACE_BATCH * common.SEQ_LEN)
-
         @jax.jit
         def trace_loss(m, tokens, seg):
-            tr = forward.trace_forward(m, tokens, seg, forward.no_ablation(), capacity=capacity)
-            overflow = sum(layer["overflow"] for layer in tr["layers"])
-            return tr["loss"], overflow, tr["layers"][0]["router_logits"][:4, :8]
+            tr = forward.trace_forward(m, tokens, seg, forward.no_ablation())
+            return tr["loss"]
 
         sums = collections.defaultdict(float)
         weights = collections.defaultdict(float)
@@ -135,7 +132,7 @@ def main() -> None:
             if set_batches[batch.source] < TRACE_BATCHES_PER_SET:
                 for half in range(EVAL_BATCH // TRACE_BATCH):
                     sl = slice(half * TRACE_BATCH, (half + 1) * TRACE_BATCH)
-                    tl, overflow, _ = trace_loss(model, tokens[sl], seg[sl])
+                    tl = trace_loss(model, tokens[sl], seg[sl])
                     tl = np.asarray(tl)
                     ww = wn[sl]
                     trace_cmp[batch.source].append(
@@ -143,7 +140,6 @@ def main() -> None:
                             model=float(np.sum(loss[sl] * ww) / max(ww.sum(), 1)),
                             trace=float(np.sum(tl * ww) / max(ww.sum(), 1)),
                             max_abs=float(np.max(np.abs(tl - loss[sl]) * (ww > 0))),
-                            overflow=int(overflow),
                         )
                     )
             set_batches[batch.source] += 1

@@ -64,11 +64,11 @@ def _labels_logp(model, hidden):
     return jax.nn.log_softmax(logits, axis=-1)
 
 
-def make_fns(capacity: int):
+def make_fns():
     eps = 1e-5
 
     def run(model, tokens, seg, abl):
-        return forward.trace_forward(forward.replicate(model), tokens, seg, abl, capacity=capacity)
+        return forward.trace_forward(forward.replicate(model), tokens, seg, abl)
 
     @jax.jit
     def loss_by_category(model, tokens, seg, cats, abl):
@@ -117,7 +117,7 @@ def make_fns(capacity: int):
     @jax.jit
     def analyse(model, tokens, seg, cats, tuned):
         model_r = forward.replicate(model)
-        tr = forward.trace_forward(model_r, tokens, seg, forward.no_ablation(), capacity=capacity)
+        tr = forward.trace_forward(model_r, tokens, seg, forward.no_ablation())
         labels = tr["labels"]
         top1 = tr["top_ids"][..., 0]
         unembed = forward.unembed_direction(model_r)  # [D, V]
@@ -275,7 +275,6 @@ def main() -> None:
     params = common.load_params(cfg, mesh, checkpoint)
     vocab = common.vocab_strings()
     feats = categories.token_features(vocab)
-    capacity = forward.default_capacity(BATCH * common.SEQ_LEN)
     t0 = time.time()
     fit = list(common.train_batches(BATCH, args.fit_sequences, seed=1))
     counts = np.bincount(np.concatenate([b.tokens.reshape(-1) for b in fit]), minlength=forward.VOCAB)
@@ -291,7 +290,7 @@ def main() -> None:
     results: dict[str, np.ndarray] = {}
     with set_mesh(mesh):
         model = common.compute_model(params)
-        loss_by_category, means_fn, tuned_fn, analyse_fn = make_fns(capacity)
+        loss_by_category, means_fn, tuned_fn, analyse_fn = make_fns()
         head_sum = sub_sum = None
         n_sum = 0.0
         xtx = xty = None

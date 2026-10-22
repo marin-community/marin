@@ -102,33 +102,46 @@ def init_state() -> dict:
     )
 
 
-def make_step(capacity: int):
+def make_step():
     @jax.jit
     def step(state, model, tokens, seg, weight, offset):
         model = forward.replicate(model)
-        tr = forward.trace_forward(model, tokens, seg, forward.no_ablation(), capacity=capacity)
-        t = tokens.size
+        tr = forward.trace_forward(model, tokens, seg, forward.no_ablation())
         flat_tok = tokens.reshape(-1)
         valid_tok = (weight.reshape(-1) > 0).astype(jnp.float32)
         new = dict(state)
         upd = {k: [] for k in state}
         for i, lay in enumerate(tr["layers"]):
-            act = lay["expert_act"]  # [E, C, I]
-            slot_token = lay["slot_token"]  # [E, C]
-            slot_ok = (slot_token < t) & (valid_tok[jnp.minimum(slot_token, t - 1)] > 0)
-            okf = slot_ok[..., None].astype(jnp.float32)
+            act = lay["expert_act"]  # [TK, I], assignments in expert order
+            experts = lay["expert_sorted"]
+            tok_sorted = lay["token_sorted"]
+            ok = valid_tok[tok_sorted]
+            okf = ok[:, None]
             pos = act > 0
-            upd["fire"].append(jnp.sum(pos * okf, axis=1))
-            upd["act_sum"].append(jnp.sum(act * okf, axis=1))
-            upd["act_sq"].append(jnp.sum(jnp.square(act) * okf, axis=1))
-            upd["act_max"].append(jnp.max(act * okf, axis=1))
-            masked = jnp.where(slot_ok[..., None], act, -1.0)
-            tv, ti = jax.lax.top_k(jnp.swapaxes(masked, 1, 2), TOP_CONTEXTS)  # [E, I, k]
-            gpos = jnp.take_along_axis(
-                jnp.broadcast_to(slot_token[:, None, :], ti.shape[:2] + slot_token.shape[1:]), ti, axis=-1
+            E = forward.NUM_EXPERTS
+            upd["fire"].append(jax.ops.segment_sum(pos * okf, experts, num_segments=E))
+            upd["act_sum"].append(jax.ops.segment_sum(act * okf, experts, num_segments=E))
+            upd["act_sq"].append(jax.ops.segment_sum(jnp.square(act) * okf, experts, num_segments=E))
+            upd["act_max"].append(jnp.maximum(jax.ops.segment_max(act * okf, experts, num_segments=E), 0.0))
+            # Each expert's top activations per unit: sort every column by (expert, -activation), then read the first
+            # TOP_CONTEXTS rows of each expert's segment.
+            masked = jnp.where(okf > 0, act, -1.0)
+            _, neg, toks = jax.lax.sort(
+                (
+                    jnp.broadcast_to(experts[:, None], act.shape),
+                    -masked,
+                    jnp.broadcast_to(tok_sorted[:, None], act.shape),
+                ),
+                dimension=0,
+                num_keys=2,
             )
-            upd["top"] = [*upd.get("top", []), (tv, gpos + offset)]
-            upd["act_hist"].append(_log_hist(act, pos & slot_ok[..., None], LOG_BINS, LOG_LO))
+            j = jnp.arange(TOP_CONTEXTS)
+            rows = jnp.minimum(lay["expert_starts"][:, None] + j[None, :], act.shape[0] - 1)  # [E, k]
+            have = j[None, :] < lay["expert_counts"][:, None]
+            tv = jnp.where(have[..., None], -neg[rows], -1.0)  # [E, k, I]
+            tp = toks[rows]
+            upd["top"] = [*upd.get("top", []), (jnp.swapaxes(tv, 1, 2), jnp.swapaxes(tp, 1, 2) + offset)]
+            upd["act_hist"].append(_log_hist(act, pos & (okf > 0), LOG_BINS, LOG_LO))
 
             s_act = lay["shared_act"] * valid_tok[:, None]
             s_pos = (lay["shared_act"] > 0) & (valid_tok[:, None] > 0)
@@ -244,8 +257,7 @@ def make_step(capacity: int):
         new["token_counts"] = state["token_counts"].at[flat_tok].add(valid_tok)
         new["loss_sum"] = state["loss_sum"] + jnp.sum(tr["loss"].reshape(-1) * valid_tok)
         new["tokens"] = state["tokens"] + jnp.sum(valid_tok)
-        overflow = sum(lay["overflow"] for lay in tr["layers"])
-        return new, overflow
+        return new
 
     return step
 
@@ -294,35 +306,29 @@ def main() -> None:
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, checkpoint)
-    capacity = forward.default_capacity(BATCH * common.SEQ_LEN)
     t0 = time.time()
     with set_mesh(mesh):
         model = common.compute_model(params)
         state = init_state()
-        step = make_step(capacity)
+        step = make_step()
         sources, seq_tokens, seq_segs, seq_weights = [], [], [], []
         batches = [
             *common.paloma_batches(BATCH, max_sequences=args.paloma_sequences),
             *common.train_batches(BATCH, args.train_sequences),
         ]
-        overflow_total = 0
         for n, batch in enumerate(batches):
             tokens, seg, w = common.device_batch(batch, mesh)
             offset = jnp.asarray(n * BATCH * common.SEQ_LEN, jnp.int32)
-            state, overflow = step(state, model, tokens, seg, w, offset)
-            overflow_total += int(overflow)
+            state = step(state, model, tokens, seg, w, offset)
             seq_tokens.append(batch.tokens.astype(np.uint16))
             seq_segs.append(batch.segment_ids.astype(np.int32))
             seq_weights.append((batch.loss_weight > 0).astype(np.uint8))
             sources += [batch.source] * BATCH
             if n % 50 == 0:
-                logger.info(
-                    "batch %d/%d (%s) %.0fs overflow %d", n, len(batches), batch.source, time.time() - t0, overflow_total
-                )
+                logger.info("batch %d/%d (%s) %.0fs", n, len(batches), batch.source, time.time() - t0)
         host = {k: np.asarray(v) for k, v in state.items()}
         host.update(neuron_logit_lens(model))
         host["router_bias"] = np.stack([np.asarray(layer.mlp.router_bias, np.float32) for layer in params.layers()])
-        host["overflow_total"] = np.asarray(overflow_total)
     common.save_npz(args.tag, "stats", **host)
     common.save_npz(
         args.tag,

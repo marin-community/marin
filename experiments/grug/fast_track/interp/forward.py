@@ -6,15 +6,15 @@ ReLU^2 MoE with one shared expert), exposing every intermediate the study reads 
 
 It re-implements ``Transformer.__call__`` for exactly this config (``check_config`` refuses any other) from the model's
 own parameters and kernels: the AttnRes gates over ``[embed, L0, ..., L(i-1)]`` (attention) and ``[..., attn_i]``
-(MLP), KDA through the fused kernel, MLA through the FA4 kernel, and the MoE as a dense, capacity-padded dispatch whose
-hidden units (the "neurons") are materialized. ``verify.py`` checks it against ``Transformer.next_token_loss``.
+(MLP), KDA through the fused kernel, MLA through the FA4 kernel, and the MoE as a dropless sorted (``ragged_dot``)
+dispatch whose hidden units (the "neurons") are materialized. ``verify.py`` checks it against
+``Transformer.next_token_loss``.
 
 Ablations are traced inputs (one compile serves all of them): every head, sublayer and neuron has a keep multiplier
 ``m`` and its output becomes ``m * out + (1 - m) * mean``.
 """
 
 import functools
-import math
 from typing import NamedTuple
 
 import equinox as eqx
@@ -287,26 +287,19 @@ def _mla_branch(attn: CausalSelfAttention, x, seg, token_ids, mask, head_mult, h
     return contrib, ve_contrib
 
 
-def _dispatch(selected: jax.Array, capacity: int):
-    """Capacity-padded expert dispatch of ``[T, K]`` assignments: ``slot_token`` / ``slot_rank`` ``[E, C]`` (``T`` /
-    ``K`` mark empty slots) and the overflow count."""
-    t, k = selected.shape
+def _dispatch(selected: jax.Array):
+    """Dropless sorted dispatch of ``[T, K]`` assignments: each assignment's expert, token and slot in expert order,
+    and the per-expert counts and segment starts."""
+    k = selected.shape[1]
     flat = selected.reshape(-1)
     order = jnp.argsort(flat, stable=True)
-    experts = flat[order]
     counts = jnp.zeros((NUM_EXPERTS,), jnp.int32).at[flat].add(1)
     starts = jnp.cumsum(counts) - counts
-    pos = jnp.arange(t * k) - starts[experts]
-    keep = pos < capacity
-    slot = jnp.where(keep, experts * capacity + pos, NUM_EXPERTS * capacity)
-    slot_token = jnp.full((NUM_EXPERTS * capacity + 1,), t, jnp.int32).at[slot].set(order // k)[:-1]
-    slot_rank = jnp.full((NUM_EXPERTS * capacity + 1,), k, jnp.int32).at[slot].set(order % k)[:-1]
-    overflow = jnp.sum(~keep)
-    return slot_token.reshape(NUM_EXPERTS, capacity), slot_rank.reshape(NUM_EXPERTS, capacity), overflow, counts
+    return flat[order], order // k, order % k, counts, starts
 
 
-def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, capacity: int, out: dict):
-    """The routed MoE plus the shared expert, as ``moe_and_shared_fused`` (dropless when nothing overflows)."""
+def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
+    """The routed MoE plus the shared expert, as ``moe_and_shared_fused`` (dropless)."""
     mlp = block.mlp
     shared = block.shared[0]
     b, s, d = x.shape
@@ -327,17 +320,16 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, capacity: int, 
     used = abl.slot_renorm * renormed + (1.0 - abl.slot_renorm) * kept
     routed_input = mlp.latent_norm(jnp.einsum("td,dl->tl", x_flat, mlp.w_latent_down))
 
-    slot_token, slot_slot, overflow, counts = _dispatch(selected, capacity)
-    padded_in = jnp.concatenate([routed_input, jnp.zeros((1, LATENT), routed_input.dtype)])[slot_token]  # [E, C, R]
+    expert_sorted, token_sorted, slot_sorted, counts, starts = _dispatch(selected)
     em = mlp.expert_mlp
-    pre = jnp.einsum("ecr,eri->eci", padded_in, em.w_up, preferred_element_type=jnp.float32)
-    act = jnp.square(jax.nn.relu(pre)) * abl.neuron_mult[layer][:, None, :]
-    y = jnp.einsum("eci,eio->eco", act.astype(x.dtype), em.w_down, preferred_element_type=jnp.float32)  # [E, C, R]
-    valid = slot_token < t
-    tok = jnp.where(valid, slot_token, 0)
-    rk = jnp.where(valid, slot_slot, 0)
-    slot_w = jnp.where(valid, used[tok, rk], 0.0)  # [E, C]
-    per_slot = jnp.zeros((t, TOP_K, LATENT), jnp.float32).at[tok, rk].add(jnp.where(valid[..., None], y, 0.0))
+    pre = jax.lax.ragged_dot(
+        routed_input[token_sorted], em.w_up, counts, preferred_element_type=jnp.float32, out_sharding=P(None, None)
+    )
+    act = jnp.square(jax.nn.relu(pre)) * abl.neuron_mult[layer][expert_sorted]
+    y = jax.lax.ragged_dot(
+        act.astype(x.dtype), em.w_down, counts, preferred_element_type=jnp.float32, out_sharding=P(None, None)
+    )  # [TK, R]
+    per_slot = jnp.zeros((t, TOP_K, LATENT), jnp.float32).at[token_sorted, slot_sorted].set(y)
     routed_latent = jnp.einsum("tk,tko->to", used, per_slot)
     routed = jnp.einsum("to,od->td", routed_latent.astype(x.dtype), mlp.w_latent_up, preferred_element_type=jnp.float32)
 
@@ -357,13 +349,13 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, capacity: int, 
         used_combine=used,
         weight_rank=rank,
         routed_input=routed_input,
-        slot_token=slot_token,
-        slot_rank=slot_slot,
-        slot_weight=slot_w,
+        expert_sorted=expert_sorted,
+        token_sorted=token_sorted,
+        slot_sorted=slot_sorted,
+        expert_starts=starts,
         expert_pre=pre,
         expert_act=act,
         expert_counts=counts,
-        overflow=overflow,
         slot_latent_out=per_slot,
         shared_pre=shared_pre,
         shared_act=shared_act,
@@ -391,8 +383,6 @@ def trace_forward(
     tokens: jax.Array,
     segment_ids: jax.Array,
     abl: Ablation,
-    *,
-    capacity: int,
 ) -> dict:
     """The forward of ``model`` (compute dtype) on ``[B, S]`` tokens, returning every intermediate: ``layers[i]`` holds
     layer ``i``'s gate weights, attention internals, MoE internals and branch outputs, and the top level the final
@@ -437,7 +427,7 @@ def trace_forward(
         attn_out = _mix(abl.sub_mult[i, SUB_ATTN], attn_out, abl.sub_mean[i, SUB_ATTN]).astype(embed.dtype)
         w_mlp, h2 = _gate([*blocks, attn_out], layer.attn_res_query_mlp, eps)
         mlp_in = layer._mlp_input(h2)
-        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, capacity, out)
+        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, out)
         routed_sc = layer.sconv_mlp(routed, seg)
         shared_sc = layer.sconv_mlp(shared_out, seg)
         mlp_out = layer.sconv_mlp(routed + shared_out, seg)
@@ -491,8 +481,3 @@ def final_gain(model: Transformer) -> jax.Array:
 def unembed_direction(model: Transformer) -> jax.Array:
     """``gain * W_out`` ``[D, V]`` in float32: a term ``t`` adds ``inv_rms * t @ unembed_direction`` to the logits."""
     return final_gain(model)[:, None] * model.output_proj.astype(jnp.float32)
-
-
-def default_capacity(tokens_per_batch: int) -> int:
-    """Expert capacity with ample headroom over the balanced load ``T K / E`` (QB keeps loads near it)."""
-    return int(2 ** math.ceil(math.log2(4 * tokens_per_batch * TOP_K / NUM_EXPERTS)))

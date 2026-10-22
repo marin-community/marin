@@ -128,12 +128,12 @@ def kda_matrix(lay: dict, seg: jax.Array, h: int) -> jax.Array:
     return cols[::-1].T  # [t, s]
 
 
-def make_fns(capacity: int):
+def make_fns():
     keep = ("q", "k", "rel_bias", "v", "log_decay", "beta", "kda_o")
 
     @jax.jit
     def trace(model, tokens, seg):
-        tr = forward.trace_forward(forward.replicate(model), tokens, seg, forward.no_ablation(), capacity=capacity)
+        tr = forward.trace_forward(forward.replicate(model), tokens, seg, forward.no_ablation())
         return forward.replicate([{k: lay[k] for k in keep if k in lay} for lay in tr["layers"]])
 
     @jax.jit
@@ -179,7 +179,7 @@ def make_fns(capacity: int):
     @jax.jit
     def head_ablation_loss(model, tokens, seg, mult):
         abl = forward.no_ablation()._replace(head_mult=mult)
-        tr = forward.trace_forward(forward.replicate(model), tokens, seg, abl, capacity=capacity)
+        tr = forward.trace_forward(forward.replicate(model), tokens, seg, abl)
         return tr["loss"]
 
     return trace, mla_seq_stats, kda_seq_stats, head_ablation_loss
@@ -215,7 +215,6 @@ def main() -> None:
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, checkpoint)
-    capacity = forward.default_capacity(BATCH * common.SEQ_LEN)
     t0 = time.time()
     natural = [
         *common.paloma_batches(BATCH, max_sequences=args.paloma_sequences),
@@ -228,7 +227,7 @@ def main() -> None:
     kda_errs = []
     with set_mesh(mesh):
         model = common.compute_model(params)
-        trace, mla_fn, kda_fn, ablate_fn = make_fns(capacity)
+        trace, mla_fn, kda_fn, ablate_fn = make_fns()
         for kind, batches in (("natural", natural), ("induction", induction)):
             for bi, batch in enumerate(batches):
                 tokens, seg, w = common.device_batch(batch, mesh)
