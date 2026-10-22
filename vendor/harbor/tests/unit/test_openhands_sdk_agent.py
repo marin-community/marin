@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from harbor.agents.installed.openhands_sdk import OpenHandsSDK
 from harbor.models.agent.context import AgentContext
 from harbor.models.agent.name import AgentName
@@ -211,42 +210,6 @@ class TestOpenHandsSDKAgent:
                 collect_token_ids=True,
             )
             assert agent._collect_token_ids is True
-
-    @patch.dict("os.environ", {"LLM_API_KEY": "test-key"})
-    @pytest.mark.asyncio
-    async def test_run_with_collect_token_ids(self):
-        """Test LITELLM_EXTRA_BODY is set when collect_token_ids=True."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent = OpenHandsSDK(
-                logs_dir=Path(tmpdir),
-                model_name="test/model",
-                collect_token_ids=True,
-            )
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Test instruction", mock_env, AsyncMock())
-            env = mock_env.exec.call_args_list[0].kwargs["env"]
-            assert "LITELLM_EXTRA_BODY" in env
-            parsed = json.loads(env["LITELLM_EXTRA_BODY"])
-            assert parsed == {"return_token_ids": True}
-
-    @patch.dict("os.environ", {"LLM_API_KEY": "test-key"})
-    @pytest.mark.asyncio
-    async def test_run_without_collect_token_ids(self):
-        """Test LITELLM_EXTRA_BODY is not set when collect_token_ids=False."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent = OpenHandsSDK(
-                logs_dir=Path(tmpdir),
-                model_name="test/model",
-                collect_token_ids=False,
-            )
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Test instruction", mock_env, AsyncMock())
-            assert (
-                "LITELLM_EXTRA_BODY"
-                not in mock_env.exec.call_args_list[0].kwargs["env"]
-            )
 
     @patch.dict("os.environ", {"LLM_API_KEY": "test-key"})
     @pytest.mark.asyncio

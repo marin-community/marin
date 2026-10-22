@@ -14,6 +14,7 @@ from datetime import date, timedelta
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from fsspec.implementations.local import LocalFileSystem
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     Constraint,
@@ -162,6 +163,30 @@ def test_get_job_status_reports_parent_job_id(service):
     )
     assert parent_status.job.parent_job_id == ""
     assert parent_status.job.has_children
+
+
+@pytest.mark.parametrize("payload", ["bundle", "workdir_file"])
+@pytest.mark.parametrize("upload_error", [TimeoutError("upload deadline exceeded"), OSError("storage unavailable")])
+def test_launch_job_failed_payload_upload_does_not_create_job(service, monkeypatch, payload, upload_error):
+    def fail_upload(*args, **kwargs):
+        raise upload_error
+
+    request = make_job_request(name="/test-user/failed-upload")
+    if payload == "bundle":
+        request.bundle_blob = b"bundle bytes"
+    else:
+        request.entrypoint.workdir_files["payload"] = b"x" * (jobs_module.WORKDIR_FILE_OFFLOAD_THRESHOLD + 1)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LocalFileSystem, "pipe_file", fail_upload)
+        with pytest.raises(ConnectError) as error:
+            service.launch_job(request, ctx=None)
+        assert error.value.code == Code.UNAVAILABLE
+
+    with pytest.raises(ConnectError) as missing:
+        service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=request.name), ctx=None)
+    assert missing.value.code == Code.NOT_FOUND
+    assert service.launch_job(request, ctx=None).job_id == request.name
 
 
 def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service):
@@ -1414,13 +1439,13 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         assert len(resp.running_buckets) == 1
         bucket = resp.running_buckets[0]
         assert bucket.job_id == job_id.to_wire()
-        assert bucket.user_id == email
+        assert bucket.user_id == "alice"
         assert bucket.worker_id == "w1"
         assert bucket.count == 1
-        # The email has no explicit user_budgets row but has an active task. The
-        # scheduler state must apply UserBudgetDefaults to that principal.
-        alice_budget = next((b for b in resp.user_budgets if b.user_id == email), None)
+        # An active owner without a configured budget gets the default limit.
+        alice_budget = next((b for b in resp.user_budgets if b.user_id == "alice"), None)
         assert alice_budget is not None
+        assert all(b.user_id != email for b in resp.user_budgets)
         assert alice_budget.budget_spent > 0
         assert alice_budget.budget_limit == UserBudgetDefaults().budget_limit
     finally:

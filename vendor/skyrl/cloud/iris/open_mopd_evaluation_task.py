@@ -15,6 +15,8 @@ from pathlib import Path
 
 from fsspec.spec import AbstractFileSystem
 
+from rigging.provenance import launch_provenance
+
 from cloud.iris.artifacts import FileEntry, copy_file_inventory, copy_tree, file_inventory, fs_and_path
 from cloud.iris.open_mopd_evaluation import (
     GATES,
@@ -451,7 +453,6 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-uri", required=True)
     parser.add_argument("--gpu-slice", required=True)
     parser.add_argument("--task-image", required=True)
-    parser.add_argument("--source-digest", required=True)
     parser.add_argument("--checkpoint-uri")
     parser.add_argument("--checkpoint-step", type=int)
     parser.add_argument("--model-export-uri")
@@ -486,12 +487,12 @@ def main(argv: list[str] | None = None) -> int:
         "status": "staging",
         "gate": args.gate,
         "evaluation_config": asdict(evaluation),
+        "provenance": asdict(launch_provenance()),
         "fidelity_config": asdict(fidelity),
         "coverage": [asdict(item) for item in benchmark_coverage(evaluation, args.gate)],
         "planned_completions": planned_completions,
         "maximum_output_tokens": maximum_output_tokens,
         "task_image": args.task_image,
-        "source_digest": args.source_digest,
         "gpu_slice": args.gpu_slice,
         "vllm_port_seed": vllm_port_seed,
         "checkpoint_uri": args.checkpoint_uri,

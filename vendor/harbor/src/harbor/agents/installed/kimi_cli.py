@@ -4,8 +4,6 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
-from litellm.utils import get_model_info
-
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     NonZeroAgentExitCodeError,
@@ -118,10 +116,7 @@ class KimiCli(BaseInstalledAgent):
         model_info: dict[str, Any] | None = kwargs.pop("model_info", None)
         super().__init__(*args, **kwargs)
 
-        if model_info and self.model_alias:
-            import litellm
-
-            litellm.register_model({self.model_alias: model_info})
+        self._model_info = model_info or {}
 
         self._max_context_size = self._resolve_max_context_size()
 
@@ -158,13 +153,9 @@ class KimiCli(BaseInstalledAgent):
         return ""
 
     def _resolve_max_context_size(self) -> int:
-        if not self.model_alias:
-            return self._DEFAULT_MAX_CONTEXT_SIZE
-        try:
-            info = get_model_info(self.model_alias)
-            return info.get("max_input_tokens") or self._DEFAULT_MAX_CONTEXT_SIZE
-        except Exception:
-            return self._DEFAULT_MAX_CONTEXT_SIZE
+        return (
+            self._model_info.get("max_input_tokens") or self._DEFAULT_MAX_CONTEXT_SIZE
+        )
 
     def _build_config_json(self, provider: str, model: str) -> str:
         pcfg = _PROVIDER_CONFIG.get(provider)
