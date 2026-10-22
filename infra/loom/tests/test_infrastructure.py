@@ -18,6 +18,7 @@ from infra.loom.infrastructure import (
     ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
+    OAuthClientConfig,
     ProfileConfig,
     RemoteMcpConfig,
     WatchConfig,
@@ -377,6 +378,37 @@ def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str
 
     with pytest.raises(ValueError, match="remote MCP"):
         RemoteMcpConfig.parse(value)
+
+
+def test_oauth_clients_render_in_stable_order_as_public_declarations() -> None:
+    clients = (
+        OAuthClientConfig.parse("zeta", {"name": " Zeta ", "redirectUris": ["http://[::1]/callback"]}),
+        OAuthClientConfig.parse("alpha", {"name": "Alpha", "redirectUris": ["https://alpha.example/callback"]}),
+    )
+    manifest = json.loads(_deployment_manifest(replace(deployment_config(), oauth_clients=clients), [], []))
+
+    assert manifest["oauth_clients"] == [
+        {"client_id": "alpha", "name": "Alpha", "redirect_uris": ["https://alpha.example/callback"]},
+        {"client_id": "zeta", "name": "Zeta", "redirect_uris": ["http://[::1]/callback"]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("client_id", "override"),
+    [
+        ("claude ai", {}),
+        ("claude-ai", {"name": " "}),
+        ("claude-ai", {"redirectUris": []}),
+        ("claude-ai", {"redirectUris": ["http://claude.ai/api/mcp/auth_callback"]}),
+        ("claude-ai", {"redirectUris": ["https://claude.ai/api/mcp/auth_callback#fragment"]}),
+    ],
+)
+def test_oauth_client_rejects_unstable_ids_and_unsafe_redirects(client_id: str, override: dict[str, object]) -> None:
+    value: dict[str, object] = {"name": "claude.ai", "redirectUris": ["https://claude.ai/api/mcp/auth_callback"]}
+    value.update(override)
+
+    with pytest.raises(ValueError, match="OAuth client"):
+        OAuthClientConfig.parse(client_id, value)
 
 
 @pulumi.runtime.test

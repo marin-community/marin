@@ -316,23 +316,27 @@ servers, so these paths must stay publicly reachable. Do not put them behind IAP
 or an IP allowlist. Caddy blocks only `/metrics`. With the setting off, Loom
 returns 404 for all of these paths.
 
-Register claude.ai once from a `loom` CLI signed in to `https://loom.oa.dev` as
-an administrator:
+The stack declares the connector's OAuth clients under `oauthClients` in
+`Pulumi.marin-loom.yaml`, and activation registers them in Loom. Both are public
+clients that prove themselves with PKCE, so there is no secret to hand out.
+`claude-ai` accepts claude.ai's callback on both `claude.ai` and `claude.com`,
+because Anthropic says it may move. `claude-code` accepts Claude Code's loopback
+callback on any port. Never rename a client: claude.ai cannot change a
+connector's OAuth settings after it is added. Because the stack prunes, removing
+a client from it revokes every token the client was issued.
+
+An organization admin adds a custom connector in claude.ai with the URL
+`https://loom.oa.dev/mcp`, selects **Use your own OAuth client** under
+**Advanced settings**, enters the client ID `claude-ai`, and leaves the secret
+blank. A Claude Code user adds the server with:
 
 ```sh
-loom oauth-client add claude.ai \
-  --redirect-uri https://claude.ai/api/mcp/auth_callback \
-  --redirect-uri https://claude.com/api/mcp/auth_callback
+claude mcp add --transport http --scope user --client-id claude-code loom https://loom.oa.dev/mcp
 ```
-
-Anthropic says the callback may move to `claude.com`, so the command registers
-both hosts. It prints a client ID and secret once. An organization admin adds a
-custom connector in claude.ai with the URL `https://loom.oa.dev/mcp`, selects
-**Use your own OAuth client** under **Advanced settings**, and enters both
-values. `loom oauth-client ls` lists registered clients, and
-`loom oauth-client rm <client_id>` removes one and revokes its tokens.
 
 Activation requires a Loom build with connector support. An older build,
 including a rollback to one, rejects the unknown `connector.enabled` setting and
-activation fails. Pulumi builds the HEAD of Loom's default branch, so that
-support must be on the default branch before this configuration deploys.
+activation fails. A build without declared OAuth clients ignores
+`oauthClients`, so the clients exist only once Loom has that support. Pulumi
+builds the HEAD of Loom's default branch, so that support must be on the default
+branch before this configuration deploys.
