@@ -43,8 +43,25 @@ def recovery_reason(row: dict) -> str | None:
     if error not in SCOREABLE or not isinstance(row["reward"], int | float):
         return f"unscored:{error or 'missing_reward'}"
     if error == "NonZeroAgentExitCodeError":
-        raise ValueError(f"nonzero exit needs manual review: {row['task_name']}")
+        if row.get("manual_review", {}).get("decision") != "retain_scored_model_failure":
+            raise ValueError(f"nonzero exit needs manual review: {row['task_name']}")
     return None
+
+
+def apply_reviews(report: dict, reviews: list[dict]) -> None:
+    """Bind manual decisions to the exact audited trial and agent log."""
+    by_task = {row["task_name"]: row for row in report["trials"]}
+    for review in reviews:
+        if review["model"] != report["model"]:
+            continue
+        row = by_task[review["task_name"]]
+        if row["sha256"] != review["result_sha256"] or review["agent_log_sha256"] not in {
+            log["sha256"] for log in row.get("agent_logs", [])
+        }:
+            raise ValueError(f"review evidence differs from audit: {row['task_name']}")
+        if review["decision"] != "retain_scored_model_failure" or not review["evidence"]:
+            raise ValueError(f"unsupported review decision: {row['task_name']}")
+        row["manual_review"] = review
 
 
 def enrich_retry_evidence(report: dict) -> None:
@@ -78,9 +95,11 @@ def partition(report: dict, task_names: set[str]) -> tuple[list[dict], list[str]
     return retained, sorted(task_names - {row["task_name"] for row in retained})
 
 
-def prepare(audit: Path, base_config: Path, output: Path) -> dict:
+def prepare(audit: Path, base_config: Path, output: Path, reviews: Path | None = None) -> dict:
     payload = audit.read_bytes()
     report = json.loads(payload)
+    if reviews is not None:
+        apply_reviews(report, json.loads(reviews.read_text()))
     enrich_retry_evidence(report)
     config = yaml.safe_load(base_config.read_text())
     dataset = config["datasets"][0]
@@ -124,8 +143,9 @@ def main():
     parser.add_argument("--audit", type=Path, required=True)
     parser.add_argument("--base-config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--reviews", type=Path)
     args = parser.parse_args()
-    print(json.dumps(prepare(args.audit, args.base_config, args.output)))
+    print(json.dumps(prepare(args.audit, args.base_config, args.output, args.reviews)))
 
 
 if __name__ == "__main__":

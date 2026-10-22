@@ -47,3 +47,28 @@ def test_transport_keyword_alone_cannot_discard_a_scored_trial():
     }
     with pytest.raises(ValueError, match="manual review"):
         prepare["partition"]({"trials": [row]}, {"ambiguous"})
+
+
+def test_review_retains_model_failure_only_for_exact_source_evidence():
+    row = {
+        "task_name": "model-broke-environment",
+        "sha256": "result-digest",
+        "reward": 0,
+        "exception_type": "NonZeroAgentExitCodeError",
+        "agent_logs": [{"sha256": "log-digest", "terminal_error_classes": ["FileNotFoundError"]}],
+    }
+    report = {"model": "model", "trials": [row]}
+    review = {
+        "model": "model",
+        "task_name": row["task_name"],
+        "result_sha256": "result-digest",
+        "agent_log_sha256": "log-digest",
+        "decision": "retain_scored_model_failure",
+        "evidence": "The model moved the directory containing its agent dependencies.",
+    }
+    prepare["apply_reviews"](report, [review])
+    retained, recovery = prepare["partition"](report, {row["task_name"]})
+    assert retained == [row]
+    assert recovery == []
+    with pytest.raises(ValueError, match="evidence differs"):
+        prepare["apply_reviews"](report, [dict(review, result_sha256="another-trial")])
