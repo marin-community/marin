@@ -58,14 +58,15 @@ difficulty. Role "adversary" tells the \
 solver to get credit without solving the task, for example by finding the answer or exploiting the grader. An \
 adversary can also pass by doing the work, so the reviewer of submit judges its passes. The tool saves the \
 transcripts under /workspace/rollouts/.
-- submit: submit a task. It refuses a task that the tools cannot run, that leaks its answer, or that has a \
-malformed CSV or JSON file. Then it needs this evidence for the exact TaskSpec: a control with expect "pass" that \
-passed, a control with expect "fail" that failed, and no "fail" control that passed; at least {min_solver_runs} \
-graded solver rollouts with a pass rate from {low} to {high}; format failures in at most {max_format_failures} of \
-the solver rollouts; and at least {min_adversary_runs} adversary rollouts with a graded answer. Last, an \
-independent reviewer reads the task, its grader, the failed solver answers and the adversary rollouts, and accepts \
-or refuses it. A changed task has no evidence until you run the tools on it again. submit tells you what is missing \
-or wrong.
+- submit: submit a task. It refuses a task that the tools cannot run, that has a malformed CSV or JSON file, or \
+whose answer selects an option from a list. Then it needs this evidence for the exact TaskSpec: a control with expect \
+"pass" that passed, a control with expect "fail" that failed, and no "fail" control that passed; at least \
+{min_solver_runs} graded solver rollouts with a pass rate from {low} to {high}; format failures in at most \
+{max_format_failures} of the solver rollouts; and at least {min_adversary_runs} adversary rollouts with a graded \
+answer. Then it grades wrong answers that it makes from your two controls, for example your right answer with its \
+last digit changed, and refuses a grader that accepts one. Last, an independent reviewer reads the task, its grader, \
+the failed solver answers and the adversary rollouts, and accepts or refuses it. A changed task has no evidence until \
+you run the tools on it again. submit tells you what is missing or wrong.
 - finish: stop, with a report. The session also stops when {n} tasks are accepted.
 
 # How to work well
@@ -76,10 +77,8 @@ a measure of difficulty, and the pass rate does not count it. Many format failur
 transcripts before you make a task harder or easier. If the failed solvers agree on one wrong answer, the prompt is \
 probably ambiguous: correct the prompt, not the difficulty.
 - Prefer one computed value, a number or a short text, graded with a NumericSpec or an ExactSpec without substring \
-matching. Do not grade free text by its keywords. Avoid multiple \
-choice: a model can often find the correct option by its form. If you give options, make them similar in length and \
-detail. Do not make each wrong option from the correct \
-option with one change: the option that agrees most with the others is then the answer. A JSON answer with many \
+matching. Do not grade free text by its keywords. Do not give options to select from: submit refuses such a task, \
+because a model can often find the correct option by its form. A JSON answer with many \
 fields fails as a whole on one slip, so its pass rate jumps between 0 and 1 and is hard to bring into the band.
 - When the capability needs a judgment, for example of a text, make an answer that one clear judgment decides. A \
 count or a product over many judgment calls changes when one other reasonable call changes it.

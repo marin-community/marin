@@ -22,7 +22,7 @@ from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, GUESS_PROMPT
-from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, BlindSolution, OptionList, TaskReview
+from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, OPTION_PROBLEM, BlindSolution, OptionList, TaskReview
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.client import Completion, ContextExhausted, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
@@ -238,10 +238,9 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     assert (result.spend.solver_rollouts, result.spend.judge_calls) == (12, 2)
 
 
-async def test_submit_refuses_a_task_whose_correct_option_is_the_longest():
-    wrong = ("Lower the cooling water flow by one tenth.", "Raise the feed rate of the reactor by one tenth.")
-    correct = "Raise the cooling water flow by one tenth, because the hot steady state then disappears below 440 K."
-    judge = AcceptingJudge(option_lists=(OptionList(options=(*wrong, correct), correct=3),))
+async def test_submit_refuses_a_task_whose_answer_selects_an_option():
+    options = ("Lower the cooling water flow.", "Raise the cooling water flow.", "Raise the feed rate.")
+    judge = AcceptingJudge(option_lists=(OptionList(options=options, correct=2),))
     script = (*SCRIPT, call("finish", report="done"))
     async with ParallelWeb("unused") as web:
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
@@ -249,7 +248,7 @@ async def test_submit_refuses_a_task_whose_correct_option_is_the_longest():
 
     [submit] = tool_replies(result, "call-10")
     assert not submit["accepted"]
-    assert any("longer than any other option" in problem for problem in submit["review"]["problems"])
+    assert submit["review"]["problems"] == [OPTION_PROBLEM]
     assert result.tasks == ()
 
 
@@ -494,19 +493,26 @@ async def test_finish_refuses_once_while_most_of_the_budget_is_left():
     assert result.report == "too easy"
 
 
-async def test_submit_refuses_a_numeric_tolerance_that_accepts_the_next_values():
-    # The reference is an integer, so a tolerance of 1 also accepts the reference plus or minus 1.
+async def test_submit_refuses_a_grader_that_accepts_a_wrong_answer_made_from_the_controls():
+    # The reference is an integer, so a tolerance of 1 also accepts the right control plus or minus 1.
     loose = GRADER.model_copy(update={"parameters": {**GRADER.parameters, "tolerance_abs": 1.0}})
     task = example_build.task_spec(TASK_ID).model_copy(update={"grader": loose})
     script = (
         call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
+        call("grade", path=TASK, answer=EXPECTED, expect="pass"),
+        call("grade", path=TASK, answer="999999", expect="fail"),
+        call("rollout", paths=[TASK], n=8, role="solver"),
+        call("rollout", paths=[TASK], n=4, role="adversary"),
         call("submit", path=TASK),
         call("finish", report="done"),
     )
     async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=12, judge_calls=2, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, config)
 
-    [submit] = tool_replies(result, "call-2")
+    [submit] = tool_replies(result, "call-6")
     assert not submit["accepted"]
-    assert any("also accepts" in problem for problem in submit["problems"])
+    assert [problem.split(",")[0] for problem in submit["problems"]] == [
+        f"The grader accepts {int(EXPECTED) + 1}",
+        f"The grader accepts {int(EXPECTED) - 1}",
+    ]

@@ -63,7 +63,7 @@ from taskcompendium.models import (
     grades_with_judge,
 )
 from taskcompendium.runtime.resources import resource_bytes
-from verifyit.spec import ExactSpec, IfevalSpec, NumericSpec, spec_from_table
+from verifyit.spec import IfevalSpec, spec_from_table
 
 from taskforge.agentic.config import AgenticConfig
 from taskforge.agentic.gate import Evidence, Gate, missing_evidence
@@ -105,14 +105,8 @@ def machine_runtime(backend: str) -> MachineRuntimeSpec:
 SHELLSIM_MACHINE = machine_runtime(Backend.SHELLSIM)
 ANSWER_TYPES = frozenset({AnswerType.TEXT, AnswerType.NUMBER, AnswerType.JSON})
 """The answer types of a final message: native actions need tools that the solver does not have."""
-ANSWER_KEYS = frozenset({"expected", "answer", "answers", "reference", "solution", "target", "correct"})
-"""Grader parameters that hold a reference answer, which the prompt and the solver's files must not contain."""
-MIN_LEAK_CHARS = 4
-"""Shorter reference answers, for example small numbers, occur in prompts and data by chance."""
-MIN_QUOTED_LEAK_CHARS = 2
-"""Shorter reference answers, single letters or digits, are guessable anyway."""
 PLAIN_DECIMAL = re.compile(r"[+-]?\d+(\.\d+)?")
-"""A reference answer whose last digit gives its precision, unlike a fraction or scientific notation."""
+"""An answer whose last digit gives its precision, unlike a fraction or scientific notation."""
 OUTPUT_CHARS = 2000
 """The most characters of a program output, an answer, a page or a file that one tool result shows."""
 REVIEW_ANSWERS = 20
@@ -129,18 +123,16 @@ RAN_OUT_STOP_REASONS = frozenset(
     {MAX_TURNS_STOP_REASON, BUDGET_STOP_REASON, LENGTH_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON}
 )
 """Stop reasons of a solver that ran out of a limit before it answered: a failed run, not a format failure."""
-MIN_PATTERN_LISTS = 4
-"""Option lists of an idea's tasks that ``submit`` pools before it refuses a place that all correct options share:
-with fewer, a shared place often comes by chance."""
-MIN_LONG_OPTION_CHARS = 30
-"""Options of text, not of codes or numbers: the length of an option tells only in a list of such options."""
-MAX_CORRECT_LENGTH_RATIO = 1.2
-"""The most that the correct option can exceed the longest other option in length before it stands out."""
+OPTION_PROBLEM = (
+    "The answer selects an option from a list, and reviews do not find the flaws of such tasks well. Make a task whose "
+    "answer the solver computes or writes."
+)
+"""On 313 labeled tasks, 27% of the option tasks that a review accepted had a blocking flaw, for example a correct
+option that a guess finds, against 8% of the other tasks."""
 GUESS_RUNS = 4
 """Rollouts of ``submit`` in which the solver model guesses the answer of a task with files from its prompt alone."""
 MAX_GUESS_PASSES = 2
-"""The most guesses that can pass: more show an answer that the prompt gives away, for example by an option that
-stands out. Random guesses among four options pass three of four times in 5% of tasks."""
+"""The most guesses that can pass: more show an answer that the prompt gives away, for example by a cue."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
 
@@ -285,6 +277,9 @@ class TaskforgeTools:
         )
         self.evidence: defaultdict[str, Evidence] = defaultdict(Evidence)
         self.failed_answers: defaultdict[str, list[str]] = defaultdict(list)
+        # The answers of the controls that came out as the agent expected, from which submit makes wrong answers.
+        self.right_answers: defaultdict[str, list[str]] = defaultdict(list)
+        self.wrong_answers: defaultdict[str, list[str]] = defaultdict(list)
         self.adversary_runs: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         self.transcripts: Counter[str] = Counter()
         self.accepted: list[AcceptedTask] = []
@@ -373,14 +368,8 @@ class ToolSession:
 
     async def grade(self, path: str, answer: str, expect: Literal["pass", "fail"]) -> ToolCallResult:
         task = await self._load(path)
-        spec = _solver_spec(task, self.config)
-        try:
-            result = await self.tools.solver_engine.run_task(spec, _ReplayModel(answer))
-        except RolloutInterrupted as error:
-            raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
-        except (ValueError, NotImplementedError) as error:
-            raise ToolError(f"The grade failed; check the task: {error}") from error
-        status = result.grade.status
+        grade = await self._grade(task, answer)
+        status = grade.status
         if status == Outcome.SUBMISSION_FAILURE:
             # A wrong control must show that the grader rejects a wrong value, not that the format rejects the answer.
             return _result(
@@ -394,18 +383,33 @@ class ToolSession:
                 }
             )
         if status != Outcome.GRADED:
-            raise ToolError(f"The grade failed ({status}); check the task: {result.grade.error}")
-        passed = _passed(result.grade)
-        self.tools.evidence[_task_digest(task)].controls.append((expect == "pass", passed))
+            raise ToolError(f"The grade failed ({status}); check the task: {grade.error}")
+        passed = _passed(grade)
+        key = _task_digest(task)
+        self.tools.evidence[key].controls.append((expect == "pass", passed))
+        if passed and expect == "pass":
+            self.tools.right_answers[key].append(answer)
+        elif not passed and expect == "fail":
+            self.tools.wrong_answers[key].append(answer)
         return _result(
             {
-                "outcome": result.grade.status,
-                "reward": result.grade.reward,
+                "outcome": grade.status,
+                "reward": grade.reward,
                 "passed": passed,
                 "as_expected": passed == (expect == "pass"),
-                "error": result.grade.error,
+                "error": grade.error,
             }
         )
+
+    async def _grade(self, task: TaskSpec, answer: str) -> GradeResult:
+        """The grade of ``answer`` by the task's grader, from a rollout of a model that gives only that answer."""
+        try:
+            result = await self.tools.solver_engine.run_task(_solver_spec(task, self.config), _ReplayModel(answer))
+        except RolloutInterrupted as error:
+            raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
+        except (ValueError, NotImplementedError) as error:
+            raise ToolError(f"The grade failed; check the task: {error}") from error
+        return result.grade
 
     async def rollout(self, paths: list[str], n: int, role: Literal["solver", "adversary"]) -> ToolCallResult:
         if n < 1:
@@ -485,18 +489,21 @@ class ToolSession:
         if any(_task_digest(accepted.task) == key for accepted in self.tools.accepted):
             raise ToolError("This task is already accepted")
         problems = _unsupported(task, self.tools.solver_engine, self.config)
-        problems += _malformed_files(task) + _leaks(task) + _weak_grader(task)
+        problems += _malformed_files(task)
         if problems:
             return _result({"accepted": False, "problems": problems})
         evidence = self.tools.evidence[key]
         missing = missing_evidence(evidence, self.config.gate)
         if missing:
             return _result({"accepted": False, "missing": missing, "evidence": asdict(evidence)})
+        problems = await self._accepted_wrong_answers(task, key)
+        if problems:
+            return _result({"accepted": False, "problems": problems})
         guessed = await self._guesses(task)
         if guessed > MAX_GUESS_PASSES:
             problem = (
                 f"A solver with the prompt alone and no files guessed the answer in {guessed} of {GUESS_RUNS} attempts: "
-                "the prompt gives the answer away, for example by an option that stands out or by a cue."
+                "the prompt gives the answer away, for example by a cue."
             )
             return _result({"accepted": False, "problems": [problem]})
         # The review comes last, so it sees all the evidence of this version of the task.
@@ -508,6 +515,40 @@ class ToolSession:
         count = len(self.tools.accepted)
         reply = {"accepted": True, "accepted_tasks": count, "remaining": self.tools.n - count, "review": review.summary}
         return _result(reply, done=count >= self.tools.n)
+
+    async def _accepted_wrong_answers(self, task: TaskSpec, key: str) -> list[str]:
+        """The problems of a grader that accepts wrong answers made from the controls of this version: the right
+        answer with one unit more or less in its last digit, the right and the wrong answer as a list in the two
+        orders, and an empty answer. A grader that accepts the list in one order only reads one position of it."""
+        # An agent can also grade a more precise right answer, so the one with the fewest decimals gives the precision.
+        right = min(
+            (answer.strip() for answer in self.tools.right_answers[key]),
+            key=lambda answer: (PLAIN_DECIMAL.fullmatch(answer) is None, len(answer.partition(".")[2])),
+        )
+        wrong = self.tools.wrong_answers[key][-1].strip()
+        neighbors = _neighbors(right)
+        lists = [f"{wrong}, {right}", f"{right}, {wrong}"]
+        answers = [*neighbors, *lists, ""]
+        grades = await asyncio.gather(*(self._grade(task, answer) for answer in answers))
+        accepted = {
+            answer
+            for answer, grade in zip(answers, grades, strict=True)
+            if grade.status == Outcome.GRADED and _passed(grade)
+        }
+        problems = [
+            f"The grader accepts {answer}, one unit from your right control {right} in its last digit. Write the "
+            "reference with the precision that the prompt asks for, and a tolerance below one unit of it"
+            for answer in neighbors
+            if answer in accepted
+        ]
+        if set(lists) <= accepted:
+            problems.append(
+                f"The grader accepts {lists[0]!r} and {lists[1]!r}, so an answer that lists candidates passes. Grade "
+                "the whole answer, for example with an ExactSpec without substring matching"
+            )
+        if "" in accepted:
+            problems.append("The grader accepts an empty answer")
+        return problems
 
     async def _guesses(self, task: TaskSpec) -> int:
         """How many of ``GUESS_RUNS`` solvers with the prompt alone guess the answer of a task with files.
@@ -535,11 +576,9 @@ class ToolSession:
             blind,
         )
         review = await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
-        accepted_lists = [options for accepted in self.tools.accepted for options in accepted.review.option_lists]
-        problems = _option_problems(list(review.option_lists), accepted_lists)
-        if not problems:
+        if not review.option_lists:
             return review
-        return review.model_copy(update={"accept": False, "problems": (*review.problems, *problems)})
+        return review.model_copy(update={"accept": False, "problems": (*review.problems, OPTION_PROBLEM)})
 
     async def finish(self, report: str) -> ToolCallResult:
         budget = self.config.budget.solver_rollouts
@@ -645,36 +684,6 @@ class _ReplayModel:
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         message = {"role": "assistant", "content": self.answer}
         return ModelTurn(message, (), (), None, "stop", text=self.answer, usage=TokenUsage(0, 0))
-
-
-def _option_problems(lists: list[OptionList], accepted: list[OptionList]) -> list[str]:
-    """The option lists of a task whose correct option a guess finds: by its length, or by a place that the correct
-    options of this task and of the accepted tasks all share."""
-    lists = [options for options in lists if options.correct <= len(options.options)]
-    problems = []
-    for number, options in enumerate(lists, start=1):
-        others = [len(option) for place, option in enumerate(options.options, start=1) if place != options.correct]
-        correct = len(options.options[options.correct - 1])
-        text = len(others) >= 2 and min(others) >= MIN_LONG_OPTION_CHARS
-        if text and correct > MAX_CORRECT_LENGTH_RATIO * max(others):
-            problems.append(
-                f"The correct option of option list {number} is {correct / max(others) - 1:.0%} longer than any other "
-                "option, so a guess of the longest option gives it. Make the options similar in length and detail."
-            )
-    pooled = [*lists, *accepted]
-    if len(pooled) < MIN_PATTERN_LISTS:
-        return problems
-    if len({options.correct for options in pooled}) == 1:
-        where = f"place {pooled[0].correct}"
-    elif all(options.correct == len(options.options) for options in pooled):
-        where = "the last place"
-    else:
-        return problems
-    problems.append(
-        f"The correct options of the {len(pooled)} option lists of this task and the accepted tasks are all at "
-        f"{where}, so a guess of the place gives the answer. Put each correct option at a random place."
-    )
-    return problems
 
 
 def _next_step(evidence: Evidence, gate: Gate) -> dict[str, str]:
@@ -790,7 +799,12 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
         try:
             if grades_with_judge(grader):
                 problems.append("Judge graders are not supported")
-        except ValueError as error:
+            elif _grades_keywords(grader):
+                problems.append(
+                    "Keyword graders are not supported: a correct paraphrase fails and an answer that only repeats "
+                    "the words passes. Ask for a value that a NumericSpec or an ExactSpec can grade"
+                )
+        except (TypeError, ValueError) as error:
             problems.append(f"The grader is invalid: {error}")
     requirements = task.environment_requirements
     if _needs_machine(task) and requirements.command_semantics != CommandSemantics.SHELL_SIMULATOR:
@@ -808,6 +822,22 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
         except (ValueError, NotImplementedError) as error:
             problems.append(f"The rollout engine rejects the task: {error}")
     return problems
+
+
+def _grades_keywords(grader: VerifyitGrader) -> bool:
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    return isinstance(spec, IfevalSpec) and any(
+        constraint.name.startswith("keywords:") for constraint in spec.constraints
+    )
+
+
+def _neighbors(answer: str) -> list[str]:
+    """``answer`` with one unit more and one unit less in its last digit, when it is a plain decimal."""
+    if PLAIN_DECIMAL.fullmatch(answer) is None:
+        return []
+    value = Decimal(answer)
+    unit = Decimal(1).scaleb(-len(answer.partition(".")[2]))
+    return [str(value + unit), str(value - unit)]
 
 
 def _malformed_files(task: TaskSpec) -> list[str]:
@@ -831,76 +861,6 @@ def _malformed_files(task: TaskSpec) -> list[str]:
             except json.JSONDecodeError as error:
                 problems.append(f"{resource.path} is not valid JSON: {error}")
     return problems
-
-
-def _weak_grader(task: TaskSpec) -> list[str]:
-    """A grader that accepts wrong answers by their form: a substring match, a keyword check of free text, or a
-    numeric tolerance that also accepts the next values at the precision of the reference answer."""
-    grader = task.grader
-    if not isinstance(grader, VerifyitGrader):
-        return []
-    try:
-        spec = spec_from_table({"mode": grader.mode, **grader.parameters})
-    except (TypeError, ValueError):
-        return []
-    if isinstance(spec, ExactSpec) and spec.substring:
-        return ["A substring grader accepts an answer that lists several candidates. Set substring to false"]
-    if isinstance(spec, IfevalSpec) and any(constraint.name.startswith("keywords:") for constraint in spec.constraints):
-        return [
-            "A keyword grader checks words, not the content of the answer: a correct paraphrase fails and an answer "
-            "that only repeats the words passes. Ask for a value that a NumericSpec or an ExactSpec can grade"
-        ]
-    if not isinstance(spec, NumericSpec) or PLAIN_DECIMAL.fullmatch(spec.expected.strip()) is None:
-        return []
-    text = spec.expected.strip()
-    expected = Decimal(text)
-    unit = Decimal(1).scaleb(-len(text.partition(".")[2]))
-    tolerance = max(Decimal(str(spec.tolerance_abs)), Decimal(str(spec.tolerance_rel)) * abs(expected))
-    if tolerance < unit:
-        return []
-    return [
-        f"The tolerance {tolerance:f} also accepts {expected - unit} and {expected + unit}, which are wrong answers "
-        f"at the precision of the reference {expected}. Write the reference with the precision that the prompt "
-        f"asks for, and a tolerance below {unit:f}"
-    ]
-
-
-def _leaks(task: TaskSpec) -> list[str]:
-    """The reference answers in the prompt or the solver's files, and in a quoted example of the prompt."""
-    grader = task.grader
-    if not isinstance(grader, VerifyitGrader):
-        return []
-    answers = {value.strip() for value in _answer_values(grader.parameters)}
-    prompt = "\n".join(_public_task(task)["prompt"])
-    texts = {"the prompt": prompt}
-    for resource in task.resources.worker:
-        if isinstance(resource.source, InlineFile):
-            texts[resource.path] = resource_bytes(resource).decode(errors="replace")
-    leaks = [
-        f"The reference answer {answer!r} is in {where}"
-        for answer in sorted(answers)
-        if len(answer) >= MIN_LEAK_CHARS
-        for where, text in texts.items()
-        if re.search(rf"(?<!\w){re.escape(answer)}(?!\w)", text)
-    ]
-    # A short answer occurs in a prompt by chance, but not as a quoted example of the answer format.
-    leaks += [
-        f"The prompt gives the reference answer {answer!r} as a quoted example"
-        for answer in sorted(answers)
-        if MIN_QUOTED_LEAK_CHARS <= len(answer) < MIN_LEAK_CHARS
-        and re.search(rf"[\"'`]\s*{re.escape(answer)}\s*[\"'`]", prompt, re.IGNORECASE)
-    ]
-    return leaks
-
-
-def _answer_values(value: Any, key: str | None = None) -> list[str]:
-    if isinstance(value, Mapping):
-        return [answer for name, item in value.items() for answer in _answer_values(item, name)]
-    if isinstance(value, list | tuple):
-        return [answer for item in value for answer in _answer_values(item, key)]
-    if key in ANSWER_KEYS and isinstance(value, str | int | float) and not isinstance(value, bool):
-        return [str(value)]
-    return []
 
 
 def _public_task(task: TaskSpec, file_chars: int = OUTPUT_CHARS) -> dict[str, Any]:
