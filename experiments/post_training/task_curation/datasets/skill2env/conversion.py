@@ -55,6 +55,169 @@ CAPTURE_ROOTS = {
         "/work",
         "/var/lib/gws-local",
     ),
+    # task_agent-platform-model-registry_822ely73.
+    "sha256:10574c3520c8e12a5c3dd18ef6882e9cfe47ce2efeb7c0cff2cfd3c5b558dd13": (
+        "/workspace",
+        "/var/lib/parcelpulse",
+        "/opt/parcelpulse/seed",
+    ),
+    # task_agent-manager_l5mfu3fn.
+    "sha256:bb79b1b83cd419659efee2f947080faac6e3056b05cf28513adb95e127553f2b": (
+        "/workspace",
+        "/var/lib/fake-cron",
+    ),
+    # task_apple-container_x5m7xq5j.
+    "sha256:a0e38b933973c61f91a108c79973c7f32b0b16084f9e64a7760090be2437afc1": (
+        "/workspace",
+        "/home/cedar",
+        "/opt/cedar-container",
+    ),
+    # task_bigquery-basics_fbebs224.
+    "sha256:c288a78e4cba2ec26b9236efa193b701c987c787d6e0e7d7c27330fd04f18724": (
+        "/workspace",
+        "/var/lib/harbor-bq",
+        "/opt/harbor-bq",
+    ),
+    # task_brief_uhjgxwy4.
+    "sha256:e7675e79e5de8a9fb3ece130a9b77f507122839aca1b61e23c1600c36305c239": (
+        "/workspace",
+        "/home/agent/.claude",
+    ),
+    # task_c-memory_sp3smf6l.
+    "sha256:6cbc1ed415104b1fc6c4907145da9dee6b3e8977b2da3299658b9dea94e4e7d0": (
+        "/workspace",
+        "/home/harbor/.claude/memory",
+    ),
+    # task_c-speakers_sst0k2od.
+    "sha256:7c2a3bce70ed42ccd165fc0ce9e1ae9290ae0653a9ee9a7e72ab79e2d54c74a7": (
+        "/workspace",
+        "/var/lib/station-speakers",
+        "/var/log/station-speakers",
+        "/opt/station-speakers/initial-state.json",
+    ),
+    # task_c-tasks_za86wnfq.
+    "sha256:28b55a1540fd712898dabcfaa9d297bee03aba71a0ea4d661465d52054930ec1": (
+        "/workspace",
+        "/var/lib/things-cli",
+        "/var/log/things-cli",
+    ),
+    # task_claimable-postgres_ot8kysxf.
+    "sha256:7b72396bbf228f1466a34edae25b3e44b08b61c679daea884ac8453184c8fa62": (
+        "/workspace",
+        "/var/lib/neon-new",
+    ),
+    # task_coreos-cve-validator_8w8gflo5.
+    "sha256:a785aff14c957bcec9eebfeae0c084d7ea3ac1fed8f250e349513627cd0c4b2c": (
+        "/workspace",
+        "/tmp/coreos-cache",
+        "/opt/coreos-validator/fixtures",
+    ),
+    # task_cs-onboard_y0zu81um.
+    "sha256:32a9fd519d177302ac2cd3b733507cdf25a775097b1bae1cf58d9d6d28e5c086": (
+        "/workspace",
+        "/home/agent/.claude",
+        "/var/lib/relayforge/approval.json",
+        "/var/log/relayforge",
+        "/opt/relayforge/baseline-context.md",
+    ),
+    # task_cs-onboard_5if8gco8.
+    "sha256:12af6b1ab47911924ec8eed08b12e4fd6752116f9f151f7475ba73ecd529db6b": (
+        "/workspace",
+        "/root",
+    ),
+    # task_design-system_8nqaiu0q.
+    "sha256:723e9639fc67b91998e09072007e54a5abd7d5c8d7fcdfcca1ee500e2d876227": (
+        "/workspace",
+        "/home/agent",
+    ),
+    # task_firebase-firestore_phatmneo.
+    "sha256:b15a8e436a359e35259421978d1fe22daec3bc1379f110529dff2f17d8ea77b9": (
+        "/workspace",
+        "/var/lib/firebase-mock/control-plane.json",
+        "/var/lib/firebase-mock/deployments.json",
+        "/var/lib/firebase-mock/invocations.jsonl",
+    ),
+    # task_gke-app-onboarding_8br2b29h.
+    "sha256:d638f9cda48e53ca53d238ec7e1a5c0bb75659ea25a5384e04c1de8550508df9": (
+        "/workspace",
+        "/var/lib/gke-sim",
+        "/opt/gke-sim/initial_state.json",
+    ),
+    # task_gke-scaling_kypx2wz3.
+    "sha256:58e95df516dafa9f8915fbde8ec58d2e503c9904ac4ff5e03429207b1192d5c5": (
+        "/workspace",
+        "/var/lib/kube-sim",
+        "/var/log/kube-sim",
+    ),
+    # task_gws-chat-send_867rfdcr.
+    "sha256:fe6a38bc7b5197cc38a9759c4ff862b741115cf15e04294f466d3d07c9ede802": (
+        "/workspace",
+        "/var/lib/gws-chat",
+        "/opt/gws-chat/seed.json",
+    ),
+    # task_gws-script-push_fvlax5x4.
+    "sha256:78e6f1bd9d289a7a7613b30ca1dcf19e5b60af1afbc18c5c802e07927fdbb74a": (
+        "/workspace",
+        "/var/lib/gws-emulator",
+        "/var/log/gws-emulator",
+    ),
+    # task_mcore-run-on-slurm_44f7slmf.
+    "sha256:75b4b8224baa7bcc447b6616ccf79048631e7d07d58fc967ba4e9af93adb9f65": (
+        "/workspace",
+        "/shared/orion/atlas",
+    ),
+    # task_neon_au39bwyi.
+    "sha256:1c0ef2f2d0a1034c0e8bd68a824ad88946cfe25cddfbb5d5e9cb397f8cf82777": (
+        "/workspace",
+        "/opt/neon-emulator",
+    ),
+    # task_recipe-create-task-list_7s3otz05.
+    "sha256:6f193281c632a3ca0a3ea2535f74d7bb95f7973ef9d12537e325c96d953ccab8": (
+        "/workspace",
+        "/var/lib/gws",
+        "/var/log/gws",
+        "/opt/gws",
+    ),
+    # task_recipe-create-events-from-sheet_f3un7a2r.
+    "sha256:21d1cde6c798fb20a118548687d922684b63722a11d305cd09b6b221b38b38f8": (
+        "/workspace",
+        "/var/lib/gws",
+        "/opt/gws-fixtures",
+    ),
+    # task_recipe-organize-drive-folder_o28wlb1u.
+    "sha256:8e9991465014b7bc01f8e74fd1850c51e60446e0f346091e12397f44e013f0c8": (
+        "/workspace",
+        "/var/lib/gws",
+        "/opt/gws",
+    ),
+    # task_research-junshi_z2s3k43l.
+    "sha256:44ab48d33e37c86e1900d09390df17fbd67fe081cb4d2eab98255b1cb24918ba": (
+        "/workspace",
+        "/home/researcher",
+    ),
+    # task_vertical-logistics_4uqzjad5.
+    "sha256:c6c4e2d1590ded5b67c3bb63a83beba7989560726a17ac8e6b5c4da117c8b9e8": ("/app",),
+    # task_cs-onboard_bntq7mho.
+    "sha256:a99f7a8aac0840533069f3ad1bea9f2cd9e7cedefaf564a2b345f93fefb3667b": (
+        "/workspace",
+        "/root/.claude",
+    ),
+    # task_recipe-reschedule-meeting_1a12lgde.
+    "sha256:171ad1db7303ae520e563b4f2f9db0ed8757bd8114708c43c388bcd1f4baaffd": (
+        "/workspace",
+        "/var/lib/local-calendar",
+        "/opt/local-calendar/seed_state.json",
+    ),
+}
+
+# This native Node image has no Python interpreter for the grading adapter.
+PYTHON_GRADER_TASK = "sha256:7b72396bbf228f1466a34edae25b3e44b08b61c679daea884ac8453184c8fa62"
+
+# Invoke the released entrypoint through the existing actor setup interface.
+STARTUP_COMMANDS = {
+    "sha256:78e6f1bd9d289a7a7613b30ca1dcf19e5b60af1afbc18c5c802e07927fdbb74a": (
+        "/usr/local/bin/gws-emulator-entrypoint true",
+    ),
 }
 
 
@@ -118,7 +281,7 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
     dockerfile = files["environment/Dockerfile"].decode()
     final_stage = re.split(r"(?im)^[ \t]*FROM[ \t]+", dockerfile)[-1]
     workdirs = re.findall(r"(?im)^[ \t]*WORKDIR[ \t]+([^\r\n]*)", final_stage)
-    if not workdirs or re.fullmatch(r"\S+", workdirs[-1].strip()) is None:
+    if not workdirs or (task_digest not in CAPTURE_ROOTS and re.fullmatch(r"\S+", workdirs[-1].strip()) is None):
         return unsupported("native_workspace", "Requires a final literal absolute WORKDIR within the capture roots")
     workdir = PurePosixPath(workdirs[-1].strip())
     if (
@@ -159,6 +322,11 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         + f"\nUSER root\nRUN rm -rf {clear_paths} && mkdir -p {shlex.quote(working_directory)}\n"
         + f"WORKDIR {working_directory}\n"
     )
+    if task_digest == PYTHON_GRADER_TASK:
+        verifier_dockerfile += (
+            "RUN apt-get update && apt-get install -y --no-install-recommends python3"
+            " && rm -rf /var/lib/apt/lists/*\n"
+        )
     grader_build = DockerBuildContext(
         files=tuple(
             inline_resource("Dockerfile", verifier_dockerfile.encode()) if resource.path == "Dockerfile" else resource
@@ -170,6 +338,7 @@ def convert_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportR
         capabilities=("shell", "filesystem"),
         command_semantics=CommandSemantics.LINUX_PROCESS,
         docker_build=actor_build,
+        setup_commands=STARTUP_COMMANDS.get(task_digest, ()),
         working_directory=working_directory,
         environment_variables={**environment_variables, **config["agent"].get("env", {})},
     )

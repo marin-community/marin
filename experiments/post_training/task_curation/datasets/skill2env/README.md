@@ -3,7 +3,7 @@
 The existing `Harbor Hub:skill2env` catalog entry has a conversion recipe for
 network-disabled tasks with native programmatic tests and a reference solution.
 The default contract requires a final Docker working directory within `/workspace`;
-the digest-pinned capture exceptions below support two additional layouts. Acquisition resolves the pinned release through Harbor
+digest-pinned capture exceptions support additional audited layouts. Acquisition resolves the pinned release through Harbor
 and verifies each downloaded task's content digest using the vendored client in
 `vendor/harbor`. The resolved task list is retained in the export
 manifest. The reader checks the release and converts only archives selected in that
@@ -45,8 +45,8 @@ QUICK writes normalized TaskSpecs for inspection. It does not build images,
 run graders or admit training tasks. Retained build recipes do not freeze the
 results of package downloads during a later build.
 
-Building and pinning these images, configuring native resource limits, and
-validating grading in those containers are follow-up work. The converted tasks
+Resolving these build contexts to pinned images and configuring native resource
+limits remain follow-up work. The converted tasks
 cannot execute in SAMPLE/FULL while their build contexts remain unresolved.
 
 Without an input override, the normal source-download step acquires and caches
@@ -62,11 +62,13 @@ the outcome-reward method in [the paper, section 3.2.2](https://www.alphaxiv.org
 It uses the existing scalar reward interface without a separate pass/fail verdict.
 The optional written LLM rubric is preserved but not executed.
 
-The default capture directory is `/workspace`. Two digest-pinned exceptions also
-capture the memory-journal task's `/root/.claude/memory`, or the spreadsheet task's
-`/work` and `/var/lib/gws-local`. These include the state inspected by the native
-verifiers, not just the declared output artifacts. Other external paths remain
-unsupported until their capture requirements are validated.
+The default capture directory is `/workspace`. Digest-pinned exceptions capture
+additional files and state directories inspected by native verifiers, including
+protected inputs and audit logs. The configured paths are in `CAPTURE_ROOTS` in
+`conversion.py`; other external paths remain unsupported until validated.
+For the Apps Script task, the existing actor setup interface invokes the released
+entrypoint. The Node-based Postgres task installs Python only in its grader image
+for the grading adapter. Neither changes the native solution or verifier.
 
 Directory capture preserves file contents, including changes to preexisting
 files and deletions. It does not reproduce file modes, symlinks, empty

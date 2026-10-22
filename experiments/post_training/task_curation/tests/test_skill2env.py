@@ -30,7 +30,7 @@ from taskcompendium.pipeline.sources import conversion_shards, staged_file_rows
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 
-from experiments.post_training.task_curation.datasets.skill2env.conversion import RELEASE, convert_task
+from experiments.post_training.task_curation.datasets.skill2env.conversion import CAPTURE_ROOTS, RELEASE, convert_task
 from experiments.post_training.task_curation.datasets.skill2env.tasks import sources
 from experiments.post_training.task_curation.pipeline import source_recipe
 
@@ -245,12 +245,15 @@ def test_unbuilt_export_preserves_contexts_and_private_roles_but_cannot_execute(
         ({}, {"answer": 0.0, "checker": 0.0}, 0.0),
     ],
 )
-@pytest.mark.parametrize("working_directory", ["/workspace", "/workspace/fleet"])
+@pytest.mark.parametrize("working_directory", ["/workspace", "/workspace/fleet", "/workspace/fleet records", "/work"])
 @pytest.mark.asyncio
 async def test_native_script_grades_captured_workspace_and_preserves_components(
-    files, components, score, working_directory
+    files, components, score, working_directory, monkeypatch
 ):
-    task = convert_task(exported_row(working_directory=working_directory), ConversionContext({}, None))
+    row = exported_row(working_directory=working_directory)
+    if working_directory in ("/workspace/fleet records", "/work"):
+        monkeypatch.setitem(CAPTURE_ROOTS, row.data["task_ref"].split("@")[1], (working_directory,))
+    task = convert_task(row, ConversionContext({}, None))
     assert isinstance(task, TaskSpec) and isinstance(task.grader, ScriptGrader)
     # The fixture uses only stdlib; use a real local sandbox at the machine boundary.
     environment = task.environment_requirements.model_copy(update={"docker_build": None, "package_spec": PackageSpec()})
