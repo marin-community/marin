@@ -116,19 +116,19 @@ def test_ungraded_sample_does_not_count_as_incorrect_answer(store):
     record = store.get_record("snowball-2026.07.20-mmlu")
     assert record is not None
     results_path = record["results_path"]
-    page = samples.fetch_samples(results_path, "mmlu", offset=0, limit=50, correct="all")
+    page = samples.fetch_samples(results_path, "mmlu", offset=0, limit=50, outcome_filter="all")
     ungraded = [row for row in page.rows if row.correct is None]
     assert len(ungraded) == 1
     assert ungraded[0].metrics == {}
 
     # The ungraded row is its own bucket: it is excluded from both correct and incorrect, so the
     # three counts partition the graded rows and `ungraded` accounts for the rest.
-    assert page.counts.model_dump() == {"all": 5, "correct": 3, "incorrect": 1, "ungraded": 1}
+    assert page.counts.model_dump() == {"all": 5, "correct": 3, "incorrect": 1, "scored": 4, "ungraded": 1}
 
-    only_ungraded = samples.fetch_samples(results_path, "mmlu", offset=0, limit=50, correct="ungraded")
+    only_ungraded = samples.fetch_samples(results_path, "mmlu", offset=0, limit=50, outcome_filter="ungraded")
     assert [row.doc_id for row in only_ungraded.rows] == [ungraded[0].doc_id]
 
-    incorrect = samples.fetch_samples(results_path, "mmlu", offset=0, limit=50, correct="incorrect")
+    incorrect = samples.fetch_samples(results_path, "mmlu", offset=0, limit=50, outcome_filter="incorrect")
     assert all(row.correct is False for row in incorrect.rows)
 
 

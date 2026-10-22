@@ -21,6 +21,8 @@ import logging
 import os
 
 from finestore.eval import EvalSample, SampleKind
+from marin.evaluation.metric_selection import is_truthfulqa_mc2_task
+from marin.evaluation.records import MetricKind
 from pydantic import BaseModel, ConfigDict
 
 from . import samples
@@ -123,6 +125,8 @@ def _outcome(sample: EvalSample) -> str:
         return "correct"
     if sample.correct is False:
         return "incorrect"
+    if sample.grading is not None and sample.grading.score is not None:
+        return "scored"
     return "ungraded"
 
 
@@ -142,7 +146,17 @@ def _sample_digest(results_path: str | None, sample: EvalSample) -> str:
         lines.append(f"prompt: {_clip(prompt, MAX_PROMPT_CHARS)}")
     if sample.kind == SampleKind.MULTIPLE_CHOICE:
         lines.append(f"model_choice: {_choice_label(sample, sample.model_choice)}")
-        lines.append(f"gold_choice: {_choice_label(sample, sample.target_choice)}")
+        if is_truthfulqa_mc2_task(sample.task):
+            try:
+                labels = json.loads(sample.doc)["mc2_targets"]["labels"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                labels = None
+            if isinstance(labels, list) and sample.choices and len(labels) == len(sample.choices):
+                choices = [_choice_label(sample, index) for index, label in enumerate(labels) if label == 1]
+                if choices:
+                    lines.append(f"gold_choices: {_clip('; '.join(choices), MAX_ANSWER_CHARS)}")
+        elif sample.target_choice is not None:
+            lines.append(f"gold_choice: {_choice_label(sample, sample.target_choice)}")
     elif sample.kind == SampleKind.GENERATION:
         lines.append(f"model_answer: {_clip(sample.extracted or sample.output or '', MAX_ANSWER_CHARS)}")
         if sample.target_text:
@@ -155,6 +169,8 @@ def _sample_digest(results_path: str | None, sample: EvalSample) -> str:
             lines.append(f"trajectory: {_clip(trajectory, MAX_TRAJECTORY_CHARS)}")
     if sample.grading and sample.grading.detail and sample.grading.detail != "{}":
         lines.append(f"grading_detail: {_clip(sample.grading.detail, MAX_DETAIL_CHARS)}")
+    if sample.grading is not None and sample.grading.score is not None:
+        lines.append(f"score: {sample.grading.score}")
     return "\n".join(lines)
 
 
@@ -211,10 +227,13 @@ def review_run_samples(
     sample_filter: str,
     n: int,
     review_model: str,
+    *,
+    primary_metric_name: str | None = None,
+    primary_metric_kind: MetricKind | None = None,
 ) -> ReviewResponse:
     """Review up to ``n`` of a run's ``task`` samples for failure modes with one call to ``review_model``.
 
-    ``sample_filter`` is ``all``/``correct``/``incorrect`` (the samples reader's correctness filter).
+    ``sample_filter`` uses the samples reader's outcome filter.
     Degrades to ``{"available": false, "reason": ...}`` -- never raising -- when the ``anthropic`` SDK is
     missing, ``ANTHROPIC_API_KEY`` is unset, the task has no matching samples, or the model does not
     return valid JSON.
@@ -228,7 +247,15 @@ def review_run_samples(
     if not api_key:
         return _unavailable(model, task, sample_filter, "ANTHROPIC_API_KEY is not set")
 
-    page = samples.fetch_samples(results_path, task, offset=0, limit=n, correct=sample_filter)
+    page = samples.fetch_samples(
+        results_path,
+        task,
+        offset=0,
+        limit=n,
+        outcome_filter=sample_filter,
+        primary_metric_name=primary_metric_name,
+        primary_metric_kind=primary_metric_kind,
+    )
     if not page.available:
         return _unavailable(model, task, sample_filter, page.error or "samples are unavailable")
     if not page.rows:

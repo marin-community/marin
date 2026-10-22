@@ -45,8 +45,20 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.metric_selection import base_metric, declared_sample_metric, primary_filter
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, BenchmarkMetadataRef, EvalTaskRef, TaskCoverage
+from marin.evaluation.metric_selection import (
+    base_metric,
+    declared_sample_metric,
+    is_truthfulqa_mc2_task,
+    primary_filter,
+    sample_metric_kind,
+)
+from marin.evaluation.records import (
+    EVALCHEMY_INFRASTRUCTURE_ERROR,
+    BenchmarkMetadataRef,
+    EvalTaskRef,
+    MetricKind,
+    TaskCoverage,
+)
 
 
 class TaskDeclaration(Protocol):
@@ -213,7 +225,10 @@ def _sample_metrics(raw: dict) -> dict[str, float]:
 
 
 def _lm_eval_grading(
-    metrics: dict[str, float], extraction_filter: str | None, primary_metric_name: str | None
+    metrics: dict[str, float],
+    extraction_filter: str | None,
+    primary_metric_name: str | None,
+    metric_kind: MetricKind | None,
 ) -> Grading | None:
     """The explicit grading for an lm-eval sample: its headline metric, filter, score, and pass flag.
 
@@ -230,11 +245,13 @@ def _lm_eval_grading(
         metric=name,
         filter=metric_filter,
         score=value,
-        passed=value >= 1.0,
+        passed=None if metric_kind is MetricKind.CONTINUOUS else value >= 1.0,
     )
 
 
-def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = None) -> EvalSample:
+def sample_from_lm_eval(
+    task: str, raw: dict, primary_metric_name: str | None = None, metric_kind: MetricKind | None = None
+) -> EvalSample:
     """Normalize one historical lm-eval ``--log_samples`` filter row."""
     arguments = raw.get("arguments")
     responses = raw.get("resps")
@@ -246,6 +263,7 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
         metrics,
         extraction_filter if isinstance(extraction_filter, str) else None,
         primary_metric_name,
+        sample_metric_kind(task, metric_kind),
     )
     failure_category = raw.get(_FAILURE_CATEGORY_KEY)
     failure_marker = (
@@ -280,7 +298,7 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
             prompt_text=context,
             choices=choices,
             model_choice=max(scored)[1] if scored and failure_marker is None else None,
-            target_choice=_resolve_target_choice(target, choices),
+            target_choice=None if is_truthfulqa_mc2_task(task) else _resolve_target_choice(target, choices),
             output=failure_marker,
             extracted=failure_marker,
             **common,
@@ -320,11 +338,13 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
     )
 
 
-def samples_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = None) -> list[EvalSample]:
+def samples_from_lm_eval(
+    task: str, raw: dict, primary_metric_name: str | None = None, metric_kind: MetricKind | None = None
+) -> list[EvalSample]:
     """Normalize a historical Evalchemy record into its extraction-filter rows."""
     variants = raw.get("filter_variants")
     if not isinstance(variants, list) or not variants:
-        return [sample_from_lm_eval(task, raw, primary_metric_name)]
+        return [sample_from_lm_eval(task, raw, primary_metric_name, metric_kind)]
 
     samples = []
     for variant in variants:
@@ -343,6 +363,7 @@ def samples_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None =
                     "filtered_resps": variant.get("filtered_resps", []),
                 },
                 primary_metric_name,
+                metric_kind,
             )
         )
     return samples
@@ -446,7 +467,9 @@ class _TaskCoverageAccumulator:
         # A pass/fail grade is the only one with a Bernoulli count behind it; a partial-credit score
         # (a rubric, an edit distance) has no numerator to record, and neither does an aggregate-scored
         # task.
-        binary = not aggregate_scored and all(summary.score in (0.0, 1.0) for summary in scored)
+        binary = not aggregate_scored and all(
+            summary.score in (0.0, 1.0) and summary.correct is not None for summary in scored
+        )
         errors = {UNGRADED_ERROR: ungraded} if ungraded else {}
         if infrastructure_errors:
             errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
@@ -528,7 +551,23 @@ def _result_contracts(
         if isinstance(raw_benchmarks, Mapping):
             for leaf, raw in raw_benchmarks.items():
                 if isinstance(leaf, str):
-                    benchmarks.setdefault(directory, {})[leaf] = BenchmarkMetadataRef.model_validate(raw)
+                    benchmark = BenchmarkMetadataRef.model_validate(raw)
+                    kind = sample_metric_kind(benchmark.task, benchmark.metric_kind)
+                    if kind is not benchmark.metric_kind:
+                        benchmark = benchmark.model_copy(
+                            update={
+                                "metric_kind": kind,
+                                "metrics": tuple(
+                                    (
+                                        metric.model_copy(update={"kind": kind})
+                                        if metric.name == benchmark.primary_metric
+                                        else metric
+                                    )
+                                    for metric in benchmark.metrics
+                                ),
+                            }
+                        )
+                    benchmarks.setdefault(directory, {})[leaf] = benchmark
         raw_canonical = result.get("canonical_results") or {}
         if isinstance(raw_canonical, Mapping):
             for leaf, values in raw_canonical.items():
@@ -714,6 +753,7 @@ def _write_sample_archive(
                 relative.rsplit("/", 1)[-1],
                 payload,
                 primary_metric_name=primary_source,
+                metric_kind=benchmark.metric_kind if benchmark is not None else None,
                 coverage=accumulator,
             )
             count += written
@@ -896,6 +936,7 @@ def _add_lm_eval_rows(
     payload: bytes,
     *,
     primary_metric_name: str | None = None,
+    metric_kind: MetricKind | None = None,
     task_name: str | None = None,
     coverage: _TaskCoverageAccumulator | None = None,
 ) -> int:
@@ -916,7 +957,7 @@ def _add_lm_eval_rows(
         if not line or line.isspace():
             continue
         raw = json.loads(line)
-        normalized = samples_from_lm_eval(task, raw, primary_metric_name)
+        normalized = samples_from_lm_eval(task, raw, primary_metric_name, metric_kind)
         variants = raw.get("filter_variants")
         filters = (
             [variant.get("filter") for variant in variants]
@@ -1010,6 +1051,7 @@ def rebuild_lm_eval_samples(out_path: str, *, tasks: Sequence[EvalTaskRef] = (),
                 name.rsplit("/", 1)[-1],
                 payload,
                 primary_metric_name=primary_source,
+                metric_kind=benchmark.metric_kind if benchmark is not None else None,
                 task_name=native_task_keys.get(name),
             )
         store.seal()

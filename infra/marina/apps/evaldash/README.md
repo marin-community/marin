@@ -92,7 +92,7 @@ GET  /runs/{run_id}     the full record.json for one run (404 if absent)
 GET  /runs/{run_id}/jobs           live iris job + per-task attempt status for each role
 GET  /runs/{run_id}/logs?role=&tail=&substring=   live finelog log lines for one role
 GET  /runs/{run_id}/samples/tasks  tasks with exported per-sample parquets
-GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
+GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows and outcome counts
 GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
@@ -115,6 +115,14 @@ Imbens-Manski critical value rather than imputing them; when it reports none, th
 `sampling_only`, because completeness is then unknown. A panel benchmark column sorts on the score;
 `/compare` ranks on the interval's lower bound, so losing items cannot buy rank there. Each row's
 `last_updated` is the maximum `created_at` among its cells.
+
+For each task, the samples endpoint returns the primary metric, its `metric_kind`, and outcome counts.
+`scored` includes binary rows counted as `correct` or `incorrect`; `ungraded` has no primary score or
+usable verdict. Binary tasks offer correct and incorrect filters. Continuous tasks offer a scored filter.
+Both offer ungraded when those rows exist. A continuous row keeps its numeric grade without a
+pass/fail verdict. EvalDash reads TruthfulQA MC2 as continuous even when an older record declares
+`acc` binary. In the preserved sample document, a `1` in `mc2_targets.labels` marks a correct
+choice; if that vector is unavailable, the browser shows no gold-choice hint.
 
 Both evaluators emit benchmark metadata with the full item count, the count selected after a run cap,
 and the canonical metric protocol. Marin preserves that block in `record.json`. Harbor reports task
@@ -204,7 +212,7 @@ with `-smoke` suites excluded, and every run for the model (smoke included), new
 its headline measurement.
 
 `/runs/{run_id}/samples/review` samples up to `n` (default 20, capped at 40) rows of the run's
-`{task}` filtered by `{filter}` (`all`/`correct`/`incorrect`), renders each into a bounded text digest,
+`{task}` filtered by `{filter}` (`all`/`correct`/`incorrect`/`scored`/`ungraded`), renders each into a bounded text digest,
 and asks one Claude call (`EVALDASH_REVIEW_MODEL`, default `claude-haiku-4-5-20251001`, keyed by
 `ANTHROPIC_API_KEY`) to bucket them into a fixed failure-mode rubric with a short narrative. Like the
 logs and artifact endpoints it returns `{available: false, reason}` -- never a 500 -- when the

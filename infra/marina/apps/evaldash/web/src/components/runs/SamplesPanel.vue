@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * Per-sample browser for a succeeded run. Lists the tasks with exported sample parquets, then
- * pages their rows filtered by correctness (per-sample primary metric == 1). A row click opens
+ * pages their rows by the primary metric outcome. A row click opens
  * the full-screen sample viewer at that row; "Open viewer" jumps straight in at the first row.
  */
 import { computed, onMounted, ref, watch } from 'vue'
@@ -43,12 +43,20 @@ watch(tasksData, (tasks) => {
   if (!selectedTask.value && tasks?.tasks.length) selectedTask.value = tasks.tasks[0].task
 })
 
+watch(selectedTask, () => {
+  correct.value = 'all'
+})
+
+watch(() => data.value?.metric_kind, (kind) => {
+  if (kind && !sampleFilters(kind, data.value?.counts?.ungraded).includes(correct.value)) correct.value = 'all'
+})
+
 watch([selectedTask, correct], () => {
   offset.value = 0
   if (selectedTask.value) refresh()
 })
 
-const FILTERS = computed(() => sampleFilters(data.value?.counts?.ungraded))
+const FILTERS = computed(() => sampleFilters(data.value?.metric_kind ?? null, data.value?.counts?.ungraded))
 
 const total = computed(() => data.value?.total ?? 0)
 const shownFrom = computed(() => (total.value === 0 ? 0 : offset.value + 1))
@@ -171,7 +179,7 @@ function openViewer(rowIndex: number) {
     </div>
 
     <ReviewPanel
-      v-if="tasksData?.available && selectedTask"
+      v-if="tasksData?.available && selectedTask && data?.metric_kind !== 'continuous'"
       :run-id="runId"
       :task="selectedTask"
       :filter="correct"
