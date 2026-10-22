@@ -473,12 +473,15 @@ def decision_grader(
     the decision model's state template; the default passes the deliverable, the rubric, the reference and
     the visible output of the solver's final turn, and a program changes it only deliberately. The grader has
     no judge strength and names no model: the host's decision client answers. It is uncalibrated (the
-    "partially matches" bar) until ``sandbox_effects.calibrate_decision_grader`` sets its bar.
+    "partially matches" bar) until ``sandbox_effects.calibrate_decision_grader`` sets its bar and reads the
+    fooling answers under it; ``run_build`` refuses a task whose decision grader lacks those reads.
 
     Raises:
         pydantic.ValidationError: ``reference`` is empty, or ``state`` leaves out the solver's output.
     """
-    return DecisionGrader(rubric=rubric, reference=reference, state=dict(state), acceptance_level=None, calibration={})
+    return DecisionGrader(
+        rubric=rubric, reference=reference, state=dict(state), acceptance_level=None, calibration={}, fooling={}
+    )
 
 
 def assemble(

@@ -21,9 +21,10 @@ The steps, in run order:
    ``run_build`` refuses a task whose machine is not the declared one.
 4. ``grader`` writes the grader of the kind the proposal declares: a decision-model grader
    (``draft.decision_grader``) by default, which ``calibrate_decision_grader`` reads on its reference and
-   three equivalent variants and either sends back (a known-correct candidate below "partially
-   matches") or calibrates; an LLM judge (``draft.judge_grader``) for a reply whose prose is the
-   product; an in-process verifyit grader (exact, numeric, math, mcq) for one value in an
+   three equivalent variants and on five fooling answers built from the reference and the author's fluent
+   wrong and hedged replies, and either sends back (a known-correct candidate below "partially matches",
+   or a fooling answer above the rejection ceiling) or calibrates; an LLM judge (``draft.judge_grader``)
+   for a reply whose prose is the product; an in-process verifyit grader (exact, numeric, math, mcq) for one value in an
    unambiguous format; otherwise a Python grader program in a verifier machine. A judge calls a model,
    which no build has, so it is not prototyped. For the other kinds, before it returns,
    the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
@@ -162,9 +163,10 @@ async def grader(
         f"names: {proposal.header.verification}. decision_model is kind=decision_model: the proposal's rubric, each "
         "item stated as its meaning with the reference values, tolerances, units and accepted equivalences, a "
         "reference reply that delivers what the deliverable statement asks for in the form a real requester "
-        "would accept, and three equivalent variants of it; the answer contract is that deliverable statement, "
-        "with no answer block. llm_as_judge is kind=llm_as_judge: the same rubric and a reference reply, for a "
-        "reply whose prose is the product. answer_in_box is an in-process kind (exact, "
+        "would accept, three equivalent variants of it, a confident reply wrong in substance (fluent_wrong_reply) "
+        "and a reply hedging between candidate answers, one of them correct (hedged_reply); the answer contract "
+        "is that deliverable statement, with no answer block. llm_as_judge is kind=llm_as_judge: the same rubric "
+        "and a reference reply, for a reply whose prose is the product. answer_in_box is an in-process kind (exact, "
         "numeric, math or mcq) for one value in an unambiguous format. code is kind=script, for a deliverable with "
         "a strict structure the requester specified whose graded parts are all deterministic, or for what only "
         "execution can judge; never for prose. Rewards lie in [0, 1]. Give partial credit only where the "
@@ -177,13 +179,16 @@ async def grader(
     async def decision_problem(submitted: GraderDraft) -> str | None:
         uncalibrated = grader_package(submitted, fixtures, requirements)
         assert isinstance(uncalibrated, DecisionGrader)
-        calibration = await calibrate_decision_grader(context, uncalibrated, submitted.equivalent_variants)
+        calibration = await calibrate_decision_grader(
+            context,
+            uncalibrated,
+            submitted.equivalent_variants,
+            fluent_wrong_reply=submitted.fluent_wrong_reply,
+            hedged_reply=submitted.hedged_reply,
+        )
         prototyped.extend(calibration.candidates)
         if calibration.problem is not None:
-            return (
-                f"{calibration.problem}. Either the rubric rejects a correct answer (state the equivalent forms it "
-                "must accept) or a variant is not equivalent to the reference (replace it)"
-            )
+            return calibration.problem
         calibrated.append(calibration.grader)
         return None
 

@@ -161,22 +161,22 @@ def test_slot_plan_declares_a_solver_machine_exactly_for_an_imageless_slot(envir
 
 def test_slot_plan_caps_how_many_proposed_slots_share_a_pairing():
     plan_type = slot_plan_type(4, ALL_ENVIRONMENTS)
-    crowded = [slot(n, "reasoning", "code") for n in (1, 2, 3)] + [slot(4, "container", "llm_as_judge")]
-    with pytest.raises(ValidationError, match="reasoning x code"):
+    crowded = [slot(n, "reasoning", "decision_model") for n in (1, 2, 3)] + [slot(4, "container", "llm_as_judge")]
+    with pytest.raises(ValidationError, match="reasoning x decision_model"):
         plan_type.model_validate(plan(crowded, []))
-    crowded[2] = slot(3, "reasoning", "code", "null")
+    crowded[2] = slot(3, "reasoning", "decision_model", "null")
     assert plan_type.model_validate(plan(crowded, [])).slots[2].status is SlotStatus.NULL
 
 
-def test_decision_model_slots_share_an_environment_without_the_pairing_cap():
+def test_code_slots_share_an_environment_without_the_pairing_cap():
     plan_type = slot_plan_type(2, ALL_ENVIRONMENTS)
-    both = plan_type.model_validate(
-        plan([slot(1, "reasoning", "decision_model"), slot(2, "reasoning", "decision_model")], [])
-    )
-    assert [s.verification for s in both.slots] == [Verification.DECISION_MODEL, Verification.DECISION_MODEL]
+    both = plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "reasoning", "code")], []))
+    assert [s.verification for s in both.slots] == [Verification.CODE, Verification.CODE]
 
-    with pytest.raises(ValidationError, match="reasoning x code"):
-        plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "reasoning", "code")], []))
+    with pytest.raises(ValidationError, match="reasoning x decision_model"):
+        plan_type.model_validate(
+            plan([slot(1, "reasoning", "decision_model"), slot(2, "reasoning", "decision_model")], [])
+        )
 
 
 def test_plan_with_a_slot_in_an_unavailable_environment_fails_validation():

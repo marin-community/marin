@@ -6,10 +6,10 @@
 import inspect
 import json
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import pytest
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from rolloutengine.models import ModelRequest, ModelTurn
 from shellbox.machine import Backend, PackageSpec
 from taskcompendium.grader import GraderPackage
@@ -21,7 +21,7 @@ from verifyit.spec import ExactSpec
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import decision, draft
-from taskforge.spec.decision import DecisionGrader, DecisionUnavailable
+from taskforge.spec.decision import DecisionGrader, DecisionUnavailable, ScoreQuestion
 from taskforge.spec.draft import answer_grader, rollout_engine
 from taskforge.spec.verdict import VERDICT_REWARD
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal, parse
@@ -39,6 +39,7 @@ from taskforge.stage40_build_with_program.sdk import (
     WORKDIR,
     FileDraft,
     FixturesDraft,
+    FoolingKind,
     GraderDraft,
     grader_package,
     machine_facts,
@@ -50,7 +51,7 @@ from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage40_build_with_program.template import standard
 from taskforge.stage50_validate.lowering import lower
 from tests.sandbox.fixture_images import SlowGraderFactory
-from tests.spec.fake_decision import FakeDecisionClient
+from tests.spec.fake_decision import FakeDecisionClient, level_probabilities
 from tests.stage40_build_with_program.conftest import (
     FACTORIES,
     IMAGE,
@@ -100,6 +101,8 @@ def grader_call(script: str) -> dict:
         "script": script,
         "rubric": None,
         "equivalent_variants": [],
+        "fluent_wrong_reply": "",
+        "hedged_reply": "",
         "private_files": [],
         "expected": "",
         "tolerance": 0.0,
@@ -433,6 +436,9 @@ async def test_fixtures_list_packages_exactly_for_a_declared_package_machine(pro
 
 DECISION_REFERENCE = "6 * 7 = 42, so the product is 42."
 DECISION_VARIANTS = ["Multiplying six by seven gives 42.", "6 times 7 is forty-two.", "The product is 42 (6 * 7)."]
+FLUENT_WRONG = "6 * 7 = 48, so the product is 48."
+HEDGED = "The product is 42, or possibly 48."
+LENIENT_CRITERION = "The reply states a product."
 DECISION_RUBRIC = {
     "deliverable": "The product of 6 and 7.",
     "items": [
@@ -456,6 +462,8 @@ def decision_call(variants: list[str]) -> dict:
         "kind": "decision_model",
         "rubric": DECISION_RUBRIC,
         "equivalent_variants": variants,
+        "fluent_wrong_reply": FLUENT_WRONG,
+        "hedged_reply": HEDGED,
         "answer_contract": "Tell me the product and how you got it.",
         "reference_reply": DECISION_REFERENCE,
         "rejection_ceiling": 0.5,
@@ -486,11 +494,47 @@ async def test_the_grader_step_calibrates_a_decision_grader_on_its_reference_and
     )
     assert set(grader.package.calibration) == {"reference", "variant:1", "variant:2", "variant:3"}
     assert "known-correct candidates read below 'partially matches'" in fake_glm.requests[1]["messages"][-2]["content"]
-    assert [c.reply for c in grader.prototyped[-5:]] == [DECISION_REFERENCE, *DECISION_VARIANTS, ""]
+    assert [c.reply for c in grader.prototyped[-10:-5]] == [DECISION_REFERENCE, *DECISION_VARIANTS, ""]
+    assert grader.prototyped[-5].reply == FLUENT_WRONG and grader.prototyped[-4].reply == HEDGED
     assert "decision_model" in fake_glm.requests[0]["messages"][-2]["content"]
     # The step output keeps the decision grader type through the step store's JSON.
     stored = TypeAdapter(Grader)
     assert stored.validate_json(stored.dump_json(grader)) == grader
+
+
+@dataclass
+class RubricSensitiveClient:
+    """Reads as ``reads`` does, except that it credits the fluent wrong reply under a rubric whose criterion is
+    ``LENIENT_CRITERION``, which never says what a correct answer commits to."""
+
+    reads: FakeDecisionClient
+
+    async def decide(
+        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion], *, elastic: str, timeout: float
+    ) -> Mapping[str, tuple[float, ...]]:
+        if state["z_candidate_answer"] == FLUENT_WRONG and LENIENT_CRITERION in json.dumps(state["rubric"]):
+            return {name: level_probabilities(3.5) for name in questions}
+        return await self.reads.decide(state, questions, elastic=elastic, timeout=timeout)
+
+
+async def test_the_grader_step_sends_back_a_rubric_that_credits_a_fooling_answer(context, fake_glm):
+    lenient = json.loads(json.dumps(DECISION_RUBRIC))
+    lenient["items"][0]["pass_criterion"] = LENIENT_CRITERION
+    client = RubricSensitiveClient(
+        FakeDecisionClient({DECISION_REFERENCE: 3.9, **dict.fromkeys(DECISION_VARIANTS, 3.2)})
+    )
+    fake_glm.stream(content=json.dumps({**decision_call(DECISION_VARIANTS), "rubric": lenient}))
+    fake_glm.stream(content=json.dumps(decision_call(DECISION_VARIANTS)))
+
+    grader = await standard.grader.fn(
+        context(decision=client), decision_proposal(), replace(FIXTURES, private_files=()), SHELLSIM
+    )
+
+    assert len(fake_glm.requests) == 2
+    assert "fluent_wrong reward 1.0" in fake_glm.requests[1]["messages"][-2]["content"]
+    assert isinstance(grader.package, DecisionGrader)
+    assert grader.package.rubric.items[0].pass_criterion == "The product is 42."
+    assert set(grader.package.fooling) == {kind.value for kind in FoolingKind}
 
 
 async def test_a_decision_grader_on_a_host_without_a_decision_model_is_the_hosts_failure(context, fake_glm):

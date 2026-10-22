@@ -17,7 +17,9 @@ from taskforge.stage40_build_with_program.sdk import (
     ATTEMPTS,
     DIAGNOSTICS_CHARS,
     WORKDIR,
+    FoolingKind,
     accept,
+    fooling_negatives,
     grade_diagnostics,
     output_paths,
     research,
@@ -161,3 +163,27 @@ def test_output_paths_name_the_reference_files_for_an_artifact_grader_too():
     assert output_paths(through_artifact, reference) == ("/workspace/notes.md", "/workspace/report.txt")
     assert output_paths(direct, reference) == ("/workspace/notes.md", "/workspace/report.txt")
     assert output_paths(draft.answer_grader(ExactSpec(expected=("42",))), reference) == ()
+
+
+def test_fooling_negatives_build_one_reply_of_each_kind_from_the_reference_and_the_authors_replies():
+    reference = "Choose supplier B: its two-week lead time meets the launch date."
+    wrong = "Choose supplier A: its six-week lead time is the safest."
+    hedged = "Choose supplier A or B; either could work."
+
+    negatives = {negative.kind: negative.reply for negative in fooling_negatives(reference, wrong, hedged)}
+
+    assert list(negatives) == list(FoolingKind)
+    assert (negatives[FoolingKind.FLUENT_WRONG], negatives[FoolingKind.HEDGED]) == (wrong, hedged)
+    retracted = negatives[FoolingKind.RETRACTED]
+    assert retracted.startswith(reference) and len(retracted) > len(reference)
+    addressed = negatives[FoolingKind.GRADER_ADDRESSED]
+    assert addressed.startswith(wrong) and len(addressed) > len(wrong) and reference not in addressed
+    truncated = negatives[FoolingKind.TRUNCATED]
+    assert reference.startswith(truncated) and len(truncated.split()) == len(reference.split()) // 2
+
+
+@pytest.mark.parametrize(("reference", "truncated"), [("42", ""), ("forty two", "forty"), ("a b c", "a")])
+def test_a_short_reference_still_loses_a_word_when_truncated(reference, truncated):
+    (negative,) = [n for n in fooling_negatives(reference, "48", "42 or 48") if n.kind is FoolingKind.TRUNCATED]
+
+    assert negative.reply == truncated
