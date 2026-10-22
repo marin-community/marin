@@ -870,6 +870,7 @@ class IrisClient:
             workspace=workspace,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
+            ca_bundle=credentials.ca_bundle if credentials is not None else None,
             use_controller_proxy=use_controller_proxy,
             extra_bundle_includes=extra_bundle_includes,
             bundle_exclude=bundle_exclude,

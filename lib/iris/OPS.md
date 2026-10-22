@@ -606,7 +606,7 @@ Namespaces:
   an agent start reports zero CPU. Memory uses the working-set gauge and an
   agent-local peak; an agent restart resets that peak. Kubelet resource metrics
   do not expose container filesystem usage, so Kubernetes rows report zero disk
-  usage. The node-agent service account requires `get` on `nodes/metrics`, which
+  usage. The separate `iris-node-agent` service account requires `get` on `nodes/metrics`, which
   is the subresource the kubelet authorizes that endpoint against.
 - `iris.task_event` — up to 30 days of deduplicated backend verdicts and
   state-changing controller actions per task attempt. Query all attempts with
@@ -862,6 +862,11 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 ---
 
 ## CoreWeave (GPU) Operations
+
+For broker-enabled clusters, use the [task credential operations](docs/credentials.md#operations-and-cutover)
+for operator login, task-session rollover or disable, certificate handling and
+checkpoint restore. These clusters require TLS and authenticated requests even
+through a Kubernetes port-forward.
 
 [`docs/coreweave.md`](docs/coreweave.md) describes the Kubernetes architecture.
 The named `cw-*` configs in `lib/iris/config/` are the source of truth for each

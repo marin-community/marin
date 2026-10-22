@@ -118,6 +118,7 @@ def make_task_backend(
             pods=PodConfig(
                 namespace=namespace,
                 default_image=config.defaults.worker.default_task_image,
+                controller_ca_config_map=config.credential_broker.ca_config_map if config.credential_broker else "",
                 logship_image=config.controller.image,
                 service_account=kp.service_account or "",
                 host_network=kp.host_network,

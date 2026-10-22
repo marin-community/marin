@@ -55,6 +55,50 @@ LABEL_JOB_ID = "iris.job_id"
 LABEL_TASK_HASH = "iris.task_hash"
 LABEL_TASK_ID = "iris.task_id"
 
+
+@pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.CONTAINER_PROFILE_SANDBOX])
+@pytest.mark.parametrize("storage_granted", [True, False])
+def test_broker_credentials_use_pod_owned_secret_without_leaking_into_task_environment(profile, storage_granted):
+    k8s = InMemoryK8sService(namespace="iris")
+    config = pod_config(
+        controller_address="https://iris-controller-svc.iris.svc.cluster.local:10000",
+        controller_ca_config_map="iris-controller-ca",
+        task_outputs=TaskOutputPolicy(destination="s3://training/outputs"),
+    )
+    request = make_run_req("/training/job/0", attempt_uid="attempt-uid")
+    request.container_profile = profile
+    request.bundle_id = "bundle-sha"
+    request.task_refresh_capability = "private-attempt-refresh-capability"
+    request.task_storage_profiles_json = json.dumps(
+        {
+            "training": {"endpoint": "https://cwobject.com", "region": "US-EAST-02A", "buckets": ["training"]},
+        }
+        if storage_granted
+        else {}
+    )
+    provider = K8sTaskProvider(descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=config, cluster_scan_interval=0.0)
+    try:
+        assert provider.sync(make_batch(tasks_to_run=[request])) == []
+        pod = k8s.list_json(K8sResource.PODS)[0]
+        secret = k8s.list_json(K8sResource.SECRETS)[0]
+    finally:
+        provider.close()
+    assert request.task_refresh_capability not in json.dumps(pod)
+    assert request.task_refresh_capability in secret["stringData"]["session.json"]
+    assert secret["metadata"]["ownerReferences"][0]["uid"] == pod["metadata"]["uid"]
+    task = next(container for container in pod["spec"]["containers"] if container["name"] == "task")
+    assert ("--write-aws-config" in task["command"][2]) == storage_granted
+    mounts = {mount["name"] for mount in task["volumeMounts"]}
+    assert ("task-session" in mounts) == (profile != job_pb2.CONTAINER_PROFILE_SANDBOX)
+    if profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+        assert all(
+            "task-session" in {m["name"] for m in container["volumeMounts"]} for container in pod["spec"]["containers"]
+        )
+    assert all(
+        "task-session" in {m["name"] for m in container["volumeMounts"]} for container in pod["spec"]["initContainers"]
+    )
+
+
 # These are Kubernetes wire keys, not Iris implementation symbols. Keep the
 # established test names while sourcing them from the external manifest contract.
 _INFRASTRUCTURE_FAILURE_REASONS = INFRASTRUCTURE_FAILURE_REASONS

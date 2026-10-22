@@ -54,6 +54,8 @@ class CredentialRecord:
     endpoint: str
     edge_refresh_token: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
+    token: str | None = field(default=None, repr=False)
+    ca_bundle: str | None = None
 
 
 def credentials_dir() -> Path:
@@ -77,6 +79,8 @@ def load_credentials(cluster: str) -> CredentialRecord | None:
         endpoint=data["endpoint"],
         edge_refresh_token=data.get("edge_refresh_token"),
         metadata=dict(data.get("metadata") or {}),
+        token=data.get("token"),
+        ca_bundle=data.get("ca_bundle"),
     )
 
 

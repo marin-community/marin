@@ -59,6 +59,7 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
     cluster_role_manifest,
     cluster_role_name,
     namespace_manifest,
+    node_agent_rbac_manifests,
     service_account_manifest,
 )
 from iris.cluster.platforms.k8s.types import (
@@ -230,6 +231,8 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
     role_name = cluster_role_name(namespace)
     k8s.apply_json(cluster_role_manifest(role_name))
     k8s.apply_json(cluster_role_binding_manifest(role_name, namespace, service_account))
+    for manifest in node_agent_rbac_manifests(namespace):
+        k8s.apply_json(manifest)
 
     for name, sg in cluster_config.scale_groups.items():
         cw = sg.slice_template.coreweave if sg.slice_template is not None else None
@@ -344,6 +347,8 @@ def test_start_controller_creates_controller_resources(hostname):
     }
 
     agent_spec = node_agent["spec"]["template"]["spec"]
+    assert agent_spec["serviceAccountName"] == "iris-node-agent"
+    assert deploy_spec["template"]["spec"]["serviceAccountName"] == "iris-controller"
     assert agent_spec["hostNetwork"] is True
     assert agent_spec["containers"][0]["command"] == [
         ".venv/bin/python",
@@ -773,6 +778,9 @@ def test_verify_prerequisites_raises_when_nothing_provisioned():
     assert "ServiceAccount/iris/iris-controller" in message
     assert "ClusterRole/iris-controller-iris" in message
     assert "ClusterRoleBinding/iris-controller-iris" in message
+    assert "ServiceAccount/iris/iris-node-agent" in message
+    assert "ClusterRole/iris-node-agent-iris" in message
+    assert "ClusterRoleBinding/iris-node-agent-iris" in message
     assert "NodePool/iris-cpu-erapids" in message
     assert "ClusterQueue/iris-cq" in message
     assert "pulumi up" in message
@@ -791,6 +799,29 @@ def test_verify_prerequisites_passes_once_seeded():
     # Presence-only: verifying must not create, delete, or otherwise touch anything.
     assert {p["metadata"]["name"] for p in k8s.list_json(K8sResource.NODE_POOLS)} == pools_before
     assert k8s.get_json(K8sResource.NAMESPACES, "iris") is not None
+    provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("resource", "name"),
+    [
+        (K8sResource.SERVICE_ACCOUNTS, "iris-node-agent"),
+        (K8sResource.CLUSTER_ROLES, "iris-node-agent-iris"),
+        (K8sResource.CLUSTER_ROLE_BINDINGS, "iris-node-agent-iris"),
+    ],
+)
+def test_start_controller_rejects_missing_node_agent_identity_before_changing_runtime(resource, name):
+    provider, k8s = _make_provider()
+    config = _make_cluster_config()
+    _seed_prerequisites(k8s, config)
+    k8s.delete(resource, name)
+
+    with pytest.raises(PrerequisitesNotProvisionedError):
+        provider.start_controller(config)
+
+    assert k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent") is None
+    assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is None
     provider.shutdown()
 
 

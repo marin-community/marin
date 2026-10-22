@@ -12,11 +12,13 @@ from dataclasses import dataclass
 
 import pulumi
 import pulumi_kubernetes as k8s
+from iris.cluster.platforms.k8s.credential_manifests import credential_secret_rbac
 from iris.cluster.platforms.k8s.rbac_manifests import (
     cluster_role_binding_manifest,
     cluster_role_manifest,
     cluster_role_name,
     namespace_manifest,
+    node_agent_rbac_manifests,
     service_account_manifest,
 )
 
@@ -42,12 +44,11 @@ def _managed_auth_user_subjects(usernames: tuple[str, ...]) -> list[dict[str, st
 class IrisRbacArgs:
     namespace: str  # from kubernetes_provider.namespace
     spec: RbacSpec
+    credential_broker: bool = False
 
 
 class IrisRbac(pulumi.ComponentResource):
-    """Namespace, iris-controller ServiceAccount, and namespace-qualified ClusterRole +
-    ClusterRoleBinding (`iris-controller-<namespace>`, to allow multiple Iris instances on
-    one CKS cluster)."""
+    """Namespace and separate controller and node-agent identities and grants."""
 
     def __init__(
         self,
@@ -108,6 +109,48 @@ class IrisRbac(pulumi.ComponentResource):
             opts=child_opts(depends_on=[cluster_role, service_account]),
         )
         imports.register(cluster_role_binding, parent=self, provider_id=role_name)
+        if args.credential_broker:
+            secret_role, secret_binding = credential_secret_rbac(args.namespace, args.spec.service_account)
+            session_role = k8s.rbac.v1.Role(
+                "task-session-secrets",
+                metadata=secret_role["metadata"],
+                rules=secret_role["rules"],
+                opts=child_opts(depends_on=[namespace]),
+            )
+            k8s.rbac.v1.RoleBinding(
+                "task-session-secrets-binding",
+                metadata=secret_binding["metadata"],
+                role_ref=secret_binding["roleRef"],
+                subjects=secret_binding["subjects"],
+                opts=child_opts(depends_on=[session_role, service_account]),
+            )
+
+        agent_account_manifest, agent_role_manifest, agent_binding_manifest = node_agent_rbac_manifests(args.namespace)
+        agent_account = k8s.core.v1.ServiceAccount(
+            "node-agent-service-account",
+            metadata=agent_account_manifest["metadata"],
+            opts=child_opts(depends_on=[namespace]),
+        )
+        imports.register(
+            agent_account,
+            parent=self,
+            provider_id=f"{args.namespace}/{agent_account_manifest['metadata']['name']}",
+        )
+        agent_role = k8s.rbac.v1.ClusterRole(
+            "node-agent-cluster-role",
+            metadata=agent_role_manifest["metadata"],
+            rules=agent_role_manifest["rules"],
+            opts=child_opts(),
+        )
+        imports.register(agent_role, parent=self, provider_id=agent_role_manifest["metadata"]["name"])
+        agent_binding = k8s.rbac.v1.ClusterRoleBinding(
+            "node-agent-cluster-role-binding",
+            metadata=agent_binding_manifest["metadata"],
+            role_ref=agent_binding_manifest["roleRef"],
+            subjects=agent_binding_manifest["subjects"],
+            opts=child_opts(depends_on=[agent_role, agent_account]),
+        )
+        imports.register(agent_binding, parent=self, provider_id=agent_binding_manifest["metadata"]["name"])
         self.register_outputs({})
 
 

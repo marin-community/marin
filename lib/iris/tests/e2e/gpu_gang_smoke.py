@@ -77,6 +77,7 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
     cluster_role_manifest,
     cluster_role_name,
     namespace_manifest,
+    node_agent_rbac_manifests,
     service_account_manifest,
 )
 from iris.cluster.platforms.k8s.service import CloudK8sService
@@ -243,6 +244,7 @@ class ControllerTarget:
             service_account_manifest(self.namespace, "iris-controller"),
             cluster_role_manifest(role_name),
             cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
+            *node_agent_rbac_manifests(self.namespace),
         ):
             self.kubectl.apply_json(manifest)
         cm = c._config_json_for_configmap(cfg)
@@ -440,6 +442,7 @@ class CoreweaveTarget(ControllerTarget):
             service_account_manifest(self.namespace, "iris-controller"),
             cluster_role_manifest(role_name),
             cluster_role_binding_manifest(role_name, self.namespace, "iris-controller"),
+            *node_agent_rbac_manifests(self.namespace),
         ):
             self.kubectl.apply_json(manifest)
 

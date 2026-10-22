@@ -17,7 +17,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{ConnectInfo, Request, State};
@@ -67,6 +67,12 @@ const X_FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto
 type HttpsClient = Client<HttpsConnector<HttpConnector>, Body>;
 type DecisionResult = Result<ProxyDecision, Box<Response<Body>>>;
 
+enum SessionStreamItem {
+    Chunk(Result<axum::body::Bytes, axum::Error>),
+    Tick,
+    End,
+}
+
 #[derive(Clone)]
 pub struct ProxyConfig {
     pub controller_url: String,
@@ -109,11 +115,19 @@ struct RegistryState {
 
 #[derive(Clone, Default)]
 pub struct ProxyControl {
+    task_sessions: Arc<RwLock<HashMap<String, TaskSessionDecision>>>,
     registry: Arc<RwLock<RegistryState>>,
     ready: Arc<AtomicBool>,
     stats: Arc<CacheStats>,
     rpc_metrics: Arc<std::sync::Mutex<RpcMetrics>>,
     proxy_metrics: Arc<std::sync::Mutex<ProxyMetrics>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskSessionDecision {
+    generation: u64,
+    deadline: f64,
+    finalizing: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,6 +139,43 @@ pub struct ProxyStats {
 }
 
 impl ProxyControl {
+    pub fn replace_task_sessions(
+        &self,
+        sessions: HashMap<String, TaskSessionDecision>,
+    ) -> Result<(), String> {
+        *self
+            .task_sessions
+            .write()
+            .map_err(|_| "task session lock is poisoned")? = sessions;
+        Ok(())
+    }
+
+    fn authorizes_task(&self, identity: &auth::VerifiedIdentity, required: bool) -> bool {
+        let Some(session_id) = &identity.session_id else {
+            return identity.role != "task" || !required;
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        self.task_sessions.read().is_ok_and(|sessions| {
+            sessions.get(session_id).is_some_and(|session| {
+                session.generation == identity.session_generation
+                    && session.deadline > now
+                    && identity.expires_at as f64 > now
+            })
+        })
+    }
+
+    fn task_can_proxy(&self, identity: &auth::VerifiedIdentity) -> bool {
+        let Some(session_id) = &identity.session_id else {
+            return true;
+        };
+        self.task_sessions
+            .read()
+            .is_ok_and(|sessions| sessions.get(session_id).is_some_and(|s| !s.finalizing))
+    }
+
     pub fn stats(&self) -> Result<ProxyStats, String> {
         let registry = self
             .registry
@@ -858,24 +909,24 @@ fn proxy_route_for_request(
     Ok(subdomain_proxy_route(headers, uri))
 }
 
-async fn verified_identity(
+fn verified_identity(
     state: &AppState,
-    headers: &HeaderMap,
-    route: &ProxyRoute,
-    peer: SocketAddr,
-    direct_connection: bool,
+    authenticated: &VerifyOutcome,
 ) -> Result<auth::VerifiedIdentity, Box<Response<Body>>> {
-    match state
-        .verifier
-        .verify_request(
-            headers,
-            route.token.as_deref(),
-            peer.ip(),
-            direct_connection,
-        )
-        .await
-    {
-        VerifyOutcome::Verified(identity) => Ok(identity),
+    let authentication = authenticated.clone();
+    match authentication {
+        VerifyOutcome::Verified(identity)
+            if state
+                .control
+                .authorizes_task(&identity, state.verifier.requires_task_sessions())
+                && state.control.task_can_proxy(&identity) =>
+        {
+            Ok(identity)
+        }
+        VerifyOutcome::Verified(_) => Err(Box::new(error_response(
+            StatusCode::UNAUTHORIZED,
+            "task session is closed",
+        ))),
         VerifyOutcome::Anonymous => Ok(anonymous_identity()),
         VerifyOutcome::Invalid | VerifyOutcome::Missing => Err(Box::new(error_response(
             StatusCode::UNAUTHORIZED,
@@ -890,6 +941,10 @@ fn anonymous_identity() -> auth::VerifiedIdentity {
         role: auth::ADMIN_ROLE.to_string(),
         audience: None,
         job_id: None,
+        owner_id: None,
+        session_id: None,
+        session_generation: 0,
+        root_job_id: None,
         endpoint: None,
         federation_peer: None,
         expires_at: u64::MAX,
@@ -938,6 +993,19 @@ fn authorize_mapping(
     mapping: &EndpointMapping,
     identity: &auth::VerifiedIdentity,
 ) -> Result<(), Box<Response<Body>>> {
+    if identity.session_id.is_some() {
+        let allowed = identity
+            .root_job_id
+            .as_ref()
+            .zip(mapping.task_id.as_ref())
+            .is_some_and(|(root, task)| task.starts_with(&format!("{root}/")));
+        if !allowed {
+            return Err(Box::new(error_response(
+                StatusCode::FORBIDDEN,
+                "task session is limited to its root job",
+            )));
+        }
+    }
     if mapping.link_access {
         if identity
             .endpoint
@@ -1105,8 +1173,7 @@ async fn native_decision(
     request_headers: &HeaderMap,
     request_method: &Method,
     request_uri: &Uri,
-    peer: SocketAddr,
-    direct_connection: bool,
+    authenticated: &VerifyOutcome,
 ) -> NativeDecision {
     if !state.control.is_ready() {
         return if request_uri.path().starts_with(PROXY_PATH_PREFIX)
@@ -1150,11 +1217,10 @@ async fn native_decision(
             )))
         }
     };
-    let identity =
-        match verified_identity(state, request_headers, &route, peer, direct_connection).await {
-            Ok(identity) => identity,
-            Err(response) => return NativeDecision::Response(response),
-        };
+    let identity = match verified_identity(state, authenticated) {
+        Ok(identity) => identity,
+        Err(response) => return NativeDecision::Response(response),
+    };
     let Some(mapping) = resolved else {
         return NativeDecision::Response(Box::new(error_response(
             StatusCode::NOT_FOUND,
@@ -1247,17 +1313,24 @@ async fn send(
     }
 }
 
-async fn forward_controller(
-    state: &AppState,
-    request: Request,
-    peer: SocketAddr,
-    direct_connection: bool,
-) -> Response<Body> {
-    let auth = state
-        .verifier
-        .verify_request(request.headers(), None, peer.ip(), direct_connection)
-        .await;
-    if matches!(auth, VerifyOutcome::Missing) && request.uri().path().starts_with("/iris.") {
+async fn forward_controller(state: &AppState, request: Request) -> Response<Body> {
+    let auth = request
+        .extensions()
+        .get::<VerifyOutcome>()
+        .expect("ingress authenticates before routing")
+        .clone();
+    if let VerifyOutcome::Verified(identity) = &auth {
+        if !state
+            .control
+            .authorizes_task(identity, state.verifier.requires_task_sessions())
+        {
+            return error_response(StatusCode::UNAUTHORIZED, "task session is closed");
+        }
+    }
+    if matches!(auth, VerifyOutcome::Missing)
+        && request.uri().path().starts_with("/iris.")
+        && request.uri().path() != "/iris.cluster.ControllerService/RenewTaskSession"
+    {
         return error_response(StatusCode::UNAUTHORIZED, "authentication required");
     }
     let handoff = match controller_handoff(state, auth) {
@@ -1282,6 +1355,33 @@ async fn ingress(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response<Body> {
+    let proxy_route = proxy_route_for_request(request.headers(), request.uri())
+        .ok()
+        .flatten();
+    let proxy_session = proxy_route.is_some();
+    let url_token = proxy_route.and_then(|route| {
+        if route.relay_peer.is_none() {
+            route.token
+        } else {
+            None
+        }
+    });
+    let authentication = state
+        .verifier
+        .verify_request(
+            request.headers(),
+            url_token.as_deref(),
+            peer.ip(),
+            !request.headers().contains_key(&X_FORWARDED_FOR),
+        )
+        .await;
+    let session_guard = match &authentication {
+        VerifyOutcome::Verified(identity) if identity.session_id.is_some() => Some(identity),
+        _ => None,
+    }
+    .cloned();
+    let mut request = request;
+    request.extensions_mut().insert(authentication);
     let rpc_timer = RpcRequestTimer::begin(&state.control.rpc_metrics, &request);
     let proxy_timer = ProxyRequestTimer::begin(&state.control.proxy_metrics, &request);
     // Count request bytes as the upstream reads the wrapped body.
@@ -1289,7 +1389,30 @@ async fn ingress(
         Some(timer) => timer.wrap_request_body(request),
         None => request,
     };
-    let response = ingress_inner(state, peer, request).await;
+    let mut response = ingress_inner(Arc::clone(&state), peer, request).await;
+    if let Some(identity) = session_guard {
+        let (parts, body) = response.into_parts();
+        let data = body
+            .into_data_stream()
+            .map(SessionStreamItem::Chunk)
+            .chain(tokio_stream::once(SessionStreamItem::End));
+        let heartbeat = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+            Duration::from_secs(1),
+        ))
+        .map(|_| SessionStreamItem::Tick);
+        let stream = data
+            .merge(heartbeat)
+            .take_while(move |item| {
+                !matches!(item, SessionStreamItem::End)
+                    && state.control.authorizes_task(&identity, true)
+                    && (!proxy_session || state.control.task_can_proxy(&identity))
+            })
+            .filter_map(|item| match item {
+                SessionStreamItem::Chunk(chunk) => Some(chunk),
+                _ => None,
+            });
+        response = Response::from_parts(parts, Body::from_stream(stream));
+    }
     if let Some(timer) = rpc_timer {
         timer.finish(response.status());
     }
@@ -1305,7 +1428,6 @@ async fn ingress_inner(
     peer: SocketAddr,
     mut request: Request,
 ) -> Response<Body> {
-    let direct_connection = !request.headers().contains_key(&X_FORWARDED_FOR);
     let proxy_request = request.uri().path().starts_with(PROXY_PATH_PREFIX)
         || proxy_subdomain(request.headers()).is_some();
     prepare_public_headers(request.headers_mut(), peer);
@@ -1319,8 +1441,10 @@ async fn ingress_inner(
             request.headers(),
             request.method(),
             request.uri(),
-            peer,
-            direct_connection,
+            request
+                .extensions()
+                .get::<VerifyOutcome>()
+                .expect("ingress authenticates before routing"),
         )
         .await
         {
@@ -1339,7 +1463,7 @@ async fn ingress_inner(
             }
             NativeDecision::Response(response) => return *response,
             NativeDecision::ControllerProxy => {
-                return forward_controller(&state, request, peer, direct_connection).await;
+                return forward_controller(&state, request).await;
             }
             NativeDecision::Federation(federation) => {
                 let decision = decision(&state, &federation).await;
@@ -1363,7 +1487,7 @@ async fn ingress_inner(
         }
     }
 
-    forward_controller(&state, request, peer, direct_connection).await
+    forward_controller(&state, request).await
 }
 
 pub fn app(config: ProxyConfig, control: ProxyControl) -> Result<Router, String> {

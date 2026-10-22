@@ -28,7 +28,9 @@ def projects_task_env_secret(config: IrisClusterConfig) -> bool:
     share this single predicate rather than each re-deriving it (a drift would
     leave envFrom dereferencing a missing Secret).
     """
-    return config.storage.remote_state_dir.startswith("s3://") or bool(config.defaults.inject_env)
+    return (config.credential_broker is None and config.storage.remote_state_dir.startswith("s3://")) or bool(
+        config.defaults.inject_env
+    )
 
 
 def collect_inject_env(names: Sequence[str]) -> dict[str, str]:

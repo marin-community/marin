@@ -26,6 +26,7 @@ from finelog.client.log_client import Table
 from google.protobuf import json_format
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster import credential_process
 from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_CONTAINER_NAME,
     OUTPUT_CONTROL_PATH,
@@ -56,6 +57,14 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.credential_process import (
+    TASK_CA_FILE,
+    TASK_CREDENTIAL_CACHE,
+    TASK_CREDENTIAL_DIR,
+    TASK_CREDENTIAL_FILE,
+    TASK_CREDENTIAL_FILE_ENV,
+    TASK_CREDENTIAL_HELPER,
+)
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
@@ -509,6 +518,7 @@ class PodConfig:
 
     namespace: str
     default_image: str
+    controller_ca_config_map: str = ""
     # Image for the log-shipper sidecar. The task default_image is a bare runtime
     # that only gains the iris package after the task's own `uv sync`, so the
     # sidecar instead runs the iris controller image (iris + finelog installed),
@@ -544,6 +554,11 @@ def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
     # Activate the venv the setup script populated. Conditional on it existing so
     # a custom or no-setup script that brings its own environment runs as-is.
     lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
+    if run_req.task_refresh_capability and json.loads(run_req.task_storage_profiles_json):
+        lines.append(
+            'if [ -n "$IRIS_TASK_CREDENTIAL_FILE" ]; then '
+            f'python3 {TASK_CREDENTIAL_HELPER} --write-aws-config "$AWS_CONFIG_FILE"; fi'
+        )
     if run_req.entrypoint.run_command.argv:
         lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
     return "\n".join(lines)
@@ -2734,6 +2749,83 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
+        credential_secret: dict | None = None
+        if run_req.task_refresh_capability:
+            profiles = json.loads(run_req.task_storage_profiles_json)
+            credential_secret = {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "type": "Opaque",
+                "metadata": {
+                    "name": f"{pod_name}-session",
+                    "namespace": self.pods.namespace,
+                    "labels": {
+                        _LABEL_MANAGED: "true",
+                        _LABEL_TASK_HASH: _task_hash(run_req.task_id),
+                        "iris.task-session": "true",
+                    },
+                    "annotations": {"iris.session-pod": pod_name},
+                },
+                "stringData": {
+                    "credential_process.py": Path(credential_process.__file__).read_text(),
+                    "session.json": json.dumps(
+                        {
+                            "controller": self.pods.controller_address,
+                            "attempt_uid": run_req.attempt_uid,
+                            "refresh_capability": run_req.task_refresh_capability,
+                            "profiles": profiles,
+                            "ca_file": TASK_CA_FILE,
+                        }
+                    ),
+                },
+            }
+            self.kubectl.apply_json(credential_secret)
+            manifest["spec"]["initContainers"].insert(
+                0,
+                {
+                    "name": "credential-cache-permissions",
+                    "image": self.pods.default_image,
+                    "command": ["sh", "-ec", f"chmod 1777 {TASK_CREDENTIAL_CACHE}"],
+                    "securityContext": {"runAsUser": 0},
+                },
+            )
+            manifest["spec"]["volumes"].extend(
+                [
+                    {"name": "task-session", "secret": {"secretName": f"{pod_name}-session", "defaultMode": 0o444}},
+                    {"name": "controller-ca", "configMap": {"name": self.pods.controller_ca_config_map}},
+                    {"name": "credential-cache", "emptyDir": {"medium": "Memory", "sizeLimit": "16Mi"}},
+                ]
+            )
+            runtime_credentials = task_isolation(run_req.container_profile, run_req.egress_policy).include_task_token
+            for container in manifest["spec"]["initContainers"] + manifest["spec"]["containers"]:
+                if container["name"] == "task" and not runtime_credentials:
+                    continue
+                container.setdefault("volumeMounts", []).extend(
+                    [
+                        {"name": "task-session", "mountPath": TASK_CREDENTIAL_DIR, "readOnly": True},
+                        {"name": "controller-ca", "mountPath": "/var/run/iris/ca", "readOnly": True},
+                        {"name": "credential-cache", "mountPath": TASK_CREDENTIAL_CACHE},
+                    ]
+                )
+                env = container.setdefault("env", [])
+                env.append({"name": TASK_CREDENTIAL_FILE_ENV, "value": TASK_CREDENTIAL_FILE})
+                if profiles:
+                    routing = {
+                        bucket: {"profile": name, "endpoint": p["endpoint"], "region": p["region"]}
+                        for name, p in profiles.items()
+                        for bucket in p["buckets"]
+                    }
+                    env.extend(
+                        [
+                            {
+                                "name": "AWS_CONFIG_FILE",
+                                "value": f"{TASK_CREDENTIAL_CACHE}/aws-config-{container['name']}",
+                            },
+                            {"name": "AWS_PROFILE", "value": next(iter(profiles))},
+                            {"name": "MARIN_S3_CREDENTIAL_PROFILES", "value": json.dumps(routing)},
+                        ]
+                    )
+
         task_id = run_req.task_id
         if _is_coordinator_task(run_req):
             # Protect the retry as soon as its pod appears, even if GC removes the old PDB.
@@ -2748,6 +2840,20 @@ class K8sTaskProvider:
             logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
         self.kubectl.apply_json(manifest)
+        if credential_secret is not None:
+            pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+            if pod is None:
+                raise ProviderError(f"Created pod {pod_name} disappeared before binding its credential Secret")
+            credential_secret["metadata"]["ownerReferences"] = [
+                {
+                    "apiVersion": "v1",
+                    "kind": "Pod",
+                    "name": pod_name,
+                    "uid": pod["metadata"]["uid"],
+                    "controller": True,
+                }
+            ]
+            self.kubectl.apply_json(credential_secret)
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
@@ -2879,6 +2985,17 @@ class K8sTaskProvider:
         now = Timestamp.now()
         cutoff = now.add(Duration.from_seconds(-_GC_MAX_AGE_SECONDS))
         gang_cutoff = now.add(Duration.from_seconds(-_GANG_GC_MAX_AGE_SECONDS))
+        # A failed Pod create can leave the preceding Secret without an owner.
+        # Allow in-flight creates ten minutes, then verify absence with a fresh get.
+        for secret in self.kubectl.list_json(K8sResource.SECRETS, labels={"iris.task-session": "true"}):
+            metadata = secret["metadata"]
+            created = metadata.get("creationTimestamp")
+            if metadata.get("ownerReferences") or not created:
+                continue
+            age = now.epoch_seconds() - parse_k8s_timestamp(created).timestamp()
+            pod_name = metadata["annotations"]["iris.session-pod"]
+            if age > 600 and self.kubectl.get_json(K8sResource.PODS, pod_name) is None:
+                self.kubectl.delete(K8sResource.SECRETS, metadata["name"], wait=False)
 
         # Pod-groups with live (Pending/Running) members share one Kueue
         # Workload across the gang; releasing it would evict the running

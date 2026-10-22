@@ -31,6 +31,7 @@ from iris.cluster.config import (
     IrisClusterConfig,
     assert_no_inlined_secrets,
     config_to_dict,
+    iter_secret_ref_fields,
     resolve_principal_references,
 )
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
@@ -42,12 +43,17 @@ from iris.cluster.platforms.k8s.constants import (
     EGRESS_NETWORK_POLICY_PREFIX,
     NVIDIA_GPU_TOLERATION,
 )
+from iris.cluster.platforms.k8s.credential_manifests import controller_tls_sidecar
 from iris.cluster.platforms.k8s.kueue_manifests import (
     IRIS_WORKLOAD_PRIORITY_CLASSES,
     build_workload_priority_class,
 )
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
-from iris.cluster.platforms.k8s.rbac_manifests import cluster_role_name
+from iris.cluster.platforms.k8s.rbac_manifests import (
+    NODE_AGENT_SERVICE_ACCOUNT,
+    cluster_role_name,
+    node_agent_cluster_role_name,
+)
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_SYSTEM,
@@ -103,6 +109,7 @@ _NODE_AGENT_MAX_UNAVAILABLE = "10%"
 CONTROLLER_ENV_SECRET_NAME = "iris-controller-env"
 SIGNING_KEY_ENV_VAR = "IRIS_SIGNING_KEY"
 PRINCIPAL_DIRECTORY_ENV_VAR = "IRIS_PRINCIPAL_DIRECTORY"
+SYSTEM_STORAGE_SECRET_NAME = "iris-system-storage"
 _CONTROLLER_SECRET_FIELDS = (
     ("signing_key", SIGNING_KEY_ENV_VAR),
     ("principal_directory", PRINCIPAL_DIRECTORY_ENV_VAR),
@@ -168,7 +175,9 @@ def _projects_controller_env_secret(config: IrisClusterConfig) -> bool:
     ``envFrom`` reference, and teardown share this one predicate, so an ``envFrom`` can
     never dereference a Secret that was not created.
     """
-    return bool(config.auth and (config.auth.signing_key or config.auth.principal_directory))
+    return bool(
+        config.credential_broker or (config.auth and (config.auth.signing_key or config.auth.principal_directory))
+    )
 
 
 def resolve_controller_env(config: IrisClusterConfig) -> dict[str, str]:
@@ -198,14 +207,26 @@ def resolve_controller_env(config: IrisClusterConfig) -> dict[str, str]:
         # A pod's env fallback must not shadow a persistent source in the operator shell.
         persistent = tuple(ref for ref in refs if ref != env_ref)
         env[variable] = resolve_secret_spec(persistent or refs).value
+    if config.credential_broker is not None:
+        for model, field in iter_secret_ref_fields(config.credential_broker):
+            spec = getattr(model, field)
+            if not spec:
+                continue
+            refs = as_secret_spec(spec)
+            environment_refs = [ref for ref in refs if ref.startswith(ENV_SCHEME)]
+            if len(environment_refs) != 1:
+                raise ValueError(f"credential_broker.{field} must list exactly one env: projection")
+            ref = environment_refs[0]
+            variable = ref.removeprefix(ENV_SCHEME)
+            if variable in env:
+                raise ValueError("Broker secret environment projections must be distinct from auth secrets")
+            env[variable] = resolve_secret_spec(tuple(item for item in refs if item != ref) or refs).value
     return env
 
 
 def _controller_secret_specs(config: IrisClusterConfig) -> tuple[tuple[str, ...], ...]:
-    return (
-        tuple(as_secret_spec(getattr(config.auth, field)) for field, _ in _CONTROLLER_SECRET_FIELDS)
-        if config.auth
-        else ()
+    return tuple(
+        as_secret_spec(getattr(model, field)) for model, field in iter_secret_ref_fields(config) if getattr(model, field)
     )
 
 
@@ -220,6 +241,7 @@ def _build_controller_deployment(
     state_mount_path: str = _DEFAULT_STATE_MOUNT_PATH,
     local_state_hostpath: bool = False,
     checkpoint_interval_seconds: float = 0,
+    tls_secret: str = "",
 ) -> dict:
     """Build the controller Deployment manifest as a dict.
 
@@ -322,6 +344,38 @@ def _build_controller_deployment(
             },
         },
     }
+    if tls_secret:
+        pod = deploy_spec["template"]["spec"]
+        controller = pod["containers"][0]
+        native_port = port + 1
+        controller["command"] = [
+            argument.replace("--host=0.0.0.0", "--host=127.0.0.1").replace(f"--port={port}", f"--port={native_port}")
+            for argument in controller["command"]
+        ]
+        controller["ports"] = []
+        probe = {
+            "exec": {
+                "command": [
+                    ".venv/bin/python",
+                    "-c",
+                    "import urllib.request; "
+                    f"urllib.request.urlopen('http://127.0.0.1:{native_port}/health', timeout=5).read()",
+                ]
+            },
+            "periodSeconds": 10,
+            "timeoutSeconds": _CONTROLLER_PROBE_TIMEOUT_SECONDS,
+            "failureThreshold": _CONTROLLER_PROBE_FAILURE_THRESHOLD,
+        }
+        controller["readinessProbe"] = probe
+        controller["livenessProbe"] = {**probe, "initialDelaySeconds": 30}
+        sidecar, _ = controller_tls_sidecar(port, native_port)
+        pod["containers"].append(sidecar)
+        pod["volumes"].extend(
+            [
+                {"name": "controller-tls", "secret": {"secretName": tls_secret}},
+                {"name": "tls-proxy-config", "configMap": {"name": "iris-controller-tls-proxy"}},
+            ]
+        )
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -342,6 +396,7 @@ def _build_node_agent_daemonset(
     cache_max_age: Duration | None = None,
     storage_health_env: dict[str, str] | None = None,
     storage_health_config: str = "disabled",
+    storage_env_secret_name: str = TASK_ENV_SECRET_NAME,
 ) -> dict:
     """Run the Iris physical-node collector once on every Kubernetes node."""
     volume_mounts = [
@@ -377,7 +432,7 @@ def _build_node_agent_daemonset(
                     },
                 },
                 "spec": {
-                    "serviceAccountName": "iris-controller",
+                    "serviceAccountName": NODE_AGENT_SERVICE_ACCOUNT,
                     "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
                     "hostNetwork": True,
                     "dnsPolicy": "ClusterFirstWithHostNet",
@@ -396,7 +451,7 @@ def _build_node_agent_daemonset(
                                 "--config=/etc/iris/config.json",
                             ],
                             **(
-                                {"envFrom": [{"secretRef": {"name": TASK_ENV_SECRET_NAME}}]}
+                                {"envFrom": [{"secretRef": {"name": storage_env_secret_name}}]}
                                 if storage_health_env is not None
                                 else {}
                             ),
@@ -461,7 +516,9 @@ def _internet_except(service_cidr: str) -> list[str]:
     return [str(network) for network in blocked]
 
 
-def build_egress_network_policy(namespace: str, network: TaskNetwork, service_cidr: str = "") -> dict:
+def build_egress_network_policy(
+    namespace: str, network: TaskNetwork, service_cidr: str = "", controller_tls_port: int = 0
+) -> dict:
     """Build the NetworkPolicy for pods whose egress label is ``network``.
 
     Both policies deny all ingress and allow egress to DNS in kube-system.
@@ -480,6 +537,13 @@ def build_egress_network_policy(namespace: str, network: TaskNetwork, service_ci
     ]
     if network is TaskNetwork.INTERNET:
         egress.append({"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": _internet_except(service_cidr)}}]})
+    if controller_tls_port:
+        egress.append(
+            {
+                "to": [{**_namespace_pods(namespace), "podSelector": {"matchLabels": {"app": "iris-controller"}}}],
+                "ports": [{"protocol": "TCP", "port": controller_tls_port}],
+            }
+        )
     return {
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",
@@ -602,18 +666,40 @@ class K8sControllerProvider:
         # S3 storage auth and operator-injected vars share one flow.
         self._s3_enabled = self.uses_s3_storage(config)
         default_env: dict[str, str] = {}
-        if self._s3_enabled:
-            default_env.update(self._s3_task_env())
+        storage_env = self._s3_task_env() if self._s3_enabled else {}
+        if config.credential_broker is None:
+            default_env.update(storage_env)
         default_env.update(collect_inject_env(config.defaults.inject_env))
         storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
-        if default_env or storage_health is not None:
+        if config.credential_broker is not None:
+            prohibited = {
+                "CW_KEY_ID",
+                "CW_KEY_SECRET",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+            }
+            if prohibited.intersection(default_env) or prohibited.intersection(config.defaults.task_env):
+                raise ValueError("Broker-enabled clusters must remove shared storage keys from task defaults")
+            self._kubectl.apply_json(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "type": "Opaque",
+                    "metadata": {"name": SYSTEM_STORAGE_SECRET_NAME, "namespace": self._namespace},
+                    "stringData": storage_env,
+                }
+            )
+        if default_env or storage_health is not None or config.credential_broker is not None:
             self.ensure_task_env_secret(default_env)
         self.ensure_egress_network_policies(config)
 
         if storage_health is not None:
             # envFrom is captured at pod startup. A Secret revision rolls agents
             # and fences old reports without copying credential values into config.
-            secret = self._kubectl.get_json(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
+            secret = self._kubectl.get_json(
+                K8sResource.SECRETS, SYSTEM_STORAGE_SECRET_NAME if config.credential_broker else TASK_ENV_SECRET_NAME
+            )
             assert secret is not None
             environment_revision = hashlib.sha256(
                 json.dumps(
@@ -629,8 +715,32 @@ class K8sControllerProvider:
                 }
             )
 
-        if self._prepared_controller_env:
-            self.ensure_controller_env_secret(self._prepared_controller_env)
+        controller_env = {**self._prepared_controller_env, **(storage_env if config.credential_broker else {})}
+        if controller_env:
+            self.ensure_controller_env_secret(controller_env)
+
+        if config.credential_broker is not None:
+            broker = config.credential_broker
+            secret = self._kubectl.get_json(K8sResource.SECRETS, broker.tls_secret)
+            assert secret is not None
+            ca = base64.b64decode(secret["data"]["ca.crt"]).decode()
+            self._kubectl.apply_json(
+                {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {"name": broker.ca_config_map, "namespace": self._namespace},
+                    "data": {"ca.crt": ca},
+                }
+            )
+            _, proxy_config = controller_tls_sidecar(port, port + 1)
+            self._kubectl.apply_json(
+                {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {"name": "iris-controller-tls-proxy", "namespace": self._namespace},
+                    "data": {"nginx.conf": proxy_config},
+                }
+            )
 
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
@@ -653,6 +763,7 @@ class K8sControllerProvider:
                 cache_max_age=config.kubernetes_provider.cache_max_age,
                 storage_health_env=(dict(config.defaults.task_env) if storage_health is not None else None),
                 storage_health_config=(storage_health.model_dump_json() if storage_health is not None else "disabled"),
+                storage_env_secret_name=SYSTEM_STORAGE_SECRET_NAME if config.credential_broker else TASK_ENV_SECRET_NAME,
             )
         )
         logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
@@ -683,6 +794,7 @@ class K8sControllerProvider:
             state_mount_path=state_mount_path,
             local_state_hostpath=local_state_hostpath,
             checkpoint_interval_seconds=config.controller.checkpoint_interval_seconds,
+            tls_secret=config.credential_broker.tls_secret if config.credential_broker else "",
         )
         deploy_manifest = _build_controller_deployment(**deploy_kwargs, fresh=fresh)
         # Always stop the old controller before starting the new one. The
@@ -707,6 +819,13 @@ class K8sControllerProvider:
                 "type": "ClusterIP",
             },
         }
+        if config.credential_broker is not None:
+            svc_manifest["metadata"]["annotations"] = {
+                "traefik.ingress.kubernetes.io/service.serversscheme": "https",
+                "traefik.ingress.kubernetes.io/service.serverstransport": (
+                    f"{self._namespace}-iris-controller@kubernetescrd"
+                ),
+            }
         self._kubectl.apply_json(svc_manifest)
         logger.info("Controller Service %s applied", service_name)
 
@@ -858,8 +977,8 @@ class K8sControllerProvider:
     def verify_prerequisites(self, config: IrisClusterConfig) -> None:
         """Assert IaC-provisioned prerequisites exist before starting the controller.
 
-        Checks the Namespace, iris-controller ServiceAccount, namespace-qualified
-        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
+        Checks the Namespace, controller and node-agent ServiceAccounts and
+        ClusterRole/ClusterRoleBindings, one NodePool per non-skipped
         scale group, the Kueue ClusterQueue and its referenced ResourceFlavors, and
         (best-effort) the IngressClass. All of these are
         provisioned by `infra/pulumi`'s Pulumi program (spec.md §4) — this method creates
@@ -877,6 +996,22 @@ class K8sControllerProvider:
             missing.append(f"ClusterRole/{role_name}")
         if self._kubectl.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, role_name) is None:
             missing.append(f"ClusterRoleBinding/{role_name}")
+        if config.credential_broker is not None:
+            for kind in (K8sResource.ROLES, K8sResource.ROLE_BINDINGS):
+                if self._kubectl.get_json(kind, "iris-task-sessions") is None:
+                    missing.append(f"{kind.kind}/iris-task-sessions")
+            certificate = self._kubectl.get_json(K8sResource.SECRETS, config.credential_broker.tls_secret)
+            if certificate is None or not all(
+                certificate.get("data", {}).get(key) for key in ("ca.crt", "tls.crt", "tls.key")
+            ):
+                missing.append(f"Ready TLS Secret/{config.credential_broker.tls_secret}")
+        if self._kubectl.get_json(K8sResource.SERVICE_ACCOUNTS, NODE_AGENT_SERVICE_ACCOUNT) is None:
+            missing.append(f"ServiceAccount/{self._namespace}/{NODE_AGENT_SERVICE_ACCOUNT}")
+        node_agent_role = node_agent_cluster_role_name(self._namespace)
+        if self._kubectl.get_json(K8sResource.CLUSTER_ROLES, node_agent_role) is None:
+            missing.append(f"ClusterRole/{node_agent_role}")
+        if self._kubectl.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, node_agent_role) is None:
+            missing.append(f"ClusterRoleBinding/{node_agent_role}")
 
         label_prefix = config.platform.label_prefix
         for name, sg in config.scale_groups.items():
@@ -1037,7 +1172,14 @@ class K8sControllerProvider:
         """
         service_cidr = config.kubernetes_provider.service_cidr
         for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
-            self._kubectl.apply_json(build_egress_network_policy(self._namespace, network, service_cidr))
+            self._kubectl.apply_json(
+                build_egress_network_policy(
+                    self._namespace,
+                    network,
+                    service_cidr,
+                    (config.controller.coreweave.port or 10000) if config.credential_broker else 0,
+                )
+            )
 
     def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
         """Create the iris-controller-env Secret holding the controller's own credentials.

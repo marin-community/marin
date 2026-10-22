@@ -13,10 +13,31 @@ import hashlib
 import json
 import os
 import shutil
+import ssl
 import sys
 import time
 import urllib.request
 import zipfile
+
+
+def _download_auth() -> tuple[dict[str, str], ssl.SSLContext | None]:
+    credential_file = os.environ.get("IRIS_TASK_CREDENTIAL_FILE")
+    if not credential_file:
+        return {}, None
+    with open(credential_file) as source:
+        config = json.load(source)
+    context = ssl.create_default_context(cafile=config["ca_file"])
+    # Connect's unary JSON protocol keeps this trusted init script dependency-free.
+    request = urllib.request.Request(
+        config["controller"] + "/iris.cluster.ControllerService/RenewTaskSession",
+        data=json.dumps(
+            {"attemptUid": config["attempt_uid"], "refreshCapability": config["refresh_capability"]}
+        ).encode(),
+        headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1"},
+    )
+    with urllib.request.urlopen(request, context=context, timeout=30) as response:
+        token = json.load(response)["token"]
+    return {"Authorization": f"Bearer {token}"}, context
 
 
 def _download_verified(url: str, expected_sha: str | None, label: str) -> bytes:
@@ -29,8 +50,11 @@ def _download_verified(url: str, expected_sha: str | None, label: str) -> bytes:
     """
     for attempt in range(3):
         try:
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            headers, context = _download_auth()
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(
+                req, timeout=300, **({"context": context} if context is not None else {})
+            ) as resp:
                 data = resp.read()
                 sha = expected_sha if expected_sha is not None else resp.getheader("X-Bundle-SHA256")
             if sha:

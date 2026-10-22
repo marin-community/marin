@@ -69,6 +69,10 @@ class VerifiedIdentity:
     audience: str | None = None
     # Set only for an Iris task token: the wire name of the job that owns the token.
     job_id: str | None = None
+    owner_id: str | None = None
+    session_id: str | None = None
+    session_generation: int = 0
+    root_job_id: str | None = None
 
 
 # Identity granted to a credentialless caller admitted by ambient trust:
@@ -632,11 +636,13 @@ class PolicyAuthInterceptor:
         cookie_name: str | None = None,
         unauthenticated_methods: frozenset[str] = frozenset(),
         authorize: Callable[[VerifiedIdentity, str], None] | None = None,
+        authorize_request: Callable[[VerifiedIdentity, str, object], None] | None = None,
     ):
         self._policy = policy
         self._cookie_name = cookie_name
         self._unauthenticated_methods = unauthenticated_methods
         self._authorize = authorize
+        self._authorize_request = authorize_request
 
     def _resolve_or_raise(self, ctx) -> VerifiedIdentity:
         headers = ctx.request_headers()
@@ -655,6 +661,8 @@ class PolicyAuthInterceptor:
         identity = self._resolve_or_raise(ctx)
         if self._authorize is not None:
             self._authorize(identity, ctx.method().name)
+        if self._authorize_request is not None:
+            self._authorize_request(identity, ctx.method().name, request)
         with identity_scope(identity):
             return call_next(request, ctx)
 
@@ -664,6 +672,8 @@ class PolicyAuthInterceptor:
         identity = self._resolve_or_raise(ctx)
         if self._authorize is not None:
             self._authorize(identity, ctx.method().name)
+        if self._authorize_request is not None:
+            self._authorize_request(identity, ctx.method().name, request)
         with identity_scope(identity):
             return await call_next(request, ctx)
 

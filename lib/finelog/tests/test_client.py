@@ -286,7 +286,8 @@ def test_all_log_client_table_writes_use_zstd(monkeypatch: pytest.MonkeyPatch) -
     stats_client_class = log_client_mod.StatsServiceClientSync
 
     def factory(address, **kwargs):
-        return stats_client_class(address=address, http_client=http_client, **kwargs)
+        kwargs["http_client"] = http_client
+        return stats_client_class(address=address, **kwargs)
 
     monkeypatch.setattr(log_client_mod, "StatsServiceClientSync", factory)
     client = LogClient.connect("http://finelog")

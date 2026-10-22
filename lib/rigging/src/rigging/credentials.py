@@ -26,6 +26,8 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from pyqwest import SyncClient, SyncHTTPTransport
+
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     BearerTokenInjector,
@@ -54,6 +56,12 @@ class ClientCredentials:
 
     token_provider: TokenProvider | None = None
     iap_provider: TokenProvider | None = None
+    ca_bundle: bytes | None = None
+    extra_interceptors: tuple = ()
+
+    def http_client(self) -> SyncClient | None:
+        """Build a verified transport for a cluster with a private certificate authority."""
+        return SyncClient(SyncHTTPTransport(tls_ca_cert=self.ca_bundle)) if self.ca_bundle else None
 
     def _bearers(self) -> tuple[tuple[str, TokenProvider], ...]:
         """The (header, provider) pairs to attach, skipping absent providers.
@@ -67,7 +75,10 @@ class ClientCredentials:
 
     def interceptors(self) -> tuple:
         """The client-side interceptor chain for these credentials."""
-        return tuple(BearerTokenInjector(provider, header) for header, provider in self._bearers())
+        return (
+            tuple(BearerTokenInjector(provider, header) for header, provider in self._bearers())
+            + self.extra_interceptors
+        )
 
     def headers(self) -> dict[str, str]:
         """The same bearer headers :meth:`interceptors` attaches, for plain-HTTP callers.
@@ -160,7 +171,10 @@ def credentials_for(
     ``Authorization`` bearer is empty unless ``$MARIN_CLUSTER_TOKEN`` injects one.
     """
     override = os.environ.get(token_env)
+    record = load_credentials(cluster)
+    token = override or (record.token if record else None)
     return ClientCredentials(
-        token_provider=StaticTokenProvider(override) if override else None,
+        token_provider=StaticTokenProvider(token) if token else None,
         iap_provider=_edge_provider(cluster, auth),
+        ca_bundle=record.ca_bundle.encode() if record and record.ca_bundle else None,
     )

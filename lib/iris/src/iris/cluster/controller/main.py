@@ -246,7 +246,7 @@ def run_controller_serve(
         log_service_address=log_service_address,
         local_log_dir=local_state_dir / "log-server",
         host=host,
-        worker_token_provider=auth.worker_token_provider,
+        worker_token_provider=auth.worker_token_provider if cluster_config.credential_broker is None else None,
     )
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
@@ -261,6 +261,10 @@ def run_controller_serve(
         auth_verifier=auth.verifier,
         auth_provider=auth.provider,
         auth=auth,
+        credential_broker=cluster_config.credential_broker,
+        output_finalization_timeout=(
+            cluster_config.task_outputs.finalization_timeout.to_seconds() if cluster_config.task_outputs else 0
+        ),
         dry_run=dry_run,
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,

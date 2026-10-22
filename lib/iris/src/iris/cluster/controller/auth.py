@@ -172,6 +172,7 @@ class NativeProxyAuthConfig:
     cache_capacity: int
     cache_ttl_seconds: int
     trusted_cidrs: tuple[str, ...]
+    require_task_sessions: bool = False
     control_audience: str = CONTROL_PLANE_AUDIENCE
     proxy_audience: str = PROXY_PLANE_AUDIENCE
     proxy_scope: str = ENDPOINT_TOKEN_SCOPE
@@ -190,9 +191,18 @@ class NativeProxyAuthConfig:
 class NativeProxyIdentityAuthenticator:
     """Trust the private listener and use its verified identity stamp when present."""
 
+    decision_secret: str | None = None
+    require_identity: bool = False
+
     def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        if self.decision_secret is not None and not secrets.compare_digest(
+            request.headers.get("x-iris-decision-secret", ""), self.decision_secret
+        ):
+            return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         encoded_identity = request.headers.get(VERIFIED_IDENTITY_HEADER)
         if encoded_identity is None:
+            if self.require_identity:
+                return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
             return AuthOutcome(AuthDecision.AUTHENTICATED, identity=ANONYMOUS_ADMIN)
         try:
             payload = json.loads(unquote(encoded_identity))
@@ -213,14 +223,25 @@ class NativeProxyIdentityAuthenticator:
             return AuthOutcome(AuthDecision.REJECTED, reason=INVALID_VERIFIED_IDENTITY_REASON)
         return AuthOutcome(
             AuthDecision.AUTHENTICATED,
-            identity=VerifiedIdentity(user_id=user_id, role=role, audience=audience, job_id=job_id),
+            identity=VerifiedIdentity(
+                user_id=user_id,
+                role=role,
+                audience=audience,
+                job_id=job_id,
+                owner_id=payload.get("owner_id"),
+                session_id=payload.get("session_id"),
+                session_generation=payload.get("session_generation", 0),
+                root_job_id=payload.get("root_job_id"),
+            ),
         )
 
 
-def native_proxy_auth_policy(external_policy: RequestAuthPolicy) -> RequestAuthPolicy:
+def native_proxy_auth_policy(
+    external_policy: RequestAuthPolicy, *, decision_secret: str | None = None, require_identity: bool = False
+) -> RequestAuthPolicy:
     """Trust private ingress and retain the external verifier for session login."""
     return RequestAuthPolicy(
-        authenticators=(NativeProxyIdentityAuthenticator(),),
+        authenticators=(NativeProxyIdentityAuthenticator(decision_secret, require_identity),),
         verifier=external_policy.verifier,
     )
 
@@ -309,6 +330,7 @@ class JwtTokenManager:
         endpoint_name: str,
         key_id: str,
         ttl_seconds: int = DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS,
+        session: VerifiedIdentity | None = None,
     ) -> str:
         """Mint a scoped bearer token authorizing only ``endpoint_name``'s /proxy path.
 
@@ -318,14 +340,23 @@ class JwtTokenManager:
         the resolved route, and the RPC/HTTP auth arms treat any audience-bearing
         identity as endpoint-scoped (no RPC authority).
         """
+        claims = {
+            "sub": f"endpoint:{endpoint_name}",
+            "role": ENDPOINT_TOKEN_ROLE,
+            "scope": ENDPOINT_TOKEN_SCOPE,
+            "endpoint": endpoint_name,
+            "jti": key_id,
+        }
+        if session is not None and session.session_id is not None:
+            claims.update(
+                {
+                    "session_id": session.session_id,
+                    "session_generation": session.session_generation,
+                    "root_job_id": session.root_job_id,
+                }
+            )
         return self._signer.mint(
-            {
-                "sub": f"endpoint:{endpoint_name}",
-                "role": ENDPOINT_TOKEN_ROLE,
-                "scope": ENDPOINT_TOKEN_SCOPE,
-                "endpoint": endpoint_name,
-                "jti": key_id,
-            },
+            claims,
             audience=PROXY_PLANE_AUDIENCE,
             ttl_seconds=ttl_seconds,
         )
@@ -380,6 +411,10 @@ class JwtTokenManager:
             role=claims.claims.get("role", "user"),
             audience=endpoint,
             job_id=None if is_proxy_scope else claims.claims.get("job_id"),
+            owner_id=claims.claims.get("owner_id"),
+            session_id=claims.claims.get("session_id"),
+            session_generation=claims.claims.get("session_generation", 0),
+            root_job_id=claims.claims.get("root_job_id"),
         )
 
 
@@ -680,7 +715,9 @@ def create_controller_auth(
 
     # Null-auth: no login-provider arm and no trusted CIDRs. The anonymous/loopback
     # admin identity is assigned by the permissive auth chain, not resolved here.
-    if auth_config is None or (auth_config.provider_kind() is None and not auth_config.trusted_cidrs):
+    if auth_config is None or (
+        auth_config.provider_kind() is None and not auth_config.trusted_cidrs and not auth_config.required
+    ):
         logger.info("Authentication disabled — null-auth mode (workers use JWT)")
         return ControllerAuth(
             verifier=request_verifier,
@@ -691,7 +728,7 @@ def create_controller_auth(
             federation_keys=federation_peers,
         )
 
-    provider = auth_config.provider_kind() or CIDR_PROVIDER
+    provider = auth_config.provider_kind() or ("jwt" if auth_config.required else CIDR_PROVIDER)
     role_policy = _build_role_policy(auth_config, provider)
 
     # IAP is the sole login provider and never mints a controller token: the IAP

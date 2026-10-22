@@ -27,7 +27,7 @@ from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp,
 from sqlalchemy import Row
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import PeerConfig
+from iris.cluster.config import CredentialBrokerConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.attempts import CapabilityUrlConfig
 from iris.cluster.controller.audit_logging import log_event
@@ -97,6 +97,7 @@ from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
 )
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
@@ -106,6 +107,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.task_sessions import TaskSessionBroker
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.tasks import PendingKick
 from iris.cluster.controller.transition_reader import DbTransitionReader
@@ -191,6 +193,7 @@ class _TickInputs:
 
     scheduling_context: SchedulingContext | None = None
     reconcile_request: ReconcileRequest | None = None
+    rejected_dispatches: list[TaskUpdate] = field(default_factory=list)
     worker_status: dict[WorkerId, WorkerStatus] = field(default_factory=dict)
     timeout_rows: Sequence[Row] = ()
     # Federated jobs queued on this parent awaiting a peer with free capacity, in
@@ -329,6 +332,9 @@ class ControllerConfig:
 
     auth: ControllerAuth | None = None
     """Full auth config passed to the service layer for login and API key management."""
+
+    credential_broker: CredentialBrokerConfig | None = None
+    output_finalization_timeout: float = 300
 
     dry_run: bool = False
     """Start in dry-run mode: compute scheduling but suppress all side effects."""
@@ -493,6 +499,13 @@ class Controller:
             db=self._db,
             system_endpoints={},
         )
+        self._task_sessions = None
+        if config.credential_broker is not None:
+            if config.auth is None or config.auth.jwt_manager is None:
+                raise ValueError("Task credential broker requires controller authentication")
+            self._task_sessions = TaskSessionBroker(
+                self._db, config.credential_broker, config.auth.jwt_manager, config.output_finalization_timeout
+            )
         self._service = ControllerServiceImpl(
             controller=self,
             bundle_store=self._bundle_store,
@@ -500,6 +513,7 @@ class Controller:
             db=self._db,
             endpoint_service=self._endpoint_service,
             auth=config.auth,
+            task_sessions=self._task_sessions,
             user_budget_defaults=config.user_budget_defaults,
             capability_url_config=CapabilityUrlConfig(
                 cluster_name=config.cluster_id,
@@ -522,7 +536,11 @@ class Controller:
 
         external_auth_policy = request_auth_policy(config.auth)
         proxy_decision_secret = secrets.token_urlsafe(32)
-        self._auth_policy = native_proxy_auth_policy(external_auth_policy)
+        self._auth_policy = native_proxy_auth_policy(
+            external_auth_policy,
+            decision_secret=proxy_decision_secret,
+            require_identity=self._task_sessions is not None,
+        )
         self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
@@ -534,6 +552,7 @@ class Controller:
             federated_handoff=federated_handoff,
             federation_owner_check=_federation_owner_check,
             proxy_decision_secret=proxy_decision_secret,
+            task_sessions=self._task_sessions,
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
@@ -776,6 +795,8 @@ class Controller:
             self._dashboard.proxy_decision_secret,
             json.dumps(asdict(self._native_proxy_auth_config())),
         )
+        if self._task_sessions is not None:
+            self._task_sessions.attach_projection(self._native_proxy.replace_task_sessions)
         telemetry.configure(
             endpoint=self._log_service_address.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
             service="iris-controller",
@@ -836,6 +857,7 @@ class Controller:
             cache_capacity=NATIVE_PROXY_JWT_CACHE_CAPACITY,
             cache_ttl_seconds=NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
             trusted_cidrs=auth.trusted_cidrs if auth is not None else (),
+            require_task_sessions=self._task_sessions is not None,
             control_audience=CONTROL_PLANE_AUDIENCE,
             proxy_audience=PROXY_PLANE_AUDIENCE,
             proxy_scope=ENDPOINT_TOKEN_SCOPE,
@@ -1030,7 +1052,7 @@ class Controller:
         inputs = _TickInputs()
         direct_dispatch = BackendCapability.DIRECT_DISPATCH in self.backend.descriptor.capabilities
         if run_reconcile and direct_dispatch:
-            inputs.reconcile_request = self._direct_reconcile_request()
+            inputs.reconcile_request = self._direct_reconcile_request(inputs.rejected_dispatches)
 
         # Dedicated control pool: the tick's snapshot must not queue behind a
         # slow dashboard read for a connection.
@@ -1071,7 +1093,7 @@ class Controller:
             observation = self.backend.reconcile(inputs.reconcile_request)
             application = apply_observation(
                 DbTransitionReader(self._db),
-                observation.task_updates,
+                [*observation.task_updates, *inputs.rejected_dispatches],
                 observation.worker_health_events,
                 worker_health=self._worker_health,
                 now=Timestamp.now(),
@@ -1130,13 +1152,35 @@ class Controller:
 
         self._refresh_backend_observation()
 
-    def _direct_reconcile_request(self) -> DirectReconcileRequest:
+        if self._task_sessions is not None:
+            self._task_sessions.publish()
+
+    def _direct_reconcile_request(self, rejected: list[TaskUpdate]) -> DirectReconcileRequest:
         drain = self._drain_dispatch_snapshot()
-        tasks_to_run = [
-            with_task_token(request, JobName.from_wire(request.task_id).require_task()[0], self._config.auth)
-            for request in drain.tasks_to_run
-        ]
-        return DirectReconcileRequest(tasks_to_run=tasks_to_run, running_tasks=drain.running_tasks)
+        tasks_to_run = (
+            self._task_sessions.prepare(drain.tasks_to_run)
+            if self._task_sessions is not None
+            else [
+                with_task_token(request, JobName.from_wire(request.task_id).require_task()[0], self._config.auth)
+                for request in drain.tasks_to_run
+            ]
+        )
+        if self._task_sessions is not None:
+            self._task_sessions.publish()
+        for original, prepared in zip(drain.tasks_to_run, tasks_to_run, strict=True):
+            if prepared is None:
+                rejected.append(
+                    TaskUpdate(
+                        task_id=JobName.from_wire(original.task_id),
+                        attempt_id=original.attempt_id,
+                        attempt_uid=original.attempt_uid,
+                        new_state=job_pb2.TASK_STATE_FAILED,
+                        error="Credential broker denied dispatch: submitting user or task session is disabled",
+                    )
+                )
+        return DirectReconcileRequest(
+            tasks_to_run=[request for request in tasks_to_run if request is not None], running_tasks=drain.running_tasks
+        )
 
     def _scheduling_inputs(self, snap: Tx, now: Timestamp) -> _SchedulingInputs:
         context = build_scheduling_context(

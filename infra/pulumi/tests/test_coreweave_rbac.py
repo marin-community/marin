@@ -8,8 +8,36 @@ from iac.coreweave.rbac import (
     grafana_observer_manifests,
     loom_session_manifests,
 )
+from iris.cluster.platforms.k8s.rbac_manifests import node_agent_rbac_manifests
 
 COREWEAVE_CLUSTERS = ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a", "cw-us-west-04a")
+
+
+def test_node_agent_can_collect_and_publish_health_without_controller_authority():
+    account, role, binding = node_agent_rbac_manifests("iris")
+
+    assert account["metadata"] == {"name": "iris-node-agent", "namespace": "iris"}
+    assert binding["subjects"] == [{"kind": "ServiceAccount", **account["metadata"]}]
+    assert binding["roleRef"] == {
+        "kind": "ClusterRole",
+        "name": role["metadata"]["name"],
+        "apiGroup": "rbac.authorization.k8s.io",
+    }
+    permissions = {
+        (group, resource, verb)
+        for rule in role["rules"]
+        for group in rule["apiGroups"]
+        for resource in rule["resources"]
+        for verb in rule["verbs"]
+    }
+    # This is the complete grant: workload creation/exec, secrets and TokenReview
+    # must not become available to the host-network collector.
+    assert permissions == {
+        ("", "nodes", "get"),
+        ("", "nodes", "patch"),
+        ("", "pods", "list"),
+        ("", "nodes/metrics", "get"),
+    }
 
 
 def test_grafana_observer_can_read_node_inventory_without_mutating_it():

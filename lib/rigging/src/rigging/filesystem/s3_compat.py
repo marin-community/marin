@@ -145,6 +145,20 @@ def fsspec_s3_conf(endpoint: str) -> dict:
     }
 
 
+def credential_profile_for_bucket(bucket: str) -> dict:
+    """Resolve a bucket to its renewable AWS process-provider profile."""
+    routes = json.loads(os.environ.get("MARIN_S3_CREDENTIAL_PROFILES", "{}"))
+    route = routes.get(bucket)
+    if route is None:
+        return {}
+    return {
+        "profile": route["profile"],
+        "endpoint_url": route["endpoint"],
+        "client_kwargs": {"region_name": route["region"]},
+        "config_kwargs": {**fsspec_s3_conf(route["endpoint"])["config_kwargs"], **s3_python_config_kwargs()},
+    }
+
+
 def configure_fsspec_s3(endpoint: str, key: str | None = None, secret: str | None = None) -> None:
     """Point ``s3://`` access (fsspec and boto alike) at an S3-compatible *endpoint*.
 

@@ -432,6 +432,35 @@ message Controller {
   }
 
   message RenewWorkerTokenRequest {}
+  message RenewTaskSessionRequest {
+    string attempt_uid = 1;
+    string refresh_capability = 2;
+  }
+  message RenewTaskSessionResponse {
+    string token = 1;
+    iris.time.Timestamp expires_at = 2;
+  }
+  message GetTaskCredentialsRequest { string profile = 1; }
+  message GetTaskCredentialsResponse {
+    string access_key_id = 1;
+    string secret_access_key = 2;
+    string session_token = 3;
+    iris.time.Timestamp expires_at = 4;
+  }
+  message ManageTaskSessionsRequest {
+    // Exactly one selector. Job selection includes descendants.
+    string attempt_uid = 1;
+    string job_id = 2;
+    string principal = 3;
+    enum Action {
+      ACTION_UNSPECIFIED = 0;
+      ROLLOVER = 1;
+      DISABLE = 2;
+      ENABLE = 3;
+    }
+    Action action = 4;
+  }
+  message ManageTaskSessionsResponse { int32 affected = 1; }
   message RenewWorkerTokenResponse {
     string token = 1;
   }
@@ -865,6 +894,10 @@ message Controller {
 message StringList { repeated string values = 1; }
 
 service ControllerService {
+  // Bootstrap authenticates its private refresh capability inside the handler.
+  rpc RenewTaskSession(Controller.RenewTaskSessionRequest) returns (Controller.RenewTaskSessionResponse);
+  rpc GetTaskCredentials(Controller.GetTaskCredentialsRequest) returns (Controller.GetTaskCredentialsResponse);
+  rpc ManageTaskSessions(Controller.ManageTaskSessionsRequest) returns (Controller.ManageTaskSessionsResponse);
   // Job lifecycle
   rpc LaunchJob(Controller.LaunchJobRequest) returns (Controller.LaunchJobResponse);
   rpc GetJobStatus(Controller.GetJobStatusRequest) returns (Controller.GetJobStatusResponse);

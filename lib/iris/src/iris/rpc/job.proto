@@ -753,4 +753,7 @@ message RunTaskRequest {
   // that the task's own Iris client presents to the controller. Empty for a
   // profile that withholds it (SANDBOX) or a controller without a JWT signer.
   string task_token = 17;
+  // Transient dispatch only. Projected as a private file, never an environment variable.
+  string task_refresh_capability = 18;
+  string task_storage_profiles_json = 19;
 }

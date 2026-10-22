@@ -35,8 +35,10 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
 
+from iris.cluster.credential_process import TASK_CREDENTIAL_FILE_ENV
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import classify_log_level
+from iris.cluster.task_credentials import task_credentials
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import EndpointServiceClientSync
 
@@ -337,6 +339,16 @@ def _connect_log_client(controller_address: str) -> LogClient:
     endpoint_client = EndpointServiceClientSync(
         address=controller_address,
         timeout_ms=10_000,
+        interceptors=(
+            task_credentials(os.environ[TASK_CREDENTIAL_FILE_ENV]).interceptors()
+            if TASK_CREDENTIAL_FILE_ENV in os.environ
+            else ()
+        ),
+        http_client=(
+            task_credentials(os.environ[TASK_CREDENTIAL_FILE_ENV]).http_client()
+            if TASK_CREDENTIAL_FILE_ENV in os.environ
+            else None
+        ),
     )
     return LogClient.connect(
         LOG_SERVER_ENDPOINT_NAME,

@@ -71,8 +71,9 @@ env -u KUBECONFIG uv run iris --cluster="$CLUSTER" cluster status
 
 An exported `KUBECONFIG` selects the file, while the cluster config still pins
 the context. Unset a stale override instead of copying contexts between files.
-Iris commands that target CoreWeave use a Kubernetes port-forward and loopback
-trust; they do not need `iris login`.
+Iris commands that target CoreWeave use a Kubernetes port-forward. Broker-enabled
+clusters require `iris operator-login`; see [Task credentials](credentials.md).
+Other configurations retain their configured loopback trust.
 
 For a live access incident, continue in [CoreWeave GPU
 Operations](../OPS.md#coreweave-gpu-operations). It separates the port-forward,
@@ -97,6 +98,20 @@ allocatable capacity, scheduling, and Pod state; hardware history remains in
 `telemetry_v1`. `K8sTaskProvider.schedule()` and `autoscale()` are no-ops.
 Capacity and task state come from Kubernetes nodes, Pods, and Kueue workloads.
 
+The node-agent runs as `iris-node-agent`, separately from the controller's
+`iris-controller` ServiceAccount. Its namespace-qualified ClusterRole grants
+only Pod listing, Node reads and patches for storage-health reports, and
+`nodes/metrics` reads for kubelet resource sampling. Pod listing covers task and
+exporter namespaces. Kubernetes RBAC does not restrict Node patches to the
+health annotation or to the agent's own Node.
+
+Apply the cluster's `infra/pulumi` stack before deploying this identity split.
+Iris startup requires the node-agent ServiceAccount, ClusterRole and binding
+and reports missing resources before changing runtime objects. Existing agents
+keep the controller account until their DaemonSet rolls; running task Pods do
+not need to restart for this change. The controller retains its existing grants
+during this rollout.
+
 GPU Pods request `nvidia.com/gpu`. On clusters with `host_network: true`, they
 also request `rdma/ib` and use `ClusterFirstWithHostNet`. Coscheduled jobs add
 Kueue topology annotations derived from
@@ -114,7 +129,9 @@ CoreWeave Traefik LoadBalancer, cert-manager issues its TLS certificate, and the
 `iris-federation-ipallowlist` middleware admits only the configured federation
 parent egress addresses. The controller then applies a second gate:
 
-- in-cluster private addresses and loopback are trusted by `auth.trusted_cidrs`;
+- configurations without the broker may trust private addresses and loopback through `auth.trusted_cidrs`;
+- broker-enabled clusters disable this ambient admin path and require authenticated
+  requests over TLS, including on the in-cluster Service and port-forward;
 - off-cluster requests must carry a bearer token;
 - federation tokens are verified with the public keys in
   `auth.federation_peers`.

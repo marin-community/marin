@@ -225,7 +225,9 @@ def mint_endpoint_token(
         ttl = DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS
     now = Timestamp.now()
     expires_at = Timestamp.from_ms(now.epoch_ms() + ttl * 1000)
-    token = jwt_manager.create_endpoint_token(row.name, f"iris_ket_{secrets.token_urlsafe(8)}", ttl_seconds=ttl)
+    token = jwt_manager.create_endpoint_token(
+        row.name, f"iris_ket_{secrets.token_urlsafe(8)}", ttl_seconds=ttl, session=get_verified_identity()
+    )
     return controller_pb2.Controller.MintEndpointTokenResponse(
         token=token,
         expires_at=timestamp_to_proto(expires_at),
