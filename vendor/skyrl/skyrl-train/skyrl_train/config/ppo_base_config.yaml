@@ -268,8 +268,9 @@ trainer:
     # Cap on prompt groups generating at once; null bounds generation only by staleness.
     max_in_flight: null
     # Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then
-    # records URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps
-    # payloads only in Ray's object store.
+    # records URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. Rollout workers
+    # write from every node, so a local directory works only on a one-node Ray cluster. null keeps payloads only in
+    # Ray's object store.
     object_store_root: null
 
   # Bound teacher-scoring work independently for each logical teacher. Queue
@@ -536,7 +537,8 @@ trajectory_runner:
   cleanup_timeout: 30
   shutdown_timeout: 45
   max_concurrent_tasks: 32
-  # One worker pool executes all task families on the trainer's node.
+  # One worker pool executes all task families. Its workers are spread round-robin over the live Ray nodes, each
+  # node taking as many as its CPUs hold, so every node's sandboxes serve a share of the rollouts.
   rollout_workers:
     num_workers: 4
     cpus_per_worker: 8
