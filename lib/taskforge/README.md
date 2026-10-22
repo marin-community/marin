@@ -12,10 +12,11 @@ src/taskforge/
                                JsonEventStore;
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
+  capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
   ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
-                               output, call cache, ledger recording, agent loop, web tools, the
+                               output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
   sandbox/                     MachineFactory selection per host, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
@@ -54,8 +55,8 @@ src/taskforge/
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
-modules (`child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and the shared
-modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
+modules (`capability`, `child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and
+the shared modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
 builds a task today goes through a build program, so the SDK, the standard template, the build
 services, the program runner and the agentic author (an agent session that writes and iterates
 that program) all live there. The name leaves room for a `stage40_build_with_agent` package in
@@ -85,15 +86,21 @@ solver's machine: `null` for a container proposal, which runs in the image its b
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
 The proposer writes it, and the build keeps it. `parse` also refuses a `resources` entry that is
 not a relative path inside the build root and a `build` name that repeats.
+`verification` is one of `Verification`. `composite` is a reserved kind: `parse` accepts a document
+that declares it, but proposers are offered only `OFFERED_VERIFICATIONS` (`decision_model`,
+`answer_in_box`, `code`, `llm_as_judge`) until a composite grader type exists, and a task whose
+grading would mix kinds declares its dominant part.
 `document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
-field that constrains a completion to the canonical layout for that id and source. A reply cut off
+field that constrains a completion to the canonical layout for that id and source, with an offered
+verification and `composite: []`. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
 
 `experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
 source for catalog capabilities, which takes its model, sampling policy and host environments at
 construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a solver
-machine and a research decision, then writes each document under the regex with GLM thinking first.
+machine, an offered verification and a research decision, then writes each document under the regex
+with GLM thinking first.
 `propose_tasks` in the same package proposes the catalog's capabilities from the command line and
 triages each proposal with `preflight`. A slot whose model call runs out of retries or is rejected
 is a `SlotFailure` like any other, so the capability keeps its plan and its other slots; only a

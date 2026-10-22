@@ -72,7 +72,6 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
 from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
 from iris.cluster.types import (
-    LOCAL_ADMIN_SUBMITTER,
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
     AttemptUid,
@@ -960,27 +959,22 @@ def running_task_band_rows(tx: Tx) -> Sequence[Row]:
 _USER_SPEND_STMT = (
     select(
         local_tasks.c.job_id,
-        jobs_table.c.submitting_user,
         job_config_table.c.res_cpu_millicores,
         job_config_table.c.res_memory_bytes,
         job_config_table.c.res_device_json,
         func.count().label("task_count"),
     )
-    .select_from(
-        local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
-            job_config_table, job_config_table.c.job_id == local_tasks.c.job_id
-        )
-    )
+    .select_from(local_tasks.join(job_config_table, job_config_table.c.job_id == local_tasks.c.job_id))
     .where(hint_rare_state(local_tasks.c.state.in_(bindparam("states", expanding=True))))
     .where(job_config_table.c.priority_band != job_pb2.PRIORITY_BAND_BATCH)
-    .group_by(local_tasks.c.job_id, jobs_table.c.submitting_user)
+    .group_by(local_tasks.c.job_id)
 )
 
 
 def user_spend_rows(tx: Tx) -> Sequence[Row]:
     """Return per-job resource rows for active, non-BATCH tasks (budget spend basis).
 
-    Each row carries ``(job_id, submitting_user, res_cpu_millicores,
+    Each row carries ``(job_id, res_cpu_millicores,
     res_memory_bytes, res_device_json, task_count)``. ``job_config.priority_band``
     (the user's requested band) drives the BATCH exclusion, not the stamped
     ``tasks.priority_band``, so scheduler-downgraded jobs still count.
@@ -1448,19 +1442,12 @@ def list_active_tasks_for_jobs(
 
 
 def count_active_tasks_for_budget_user(tx: Tx, user_id: str) -> int:
-    """Return non-terminal local tasks attributed to the budget identity ``user_id``."""
-    budget_user = case(
-        (
-            jobs_table.c.submitting_user.in_(("", LOCAL_ADMIN_SUBMITTER)),
-            jobs_table.c.user_id,
-        ),
-        else_=jobs_table.c.submitting_user,
-    )
+    """Return non-terminal local tasks owned by ``user_id``."""
     return int(
         tx.execute(
             select(func.count())
             .select_from(local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id))
-            .where(budget_user == bindparam("user_id"))
+            .where(jobs_table.c.user_id == bindparam("user_id"))
             .where(local_tasks.c.state.in_(bindparam("states", expanding=True))),
             {"user_id": user_id, "states": list(NON_TERMINAL_TASK_STATES)},
         ).scalar()

@@ -36,13 +36,8 @@ class FakeIrisClient:
         return FakeResolver(self.urls, job)
 
 
-def iris_context(client: FakeIrisClient | None) -> IrisContext:
-    return IrisContext(job_id=None, client=cast(IrisClient | None, client))
-
-
-def test_relay_endpoint_without_an_iris_client_raises():
-    with iris_ctx_scope(iris_context(None)), pytest.raises(RuntimeError, match="Iris client"):
-        RelayEndpoint(RELAY_JOB, TOKEN, Pool.BULK).current()
+def iris_context(client: FakeIrisClient) -> IrisContext:
+    return IrisContext(job_id=None, client=cast(IrisClient, client))
 
 
 def test_relay_endpoint_raises_when_the_relay_registered_no_glm_endpoint():

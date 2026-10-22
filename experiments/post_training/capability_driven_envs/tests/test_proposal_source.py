@@ -12,9 +12,10 @@ import re
 from pathlib import Path
 
 from pydantic import ValidationError
+from taskforge.capability import capability_idea_record
 from taskforge.llm.client import FinishReason, ModelRequestRejected
 from taskforge.llm.policy import LLMPolicy
-from taskforge.llm.structured import StructuredOutputError, response_format, schema_instruction
+from taskforge.llm.structured import StructuredOutputError, response_format
 from taskforge.stage10_proposal.model import (
     DOCUMENT_REPAIR_PROMPT,
     Environment,
@@ -29,7 +30,6 @@ from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOu
 
 from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,
-    capability_idea_record,
     load_capability_ideas,
 )
 from experiments.post_training.capability_driven_envs.proposal_source import (
@@ -135,6 +135,18 @@ def test_slot_plan_requires_n_slots_and_rejects_using_an_excluded_pairing():
         plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "llm_as_judge")], excluded))
 
 
+def test_the_slot_plan_does_not_offer_or_accept_the_reserved_composite_verification():
+    plan_type = slot_plan_type(1, ALL_ENVIRONMENTS)
+    schema = json.dumps(response_format(plan_type))
+
+    assert '"decision_model"' in schema and '"composite"' not in schema
+    with pytest.raises(ValidationError, match="verification"):
+        plan_type.model_validate(plan([slot(1, "reasoning", "composite")], []))
+    excluded = [{"environment": "reasoning", "verification": "composite", "reason": "x"}]
+    with pytest.raises(ValidationError, match="verification"):
+        plan_type.model_validate(plan([slot(1, "reasoning", "code")], excluded))
+
+
 @pytest.mark.parametrize(
     ("environment", "machine"), [("container", "cpython"), ("reasoning", None)], ids=["container", "imageless"]
 )
@@ -176,13 +188,6 @@ def test_plan_with_a_slot_in_an_unavailable_environment_fails_validation():
     assert nulled.slots[1].status is SlotStatus.NULL
 
 
-def test_the_plan_instruction_states_the_slot_count_and_the_status_values():
-    instruction = schema_instruction(slot_plan_type(3, NO_CONTAINER))
-
-    assert "Exactly 3 slots, numbered 1 through 3 in order." in instruction
-    assert "status (one of 'propose', 'null', required)" in instruction
-
-
 def test_plan_and_proposal_prompts_share_the_research_criterion_and_the_catalog_record(ideas):
     idea = ideas[CAPABILITY_ID]
     portfolio = slot_plan_type(1, NO_CONTAINER).model_validate(plan([slot(1, "reasoning", "code")], []))
@@ -203,7 +208,7 @@ def filled_document(idea, number: int, research_need: ResearchNeed = ResearchNee
         document_template(f"{CAPABILITY_ID}/{number}", idea)
         .replace("<reasoning | shellsim | container>", "shellsim")
         .replace("<none (reasoning only) | shellsim | cpython | packages, or null for container>", "cpython")
-        .replace("<decision_model | answer_in_box | code | llm_as_judge | composite>", "decision_model")
+        .replace("<decision_model | answer_in_box | code | llm_as_judge>", "decision_model")
         .replace("<needed | not_needed>", str(research_need))
         .replace("<web | github>", "github")
     )
