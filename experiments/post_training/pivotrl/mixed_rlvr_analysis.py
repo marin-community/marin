@@ -356,11 +356,14 @@ def _style() -> None:
     )
 
 
-def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequence[int], shared: bool) -> None:
+def plot(
+    data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequence[int], shared: bool, bands: bool
+) -> None:
     scores = load_scores(data_dir, series, steps, shared)
     points, rows = paired_points(scores, series, steps)
     _style()
-    fig, axes = plt.subplots(2, 3, figsize=(10, 5.6), sharex=True, sharey=True)
+    # Each benchmark gets its own y-range: SWE-bench moves by ten points where MMLU-Pro moves by one.
+    fig, axes = plt.subplots(2, 3, figsize=(10, 5.6), sharex=True, sharey=False)
     for ax, (bench, title) in zip(axes.flat, PANELS, strict=True):
         ref = scores[bench][REF]
         ax.axhline(0, color="#222222", lw=0.8, ls=(0, (4, 3)), zorder=1)
@@ -373,15 +376,16 @@ def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequenc
                 continue
             evaluated = [step for step, _ in deltas]
             emphasis = base != "a"
-            ax.fill_between(
-                evaluated,
-                [d.low for _, d in deltas],
-                [d.high for _, d in deltas],
-                color=color,
-                alpha=(0.16 if emphasis else 0.13) * (0.5 if seed else 1.0),
-                lw=0,
-                zorder=2,
-            )
+            if bands:
+                ax.fill_between(
+                    evaluated,
+                    [d.low for _, d in deltas],
+                    [d.high for _, d in deltas],
+                    color=color,
+                    alpha=(0.16 if emphasis else 0.13) * (0.5 if seed else 1.0),
+                    lw=0,
+                    zorder=2,
+                )
             ax.plot(
                 evaluated,
                 [d.mean for _, d in deltas],
@@ -414,7 +418,7 @@ def plot(data_dir: Path, out_prefix: Path, series: Sequence[str], steps: Sequenc
     for ax in axes[1]:
         ax.set_xlabel("RL step")
     for ax in axes[:, 0]:
-        ax.set_ylabel("Δ accuracy vs reference (pts, 80% CI)")
+        ax.set_ylabel("Δ accuracy vs reference (pts" + (", 80% CI)" if bands else ")"))
     # A replicate may have points on some panels only, so the legend gathers every series drawn on any panel.
     legend: dict[str, object] = {}
     for ax in axes.flat:
@@ -438,6 +442,7 @@ def main() -> None:
         "--series", default="a,b,c", help="comma-separated arm labels, such as a,b,c or a-seed43,b-seed43,c-seed43"
     )
     parser.add_argument("--steps", default="4,8,12")
+    parser.add_argument("--bands", action="store_true", help="plot: shade the 80%% bootstrap interval of every point")
     parser.add_argument(
         "--shared-items",
         action="store_true",
@@ -453,7 +458,7 @@ def main() -> None:
     else:
         if args.out_prefix is None:
             raise SystemExit("plot needs an output prefix")
-        plot(args.data_dir, args.out_prefix, series, steps, args.shared_items)
+        plot(args.data_dir, args.out_prefix, series, steps, args.shared_items, args.bands)
 
 
 if __name__ == "__main__":
