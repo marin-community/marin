@@ -15,11 +15,16 @@ from dataclasses import asdict, dataclass, field
 from importlib.metadata import distribution
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import click
 import pyarrow.parquet as pq
+import rolloutengine.engine
+import taskcompendium.models
+import verifyit.modes.grade_judge
 from cloud.iris.launch_config import load_launch_config
-from cloud.iris.runtime_bundle import resolve_launcher_source
+from cloud.iris.runtime_bundle import local_module_source, resolve_launcher_source
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
 from marinskyrl.task_machine_factories import task_machine_factories
 from omegaconf import DictConfig, OmegaConf
@@ -48,7 +53,11 @@ from transformers import PreTrainedTokenizerBase
 from verifyit.modes.grade_judge import MODEL_ENV, JudgeConnection
 
 EXPECTED_ROWS = 100_000
-FEATURE_DISTRIBUTIONS = ("marin-taskcompendium", "marin-rolloutengine", "marin-verifyit")
+FEATURE_DISTRIBUTIONS = {
+    "marin-taskcompendium": taskcompendium.models,
+    "marin-rolloutengine": rolloutengine.engine,
+    "marin-verifyit": verifyit.modes.grade_judge,
+}
 INVALID_ANSWER = "snowball_inventory_probe_invalid_answer"
 
 
@@ -97,16 +106,33 @@ class ProbeReport:
     error_type: str | None = None
 
 
-def package_revisions() -> dict[str, str]:
+def package_revisions(expected_source_digest: str) -> dict[str, str]:
     """Record installed package identities selected by the digest-covered frozen lock."""
     revisions = {}
-    for name in FEATURE_DISTRIBUTIONS:
+    for name, imported_module in FEATURE_DISTRIBUTIONS.items():
         package = distribution(name)
         metadata = package.read_text("direct_url.json")
         if metadata is None:
             revisions[name] = f"registry:{package.version}"
             continue
         source = json.loads(metadata)
+        if source.get("dir_info", {}).get("editable") is True:
+            uri = urlsplit(source["url"])
+            if (
+                uri.scheme != "file"
+                or uri.netloc not in {"", "localhost"}
+                or not uri.path.startswith("/")
+                or uri.query
+                or uri.fragment
+            ):
+                raise ValueError("Editable feature package must name a local file URI")
+            installed_root = Path(url2pathname(uri.path)).resolve(strict=True)
+            module_source = local_module_source(name, installed_root, expected_source_digest)
+            if imported_module.__file__ is None:
+                raise ValueError("Feature package has no imported source file")
+            Path(imported_module.__file__).resolve(strict=True).relative_to(module_source.root.resolve(strict=True))
+            revisions[name] = f"module-source-sha256:{module_source.digest}"
+            continue
         revision = source.get("vcs_info", {}).get("commit_id")
         if isinstance(revision, str) and len(revision) == 40 and all(c in "0123456789abcdef" for c in revision):
             revisions[name] = f"git:{revision}"
@@ -255,7 +281,7 @@ async def probe(
         report.model_repository = manifest.model_id
         report.model_revision = manifest.revision
     report.phase = "package_identity"
-    report.package_revisions = package_revisions()
+    report.package_revisions = package_revisions(str(config.runtime.source_digest))
     task_sessions = config.skyrl.environment.task_sessions
     if task_sessions.get("local") is None:
         raise ValueError("The composed training configuration did not enable the local machine backend")

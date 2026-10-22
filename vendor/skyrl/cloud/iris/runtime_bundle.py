@@ -6,12 +6,13 @@ import hashlib
 import json
 import shutil
 import tempfile
+import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from cloud.iris.paths import PROJECT_ROOT
+from cloud.iris.paths import PROJECT_RELATIVE_PATH, PROJECT_ROOT
 
 BUNDLE_FILE_MANIFEST = Path("cloud/iris/runtime_bundle_files.txt")
 BUNDLE_IDENTITY_FILE = ".marinskyrl-runtime.json"
@@ -49,7 +50,7 @@ class RuntimeBundleIdentity:
 def resolve_launcher_source() -> LauncherSource:
     """Identify the checked-out runtime source, assets, and independent lock."""
     files = tuple(
-        RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(PROJECT_ROOT / path))
+        RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(PROJECT_ROOT.parents[1] / path))
         for path in _bundle_paths(PROJECT_ROOT)
     )
     return LauncherSource(root=PROJECT_ROOT, digest=_files_digest(files))
@@ -70,6 +71,25 @@ def read_manifest_paths(root: Path) -> tuple[str, ...]:
     )
 
 
+def _module_bundle_paths(root: Path) -> set[Path]:
+    project = tomllib.loads((root / "pyproject.toml").read_text())
+    paths: set[Path] = set()
+    workspace = root.parents[1].resolve()
+    for source in project.get("tool", {}).get("uv", {}).get("sources", {}).values():
+        if not isinstance(source, dict) or "path" not in source:
+            continue
+        module = (root / source["path"]).resolve()
+        relative = module.relative_to(workspace)
+        metadata = tomllib.loads((module / "pyproject.toml").read_text())
+        paths.add(relative / "pyproject.toml")
+        readme = metadata["project"].get("readme")
+        if readme is not None:
+            paths.add(relative / (readme if isinstance(readme, str) else readme["file"]))
+        for package in metadata["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]:
+            paths.update(path.relative_to(workspace) for path in (module / package).rglob("*") if path.is_file())
+    return paths
+
+
 def _bundle_paths(root: Path) -> tuple[Path, ...]:
     names = set(read_manifest_paths(root))
     names.update({BUNDLE_FILE_MANIFEST.as_posix(), PROVENANCE_FILE.as_posix(), "pyproject.toml", "uv.lock"})
@@ -79,15 +99,17 @@ def _bundle_paths(root: Path) -> tuple[Path, ...]:
             names.update(path.relative_to(root).as_posix() for path in source.rglob("*") if path.is_file())
         elif source.is_file():
             names.add(prefix)
+    workspace = root.parents[1]
+    candidates = {PROJECT_RELATIVE_PATH / name for name in names} | _module_bundle_paths(root)
     paths = []
-    for name in sorted(names):
-        path = _bundle_relative_path(name)
+    for candidate in sorted(candidates):
+        path = _bundle_relative_path(candidate.as_posix())
         if {"tests", "__pycache__"}.intersection(path.parts) or path.suffix in {".pyc", ".pyo"}:
             continue
-        original = root / path
-        original.resolve().relative_to(root.resolve())
+        original = workspace / path
+        original.resolve().relative_to(workspace.resolve())
         if not original.is_file():
-            raise FileNotFoundError(f"Runtime source file is missing: {name}")
+            raise FileNotFoundError(f"Runtime source file is missing: {path}")
         paths.append(path)
     return tuple(paths)
 
@@ -107,7 +129,7 @@ def _sha256(path: Path) -> str:
 
 def validate_bundled_runtime(workspace: Path | None = None) -> str:
     """Verify the files synced into an Iris task and return their source digest."""
-    root = workspace or PROJECT_ROOT
+    root = workspace or PROJECT_ROOT.parents[1]
     identity_path = root / BUNDLE_IDENTITY_FILE
     if not identity_path.is_file():
         raise RuntimeError(f"Runtime bundle identity is missing: {identity_path}")
@@ -132,10 +154,31 @@ def validate_bundled_runtime(workspace: Path | None = None) -> str:
         bundled_file = root / relative_path
         if not bundled_file.is_file() or _sha256(bundled_file) != entry.sha256:
             raise RuntimeError(f"Runtime bundle file does not match its recorded identity: {entry.path}")
-    actual = tuple(RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(root / path)) for path in _bundle_paths(root))
+    actual = tuple(
+        RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(root / path))
+        for path in _bundle_paths(root / PROJECT_RELATIVE_PATH)
+    )
     if _files_digest(actual) != source_digest or _files_digest(tuple(files)) != source_digest:
         raise ValueError("Bundled source files do not match the selected runtime identity")
     return source_digest
+
+
+def local_module_source(distribution_name: str, installed_root: Path, expected_source_digest: str) -> LauncherSource:
+    """Verify an installed local module against the selected checkout or worker bundle."""
+    source = resolve_launcher_source()
+    if source.digest != expected_source_digest:
+        raise ValueError("Local module source no longer matches the selected runtime identity")
+    workspace = source.root.parents[1].resolve()
+    if (workspace / BUNDLE_IDENTITY_FILE).is_file():
+        validate_bundled_runtime(workspace)
+    project = tomllib.loads((source.root / "pyproject.toml").read_text())
+    configured = project["tool"]["uv"]["sources"][distribution_name]
+    module = (source.root / configured["path"]).resolve()
+    if installed_root.resolve() != module:
+        raise ValueError(f"Installed {distribution_name} does not come from the selected module source")
+    paths = sorted(path for path in _bundle_paths(source.root) if path.is_relative_to(module.relative_to(workspace)))
+    files = tuple(RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(workspace / path)) for path in paths)
+    return LauncherSource(root=module, digest=_files_digest(files))
 
 
 def runtime_bundle_inputs(expected_source_digest: str) -> tuple[LauncherSource, tuple[Path, ...]]:
@@ -160,7 +203,7 @@ def build_runtime_bundle(expected_source_digest: str) -> Iterator[Path]:
         for relative_path in paths:
             destination = workspace / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source.root / relative_path, destination)
+            shutil.copy2(source.root.parents[1] / relative_path, destination)
             files.append(RuntimeBundleFile(path=relative_path.as_posix(), sha256=_sha256(destination)))
         identity = RuntimeBundleIdentity(source_digest=source.digest, files=tuple(files))
         if _files_digest(identity.files) != expected_source_digest:

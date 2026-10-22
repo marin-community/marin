@@ -6,54 +6,30 @@
 from __future__ import annotations
 
 import asyncio
-
-
 from dataclasses import replace
-
 from pathlib import Path
 
-
 import pytest
-
-
 from omegaconf import OmegaConf
-
 from rolloutengine.harness.prefill import prefill_prompt
-
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutContractError
-
-
 from skyrl_train.config.utils import get_default_config
-
 from skyrl_train.dataset.tasks import TaskDataset, task_prompt_token_count, write_tasks
-
-
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
-
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
-
 from skyrl_train.task_inputs import task_messages
-
 from skyrl_train.tokenizer import tokenizer_from_config
-
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
-
-
 from skyrl_train.trajectory_runners.types import (
     BatchMetadata,
     TaskRequestBatch,
     TokenProvenance,
     TrajectoryID,
 )
-
 from taskcompendium.grader import verifyit_package
-
 from taskcompendium.grading_result import GradeResult, Outcome
-
 from taskcompendium.grading import grade_answer
-
 from shellbox.machine import Backend, Command, ExitReason, Result
-
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -65,20 +41,12 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task, machine_runtime
-
 from tokenizers import Tokenizer, models, pre_tokenizers
-
 from transformers import PreTrainedTokenizerFast
-
 from verifyit.closure_scoring import ClosureFormat
-
 from verifyit.spec import NumericSpec, StructureClosureSpec, MathSpec, JudgeSpec
-
 from verifyit.modes.grade_judge import JudgeConnection
-
-
 from marinskyrl.saved_answers import (
     AnswerAdmission,
     SavedAnswer,
