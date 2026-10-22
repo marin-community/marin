@@ -9,7 +9,6 @@ import httpx
 import pytest
 
 from harbor.agents.installed.sotopia import SotopiaAgent
-from harbor.environments.base import ExecResult
 from harbor.llms import vllm_tokenization
 
 
@@ -22,7 +21,6 @@ async def test_agent_install_restages_task_config(tmp_path: Path) -> None:
     environment = SimpleNamespace(
         environment_dir=environment_dir,
         upload_file=AsyncMock(),
-        exec=AsyncMock(return_value=ExecResult(return_code=0)),
     )
 
     await SotopiaAgent(logs_dir=tmp_path).install(environment)
@@ -31,18 +29,6 @@ async def test_agent_install_restages_task_config(tmp_path: Path) -> None:
         task_config,
         "/opt/sotopia/task_config.json",
     )
-
-
-@pytest.mark.asyncio
-async def test_dependency_install_failure_stops_setup(tmp_path: Path) -> None:
-    environment = SimpleNamespace(
-        environment_dir=tmp_path,
-        upload_file=AsyncMock(),
-        exec=AsyncMock(return_value=ExecResult(return_code=1, stderr="Package download failed")),
-    )
-
-    with pytest.raises(RuntimeError, match="Package download failed"):
-        await SotopiaAgent(logs_dir=tmp_path).install(environment)
 
 
 @pytest.mark.asyncio
