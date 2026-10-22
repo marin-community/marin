@@ -62,9 +62,10 @@ transcripts under /workspace/rollouts/.
 TaskSpec: a control with expect "pass" that \
 passed, a control with expect "fail" that failed, and no "fail" control that passed; at least {min_solver_runs} \
 graded solver rollouts with a pass rate from {low} to {high}; format failures in at most {max_format_failures} of \
-the solver rollouts; and at least {min_adversary_runs} adversary rollouts. Last, an independent reviewer reads the \
-task, its grader, the failed solver answers and the adversary rollouts, and accepts or refuses it. A changed task \
-has no evidence until you run the tools on it again. submit tells you what is missing or wrong.
+the solver rollouts; and at least {min_adversary_runs} adversary rollouts with a graded answer. Last, an \
+independent reviewer reads the task, its grader, the failed solver answers and the adversary rollouts, and accepts \
+or refuses it. A changed task has no evidence until you run the tools on it again. submit tells you what is missing \
+or wrong.
 - finish: stop, with a report. The session also stops when {n} tasks are accepted.
 
 # How to work well

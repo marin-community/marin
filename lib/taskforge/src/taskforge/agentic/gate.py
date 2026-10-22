@@ -20,7 +20,8 @@ class Gate:
     max_format_failure_rate: float
     """The highest permitted share of solver attempts whose answer the answer format rejects."""
     min_adversary_runs: int
-    """Adversary rollouts that a task needs. The review decides whether an adversary pass used a shortcut."""
+    """Adversary rollouts with a graded answer that a task needs. The review decides whether an adversary pass used a
+    shortcut."""
 
 
 @dataclass

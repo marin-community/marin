@@ -101,9 +101,11 @@ class ScriptedAgent:
 
 @dataclass
 class Solver:
-    """Solves every second task attempt and answers ``wrong`` in the others. The adversary role answers 0."""
+    """Solves every second task attempt and answers ``wrong`` in the others. The adversary role answers
+    ``adversary_answer``."""
 
     wrong: str = "1"
+    adversary_answer: str = "0"
     attempts: itertools.count = field(default_factory=itertools.count)
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
@@ -111,7 +113,7 @@ class Solver:
             return any(prompt in str(message.get("content")) for message in request.messages)
 
         if told(ADVERSARY_PROMPT):
-            answer = "0"
+            answer = self.adversary_answer
         else:
             answer = EXPECTED if next(self.attempts) % 2 == 0 else self.wrong
         return ModelTurn({"role": "assistant", "content": answer}, (), (), None, "stop", usage=TokenUsage(5, 1))
@@ -388,6 +390,31 @@ async def test_the_pass_rate_of_a_rollout_counts_only_graded_answers():
     [rollout] = tool_replies(result, "call-2")
     reply = rollout["results"][TASK]
     assert (reply["graded"], reply["format_failures"], reply["pass_rate"]) == (2, 2, 1.0)
+
+
+async def test_an_adversary_rollout_without_a_graded_answer_does_not_count():
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("rollout", paths=[TASK], n=4, role="adversary"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=4, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=Solver(adversary_answer="")))
+
+    [rollout] = tool_replies(result, "call-2")
+    assert rollout["results"][TASK]["evidence"]["adversary_runs"] == 0
+
+
+async def test_a_review_needs_the_judge_budget_for_all_of_its_calls():
+    script = (*SCRIPT, call("finish", report="done"))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=1, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [submit] = tool_replies(result, "call-10")
+    assert "1 judge calls left" in submit["error"]
+    assert result.spend.judge_calls == 0
 
 
 async def test_rollout_refuses_a_task_that_submit_cannot_accept():

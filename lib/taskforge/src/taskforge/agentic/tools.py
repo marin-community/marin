@@ -102,6 +102,8 @@ ANSWER_TYPES = frozenset({AnswerType.TEXT, AnswerType.NUMBER, AnswerType.JSON})
 OUTPUT_CHARS = 2000
 """The most characters of a program output, an answer, a page or a file that one tool result shows."""
 REVIEW_ANSWERS = 20
+JUDGE_CALLS_PER_REVIEW = 2
+"""A review is a blind solve and the review itself."""
 REVIEW_FILE_CHARS = 20_000
 """The most characters of each solver file that the judge reads: it must see a synopsis or a table to judge it."""
 MAX_EMPTY_BUDGET_CALLS = 3
@@ -411,7 +413,8 @@ class ToolSession:
                 evidence.solver_passes += passed
                 if not passed:
                     self.tools.failed_answers[key].append(answer)
-            else:
+            elif grade.status == Outcome.GRADED:
+                # An adversary without a graded answer shows nothing that the review can judge, so it does not count.
                 evidence.adversary_runs += 1
                 evidence.adversary_passes += passed
                 record = {"passed": passed, "answer": _clip(answer, limit=300), "commands": _commands(rollout)}
@@ -453,6 +456,8 @@ class ToolSession:
         return _result(reply, done=count >= self.tools.n)
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
+        # The budget must hold the whole review, so that a review never stops after its blind solve.
+        self._spend("judge_calls", self.config.budget.judge_calls, JUDGE_CALLS_PER_REVIEW)
         # The judge first solves the task without its reference answer, as a check that is not anchored on it.
         blind = await self._judge(BLIND_SOLVE_PROMPT, pretty_json(blind_content(self.tools.idea, task)), BlindSolution)
         content = review_content(
@@ -493,7 +498,6 @@ class ToolSession:
         return outcome
 
     async def _judge[T: BaseModel](self, system: str, user: str, output_type: type[T]) -> T:
-        self._spend("judge_calls", self.config.budget.judge_calls, 1)
         messages: list[Message] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         try:
             result = await self.config.judge.complete_structured(messages, output_type, self.config.judge_policy)
@@ -582,7 +586,7 @@ def _next_step(evidence: Evidence, gate: Gate) -> dict[str, str]:
         "controls": "a correct control that passes and a wrong control that fails",
         "solver band": f"{gate.min_solver_runs} graded solver rollouts in the band",
         "answer format": "fewer format failures",
-        "adversary": f"{gate.min_adversary_runs} adversary rollouts",
+        "adversary": f"{gate.min_adversary_runs} adversary rollouts with a graded answer",
     }
     missing = [needs[name] for name in missing_evidence(evidence, gate)]
     if not missing:
