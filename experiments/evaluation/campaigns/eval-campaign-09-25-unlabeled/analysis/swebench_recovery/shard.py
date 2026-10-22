@@ -55,6 +55,7 @@ def partition(report: dict, config: dict, count: int) -> tuple[dict, list[dict]]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audit", type=Path, required=True)
+    parser.add_argument("--source-audit-archive", required=True, help="Durable archive of the exact input audit")
     parser.add_argument("--base-config", type=Path, required=True)
     parser.add_argument("--source-root", required=True, help="Stopped Iris root whose audited outcomes are retained")
     parser.add_argument("--count", type=int, required=True)
@@ -64,6 +65,7 @@ def main():
     config = yaml.safe_load(args.base_config.read_text())
     manifest, shards = partition(json.loads(payload), config, args.count)
     manifest["audit_sha256"] = hashlib.sha256(payload).hexdigest()
+    manifest["source_audit_archive"] = args.source_audit_archive
     manifest["base_config_sha256"] = hashlib.sha256(args.base_config.read_bytes()).hexdigest()
     manifest["source_root"] = args.source_root
     config["datasets"][0]["task_names"] = manifest["recovery_tasks"]
