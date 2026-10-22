@@ -55,6 +55,10 @@ def _request() -> HFExportRequest:
         export_path="s3://run/exports",
         model_path="Qwen/Qwen3-8B",
         model_revision="a" * 40,
+        release_precision="bf16",
+        eos_token_ids=[1, 2],
+        generation_controls={"temperature": 0.8},
+        chat_template="{{ bos_token }}",
         num_nodes=1,
         gpus_per_node=4,
     )
@@ -86,6 +90,11 @@ def test_checkpoint_export_config_carries_request_fields_as_data() -> None:
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
     assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
     assert config.skyrl.checkpoint_export.export_root == request.export_path
+    assert config.skyrl.trainer.policy.model.revision == request.model_revision
+    assert config.skyrl.checkpoint_export.release_precision == "bf16"
+    assert config.skyrl.checkpoint_export.eos_token_ids == [1, 2]
+    assert config.skyrl.checkpoint_export.generation_controls.temperature == 0.8
+    assert config.skyrl.checkpoint_export.chat_template == "{{ bos_token }}"
 
 
 def test_checkpoint_export_config_preserves_federated_routing() -> None:

@@ -14,10 +14,11 @@ from omegaconf import DictConfig
 from ray.util.placement_group import PlacementGroup, placement_group, remove_placement_group
 from transformers import GenerationConfig, PreTrainedTokenizerBase
 
-from marin_hf_release import PrecisionMode, ReleasePolicy
+from marin_hf_release import POLICY_VERSION, PrecisionMode, ReleasePolicy, generation_metadata
 
 from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY, policy_export_path
 from marinskyrl.resource_locator import is_hugging_face_repo_id
+from marinskyrl.speculative_decoding import is_hugging_face_commit
 from skyrl_train import hf_model_io
 from skyrl_train.hf_release_export import ReleaseExportOptions
 from skyrl_train.hf_export_schema import (
@@ -48,7 +49,7 @@ class CheckpointExportPlan:
     model_path: str
     model_revision: str | None = None
     release_precision: str = "preserve"
-    release_policy_version: int = 1
+    release_policy_version: int = POLICY_VERSION
     eos_token_ids: list[int] | None = None
     generation_controls: dict[str, object] | None = None
     chat_template: str | None = None
@@ -139,7 +140,8 @@ class CheckpointExporter:
         self._tokenizer = tokenizer
         self._publisher = publisher
 
-    def _validate_checkpoint(self) -> str:
+    def _checkpoint_identity(self) -> str:
+        """Validate the completed checkpoint and hash its trainer-state marker."""
         trainer_state_path = os.path.join(self._plan.checkpoint_path, TRAINER_STATE_FILENAME)
         if not io.exists(trainer_state_path):
             raise FileNotFoundError(f"completed checkpoint marker not found: {trainer_state_path}")
@@ -158,21 +160,18 @@ class CheckpointExporter:
     def _release_options(self, checkpoint_identity: str) -> ReleaseExportOptions:
         policy = ReleasePolicy(PrecisionMode(self._plan.release_precision), self._plan.release_policy_version)
         revision = self._plan.model_revision
-        is_pinned = revision is not None and len(revision) == 40 and all(char in "0123456789abcdef" for char in revision)
+        is_pinned = revision is not None and is_hugging_face_commit(revision)
         if is_hugging_face_repo_id(self._plan.model_path) and not is_pinned:
             raise ValueError("HF release source model must be pinned to a 40-character commit")
         eos_token_ids = self._plan.eos_token_ids
         controls = {}
         if is_pinned or os.path.isdir(self._plan.model_path):
-            source_generation = GenerationConfig.from_pretrained(
+            source_eos, source_controls = generation_metadata(GenerationConfig.from_pretrained(
                 self._plan.model_path, revision=revision if is_pinned else None
-            ).to_diff_dict()
-            eos = source_generation.pop("eos_token_id", None)
-            if eos_token_ids is None and eos is not None:
-                eos_token_ids = eos if isinstance(eos, list) else [eos]
-            source_generation.pop("bos_token_id", None)
-            source_generation.pop("transformers_version", None)
-            controls = source_generation
+            ).to_diff_dict())
+            if eos_token_ids is None:
+                eos_token_ids = source_eos
+            controls = source_controls
         if eos_token_ids is None:
             raise ValueError("checkpoint HF release needs explicit EOS IDs or source generation metadata")
         controls.update(self._plan.generation_controls or {})
@@ -190,7 +189,7 @@ class CheckpointExporter:
 
     def run(self) -> CheckpointExportResult:
         try:
-            checkpoint_identity = self._validate_checkpoint()
+            checkpoint_identity = self._checkpoint_identity()
             release_options = self._release_options(checkpoint_identity)
             self._workers.initialize(self._plan.model_path)
             self._workers.load_model_checkpoint(self._plan.policy_checkpoint_path)
@@ -222,7 +221,7 @@ def checkpoint_export_plan(cfg: DictConfig) -> CheckpointExportPlan:
         model_path=str(cfg.trainer.policy.model.path),
         model_revision=cfg.trainer.policy.model.get("revision"),
         release_precision=str(export_cfg.get("release_precision", "preserve")),
-        release_policy_version=int(export_cfg.get("release_policy_version", 1)),
+        release_policy_version=int(export_cfg.get("release_policy_version", POLICY_VERSION)),
         eos_token_ids=export_cfg.get("eos_token_ids"),
         generation_controls=export_cfg.get("generation_controls"),
         chat_template=export_cfg.get("chat_template"),

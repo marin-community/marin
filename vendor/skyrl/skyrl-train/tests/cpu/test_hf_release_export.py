@@ -6,10 +6,10 @@ import torch
 from safetensors.torch import load_file, save_file
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
-from transformers import GenerationConfig, PreTrainedTokenizerFast
+from transformers import AutoTokenizer, GenerationConfig, PreTrainedTokenizerFast
 
 from marin_hf_release import PrecisionMode
-from marin_hf_release.validation import read_safetensors_tensors
+from marin_hf_release.validation import read_safetensors_header_specs
 from skyrl_train import hf_model_io
 from skyrl_train.hf_model_io import local_hf_model_dir, verify_hf_model_export
 from skyrl_train.hf_release_export import ReleaseExportOptions, finalize_grug_release
@@ -63,7 +63,7 @@ def test_grug_bridge_release_preserves_router_bias_and_logits(tmp_path, precisio
         finalize_grug_release(Path(directory), config.to_dict(), tokenizer, options)
 
     verify_hf_model_export(str(tmp_path), require_release_manifest=True)
-    headers = read_safetensors_tensors(tmp_path / "model.safetensors")
+    headers = read_safetensors_header_specs(tmp_path / "model.safetensors")
     expected = "BF16" if precision is PrecisionMode.BF16 else "F32"
     assert headers["model.embed_tokens.weight"].source_dtype == expected
     assert headers["model.layers.0.mlp.router.bias"].source_dtype == "F32"
@@ -74,7 +74,10 @@ def test_grug_bridge_release_preserves_router_bias_and_logits(tmp_path, precisio
     )
     generation = GenerationConfig.from_pretrained(tmp_path)
     assert generation.eos_token_id == [1, 2]
-    assert tokenizer.apply_chat_template([{"role": "user", "content": "hello"}], tokenize=False) == "[BOS]hello[EOS]"
+    released_tokenizer = AutoTokenizer.from_pretrained(tmp_path)
+    assert released_tokenizer.apply_chat_template([{"role": "user", "content": "hello"}], tokenize=False) == (
+        "[BOS]hello[EOS]"
+    )
 
     restored = GrugMoeForCausalLM(config).eval()
     restored.load_state_dict(exported)

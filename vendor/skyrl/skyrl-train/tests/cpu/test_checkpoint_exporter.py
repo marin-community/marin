@@ -18,6 +18,7 @@ class FakePolicyExportWorkers:
         self.checkpoint_path = None
         self.export_path = None
         self.tokenizer = None
+        self.release_options = None
         self.closed = False
 
     def initialize(self, model_path: str) -> None:
@@ -29,6 +30,7 @@ class FakePolicyExportWorkers:
     def save_hf_model(self, export_path: str, tokenizer: object, release_options: ReleaseExportOptions) -> None:
         self.export_path = export_path
         self.tokenizer = tokenizer
+        self.release_options = release_options
         Path(export_path).mkdir(parents=True)
         Path(export_path, "model.safetensors").write_bytes(b"weights")
         Path(export_path, "hf_release_manifest.json").write_text("{}")
@@ -39,12 +41,12 @@ class FakePolicyExportWorkers:
 
 
 class MissingExportWorkers(FakePolicyExportWorkers):
-    def save_hf_model(self, export_path: str, tokenizer: object, release_options: ReleaseExportOptions) -> None:
+    def save_hf_model(self, export_path: str, _tokenizer: object, _release_options: ReleaseExportOptions) -> None:
         self.export_path = export_path
 
 
 class MetadataOnlyExportWorkers(FakePolicyExportWorkers):
-    def save_hf_model(self, export_path: str, tokenizer: object, release_options: ReleaseExportOptions) -> None:
+    def save_hf_model(self, export_path: str, _tokenizer: object, _release_options: ReleaseExportOptions) -> None:
         self.export_path = export_path
         Path(export_path).mkdir(parents=True)
         Path(export_path, "config.json").write_text("{}")
@@ -116,6 +118,9 @@ def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path):
     assert workers.checkpoint_path == str(tmp_path / "checkpoints" / "global_step_12" / "policy")
     assert workers.export_path == result.export_path
     assert workers.tokenizer is tokenizer
+    assert workers.release_options.precision is PrecisionMode.PRESERVE
+    assert workers.release_options.eos_token_ids == [1]
+    assert workers.release_options.source_step == 12
     assert workers.closed
 
 

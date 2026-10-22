@@ -41,7 +41,7 @@ from levanter.models.snowball import (
     validate_single_name_config,
 )
 from levanter.testing.cpu_devices import run_on_cpu_devices
-from marin_hf_release.validation import read_safetensors_tensors
+from marin_hf_release.validation import read_safetensors_header_specs
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -98,7 +98,7 @@ def test_snowball_release_keeps_nonzero_router_bias_fp32(tmp_path):
             save_reference_code=False,
         )
 
-    headers = read_safetensors_tensors(tmp_path / "model.safetensors")
+    headers = read_safetensors_header_specs(tmp_path / "model.safetensors")
     assert headers["model.embed_tokens.weight"].source_dtype == "BF16"
     assert headers["model.layers.0.mlp.router.bias"].source_dtype == "F32"
     weights = load_file(tmp_path / "model.safetensors")

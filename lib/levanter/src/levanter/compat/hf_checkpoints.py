@@ -54,7 +54,9 @@ from marin_hf_release import (
     canonical_grug_config,
     completion_manifest,
     exporter_revision,
+    generation_metadata,
     grug_tensor_specs,
+    is_hf_commit,
     persist_request,
     resolve_metadata,
     tokenizer_special_token_ids,
@@ -183,8 +185,8 @@ def build_generation_config(
         *eos_token_ids* is ``None``.
 
     Raises:
-        ValueError: If the list is empty, contains non-ints, or contains
-            IDs outside the tokenizer's vocabulary range.
+        ValueError: If the tokenizer has no EOS ID, the explicit list omits it,
+            or the list is empty or contains invalid IDs.
     """
     if eos_token_ids is None:
         return None
@@ -1223,22 +1225,21 @@ class HFCheckpointConverter(Generic[LevConfig]):
             source_ref = self.reference_checkpoint
             if source_ref is not None and not os.path.exists(source_ref.model_name_or_path):
                 revision = source_ref.revision
-                if revision is None or len(revision) != 40 or any(char not in "0123456789abcdef" for char in revision):
+                if not is_hf_commit(revision):
                     raise ValueError("HF release source model must be pinned to a 40-character commit")
                 source_model, source_model_commit = source_ref.model_name_or_path, revision
             else:
                 source_model, source_model_commit = None, None
             source_metadata: dict[str, object] = {}
             if is_grug and source_ref is not None:
-                source_generation = GenerationConfig.from_pretrained(
-                    source_ref.model_name_or_path, revision=source_model_commit
-                ).to_diff_dict()
-                source_eos = source_generation.pop("eos_token_id", None)
+                source_eos, source_controls = generation_metadata(
+                    GenerationConfig.from_pretrained(
+                        source_ref.model_name_or_path, revision=source_model_commit
+                    ).to_diff_dict()
+                )
                 if source_eos is not None:
-                    source_metadata["eos_token_ids"] = source_eos if isinstance(source_eos, list) else [source_eos]
-                source_generation.pop("bos_token_id", None)
-                source_generation.pop("transformers_version", None)
-                source_metadata["generation_controls"] = source_generation
+                    source_metadata["eos_token_ids"] = source_eos
+                source_metadata["generation_controls"] = source_controls
             resolved_tokenizer, resolved_generation = resolve_metadata(
                 explicit_metadata, checkpoint_metadata, source_metadata, require_chat_template=is_grug
             )

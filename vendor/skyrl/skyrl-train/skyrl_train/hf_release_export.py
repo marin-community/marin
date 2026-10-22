@@ -27,7 +27,7 @@ from marin_hf_release import (
     write_completion_manifest,
 )
 from marin_hf_release.policy import dtype_size
-from marin_hf_release.validation import INDEX_NAME, read_safetensors_tensors
+from marin_hf_release.validation import INDEX_NAME, read_safetensors_header_specs
 from marinskyrl.hf_model import normalize_fast_tokenizer_metadata
 
 from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
@@ -55,7 +55,7 @@ def _expected_grug_shapes(config: dict[str, object]) -> dict[str, tuple[int, ...
 def _bridge_tensor_specs(root: Path, expected_shapes: dict[str, tuple[int, ...]]) -> dict[str, TensorSpec]:
     tensors = {}
     for shard in root.glob("*.safetensors"):
-        for name, spec in read_safetensors_tensors(shard).items():
+        for name, spec in read_safetensors_header_specs(shard).items():
             if name in tensors:
                 raise ValueError(f"duplicate Bridge tensor {name}")
             tensors[name] = spec
@@ -73,7 +73,7 @@ def _bridge_tensor_specs(root: Path, expected_shapes: dict[str, tuple[int, ...]]
 
 def _rewrite_precision(root: Path, specs: dict[str, TensorSpec], policy: ReleasePolicy) -> None:
     for shard in sorted(root.glob("*.safetensors")):
-        headers = read_safetensors_tensors(shard)
+        headers = read_safetensors_header_specs(shard)
         if all(policy.target_dtype(name, specs[name]) == spec.source_dtype for name, spec in headers.items()):
             continue
         tensors = load_file(shard, device="cpu")
@@ -90,7 +90,7 @@ def _write_index(root: Path) -> None:
     weight_map = {}
     total_size = 0
     for shard in sorted(root.glob("*.safetensors")):
-        for name, spec in read_safetensors_tensors(shard).items():
+        for name, spec in read_safetensors_header_specs(shard).items():
             if name in weight_map:
                 raise ValueError(f"duplicate Bridge tensor {name}")
             weight_map[name] = shard.name

@@ -1,15 +1,17 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Resolved, retry-stable inference export requests and metadata."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import subprocess
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Iterable, Mapping
 
 from marin_hf_release.policy import ReleasePolicy, TensorSpec
 
@@ -17,18 +19,38 @@ REQUEST_NAME = "hf_release_request.json"
 MANIFEST_NAME = "hf_release_manifest.json"
 
 
+def is_hf_commit(value: str | None) -> bool:
+    return value is not None and len(value) == 40 and all(char in "0123456789abcdef" for char in value)
+
+
+def generation_metadata(generation: dict[str, object]) -> tuple[list[int] | None, dict[str, object]]:
+    """Separate EOS IDs from source generation controls without backend defaults."""
+    fields = dict(generation)
+    eos = fields.pop("eos_token_id", None)
+    fields.pop("bos_token_id", None)
+    fields.pop("transformers_version", None)
+    if eos is None:
+        return None, fields
+    return eos if isinstance(eos, list) else [eos], fields
+
+
 def exporter_revision(backend_file: Path) -> str:
     """Identify the exporter commit or hash its source when Git metadata is absent."""
-    commit = os.environ.get("GIT_COMMIT")
-    if commit is None and shutil.which("git") is not None:
+    commit = None
+    if shutil.which("git") is not None:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=backend_file.parent, capture_output=True, text=True, check=False
         )
         commit = result.stdout.strip() if result.returncode == 0 else None
-    if commit is not None and len(commit) == 40 and all(char in "0123456789abcdef" for char in commit):
+    if is_hf_commit(commit):
         return commit
     digest = hashlib.sha256()
-    for path in (backend_file, Path(__file__), Path(__file__).with_name("policy.py"), Path(__file__).with_name("validation.py")):
+    for path in (
+        backend_file,
+        Path(__file__),
+        Path(__file__).with_name("policy.py"),
+        Path(__file__).with_name("validation.py"),
+    ):
         digest.update(path.name.encode())
         digest.update(path.read_bytes())
     return f"source-sha256:{digest.hexdigest()}"
@@ -51,7 +73,7 @@ def tokenizer_special_token_ids(tokenizer: object) -> dict[str, int]:
         token_id = getattr(tokenizer, f"{name}_id")
         if token_id is not None:
             result[name] = token_id
-    for index, token_id in enumerate(getattr(tokenizer, "extra_special_tokens_ids")):
+    for index, token_id in enumerate(tokenizer.extra_special_tokens_ids):
         result[f"extra_special_tokens_{index}"] = token_id
     return result
 
@@ -133,10 +155,7 @@ class ReleaseRequest:
             raise ValueError("HF release request requires exporter code revision")
         if self.source_model is not None and self.source_model_commit is None:
             raise ValueError("HF release source model must be pinned to a commit")
-        if self.source_model_commit is not None and (
-            len(self.source_model_commit) != 40
-            or any(char not in "0123456789abcdef" for char in self.source_model_commit)
-        ):
+        if self.source_model_commit is not None and not is_hf_commit(self.source_model_commit):
             raise ValueError("HF release source model commit must be a 40-character SHA")
         for field_name, expected in (
             ("bos_token_id", self.tokenizer.bos_token_id),
@@ -186,8 +205,7 @@ def validate_release_metadata(
     tokenizer_json = json.loads((root / "tokenizer.json").read_text())
     vocabulary = tokenizer_json["model"]["vocab"]
     tokens_to_ids = (
-        dict(vocabulary) if isinstance(vocabulary, dict)
-        else {entry[0]: index for index, entry in enumerate(vocabulary)}
+        dict(vocabulary) if isinstance(vocabulary, dict) else {entry[0]: index for index, entry in enumerate(vocabulary)}
     )
     tokens_to_ids.update({token["content"]: token["id"] for token in tokenizer_json.get("added_tokens", [])})
     ids = set(tokens_to_ids.values())

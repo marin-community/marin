@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
-from marin_hf_release import PrecisionMode, ReleasePolicy
+from marin_hf_release import POLICY_VERSION, PrecisionMode, ReleasePolicy
 
 from marinskyrl.resource_locator import is_hugging_face_repo_id, validate_replayable_model_reference
+from marinskyrl.speculative_decoding import is_hugging_face_commit
 
 HF_EXPORT_REQUEST_SCHEMA_VERSION = 2
 TRAINER_STATE_FILENAME = "trainer_state.pt"
@@ -35,7 +36,7 @@ class HFExportRequest:
     num_nodes: int
     gpus_per_node: int
     release_precision: str = "preserve"
-    release_policy_version: int = 1
+    release_policy_version: int = POLICY_VERSION
     eos_token_ids: list[int] | None = None
     generation_controls: dict[str, object] = field(default_factory=dict)
     chat_template: str | None = None
@@ -56,9 +57,7 @@ class HFExportRequest:
         validate_replayable_model_reference(self.model_path, self.model_source_uri, self.model_source_identity)
         ReleasePolicy(PrecisionMode(self.release_precision), version=self.release_policy_version)
         if is_hugging_face_repo_id(self.model_path) and (
-            self.model_revision is None
-            or len(self.model_revision) != 40
-            or any(char not in "0123456789abcdef" for char in self.model_revision)
+            self.model_revision is None or not is_hugging_face_commit(self.model_revision)
         ):
             raise ValueError("HF release source model must be pinned to a 40-character commit")
 

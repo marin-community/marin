@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Bounded-memory validation of completed local safetensors releases."""
 
 from __future__ import annotations
@@ -5,8 +8,8 @@ from __future__ import annotations
 import hashlib
 import json
 import struct
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from marin_hf_release.policy import ReleasePolicy, TensorSpec, dtype_size
 
@@ -22,7 +25,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def read_safetensors_tensors(path: Path) -> dict[str, TensorSpec]:
+def read_safetensors_header_specs(path: Path) -> dict[str, TensorSpec]:
     """Read one safetensors header without loading tensor payloads."""
     with path.open("rb") as source:
         prefix = source.read(8)
@@ -69,7 +72,7 @@ def read_safetensors_tensors(path: Path) -> dict[str, TensorSpec]:
 
 def validate_release_shard(path: Path, specs: Mapping[str, TensorSpec], policy: ReleasePolicy) -> str:
     """Validate a staged shard before upload, then return its SHA-256 hash."""
-    actual = read_safetensors_tensors(path)
+    actual = read_safetensors_header_specs(path)
     if actual.keys() != specs.keys():
         missing = sorted(specs.keys() - actual.keys())
         extra = sorted(actual.keys() - specs.keys())
@@ -117,7 +120,7 @@ def validate_release_weights(
     actual: dict[str, TensorSpec] = {}
     weight_map: dict[str, str] = {}
     for shard in shards:
-        for name, spec in read_safetensors_tensors(shard).items():
+        for name, spec in read_safetensors_header_specs(shard).items():
             if name in actual:
                 raise ValueError(f"duplicate safetensors tensor {name}: {root}")
             actual[name] = spec

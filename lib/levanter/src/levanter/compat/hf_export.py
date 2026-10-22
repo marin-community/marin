@@ -129,7 +129,7 @@ class _HFShardWriter:
         self._resume = resume
         self._upload_to_hf = upload_to_hf
         self._validate_shard = validate_shard
-        self._pending: deque[Future[HFShardRecord | None]] = deque()
+        self._pending: deque[Future[HFShardRecord]] = deque()
         self._records: list[HFShardRecord] = []
 
     def resume_shard(self, filename: str, tensor_names: list[str]) -> bool:
@@ -144,8 +144,7 @@ class _HFShardWriter:
 
     def drain_one(self) -> None:
         record = self._pending.popleft().result()
-        if record is not None:
-            self._records.append(record)
+        self._records.append(record)
 
     def reserve(self, num_bytes: int, reservation: ExitStack) -> None:
         if len(self._pending) >= self._max_concurrent_shards:
@@ -176,7 +175,7 @@ class _HFShardWriter:
             self.drain_one()
         return self._records
 
-    def _write_shard(self, filename: str, tensors: dict[str, np.ndarray]) -> HFShardRecord | None:
+    def _write_shard(self, filename: str, tensors: dict[str, np.ndarray]) -> HFShardRecord:
         staging = (
             nullcontext(url_to_fs(str(self._root))[1])
             if self._root.is_local
