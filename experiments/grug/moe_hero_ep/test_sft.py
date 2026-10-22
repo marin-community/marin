@@ -95,7 +95,7 @@ def test_scanned_lora_outputs_and_gradients_match_dense_reference():
 
 
 @pytest.mark.timeout(120)
-def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_path):
+def test_current_hero_compact_sft_update_resume_and_context_sharding(tmp_path):
     script = r"""
         import dataclasses
         import hashlib
@@ -104,32 +104,20 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
         import jax.numpy as jnp
         import equinox as eqx
         import numpy as np
-        from jax.sharding import AxisType, Mesh, PartitionSpec
-        from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer, apply_qb_betas, LoraProjection
-        from levanter.checkpoint import save_checkpoint
+        from jax.sharding import AxisType, Mesh
+        from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
         from levanter.trainer import TrainerConfig
         from levanter.data.text.datasets import LmDataConfig
         from fray.types import ResourceConfig
-        from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
         from pathlib import Path
-        from unittest.mock import patch
-        import draccus
-        import yaml
-        from experiments.grug.moe_hero_ep.averaging import (
-            AverageConfig, CheckpointPin, TokenizerPin, average_checkpoints, _DONORS,
-        )
-        from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
-        from experiments.grug.moe_hero_ep.weights import restore_weights
         from experiments.grug.moe_hero_ep.format_eval import AcquisitionCase, AcquisitionPanel, AcquisitionDiagnostic
         from experiments.grug.moe_hero_ep.sft_launch import (
-            HeroSftCheckpoint, write_sft_handoff, HeroSftInspection, PilotInspection, PilotStop,
-            pilot_inspection_due, read_pilot_inspection, save_pilot_inspection,
             HeroSftRunConfig, PendingAcquisition, pending_acquisition, complete_acquisition,
         )
         from experiments.grug.moe_hero_ep.sft import (
             SftConfig, BaseReference, initialize_sft, sft_logits, sft_loss,
             make_sft_step, save_sft_checkpoint, restore_sft_checkpoint, merge_sft,
-            compiled_gradient_report, initialize_from_checkpoint, export_sft,
+            compiled_gradient_report,
             make_sft_gradients, make_sft_optimizer_step, compact_optimizer_report,
         )
 
@@ -319,134 +307,183 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
                     full_report = compiled_gradient_report(full_compiled, base)
                     assert not full_report["avoids_full_base_gradients"], full_report
                     assert full_report["unverified_weight_shaped_results"], full_report
-                    # Prepare a real candidate C through the streamed donor path. Only
-                    # provider metadata/tokenizer acquisition are external-boundary fakes.
-                    donor_config = dataclasses.replace(config, vocab_size=128010, hidden_dim=8,
-                        intermediate_dim=4, shared_expert_intermediate_dim=4,
-                        num_heads=2, num_kv_heads=1, head_dim=4)
-                    donor_base = Transformer.init(donor_config, key=jax.random.key(17))
-                    source = CHECKPOINT_ROOT + "/source-pt"
-                    pending = jnp.array([[0.0031, -0.0021, 0.007, 0.001],
-                                         [-0.0031, 0.0051, 0.0023, -0.007]], dtype=jnp.float32)
-                    save_checkpoint({"master_params": donor_base,
-                        "params": jax.tree.map(lambda x: jnp.zeros_like(x, dtype=jnp.bfloat16), donor_base),
-                        "pending_qb_betas": pending, "step": jnp.array(123), "opt_state": jnp.arange(13)},
-                        123, source, is_temporary=False)
-                    metadata = json.loads((Path(source) / "metadata.json").read_text())
-                    manifest = json.loads((Path(source) / "manifest.json").read_text())
-                    revision = "a" * 40
-                    run = {"model": draccus.encode(donor_config),
-                        "optimizer": draccus.encode(GrugMoeMuonHConfig(learning_rate=0.1, adam_lr=0.02)),
-                        "trainer": {"trainer": {"num_train_steps": 1000}}, "data": {"tokenizer": "test-tokenizer"}}
-                    run = json.loads(json.dumps(run))
-                    config_path = CHECKPOINT_ROOT + "/source.yaml"
-                    Path(config_path).write_text(yaml.safe_dump(run))
-                    pin = CheckpointPin(source, digest(metadata), config_path, digest(run), revision,
-                                        digest(manifest), "local tokenizer fixture")
-                    class LocalProvider:
-                        worker_identity = {"provider": "local-cpu-fixture"}
-                        def worker_region(self): return "local-fixture"
-                        def storage_region(self, path): return "local-fixture"
-                    class LocalTokenizer:
-                        def encode(self, text, *, add_special_tokens):
-                            encodings = {text: token for row in _DONORS for text, token in (row[:2], row[2:])}
-                            return [encodings[text]]
-                    prepared = CHECKPOINT_ROOT + "/prepared-c"
-                    preparation = AverageConfig((pin,), prepared, CHECKPOINT_ROOT + "/scratch",
-                        TokenizerPin("test-tokenizer", revision), (), "f" * 40, 8,
-                        max_chunk_bytes=8 * 1024 * 1024, initialize_donors=True)
-                    with patch("experiments.grug.moe_hero_ep.averaging.AutoTokenizer.from_pretrained",
-                               return_value=LocalTokenizer()):
-                        c_metadata = average_checkpoints(preparation, region_probe=LocalProvider())
-                    actual_reference = BaseReference(prepared, digest(c_metadata), source, 123, "A",
-                                                     "test-tokenizer", revision)
-                    donor_sft = dataclasses.replace(sft, token_ids=tuple(row[1] for row in _DONORS),
-                                                      vocab_block_size=4096, token_block_size=4)
-                    restored_base, reset = initialize_from_checkpoint(actual_reference, donor_config, mesh, donor_sft)
-                    expected = apply_qb_betas(donor_base, pending)
-                    np.testing.assert_array_equal(restored_base.stacked_blocks.stacked.mlp.router_bias,
-                                                   expected.stacked_blocks.stacked.mlp.router_bias)
-                    assert int(reset.step) == 0 and int(reset.processed_tokens) == 0
-                    assert np.count_nonzero(np.asarray(reset.params.input_delta)) == 0
-                    assert np.count_nonzero(np.asarray(reset.params.output_delta)) == 0
-                    for destination, donor in [(row[1], row[3]) for row in _DONORS]:
-                        destination_value = restored_base.output_proj.at[:, destination].get(
-                            out_sharding=PartitionSpec())
-                        donor_value = donor_base.output_proj.at[:, donor].get(out_sharding=PartitionSpec())
-                        np.testing.assert_array_equal(destination_value, donor_value.astype(jnp.bfloat16))
-                    np.testing.assert_array_equal(restored_base.token_embed, donor_base.token_embed.astype(jnp.bfloat16))
-                    donor_ids = jnp.tile(jnp.array([[128006, 3, 128007, 5, 128009, 4, 128006, 2]], jnp.int32), (4,1))
-                    donor_weights = jnp.ones_like(donor_ids, dtype=jnp.float32).at[:,-1].set(0)
-                    learned, _ = make_sft_step(donor_sft)(reset, restored_base, donor_ids, donor_weights,
-                                                         jnp.ones_like(donor_ids, dtype=bool))
-                    compact_path = CHECKPOINT_ROOT + "/compact-d"
-                    save_sft_checkpoint(compact_path, learned, actual_reference, donor_sft)
-                    compact_metadata = json.loads((Path(compact_path) / "metadata.json").read_text())
-                    assert compact_metadata["hero_sft_counters"] == {
-                        "sft_step": 1,
-                        "processed_tokens": donor_ids.size,
-                        "supervised_tokens": int(donor_weights.sum()),
-                    }
-                    export_path = CHECKPOINT_ROOT + "/export-d"
-                    export_sft(export_path, restored_base, learned, actual_reference, donor_sft)
-                    write_sft_handoff(CHECKPOINT_ROOT, export_path, compact_path, learned, actual_reference)
-                    handoff = HeroSftCheckpoint(path=CHECKPOINT_ROOT)
-                    assert handoff.native_checkpoint == export_path and handoff.compact_checkpoint == compact_path
-                    assert handoff.handoff.step == 1 and handoff.handoff.processed_tokens == donor_ids.size
-                    export_metadata = json.loads((Path(export_path) / "metadata.json").read_text())
-                    ordinary = restore_weights(export_path, digest(export_metadata), donor_config, mesh)
-                    np.testing.assert_array_equal(ordinary.stacked_blocks.stacked.mlp.router_bias,
-                                                   expected.stacked_blocks.stacked.mlp.router_bias)
-                    expected_merged = merge_sft(restored_base, learned.params, donor_sft)
-                    np.testing.assert_array_equal(ordinary.output_proj, expected_merged.output_proj)
-                    assert handoff.metadata_digest == digest(export_metadata)
-                    # A mandatory early pause exports the exact state. Continuing with
-                    # the whole-pilot schedule preserves Adam and the next data update.
-                    boundary = PilotInspection(early_update=1, non_padding_tokens=donor_ids.size + 8,
-                                               policy_digest="pinned-policy", budget_digest="pinned-budget")
-                    assert pilot_inspection_due(int(reset.step), int(reset.processed_tokens), boundary) is None
-                    assert (
-                        pilot_inspection_due(int(learned.step), int(learned.processed_tokens), boundary)
-                        == PilotStop.EARLY_UPDATE
-                    )
-                    inspection = HeroSftInspection(
-                        handoff=handoff.handoff, compact_metadata_digest=digest(compact_metadata),
-                        sft=donor_sft, measurement_identity_digest="pinned-model-data-batch",
-                        inspection=boundary, max_processed_tokens=donor_ids.size * 4,
-                        stop_reason=PilotStop.EARLY_UPDATE,
-                    )
-                    save_pilot_inspection(CHECKPOINT_ROOT, inspection)
-                    inspection_json = json.loads((Path(CHECKPOINT_ROOT) / "inspection.json").read_text())
-                    checked = read_pilot_inspection(CHECKPOINT_ROOT + "/inspection.json", digest(inspection_json))
-                    assert checked.status == "awaiting_evaluation" and checked.sft == donor_sft
-                    continued = restore_sft_checkpoint(compact_path, reset, actual_reference, donor_sft, mesh)
-                    next_boundary = dataclasses.replace(boundary, reviewed_step=int(continued.step),
-                                                        reviewed_tokens=int(continued.processed_tokens))
-                    assert (pilot_inspection_due(
-                        int(continued.step), int(continued.processed_tokens), next_boundary
-                    ) is None)
-                    resumed, _ = make_sft_step(donor_sft)(continued, restored_base, donor_ids, donor_weights,
-                                                         jnp.ones_like(donor_ids, dtype=bool))
-                    uninterrupted, _ = make_sft_step(donor_sft)(learned, restored_base, donor_ids, donor_weights,
-                                                               jnp.ones_like(donor_ids, dtype=bool))
-                    for actual, expected in zip(jax.tree.leaves(resumed), jax.tree.leaves(uninterrupted), strict=True):
-                        np.testing.assert_array_equal(actual, expected)
-                    assert (
-                        pilot_inspection_due(int(resumed.step), int(resumed.processed_tokens), next_boundary)
-                        == PilotStop.TOKEN_INSPECTION
-                    )
-                    try:
-                        initialize_from_checkpoint(actual_reference,
-                            dataclasses.replace(donor_config, qk_mult=2.), mesh, donor_sft)
-                    except ValueError:
-                        pass
-                    else:
-                        raise AssertionError("Shape-compatible changes to forward semantics must be rejected")
-                output[context] = (float(metrics["loss"]), adapter_logits)
+            output[context] = (float(metrics["loss"]), adapter_logits)
         np.testing.assert_allclose(output[1][0], output[2][0], rtol=1e-5, atol=1e-5)
         np.testing.assert_allclose(output[1][1], output[2][1], rtol=0.02, atol=0.002)
     """
     script = "CHECKPOINT_ROOT = " + repr(str(tmp_path)) + "\n" + textwrap.dedent(script)
-    # Two real EP/CP meshes exercise forward, activation backprop, trainable sharding,
-    # native checkpoint I/O and deterministic optimizer/data-step continuation.
+    # Keep both real EP/CP meshes in one process for direct loss/logit parity.
+    run_on_cpu_devices(script, device_count=4)
+
+
+@pytest.mark.timeout(120)
+def test_current_hero_donor_sft_native_export_and_inspection_resume(tmp_path):
+    script = r"""
+        import dataclasses
+        import json
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import draccus
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        import yaml
+        from jax.sharding import AxisType, Mesh, PartitionSpec
+        from levanter.checkpoint import save_checkpoint
+
+        from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer, apply_qb_betas
+        from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+        from experiments.grug.moe_hero_ep.averaging import (
+            AverageConfig, CheckpointPin, TokenizerPin, average_checkpoints, _DONORS,
+        )
+        from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+        from experiments.grug.moe_hero_ep.weights import restore_weights
+        from experiments.grug.moe_hero_ep.sft_launch import (
+            HeroSftCheckpoint, write_sft_handoff, HeroSftInspection, PilotInspection, PilotStop,
+            pilot_inspection_due, read_pilot_inspection, save_pilot_inspection,
+        )
+        from experiments.grug.moe_hero_ep.sft import (
+            SftConfig, BaseReference, initialize_from_checkpoint, make_sft_step,
+            save_sft_checkpoint, restore_sft_checkpoint, export_sft, merge_sft,
+        )
+
+        config = GrugModelConfig(vocab_size=64, hidden_dim=32, intermediate_dim=16,
+            shared_expert_intermediate_dim=16, num_experts=4, num_experts_per_token=2,
+            num_layers=2, num_heads=4, num_kv_heads=2, head_dim=8, max_seq_len=8,
+            sliding_window=4, global_every=2, attention_implementation="reference",
+            moe_implementation="fixed_all_to_all", capacity_factor=4.)
+        sft = SftConfig(rank=2, alpha=2., token_ids=(2, 3, 4, 5, 6),
+            adapter_learning_rate=1e-3, vocab_learning_rate=1e-3,
+            num_steps=10, warmup_steps=0, seed=1, vocab_block_size=32, token_block_size=4)
+        mesh = Mesh(np.asarray(jax.devices()).reshape(1,1,1,4,1),
+                    ("replica_dcn", "data", "context", "expert", "model"), axis_types=(AxisType.Explicit,) * 5)
+        with jax.set_mesh(mesh):
+            # Prepare a real candidate C through the streamed donor path. Only
+            # provider metadata/tokenizer acquisition are external-boundary fakes.
+            donor_config = dataclasses.replace(config, vocab_size=128010, hidden_dim=8,
+                intermediate_dim=4, shared_expert_intermediate_dim=4,
+                num_heads=2, num_kv_heads=1, head_dim=4)
+            donor_base = Transformer.init(donor_config, key=jax.random.key(17))
+            source = CHECKPOINT_ROOT + "/source-pt"
+            pending = jnp.array([[0.0031, -0.0021, 0.007, 0.001],
+                                 [-0.0031, 0.0051, 0.0023, -0.007]], dtype=jnp.float32)
+            save_checkpoint({"master_params": donor_base,
+                "params": jax.tree.map(lambda x: jnp.zeros_like(x, dtype=jnp.bfloat16), donor_base),
+                "pending_qb_betas": pending, "step": jnp.array(123), "opt_state": jnp.arange(13)},
+                123, source, is_temporary=False)
+            metadata = json.loads((Path(source) / "metadata.json").read_text())
+            manifest = json.loads((Path(source) / "manifest.json").read_text())
+            revision = "a" * 40
+            run = {"model": draccus.encode(donor_config),
+                "optimizer": draccus.encode(GrugMoeMuonHConfig(learning_rate=0.1, adam_lr=0.02)),
+                "trainer": {"trainer": {"num_train_steps": 1000}}, "data": {"tokenizer": "test-tokenizer"}}
+            run = json.loads(json.dumps(run))
+            config_path = CHECKPOINT_ROOT + "/source.yaml"
+            Path(config_path).write_text(yaml.safe_dump(run))
+            pin = CheckpointPin(source, digest(metadata), config_path, digest(run), revision,
+                                digest(manifest), "local tokenizer fixture")
+            class LocalProvider:
+                worker_identity = {"provider": "local-cpu-fixture"}
+                def worker_region(self): return "local-fixture"
+                def storage_region(self, path): return "local-fixture"
+            class LocalTokenizer:
+                def encode(self, text, *, add_special_tokens):
+                    encodings = {text: token for row in _DONORS for text, token in (row[:2], row[2:])}
+                    return [encodings[text]]
+            prepared = CHECKPOINT_ROOT + "/prepared-c"
+            preparation = AverageConfig((pin,), prepared, CHECKPOINT_ROOT + "/scratch",
+                TokenizerPin("test-tokenizer", revision), (), "f" * 40, 8,
+                max_chunk_bytes=8 * 1024 * 1024, initialize_donors=True)
+            with patch("experiments.grug.moe_hero_ep.averaging.AutoTokenizer.from_pretrained",
+                       return_value=LocalTokenizer()):
+                c_metadata = average_checkpoints(preparation, region_probe=LocalProvider())
+            actual_reference = BaseReference(prepared, digest(c_metadata), source, 123, "A",
+                                             "test-tokenizer", revision)
+            donor_sft = dataclasses.replace(sft, token_ids=tuple(row[1] for row in _DONORS),
+                                              vocab_block_size=4096, token_block_size=4)
+            restored_base, reset = initialize_from_checkpoint(actual_reference, donor_config, mesh, donor_sft)
+            expected = apply_qb_betas(donor_base, pending)
+            np.testing.assert_array_equal(restored_base.stacked_blocks.stacked.mlp.router_bias,
+                                           expected.stacked_blocks.stacked.mlp.router_bias)
+            assert int(reset.step) == 0 and int(reset.processed_tokens) == 0
+            assert np.count_nonzero(np.asarray(reset.params.input_delta)) == 0
+            assert np.count_nonzero(np.asarray(reset.params.output_delta)) == 0
+            for destination, donor in [(row[1], row[3]) for row in _DONORS]:
+                destination_value = restored_base.output_proj.at[:, destination].get(
+                    out_sharding=PartitionSpec())
+                donor_value = donor_base.output_proj.at[:, donor].get(out_sharding=PartitionSpec())
+                np.testing.assert_array_equal(destination_value, donor_value.astype(jnp.bfloat16))
+            np.testing.assert_array_equal(restored_base.token_embed, donor_base.token_embed.astype(jnp.bfloat16))
+            donor_ids = jnp.tile(jnp.array([[128006, 3, 128007, 5, 128009, 4, 128006, 2]], jnp.int32), (4,1))
+            donor_weights = jnp.ones_like(donor_ids, dtype=jnp.float32).at[:,-1].set(0)
+            learned, _ = make_sft_step(donor_sft)(reset, restored_base, donor_ids, donor_weights,
+                                                 jnp.ones_like(donor_ids, dtype=bool))
+            compact_path = CHECKPOINT_ROOT + "/compact-d"
+            save_sft_checkpoint(compact_path, learned, actual_reference, donor_sft)
+            compact_metadata = json.loads((Path(compact_path) / "metadata.json").read_text())
+            assert compact_metadata["hero_sft_counters"] == {
+                "sft_step": 1,
+                "processed_tokens": donor_ids.size,
+                "supervised_tokens": int(donor_weights.sum()),
+            }
+            export_path = CHECKPOINT_ROOT + "/export-d"
+            export_sft(export_path, restored_base, learned, actual_reference, donor_sft)
+            write_sft_handoff(CHECKPOINT_ROOT, export_path, compact_path, learned, actual_reference)
+            handoff = HeroSftCheckpoint(path=CHECKPOINT_ROOT)
+            assert handoff.native_checkpoint == export_path and handoff.compact_checkpoint == compact_path
+            assert handoff.handoff.step == 1 and handoff.handoff.processed_tokens == donor_ids.size
+            export_metadata = json.loads((Path(export_path) / "metadata.json").read_text())
+            ordinary = restore_weights(export_path, digest(export_metadata), donor_config, mesh)
+            np.testing.assert_array_equal(ordinary.stacked_blocks.stacked.mlp.router_bias,
+                                           expected.stacked_blocks.stacked.mlp.router_bias)
+            expected_merged = merge_sft(restored_base, learned.params, donor_sft)
+            np.testing.assert_array_equal(ordinary.output_proj, expected_merged.output_proj)
+            assert handoff.metadata_digest == digest(export_metadata)
+            # A mandatory early pause exports the exact state. Continuing with
+            # the whole-pilot schedule preserves Adam and the next data update.
+            boundary = PilotInspection(early_update=1, non_padding_tokens=donor_ids.size + 8,
+                                       policy_digest="pinned-policy", budget_digest="pinned-budget")
+            assert pilot_inspection_due(int(reset.step), int(reset.processed_tokens), boundary) is None
+            assert (
+                pilot_inspection_due(int(learned.step), int(learned.processed_tokens), boundary)
+                == PilotStop.EARLY_UPDATE
+            )
+            inspection = HeroSftInspection(
+                handoff=handoff.handoff, compact_metadata_digest=digest(compact_metadata),
+                sft=donor_sft, measurement_identity_digest="pinned-model-data-batch",
+                inspection=boundary, max_processed_tokens=donor_ids.size * 4,
+                stop_reason=PilotStop.EARLY_UPDATE,
+            )
+            save_pilot_inspection(CHECKPOINT_ROOT, inspection)
+            inspection_json = json.loads((Path(CHECKPOINT_ROOT) / "inspection.json").read_text())
+            checked = read_pilot_inspection(CHECKPOINT_ROOT + "/inspection.json", digest(inspection_json))
+            assert checked.status == "awaiting_evaluation" and checked.sft == donor_sft
+            continued = restore_sft_checkpoint(compact_path, reset, actual_reference, donor_sft, mesh)
+            next_boundary = dataclasses.replace(boundary, reviewed_step=int(continued.step),
+                                                reviewed_tokens=int(continued.processed_tokens))
+            assert (pilot_inspection_due(
+                int(continued.step), int(continued.processed_tokens), next_boundary
+            ) is None)
+            resumed, _ = make_sft_step(donor_sft)(continued, restored_base, donor_ids, donor_weights,
+                                                 jnp.ones_like(donor_ids, dtype=bool))
+            uninterrupted, _ = make_sft_step(donor_sft)(learned, restored_base, donor_ids, donor_weights,
+                                                       jnp.ones_like(donor_ids, dtype=bool))
+            for actual, expected in zip(jax.tree.leaves(resumed), jax.tree.leaves(uninterrupted), strict=True):
+                np.testing.assert_array_equal(actual, expected)
+            assert (
+                pilot_inspection_due(int(resumed.step), int(resumed.processed_tokens), next_boundary)
+                == PilotStop.TOKEN_INSPECTION
+            )
+            try:
+                initialize_from_checkpoint(actual_reference,
+                    dataclasses.replace(donor_config, qk_mult=2.), mesh, donor_sft)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Shape-compatible changes to forward semantics must be rejected")
+    """
+    script = "CHECKPOINT_ROOT = " + repr(str(tmp_path)) + "\n" + textwrap.dedent(script)
+    # The real-vocabulary donor/export regression compiles independently of the
+    # tiny-vocabulary cross-mesh and diagnostic-recovery regression above.
     run_on_cpu_devices(script, device_count=4)
