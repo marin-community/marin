@@ -154,18 +154,21 @@ parent's `env`, and a job's explicit env overrides a cluster's `defaults.task_en
 `-e MARIN_PREFIX gs://…` to a job bound for CoreWeave therefore delivers a `gs://` path to a
 pod holding only S3 credentials.
 
-## Credentials do not travel
+## Storage credentials
 
-Each cluster's task pods carry that cluster's credentials, and only those:
+GCP task Pods use a platform service account. CoreWeave task Pods use the
+submitter's object-storage keys from the job environment:
 
 | Cluster | Task pods can read |
 | --- | --- |
 | `marin` (GCP) | `gs://` via the `iris-worker` service account |
-| `cw-*` (CoreWeave) | `s3://` via the `iris-task-env` secret (CoreWeave AI Object Storage) |
+| `cw-*` (CoreWeave) | `s3://` with submitter `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave AI Object Storage) |
 
-There is no cross-cloud identity. A job on CoreWeave cannot read `gs://`, and a job on
-`marin` cannot read `s3://marin-us-east-02a` unless it is handed AWS credentials explicitly.
-Every artifact a federated job touches must live in the peer's object store.
+Federation forwards the job environment, including CoreWeave keys. It does not
+translate service-account identity or storage URLs. A CoreWeave job cannot use
+the GCP worker service account to read `gs://`; a GCP job accessing CoreWeave
+storage needs the object-storage keys and endpoint configuration. Keep artifacts
+in the execution cluster's regional object store to avoid cross-region transfers.
 
 ## Reaching a child's serving endpoint through the parent
 

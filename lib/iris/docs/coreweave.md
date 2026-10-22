@@ -340,8 +340,9 @@ The cluster config carries two endpoints for the same S3-compatible store:
 
 Both domains require virtual-hosted bucket addressing. Let Iris, Rigging, or
 [`fsutil`](../../../docs/references/fsutil.md) derive it; do not build endpoint
-URLs by hand. For operator-side access, create a CoreWeave object-storage access
-key and expose only its expected names:
+URLs by hand. Create a personal object-storage access key on the
+[CoreWeave console Access Keys page](https://console.coreweave.com/object-storage/access-keys)
+and export both values before submitting jobs:
 
 ```bash
 export CW_KEY_ID=<key-id>
@@ -349,9 +350,14 @@ export CW_KEY_SECRET=<key-secret>
 uv run fsutil buckets
 ```
 
-During a controller deployment, Iris maps these values to the S3 variables in
-`iris-task-env`. Normal task submissions then receive cluster-managed storage
-access without carrying the operator's shell environment.
+The CLI and SDK forward these keys; explicit job environment values override them.
+Non-sandbox CoreWeave jobs require both. Tasks and output uploaders receive the
+submitted pair under both `CW_*` and `AWS_*` names. Operator keys stay in the
+infrastructure-only `iris-storage-env` Secret for checkpoints and node health
+probes. Existing Pods retain their environment, but retries and preemption create
+new Pods and require personal keys. Before deploying a controller that enforces
+submitter credentials, resume running jobs whose stored environment lacks keys
+(including hero runs) with personal keys. Resubmit queued jobs that lack keys.
 
 Task working directories and caches are node-local:
 
@@ -437,16 +443,19 @@ Credentials have separate owners and scopes:
 | --- | --- |
 | `~/.kube/coreweave-iris` | Operator access to CKS. It is not copied into Pods. |
 | Checkout-local `.marin.yaml` or explicit job environment | Submitter-provided values such as W&B or Hugging Face credentials. |
-| Operator `CW_KEY_ID` and `CW_KEY_SECRET` | Input used when deploying the cluster-managed object-storage Secret. |
-| `iris-task-env` Secret | Object-storage credentials and names listed in `defaults.inject_env`; mounted by the controller and task Pods. |
+| Submitter `CW_KEY_ID` and `CW_KEY_SECRET` | Personal object-storage credentials forwarded in the job environment. |
+| Operator `CW_KEY_ID` and `CW_KEY_SECRET` | Infrastructure object-storage credentials written to `iris-storage-env` at deployment. |
+| `iris-storage-env` Secret | Checkpoint and storage-health credentials; mounted by the controller and node agents. |
+| `iris-task-env` Secret | Object-storage endpoint defaults and names listed in `defaults.inject_env`; mounted by the controller and task Pods. |
 | `iris-controller-env` Secret | Controller-only credentials such as the cluster signing key; task Pods do not mount it. |
 | `defaults.task_env` | Non-secret cluster defaults written into task Pod environments. |
 
 The Iris CLI loads `.marin.yaml` only when run from that checkout. SDK
-submissions and commands from another directory must pass their task environment
-explicitly. The deploy path rejects literal secrets before writing
+submissions and commands from another directory must pass checkout-local values
+explicitly; the SDK forwards exported CoreWeave credentials. The deploy path
+rejects literal secrets before writing
 `iris-cluster-config`: references remain in the ConfigMap, while resolved values
-go through the two Secrets above.
+go through the Kubernetes Secrets above.
 
 Do not dump Pod environments or use `kubectl describe pod` on a task Pod; literal
 job environment values can appear in the output. Inspect named keys and

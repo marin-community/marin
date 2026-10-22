@@ -15,7 +15,7 @@ import re
 import shlex
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -132,14 +132,28 @@ from iris.cluster.stats.tables import (
     TaskEventSeverity,
     stats_timestamp,
 )
-from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
+from iris.cluster.types import COREWEAVE_STORAGE_ENV_VARS, AttemptUid, JobName, WellKnownAttribute, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
+COREWEAVE_ACCESS_KEYS_URL = "https://console.coreweave.com/object-storage/access-keys"
+
 _ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
+
+
+def validate_coreweave_credentials(env: Mapping[str, str]) -> str | None:
+    """Check the submitted storage keys and explain how to supply missing credentials."""
+    missing = [name for name in COREWEAVE_STORAGE_ENV_VARS if not env.get(name)]
+    if not missing:
+        return None
+    return (
+        f"CoreWeave jobs require your own object-storage credentials. Missing: {', '.join(missing)}. "
+        f"Create an access key at {COREWEAVE_ACCESS_KEYS_URL}, "
+        "then export CW_KEY_ID and CW_KEY_SECRET before submitting, or set both in the job environment."
+    )
 
 
 class PodManifestError(ValueError):
@@ -520,6 +534,7 @@ class PodConfig:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    require_coreweave_credentials: bool = False
     task_outputs: TaskOutputPolicy | None = None
     # Name of a Secret whose keys are projected into every task container via
     # envFrom (operator-injected env, defaults.inject_env). Empty disables it.
@@ -678,13 +693,16 @@ def _build_output_uploader(
     policy: TaskOutputPolicy,
     source_prefix: str | None,
     env_secret_name: str,
+    storage_env: dict[str, str],
 ) -> dict:
+    env = output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix)
+    env.extend({"name": name, "value": value} for name, value in storage_env.items())
     container: dict[str, object] = {
         "name": OUTPUT_CONTAINER_NAME,
         "image": image,
         "imagePullPolicy": "IfNotPresent",
         "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.outputship"],
-        "env": output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix),
+        "env": env,
         "volumeMounts": [
             {"name": OUTPUT_MOUNT.name, "mountPath": OUTPUT_MOUNT.container_path},
             {"name": OUTPUT_CONTROL_VOLUME_NAME, "mountPath": OUTPUT_CONTROL_PATH},
@@ -859,6 +877,18 @@ def _build_pod_manifest(
     )
     cluster_env = config.task_env if isolation.include_cluster_env else {}
     combined = {**cluster_env, **dict(run_req.environment.env_vars), **iris_env}
+    storage_env = {}
+    if config.require_coreweave_credentials and isolation.include_cluster_env:
+        storage_error = validate_coreweave_credentials(run_req.environment.env_vars)
+        if storage_error:
+            raise PodManifestError(storage_error)
+        storage_env = {
+            "CW_KEY_ID": combined["CW_KEY_ID"],
+            "CW_KEY_SECRET": combined["CW_KEY_SECRET"],
+            "AWS_ACCESS_KEY_ID": combined["CW_KEY_ID"],
+            "AWS_SECRET_ACCESS_KEY": combined["CW_KEY_SECRET"],
+        }
+        combined.update(storage_env)
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
     env_list.append(
@@ -1055,6 +1085,7 @@ def _build_pod_manifest(
                 config.task_outputs,
                 config.task_env.get("MARIN_PREFIX"),
                 config.env_secret_name,
+                storage_env,
             )
         )
 
@@ -2449,6 +2480,11 @@ class K8sTaskProvider:
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
+
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+            return None
+        return validate_coreweave_credentials(request.environment.env_vars)
 
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.

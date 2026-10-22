@@ -193,9 +193,11 @@ def _build_task_script(request: job_pb2.RunTaskRequest) -> str:
 
 
 def test_task_output_policy_adds_uploader_and_dedicated_volume() -> None:
+    request = make_run_req("/user/job/0", attempt_uid="0123456789abcdef")
+    request.environment.env_vars.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
     manifest = _build_pod_manifest(
-        make_run_req("/user/job/0", attempt_uid="0123456789abcdef"),
-        pod_config(logship_image="iris-controller", task_outputs=TaskOutputPolicy()),
+        request,
+        pod_config(logship_image="iris-controller", task_outputs=TaskOutputPolicy(), require_coreweave_credentials=True),
     )
 
     uploader = next(container for container in manifest["spec"]["containers"] if container["name"] == "output-uploader")
@@ -205,6 +207,11 @@ def test_task_output_policy_adds_uploader_and_dedicated_volume() -> None:
     assert env["IRIS_ATTEMPT_UID"] == "0123456789abcdef"
     assert env["IRIS_TASK_OUTPUT_TTL_DAYS"] == "7"
     assert output_policy_from_environment(env) == TaskOutputPolicy()
+    task = next(container for container in manifest["spec"]["containers"] if container["name"] == "task")
+    task_env = {entry["name"]: entry.get("value") for entry in task["env"]}
+    for container_env in (env, task_env):
+        assert container_env["AWS_ACCESS_KEY_ID"] == container_env["CW_KEY_ID"] == "user-key"
+        assert container_env["AWS_SECRET_ACCESS_KEY"] == container_env["CW_KEY_SECRET"] == "user-secret"
 
 
 def test_succeeded_pod_reports_uploader_archive() -> None:
@@ -1079,6 +1086,7 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
         controller_address="http://ctrl:8080",
         task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
         task_outputs=TaskOutputPolicy(),
+        require_coreweave_credentials=True,
         env_secret_name="iris-task-env",
         service_account="iris-task",
         host_network=True,
@@ -1847,3 +1855,9 @@ def test_pod_manifest_floors_an_unset_band_at_interactive():
     req = make_run_req("/test-job/0", priority=job_pb2.PRIORITY_BAND_INHERIT)
     manifest = _build_pod_manifest(req, pod_config())
     assert manifest["spec"]["priorityClassName"] == "iris-interactive"
+
+
+def test_coreweave_retry_without_stored_keys_is_rejected() -> None:
+    request = make_run_req("/user/queued-before-upgrade/0", attempt_id=1)
+    update = _rejected_dispatch(request, pod_config(require_coreweave_credentials=True))
+    assert "https://console.coreweave.com/object-storage/access-keys" in update.error

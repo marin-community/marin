@@ -11,7 +11,8 @@
 #        export CW_KEY_ID=<coreweave-access-key-id>
 #        export CW_KEY_SECRET=<coreweave-access-key-secret>
 #      These are created in the CoreWeave console under Object Storage > Access Keys.
-#      `iris cluster start` creates a K8s Secret from these env vars automatically.
+#      `iris cluster start` stores them in the infrastructure-only iris-storage-env Secret.
+#      Job submitters export their own pair; task Pods do not mount the service keys.
 #
 #   2. Start the cluster (creates RBAC, shared NodePools, ConfigMap, Deployment, Service):
 #        iris --config=lib/iris/config/examples/coreweave.yaml cluster start

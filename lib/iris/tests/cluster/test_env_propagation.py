@@ -228,6 +228,8 @@ def test_sandbox_child_receives_only_its_own_env(capturing_client, parent_contex
     """A sandbox child gets neither the parent's env and setup nor the submitter's tokens."""
     client, stub = capturing_client
     monkeypatch.setenv("HF_TOKEN", "submitter-token")
+    monkeypatch.setenv("CW_KEY_ID", "submitter-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "submitter-secret")
     parent = _parent_job_info({"PARENT_SECRET": "parent"})
     parent.setup_scripts = ["uv sync"]
 
@@ -258,3 +260,18 @@ def test_task_client_presents_the_task_token_from_its_env(monkeypatch):
         assert info.credentials.headers() == {"authorization": "Bearer task-token"}
     finally:
         set_job_info(None)
+
+
+@pytest.mark.parametrize("explicit", [None, {"CW_KEY_ID": "explicit-key", "CW_KEY_SECRET": "explicit-secret"}])
+def test_submit_forwards_personal_storage_credentials(capturing_client, monkeypatch, explicit):
+    client, stub = capturing_client
+    monkeypatch.setenv("CW_KEY_ID", "shell-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "shell-secret")
+    client.submit(
+        Entrypoint.from_command("true"),
+        "storage",
+        ResourceSpec(cpu=1, memory="1g"),
+        environment=EnvironmentSpec(env_vars=explicit, setup_scripts=[]),
+    )
+    expected = explicit or {"CW_KEY_ID": "shell-key", "CW_KEY_SECRET": "shell-secret"}
+    assert {name: stub.captured_env[name] for name in expected} == expected

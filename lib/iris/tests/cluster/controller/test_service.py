@@ -1590,3 +1590,43 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
 
     response = service.launch_job(child_req, None)
     assert response.job_id == child_id.to_wire()
+
+
+@pytest.mark.parametrize("env", [{}, {"CW_KEY_ID": "user-key"}, {"CW_KEY_ID": "user-key", "CW_KEY_SECRET": ""}])
+def test_coreweave_launch_with_missing_keys_is_rejected(coreweave_service, monkeypatch, env):
+    monkeypatch.setenv("CW_KEY_ID", "operator-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "operator-secret")
+    request = make_job_request("missing-cw-keys")
+    request.environment.env_vars.update(env)
+
+    with pytest.raises(ConnectError) as exc:
+        coreweave_service.launch_job(request, None)
+
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert "https://console.coreweave.com/object-storage/access-keys" in str(exc.value)
+    with pytest.raises(ConnectError) as missing:
+        coreweave_service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=request.name), None)
+    assert missing.value.code == Code.NOT_FOUND
+
+
+def test_coreweave_invalid_replacement_preserves_existing_job(coreweave_service):
+    request = make_job_request("existing-cw-job")
+    request.environment.env_vars.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
+    response = coreweave_service.launch_job(request, None)
+    request.environment.env_vars.clear()
+    request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
+
+    with pytest.raises(ConnectError) as exc:
+        coreweave_service.launch_job(request, None)
+
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    status = coreweave_service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
+    )
+    assert status.job.state == job_pb2.JOB_STATE_PENDING
+
+
+def test_coreweave_sandbox_does_not_require_storage_keys(coreweave_service):
+    request = make_job_request("sandbox-without-storage-keys")
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    assert coreweave_service.launch_job(request, None).job_id == request.name

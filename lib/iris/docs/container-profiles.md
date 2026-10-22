@@ -118,12 +118,13 @@ has no service-account token, and its egress policy blocks cluster addresses.
 `SANDBOX` is for a job whose commands come from a model or another untrusted
 source, such as a shellbox machine. A task normally assembles its environment
 from three places: the cluster (`defaults.task_env`, `defaults.inject_env`, and
-on Kubernetes the `iris-task-env` Secret holding the object-store keys), Iris
-itself (`IRIS_*` identity, the controller address, cache paths), and the job
-(`EnvironmentSpec.env_vars`, which by default also copies `HF_TOKEN` and
-`WANDB_API_KEY` from the submitting process, and in a child job the parent's
-variables). Under `SANDBOX` only the job's explicit `env_vars` and the Iris
-identity variables reach the task.
+on Kubernetes the `iris-task-env` Secret holding endpoint defaults and
+operator-injected values), Iris itself (`IRIS_*` identity, the controller address,
+cache paths), and the job
+(`EnvironmentSpec.env_vars`, which by default also copies `HF_TOKEN`,
+`WANDB_API_KEY`, `CW_KEY_ID`, and `CW_KEY_SECRET` from the submitting process,
+and in a child job the parent's variables). Under `SANDBOX` only the job's explicit
+`env_vars` and the Iris identity variables reach the task.
 
 The profile still supports `ExecInContainer`, which reaches the task through
 the worker or `kubectl exec`. The job cannot carry a workspace bundle, and
