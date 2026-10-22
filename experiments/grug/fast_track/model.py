@@ -907,6 +907,9 @@ class GrugModelConfig:
     history (``_AttnResHistory``), each layer rematerialized in the backward, instead of unrolling every layer.
     Same math; the layers after the leading run of identical units (e.g. ``latent_out_full_layers``) stay
     unrolled. Needed to compile deep models (48 layers)."""
+    attn_res_final_logit_soft_cap: float | None = None
+    """Tanh soft-cap ``c * tanh(z / c)`` on the final AttnRes readout gate's source logits only (after the logit
+    biases, before the softmax and z-loss); the per-layer gates stay uncapped. None: off."""
     attn_res_remat_attention: bool = False
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
     the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
@@ -1074,6 +1077,12 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
+        if self.attn_res_final_logit_soft_cap is not None and (
+            not self.attn_res or self.attn_res_final_logit_soft_cap <= 0
+        ):
+            raise ValueError(
+                f"attn_res_final_logit_soft_cap needs attn_res and must be > 0, got {self.attn_res_final_logit_soft_cap}"
+            )
         if self.scan_layers and (not self.attn_res or self.attn_res_layer_backward != AttnResLayerBackward.RECOMPUTE):
             raise ValueError("scan_layers needs attn_res with attn_res_layer_backward=recompute")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
@@ -4281,7 +4290,7 @@ def _bias_gate_logits(
 
 
 def _soft_cap_logits(logits: list[jax.Array], cap: float | None) -> list[jax.Array]:
-    """``cap * tanh(logit / cap)`` on each source logit (``attn_res_logit_soft_cap``); unchanged when None."""
+    """``cap * tanh(logit / cap)`` on each source logit (``attn_res_final_logit_soft_cap``); unchanged when None."""
     if cap is None:
         return logits
     return [cap * jnp.tanh(logit / cap) for logit in logits]
@@ -5851,7 +5860,7 @@ class Transformer(eqx.Module):
             logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
             logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps, (False))[0])
             logits = _bias_gate_logits(logits, logit_bias, final_index, [*blocks, partial], eps, has_partial=True)
-            logits = _soft_cap_logits(logits, (None))
+            logits = _soft_cap_logits(logits, cfg.attn_res_final_logit_soft_cap)
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
             if cfg.attn_res_plain_sum:
                 mixed = _stream_sum((*blocks, partial))
