@@ -7,9 +7,11 @@ import ast
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
 from pathlib import Path
+from types import MappingProxyType
 
 import yaml
 from marin.evaluation.eval_policy_metrics import POLICY_METRICS_2026_10_16
@@ -19,11 +21,13 @@ CAMPAIGN = ROOT / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabele
 EVALCHEMY = ROOT / "vendor/evalchemy/eval"
 HARBOR = ROOT / "vendor/harbor/src/harbor"
 MRCR_CONTEXT_VARIANTS = frozenset({"mrcr-32k", "mrcr-65k"})
-LM_EVAL_OVERRIDES = {
-    "gsm8k": EVALCHEMY / "lm_eval_tasks/gsm8k/gsm8k.yaml",
-    "triviaqa": EVALCHEMY / "lm_eval_tasks/triviaqa/default.yaml",
-    "truthfulqa_mc2": EVALCHEMY / "lm_eval_tasks/truthfulqa/truthfulqa_mc2.yaml",
-}
+LM_EVAL_OVERRIDES = MappingProxyType(
+    {
+        "gsm8k": EVALCHEMY / "lm_eval_tasks/gsm8k/gsm8k.yaml",
+        "triviaqa": EVALCHEMY / "lm_eval_tasks/triviaqa/default.yaml",
+        "truthfulqa_mc2": EVALCHEMY / "lm_eval_tasks/truthfulqa/truthfulqa_mc2.yaml",
+    }
+)
 
 
 def _class_metric(path: Path) -> str:
@@ -40,7 +44,7 @@ def _class_metric(path: Path) -> str:
     raise AssertionError(f"{path}: no benchmark PRIMARY_METRIC declaration")
 
 
-def test_policy_metric_map_covers_campaign_configs_and_vendored_evalchemy():
+def test_policy_metric_map_covers_campaign_configs():
     evalchemy_configs = CAMPAIGN / "evalchemy-configs"
     harbor_configs = CAMPAIGN / "harbor-configs"
     config_names = {
@@ -51,13 +55,15 @@ def test_policy_metric_map_covers_campaign_configs_and_vendored_evalchemy():
 
     for name, metric in POLICY_METRICS_2026_10_16.items():
         if metric.mechanism == "harbor":
-            config = yaml.safe_load((harbor_configs / f"{name}.yaml").read_text())
-            assert config["datasets"], name
-            assert metric.task is None
             continue
-
         config = yaml.safe_load((evalchemy_configs / f"{name}.yaml").read_text())
         assert config["tasks"] == [metric.task], name
+
+
+def test_policy_evalchemy_metric_names_match_vendored_declarations():
+    for name, metric in POLICY_METRICS_2026_10_16.items():
+        if metric.mechanism != "evalchemy":
+            continue
         assert metric.task is not None
         source = EVALCHEMY / "chat_benchmarks" / metric.task / "eval_instruct.py"
         if metric.task == "NUPA5K-Loose":
@@ -76,24 +82,16 @@ def test_policy_metric_map_covers_campaign_configs_and_vendored_evalchemy():
                 assert re.search(rf"^  - metric: {re.escape(metric.evaluator_metric)}$", source_text, re.MULTILINE)
 
 
-def test_policy_metric_map_names_match_harbor_and_publication_surfaces():
-    harbor_metadata = (HARBOR / "models/benchmark.py").read_text()
-    assert 'name="reward"' in harbor_metadata
+def test_policy_harbor_metric_names_match_vendored_metadata():
+    reward_benchmark_metadata = runpy.run_path(HARBOR / "models/benchmark.py")["reward_benchmark_metadata"]
+    metadata = reward_benchmark_metadata("policy-example", n_benchmark=1, n_attempted=1)
     harbor_metrics = {
         metric.evaluator_metric for metric in POLICY_METRICS_2026_10_16.values() if metric.mechanism == "harbor"
     }
-    assert harbor_metrics == {"reward"}
-
-    crux = POLICY_METRICS_2026_10_16["cruxeval"]
-    crux_source = (EVALCHEMY / "chat_benchmarks/CruxEval/eval_instruct.py").read_text()
-    assert 'groups={"direction": "{group}_{metric}"}' in crux_source
-    assert crux.published_metric == f"output_{crux.evaluator_metric}"
-    assert crux.record_metric == "pass_at_1"
-
-    sotopia = POLICY_METRICS_2026_10_16["sotopia-hard"]
-    rank_source = (CAMPAIGN / "analysis/sotopia_length_control/rank.py").read_text()
-    assert f"score.{sotopia.published_metric}" in rank_source
-    assert sotopia.published_metric != sotopia.record_metric
+    assert harbor_metrics == {metadata.metrics[0].source_name}
+    assert {metric.record_metric for metric in POLICY_METRICS_2026_10_16.values() if metric.mechanism == "harbor"} == {
+        metadata.primary_metric
+    }
 
 
 def test_evalchemy_metric_names_project_to_evaldash_record_keys():

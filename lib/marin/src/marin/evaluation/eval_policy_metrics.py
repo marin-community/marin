@@ -4,9 +4,10 @@
 """Metric names for the October 2026 publication-policy evaluation suite.
 
 ``evaluator_metric`` is the spelling declared by Evalchemy or Harbor. ``record_metric``
-is the canonical key consumed by Evaldash. ``published_metric`` identifies the score
-specified in issue #10197; it can name a subgroup or a separate cohort statistic.
-The map describes the current campaign, not historical record migrations.
+is the canonical key consumed by Evaldash. ``published_metric`` identifies the
+machine key behind the score reported for the current publication campaign; it can
+name a subgroup or a separate cohort statistic. Historical records retain their
+recorded benchmark metadata.
 CRUXEval's record metric combines directions while its published metric uses only
 output trials. SOTOPIA's published metric is computed across a model cohort after
 the Harbor reward record is written.
