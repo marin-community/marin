@@ -2865,7 +2865,7 @@ class MoEMLP(eqx.Module):
             else:
                 routed_input = self._mix_latent(routed_input, x_flat, self.latent_norm, self.latent_mix_in_gate)
         if self.latent_prev_conv is not None:
-            routed_input = _prev_token_conv(routed_input, self.latent_prev_conv, segment_ids, b, s)
+            routed_input = _prev_token_conv(routed_input, self.latent_prev_conv, segment_ids, x, self.cfg.sconv_impl)
         if self.latent_width_gate is not None:
             routed_input = self._matryoshka_latent(routed_input, x_flat, router_stats)
         bank_mlps = [self.expert_mlp]
@@ -2957,17 +2957,21 @@ class MoEMLP(eqx.Module):
 
 
 def _prev_token_conv(
-    z_flat: Float[Array, "T R"], w: Float[Array, " R"], segment_ids: Int[Array, "B S"] | None, b: int, s: int
+    z_flat: Float[Array, "T R"],
+    w: Float[Array, " R"],
+    segment_ids: Int[Array, "B S"] | None,
+    like: Float[Array, "B S D"],
+    implementation: str | None,
 ) -> Float[Array, "T R"]:
-    """``z_t + w * z_{t-1}`` along each of the ``b`` sequences, with ``z_{t-1} = 0`` at position 0 and at every
-    packed-document start."""
-    z = rearrange(z_flat, "(b s) r -> b s r", b=b, s=s)
-    prev = jnp.pad(z[:, :-1], ((0, 0), (1, 0), (0, 0)))
+    """``z_t + w * z_{t-1}`` along each sequence of ``like`` (the MoE input, whose ``[B, S]`` sharding it takes),
+    with ``z_{t-1} = 0`` at position 0 and at every packed-document start: a 2-tap ``short_conv``."""
+    b, s, _ = like.shape
+    spec = _padded_spec(like)
+    z = reshard(rearrange(z_flat, "(b s) r -> b s r", b=b, s=s), P(spec[0], spec[1], None))
     if segment_ids is not None:
-        seg = reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None))
-        same_doc = jnp.pad(seg[:, 1:] == seg[:, :-1], ((0, 0), (1, 0)))
-        prev = jnp.where(same_doc[..., None], prev, jnp.zeros_like(prev))
-    out = z + w.astype(z.dtype) * prev
+        segment_ids = reshard(jnp.broadcast_to(segment_ids, (b, s)), P(spec[0], spec[1]))
+    taps = jnp.stack([jnp.ones_like(w), w]).astype(z.dtype)
+    out = short_conv(taps, z, segment_ids, implementation=implementation, batch_axes=_BATCH_AXES)
     return reshard(rearrange(out, "b s r -> (b s) r"), _batch_spec())
 
 
