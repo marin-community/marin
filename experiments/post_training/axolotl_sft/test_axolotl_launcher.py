@@ -74,6 +74,7 @@ def _spec(base, **overrides) -> AxolotlSpec:
         "chat_template": template,
         "template_sha256": hashlib.sha256(template.encode()).hexdigest(),
         "seed": 0,
+        "output_router_logits": True,
     }
     kwargs.update(overrides)
     return AxolotlSpec(**kwargs)
@@ -103,11 +104,21 @@ def test_config_builds_for_each_base_with_the_integrity_plugin_and_inline_templa
         assert config["output_dir"].startswith("/scratch/"), "checkpoints must not be written to a shared mount"
 
 
-def test_qwen_config_enables_the_router_aux_loss_and_nemotron_records_the_deviation():
+def test_router_aux_loss_is_explicit_per_spec():
     qwen = axolotl_config(_spec(QWEN3_30B_A3B_BASE), scratch_output_dir="/scratch/axolotl/q")
     assert qwen["output_router_logits"] is True
-    nemotron = axolotl_config(_spec(NEMOTRON_3_NANO_30B_A3B_BASE), scratch_output_dir="/scratch/axolotl/n")
+    # A run that turns the aux loss off simply does not emit the key; the
+    # manifest records the deviation either way.
+    off = axolotl_config(
+        _spec(QWEN3_30B_A3B_BASE, output_router_logits=False), scratch_output_dir="/scratch/axolotl/q-off"
+    )
+    assert "output_router_logits" not in off
+    nemotron = axolotl_config(
+        _spec(NEMOTRON_3_NANO_30B_A3B_BASE, output_router_logits=False), scratch_output_dir="/scratch/axolotl/n"
+    )
     assert "output_router_logits" not in nemotron
+    with pytest.raises(TypeError):
+        _spec(QWEN3_30B_A3B_BASE, output_router_logits=None)
 
 
 def test_expert_parallel_wires_the_plugin_for_qwen_and_refuses_nemotron():
