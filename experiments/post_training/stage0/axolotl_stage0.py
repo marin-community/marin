@@ -27,7 +27,7 @@ apart (the review's doubled-path bug).
 
 from experiments.post_training.axolotl_sft.bases import AXOLOTL_BASES, AxolotlBaseModel
 from experiments.post_training.axolotl_sft.launcher import AxolotlOptimizer, AxolotlSpec
-from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template
+from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template, template_sha256
 from experiments.post_training.stage0.budget import (
     ADAM_BETA1,
     ADAM_BETA2,
@@ -38,6 +38,7 @@ from experiments.post_training.stage0.budget import (
     MAX_GRAD_NORM,
     PER_DEVICE_BATCH,
     SEQUENCE_LEN,
+    STAGE0_SEED,
     WARMUP_STEPS,
     WEIGHT_DECAY,
 )
@@ -86,7 +87,8 @@ def stage_specs(base_name: str, *, data_root: str, output_root: str) -> list[Axo
     pinned base; stages 2 and 3 initialize from the previous stage's output directory.
     """
     base: AxolotlBaseModel = AXOLOTL_BASES[base_name]
-    chat_template = shared_template(FAMILY_TOKEN_MAPS[base.architecture])
+    tokens = FAMILY_TOKEN_MAPS[base.architecture]
+    chat_template = shared_template(tokens)
     optimizer = stage_optimizer()
     router_aux_loss = ROUTER_AUX_LOSS[base.architecture]
     specs: list[AxolotlSpec] = []
@@ -104,6 +106,8 @@ def stage_specs(base_name: str, *, data_root: str, output_root: str) -> list[Axo
                 gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
                 epochs=EPOCHS_PER_STAGE,
                 chat_template=chat_template,
+                template_sha256=template_sha256(tokens),
+                seed=STAGE0_SEED,
                 sample_packing=False,
                 init_checkpoint=None if previous is None else stage_output(previous, output_root=output_root),
             )

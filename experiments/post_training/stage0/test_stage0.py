@@ -449,7 +449,7 @@ def test_axolotl_budget_matches_and_carries_the_shared_template_per_family():
             assert spec.per_device_batch_size * gpus_per_node * spec.gradient_accumulation_steps == GLOBAL_BATCH
             # The family's shared-template instance, identical on every stage of the base.
             assert spec.chat_template == shared_template(FAMILY_TOKEN_MAPS[architecture])
-            config = axolotl_config(spec, template_path="/tmp/stage0-template.jinja")
+            config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
             assert config["sequence_len"] == SEQUENCE_LEN
             assert config["num_epochs"] == EPOCHS_PER_STAGE
             assert config["per_device_train_batch_size"] == PER_DEVICE_BATCH
@@ -470,10 +470,11 @@ def test_axolotl_stage_1_pins_the_base_and_later_stages_init_from_the_chain():
     base_name = "qwen3-30b-a3b-base"
     output_root = "/out"
     specs = stage_specs(base_name, data_root="/data", output_root=output_root)
-    stage1_config = axolotl_config(specs[0], template_path="/tmp/stage0-template.jinja")
-    assert stage1_config["base_model"] == ("Qwen/Qwen3-30B-A3B-Base@1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9")
+    stage1_config = axolotl_config(specs[0], scratch_output_dir=f"/scratch/axolotl/{specs[0].name}")
+    assert stage1_config["base_model"] == specs[0].base.hf_id
+    assert stage1_config["revision_of_model"] == specs[0].base.revision
     for index in (1, 2):
-        config = axolotl_config(specs[index], template_path="/tmp/stage0-template.jinja")
+        config = axolotl_config(specs[index], scratch_output_dir=f"/scratch/axolotl/{specs[index].name}")
         assert config["base_model"] == specs[index].init_checkpoint
         assert config["base_model"] == f"{output_root}/{specs[index - 1].name}"
 
@@ -502,7 +503,7 @@ def test_axolotl_optimizer_is_explicit_and_identical_to_the_budget():
     assert optimizer.warmup_steps == WARMUP_STEPS
     assert optimizer.max_grad_norm == MAX_GRAD_NORM
     spec = stage_specs("nemotron-3-nano-30b-a3b-base", data_root="/data", output_root="/out")[0]
-    config = axolotl_config(spec, template_path="/tmp/stage0-template.jinja")
+    config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
     assert config["learning_rate"] == optimizer.learning_rate
     assert config["adam_beta1"] == ADAM_BETA1
     assert config["adam_beta2"] == ADAM_BETA2
@@ -525,8 +526,10 @@ def test_axolotl_router_policy_is_explicit_per_architecture():
         expected = ROUTER_AUX_LOSS[base.architecture]
         for spec in specs:
             assert spec.output_router_logits is expected
-            config = axolotl_config(spec, template_path="/tmp/stage0-template.jinja")
-            assert config["output_router_logits"] is expected
+            config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
+            # The key emits only when the aux loss trains; its absence IS the
+            # False case (the launcher never dispatches on architecture itself).
+            assert ("output_router_logits" in config) is expected
     # The deviation is deliberate: Qwen arms carry the aux loss, Nemotron-H does not.
     assert ROUTER_AUX_LOSS["qwen3_moe"] is True
     assert ROUTER_AUX_LOSS["qwen3_5_moe"] is True
