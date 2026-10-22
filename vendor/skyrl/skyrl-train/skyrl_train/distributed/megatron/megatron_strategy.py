@@ -15,8 +15,6 @@ from torch import optim
 from torch import distributed as dist
 
 from skyrl_train.checkpoint_schedule import (
-    FULL_OPTIMIZER_STATE,
-    MASTER_ONLY_OPTIMIZER_STATE,
     OPTIMIZER_STATE_MARKER,
     OptimizerStateMode,
     master_only_optimizer_state,
@@ -38,7 +36,7 @@ from skyrl_train.distributed.megatron.megatron_utils import (
 )
 from skyrl_train.distributed.megatron.direct_checkpoint import (
     DirectS3TorchDistLoadShardedStrategy,
-    DirectS3TorchDistSaveShardedStrategy,
+    MasterWeightsSaveShardedStrategy,
 )
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
 from skyrl_train.distributed.megatron.checkpoint_restore import (
@@ -50,9 +48,6 @@ from marinskyrl.remote_io import abort_multipart_uploads
 from megatron.core.dist_checkpointing.strategies import base as ckpt_base
 from megatron.core.dist_checkpointing.strategies.async_utils import AsyncCallsQueue
 from megatron.core import dist_checkpointing
-from megatron.core.dist_checkpointing.serialization import (
-    get_default_save_sharded_strategy,
-)
 from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelLoadStrategyWrapper,
     FullyParallelSaveStrategyWrapper,
@@ -325,11 +320,18 @@ class MegatronStrategy(DistributedStrategy):
         client_state: dict = {},
         tag=None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
-        optimizer_state: OptimizerStateMode = FULL_OPTIMIZER_STATE,
+        optimizer_state: OptimizerStateMode = OptimizerStateMode.FULL,
     ):
-        if optimizer_state not in (FULL_OPTIMIZER_STATE, MASTER_ONLY_OPTIMIZER_STATE):
+        if optimizer_state not in (OptimizerStateMode.FULL, OptimizerStateMode.MASTERS_ONLY):
             raise ValueError(
-                f"optimizer_state must be {FULL_OPTIMIZER_STATE.value} or {MASTER_ONLY_OPTIMIZER_STATE.value}"
+                f"optimizer_state must be {OptimizerStateMode.FULL.value} or {OptimizerStateMode.MASTERS_ONLY.value}"
+            )
+        if optimizer_state == OptimizerStateMode.MASTERS_ONLY and self.megatron_config.optimizer_checkpoint_sharding_type != "fully_reshardable":
+            sharding_type = self.megatron_config.optimizer_checkpoint_sharding_type
+            raise ValueError(
+                "master-only optimizer checkpoints require "
+                "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type == 'fully_reshardable'; "
+                f"got {sharding_type!r}, whose optimizer records cannot be filtered down to masters only"
             )
         # Extract base model.
         model: List[nn.Module] = model.actor_module
@@ -361,7 +363,7 @@ class MegatronStrategy(DistributedStrategy):
                 model_sharded_state_dict,
                 metadata=_optimizer_checkpoint_metadata(self.megatron_config.optimizer_checkpoint_sharding_type),
             )
-            if optimizer_state == MASTER_ONLY_OPTIMIZER_STATE:
+            if optimizer_state == OptimizerStateMode.MASTERS_ONLY:
                 # Keep the FP32 master records that weight analysis reads; drop the
                 # moment states a resume would need.
                 optimizer_sharded_state = master_only_optimizer_state(optimizer_sharded_state)
@@ -390,9 +392,7 @@ class MegatronStrategy(DistributedStrategy):
                         ckpt_dir,
                     )
             dist.barrier()
-            save_strategy = DirectS3TorchDistSaveShardedStrategy(ckpt_dir)
-        else:
-            save_strategy = get_default_save_sharded_strategy("torch_dist")
+        save_strategy = MasterWeightsSaveShardedStrategy(ckpt_dir)
         save_strategy = FullyParallelSaveStrategyWrapper(
             save_strategy, mpu.get_data_parallel_group(with_context_parallel=True)
         )

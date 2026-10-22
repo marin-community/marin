@@ -25,13 +25,13 @@ import math
 import os
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Type
+from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.config.callbacks import has_explicit_callbacks, interval_hf_export_enabled
-from skyrl_train.checkpoint_schedule import checkpoint_schedule
+from skyrl_train.checkpoint_schedule import CheckpointSchedule
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
@@ -94,27 +94,21 @@ def _configured_distillation_token_budget(cfg: DictConfig) -> int | None:
 @register_callback(CHECKPOINT_CALLBACK_TYPE)
 class CheckpointCallback(TrainerCallback):
     """
-    Callback for saving training checkpoints at regular or explicitly listed steps.
+    Callback for saving training checkpoints on a checkpoint schedule.
 
     This replaces the inline `ckpt_interval` logic in the training loop.
     Checkpoints include model weights, optimizer state, and training state
     for resumable training.
 
     Args:
-        save_steps: Save a checkpoint every N steps. Set to -1 or 0 to disable.
+        schedule: The checkpoint schedule deciding the save steps; the trainer reads
+            ``optimizer_mode`` from the same schedule at save time.
         save_on_train_end: Whether to save a final checkpoint when training ends.
-        save_step_list: Explicit checkpoint steps; overrides ``save_steps`` when non-empty.
     """
 
-    def __init__(
-        self,
-        save_steps: int = 10,
-        save_on_train_end: bool = True,
-        save_step_list: Sequence[int] | None = None,
-    ):
-        self.save_steps = save_steps
+    def __init__(self, schedule: CheckpointSchedule, save_on_train_end: bool = True):
+        self.schedule = schedule
         self.save_on_train_end = save_on_train_end
-        self.save_step_list = frozenset(save_step_list or ())
 
     def on_step_end(
         self,
@@ -122,9 +116,7 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if state.global_step in self.save_step_list or (
-            not self.save_step_list and self.save_steps > 0 and state.global_step % self.save_steps == 0
-        ):
+        if self.schedule.should_save_weights(state.global_step):
             control.should_save = True
         return control
 
@@ -134,7 +126,7 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and (self.save_steps > 0 or self.save_step_list):
+        if self.save_on_train_end and self.schedule.saves_checkpoints:
             control.should_save = True
         return control
 
@@ -940,6 +932,16 @@ class InferenceStatsCallback(TrainerCallback):
                 logger.warning(f"InferenceStatsCallback: {type(sink).__name__} failed", exc_info=True)
 
 
+def _reject_checkpoint_steps_with_explicit_callbacks(cfg: DictConfig) -> None:
+    """Explicit callbacks own the checkpoint steps; the schedule fields would be dead config."""
+    for field in ("checkpoint_steps", "optimizer_checkpoint_steps"):
+        if cfg.trainer.get(field):
+            raise ValueError(
+                f"trainer.{field} must not be set together with explicit trainer.callbacks; the explicit "
+                "callbacks decide the checkpoint steps, so the schedule field would be silently ignored"
+            )
+
+
 def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     """
     Create the default set of callbacks based on trainer configuration.
@@ -974,6 +976,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     """
     # Check for new-style explicit callback configuration
     if has_explicit_callbacks(cfg):
+        _reject_checkpoint_steps_with_explicit_callbacks(cfg)
         logger.info("Using explicit callback configuration from YAML")
         callbacks = create_callbacks_from_config(cfg)
         token_budget = _configured_distillation_token_budget(cfg)
@@ -1002,11 +1005,9 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     callbacks = []
 
     # Checkpoint callback
-    schedule = checkpoint_schedule(cfg)
-    if schedule.weight_steps:
-        callbacks.append(CheckpointCallback(save_step_list=list(schedule.weight_steps)))
-    elif schedule.interval > 0:
-        callbacks.append(CheckpointCallback(save_steps=schedule.interval))
+    schedule = CheckpointSchedule.from_config(cfg)
+    if schedule.saves_checkpoints:
+        callbacks.append(CheckpointCallback(schedule))
 
     # Evaluation callback
     eval_interval = getattr(cfg.trainer, "eval_interval", 5)
@@ -1158,9 +1159,29 @@ def create_callback_from_config(callback_config: Dict[str, Any]) -> TrainerCallb
     params = {k: v for k, v in callback_config.items() if k != "type"}
 
     try:
+        if callback_cls is CheckpointCallback:
+            return _checkpoint_callback_from_params(params)
         return callback_cls(**params)
     except TypeError as e:
         raise ValueError(f"Invalid parameters for callback '{callback_type}': {e}") from e
+
+
+def _checkpoint_callback_from_params(params: Dict[str, Any]) -> CheckpointCallback:
+    """Translate YAML checkpoint-callback params into a full-optimizer schedule.
+
+    Explicit YAML callbacks always save the full optimizer state, which keeps every
+    checkpoint they write resumable. A non-positive ``save_steps`` disables saving.
+    """
+    save_steps = max(int(params.pop("save_steps", 10)), 0)
+    save_step_list = tuple(int(step) for step in (params.pop("save_step_list", None) or ()))
+    save_on_train_end = bool(params.pop("save_on_train_end", True))
+    if params:
+        raise ValueError(f"Unknown parameters for checkpoint callback: {sorted(params)}")
+    if save_step_list:
+        schedule = CheckpointSchedule(interval=0, weight_steps=save_step_list, optimizer_steps=save_step_list)
+    else:
+        schedule = CheckpointSchedule(interval=save_steps, weight_steps=(), optimizer_steps=())
+    return CheckpointCallback(schedule, save_on_train_end=save_on_train_end)
 
 
 def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:

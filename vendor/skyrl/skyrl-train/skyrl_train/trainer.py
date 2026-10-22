@@ -114,9 +114,8 @@ from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.speculative_decoding import SpeculativeDecodingConfig, runai_model_uri
 from skyrl_train.checkpoint_listing import extract_step_from_path
 from skyrl_train.checkpoint_schedule import (
-    MASTER_ONLY_OPTIMIZER_STATE,
-    OPTIMIZER_STATE_MARKER,
-    checkpoint_schedule,
+    CheckpointSchedule,
+    assert_optimizer_resumable,
 )
 from skyrl_train.utils.trainer_utils import (
     async_step_metrics,
@@ -3182,7 +3181,7 @@ class RayPPOTrainer:
         io.makedirs(global_step_folder, exist_ok=True)
 
         # Save policy checkpoint
-        schedule = checkpoint_schedule(self.cfg)
+        schedule = CheckpointSchedule.from_config(self.cfg)
         ray.get(
             self.policy_model.async_run_ray_method(
                 "pass_through",
@@ -3294,8 +3293,9 @@ class RayPPOTrainer:
         if self.resume_mode == ResumeMode.NONE:
             logger.info("Checkpoint resumption disabled, starting training from scratch")
             return 0, None
+        schedule = CheckpointSchedule.from_config(self.cfg)
         # first, let's get resume_path
-        elif self.resume_mode == ResumeMode.LATEST:
+        if self.resume_mode == ResumeMode.LATEST:
             latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
             if not io.exists(latest_checkpoint_file):
                 logger.warning(
@@ -3306,22 +3306,13 @@ class RayPPOTrainer:
             with io.open_file(latest_checkpoint_file, "r") as f:
                 ckpt_iteration = int(f.read().strip())
             checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{ckpt_iteration}")
-            marker_path = os.path.join(checkpoint_path, POLICY_CHECKPOINT_SUBDIRECTORY, OPTIMIZER_STATE_MARKER)
-            if io.exists(marker_path):
-                with io.open_file(marker_path, "r") as f:
-                    marker = json.load(f)
-                if marker.get("optimizer_state") == MASTER_ONLY_OPTIMIZER_STATE:
-                    raise ValueError(
-                        f"the latest checkpoint at step {ckpt_iteration} carries no optimizer state; set "
-                        "trainer.resume_path to the latest checkpoint listed in trainer.optimizer_checkpoint_steps"
-                    )
             # Run validation: Make sure ckpt folder is consistent with latest_ckpt_global_step.txt
             validate_consistency_for_latest_checkpoint(
                 self.cfg.trainer.ckpt_path,
                 ckpt_iteration,
                 checkpoint_path,
                 latest_checkpoint_file,
-                self.cfg.trainer.ckpt_interval,
+                schedule.max_gap,
             )
         else:
             # Get and validate resume path
@@ -3339,6 +3330,10 @@ class RayPPOTrainer:
         # Validate that the path exists
         if not io.exists(str(checkpoint_path)):
             raise FileNotFoundError(f"Checkpoint path not found: {checkpoint_path}")
+
+        # A masters-only checkpoint dropped the moment states a resume needs, on either
+        # resume path.
+        assert_optimizer_resumable(checkpoint_path)
 
         logger.info(f"Loading checkpoint from: {checkpoint_path}")
 
