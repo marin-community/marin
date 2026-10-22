@@ -453,7 +453,7 @@ class CallbackHandler:
     Example:
         ```python
         handler = CallbackHandler([
-            CheckpointCallback(save_steps=10),
+            CheckpointCallback(CheckpointSchedule(interval=10, weight_steps=(), optimizer_steps=())),
             EvaluationCallback(eval_steps=20),
             MyCustomCallback(),
         ])

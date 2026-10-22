@@ -10,11 +10,15 @@ marker so a later resume fails loudly instead of silently restarting the optimiz
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+import json
+import os
 from typing import Any
 
-from omegaconf import DictConfig, OmegaConf
+from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY
+from omegaconf import OmegaConf
 
 from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_master
+from skyrl_train.io import io
 
 OPTIMIZER_STATE_MARKER = "optimizer_state.json"
 
@@ -24,10 +28,6 @@ class OptimizerStateMode(StrEnum):
 
     FULL = "full"
     MASTERS_ONLY = "masters"
-
-
-FULL_OPTIMIZER_STATE = OptimizerStateMode.FULL
-MASTER_ONLY_OPTIMIZER_STATE = OptimizerStateMode.MASTERS_ONLY
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ class CheckpointSchedule:
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> "CheckpointSchedule":
-        trainer = config["trainer"] if "trainer" in config else config
+        trainer = config["trainer"]
         weight_steps = _step_list(trainer, "checkpoint_steps")
         optimizer_steps = _step_list(trainer, "optimizer_checkpoint_steps")
         if weight_steps and not optimizer_steps:
@@ -53,11 +53,25 @@ class CheckpointSchedule:
                 "trainer.optimizer_checkpoint_steps is required when trainer.checkpoint_steps is set; "
                 "list the steps whose checkpoints must resume training"
             )
+        _require_savable_optimizer_steps(weight_steps, optimizer_steps, checkpoint_interval(trainer))
+        _require_fully_reshardable(trainer, optimizer_steps)
         return cls(
-            interval=int(trainer.get("ckpt_interval", 0) or 0),
+            interval=checkpoint_interval(trainer),
             weight_steps=weight_steps,
             optimizer_steps=optimizer_steps,
         )
+
+    @property
+    def saves_checkpoints(self) -> bool:
+        """Whether the schedule saves any checkpoint at all."""
+        return bool(self.weight_steps) or self.interval > 0
+
+    @property
+    def max_gap(self) -> int:
+        """The largest gap between consecutive checkpoint steps, for resume validation."""
+        if self.weight_steps:
+            return max((later - earlier for earlier, later in zip(self.weight_steps, self.weight_steps[1:])), default=1)
+        return self.interval
 
     def should_save_weights(self, step: int) -> bool:
         if self.weight_steps:
@@ -71,7 +85,53 @@ class CheckpointSchedule:
 
     def optimizer_mode(self, step: int) -> OptimizerStateMode:
         """The optimizer records a checkpoint at ``step`` carries."""
-        return FULL_OPTIMIZER_STATE if self.should_save_optimizer(step) else MASTER_ONLY_OPTIMIZER_STATE
+        return OptimizerStateMode.FULL if self.should_save_optimizer(step) else OptimizerStateMode.MASTERS_ONLY
+
+
+def checkpoint_interval(trainer: Mapping[str, Any]) -> int:
+    """The checkpoint interval, or 0 when the run saves only listed steps."""
+    return int(trainer.get("ckpt_interval", 0) or 0)
+
+
+def _require_savable_optimizer_steps(weight_steps: tuple[int, ...], optimizer_steps: tuple[int, ...], interval: int):
+    """Reject optimizer steps that would silently never save."""
+    if not optimizer_steps:
+        return
+    if weight_steps:
+        outside = [step for step in optimizer_steps if step not in weight_steps]
+        cadence = "trainer.checkpoint_steps"
+    elif interval > 0:
+        outside = [step for step in optimizer_steps if step % interval != 0]
+        cadence = f"trainer.ckpt_interval ({interval})"
+    else:
+        raise ValueError(
+            "trainer.optimizer_checkpoint_steps is set but no checkpoint ever saves; "
+            "set trainer.checkpoint_steps or trainer.ckpt_interval"
+        )
+    if outside:
+        raise ValueError(
+            f"trainer.optimizer_checkpoint_steps lists steps that never save a checkpoint: {outside}; "
+            f"every optimizer checkpoint step must also be saved under {cadence}"
+        )
+
+
+def _require_fully_reshardable(trainer: Mapping[str, Any], optimizer_steps: tuple[int, ...]):
+    """Master-only checkpoints need the DP-gathered optimizer format.
+
+    The ``dp_reshardable`` format stores each bucket's param, master, and moment shards
+    as records named by bucket position, so a masters-only filter cannot separate them.
+    """
+    if not optimizer_steps:
+        return
+    policy = trainer.get("policy")
+    megatron_config = policy.get("megatron_config") if policy is not None else None
+    sharding_type = megatron_config.get("optimizer_checkpoint_sharding_type") if megatron_config is not None else None
+    if sharding_type is not None and sharding_type != "fully_reshardable":
+        raise ValueError(
+            "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type must be 'fully_reshardable' "
+            f"when trainer.optimizer_checkpoint_steps is set; got {sharding_type!r}, whose optimizer "
+            "records cannot be filtered down to masters only"
+        )
 
 
 def _step_list(trainer: Mapping[str, Any], field: str) -> tuple[int, ...]:
@@ -83,35 +143,43 @@ def _step_list(trainer: Mapping[str, Any], field: str) -> tuple[int, ...]:
     return tuple(sorted(set(value)))
 
 
-def checkpoint_schedule(cfg: DictConfig) -> CheckpointSchedule:
-    """Resolve the run's checkpoint schedule from the trainer config."""
-    return CheckpointSchedule.from_config(cfg)
+def assert_optimizer_resumable(checkpoint_path: str) -> None:
+    """Refuse a masters-only checkpoint; resuming from one silently restarts the optimizer."""
+    marker_path = os.path.join(checkpoint_path, POLICY_CHECKPOINT_SUBDIRECTORY, OPTIMIZER_STATE_MARKER)
+    if not io.exists(marker_path):
+        return
+    with io.open_file(marker_path, "r") as stream:
+        marker = json.load(stream)
+    if marker.get("optimizer_state") == OptimizerStateMode.MASTERS_ONLY.value:
+        raise ValueError(
+            f"the checkpoint at {checkpoint_path} carries no optimizer state; resume from a checkpoint "
+            "whose step is listed in trainer.optimizer_checkpoint_steps"
+        )
 
 
 def master_only_optimizer_state(optimizer_state: Mapping[str, Any]) -> dict[str, Any]:
     """Drop moment and scalar records, keeping the param and FP32 master records.
 
-    Walks the sharded-state nesting and keeps every subtree whose leaf keys name a
-    param or FP32 master record — the records weight analysis reads. The dropped
-    moment states are what a resume needs, so master-only checkpoints are not
-    optimizer-resumable.
+    DCP names records by their ShardedTensor key, which differs from the dict path that
+    carries it, so the filter matches ``leaf.key``. The dropped moment states are what
+    a resume needs, so master-only checkpoints are not optimizer-resumable.
     """
 
-    def keep_leaf(path: str, value: Any) -> bool:
-        return not isinstance(value, Mapping) and model_key_for_master(path) is not None
+    def keep_leaf(value: Any) -> bool:
+        key = getattr(value, "key", None)
+        return isinstance(key, str) and model_key_for_master(key) is not None
 
-    def filter_subtree(path: str, value: Any) -> tuple[dict[str, Any], bool]:
+    def filter_subtree(value: Any) -> tuple[Any, bool]:
         if not isinstance(value, Mapping):
-            return ({**{path: value}}, keep_leaf(path, value))
+            return (value, keep_leaf(value))
         kept: dict[str, Any] = {}
         for key, child in value.items():
-            child_path = f"{path}.{key}" if path else str(key)
-            subtree, has_master = filter_subtree(child_path, child)
+            subtree, has_master = filter_subtree(child)
             if has_master:
                 kept[key] = subtree
         return (kept, bool(kept))
 
-    filtered, _ = filter_subtree("", optimizer_state)
+    filtered, _ = filter_subtree(optimizer_state)
     if not filtered:
         raise ValueError(
             "optimizer state carries no param or FP32 master records; cannot write a master-only checkpoint"
