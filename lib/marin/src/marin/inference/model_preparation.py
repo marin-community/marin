@@ -11,6 +11,7 @@ from levanter.model_cache import resolve_cached_model_path
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoConfig, PreTrainedTokenizerBase
 
+from marin.inference.config import RemoteInferenceConfig, VllmEngineConfig
 from marin.inference.vllm_server import _is_object_store_path
 
 _MODEL_CACHE_PREFIX = "quick-serve-models"
@@ -109,3 +110,10 @@ def resolve_model_path(model: str, cache_ttl_days: int, revision: str | None = N
     )
     # With caching disabled, vLLM receives the bare model plus its separate revision argument.
     return model if resolved == pinned_model else _vllm_model_path(resolved)
+
+
+def precache_inference_model(config: RemoteInferenceConfig) -> None:
+    """Mirror serving weights on a CPU coordinator before its readiness clock starts."""
+    resolve_model_path(config.model.weights, config.iris.cache_ttl_days, config.model.revision)
+    if isinstance(config.engine, VllmEngineConfig) and config.engine.speculative is not None:
+        resolve_model_path(config.engine.speculative.model.uri, config.iris.cache_ttl_days)

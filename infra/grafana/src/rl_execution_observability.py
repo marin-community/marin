@@ -262,6 +262,7 @@ def rl_execution_dataset(
     start_ms: int,
     end_ms: int,
     requested_bucket_ms: int,
+    view: str | None = None,
 ) -> DashboardDataset:
     """Build bounded sources for the selected job's executions of either training type."""
     validate_values("clusters", clusters, max_values=RL_EXECUTION_MAX_CLUSTERS, max_length=128)
@@ -1011,21 +1012,71 @@ FROM windows ORDER BY start, execution
         "position_dependence": _train_metric_points(_POSITION_METRICS),
         "corrections": _train_metric_points(_CORRECTION_METRICS),
     }
+    sources = {
+        "core": SourceQuery("core", core_sql, RL_EXECUTION_MAX_CORE_ROWS),
+        "metrics": SourceQuery("metrics", metrics_sql, RL_EXECUTION_MAX_METRIC_ROWS),
+        "staleness": SourceQuery("staleness", staleness_sql, RL_EXECUTION_MAX_STEP_ROWS),
+        "processes": SourceQuery("processes", processes_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
+        "memory": SourceQuery("memory", memory_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
+        "megatron": SourceQuery("megatron", megatron_sql, RL_EXECUTION_MAX_SPAN_ROWS),
+        "windows": SourceQuery("windows", windows_sql, RL_EXECUTION_MAX_SPAN_ROWS),
+        "overlap": SourceQuery("overlap", overlap_sql, RL_EXECUTION_MAX_STEP_ROWS),
+        "service": SourceQuery("service", service_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
+        "coverage": SourceQuery("coverage", coverage_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
+    }
+    dependencies = {
+        "status": ("core", "metrics", "processes"),
+        "residuals": ("core", "megatron"),
+        "span_coverage": ("coverage",),
+        "lifecycle": ("processes",),
+        "exporter": ("processes",),
+        "training_overlap": ("overlap",),
+        "megatron_policy_wall": ("megatron",),
+        "megatron_phases": ("megatron",),
+        "learner_memory": ("memory",),
+        "inference_service": ("service",),
+        "staleness_groups": ("staleness",),
+        "staleness_tokens": ("staleness",),
+        "weight_sync_stages": ("windows",),
+    }
+    metric_views = (
+        "reward",
+        "evaluation",
+        "length_stops",
+        "optimizer",
+        "drift",
+        "clip_pressure",
+        "drift_coverage",
+        "log_ratio_squared",
+        "correction_weights",
+        "core_cycle",
+        "loss_token_rates",
+        "core_fractions",
+        "role_gpu_tokens",
+        "role_gpus",
+        "core_gpu_hours",
+        "uniform_staleness",
+        "uniform_staleness_coverage",
+        "evaluation_lengths",
+        "evaluation_contributions",
+        "mismatch_staleness0",
+        "mismatch_by_staleness",
+        "learner_drift",
+        "position_dependence",
+        "corrections",
+    )
+    dependencies.update({name: ("metrics",) for name in metric_views})
+    source_group = tuple(sources)
+    if view is not None:
+        if view not in views:
+            raise ValueError(f"unknown RL execution view {view!r}")
+        source_group = dependencies.get(view, ("core",))
+        sources = {name: sources[name] for name in source_group}
+        views = {name: sql for name, sql in views.items() if dependencies.get(name, ("core",)) == source_group}
     return DashboardDataset(
         name="RL execution",
-        cache_key=(clusters, run, job, executions, start_ms, end_ms, bucket_ms),
-        sources=(
-            SourceQuery("core", core_sql, RL_EXECUTION_MAX_CORE_ROWS),
-            SourceQuery("metrics", metrics_sql, RL_EXECUTION_MAX_METRIC_ROWS),
-            SourceQuery("staleness", staleness_sql, RL_EXECUTION_MAX_STEP_ROWS),
-            SourceQuery("processes", processes_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
-            SourceQuery("memory", memory_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
-            SourceQuery("megatron", megatron_sql, RL_EXECUTION_MAX_SPAN_ROWS),
-            SourceQuery("windows", windows_sql, RL_EXECUTION_MAX_SPAN_ROWS),
-            SourceQuery("overlap", overlap_sql, RL_EXECUTION_MAX_STEP_ROWS),
-            SourceQuery("service", service_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
-            SourceQuery("coverage", coverage_sql, RL_EXECUTION_MAX_PROCESS_ROWS),
-        ),
+        cache_key=(clusters, run, job, executions, start_ms, end_ms, bucket_ms, source_group),
+        sources=tuple(sources.values()),
         setup_sql=(),
         views=views,
         max_result_rows=RL_EXECUTION_MAX_RESULT_ROWS,
