@@ -161,9 +161,9 @@ task token, reaches the controller, finelog and other tasks, and launches child
 jobs. Outside the cluster it reaches only:
 
 - Iris's base allowlist, `BASE_EGRESS_ALLOWLIST` in `iris.cluster.egress`:
-  package indexes (PyPI, PyTorch, NVIDIA, npm, conda, crates, Debian and
-  Ubuntu), GitHub, Hugging Face, Google Cloud APIs and Artifact Registry, and
-  Weights & Biases;
+  package indexes (PyPI, PyTorch, NVIDIA, Marin's wheel index, npm, conda,
+  crates, Debian and Ubuntu), GitHub, Hugging Face, Google Cloud APIs and
+  Artifact Registry, and Weights & Biases;
 - the cluster's additions in `defaults.egress_allowlist.allow`, such as its
   object store;
 - the job's own rules.

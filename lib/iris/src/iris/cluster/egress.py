@@ -30,9 +30,13 @@ BASE_EGRESS_ALLOWLIST: tuple[str, ...] = (
     "pypi.org",
     "files.pythonhosted.org",
     "download.pytorch.org",
+    "download-r2.pytorch.org",
     "pypi.nvidia.com",
     "wheels.vllm.ai",
     "flashinfer.ai",
+    # Marin's own wheel index and wheels, which the workspace lockfile names.
+    "marin-community.github.io",
+    "marin.community",
     # Source code, release assets and uv's managed Python builds.
     "github.com",
     "*.github.com",
