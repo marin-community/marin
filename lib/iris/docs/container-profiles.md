@@ -83,7 +83,7 @@ container is created.
 |---|---|
 | `RESTRICTED` | `capabilities.drop:[ALL]`, `allowPrivilegeEscalation:false`, `seccompProfile.type:RuntimeDefault` (not full PSS Restricted — `runAsNonRoot` is not forced) |
 | `DEFAULT` | `capabilities.add:[SYS_PTRACE (+SYS_RESOURCE on TPU)]` |
-| `SANDBOX` | DEFAULT `securityContext` (no privilege) plus `spec.runtimeClassName: gvisor` on the pod — the node RuntimeClass provides isolation, not the container context — and `automountServiceAccountToken: false`, no `serviceAccountName`, no `envFrom` task-env Secret, no cluster `task_env`, and no node cache `hostPath` mounts (cache paths stay in the container layer) |
+| `SANDBOX` | DEFAULT `securityContext` (no privilege) plus `spec.runtimeClassName: gvisor` on the pod — the node RuntimeClass provides isolation, not the container context — and `automountServiceAccountToken: false`, no `serviceAccountName`, no ambient task credential volume, no cluster `task_env`, and no node cache `hostPath` mounts (cache paths stay in the container layer) |
 | `DOCKER_ACCESS` | **rejected** — k8s nodes run containerd, not dockerd, so there is no host docker socket. Use the docker worker backend, or `PRIVILEGED` with an in-pod runtime. |
 | `PRIVILEGED` | `privileged:true`, `allowPrivilegeEscalation:true`, plus the DEFAULT caps |
 
@@ -117,13 +117,12 @@ has no service-account token, and its egress policy blocks cluster addresses.
 
 `SANDBOX` is for a job whose commands come from a model or another untrusted
 source, such as a shellbox machine. A task normally assembles its environment
-from three places: the cluster (`defaults.task_env`, `defaults.inject_env`, and
-on Kubernetes the `iris-task-env` Secret holding the object-store keys), Iris
+from three places: the cluster (`defaults.task_env`), Iris
 itself (`IRIS_*` identity, the controller address, cache paths), and the job
-(`EnvironmentSpec.env_vars`, which by default also copies `HF_TOKEN` and
-`WANDB_API_KEY` from the submitting process, and in a child job the parent's
+(`EnvironmentSpec.env_vars`, and in a child job the parent's
 variables). Under `SANDBOX` only the job's explicit `env_vars` and the Iris
-identity variables reach the task.
+identity variables reach the task. Its explicit `secrets` map is mounted as
+read-only files; parent secrets are not inherited.
 
 The profile still supports `ExecInContainer`, which reaches the task through
 the worker or `kubectl exec`. The job cannot carry a workspace bundle, and
