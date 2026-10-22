@@ -145,6 +145,7 @@ def test_seed_is_required_and_optimizers_reject_silent_defaults():
         "optimizer": STAGE0_OPTIMIZER,
         "chat_template": "t",
         "template_sha256": hashlib.sha256(b"t").hexdigest(),
+        "output_router_logits": True,
     }
     assert AxolotlSpec(**kwargs, seed=7).seed == 7
     with pytest.raises(TypeError):
