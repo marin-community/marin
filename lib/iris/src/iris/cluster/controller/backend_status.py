@@ -137,8 +137,6 @@ def get_scheduler_state(
         )
 
     return controller_pb2.Controller.GetSchedulerStateResponse(
-        budget_authority=dependencies.budgets.parent_id or dependencies.budgets.cluster_id,
-        budget_policy_ready=budget_context.ready,
         user_budgets=budget_protos,
         total_pending=sum(pending_counts.values()),
         total_running=sum(running_counts.values()),

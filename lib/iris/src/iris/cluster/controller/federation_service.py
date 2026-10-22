@@ -17,7 +17,6 @@ from sqlalchemy import Row
 from iris.cluster.controller import jobs, reads, tasks
 from iris.cluster.controller.codec import resource_spec_from_job_row
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.federation.manager import FederationManager
@@ -36,7 +35,6 @@ class FederationRuntime(Protocol):
 class FederationDependencies:
     db: ControllerDB
     runtime: FederationRuntime
-    budgets: FederationBudgets
 
 
 def list_peers(
@@ -64,7 +62,6 @@ def _job_summary(q: Tx, job) -> job_pb2.JobStatus:
         backend_id=job.backend_id or "",
         cluster=job.cluster,
         resources=resource_spec_from_job_row(job),
-        priority_band=job.priority_band,
     )
     jobs.apply_job_status_counts(status, summaries.get(job.job_id), job.job_id)
     if job.started_at_ms:
@@ -168,9 +165,6 @@ def federation_sync(
     """Return the peer-visible job changes since the requester's cursor."""
     requester_id = request.requester_id
     _authorize_sync(requester_id)
-    budget_report = dependencies.budgets.receive_policy(
-        requester_id, request.budget_policy if request.HasField("budget_policy") else None
-    )
     cursor = request.cursor
     cursor_seq = int(cursor) if cursor else 0
     deltas: list[controller_pb2.Controller.FederationJobDelta] = []
@@ -190,7 +184,6 @@ def federation_sync(
                 next_cursor=next_cursor,
                 cursor_stale=True,
                 endpoints=endpoints,
-                budget_report=budget_report,
             )
 
         changes = _fold_changelog(reads.changelog_rows_since(q, requester_id, cursor_seq))
@@ -209,5 +202,4 @@ def federation_sync(
         next_cursor=next_cursor,
         cursor_stale=False,
         endpoints=endpoints,
-        budget_report=budget_report,
     )

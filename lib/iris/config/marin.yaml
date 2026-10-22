@@ -137,6 +137,8 @@ auth:
 # advertises, is delivered there and runs under the same job id. The peer decides
 # who it admits; the credential is this controller's short-lived aud="federation"
 # token, signed by the key above and trusted by name at the peer.
+budget_peers: [cw-rno2a, cw-us-east-02a, cw-us-east-08a]
+
 peers:
   cw-rno2a:
     controller_address: https://iris-cw-rno2a.oa.dev

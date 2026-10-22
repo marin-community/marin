@@ -200,67 +200,46 @@ registered endpoint. The `scope=total` counter is exact; per-endpoint series are
 
 ## Shared budgets
 
-The federation parent owns budget limits, default limits, and priority ceilings.
-Set `budget_parent: marin` on production peers and `budget_parent: marin-dev`
-on development peers. The name must occur in the peer's
-`auth.federation_peers` trust map. Configure `user_budgets` on the parent;
-peer-local budget edits are rejected.
+Configure limits and priority ceilings on the budget parent. Set `budget_parent`
+to that cluster's name on each child, and list those children in the parent's
+`budget_peers`. Budget peers must also be routing peers. Other routing peers do
+not contribute usage or block budget reads. Production children set
+`budget_parent: marin`; the CI child sets `budget_parent: marin-dev`.
+Peer-local budget changes are rejected.
 
-`marin-dev` also routes to production peers. A production peer continues to use
-`marin` as its budget authority for that work; it acknowledges the other hub's
-sync without exporting budget usage to it. The CI peer uses `marin-dev` policy.
-The routing hub still enforces its submission priority ceiling before handoff.
+The parent polls the existing `ListUserBudgets` RPC for each budget peer's local
+usage. That RPC includes configured and active users and excludes mirrored tasks.
+`GetUserBudget` returns effective policy and combined parent/peer usage, including
+the parent's defaults for a user without an override. Keeping lists local prevents
+recursive reads and double charging.
 
-Every peer reports its local active spend through `FederationSync`, including
-direct submissions and child jobs. Spend is the current sum of requested
-resources, valued as `1000 * accelerators + RAM_GiB + 5 * CPU_cores` per task;
-it is not accumulated compute time. Fractional GiB and CPU cores are truncated.
-The parent adds those reports to its own
-local spend. Mirrored task rows are excluded, so a handed-off task counts once.
-Reports replace the previous report from that cluster, including an empty
-report when its work finishes. Jobs explicitly requested at BATCH do not count;
-INTERACTIVE jobs demoted to BATCH still count. ASSIGNED and BUILDING tasks
-count alongside RUNNING tasks, including pods waiting for Kueue admission.
+Direct submissions and child jobs call `GetUserBudget` on the parent before
+admission. Handoffs from that parent reuse its check. Parent access uses
+the named cluster manifest and the existing credential resolver. A child behind
+CoreWeave must have ambient service-account credentials authorized for the
+parent's IAP endpoint, such as a Workload Identity Federation ADC file supplied
+through `GOOGLE_APPLICATION_CREDENTIALS`. A parent-to-child federation token alone
+does not provide that reverse access.
+The parent uses its existing federation credentials to read child budgets.
 
-A direct or child submission waits for the parent to acknowledge a new policy
-check before admission. This check travels over the existing signed
-parent-to-peer sync connection; CoreWeave needs no reverse IAP credentials.
-With the default three-second sync interval, a check can take two sync cycles.
-A check without an answer after 15 seconds returns `UNAVAILABLE`.
-Handed-off roots were already checked by the parent and do not wait again.
+Both worker scheduling and Kubernetes dispatch use the same budget snapshot.
+Background reads refresh at most every three seconds, with a ten-second timeout
+per RPC. Reconciliation does not wait for these reads. Between reads, a child
+counts at least its current local spend when applying the parent's limit.
+The parent pauses admission and new scheduling when a peer-usage read is over
+30 seconds old. A child pauses new scheduling when its parent-policy read expires
+or the parent reports unavailable usage. Existing attempts continue to reconcile.
+The parent retains a missing peer's last usage until reads recover. After restart,
+the parent blocks admission and new scheduling until every budget peer responds.
+A direct submission fails with `UNAVAILABLE` when its parent cannot be reached.
 
-Both VM scheduling and Kubernetes dispatch use the parent's policy and combined
-spend. Between reports, a peer replaces its own reported contribution with its
-current local spend. This prevents that peer from forgetting tasks it has just
-dispatched. Budgets remain soft priority thresholds: scheduling uses usage
-snapshots, concurrent promotions can overshoot a threshold, and existing
-attempts keep the effective priority fixed when they were assigned. SYSTEM and PRODUCTION remain exempt from
-budget demotion. No task is killed merely for exceeding a budget.
-
-New scheduling pauses if the parent policy or any required usage report is
-older than 30 seconds. Existing attempts continue to reconcile. The parent
-retains a missing peer's last reported spend and requires a fresh report from
-every budget-managed peer after startup before new scheduling resumes. A peer
-with an unknown budget authority must first report which authority owns it;
-a known peer governed by another authority does not gate budget readiness. Budget
-reads expose the last known values; `get-scheduler-state` also reports
-`budget_authority` and `budget_policy_ready`.
-
-```bash
-uv run iris --cluster=marin user budget list
-uv run iris --cluster=marin rpc controller get-scheduler-state
-uv run iris --cluster=cw-rno2a rpc controller get-scheduler-state
-```
-
-Deploy the matching parent and peer versions together under the controller
-rollout procedure. A peer configured with `budget_parent` pauses new scheduling
-until its parent supports the budget exchange. A new parent waits for reports
-from all budget-managed peers. Verify `budget_policy_ready: true` on the parent
-and every peer before considering the rollout complete.
-
-Task status carries the effective priority fixed for its current attempt.
-Job status carries the resolved requested priority, including explicit child
-overrides. Federation mirrors both fields for inspection from the parent.
+Spend is current requested resource value, not accumulated compute time:
+`1000 * accelerators + RAM_GiB + 5 * CPU_cores` per active task. Fractional GiB and
+cores are truncated. ASSIGNED, BUILDING, and RUNNING tasks count, including pods
+waiting for Kueue admission. Requested BATCH work is excluded; demoted INTERACTIVE
+work still counts. Over-budget INTERACTIVE work runs at BATCH priority. Concurrent
+starts can exceed limits, and existing attempts retain their assigned band. SYSTEM and
+PRODUCTION work is exempt from budget demotion.
 
 ## Observing federation
 

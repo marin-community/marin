@@ -16,6 +16,7 @@ from iris.cluster.config import PeerConfig
 from iris.cluster.controller.checkpoint import CheckpointResult, download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.federation_budget import BudgetClient
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import task_log_key
@@ -71,6 +72,8 @@ class JourneyWorld:
         capacity_available: bool = True,
         cluster_id: str = "journey",
         budget_parent: str = "",
+        budget_parent_client: BudgetClient | None = None,
+        budget_peer_clients: dict[str, BudgetClient] | None = None,
         peer_configs: dict[str, PeerConfig] | None = None,
         federation_peers: list[FederationPeer] | None = None,
         dry_run: bool = False,
@@ -81,6 +84,8 @@ class JourneyWorld:
         self._incarnation = 0
         self._capacity_available = capacity_available
         self._cluster_id = cluster_id
+        self._budget_parent_client = budget_parent_client
+        self._budget_peer_clients = budget_peer_clients
         self._budget_parent = budget_parent
         self._peer_configs = peer_configs or {}
         self._federation_peers = federation_peers
@@ -126,6 +131,8 @@ class JourneyWorld:
             threads=ThreadContainer(name=f"journey-{self._incarnation}"),
             db=db,
             federation_peers=self._federation_peers,
+            budget_parent_client=self._budget_parent_client,
+            budget_peer_clients=self._budget_peer_clients,
         )
         controller.register_backend(backend)
         return controller, backend

@@ -83,7 +83,7 @@ class ControllerServiceImpl:
             auth=resolved_auth,
             budgets=resolved_budgets,
         )
-        self._federation = federation_service.FederationDependencies(db=db, runtime=controller, budgets=resolved_budgets)
+        self._federation = federation_service.FederationDependencies(db=db, runtime=controller)
         self._attempts = attempts.AttemptDependencies(
             db=db,
             runtime=controller,

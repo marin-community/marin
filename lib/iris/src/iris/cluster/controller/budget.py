@@ -10,13 +10,11 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from rigging.timing import Timestamp
-from sqlalchemy import select
 
 from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.schema import federation_budget_reports_table
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, PRIORITY_BAND_VALUES
 
@@ -42,7 +40,7 @@ def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: in
     return 1000 * accelerator_count + ram_gb + 5 * cpu_cores
 
 
-def compute_local_user_spend(tx: Tx) -> dict[str, int]:
+def compute_user_spend(tx: Tx) -> dict[str, int]:
     """Compute per-user budget spend from active tasks.
 
     Sums ``resource_value * task_count`` per user over the active, non-BATCH
@@ -62,15 +60,6 @@ def compute_local_user_spend(tx: Tx) -> dict[str, int]:
         value = resource_value(cpu, mem, accel)
         spend[user_id] += value * int(row.task_count)
     return dict(spend)
-
-
-def compute_user_spend(tx: Tx) -> dict[str, int]:
-    """Combine local spend with peer reports, excluding mirrored task rows."""
-    spend = compute_local_user_spend(tx)
-    for report in tx.execute(select(federation_budget_reports_table.c.user_spend)):
-        for user, value in report.user_spend.items():
-            spend[user] = spend.get(user, 0) + value
-    return spend
 
 
 def compute_effective_band(

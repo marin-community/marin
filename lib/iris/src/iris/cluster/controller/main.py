@@ -268,6 +268,7 @@ def run_controller_serve(
         dashboard_url=cluster_config.dashboard_url,
         federation_public_parent=cluster_config.federation_public_parent,
         budget_parent=cluster_config.budget_parent,
+        budget_peers=tuple(cluster_config.budget_peers),
         peers=cluster_config.peers,
         user_budget_defaults=UserBudgetDefaults(
             budget_limit=cluster_config.user_budget_defaults.budget_limit,

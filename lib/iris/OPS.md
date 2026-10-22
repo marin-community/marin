@@ -674,13 +674,11 @@ iris rpc controller list-users        # active users with task/job counts
 iris user budget list                 # per-user budget limits
 ```
 
-For federated clusters, budget policy belongs to the parent. Peer-local
-`user budget set` is rejected. `get-scheduler-state` exposes
-`budget_authority` and `budget_policy_ready`; false readiness pauses new
-scheduling while existing attempts keep reconciling. Check the parent's
-`list-peers` and restore budget sync before retrying a direct submission that
-returns `UNAVAILABLE`. Usage reports include direct peer submissions and
-children, so parent budget spend is wider than its locally running task list.
+For federated clusters, configure and edit policy on the budget parent.
+`user budget list` reports local spend; `user budget get` reads the parent's
+effective budget and combined usage. A direct submission returning `UNAVAILABLE`
+needs working parent credentials and fresh reads from the parent's `budget_peers`.
+Existing attempts continue reconciling while new scheduling waits.
 See [shared budgets](docs/federation.md#shared-budgets).
 
 Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge

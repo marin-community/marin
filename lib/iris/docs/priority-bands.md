@@ -89,9 +89,9 @@ exceeds their budget, INTERACTIVE submissions are silently downgraded to BATCH.
 SYSTEM and PRODUCTION are exempt.
 
 In a federation, the parent's policy applies to combined usage on the parent
-and all peers, including work submitted directly to a peer. Direct submissions
+and its budget peers, including work submitted directly to a peer. Direct submissions
 wait for a fresh parent policy check. Configure and edit budgets on the parent;
-see [shared budgets](federation.md#shared-budgets) for accounting, sync latency,
+see [shared budgets](federation.md#shared-budgets) for accounting, RPC latency,
 and behavior when a peer or the parent is unavailable.
 
 ### Max-band caps and unlisted users

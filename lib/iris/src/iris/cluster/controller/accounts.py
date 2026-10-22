@@ -15,7 +15,7 @@ from sqlalchemy import bindparam, func, select
 from iris.cluster.controller import writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.federation_budget import FederationBudgets
+from iris.cluster.controller.federation_budget import FederationBudgets, read_budget_context
 from iris.cluster.controller.schema import jobs_table, tasks_table, user_budgets_table
 from iris.cluster.types import TERMINAL_JOB_STATES, USER_JOB_STATES
 from iris.rpc import controller_pb2, job_pb2
@@ -133,12 +133,7 @@ def get_user_budget(
     require_identity()
     if not request.user_id:
         raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
-    with dependencies.db.read_snapshot() as snapshot:
-        budget_context = dependencies.budgets.context(snapshot)
-        budget = budget_context.users.get(request.user_id)
-    if budget is None:
-        raise ConnectError(Code.NOT_FOUND, f"No budget found for user {request.user_id}")
-    return budget.to_proto()
+    return dependencies.budgets.check_submission(request.user_id).user(request.user_id).to_proto()
 
 
 def list_user_budgets(
@@ -146,11 +141,11 @@ def list_user_budgets(
     request: controller_pb2.Controller.ListUserBudgetsRequest,
     context: RequestContext,
 ) -> controller_pb2.Controller.ListUserBudgetsResponse:
-    """Return every configured user budget with current spend."""
+    """Return local configured and active users with locally executed spend."""
     del request, context
     require_identity()
     with dependencies.db.read_snapshot() as snapshot:
-        budgets = dependencies.budgets.context(snapshot).users.values()
+        budgets = read_budget_context(snapshot, dependencies.budgets.defaults).users.values()
     return controller_pb2.Controller.ListUserBudgetsResponse(users=[budget.to_proto() for budget in budgets])
 
 

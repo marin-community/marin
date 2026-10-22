@@ -1,29 +1,38 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parent-owned budget policy exchanged over the authenticated federation sync."""
+"""Shared budget enforcement through the existing budget read RPCs."""
 
+import logging
 import threading
-import uuid
 from collections.abc import Callable, Mapping
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from types import MappingProxyType
+from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.auth import IapCredentialsUnavailable
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import delete, select
-from sqlalchemy.dialects.sqlite import insert
 
 from iris.cluster.controller import reads
-from iris.cluster.controller.budget import compute_effective_band, compute_local_user_spend, compute_user_spend
+from iris.cluster.controller.budget import compute_effective_band, compute_user_spend
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.schema import federation_budget_reports_table
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import controller_pb2
 
+logger = logging.getLogger(__name__)
 BUDGET_POLICY_MAX_AGE = Duration.from_seconds(30)
-BUDGET_REFRESH_TIMEOUT = Duration.from_seconds(15)
+BUDGET_REFRESH_INTERVAL = Duration.from_seconds(3)
+
+
+class BudgetClient(Protocol):
+    def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse: ...
+
+    def list_user_budgets(self) -> controller_pb2.Controller.ListUserBudgetsResponse: ...
+
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -74,7 +83,7 @@ class BudgetContext:
 
 
 def read_budget_context(tx: Tx, defaults: UserBudgetDefaults) -> BudgetContext:
-    """Read locally owned policy and combined usage from one database snapshot."""
+    """Read locally owned policy and local usage from one database snapshot."""
     budgets = {row.user_id: row for row in reads.list_user_budgets(tx)}
     spend = compute_user_spend(tx)
     return BudgetContext(
@@ -92,18 +101,21 @@ def read_budget_context(tx: Tx, defaults: UserBudgetDefaults) -> BudgetContext:
 
 
 @dataclass(frozen=True)
-class _ParentPolicy:
-    context: BudgetContext
+class _BudgetRead:
+    users: tuple[UserBudgetSnapshot, ...]
     received_at: Timestamp
-    reported_spend: Mapping[str, int]
+
+
+def _snapshot(budget: controller_pb2.Controller.GetUserBudgetResponse) -> UserBudgetSnapshot:
+    return UserBudgetSnapshot(budget.user_id, budget.budget_limit, budget.max_band, budget.budget_spent)
 
 
 class FederationBudgets:
-    """Serve local policy or require a fresh policy from a named parent.
+    """Combine peer-local usage at the parent and read parent decisions on children.
 
-    Usage reports cover every local task, including direct submissions and
-    children. Mirrored tasks never contribute. Lost budget peers retain their last
-    spend and stop new scheduling once their report expires.
+    ListUserBudgets always reports local usage, so parent reads cannot recurse.
+    Remote reads happen outside database transactions. Expired reads pause new
+    scheduling while existing attempts continue reconciling.
     """
 
     def __init__(
@@ -111,160 +123,127 @@ class FederationBudgets:
         db: ControllerDB,
         defaults: UserBudgetDefaults,
         *,
-        cluster_id: str = "",
         parent_id: str = "",
-        peer_ids: tuple[str, ...] = (),
+        parent_client: BudgetClient | None = None,
+        peer_clients: Mapping[str, BudgetClient] | None = None,
         now: Callable[[], Timestamp] | None = None,
     ):
+        if bool(parent_id) != (parent_client is not None):
+            raise ValueError("A budget parent requires an authenticated parent client")
         self.db = db
         self.defaults = defaults
-        self.cluster_id = cluster_id
         self.parent_id = parent_id
-        self.peer_ids = peer_ids
+        self._parent = parent_client
+        self._peers = dict(peer_clients or {})
         self._now = now or Timestamp.now
-        self._condition = threading.Condition()
-        self._epoch = uuid.uuid4().hex
-        self._generation = 0
-        self._ack_generation = -1
-        self._policy: _ParentPolicy | None = None
-        self._observed_peers: set[str] = set()
-        with db.transaction() as tx:
-            tx.execute(
-                delete(federation_budget_reports_table).where(~federation_budget_reports_table.c.cluster.in_(peer_ids))
-            )
+        self._lock = threading.Lock()
+        self._reads: dict[str, _BudgetRead] = {}
+
+    def _fresh(self, read: _BudgetRead, max_age: Duration) -> bool:
+        return self._now().epoch_ms() - read.received_at.epoch_ms() < max_age.to_ms()
+
+    def _required_users(self, tx: Tx) -> set[str]:
+        return {row.job_id.user for row in reads.pending_tasks_with_jobs(tx)} | compute_user_spend(tx).keys()
 
     def context(self, tx: Tx) -> BudgetContext:
-        """Read a scheduling snapshot without waiting while a DB snapshot is held."""
-        if self.parent_id:
-            with self._condition:
-                policy = self._policy
-            if policy is None:
-                return BudgetContext({}, self.defaults, ready=False)
-            fresh = self._now().epoch_ms() - policy.received_at.epoch_ms() < BUDGET_POLICY_MAX_AGE.to_ms()
-            local_spend = compute_local_user_spend(tx)
+        """Read a scheduling snapshot without performing network I/O."""
+        with self._lock:
+            remote = dict(self._reads)
+        if self._parent is not None:
+            required = self._required_users(tx)
+            local_spend = compute_user_spend(tx)
             return BudgetContext(
                 {
-                    user_id: replace(
-                        policy.context.user(user_id),
-                        budget_spent=policy.context.user(user_id).budget_spent
-                        - policy.reported_spend.get(user_id, 0)
-                        + local_spend.get(user_id, 0),
+                    budget.user_id: replace(
+                        budget, budget_spent=max(budget.budget_spent, local_spend.get(budget.user_id, 0))
                     )
-                    for user_id in policy.context.users.keys() | local_spend.keys()
+                    for read in remote.values()
+                    for budget in read.users
                 },
-                policy.context.defaults,
-                ready=fresh and policy.context.ready,
+                self.defaults,
+                ready=all(user in remote and self._fresh(remote[user], BUDGET_POLICY_MAX_AGE) for user in required),
             )
-        context = read_budget_context(tx, self.defaults)
-        reports = tx.execute(select(federation_budget_reports_table)).all()
-        known_peers = {row.cluster for row in reports}
-        budget_peers = {row.cluster for row in reports if row.authority_id == self.cluster_id}
-        fresh_peers = {
-            row.cluster
-            for row in reports
-            if self._now().epoch_ms() - row.reported_at_ms.epoch_ms() < BUDGET_POLICY_MAX_AGE.to_ms()
-        }
-        with self._condition:
-            ready = set(self.peer_ids) <= known_peers and budget_peers <= fresh_peers & self._observed_peers
-        return replace(context, ready=ready)
+        local = read_budget_context(tx, self.defaults)
+        spend = local.spend
+        for read in remote.values():
+            for budget in read.users:
+                spend[budget.user_id] = spend.get(budget.user_id, 0) + budget.budget_spent
+        return BudgetContext(
+            {
+                user: replace(local.user(user), budget_spent=spend.get(user, 0))
+                for user in local.users.keys() | spend.keys()
+            },
+            self.defaults,
+            ready=all(peer in remote and self._fresh(remote[peer], BUDGET_POLICY_MAX_AGE) for peer in self._peers),
+        )
 
-    def check_submission(self) -> BudgetContext:
-        """Wait for a parent round trip before admitting a direct or child submission."""
-        if self.parent_id:
-            with self._condition:
-                self._generation += 1
-                requested = self._generation
-                refreshed = self._condition.wait_for(
-                    lambda: self._ack_generation >= requested,
-                    timeout=BUDGET_REFRESH_TIMEOUT.to_seconds(),
-                )
-                if not refreshed:
-                    raise ConnectError(
-                        Code.UNAVAILABLE, f"Budget parent {self.parent_id!r} did not answer the budget check"
-                    )
+    def _read_parent(self, user_id: str) -> None:
+        assert self._parent is not None
+        try:
+            budget = self._parent.get_user_budget(user_id)
+        except ConnectError as error:
+            if error.code == Code.UNAVAILABLE:
+                with self._lock:
+                    self._reads.pop(user_id, None)
+            raise
+        with self._lock:
+            self._reads[user_id] = _BudgetRead((_snapshot(budget),), self._now())
+
+    def _read_peer(self, peer_id: str) -> None:
+        budgets = self._peers[peer_id].list_user_budgets()
+        with self._lock:
+            self._reads[peer_id] = _BudgetRead(tuple(_snapshot(budget) for budget in budgets.users), self._now())
+
+    def refresh(self, stop_event: threading.Event | None = None) -> None:
+        """Refresh scheduling inputs with bounded RPCs before opening a DB snapshot."""
+        if self._parent is not None:
+            with self.db.read_snapshot() as tx:
+                keys = self._required_users(tx)
+            read_remote = self._read_parent
+        else:
+            keys = self._peers.keys()
+            read_remote = self._read_peer
+        with self._lock:
+            due = [
+                key
+                for key in keys
+                if key not in self._reads or not self._fresh(self._reads[key], BUDGET_REFRESH_INTERVAL)
+            ]
+        if not due:
+            return
+        with ThreadPoolExecutor(max_workers=min(len(due), 8), thread_name_prefix="budget-read") as executor:
+            futures = {executor.submit(read_remote, key): key for key in due}
+            while futures:
+                if stop_event is not None and stop_event.is_set():
+                    for future in futures:
+                        future.cancel()
+                    return
+                done, _ = wait(futures, timeout=1, return_when=FIRST_COMPLETED)
+                for future in done:
+                    key = futures.pop(future)
+                    try:
+                        future.result()
+                    except (ConnectError, ConnectionError, OSError, IapCredentialsUnavailable):
+                        # Never replace unreachable peers with zero spend.
+                        logger.warning("Budget read from %s failed", key, exc_info=True)
+
+    def check_submission(self, user_id: str) -> BudgetContext:
+        """Read the parent's current decision before admitting a direct or child job."""
+        if self._parent is not None:
+            try:
+                self._read_parent(user_id)
+            except (ConnectionError, OSError, IapCredentialsUnavailable) as error:
+                raise ConnectError(Code.UNAVAILABLE, f"Budget parent {self.parent_id!r} is unavailable") from error
         with self.db.read_snapshot() as tx:
             context = self.context(tx)
+        if self._parent is not None:
+            return BudgetContext({user_id: context.user(user_id)}, self.defaults)
         if not context.ready:
-            raise ConnectError(
-                Code.UNAVAILABLE, "Federation budget usage is unavailable or stale; retry after sync recovers"
-            )
+            raise ConnectError(Code.UNAVAILABLE, "Budget usage is unavailable or stale; retry after reads recover")
         return context
 
-    def policy_for_peer(self, peer_id: str) -> controller_pb2.Controller.FederationBudgetPolicy | None:
-        """Return authoritative policy with the peer's refresh acknowledgement."""
-        if self.parent_id:
-            return None
-        with self.db.read_snapshot() as tx:
-            context = self.context(tx)
-            report = tx.execute(
-                select(federation_budget_reports_table).where(federation_budget_reports_table.c.cluster == peer_id)
-            ).first()
-        return controller_pb2.Controller.FederationBudgetPolicy(
-            users=[budget.to_proto() for budget in context.users.values()],
-            default_limit=context.defaults.budget_limit,
-            default_max_band=context.defaults.max_band,
-            refresh_epoch=report.refresh_epoch if report is not None else "",
-            refresh_generation=report.refresh_generation if report is not None else 0,
-            ready=context.ready,
-            peer_spend=report.user_spend if report is not None else {},
-        )
-
-    def receive_policy(
-        self, requester_id: str, policy: controller_pb2.Controller.FederationBudgetPolicy | None
-    ) -> controller_pb2.Controller.FederationBudgetReport:
-        """Accept policy only from the configured parent and return local usage."""
-        if not self.parent_id:
-            return controller_pb2.Controller.FederationBudgetReport()
-        if requester_id != self.parent_id:
-            # A second routing hub may observe this peer, but only its declared
-            # budget parent owns policy and usage. Tell other hubs that the peer
-            # is managed elsewhere so their readiness does not wait forever.
-            return controller_pb2.Controller.FederationBudgetReport(authority_id=self.parent_id)
-        with self._condition:
-            if policy is not None and policy.refresh_epoch == self._epoch:
-                self._policy = _ParentPolicy(
-                    context=BudgetContext(
-                        {
-                            row.user_id: UserBudgetSnapshot(
-                                row.user_id, row.budget_limit, row.max_band, row.budget_spent
-                            )
-                            for row in policy.users
-                        },
-                        UserBudgetDefaults(budget_limit=policy.default_limit, max_band=policy.default_max_band),
-                        ready=policy.ready,
-                    ),
-                    received_at=self._now(),
-                    reported_spend=MappingProxyType(dict(policy.peer_spend)),
-                )
-                self._ack_generation = max(self._ack_generation, policy.refresh_generation)
-                self._condition.notify_all()
-            epoch, generation = self._epoch, self._generation
-        with self.db.read_snapshot() as tx:
-            spend = compute_local_user_spend(tx)
-        return controller_pb2.Controller.FederationBudgetReport(
-            authority_id=self.parent_id,
-            user_spend=spend,
-            refresh_epoch=epoch,
-            refresh_generation=generation,
-        )
-
-    def record_report(self, peer_id: str, report: controller_pb2.Controller.FederationBudgetReport) -> None:
-        """Replace one peer's usage, so retries and mirrors cannot double-charge it."""
-        if self.parent_id or peer_id not in self.peer_ids or not report.authority_id:
-            return
-        values = dict(
-            cluster=peer_id,
-            authority_id=report.authority_id,
-            user_spend=dict(report.user_spend) if report.authority_id == self.cluster_id else {},
-            reported_at_ms=self._now(),
-            refresh_epoch=report.refresh_epoch,
-            refresh_generation=report.refresh_generation,
-        )
-        with self.db.transaction() as tx:
-            tx.execute(
-                insert(federation_budget_reports_table)
-                .values(**values)
-                .on_conflict_do_update(index_elements=["cluster"], set_=values)
-            )
-        with self._condition:
-            self._observed_peers.add(peer_id)
+    def close(self) -> None:
+        for client in self._peers.values():
+            client.close()
+        if self._parent is not None:
+            self._parent.close()

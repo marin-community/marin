@@ -117,7 +117,6 @@ class JobStatusRow(Protocol):
     name: str
     backend_id: str | None
     cluster: str
-    priority_band: int
 
 
 def submitting_user_for_root(
@@ -573,10 +572,12 @@ def _resolve_launch_priority(
             inherited_band = reads.get_priority_bands(snapshot, [launch.job_id.parent])[launch.job_id.parent]
     band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
     request.priority_band = band
-    if launch.received_handoff:
+    if launch.received_handoff and (
+        not dependencies.budgets.parent_id or request.federation.requester_id == dependencies.budgets.parent_id
+    ):
         return band
-    budget_context = dependencies.budgets.check_submission()
-    if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider:
+    budget_context = dependencies.budgets.check_submission(launch.budget_user)
+    if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider and not launch.received_handoff:
         parent = _task_caller_parent(dependencies, launch.job_id)
         if parent is None or priority_band_rank(band) < priority_band_rank(int(parent.priority_band)):
             authorize(AuthzAction.MANAGE_BUDGETS)
@@ -1096,7 +1097,6 @@ def _job_to_proto(
         backend_id=job.backend_id or "",
         cluster=job.cluster,
         peer_status=current_peer_status,
-        priority_band=job.priority_band,
     )
     if resources is not None:
         proto_job.resources.CopyFrom(resources)

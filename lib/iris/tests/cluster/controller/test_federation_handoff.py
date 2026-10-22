@@ -417,9 +417,7 @@ def test_sync_mirrors_attempt_history_and_backend_identity(tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
         manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
-        request = _cluster_pinned_request("fed-job")
-        request.priority_band = job_pb2.PRIORITY_BAND_BATCH
-        response = parent_service.launch_job(request, None)
+        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         job_id = JobName.from_wire(response.job_id)
         promote_queued_federation(manager, parent_state)
 
@@ -440,7 +438,6 @@ def test_sync_mirrors_attempt_history_and_backend_identity(tmp_path, log_client)
         ).task
 
         assert task.cluster == "cw"
-        assert task.priority_band == job_pb2.PRIORITY_BAND_BATCH
         assert task.worker_id == "w1"
         assert len(task.attempts) == 1
         assert task.attempts[0].state == job_pb2.TASK_STATE_SUCCEEDED
@@ -1264,7 +1261,6 @@ def test_sync_mirrors_a_childs_resources_from_the_peer(tmp_path, log_client):
 
         request = make_direct_job_request("trainer", replicas=1)
         request.name = root.child("trainer").to_wire()
-        request.priority_band = job_pb2.PRIORITY_BAND_BATCH
         request.resources.CopyFrom(job_pb2.ResourceSpecProto(cpu_millicores=8000, memory_bytes=64 * 1024**3))
         child = JobName.from_wire(peer_service.launch_job(request, None).job_id)
         manager.sync_once()
@@ -1272,12 +1268,6 @@ def test_sync_mirrors_a_childs_resources_from_the_peer(tmp_path, log_client):
         mirrored = query_job(parent_state, child)
         assert mirrored.res_cpu_millicores == 8000
         assert mirrored.res_memory_bytes == 64 * 1024**3
-        assert (
-            parent_service.get_job_status(
-                controller_pb2.Controller.GetJobStatusRequest(job_id=child.to_wire()), None
-            ).job.priority_band
-            == job_pb2.PRIORITY_BAND_BATCH
-        )
 
 
 def test_full_resync_reports_the_whole_subtree_under_a_received_root(tmp_path, log_client):

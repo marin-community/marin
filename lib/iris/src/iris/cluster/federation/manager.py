@@ -22,7 +22,7 @@ import logging
 import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Protocol, TypeVar
+from typing import TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -57,14 +57,6 @@ _T = TypeVar("_T")
 
 DEFAULT_HEARTBEAT_INTERVAL = Duration.from_seconds(30)
 DEFAULT_SYNC_INTERVAL = Duration.from_seconds(3)
-
-
-class BudgetExchange(Protocol):
-    def policy_for_peer(self, peer_id: str) -> controller_pb2.Controller.FederationBudgetPolicy | None: ...
-
-    def record_report(self, peer_id: str, report: controller_pb2.Controller.FederationBudgetReport) -> None: ...
-
-
 # Safety cap on federation queue promotions per peer per control tick, on top of
 # the reservation ledger. Consume up to a peer's advertised free capacity per
 # heartbeat, but never promote more than this many jobs to one peer in a single
@@ -126,14 +118,12 @@ class FederationManager:
         heartbeat_interval: Duration = DEFAULT_HEARTBEAT_INTERVAL,
         sync_interval: Duration = DEFAULT_SYNC_INTERVAL,
         max_handoffs_per_cycle: int = DEFAULT_MAX_HANDOFFS_PER_CYCLE,
-        budgets: BudgetExchange | None = None,
     ):
         self._peers = {peer.peer_id: peer for peer in peers}
         self._threads = threads
         self._store = store
         self._bundles = bundles
         self._cluster_id = cluster_id
-        self._budgets = budgets
         self._heartbeat_interval = heartbeat_interval
         self._sync_interval = sync_interval
         self._max_handoffs_per_cycle = max_handoffs_per_cycle
@@ -453,17 +443,11 @@ class FederationManager:
         assert self._store is not None
         cursor = self._store.read_cursor(peer.peer_id)
         request = controller_pb2.Controller.FederationSyncRequest(requester_id=self._cluster_id, cursor=cursor)
-        if self._budgets is not None:
-            policy = self._budgets.policy_for_peer(peer.peer_id)
-            if policy is not None:
-                request.budget_policy.CopyFrom(policy)
         try:
             response = peer.federation_sync(request)
         except _PEER_RPC_ERRORS as exc:
             logger.warning("Federation sync with peer %s failed: %s", peer.peer_id, exc)
             return
-        if self._budgets is not None:
-            self._budgets.record_report(peer.peer_id, response.budget_report)
         self._store.apply_sync_batch(
             peer.peer_id,
             list(response.deltas),
