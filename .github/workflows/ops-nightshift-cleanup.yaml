@@ -32,7 +32,8 @@ jobs:
           idempotency-key: nightshift-cleanup:${{ github.run_id }}:${{ github.run_attempt }}
           title: "Nightshift area review ${{ github.run_id }}"
           goal: >-
-            Follow .agents/skills/nightshift-review/SKILL.md in
+            Follow the Nightshift area reviews procedure in
+            .github/workflows/README.md in
             ${{ github.repository }}. Choose one project area, review its
             design and behavior holistically, and compare supported candidates
             before implementing the highest-value eligible improvement. Follow

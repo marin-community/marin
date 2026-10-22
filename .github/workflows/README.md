@@ -109,19 +109,85 @@ delta is only `Deslop` commits, which closes the review-then-deslop loop.
 ## Nightshift area reviews
 
 `ops-nightshift-cleanup.yaml` runs on weekdays at 10:00 UTC and by manual
-dispatch. It launches one `github-automation` session using
-[nightshift-review](../../.agents/skills/nightshift-review/SKILL.md). The
-session chooses one bounded subsystem, reads its callers and state flow using
-the holistic review questions, and compares up to three supported improvements
-before editing. Recent nightshift outcomes and overlapping PRs inform the
-choice of area and prevent duplicate work.
+dispatch. It launches one `github-automation` session. Follow this procedure
+for that assignment; CI-test and documentation-drift jobs have separate scopes.
 
-The skill ranks impact and evidence against effort and risk. Only candidates
-with a concrete user or operator consequence and a safe validation plan can
-lead to a PR. The session implements one eligible improvement or records why
-no change is warranted. Its typed Loom result includes the area walkthrough,
-candidate table, evidence, validation limits, and PR URL when present. CI-test
-and documentation-drift nightshift jobs retain their separate audit scopes.
+1. **Choose one area.** Read applicable `AGENTS.md` files and use
+   `consult-echo` for prior work. Inspect the last 20 PRs labeled `nightshift`,
+   including closed PRs and relevant feedback:
+
+   ```bash
+   gh pr list --state all --label nightshift --limit 20 \
+     --json number,title,state,createdAt,url,files
+   ```
+
+   Choose a bounded subsystem under `lib/marin/src/marin`,
+   `lib/iris/src/iris`, `lib/zephyr/src/zephyr`, or
+   `lib/levanter/src/levanter`. Explain why it deserves review: recurring
+   friction, recent changes, a critical operational boundary, or neglected
+   coverage. Prefer an area recent runs have not reviewed unless new evidence
+   justifies returning.
+
+2. **Understand the system before proposing edits.** Apply the whole-system
+   questions from [holistic review](../../.agents/skills/review-pr-holistic/SKILL.md):
+   fit with existing concepts, better abstractions, consequences across
+   boundaries, hidden tests, claims versus evidence, related PRs, test value,
+   and scope. This is an audit of existing behavior; the PR-specific head,
+   delta, posting, and telemetry procedures apply only to PR reviews.
+   Trace entry points, current callers, configuration defaults, state and
+   error transitions, neighboring abstractions, tests, and recent history.
+   Read `TESTING.md` and module testing guidance when assessing coverage.
+   Write a short walkthrough of how the area works.
+
+3. **Compare up to three supported improvements.** Do not fill a quota. Each
+   candidate needs exact source paths and lines, an affected user or operator,
+   a concrete consequence, a replacement using existing concepts, and a safe,
+   falsifiable regression or measurement. Establish why the affected case
+   matters now: a non-test caller exercising it, an active operational path,
+   a recent failure or request, repeated CI observations, or a measurement on
+   a representative workload. Accompany a synthetic reproducer with evidence
+   of priority. Public-API completeness or unused option combinations alone are
+   insufficient reasons to spend a nightshift run.
+
+   Check open PRs by listing their changed files and filtering by the
+   candidate's paths; `gh pr list --search` does not search changed paths.
+   Read relevant issues and PR discussions. Defer work already covered by an
+   open PR, rejected without new evidence, or requiring a maintainer decision.
+
+4. **Choose by demonstrated benefit.** Record a candidate table with evidence
+   of current use, consequence or measured cost, proposed change, validation,
+   effort, risk, and selection or rejection reasons. Distinguish observed
+   impact from possible severity; mark frequency and savings unknown when
+   unmeasured. Prefer removal of recurring cost or failure in exercised paths
+   over isolated edge-case completeness. Explain why the winner is worth more
+   than the alternatives relative to its implementation and review burden.
+   Avoid style-only changes, trivial extraction, and speculative performance
+   claims. Defer changes needing live migrations, distributed ownership
+   redesign, multiple PRs, or validation unavailable to this run.
+
+   If no candidate has enough demonstrated value for one coherent PR, report
+   what was reviewed and why no change is warranted. Do not switch areas
+   repeatedly to force a PR.
+
+5. **Validate the premise, then implement one improvement.** Reproduce the
+   defect or measure the cost before editing. Drop disproved candidates and
+   reconsider the remaining ones. Follow applicable implementation and
+   testing skills, and compare the changed behavior with the baseline using
+   the promised regression or measurement. Passing existing tests alone does
+   not establish the improvement. Use `update-docs` when guidance changes and
+   `commit` to publish a PR with `agent-generated` and `nightshift` labels.
+   Do not merge it or file issues for unselected candidates.
+
+Publish the report in the session's Loom channel with message kind `result`:
+
+```bash
+loom channels send --kind result "<review and outcome>"
+```
+
+Include the source revision, reviewed area, walkthrough, candidate table,
+selection or no-change rationale, validation results and limits, and PR URL
+when present. Keep the full review in the session; keep the PR description
+focused on its resulting behavior.
 
 ## SkyRL runtime checks
 
