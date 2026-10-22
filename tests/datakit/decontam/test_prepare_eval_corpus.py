@@ -309,14 +309,67 @@ def test_lmh_artifacts_are_stored_below_the_versioned_corpus_root(tmp_path, monk
     monkeypatch.setitem(sys.modules, "lm_eval", lm_eval)
     monkeypatch.setitem(sys.modules, "lm_eval.tasks", lm_eval_tasks)
     monkeypatch.setattr(prepare_eval_corpus, "marin_prefix", lambda: str(tmp_path))
-    monkeypatch.setattr(prepare_eval_corpus, "trust_remote_code_for_hf", lambda: None)
+    monkeypatch.setattr(prepare_eval_corpus, "patch_hf_dataset_loading", lambda: None)
     monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: ["example-task"])
+    monkeypatch.setattr(prepare_eval_corpus, "REQUIRED_LMH_TASKS", ("example-task",))
 
     manifest = prepare_eval_corpus._prepare_lmh()
 
     artifact_path = tmp_path / prepare_eval_corpus.EVALS_RELATIVE / "lmh/example-task/eval.parquet"
     assert artifact_path.exists()
     assert manifest["artifacts"] == [{"task": "example-task", "artifact": "example-task/eval.parquet", "records": 1}]
+    assert manifest["required_tasks"] == {"example-task": ["example-task"]}
+
+
+def _fake_task(docs: list[dict]) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        test_docs=lambda: docs,
+        validation_docs=lambda: [],
+        training_docs=lambda: [],
+        doc_to_text=lambda doc: doc["question"],
+        doc_to_target=lambda doc: doc["answer"],
+    )
+
+
+def _load_required_group(names: list[str]) -> dict:
+    [name] = names
+    if name != "required-group":
+        return {name: _fake_task([{"question": "What is two plus two?", "answer": "4"}])}
+    return {
+        "required-group": {
+            "required-group_a": _fake_task([{"question": "What is one plus one?", "answer": "2"}]),
+            "required-group_b": _fake_task([]),
+        }
+    }
+
+
+def _reject_required_group(names: list[str]) -> dict:
+    if names == ["required-group"]:
+        raise ConnectionError("Server disconnected without sending a response.")
+    return _load_required_group(names)
+
+
+@pytest.mark.parametrize(
+    "get_task_dict",
+    [_reject_required_group, _load_required_group],
+    ids=["task-load-fails", "one-leaf-has-no-docs"],
+)
+def test_lmh_required_task_failure_does_not_seal_manifest(tmp_path, monkeypatch, get_task_dict):
+    lm_eval = types.ModuleType("lm_eval")
+    lm_eval_tasks = types.ModuleType("lm_eval.tasks")
+    lm_eval_tasks.get_task_dict = get_task_dict
+    lm_eval.tasks = lm_eval_tasks
+    monkeypatch.setitem(sys.modules, "lm_eval", lm_eval)
+    monkeypatch.setitem(sys.modules, "lm_eval.tasks", lm_eval_tasks)
+    monkeypatch.setattr(prepare_eval_corpus, "marin_prefix", lambda: str(tmp_path))
+    monkeypatch.setattr(prepare_eval_corpus, "patch_hf_dataset_loading", lambda: None)
+    monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: ["optional-task", "required-group"])
+    monkeypatch.setattr(prepare_eval_corpus, "REQUIRED_LMH_TASKS", ("required-group",))
+
+    with pytest.raises(ValueError, match="required-group"):
+        prepare_eval_corpus._prepare_lmh()
+
+    assert not (tmp_path / prepare_eval_corpus.EVALS_RELATIVE / prepare_eval_corpus.LMH_MANIFEST_RELATIVE).exists()
 
 
 def test_lmh_import_failure_does_not_seal_manifest(tmp_path, monkeypatch):
@@ -328,7 +381,7 @@ def test_lmh_import_failure_does_not_seal_manifest(tmp_path, monkeypatch):
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(prepare_eval_corpus, "_output_root", lambda: str(tmp_path))
-    monkeypatch.setattr(prepare_eval_corpus, "trust_remote_code_for_hf", lambda: None)
+    monkeypatch.setattr(prepare_eval_corpus, "patch_hf_dataset_loading", lambda: None)
     monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: ["example-task"])
     monkeypatch.setattr(builtins, "__import__", reject_lm_eval)
 

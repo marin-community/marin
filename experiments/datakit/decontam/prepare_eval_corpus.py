@@ -21,7 +21,9 @@ this manifest.
 
 Test split is preferred; tasks without a test split fall back to
 validation, then training. Tasks that fail to load (e.g. removed from
-lm-eval since our pinned commit, gated HF datasets) are logged and skipped.
+lm-eval since our pinned commit, gated HF datasets) are logged and skipped,
+except :data:`REQUIRED_LMH_TASKS`: if one of them fails, preparation stops
+before it seals the lm-eval manifest.
 
 Submit on a CPU Iris cluster. The ``lm_eval`` extra supplies the optional
 lm-eval-harness package:
@@ -37,7 +39,8 @@ script monkey-patches ``datasets.load_dataset`` to force
 ``trust_remote_code=True`` and sets ``HF_ALLOW_CODE_EVAL=1`` before
 loading any task, so tasks shipping custom HF loading scripts (logiqa,
 piqa, ethics_*, crows_pairs_*, ...) and humaneval load without per-task
-plumbing.
+plumbing. It also maps legacy dataset IDs such as ``gsm8k`` to their
+namespaced repositories.
 """
 
 import dataclasses
@@ -61,7 +64,7 @@ from rigging.log_setup import configure_logging
 from experiments.datakit.decontam.lmh_loader import (
     flatten_task_dict,
     materialize_first_nonempty_split,
-    trust_remote_code_for_hf,
+    patch_hf_dataset_loading,
 )
 from experiments.evals.task_configs import (
     ACTION_TASKS,
@@ -89,7 +92,7 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v3"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v4"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
 LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
@@ -665,6 +668,11 @@ DECON_EXCLUDED_EVAL_TASKS: frozenset[str] = frozenset(
 )
 
 
+# lm-eval tasks that must load. Preparation does not seal the lm-eval manifest,
+# and the Bloom is not built, unless every leaf task of each one is present.
+REQUIRED_LMH_TASKS: tuple[str, ...] = ("gsm8k", "humaneval", "mmlu")
+
+
 def _lmh_task_names() -> list[str]:
     bundles: tuple[Iterable, ...] = (
         CORE_TASKS,
@@ -724,7 +732,7 @@ def _prepare_lmh() -> dict[str, Any]:
         logger.info("lmh: version %s is already sealed at %s", EVAL_CORPUS_VERSION, manifest_path)
         return existing_manifest
 
-    trust_remote_code_for_hf()
+    patch_hf_dataset_loading()
     names = _lmh_task_names()
     logger.info("lmh: %d unique task names from task_configs.py", len(names))
 
@@ -733,12 +741,14 @@ def _prepare_lmh() -> dict[str, Any]:
     succeeded: list[str] = []
     skipped_existing: list[str] = []
     failed: list[tuple[str, str]] = []
+    task_leaves: dict[str, list[str]] = {}
     for name in names:
         direct_out_path = f"{_lmh_output_root()}/{name}/eval.parquet"
         direct_version_path = f"{_lmh_output_root()}/{name}/{_LMH_VERSION_SIDECAR}"
         if StoragePath(direct_out_path).exists() and _staged_lmh_version(direct_version_path) == _LMH_EXTRACTION_VERSION:
             logger.info("lmh/%s: exists (extraction %s), skipping", name, _LMH_EXTRACTION_VERSION)
             skipped_existing.append(name)
+            task_leaves[name] = [name]
             continue
 
         try:
@@ -755,6 +765,7 @@ def _prepare_lmh() -> dict[str, Any]:
             continue
         if len(leaves) > 1:
             logger.info("lmh/%s: group expanded to %d leaf tasks", name, len(leaves))
+        task_leaves[name] = [child_name for child_name, _ in leaves]
 
         for child_name, task in leaves:
             out_path = f"{_lmh_output_root()}/{child_name}/eval.parquet"
@@ -800,6 +811,13 @@ def _prepare_lmh() -> dict[str, Any]:
         for n, reason in failed:
             logger.info("  FAIL lmh/%s: %s", n, reason)
 
+    failed_names = {n for n, _ in failed}
+    missing_required = [
+        task for task in REQUIRED_LMH_TASKS if not task_leaves.get(task) or failed_names.intersection(task_leaves[task])
+    ]
+    if missing_required:
+        raise ValueError(f"required lm-eval tasks did not load: {missing_required}; the FAIL lines above give reasons")
+
     included_leaf_tasks = sorted(set(succeeded + skipped_existing))
     artifacts: list[dict[str, Any]] = []
     for task_name in included_leaf_tasks:
@@ -817,6 +835,7 @@ def _prepare_lmh() -> dict[str, Any]:
         "artifact_root": LMH_EVALS_RELATIVE,
         "extraction_version": _LMH_EXTRACTION_VERSION,
         "configured_tasks": names,
+        "required_tasks": {task: task_leaves[task] for task in REQUIRED_LMH_TASKS},
         "included_leaf_tasks": included_leaf_tasks,
         "artifacts": artifacts,
         "failed": [{"task": name, "reason": reason} for name, reason in failed],

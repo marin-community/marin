@@ -3,12 +3,12 @@
 
 """Shared lm-eval-harness loading helpers for the decontam corpus prep.
 
-Three pieces of glue used by both ``prepare_eval_corpus.py`` (writes the
-corpus) and ``verify_lmh_tasks.py`` (previews the fail set):
+Three pieces of glue used by ``prepare_eval_corpus.py``:
 
-* ``trust_remote_code_for_hf`` -- monkey-patch ``datasets.load_dataset`` /
-  ``load_dataset_builder`` to inject ``trust_remote_code=True``. Necessary
-  on ``datasets`` 4.x where the env var and config flag were removed.
+* ``patch_hf_dataset_loading`` -- monkey-patch ``datasets.load_dataset`` /
+  ``load_dataset_builder`` to inject ``trust_remote_code=True`` (necessary
+  on ``datasets`` 4.x where the env var and config flag were removed) and to
+  map legacy dataset IDs that the Hub no longer resolves.
 * ``flatten_task_dict`` -- walk the (possibly nested) result of
   ``lm_eval.tasks.get_task_dict`` and yield only ``(str_name, Task)`` leaf
   pairs. lm-eval-harness returns groups as nested dicts keyed by
@@ -18,7 +18,7 @@ corpus) and ``verify_lmh_tasks.py`` (previews the fail set):
 
 Importing this module pulls only ``datasets`` + stdlib, NOT
 ``experiments.evals.task_configs`` (which transitively imports torch).
-That keeps both callers cheap to import in a torch-less environment.
+That keeps it cheap to import in a torch-less environment.
 """
 
 import logging
@@ -31,9 +31,16 @@ import datasets
 
 logger = logging.getLogger(__name__)
 
+# Legacy un-namespaced dataset IDs in the pinned lm-eval task configs that the
+# Hub no longer resolves ("Repository id must be 'namespace/name'").
+_HF_DATASET_IDS = {"gsm8k": "openai/gsm8k"}
 
-def trust_remote_code_for_hf() -> None:
+
+def patch_hf_dataset_loading() -> None:
     """Try ``trust_remote_code=True`` on every ``datasets.load_dataset`` call, fall back without on kwarg rejection.
+
+    Legacy dataset IDs in :data:`_HF_DATASET_IDS` are first mapped to their
+    namespaced repositories.
 
     In ``datasets`` 4.x the ``HF_DATASETS_TRUST_REMOTE_CODE`` env var and
     ``datasets.config.HF_DATASETS_TRUST_REMOTE_CODE`` flag were removed; only
@@ -75,24 +82,26 @@ def trust_remote_code_for_hf() -> None:
         # ValueError; the message reliably mentions ``'trust_remote_code'``.
         return isinstance(exc, (TypeError, ValueError)) and "trust_remote_code" in str(exc)
 
-    def patched_load_dataset(*args, **kwargs):
+    def patched_load_dataset(path, *args, **kwargs):
+        path = _HF_DATASET_IDS.get(path, path)
         if "trust_remote_code" in kwargs:
-            return original_load(*args, **kwargs)
+            return original_load(path, *args, **kwargs)
         try:
-            return original_load(*args, trust_remote_code=True, **kwargs)
+            return original_load(path, *args, trust_remote_code=True, **kwargs)
         except Exception as exc:
             if _is_trc_rejection(exc):
-                return original_load(*args, **kwargs)
+                return original_load(path, *args, **kwargs)
             raise
 
-    def patched_builder(*args, **kwargs):
+    def patched_builder(path, *args, **kwargs):
+        path = _HF_DATASET_IDS.get(path, path)
         if "trust_remote_code" in kwargs:
-            return original_builder(*args, **kwargs)
+            return original_builder(path, *args, **kwargs)
         try:
-            return original_builder(*args, trust_remote_code=True, **kwargs)
+            return original_builder(path, *args, trust_remote_code=True, **kwargs)
         except Exception as exc:
             if _is_trc_rejection(exc):
-                return original_builder(*args, **kwargs)
+                return original_builder(path, *args, **kwargs)
             raise
 
     datasets.load_dataset = patched_load_dataset  # type: ignore[assignment]
