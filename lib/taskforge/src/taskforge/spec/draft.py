@@ -81,29 +81,15 @@ from taskforge.spec.verdict import VERDICT_REWARD
 
 SHELL_CAPABILITY = "shell"
 TOOL_HARNESS = "tools"
-"""The name every Taskforge ``TaskRolloutSpec`` selects its harness by, and ``rollout_engine`` registers
-RolloutEngine's ``ShellHarness`` under. The harness serves a shell tool only on a task machine; a task
-without one is a plain conversation, and no machine starts for it."""
+"""The harness every Taskforge spec selects: a shell tool on the task machine, or a plain conversation without one."""
 NO_MACHINE = EnvironmentRequirements()
 """The environment of a task without a machine: the solver answers in the conversation, with no tools."""
 FILESYSTEM_CAPABILITY = "filesystem"
 SHELLSIM_CPYTHON = PackageSpec(pypi_packages=())
-"""The software of a task machine without an image: the ports catalog's CPython and no PyPI packages.
-
-ShellSim installs a catalog's CPython runtime whenever ``pypi_packages`` is set, even to no packages;
-a bare ``PackageSpec()`` has the built-in shell tools and no ``python3``. The catalog
-``sandbox.factories.SHELLSIM_CATALOG`` provides CPython 3.13 with its standard library.
-"""
+"""ShellSim's CPython 3.13 and no PyPI packages; a bare ``PackageSpec()`` would have no ``python3``."""
 
 LOCAL_CPYTHON = PackageSpec(pypi_packages=())
-"""``GRADER_BASE_IMAGE``'s software on the local backend: a uv-managed CPython 3.12 and no PyPI packages.
-
-shellbox's local factory resolves the empty requirement list into an empty hash lock, then installs the
-interpreter (``shellbox.backends.local.python_environment.DEFAULT_PYTHON_VERSION``) and a venv from it
-under the factory's package cache when the first such machine starts, and mounts both read-only as
-the machine's ``HostImage``, the venv's ``bin`` first on ``PATH``. Later machines on the host reuse
-the build. ``sh``, ``setsid``, ``tar`` and the other commands come from the host's system directories.
-"""
+"""``GRADER_BASE_IMAGE``'s software on the local backend: a uv-managed CPython 3.12 and no PyPI packages."""
 LOCAL_READ_ONLY = "read_only"
 """shellbox's ``SystemDirectories.READ_ONLY``, the local factory's default mode for system directories."""
 LOCAL_COPY_ON_WRITE = "copy_on_write"
@@ -124,14 +110,10 @@ LOCAL_UNWRITABLE_ROOTS: Mapping[str, tuple[str, ...]] = {
     ),
     LOCAL_COPY_ON_WRITE: ("/run/systemd/resolve", "/sys"),
 }
-"""The host directories a local machine cannot write, by its factory's mode for system directories.
+"""The host directories a local machine cannot write, by its factory's system-directory mode.
 
-The local backend mounts shellbox's ``SYSTEM_DIRECTORIES`` into every machine: read-only, or overlaid
-copy-on-write with a writable layer of the machine's own on all but ``/sys`` and the resolver's directory.
-A machine that must write under one of its mode's roots, a task shipping files to ``/opt`` beside a
-read-only factory for instance, cannot run on the local backend, and ``host_requirements`` keeps its image.
-shellbox's enum imports on Linux only, so ``tests/spec/test_draft.py`` holds these modes and roots equal
-to shellbox's on hosts where the local backend imports.
+A machine that must write under one of them keeps its image (``host_requirements``). Mirrors shellbox's
+Linux-only enum; ``tests/spec/test_draft.py`` checks they agree.
 """
 
 
