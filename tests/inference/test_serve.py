@@ -713,9 +713,10 @@ def test_marin_fork_requires_gpu():
         _plan(vllm_source=VllmSource.MARIN_FORK)  # default tpu path
 
 
-def test_resolve_serving_plan_rejects_multihost_slices():
+def test_resolve_serving_plan_allows_multihost_vllm_but_not_levanter():
+    assert _plan(tpu="v4-32").engine.launcher is VllmLauncherType.TPU
     with pytest.raises(click.ClickException, match="multi-host"):
-        _plan(tpu="v6e-16")
+        _plan(tpu="v6e-16", backend="levanter")
 
 
 def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
@@ -1266,3 +1267,22 @@ def test_dashboard_health_reports_loading_when_upstream_down():
         response = requests.get(f"http://127.0.0.1:{dashboard_port}/health", timeout=10)
     assert response.status_code == 503
     assert response.json()["status"] == "loading"
+
+
+def test_iris_serve_multihost_allocates_one_slice_and_ray_ports(monkeypatch):
+    result, client, services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", "--no-wait")
+    assert result.exit_code == 0, result.output
+    submission = client.submit.call_args.kwargs
+    assert submission["replicas"] == 4
+    assert submission["coscheduling"].group_by == "tpu-name"
+    assert set(submission["ports"]) == {"http", "ray-gcs", "ray-client", "ray-dashboard", "ray-dashboard-agent"}
+    assert services[0].iris.worker_resources.device.variant == "v4-32"
+
+
+def test_iris_serve_multihost_dry_run_does_not_submit(monkeypatch):
+    result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", "--dry-run")
+    assert result.exit_code == 0, result.output
+    client.submit.assert_not_called()
+    assert "replicas: 4" in result.output
+    assert "tpu-name" in result.output
+    assert "ray-client" in result.output
