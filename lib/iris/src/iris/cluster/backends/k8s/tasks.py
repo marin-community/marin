@@ -2542,7 +2542,7 @@ class K8sTaskProvider:
         if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST and self.pods.egress_allowlist is None:
             return (
                 "Egress policy allowlist needs Cilium, which this cluster does not configure "
-                "(kubernetes_provider.cilium); use --egress-policy cluster"
+                "(kubernetes_provider.cilium); use --egress-policy EGRESS_POLICY_CLUSTER"
             )
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None

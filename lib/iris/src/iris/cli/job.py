@@ -1042,7 +1042,7 @@ Examples:
     help=(
         "Repeatable. A destination an ALLOWLIST job may reach beyond the cluster allowlist: a "
         "domain (api.openai.com), a one-label wildcard (*.openai.com) or a CIDR "
-        "(203.0.113.0/24), optionally limited to TCP ports. Implies --egress-policy allowlist."
+        "(203.0.113.0/24), optionally limited to TCP ports. Implies --egress-policy EGRESS_POLICY_ALLOWLIST."
     ),
 )
 @click.option(

@@ -145,9 +145,9 @@ decides what its network reaches.
 
 The controller resolves an unspecified policy when it accepts a job. A child
 job takes its parent's policy and allowlist rules, so a job tree that opted
-out with `--egress-policy cluster`, or added rules, keeps that choice. A root
-job takes the cluster's default. A job forwarded to a federation peer is
-resolved by the peer.
+out with `--egress-policy EGRESS_POLICY_CLUSTER`, or added rules, keeps that
+choice. A root job takes the cluster's default. A job forwarded to a federation
+peer is resolved by the peer.
 
 `INTERNET` and `NONE` reach neither the controller, finelog, worker RPC ports,
 other tasks nor the cloud metadata server. A task under either cannot launch
@@ -193,8 +193,8 @@ A rule is `DEST[:PORT[,PORT...]]`:
 Domains are lowercase, `*` stands for exactly one whole label and only in the
 leftmost labels, and a pattern needs two fixed labels (`*.com` is rejected).
 Networks must have their host bits clear, and `0.0.0.0/0` is rejected; use
-`--egress-policy cluster` instead. A port list restricts TCP; a rule without
-ports admits every port and protocol.
+`--egress-policy EGRESS_POLICY_CLUSTER` instead. A port list restricts TCP; a
+rule without ports admits every port and protocol.
 
 Practical guidance:
 
@@ -209,7 +209,7 @@ Practical guidance:
   `dns error: failed to lookup address information: Try again` from uv. An
   unlisted address times out.
 - If a job needs arbitrary internet access, run it with
-  `--egress-policy cluster`; its children inherit that.
+  `--egress-policy EGRESS_POLICY_CLUSTER`; its children inherit that.
 
 Operators configure the allowlist in the cluster config:
 
