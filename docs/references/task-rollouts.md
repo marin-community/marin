@@ -287,6 +287,34 @@ with one required, unconstrained string argument; unsupported schemas fail befor
 acquisition. Tool names alone never select an executor. Other interaction tools and
 provider contracts require a registered tool provider or another harness.
 
+A task with a shell tool gets one paragraph of instructions at the end of its last user message,
+not a separate user turn: a trailing turn such as `Give your answer as plain text.` reads as a
+request to answer at once, and models then skip the tools. Unless the task binds its own shell tool,
+the paragraph says to read the files that the conversation names with the tool (or that the tool
+can run commands), and to write each of the task's `output_paths`. It ends with the answer
+format's instruction, after "When you have finished,". A `workspace_state` task gets
+`WORKSPACE_INSTRUCTION` there. A task without a shell tool keeps the answer instruction as its own
+final user turn, as in `taskcompendium.submission.chat_request`.
+
+Resource paths are relative to the root, so prompts often name `/workspace/data.txt` as
+`workspace/data.txt`. When the task's `working_directory` is directly under the root, for example
+`/workspace`, and the conversation names a relative path that starts with its name, the harness
+links `workspace -> .` in it before the first model request. It skips an existing name and logs a
+warning when the machine refuses the link.
+
+A reply whose content holds a Hermes `<tool_call>` that the server's tool parser did not return,
+outside the reasoning before `</think>`, gets an error and another turn, up to `max_parse_retries`
+(default 3, `0` disables) times. The error is a user message wrapped in
+`<tool_response>...</tool_response>`, which Hermes chat templates render like a tool result, so a
+thinking template keeps the earlier reasoning and the next prompt extends the served tokens. A
+reply cut off by the length limit is not retried.
+
+The last step of a task with a shell tool records `TOOL_USAGE_METRICS`: `tool_calls`, `parse_retry`,
+`opened_input_file` (whether a shell command named one of the conversation's task files, only for tasks
+whose conversation names one), and `wrote_output_file` (whether every `output_paths` entry exists when the
+attempt ends, only for tasks with `output_paths`). A turn or token limit that ends the attempt still
+records them. SkyRL reports them per environment for `taskcompendium` rows.
+
 ### Tool providers
 
 A tool provider serves host tools for one action interface. Register providers with the shell harness,

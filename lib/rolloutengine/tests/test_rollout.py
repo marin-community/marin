@@ -42,6 +42,7 @@ from taskcompendium.models import (
     FunctionDefinition,
     JsonValueAnswer,
     NoGrader,
+    PlainText,
     ProviderRequirement,
     ResourceGroups,
     RewardFile,
@@ -55,6 +56,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.output_capture import MAX_OUTPUT_FILES
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import ShellToolConfig
+from taskcompendium.submission import submission_instruction
 from verifyit.grade import grade as verifyit_grade
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import (
@@ -69,7 +71,13 @@ from verifyit.spec import (
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness
-from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
+from rolloutengine.harness.shell import (
+    TOOL_USAGE_METRICS,
+    WORKSPACE_INSTRUCTION,
+    ShellHarness,
+    ToolCallResult,
+    ToolContext,
+)
 from rolloutengine.harness.step import StepHarness
 from rolloutengine.machines import task_machine
 from rolloutengine.models import (
@@ -1298,9 +1306,105 @@ async def test_workspace_state_receives_shell_presentation_without_answer_tools(
         rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime())
     )
     assert record.grade.reward == 1.0
-    assert model.requests[0].messages[:-1] == ({"role": "user", "content": "What is six plus six?"},)
-    assert model.requests[0].messages[-1] == {"role": "user", "content": WORKSPACE_INSTRUCTION.format(tool_name="shell")}
+    (message,) = model.requests[0].messages
+    assert message == {
+        "role": "user",
+        "content": f"What is six plus six?\n\n{WORKSPACE_INSTRUCTION.format(tool_name='shell')}",
+    }
     assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
+
+
+WORKSPACE_PROMPT = "Read workspace/data.txt and report six plus the number in it."
+
+
+def workspace_input_task(**update) -> TaskSpec:
+    """The arithmetic task on a ShellSim machine whose prompt names its input by its root-relative path."""
+    return arithmetic_task(
+        **{
+            "context": ConversationInput(events=(TextMessage(role="user", content=WORKSPACE_PROMPT),)),
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.SHELL_SIMULATOR,
+                capabilities=("shell", "filesystem"),
+                working_directory="/workspace",
+            ),
+            "resources": ResourceGroups(worker=(inline_resource("workspace/data.txt", b"6"),)),
+            **update,
+        }
+    )
+
+
+def workspace_input_spec(task: TaskSpec, **limits) -> TaskRolloutSpec:
+    return rollout_spec(task, machine=machine_runtime(backend="simulator"), **limits)
+
+
+async def test_shell_task_reads_workspace_paths_after_one_folded_instruction():
+    model = ReplayModel([shell_call("cat workspace/data.txt"), {"role": "assistant", "content": "12"}])
+    record = await engine(model, {"simulator": ShellSimMachineFactory()}).run_task(
+        workspace_input_spec(workspace_input_task())
+    )
+
+    assert record.grade.reward == 1.0
+    (message,) = model.requests[0].messages
+    assert message["role"] == "user" and message["content"].startswith(WORKSPACE_PROMPT)
+    assert submission_instruction(PlainText()).lower().rstrip(".") in message["content"].lower()
+    observation = json.loads(model.requests[1].messages[-1]["content"])
+    assert (observation["exit_code"], observation["stdout"]) == (0, "6")
+    assert {key: record.rollout.metrics[key] for key in TOOL_USAGE_METRICS if key in record.rollout.metrics} == {
+        "tool_calls": 1.0,
+        "parse_retry": 0.0,
+        "opened_input_file": 1.0,
+    }
+
+
+async def test_task_without_a_shell_tool_keeps_the_answer_instruction_as_its_own_turn():
+    model = ReplayModel([{"role": "assistant", "content": "12"}])
+    record = await engine(model).run_task(rollout_spec(arithmetic_task()))
+
+    assert record.grade.reward == 1.0
+    assert model.requests[0].messages == (
+        {"role": "user", "content": "What is six plus six?"},
+        {"role": "user", "content": submission_instruction(PlainText())},
+    )
+
+
+UNPARSED_CALL = {"role": "assistant", "content": '<tool_call>\n{"name": "shell", \'arguments\': {}}\n</tool_call>'}
+
+
+@pytest.mark.parametrize("max_parse_retries", [3, 0])
+async def test_unparsed_tool_call_gets_an_error_and_another_turn_until_the_retry_limit(max_parse_retries):
+    model = ReplayModel([UNPARSED_CALL, {"role": "assistant", "content": "12"}])
+    record = await engine(
+        model, {"simulator": ShellSimMachineFactory()}, harnesses=shell_harnesses(max_parse_retries=max_parse_retries)
+    ).run_task(workspace_input_spec(workspace_input_task()))
+
+    if max_parse_retries:
+        retry = model.requests[1].messages[-1]
+        assert retry["role"] == "user" and retry["content"].startswith("<tool_response>\nError:")
+        assert (record.grade.reward, record.rollout.metrics["parse_retry"]) == (1.0, 1.0)
+    else:
+        assert len(model.requests) == 1
+        assert (record.grade.reward, record.rollout.metrics["parse_retry"]) == (0.0, 0.0)
+
+
+async def test_turn_limit_keeps_the_tool_usage_of_the_attempt():
+    model = ReplayModel([shell_call("cat workspace/data.txt")])
+    record = await engine(model, {"simulator": ShellSimMachineFactory()}).run_task(
+        workspace_input_spec(workspace_input_task(), max_turns=1)
+    )
+
+    assert record.rollout.stop_reason != "stop"
+    assert (record.rollout.metrics["tool_calls"], record.rollout.metrics["opened_input_file"]) == (1.0, 1.0)
+
+
+@pytest.mark.parametrize("written", [True, False])
+async def test_declared_output_files_are_checked_on_the_task_machine(written):
+    command = "cat workspace/data.txt > /workspace/report.txt" if written else "cat workspace/data.txt"
+    model = ReplayModel([shell_call(command), {"role": "assistant", "content": "12"}])
+    record = await engine(model, {"simulator": ShellSimMachineFactory()}).run_task(
+        workspace_input_spec(workspace_input_task(output_paths=("/workspace/report.txt",)))
+    )
+
+    assert record.rollout.metrics["wrote_output_file"] == float(written)
 
 
 @pytest.mark.parametrize(

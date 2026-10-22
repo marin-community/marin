@@ -15,6 +15,7 @@ from skyrl_gym.verification import (
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from skyrl_gym.task_records import grade_skipped, skipped_grade
+from rolloutengine.harness.shell import TOOL_USAGE_METRICS
 from rolloutengine.models import RolloutContractError
 from skyrl_train.rollouts.training_record import TrainingRollout
 
@@ -364,7 +365,7 @@ def _training_batch(
     metrics = None
     if env_metric_classes is not None:
         metrics = [
-            {} if environment == TASKCOMPENDIUM_ENVIRONMENT else dict(rollout.metrics)
+            _tool_usage(rollout) if environment == TASKCOMPENDIUM_ENVIRONMENT else dict(rollout.metrics)
             for rollout, environment in zip(rollouts, env_metric_classes, strict=True)
         ]
         if any(metrics):
@@ -503,6 +504,11 @@ def _task_error_policies(
     if harbor is None:
         return [default] * len(request.rows)
     return [harbor if "harbor" in row.spec.task.tags else default for row in request.rows]
+
+
+def _tool_usage(rollout: TrainingRollout) -> dict[str, float]:
+    """The shell harness's tool-usage metrics, which a ``taskcompendium`` row reports per environment."""
+    return {key: float(rollout.metrics[key]) for key in TOOL_USAGE_METRICS if key in rollout.metrics}
 
 
 def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:
