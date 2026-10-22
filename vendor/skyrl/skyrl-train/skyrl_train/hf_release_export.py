@@ -30,7 +30,7 @@ from marin_hf_release.policy import dtype_size
 from marin_hf_release.validation import INDEX_NAME, read_safetensors_header_specs
 from marinskyrl.hf_model import normalize_fast_tokenizer_metadata
 
-from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
+from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, GrugMoeConfig, GrugMoeForCausalLM
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,7 @@ class ReleaseExportOptions:
 
 def _expected_hf_shapes(config: PretrainedConfig, canonical: dict[str, object]) -> dict[str, tuple[int, ...]]:
     with torch.device("meta"):
-        if config.model_type == "grug_moe":
+        if config.model_type == GRUG_MOE_MODEL_TYPE:
             model = GrugMoeForCausalLM(GrugMoeConfig(**canonical))
         else:
             model = AutoModelForCausalLM.from_config(config)
@@ -112,8 +112,8 @@ def finalize_hf_release(
     tokenizer: PreTrainedTokenizerBase,
     options: ReleaseExportOptions,
 ) -> ReleaseRequest:
-    """Validate and complete a supported HF release after Bridge writes its shards."""
-    is_grug = config.model_type == "grug_moe"
+    """Validate Bridge output and return its persisted release request."""
+    is_grug = config.model_type == GRUG_MOE_MODEL_TYPE
     canonical = canonical_grug_config(config.to_dict()) if is_grug else config.to_dict()
     policy = ReleasePolicy(options.precision)
     expected = _expected_hf_shapes(config, canonical)

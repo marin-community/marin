@@ -88,7 +88,7 @@ def _assert_vllm_bf16(export_dir: Path, config: GrugModelConfig) -> None:
     assert (export_dir / "hf_release_manifest.json").is_file()
 
 
-def assert_checkpoint_reproduces_bf16_export() -> None:
+def assert_checkpoint_exports_bf16_release() -> None:
     executor_info = read_executor_info()
     model_config = executor_info["config"]["model"]
     vendored_config = decode_vendored_config(executor_info)
@@ -134,7 +134,7 @@ def test_snowball_checkpoint_validates_bf16_release(marin_gpu_client: IrisClient
         marin_gpu_client,
         JobRequest(
             name=f"snowball-bf16-export-{uuid.uuid4().hex[:8]}",
-            entrypoint=Entrypoint.from_callable(assert_checkpoint_reproduces_bf16_export),
+            entrypoint=Entrypoint.from_callable(assert_checkpoint_exports_bf16_release),
             resources=ResourceConfig.with_gpu(
                 "H100", count=8, cpu=64, ram="512g", disk="256g", target_cluster=MARIN_GPU_CLUSTER
             ),

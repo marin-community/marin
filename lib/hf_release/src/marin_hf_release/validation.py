@@ -15,6 +15,7 @@ from marin_hf_release.policy import ReleasePolicy, TensorSpec, dtype_size
 
 INDEX_NAME = "model.safetensors.index.json"
 MAX_HEADER_BYTES = 100 * 2**20
+SAFETENSORS_LENGTH_PREFIX_BYTES = 8
 
 
 def _sha256(path: Path) -> str:
@@ -28,8 +29,8 @@ def _sha256(path: Path) -> str:
 def read_safetensors_header_specs(path: Path) -> dict[str, TensorSpec]:
     """Read one safetensors header without loading tensor payloads."""
     with path.open("rb") as source:
-        prefix = source.read(8)
-        if len(prefix) != 8:
+        prefix = source.read(SAFETENSORS_LENGTH_PREFIX_BYTES)
+        if len(prefix) != SAFETENSORS_LENGTH_PREFIX_BYTES:
             raise ValueError(f"truncated safetensors length prefix: {path}")
         header_bytes = struct.unpack("<Q", prefix)[0]
         if header_bytes > MAX_HEADER_BYTES:
@@ -40,7 +41,7 @@ def read_safetensors_header_specs(path: Path) -> dict[str, TensorSpec]:
     parsed = json.loads(header)
     if not isinstance(parsed, dict):
         raise ValueError(f"invalid safetensors header: {path}")
-    payload_bytes = path.stat().st_size - 8 - header_bytes
+    payload_bytes = path.stat().st_size - SAFETENSORS_LENGTH_PREFIX_BYTES - header_bytes
     tensors = {}
     offsets = []
     for name, entry in parsed.items():
@@ -110,7 +111,7 @@ def validate_release_weights(
     specs: Mapping[str, TensorSpec],
     policy: ReleasePolicy,
 ) -> dict[str, str]:
-    """Check exact tensor layout, index coverage, and byte totals one shard at a time."""
+    """Check tensor layout and index totals, returning shard and index hashes."""
     shards = sorted(root.glob("*.safetensors"))
     if not shards:
         raise ValueError(f"HF release has no safetensors shards: {root}")

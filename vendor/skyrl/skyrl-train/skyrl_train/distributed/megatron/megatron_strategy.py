@@ -64,6 +64,7 @@ from skyrl_train import hf_model_io
 from skyrl_train.hf_release_export import ReleaseExportOptions, finalize_hf_release
 from marin_hf_release import ReleasePolicy, canonical_grug_config
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
+from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE
 
 
 # Both formats make non-flattened ShardedTensors accepted by torch_dist. The default
@@ -524,7 +525,7 @@ class MegatronStrategy(DistributedStrategy):
     ) -> None:
         if release_options is not None:
             ReleasePolicy(release_options.precision)
-            if self.hf_config.model_type == "grug_moe":
+            if self.hf_config.model_type == GRUG_MOE_MODEL_TYPE:
                 canonical_grug_config(self.hf_config.to_dict())
                 if release_options.eos_token_ids is None:
                     raise ValueError("Grug HF release requires explicit or source generation EOS IDs")

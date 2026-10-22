@@ -233,7 +233,7 @@ def checkpoint_export_plan(cfg: DictConfig) -> CheckpointExportPlan:
         export_root=str(export_root).rstrip("/"),
         model_path=str(cfg.trainer.policy.model.path),
         model_revision=cfg.trainer.policy.model.get("revision"),
-        release_precision=str(export_cfg.get("release_precision", "preserve")),
+        release_precision=str(export_cfg.get("release_precision", PrecisionMode.PRESERVE.value)),
         release_policy_version=int(export_cfg.get("release_policy_version", POLICY_VERSION)),
         eos_token_ids=eos_token_ids,
         generation_controls=generation_controls,

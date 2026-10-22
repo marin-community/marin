@@ -49,6 +49,7 @@ from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from marin_hf_release import (
+    HF_COMMIT_HEX_LENGTH,
     PrecisionMode,
     ReleasePolicy,
     ReleaseRequest,
@@ -1246,7 +1247,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
                         return commit
 
                     resolved = run_on_export_writer(resolve_source_commit)
-                    commit_bytes = np.frombuffer((resolved or "0" * 40).encode("ascii"), dtype=np.uint8)
+                    commit_bytes = np.frombuffer(
+                        (resolved or "0" * HF_COMMIT_HEX_LENGTH).encode("ascii"), dtype=np.uint8
+                    )
                     revision = bytes(multihost_utils.broadcast_one_to_all(commit_bytes)).decode("ascii")
                 if not is_hf_commit(revision):
                     raise ValueError("HF release source model did not resolve to a 40-character commit")

@@ -12,6 +12,7 @@ from marin_hf_release.policy import (
     grug_tensor_specs,
 )
 from marin_hf_release.request import (
+    HF_COMMIT_HEX_LENGTH,
     ReleaseRequest,
     TokenizerMetadata,
     completion_manifest,

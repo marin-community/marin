@@ -17,10 +17,11 @@ from marin_hf_release.policy import ReleasePolicy, TensorSpec
 
 REQUEST_NAME = "hf_release_request.json"
 MANIFEST_NAME = "hf_release_manifest.json"
+HF_COMMIT_HEX_LENGTH = 40
 
 
 def is_hf_commit(value: str | None) -> bool:
-    return value is not None and len(value) == 40 and all(char in "0123456789abcdef" for char in value)
+    return value is not None and len(value) == HF_COMMIT_HEX_LENGTH and all(char in "0123456789abcdef" for char in value)
 
 
 def generation_metadata(generation: dict[str, object]) -> tuple[list[int] | None, dict[str, object]]:
@@ -85,7 +86,7 @@ def resolve_metadata(
     *,
     require_chat_template: bool,
 ) -> tuple[TokenizerMetadata, dict[str, object]]:
-    """Resolve behavior metadata fieldwise, with request values taking precedence."""
+    """Resolve tokenizer metadata and generation config, preferring request values."""
     layers = (explicit, checkpoint, source)
 
     def value(key: str) -> object | None:
@@ -189,7 +190,7 @@ def persist_request(root: Path, request: ReleaseRequest) -> None:
 def validate_release_metadata(
     root: Path, request: ReleaseRequest, file_names: Iterable[str] | None = None
 ) -> dict[str, str]:
-    """Check saved config, tokenizer IDs/template, and generation behavior."""
+    """Check saved behavior metadata and return metadata-file SHA-256 hashes."""
     if json.loads((root / "config.json").read_text()) != request.config:
         raise ValueError("HF release config.json differs from resolved request")
     if json.loads((root / "generation_config.json").read_text()) != request.generation:
