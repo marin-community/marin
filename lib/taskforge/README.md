@@ -17,6 +17,7 @@ src/taskforge/
                                config.py, prompts.py, parallel.py (web search), example_build.py
   capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
+  ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
                                output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
@@ -37,7 +38,8 @@ stage later without renumbering. A stage imports from lower-numbered stages and 
 modules (`capability`, `content_hash`, `ledger`, `llm`), and the shared modules import no stage.
 The coordinator package, `stage_coordinator`, runs the stages in order and is unnumbered. It may
 import any stage and shared module, and `tests/test_imports.py` refuses an import of it from any
-other package, along with the other wrong-way imports.
+other package, along with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
+and step over JSONL ledgers.
 
 ## Model calls
 
