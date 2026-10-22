@@ -1,13 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One validation round of a draft: lowering, control writing, the k solver trials and control replay as
-units of one graph.
+"""One validation round of a draft: lowering, control writing, the k solver trials, control replay and the
+adversary trials as units of one graph.
 
 Lowering (``preflight``) and control writing (``write_controls``) start together. Each solver trial starts
-as soon as the lowering is done and does not wait for the controls. Control replay starts once both the
-lowered spec and the controls exist, and the result waits for every unit. A unit that raises cancels the
-others and the round raises its error; the files the finished units wrote stay for the relaunch.
+as soon as the lowering is done and does not wait for the controls. Control replay and each adversary trial
+(``adversary.run_adversary_trial``) start once both the lowered spec and the controls exist, and wait for no
+solver trial. The result waits for every unit. A unit that raises cancels the others and the round raises its
+error; the files the finished units wrote stay for the relaunch.
 
 Each unit is idempotent on its own file, so a relaunch redoes only the units whose files are missing:
 
@@ -16,12 +17,17 @@ Each unit is idempotent on its own file, so a relaunch redoes only the units who
     <round_dir>/validation/<draft>/controls.json               the controls
     <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
     <round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
+    <round_dir>/validation/<draft>/<task>/adversary/<i>/attempt-<n>.json
+    <round_dir>/validation/<draft>/<task>/adversary/<i>/submissions/<n>/control/s<m>/attempt-<k>.json
 
 ``<draft>`` is ``content_hash.digest`` of the draft's task, ``<task>`` the ``trials.task_digest`` of the
 lowered spec as its trials run, and ``<controls>`` ``content_hash.digest`` of the control set. A file covers
 what its path names, so the lowering or controls of another task, the trials of another lowered spec and the
 replay of another control set are never read as done. ``lowered.json`` also records the host and the
-factory backends it lowered for, and a lowering for another host is done again.
+factory backends it lowered for, and a lowering for another host is done again. An adversary attempt records its
+brief, which holds the mode, the budget and, white-box, the controls: an attempt under another brief is kept, and
+the trial runs again after it with its full retries. An adversary attempt is numbered after any submissions an
+attempt cancelled in flight graded, so its submissions directory is its own.
 
 A trial is done when its last attempt file holds a grade or a cause that is not retryable, or when it holds
 ``max_retries + 1`` attempts: where ``run_trial`` stops. Otherwise the trial resumes at the next attempt
@@ -32,8 +38,10 @@ ungraded.
 The result is read back from the unit files, each outcome through ``trials.attempt_outcome``, so a resumed
 round returns what an uninterrupted one would. ``validation.json`` holds every decision input and no rollout,
 which stays in the attempt files it names: the lowering's status, refusals and backend fallback; per solver
-trial its status, reward and cause, with the solver ``Evidence``'s reward totals and ungraded causes; and per
-control its verdict and cause. ``load_validation`` reads it without the evidence files.
+trial its status, reward and cause, with the solver ``Evidence``'s reward totals and ungraded causes; per
+control its verdict and cause; and per adversary trial its status, cause, claim and every submission with its
+grade status, reward and whether it passed. Which passing submissions are shortcuts is review's judgement, not
+the round's. ``load_validation`` reads it without the evidence files.
 
 A spec RolloutEngine rejects is ``REJECTED`` and no trial runs. A spec a factory refuses is ``REFUSED`` and its
 trials run, each recording the one ``MACHINE_UNSUPPORTED`` attempt ``run_trial`` records for it.
@@ -41,12 +49,14 @@ trials run, each recording the one ``MACHINE_UNSUPPORTED`` attempt ``run_trial``
 
 import asyncio
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from pydantic import TypeAdapter
 from rolloutengine.models import TaskRolloutSpec
+from taskcompendium.grading_result import Outcome as GradeStatus
 
 from taskforge.content_hash import digest, pretty_json
 from taskforge.ledger.records import Ledger
@@ -59,6 +69,15 @@ from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage30_author.loader import GRADER_STEP
 from taskforge.stage40_build_with_program.outputs import Grader
 from taskforge.stage40_build_with_program.run import TaskDraft, step_output
+from taskforge.stage50_validate.adversary import (
+    SUBMISSIONS_DIR,
+    AdversaryMode,
+    AdversaryPolicy,
+    Claim,
+    adversary_brief,
+    adversary_record,
+    run_adversary_trial,
+)
 from taskforge.stage50_validate.control_drafts import CONTROLS_FILE, CONTROLS_STEP, load_controls, write_controls
 from taskforge.stage50_validate.controls import ControlVerdict, check_replayable, control_outcome, replay_control
 from taskforge.stage50_validate.evidence import Evidence, Incomplete, RewardStats
@@ -101,6 +120,7 @@ class ValidationContext:
         max_retries: The retries of a trial that fails for a retryable cause.
         retry_backoff: The wait between a trial's attempts.
         sampling: The sampling policy of the model writing the controls.
+        adversary: The adversary trials' policy.
         ledger: Where the trials and the control writing are recorded.
     """
 
@@ -116,6 +136,7 @@ class ValidationContext:
     max_retries: int
     retry_backoff: RetryBackoff
     sampling: LLMPolicy
+    adversary: AdversaryPolicy
     ledger: Ledger
 
 
@@ -180,15 +201,42 @@ class ControlResult:
 
 
 @dataclass(frozen=True)
+class SubmissionResult:
+    """An adversary submission as the verifier graded it. ``attempt_file``, relative to the round directory,
+    holds the full grade."""
+
+    ordinal: int
+    status: GradeStatus
+    reward: float | None
+    passed: bool
+    attempt_file: str
+
+
+@dataclass(frozen=True)
+class AdversaryResult:
+    """An adversary trial's final attempt: ``cause`` is set when it is ungraded, and ``claim`` is the adversary's
+    own verdict. ``attempt_file`` is relative to the round directory."""
+
+    trial: str
+    mode: AdversaryMode
+    status: TrialStatus
+    cause: Cause | None
+    claim: Claim
+    submissions: tuple[SubmissionResult, ...]
+    attempt_file: str
+
+
+@dataclass(frozen=True)
 class ValidationResult:
-    """A validation round, written as ``validation.json``: ``solver`` is ``None`` and ``controls`` empty when
-    the lowering was rejected."""
+    """A validation round, written as ``validation.json``: ``solver`` is ``None`` and ``controls`` and
+    ``adversary`` empty when the lowering was rejected."""
 
     workpiece_id: str
     round: int
     lowering: Lowering
     solver: SolverEvidence | None
     controls: tuple[ControlResult, ...]
+    adversary: tuple[AdversaryResult, ...]
 
 
 @dataclass(frozen=True)
@@ -209,7 +257,11 @@ class _Lowered:
 
 
 async def validate_round(
-    draft: TaskDraft, context: ValidationContext, solver_model: TrialModel, controls_model: ModelClient
+    draft: TaskDraft,
+    context: ValidationContext,
+    solver_model: TrialModel,
+    controls_model: ModelClient,
+    adversary_model: ModelClient,
 ) -> ValidationResult:
     """Validate ``draft``, running only the units without a file, and write ``validation.json``.
 
@@ -218,6 +270,7 @@ async def validate_round(
         context: The round's settings.
         solver_model: The model of the solver trials.
         controls_model: The model that writes the controls.
+        adversary_model: The model of the adversary trials.
 
     Raises:
         BuildInfrastructureFailure: the preflight probe's machine did not start twice.
@@ -231,6 +284,7 @@ async def validate_round(
             controls = group.create_task(_controls_unit(draft, context, controls_model, directory))
             group.create_task(_solver_units(lowering, context, solver_model, directory))
             group.create_task(_replay_units(lowering, controls, context, directory))
+            group.create_task(_adversary_units(lowering, controls, context, adversary_model, directory))
     except BaseExceptionGroup as failure:
         if len(failure.exceptions) == 1:
             raise failure.exceptions[0] from None
@@ -303,7 +357,7 @@ async def _solver_units(
     spec, evidence_dir = lowered.spec, _trials_dir(directory, context, lowered.spec)
     async with asyncio.TaskGroup() as group:
         for index in range(context.k):
-            plan = _resumed_plan(context, TrialKind.SOLVER, evidence_dir, str(index))
+            plan = _resumed_plan(context, TrialKind.SOLVER, evidence_dir, str(index), _any_attempt, 0)
             if plan is not None:
                 group.create_task(run_trial(spec, plan, context.engine, model, str(index)))
 
@@ -323,17 +377,66 @@ async def _replay_units(
     check_replayable(spec.task, control_set, context.engine.max_turns)
     async with asyncio.TaskGroup() as group:
         for control in control_set:
-            plan = _resumed_plan(context, TrialKind.CONTROL, evidence_dir, control.id)
+            plan = _resumed_plan(context, TrialKind.CONTROL, evidence_dir, control.id, _any_attempt, 0)
             if plan is not None:
                 group.create_task(replay_control(spec, control, plan, context.engine))
 
 
-def _resumed_plan(context: ValidationContext, kind: TrialKind, evidence_dir: Path, trial: str) -> TrialPlan | None:
-    """The plan that runs the rest of ``trial`` after the attempts on disk, or ``None`` when it is done."""
+async def _adversary_units(
+    lowering: asyncio.Task[_Lowered],
+    controls: asyncio.Task[tuple[Control, ...]],
+    context: ValidationContext,
+    model: ModelClient,
+    directory: Path,
+) -> None:
+    if not await _inputs_ready(lowering, controls):
+        return
+    lowered, control_set = lowering.result(), controls.result()
+    if lowered.spec is None:
+        return
+    spec, evidence_dir = lowered.spec, _trials_dir(directory, context, lowered.spec)
+    policy = context.adversary
+    brief = adversary_brief(spec, control_set, policy)
+
+    def under_brief(payload: bytes) -> bool:
+        return adversary_record(payload).brief == brief
+
+    async with asyncio.TaskGroup() as group:
+        for index in range(policy.k):
+            trial = str(index)
+            graded_submissions = _numbered_dirs(evidence_dir / str(TrialKind.ADVERSARY) / trial / SUBMISSIONS_DIR)
+            floor = graded_submissions[-1] + 1 if graded_submissions else 0
+            plan = _resumed_plan(context, TrialKind.ADVERSARY, evidence_dir, trial, under_brief, floor)
+            if plan is not None:
+                run = run_adversary_trial(spec, brief, policy, plan, context.engine, model, trial, context.max_retries)
+                group.create_task(run)
+
+
+def _any_attempt(payload: bytes) -> bool:
+    return True
+
+
+def _resumed_plan(
+    context: ValidationContext,
+    kind: TrialKind,
+    evidence_dir: Path,
+    trial: str,
+    covers: Callable[[bytes], bool],
+    floor: int,
+) -> TrialPlan | None:
+    """The plan that runs the rest of ``trial`` after the attempts on disk, or ``None`` when it is done.
+
+    Only the attempts whose file ``covers`` accepts belong to this run of the trial and spend its retries; the
+    trial is done when the last attempt is one of them and ends it. The next attempt is numbered after every
+    attempt on disk and at least ``floor``.
+    """
     attempts = _attempt_numbers(evidence_dir / str(kind) / trial)
-    if attempts:
-        last = attempt_outcome(_attempt_path(evidence_dir, kind, trial, attempts[-1]).read_bytes())
-        if isinstance(last, Graded) or not last.retryable or len(attempts) > context.max_retries:
+    payloads = {attempt: _attempt_path(evidence_dir, kind, trial, attempt).read_bytes() for attempt in attempts}
+    covered = [attempt for attempt in attempts if covers(payloads[attempt])]
+    spent = len(covered) if covered and covered[-1] == attempts[-1] else 0
+    if spent:
+        last = attempt_outcome(payloads[attempts[-1]])
+        if isinstance(last, Graded) or not last.retryable or spent > context.max_retries:
             return None
     return TrialPlan(
         workpiece_id=context.workpiece_id,
@@ -341,12 +444,18 @@ def _resumed_plan(context: ValidationContext, kind: TrialKind, evidence_dir: Pat
         kind=kind,
         k=1,
         deadlines=context.deadlines,
-        max_retries=context.max_retries - len(attempts),
+        max_retries=context.max_retries - spent,
         retry_backoff=context.retry_backoff.schedule(),
         evidence_dir=evidence_dir,
         ledger=context.ledger,
-        first_attempt=attempts[-1] + 1 if attempts else 0,
+        first_attempt=max(floor, attempts[-1] + 1 if attempts else 0),
     )
+
+
+def _numbered_dirs(directory: Path) -> list[int]:
+    if not directory.is_dir():
+        return []
+    return sorted(int(path.name) for path in directory.iterdir() if path.is_dir() and path.name.isdigit())
 
 
 def _attempt_numbers(trial_dir: Path) -> list[int]:
@@ -378,7 +487,7 @@ def _result(
     """The round's result, read back from its unit files."""
     if lowered.spec is None:
         rejected = Lowering(LoweringStatus.REJECTED, lowered.detail, (), None, None)
-        return ValidationResult(context.workpiece_id, context.round, rejected, None, ())
+        return ValidationResult(context.workpiece_id, context.round, rejected, None, (), ())
     trial_digest = _trial_digest(context, lowered.spec)
     status = LoweringStatus.REFUSED if lowered.refusals else LoweringStatus.LOWERED
     lowering = Lowering(status, "", lowered.refusals, lowered.fallback, trial_digest)
@@ -389,6 +498,7 @@ def _result(
         lowering,
         _solver_evidence(context, trials_dir),
         _control_results(context, _replay_dir(trials_dir, controls), controls),
+        tuple(_adversary_result(context, trials_dir, str(index)) for index in range(context.adversary.k)),
     )
 
 
@@ -421,6 +531,28 @@ def _control_results(
         cause = None if isinstance(outcome, Graded) else outcome.cause
         results.append(ControlResult(control.id, control.kind, verdict, cause, _relative(context, path)))
     return tuple(results)
+
+
+def _adversary_result(context: ValidationContext, evidence_dir: Path, trial: str) -> AdversaryResult:
+    attempt = _attempt_numbers(evidence_dir / str(TrialKind.ADVERSARY) / trial)[-1]
+    path = _attempt_path(evidence_dir, TrialKind.ADVERSARY, trial, attempt)
+    payload = path.read_bytes()
+    record = adversary_record(payload)
+    graded = _trial_result(trial, attempt_outcome(payload), "")
+    submissions_dir = evidence_dir / str(TrialKind.ADVERSARY) / trial / SUBMISSIONS_DIR / str(attempt)
+    submissions = []
+    for submission in record.submissions:
+        grading = _attempt_numbers(submissions_dir / str(TrialKind.CONTROL) / submission.trial)
+        grading_file = _attempt_path(submissions_dir, TrialKind.CONTROL, submission.trial, grading[-1])
+        grade = submission.grade
+        submissions.append(
+            SubmissionResult(
+                submission.ordinal, grade.status, grade.reward, submission.passed, _relative(context, grading_file)
+            )
+        )
+    return AdversaryResult(
+        trial, record.mode, graded.status, graded.cause, record.claim, tuple(submissions), _relative(context, path)
+    )
 
 
 def _relative(context: ValidationContext, path: Path) -> str:

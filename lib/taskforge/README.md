@@ -49,7 +49,8 @@ src/taskforge/
                                lowering.py: `lower`, a task lowered for the validating host;
                                control_drafts.py: `write_controls`, the controls of a draft round;
                                controls.py: control replay; outcome.py, evidence.py: outcomes and their totals
-                               round.py: `validate_round`, one validation round as a graph of units
+                               round.py: `validate_round`, one validation round as a graph of units;
+                               adversary.py, adversary_prompts.py: adversary trials and their brief
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
 
@@ -546,11 +547,11 @@ where it stopped. `stage50_validate.evidence.Evidence(outcomes).reward_stats(kin
 trials. `stage50_validate.controls.replay(spec, controls, plan, settings)` replays each control as
 one `CONTROL` trial named by its id.
 
-`stage50_validate.round.validate_round(draft, context, solver_model, controls_model)` runs one
-validation round from these parts as a graph of units. Lowering (`preflight`) and control writing
-start together; each of the `context.k` solver trials starts once the lowering is done, without
-waiting for the controls; each control's replay starts once both the lowered spec and the controls
-exist. Every unit is idempotent on its own file, so a relaunch runs only the units whose files are
+`stage50_validate.round.validate_round(draft, context, solver_model, controls_model, adversary_model)`
+runs one validation round from these parts as a graph of units. Lowering (`preflight`) and control
+writing start together; each of the `context.k` solver trials starts once the lowering is done, without
+waiting for the controls; each control's replay and each of the `context.adversary.k` adversary trials
+start once both the lowered spec and the controls exist, without waiting for a solver trial. Every unit is idempotent on its own file, so a relaunch runs only the units whose files are
 missing:
 
 ```
@@ -559,6 +560,8 @@ missing:
 <round_dir>/validation/<draft>/controls.json                 the written controls
 <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
 <round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
+<round_dir>/validation/<draft>/<task>/adversary/<i>/attempt-<n>.json
+<round_dir>/validation/<draft>/<task>/adversary/<i>/submissions/<n>/control/s<m>/attempt-<k>.json
 ```
 
 `<draft>` is `content_hash.digest` of the draft's task, `<task>` the `trials.task_digest` of the
@@ -571,8 +574,23 @@ counting as ungraded. The result is read back from the unit files (`trials.attem
 `validation.json` holds every decision input without the rollouts: the lowering's status
 (`lowered`, `refused` by a factory, `rejected` by RolloutEngine, when no trial runs), refusals and
 backend fallback; each solver trial's status, reward, cause and attempt file, with the reward totals
-and ungraded causes of its `Evidence`; and each control's verdict (`met`, `violated`, `ungraded`) and
-cause. `load_validation(round_dir)` reads it back.
+and ungraded causes of its `Evidence`; each control's verdict (`met`, `violated`, `ungraded`) and
+cause; and each adversary trial's status, cause, claim and submissions with their grades and rewards.
+`load_validation(round_dir)` reads it back.
+
+An adversary trial (`stage50_validate.adversary.run_adversary_trial`) red-teams the grader as an agent
+loop with two tools: `shell` on a private task machine, started as the engine starts the solver's, and
+`submit`, which grades one candidate (a final reply and the files it names) as a control is graded, on a
+fresh machine. `AdversaryPolicy` sets the trials per round, the submissions per attempt (a `submit` past
+them grades nothing), the turns, the sampling and the mode; the round's deadlines, retries and backoff
+apply. A `blackbox` adversary sees the task as the solver does; a `whitebox` one is also shown the
+grader's specification and verifier files, the round's controls with their expected rewards and the
+task's example answers. The brief (`adversary_prompts`) asks for at least `min_probes` shortcut
+candidates and a final `NO_SHORTCUT` or `SHORTCUT:` line, recorded as the trial's claim. An attempt is
+graded with its last passing submission's grade, else its last submission's. Its attempt file holds the
+agent's whole rollout, the brief and every submission; an attempt under another brief, such as another
+mode or control set, does not count as done. The round records facts only: whether a passing submission
+is a shortcut is review's judgement.
 
 ## Testing
 

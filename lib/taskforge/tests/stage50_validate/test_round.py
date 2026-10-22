@@ -1,7 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""validate_round: the unit graph, resuming from the unit files, files keyed by what they cover, cancellation."""
+"""validate_round: the unit graph, resuming from the unit files, files keyed by what they cover, cancellation, and
+the adversary trials."""
 
 import asyncio
 import json
@@ -14,11 +15,12 @@ from pydantic import BaseModel
 from rolloutengine.models import Model, ModelRequest, ModelTurn
 from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import AnswerType, PlainText, Source
 from verifyit.spec import ExactSpec
 
 from taskforge.ledger.records import EntryKind
-from taskforge.llm.client import Completion, ModelClient, StructuredResult
+from taskforge.llm.client import Completion, FinishReason, ModelClient, StructuredResult, ToolCall, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
@@ -32,6 +34,7 @@ from taskforge.stage40_build_with_program.step_store import (
     RLEnvBuildStepKey,
     RLEnvBuildStepStore,
 )
+from taskforge.stage50_validate.adversary import AdversaryMode, AdversaryPolicy, Claim, ClaimKind
 from taskforge.stage50_validate.control_drafts import CONTROLS_STEP
 from taskforge.stage50_validate.controls import ControlVerdict
 from taskforge.stage50_validate.round import (
@@ -113,7 +116,25 @@ def built_draft(store_root: Path) -> TaskDraft:
     return TaskDraft(task=TASK, provenance=provenance)
 
 
-def round_context(tmp_path: Path, ledger, k: int = 2, deadlines: Deadlines | None = None) -> ValidationContext:
+def adversary_policy(k: int, submissions: int = 3, mode: AdversaryMode = AdversaryMode.BLACKBOX) -> AdversaryPolicy:
+    return AdversaryPolicy(
+        k=k,
+        submissions=submissions,
+        repair_submissions=1,
+        max_turns=6,
+        sampling=LLMPolicy(max_continuations=0),
+        mode=mode,
+        min_probes=3,
+    )
+
+
+def round_context(
+    tmp_path: Path,
+    ledger,
+    k: int = 2,
+    deadlines: Deadlines | None = None,
+    adversary: AdversaryPolicy | None = None,
+) -> ValidationContext:
     return ValidationContext(
         workpiece_id=WORKPIECE,
         round=0,
@@ -134,6 +155,7 @@ def round_context(tmp_path: Path, ledger, k: int = 2, deadlines: Deadlines | Non
         max_retries=1,
         retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=2.0, jitter=0.0),
         sampling=LLMPolicy(),
+        adversary=adversary or adversary_policy(k=0),
         ledger=ledger,
     )
 
@@ -188,7 +210,7 @@ class HeldClient:
 
 
 class UncalledClient:
-    """A control writer for a round whose controls are on disk: any call fails the test."""
+    """A model the round must not call: the controls are on disk, or no adversary trial is due."""
 
     @property
     def model(self) -> str:
@@ -197,12 +219,65 @@ class UncalledClient:
     async def complete(
         self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
     ) -> Completion:
-        raise AssertionError("the round wrote controls it had on disk")
+        raise AssertionError("the round called a model whose work was on disk")
 
     async def complete_structured[T: BaseModel](
         self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
     ) -> StructuredResult[T]:
-        raise AssertionError("the round wrote controls it had on disk")
+        raise AssertionError("the round called a model whose work was on disk")
+
+
+@dataclass(frozen=True)
+class Submit:
+    reply: str
+
+
+USAGE = Usage(prompt_tokens=10, completion_tokens=5, reasoning_tokens=0, cached_tokens=0)
+
+
+@dataclass
+class AdversaryScript:
+    """An adversary whose n-th reply in a conversation is ``turns[n]``: a ``submit`` call or its final text.
+
+    It sets ``called`` on its first request and ``answered`` when it gives its final text, sets ``held`` and waits on
+    ``release`` before its reply numbered ``hold_at`` when that is given, and keeps every conversation it was sent.
+    """
+
+    turns: tuple[Submit | str, ...]
+    hold_at: int | None = None
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+    called: asyncio.Event = field(default_factory=asyncio.Event)
+    answered: asyncio.Event = field(default_factory=asyncio.Event)
+    held: asyncio.Event = field(default_factory=asyncio.Event)
+    requests: list[list[Message]] = field(default_factory=list)
+
+    @property
+    def model(self) -> str:
+        return "adversary"
+
+    async def complete(
+        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
+    ) -> Completion:
+        self.requests.append(list(messages))
+        self.called.set()
+        index = sum(message["role"] == "assistant" for message in messages)
+        if index == self.hold_at:
+            self.held.set()
+            await self.release.wait()
+        turn = self.turns[index]
+        if isinstance(turn, Submit):
+            call = ToolCall(f"call-{index}", "submit", json.dumps({"reply": turn.reply}))
+            return Completion("", "", (call,), FinishReason.TOOL_CALLS, USAGE, 0.1, 0.01, 0.09, 0, ())
+        self.answered.set()
+        return Completion(turn, "", (), FinishReason.STOP, USAGE, 0.1, 0.01, 0.09, 0, ())
+
+    async def complete_structured[T: BaseModel](
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
+    ) -> StructuredResult[T]:
+        raise AssertionError("an adversary makes no structured call")
+
+
+PROBES = (Submit("41"), Submit("42"), "I submitted the honest answer.\nNO_SHORTCUT")
 
 
 def trial_steps(ledger, since: int = 0) -> set[str]:
@@ -211,7 +286,14 @@ def trial_steps(ledger, since: int = 0) -> set[str]:
 
 def evidence_files(result: ValidationResult) -> list[str]:
     assert result.solver is not None
-    return [trial.attempt_file for trial in result.solver.trials] + [c.attempt_file for c in result.controls]
+    adversary = [trial.attempt_file for trial in result.adversary]
+    submissions = [submission.attempt_file for trial in result.adversary for submission in trial.submissions]
+    return [
+        *(trial.attempt_file for trial in result.solver.trials),
+        *(c.attempt_file for c in result.controls),
+        *adversary,
+        *submissions,
+    ]
 
 
 def files_under(directory: Path) -> dict[str, bytes]:
@@ -226,7 +308,9 @@ async def test_solver_trials_start_before_the_controls_exist_and_replay_waits_fo
     solver = SolverModel()
     context = round_context(tmp_path, ledger)
     running = asyncio.create_task(
-        validate_round(built_draft(tmp_path / "store"), context, solver, HeldClient(glm_client, release))
+        validate_round(
+            built_draft(tmp_path / "store"), context, solver, HeldClient(glm_client, release), UncalledClient()
+        )
     )
 
     await asyncio.wait_for(solver.called.wait(), timeout=30)
@@ -249,14 +333,14 @@ async def test_solver_trials_start_before_the_controls_exist_and_replay_waits_fo
 async def test_a_relaunch_redoes_only_the_units_whose_files_are_missing(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     context = round_context(tmp_path, ledger)
-    first = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client)
+    first = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, UncalledClient())
     assert first.solver is not None
     (context.round_dir / first.solver.trials[1].attempt_file).unlink()
     (context.round_dir / first.controls[1].attempt_file).unlink()
     recorded = len(ledger.entries)
 
     solver = SolverModel(allowed=frozenset({"solver/1/0"}))
-    again = await validate_round(built_draft(tmp_path / "store"), context, solver, UncalledClient())
+    again = await validate_round(built_draft(tmp_path / "store"), context, solver, UncalledClient(), UncalledClient())
 
     assert solver.steps == ["solver/1/0"]
     assert trial_steps(ledger, recorded) == {"solver/1/0", "control/N1-shortcut/0"}
@@ -268,14 +352,16 @@ async def test_the_trials_of_another_lowered_spec_are_not_read_as_done(glm_clien
     """Other deadlines lower the same draft to another spec: its trials run in their own directory."""
     fake_glm.stream(content=controls_reply("41"))
     draft_of_round = built_draft(tmp_path / "store")
-    first = await validate_round(draft_of_round, round_context(tmp_path, ledger), SolverModel(), glm_client)
+    first = await validate_round(
+        draft_of_round, round_context(tmp_path, ledger), SolverModel(), glm_client, UncalledClient()
+    )
     trials_dir = tmp_path / "round" / Path(evidence_files(first)[0]).parents[2]
     before = files_under(trials_dir)
 
     solver = SolverModel()
     longer = Deadlines(total_turn_timeout=40, attempt_timeout=80)
     other = await validate_round(
-        draft_of_round, round_context(tmp_path, ledger, deadlines=longer), solver, UncalledClient()
+        draft_of_round, round_context(tmp_path, ledger, deadlines=longer), solver, UncalledClient(), UncalledClient()
     )
 
     assert other.lowering.task_digest != first.lowering.task_digest
@@ -288,11 +374,13 @@ async def test_a_rewritten_control_set_is_replayed_again(glm_client, fake_glm, l
     fake_glm.stream(content=controls_reply("41"))
     fake_glm.stream(content=controls_reply("43"))
     context = round_context(tmp_path, ledger)
-    first = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client)
+    first = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, UncalledClient())
     (next(context.round_dir.rglob("controls.json"))).unlink()
     recorded = len(ledger.entries)
 
-    again = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(allowed=frozenset()), glm_client)
+    again = await validate_round(
+        built_draft(tmp_path / "store"), context, SolverModel(allowed=frozenset()), glm_client, UncalledClient()
+    )
 
     assert trial_steps(ledger, recorded) == {f"control/{control_id}/0" for control_id in CONTROL_IDS}
     assert again.solver == first.solver
@@ -306,7 +394,9 @@ async def test_a_trial_cancelled_in_flight_leaves_no_attempt_and_is_rerun(glm_cl
     fake_glm.stream(content=controls_reply("41"))
     context = round_context(tmp_path, ledger, k=1)
     hanging = SolverModel(release=asyncio.Event())
-    running = asyncio.create_task(validate_round(built_draft(tmp_path / "store"), context, hanging, glm_client))
+    running = asyncio.create_task(
+        validate_round(built_draft(tmp_path / "store"), context, hanging, glm_client, UncalledClient())
+    )
     await asyncio.wait_for(hanging.called.wait(), timeout=30)
 
     running.cancel()
@@ -315,7 +405,7 @@ async def test_a_trial_cancelled_in_flight_leaves_no_attempt_and_is_rerun(glm_cl
 
     assert not [path for path in context.round_dir.rglob("*") if "/solver/" in str(path) and path.is_file()]
     solver = SolverModel()
-    result = await validate_round(built_draft(tmp_path / "store"), context, solver, glm_client)
+    result = await validate_round(built_draft(tmp_path / "store"), context, solver, glm_client, UncalledClient())
     assert solver.steps == ["solver/0/0"]
     assert result.solver is not None and result.solver.ungraded == {}
     assert [trial.status for trial in result.solver.trials] == [TrialStatus.GRADED]
@@ -326,8 +416,134 @@ async def test_a_rejected_lowering_runs_no_trial_and_round_trips(glm_client, fak
     context = round_context(tmp_path, ledger)
     context = replace(context, engine=replace(context.engine, factories={}))
 
-    result = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(allowed=frozenset()), glm_client)
+    result = await validate_round(
+        built_draft(tmp_path / "store"), context, SolverModel(allowed=frozenset()), glm_client, UncalledClient()
+    )
 
     assert result.lowering.status is LoweringStatus.REJECTED
     assert result.solver is None and result.controls == ()
     assert load_validation(context.round_dir) == result
+
+
+async def test_adversary_trials_start_once_lowering_and_controls_exist_and_wait_for_no_solver(
+    glm_client, fake_glm, ledger, tmp_path
+):
+    fake_glm.stream(content=controls_reply("41"))
+    controls_release, solver = asyncio.Event(), SolverModel(release=asyncio.Event())
+    adversary = AdversaryScript(PROBES)
+    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=1, mode=AdversaryMode.WHITEBOX))
+    running = asyncio.create_task(
+        validate_round(
+            built_draft(tmp_path / "store"), context, solver, HeldClient(glm_client, controls_release), adversary
+        )
+    )
+
+    await asyncio.wait_for(solver.called.wait(), timeout=30)
+    assert not adversary.called.is_set()
+    controls_release.set()
+    await asyncio.wait_for(adversary.answered.wait(), timeout=30)
+    assert solver.release is not None
+    solver.release.set()
+    result = await running
+
+    controls_ended = max(entry.ended for entry in ledger.entries if entry.step == CONTROLS_STEP)
+    adversary_trials = [e for e in ledger.entries if e.kind is EntryKind.TRIAL and e.step.startswith("adversary/")]
+    solver_trials = [e for e in ledger.entries if e.kind is EntryKind.TRIAL and e.step.startswith("solver/")]
+    assert [e.step for e in adversary_trials] == ["adversary/0/0"]
+    assert adversary_trials[0].started >= controls_ended
+    assert adversary_trials[0].ended < solver_trials[0].ended
+    # The white-box brief holds this round's controls.
+    system = str(adversary.requests[0][0]["content"])
+    assert all(f"control {control_id}" in system for control_id in CONTROL_IDS)
+    (trial,) = result.adversary
+    assert (trial.status, trial.claim) == (TrialStatus.GRADED, Claim(ClaimKind.NO_SHORTCUT, "", ""))
+    # validation.json holds the adversary field without the attempt files it names.
+    for name in evidence_files(result):
+        (context.round_dir / name).unlink()
+    assert load_validation(context.round_dir) == result
+
+
+async def test_each_submission_is_graded_as_a_control_and_recorded_with_its_reward(
+    glm_client, fake_glm, ledger, tmp_path
+):
+    fake_glm.stream(content=controls_reply("41"))
+    adversary = AdversaryScript((Submit("41"), Submit("42"), "SHORTCUT: it accepts 42.\ngrader line: expected 42"))
+    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=1))
+
+    result = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, adversary)
+
+    (trial,) = result.adversary
+    graded = [(s.ordinal, s.status, s.reward, s.passed) for s in trial.submissions]
+    assert graded == [(1, GradeStatus.GRADED, 0.0, False), (2, GradeStatus.GRADED, 1.0, True)]
+    assert trial.claim == Claim(ClaimKind.SHORTCUT, "it accepts 42.", "expected 42")
+    for submission in trial.submissions:
+        grading = json.loads((context.round_dir / submission.attempt_file).read_bytes())
+        assert grading["grade"]["reward"] == submission.reward
+        assert Path(submission.attempt_file).parts[-3] == "control"
+    observations = [m for m in adversary.requests[-1] if m["role"] == "tool"]
+    assert [json.loads(str(m["content"]))["reward"] for m in observations] == [0.0, 1.0]
+
+
+async def test_the_submission_budget_grades_no_submission_past_it(glm_client, fake_glm, ledger, tmp_path):
+    fake_glm.stream(content=controls_reply("41"))
+    adversary = AdversaryScript((Submit("40"), Submit("41"), Submit("42"), "NO_SHORTCUT"))
+    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=1, submissions=2))
+
+    result = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, adversary)
+
+    (trial,) = result.adversary
+    assert [s.ordinal for s in trial.submissions] == [1, 2]
+    last_observation = [m for m in adversary.requests[-1] if m["role"] == "tool"][-1]
+    assert "submission budget spent" in json.loads(str(last_observation["content"]))["error"]
+    graded_dir = context.round_dir / Path(trial.submissions[0].attempt_file).parents[1]
+    assert sorted(path.name for path in graded_dir.iterdir()) == ["s1", "s2"]
+
+
+async def test_a_relaunch_reruns_only_a_missing_adversary_attempt(glm_client, fake_glm, ledger, tmp_path):
+    fake_glm.stream(content=controls_reply("41"))
+    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=2))
+    first = await validate_round(
+        built_draft(tmp_path / "store"), context, SolverModel(), glm_client, AdversaryScript(PROBES)
+    )
+    (context.round_dir / first.adversary[1].attempt_file).unlink()
+    recorded = len(ledger.entries)
+
+    again = await validate_round(
+        built_draft(tmp_path / "store"),
+        context,
+        SolverModel(allowed=frozenset()),
+        UncalledClient(),
+        AdversaryScript(PROBES),
+    )
+
+    steps = trial_steps(ledger, recorded)
+    assert {step for step in steps if not step.startswith("control/s")} == {"adversary/1/1"}
+    assert again.adversary[0] == first.adversary[0]
+    rerun, before = again.adversary[1], first.adversary[1]
+    assert rerun.attempt_file.endswith("adversary/1/attempt-1.json")
+    assert [(s.ordinal, s.reward) for s in rerun.submissions] == [(s.ordinal, s.reward) for s in before.submissions]
+    assert (again.solver, again.controls) == (first.solver, first.controls)
+
+
+async def test_an_adversary_attempt_cancelled_in_flight_leaves_no_attempt_file(glm_client, fake_glm, ledger, tmp_path):
+    fake_glm.stream(content=controls_reply("41"))
+    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=1))
+    hanging = AdversaryScript(PROBES, hold_at=1)
+    running = asyncio.create_task(
+        validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, hanging)
+    )
+    await asyncio.wait_for(hanging.held.wait(), timeout=30)
+
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    assert not list(context.round_dir.rglob("adversary/0/attempt-*"))
+    # The cancelled attempt's graded submission stays, so the rerun is numbered after it.
+    assert list(context.round_dir.rglob("adversary/0/submissions/0/control/s1/attempt-0.json"))
+    result = await validate_round(
+        built_draft(tmp_path / "store"), context, SolverModel(), UncalledClient(), AdversaryScript(PROBES)
+    )
+    (trial,) = result.adversary
+    assert trial.status is TrialStatus.GRADED
+    assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
