@@ -4,7 +4,9 @@
 """Shared setup for the d512 Belay interpretability study: the exact Ckpt 1 d512 model config, its checkpoint, a
 one-GPU mesh, the token sources (training cache and Paloma validation sets) and result upload."""
 
+import concurrent.futures
 import dataclasses
+import functools
 import io
 import itertools
 import json
@@ -139,6 +141,19 @@ def _examples_to_batch(source: str, examples) -> TokenBatch:
     return TokenBatch(source, tokens, np.stack(segs), weights)
 
 
+def _off_mesh(fn):
+    """Run ``fn`` on a worker thread: the datasets' per-example jit pins outputs to a CPU device, and JAX's mesh
+    context (thread-local) would otherwise make it a GPU-mesh computation."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs) -> list:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(lambda: list(fn(*args, **kwargs))).result()
+
+    return wrapper
+
+
+@_off_mesh
 def paloma_batches(batch_size: int, max_sequences: int | None = None) -> Iterator[TokenBatch]:
     """Every Paloma validation sequence, set by set, in batches of ``batch_size`` (the last batch of a set padded with
     zero-weight copies)."""
@@ -152,11 +167,6 @@ def paloma_batches(batch_size: int, max_sequences: int | None = None) -> Iterato
             yield _pad_batch(batch, batch_size)
 
 
-def paloma_lengths() -> dict[str, int]:
-    sets = data_config().validation_sets(Axis("position", SEQ_LEN))
-    return {name: len(sets[f"paloma/{name}"].as_sync_dataset()) for name in PALOMA_SETS}
-
-
 def _pad_batch(batch: TokenBatch, batch_size: int) -> TokenBatch:
     pad = batch_size - batch.tokens.shape[0]
     if pad == 0:
@@ -168,6 +178,7 @@ def _pad_batch(batch: TokenBatch, batch_size: int) -> TokenBatch:
     return TokenBatch(batch.source, rep(batch.tokens, 0), rep(batch.segment_ids, 0), rep(batch.loss_weight, 0.0))
 
 
+@_off_mesh
 def train_batches(batch_size: int, num_sequences: int, *, seed: int = 0) -> Iterator[TokenBatch]:
     """``num_sequences`` random unseen training-cache sequences (indices past the trained prefix)."""
     sets = data_config().train_sets(Axis("position", SEQ_LEN), key=jax.random.PRNGKey(0))

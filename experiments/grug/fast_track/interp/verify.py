@@ -91,7 +91,12 @@ def main() -> None:
     t0 = time.time()
     report["checkpoint"] = checkpoint
     report["chunks"] = chunk_report(checkpoint)
-    logger.info("chunk check: %d arrays, %d short", report["chunks"]["arrays"], len(report["chunks"]["short"]))
+    logger.info(
+        "chunk check: %d arrays, %d short: %s",
+        report["chunks"]["arrays"],
+        len(report["chunks"]["short"]),
+        report["chunks"]["short"],
+    )
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, checkpoint)
     report["zero_experts"] = zero_expert_report(params)
