@@ -101,6 +101,7 @@ async def test_compose_subprocess_does_not_inherit_host_credentials(
     docker_env_with_persistent_env, monkeypatch
 ):
     monkeypatch.setenv("HARBOR_HOST_SECRET", "host-only")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/host-only/ssh-agent.sock")
     monkeypatch.setenv("DOCKER_HOST", "unix:///test/docker.sock")
     create_subprocess = asyncio.create_subprocess_exec
 
@@ -119,6 +120,7 @@ async def test_compose_subprocess_does_not_inherit_host_credentials(
     )
     environment = json.loads(result.stdout)
     assert "HARBOR_HOST_SECRET" not in environment
+    assert "SSH_AUTH_SOCK" not in environment
     assert environment["DOCKER_HOST"] == "unix:///test/docker.sock"
     assert environment["FOO"] == "bar"
 
