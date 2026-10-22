@@ -199,12 +199,13 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
     # completion_only: code-infilling tasks score a raw continuation, which chat formatting breaks.
     use_chat = config["apply_chat_template"] and task["generation"] and not task["completion_only"]
     model = "local-chat-completions" if use_chat else "local-completions"
-    # Model-level extra sampler kwargs (skip_special_tokens, repetition_penalty, ...) ride on the same
-    # --gen_kwargs list as the generation budget; lm-eval forwards them on both the completions and chat
-    # routes (MCQ tasks ignore gen_kwargs). A per-model value overrides the max_gen_toks default only if
-    # it keys "max_gen_toks", which the registry does not.
-    budget_kwargs, budget_args = budget_arguments(config, task, max_length)
-    gen_kwargs = budget_kwargs + [f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items()]
+    # Evalchemy applies generation overrides to echo/logprob requests too. A larger
+    # max_tokens makes lm-eval include generated tokens in the continuation score.
+    budget_args: list[str] = []
+    gen_kwargs: list[str] = []
+    if task["generation"]:
+        budget_kwargs, budget_args = budget_arguments(config, task, max_length)
+        gen_kwargs = budget_kwargs + [f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items()]
     cmd = [
         str(Path(python).with_name("evalchemy")),
         "--model",
