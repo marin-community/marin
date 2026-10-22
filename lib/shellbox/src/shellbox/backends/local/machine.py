@@ -29,6 +29,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 from shellbox.backends.local import launch
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
@@ -389,6 +390,14 @@ def _exited(pidfd: int) -> bool:
     return bool(poller.poll(0))
 
 
+class _Pipes(NamedTuple):
+    """The read ends of a command launcher's pipes."""
+
+    status: int
+    stdout: int
+    stderr: int
+
+
 class _Output:
     """The first ``limit`` bytes of a pipe, and whether it had more; what was read stays when reading stops early."""
 
@@ -647,7 +656,7 @@ class LocalMachine:
 
     async def _launch(
         self, command: Command, environment: list[bytes], account: pwd.struct_passwd | None
-    ) -> tuple[asyncio.subprocess.Process, list[int]]:
+    ) -> tuple[asyncio.subprocess.Process, _Pipes]:
         """Start the launcher of ``command``; return it and the read ends of its status, stdout and stderr pipes.
 
         ``environment`` holds the command's variable names and values, alternately.
@@ -664,7 +673,7 @@ class LocalMachine:
         status_read, status_write = os.pipe()
         stdout_read, stdout_write = os.pipe()
         stderr_read, stderr_write = os.pipe()
-        pipes = [status_read, stdout_read, stderr_read]
+        pipes = _Pipes(status_read, stdout_read, stderr_read)
         try:
             # Environment values must stay out of both the host launcher's environment and its public argv.
             with tempfile.TemporaryFile() as environment_file:
@@ -700,27 +709,29 @@ class LocalMachine:
                 os.close(fd)
         return process, pipes
 
-    async def _communicate(self, process: asyncio.subprocess.Process, unread: list[int], command: Command) -> Result:
+    async def _communicate(self, process: asyncio.subprocess.Process, pipes: _Pipes, command: Command) -> Result:
         """Write the command's input, collect its output and report, and stop it if its timeout expires."""
         assert process.stdin is not None
         stdout, stderr = _Output(command.output_limit_bytes), _Output(command.output_limit_bytes)
+        unread = list(pipes)
         transports: list[asyncio.ReadTransport] = []
         collecting: list[asyncio.Task[None]] = []
+
+        async def reader(fd: int) -> asyncio.StreamReader:
+            unread.remove(fd)
+            stream, transport = await _pipe_reader(fd)
+            transports.append(transport)
+            return stream
+
         sending = asyncio.create_task(_send_input(process.stdin, command.stdin))
         try:
             try:
-                streams = []
-                while unread:
-                    stream, transport = await _pipe_reader(unread.pop(0))
-                    streams.append(stream)
-                    transports.append(transport)
-                collecting = [
-                    asyncio.create_task(output.collect(stream))
-                    for output, stream in zip((stdout, stderr), streams[1:], strict=True)
-                ]
+                status = await reader(pipes.status)
+                for output, fd in ((stdout, pipes.stdout), (stderr, pipes.stderr)):
+                    collecting.append(asyncio.create_task(output.collect(await reader(fd))))
                 async with asyncio.timeout(command.timeout):
                     # The launcher closes its status pipe when it exits, once the command's process group has ended.
-                    report = await streams[0].read()
+                    report = await status.read()
                 await _end_input(process, sending)
                 await process.wait()
             except BaseException as interruption:
