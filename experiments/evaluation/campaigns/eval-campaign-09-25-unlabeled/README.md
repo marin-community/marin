@@ -66,3 +66,32 @@ and Harbor policy digest.
 Credentials are operational inputs. Export `HF_TOKEN`, `TOGETHER_API_KEY`, and CoreWeave object-store
 credentials, or use the configured Google Secret Manager access. Set `EVAL_CAMPAIGN_SECRETS_ENV` only
 when reading Hugging Face or Together credentials from a local environment file.
+
+## Sharded SWE-bench recovery
+
+`analysis/swebench_recovery/shard.py` partitions the remaining tasks from a
+combined recovery audit. Stop the source Iris root and confirm it is terminal,
+then run `combine.py --manifest OLD_MANIFEST.json --recovery-results OLD_RESULTS_URL
+--output AUDIT.json` before preparing replacement jobs. Supply manual reviews
+with `--reviews REVIEWS.json` when required.
+Retained tasks must have audited numeric rewards; infrastructure-affected and
+unfinished tasks are assigned to exactly one new shard.
+
+Run `shard.py --audit AUDIT.json --base-config CONFIG.yaml --source-root ROOT
+--count 4 --output DIRECTORY`. It writes a retained-task manifest, a combined
+recovery config, and four `swebench-shard-N.yaml` configs. Check these files into
+the campaign worktree before launching. Pass one shard YAML as the Harbor config
+and the original canonical model-serving config as the model config for each job.
+The combined recovery config is audit input, not an additional launch. Only
+task selection differs between the shard configs.
+
+After launch, record each canonical config path and its exact results URL in a
+JSON list: `[{"config": "PATH.yaml", "results": "s3://.../results"}, ...]`.
+Run `combine.py --manifest DIRECTORY/manifest.json --shards SHARDS.json
+--output AUDIT.json`, adding `--reviews REVIEWS.json` for hash-bound manual
+error classifications. The audit rejects overlapping assignments, tasks omitted
+from the shard plan, benchmark-config drift, and runtime mismatches. Assigned
+tasks without results remain pending. The audit records each shard's effective
+config and counts valid scored tasks across all shards and retained evidence
+against the original 500-task denominator.
+Do not seal a shard independently or count an unfinished shard as a model zero.
