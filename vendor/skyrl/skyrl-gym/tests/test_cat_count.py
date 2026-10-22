@@ -96,7 +96,7 @@ def test_environment_scores_completion_and_reports_verification_and_metrics(
     metrics = step.metrics
     assert metrics[f"exact_n{n}"] == float(exact)
     assert metrics[f"n_words_n{n}"] == float(n_words)
-    assert metrics["has_cat"] == 1.0
+    assert metrics["has_target"] == 1.0
     assert metrics["truncated"] == float(truncated)
 
 

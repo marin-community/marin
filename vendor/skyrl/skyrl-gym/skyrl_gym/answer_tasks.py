@@ -78,7 +78,7 @@ def grade_cat_count(turn: ModelTurn, config: dict, extras: dict) -> TaskTransiti
         grade=GradeResult(Outcome.GRADED, float(score.exact), passed=score.exact),
         metrics={
             "exact": float(score.exact),
-            "has_cat": float(score.cat_unigram_count > 0),
+            "has_target": float(score.target_unigram_count > 0),
             "junk": float(score.junk_words),
             "truncated": float(score.truncated),
             f"exact_n{count}": float(score.exact),

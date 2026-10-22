@@ -14,7 +14,7 @@ NGRAM_WEIGHTS = {1: 0.5, 2: 0.3, 3: 0.2}
 JUNK_PENALTY = 0.25
 JUNK_PENALTY_PER_EXTRA_WORD = 0.02
 JUNK_PENALTY_CAP = 0.45
-EXTRA_CAT_PENALTY = 0.01
+EXTRA_TARGET_PENALTY = 0.01
 TRUNCATION_PENALTY = 0.1
 
 _TRAILING_SPECIAL = re.compile(r"(?:(?:<\|im_end\|>|</s>|<\|endoftext\|>|<\|eot_id\|>)\s*)+$")
@@ -26,12 +26,12 @@ _EDGE_PUNCT = re.compile(r"^[^\w]+|[^\w]+$")
 class CatCountScore:
     reward: float
     exact: bool
-    cat_unigram_count: int
-    cat_bigram_count: int
-    cat_trigram_count: int
+    target_unigram_count: int
+    target_bigram_count: int
+    target_trigram_count: int
     n_words: int
     junk_words: int
-    extra_cats: int
+    extra_targets: int
     truncated: bool
 
 
@@ -46,7 +46,7 @@ def shaping_words(text: str) -> list[str]:
     return [w for w in words if w]
 
 
-def cat_ngram_count(words: Sequence[str], k: int, word: str = TARGET_WORD) -> int:
+def target_ngram_count(words: Sequence[str], k: int, word: str = TARGET_WORD) -> int:
     """Count positions containing k consecutive target words."""
     run = 0
     count = 0
@@ -71,14 +71,14 @@ def cat_count_score(
 
     words = shaping_words(completion)
     shaping_word = word.lower()
-    counts = {k: cat_ngram_count(words, k, shaping_word) for k in NGRAM_WEIGHTS}
+    counts = {k: target_ngram_count(words, k, shaping_word) for k in NGRAM_WEIGHTS}
     orders = [k for k in NGRAM_WEIGHTS if k <= n]
     weight_total = sum(NGRAM_WEIGHTS[k] for k in orders)
     shaped = sum(NGRAM_WEIGHTS[k] * closeness(counts[k], n - k + 1) for k in orders) / weight_total
 
     exact = strip_completion(completion) == " ".join([word] * n)
     junk_words = sum(1 for w in words if w != shaping_word)
-    extra_cats = max(0, counts[1] - n)
+    extra_targets = max(0, counts[1] - n)
     truncated = stop_reason == "length"
 
     reward = SHAPED_WEIGHT * shaped + EXACT_WEIGHT * float(exact)
@@ -86,7 +86,7 @@ def cat_count_score(
         reward -= min(JUNK_PENALTY_CAP, JUNK_PENALTY + JUNK_PENALTY_PER_EXTRA_WORD * (junk_words - 1))
     elif not words:
         reward -= JUNK_PENALTY
-    reward -= EXTRA_CAT_PENALTY * extra_cats
+    reward -= EXTRA_TARGET_PENALTY * extra_targets
     if truncated:
         reward -= TRUNCATION_PENALTY
     reward = max(-1.0, min(1.0, reward))
@@ -94,11 +94,11 @@ def cat_count_score(
     return CatCountScore(
         reward=reward,
         exact=exact,
-        cat_unigram_count=counts[1],
-        cat_bigram_count=counts[2],
-        cat_trigram_count=counts[3],
+        target_unigram_count=counts[1],
+        target_bigram_count=counts[2],
+        target_trigram_count=counts[3],
         n_words=len(words),
         junk_words=junk_words,
-        extra_cats=extra_cats,
+        extra_targets=extra_targets,
         truncated=truncated,
     )
