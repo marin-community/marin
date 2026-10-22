@@ -76,6 +76,7 @@ DAYTONA_RL_SECRET_NAME = "DAYTONA_RL_API_KEY"
 DAYTONA_RL_SECRET_VERSION = "1"
 
 
+RUNTIME_BUNDLE_INCLUDES = ("**/*",)
 AUTOMATIC_RESOURCE_REQUEST = "auto"
 MEMORY_RESOURCE = "memory"
 DISK_RESOURCE = "ephemeral-storage"
@@ -1076,7 +1077,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             )
         with bundle.controller.tunnel(address=controller_address) as controller_url:
             # The sealed workspace already contains only the declared runtime files.
-            yield IrisClient.remote(controller_url, workspace=workspace, extra_bundle_includes=("**/*",))
+            yield IrisClient.remote(controller_url, workspace=workspace, extra_bundle_includes=RUNTIME_BUNDLE_INCLUDES)
 
     if args.target_cluster:
         # Federated submission MUST carry the IAP *user* identity: the controller rejects
@@ -1090,7 +1091,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         from iris.cli.connect import open_iris_client
 
         client_cm = open_iris_client(
-            config_file=Path(submit_cluster_config), workspace=workspace, extra_bundle_includes=("**/*",)
+            config_file=Path(submit_cluster_config), workspace=workspace, extra_bundle_includes=RUNTIME_BUNDLE_INCLUDES
         )
     else:
         client_cm = _direct_client()
@@ -1147,7 +1148,7 @@ def _ambient_in_cluster_client(workspace: Path) -> IrisClient | None:
     controller_url = os.environ.get("IRIS_CONTROLLER_URL")
     if not controller_url:
         return None
-    return IrisClient.in_cluster(controller_url, workspace=workspace, extra_bundle_includes=("**/*",))
+    return IrisClient.in_cluster(controller_url, workspace=workspace, extra_bundle_includes=RUNTIME_BUNDLE_INCLUDES)
 
 
 def _seconds_to_duration(secs: int):
