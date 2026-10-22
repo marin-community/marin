@@ -49,6 +49,8 @@ from experiments.post_training.snowball_inventory_probe import (
     runtime_source_evidence,
 )
 
+EXPORT_POLICY_NODES = 4
+EXPORT_POLICY_GPUS_PER_NODE = 8
 REFERENCE_RUNTIME_LIMITS = {"model_turn_timeout": 1800.0, "total_turn_timeout": 2400.0, "attempt_timeout": 3600.0}
 
 
@@ -476,12 +478,15 @@ def export_config(request: dict) -> dict:
         raise ValueError("The selected step has not been committed")
     filesystem, path = fs_and_path(checkpoint_path)
     inventory = {entry.path: entry.size for _, entry in file_inventory(filesystem, path)}
-    required = {"trainer_state.pt", "policy/.metadata", *(f"policy/__{rank}_0.distcp" for rank in range(32))}
+    placement = training.skyrl.trainer.placement
+    policy_nodes = int(placement.policy_num_nodes)
+    policy_gpus_per_node = int(placement.policy_num_gpus_per_node)
+    if (policy_nodes, policy_gpus_per_node) != (EXPORT_POLICY_NODES, EXPORT_POLICY_GPUS_PER_NODE):
+        raise ValueError("This exporter requires the approved four-by-eight saved policy geometry")
+    policy_shards = policy_nodes * policy_gpus_per_node
+    required = {"trainer_state.pt", "policy/.metadata", *(f"policy/__{rank}_0.distcp" for rank in range(policy_shards))}
     if any(inventory.get(name, 0) <= 0 for name in required):
         raise ValueError("Selected checkpoint is incomplete or has already been removed by retention")
-    placement = training.skyrl.trainer.placement
-    if int(placement.policy_num_nodes) != 4 or int(placement.policy_num_gpus_per_node) != 8:
-        raise ValueError("This exporter requires the approved four-by-eight saved policy geometry")
     model = training.inputs.model
     destination = StoragePath(request["output_path"])
     export_root = str(destination / "exports")
@@ -491,8 +496,8 @@ def export_config(request: dict) -> dict:
         checkpoint_path=checkpoint_path,
         export_path=export_root,
         model_path=str(model.local_path),
-        num_nodes=4,
-        gpus_per_node=8,
+        num_nodes=policy_nodes,
+        gpus_per_node=policy_gpus_per_node,
         model_source_uri=str(model.uri),
         model_source_identity=str(model.identity),
     )
@@ -510,7 +515,7 @@ def export_config(request: dict) -> dict:
         cpu=32,
         memory="1800GB",
         disk="2TB",
-        allocation_gpus_per_node=8,
+        allocation_gpus_per_node=policy_gpus_per_node,
     )
     config = checkpoint_export_launch_config(training, export_request, spec)
     config.run.id = "snowball-evaluation-export-" + hashlib.sha256(str(destination).encode()).hexdigest()[:12]
@@ -529,7 +534,9 @@ def export_config(request: dict) -> dict:
         "source_config_sha256": hashlib.sha256(source_text.encode()).hexdigest(),
         **runtime_source_evidence(),
         "checkpoint_step": step,
-        "checkpoint_checks": "Committed step marker and nonempty control/metadata/32 shards; no tensor rehash or resume",
+        "checkpoint_checks": (
+            f"Committed step marker and nonempty control/metadata/{policy_shards} shards; no tensor rehash or resume"
+        ),
     }
 
 
