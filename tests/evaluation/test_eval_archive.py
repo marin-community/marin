@@ -24,11 +24,14 @@ from finestore.eval import (
     sample_to_archive_row,
     write_sample_parquet,
 )
+from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
+from marin.evaluation.evalchemy.client import completed_result
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import (
+    evalchemy_result_committed,
     export_lm_eval_samples,
     preserved_sample_sources,
     rebuild_lm_eval_samples,
@@ -36,6 +39,7 @@ from marin.evaluation.lm_eval_samples import (
     sample_from_lm_eval,
     samples_from_lm_eval,
     summarize_native_eval_samples,
+    task_coverage,
 )
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
@@ -186,6 +190,71 @@ def test_native_summary_reads_evalchemy_normalized_rows(tmp_path, provenance):
         "requires_judge": False,
         **benchmark,
     }
+
+
+def test_native_summary_reads_direct_evalchemy_result_table(tmp_path):
+    root = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(root, writer_id="evalchemy-samples")
+    try:
+        store.add_sample(
+            EvalSample(
+                task="gsm8k_0shot",
+                doc_id="0",
+                kind=SampleKind.GENERATION,
+                output="4",
+                extracted="4",
+                grading=Grading(method="lm-eval:exact_match", metric="exact_match", score=1.0, passed=True),
+                metrics={"exact_match": 1.0},
+                correct=True,
+            )
+        )
+        store.seal()
+    finally:
+        store.close()
+
+    document = json.dumps(
+        {
+            "results": {"gsm8k": {"exact_match,flexible-extract": 1.0}},
+            **_result_contract("gsm8k", "exact_match", "accuracy", 1.0, n_benchmark=1, n_attempted=1),
+        }
+    )
+    results = DataStore.open(root, writer_id="evalchemy-results")
+    try:
+        results.table(
+            "evalchemy_results",
+            primary_key=("source_prefix",),
+            schema=pa.schema(
+                [
+                    pa.field("source_prefix", pa.string()),
+                    pa.field("document", pa.large_string()),
+                    pa.field("scored", pa.bool_()),
+                ]
+            ),
+            on_conflict=OnConflict.SUPERSEDE,
+        )
+        with results.unbounded_transaction() as transaction:
+            transaction.table("evalchemy_results").add(
+                {"source_prefix": "gsm8k_0shot", "document": document, "scored": True}
+            )
+        results.seal()
+    finally:
+        results.close()
+
+    summary = summarize_native_eval_samples(root, tasks=(EvalTaskConfig("gsm8k", 0),))
+
+    assert completed_result(root, "gsm8k_0shot")
+    assert evalchemy_result_committed(root, "gsm8k_0shot")
+    assert summary.samples == 1
+    assert summary.coverage == {
+        "gsm8k_0shot": TaskCoverage(
+            n_benchmark=1,
+            n_attempted=1,
+            n_scored=1,
+            n_correct=1,
+            n_unanswered=0,
+        )
+    }
+    assert summary.canonical_metrics == {"gsm8k_0shot": {"accuracy": 1.0}}
 
 
 def test_native_summary_partitions_repeated_task_configurations(tmp_path):
@@ -541,6 +610,22 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     source.unlink()
     assert rebuild_lm_eval_samples(str(results)) == 2
     assert ReadView(str(results)).scan("samples").num_rows == 2
+
+
+def test_rebuild_preserves_repeated_sample_trial_ids(tmp_path):
+    results = tmp_path / "run" / "results"
+    first = _lm_eval_row(0, "none", 0.0, "first") | {"sample_repeat": 0}
+    second = _lm_eval_row(0, "none", 1.0, "second") | {"sample_repeat": 1}
+    source = _write_jsonl(results, [first, second])
+    assert export_lm_eval_samples(str(results)).samples == 2
+
+    source.unlink()
+    assert rebuild_lm_eval_samples(str(results)) == 2
+    rows = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {(row["trial_id"], sample_from_archive_row(row).output) for row in rows} == {
+        ("0", "first"),
+        ("1", "second"),
+    }
 
 
 def test_export_preserves_every_artifact_the_harness_left(tmp_path):
@@ -962,6 +1047,37 @@ def test_declared_aggregate_metric_uses_its_per_sample_base_metric(tmp_path):
 
     [stored] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(stored).grading.metric == "accuracy"
+
+
+@pytest.mark.parametrize("metric", ["pass@1", "pass_at_1", "input_pass@1", "output_pass@1"])
+def test_rebuild_reads_sandbox_pass_rates_for_declared_pass_at_one(tmp_path, metric):
+    results = tmp_path / "results"
+    directory = results / "cruxeval" / "native"
+    directory.mkdir(parents=True)
+    rows = [_lm_eval_row(index, "none", score, "4") for index, score in enumerate((1.0, 0.0))]
+    for row in rows:
+        row["pass_rate"] = row.pop("exact_match")
+    source = directory / "samples_CruxEval_native.jsonl"
+    source.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    (directory / "results_20260807.json").write_text(
+        json.dumps(
+            {
+                "results": {"CruxEval": {metric: 0.5}},
+                **_result_contract("CruxEval", metric, metric, 0.5, n_benchmark=2, n_attempted=2),
+            }
+        )
+    )
+    task = EvalTaskConfig("CruxEval", 0, task_alias="cruxeval")
+    exported = export_lm_eval_samples(str(results), tasks=(task,))
+    source.unlink()
+
+    assert rebuild_lm_eval_samples(str(results), tasks=exported.tasks) == 2
+    samples = [sample_from_archive_row(row) for row in ReadView(str(results)).scan("samples").to_pylist()]
+    coverage = task_coverage(samples, n_benchmark=2, n_attempted=2)
+    assert coverage == TaskCoverage(n_benchmark=2, n_attempted=2, n_scored=2, n_correct=1, n_unanswered=0)
+    assert [sample.correct for sample in samples] == [True, False]
+    assert all(sample.grading.metric == "pass_rate" for sample in samples)
+    assert exported.canonical_metrics == {"cruxeval": {metric: 0.5}}
 
 
 def test_rebuild_keeps_the_recorded_primary_metric(tmp_path):

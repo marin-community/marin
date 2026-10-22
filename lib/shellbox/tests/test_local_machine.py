@@ -8,6 +8,7 @@ import io
 import os
 import shutil
 import socket
+import sys
 import tarfile
 import tempfile
 import uuid
@@ -104,6 +105,12 @@ def make_factory(**options) -> LocalMachineFactory:
 @pytest.fixture
 def factory() -> LocalMachineFactory:
     return make_factory()
+
+
+def test_local_factory_reports_unsupported_host(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(SandboxUnavailable):
+        LocalMachineFactory()
 
 
 def test_recursive_download_preserves_hardlinks_as_files_and_literal_names(factory, tmp_path):
@@ -637,7 +644,6 @@ def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
     assert prefix == python_environment.bin_dir.parent
     assert base_prefix.is_relative_to(python_environment.root)
 
-    monkeypatch.setenv("UV_OFFLINE", "1")
     packages = PackageSpec(pypi_packages=("six==1.17.0",), tools=("python3",))
     factory = make_factory(python_version=PYTHON_VERSION, hash_seed="23")
     spec = MachineSpec(packages, workdir="/app")
@@ -664,6 +670,7 @@ def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
         finally:
             await first.close()
         # A fresh factory must reuse the resolved installation without index access.
+        monkeypatch.setenv("UV_OFFLINE", "1")
         second = await make_factory(python_version=PYTHON_VERSION).create(spec)
         try:
             result = await second.run(Command(("python3", "-c", "import six,sys; print(sys.prefix)")))

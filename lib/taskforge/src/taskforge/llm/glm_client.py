@@ -32,8 +32,15 @@ After a failed attempt, the client handles the failure by kind:
 
 The client asks its ``EndpointSource`` for the endpoint when a hold starts, on each hold poll and
 after a connection error, since a moved relay shows up as a refused connection. When the answer
-changes, the client rebuilds the SDK client on the same connection pool and sends the next attempt to
-the new endpoint.
+changes, each event loop's SDK client is rebuilt on that loop's connection pool at its next request,
+which goes to the new endpoint.
+
+An httpx pool works only in the event loop that opened it, so the client opens one connection pool,
+with its SDK client, in each event loop that uses it, and drops the pools of loops that have closed.
+A pickled client holds only its endpoint source and provider config, so a copy in another process
+opens its own pools. After a stalled read the client replaces the running loop's pool, at most once
+per ``POOL_RESET_INTERVAL``, so the retry cannot reuse a connection that may be dead. Requests still
+streaming on the old pool keep it: the old pool is retired and closes when the last of them ends.
 
 vLLM's GLM tool parser reports a reply cut off by ``max_tokens`` inside a tool call as
 ``finish_reason == "tool_calls"`` with partial arguments (measured live). The client reports a
@@ -52,7 +59,6 @@ import json
 import logging
 import re
 import time
-from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -243,8 +249,21 @@ def request_kwargs(
     }
 
 
+@dataclass(eq=False)
+class _LoopPool:
+    """The connection pool of one event loop, the SDK client on it for one endpoint, and its requests in flight."""
+
+    http: httpx.AsyncClient
+    sdk: openai.AsyncOpenAI
+    endpoint: GlmEndpoint
+    in_flight: int = 0
+
+
 class GlmClient:
     """Async GLM client. Use as ``async with GlmClient(source, provider) as client``.
+
+    The client opens one connection pool in each event loop that uses it, and a pickled client holds only
+    ``source`` and ``provider``.
 
     Args:
         source: Supplies the endpoint. The client asks it again during holds and after a connection
@@ -259,12 +278,13 @@ class GlmClient:
         self._backoff = ExponentialBackoff(
             initial=provider.backoff_initial, maximum=provider.backoff_maximum, factor=provider.backoff_factor
         )
-        self._http = self._new_pool()
-        self._in_flight: Counter[httpx.AsyncClient] = Counter()
-        self._retired: set[httpx.AsyncClient] = set()
-        self._pool_reset_at = -POOL_RESET_INTERVAL
         self._endpoint = source.current()
-        self._sdk = self._sdk_client(self._endpoint)
+        self._pools: dict[asyncio.AbstractEventLoop, _LoopPool] = {}
+        self._retired: dict[asyncio.AbstractEventLoop, list[_LoopPool]] = {}
+        self._pool_reset_at = -POOL_RESET_INTERVAL
+
+    def __reduce__(self) -> tuple[type[Self], tuple[EndpointSource, LLMProviderConfig]]:
+        return type(self), (self._source, self._provider)
 
     @property
     def model(self) -> str:
@@ -272,16 +292,51 @@ class GlmClient:
 
     @property
     def http(self) -> httpx.AsyncClient:
-        """The SDK client's connection pool, for requests to the router's other endpoints such as ``/health``."""
-        return self._http
+        """The running event loop's connection pool, for requests to the router's other endpoints such as ``/health``."""
+        return self._pool().http
 
-    def _new_pool(self) -> httpx.AsyncClient:
-        connections = self._provider.max_connections
-        return httpx.AsyncClient(
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        pools = self._retired.pop(loop, [])
+        current = self._pools.pop(loop, None)
+        if current is not None:
+            pools.append(current)
+        for pool in pools:
+            await pool.http.aclose()
+
+    def _open_pool(self) -> _LoopPool:
+        """A fresh connection pool for the running event loop, with an SDK client on it for the current endpoint."""
+        limit = self._provider.max_connections
+        http = httpx.AsyncClient(
             limits=httpx.Limits(
-                max_connections=connections, max_keepalive_connections=connections, keepalive_expiry=KEEPALIVE_EXPIRY
+                max_connections=limit, max_keepalive_connections=limit, keepalive_expiry=KEEPALIVE_EXPIRY
             )
         )
+        return _LoopPool(http, self._sdk_client(self._endpoint, http), self._endpoint)
+
+    def _pool(self) -> _LoopPool:
+        """The running event loop's connection pool and SDK client, opened on first use there.
+
+        An httpx pool works only in the event loop that opened it. The pools of closed loops, retired ones
+        included, are dropped.
+        """
+        for closed in [loop for loop in self._pools.keys() | self._retired.keys() if loop.is_closed()]:
+            self._pools.pop(closed, None)
+            self._retired.pop(closed, None)
+        loop = asyncio.get_running_loop()
+        pool = self._pools.get(loop)
+        if pool is None:
+            pool = self._open_pool()
+            self._pools[loop] = pool
+        elif pool.endpoint != self._endpoint:
+            pool.sdk = self._sdk_client(self._endpoint, pool.http)
+            pool.endpoint = self._endpoint
+        return pool
 
     async def _reset_pool(self) -> None:
         """Open a fresh connection pool after a stalled read, so the retry cannot reuse a connection that may be dead.
@@ -290,65 +345,55 @@ class GlmClient:
         own event loop blocking for longer than the connect timeout; the bounded retry with backoff carries the call
         through those, and the reset interval keeps the two from compounding into a reconnect storm.
 
-        Other calls may still be streaming on the old pool's connections, so the old pool is retired and closes when
-        the last request leased from it ends (``_leased``). httpx drops an expired idle connection only when a request
-        next uses its pool, so a retired pool left open would hold its sockets until the client exits.
+        The reset replaces the running event loop's pool. Other calls in that loop may still be streaming on the old
+        pool's connections, so the old pool is retired and closes when the last request leased from it ends
+        (``_leased``). httpx drops an expired idle connection only when a request next uses its pool, so a retired
+        pool left open would hold its sockets until the client exits.
         """
         now = time.monotonic()
         if now - self._pool_reset_at < POOL_RESET_INTERVAL:
             return
         self._pool_reset_at = now
-        old = self._http
+        loop = asyncio.get_running_loop()
+        old = self._pool()
         logger.warning(
-            "GLM read stalled; replacing the connection pool (%d requests still on the old one)", self._in_flight[old]
+            "GLM read stalled; replacing the connection pool (%d requests still on the old one)", old.in_flight
         )
-        self._http = self._new_pool()
-        self._sdk = self._sdk_client(self._endpoint)
-        if self._in_flight[old]:
-            self._retired.add(old)
+        self._pools[loop] = self._open_pool()
+        if old.in_flight:
+            self._retired.setdefault(loop, []).append(old)
         else:
-            await old.aclose()
+            await old.http.aclose()
 
     @asynccontextmanager
     async def _leased(self) -> AsyncIterator[tuple[openai.AsyncOpenAI, httpx.AsyncClient]]:
-        """The current SDK client and its pool, which stays open until the request using them ends."""
-        sdk, pool = self._sdk, self._http
-        self._in_flight[pool] += 1
+        """The running event loop's SDK client and its pool, which stays open until the request using them ends."""
+        pool = self._pool()
+        pool.in_flight += 1
         try:
-            yield sdk, pool
+            yield pool.sdk, pool.http
         finally:
-            self._in_flight[pool] -= 1
-            if not self._in_flight[pool]:
-                del self._in_flight[pool]
-                if pool in self._retired:
-                    self._retired.remove(pool)
-                    await pool.aclose()
+            pool.in_flight -= 1
+            retired = self._retired.get(asyncio.get_running_loop(), [])
+            if not pool.in_flight and pool in retired:
+                retired.remove(pool)
+                await pool.http.aclose()
 
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
-    ) -> None:
-        for pool in (*self._retired, self._http):
-            await pool.aclose()
-
-    def _sdk_client(self, endpoint: GlmEndpoint) -> openai.AsyncOpenAI:
+    def _sdk_client(self, endpoint: GlmEndpoint, http: httpx.AsyncClient) -> openai.AsyncOpenAI:
         timeout = httpx.Timeout(
             connect=CONNECT_TIMEOUT, read=self._provider.stall_timeout, write=WRITE_TIMEOUT, pool=None
         )
         return openai.AsyncOpenAI(
-            base_url=endpoint.base_url, api_key=endpoint.token, max_retries=0, timeout=timeout, http_client=self._http
+            base_url=endpoint.base_url, api_key=endpoint.token, max_retries=0, timeout=timeout, http_client=http
         )
 
     def _refresh_endpoint(self) -> None:
-        """Ask the source for the endpoint and rebuild the SDK client if it changed."""
+        """Ask the source for the endpoint. Each loop's SDK client moves to a new endpoint at its next request."""
         endpoint = self._source.current()
         if endpoint == self._endpoint:
             return
         logger.warning("GLM endpoint moved from %s to %s", self._endpoint.base_url, endpoint.base_url)
         self._endpoint = endpoint
-        self._sdk = self._sdk_client(endpoint)
 
     async def complete(
         self,

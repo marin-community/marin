@@ -24,6 +24,8 @@ dependencies = [
     "marin-iris",
     "jsonschema>=4.20",
     "pyyaml>=6.0",
+    # Its failed-run analysis is a Zephyr pipeline over the rollout records of rolloutengine.
+    "marin-zephyr",
 ]
 
 [dependency-groups]
