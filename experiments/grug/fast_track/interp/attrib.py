@@ -68,7 +68,8 @@ def make_fns():
     eps = 1e-5
 
     def run(model, tokens, seg, abl):
-        return forward.trace_forward(forward.replicate(model), tokens, seg, abl)
+        # One device: replicated intermediates combine freely with the host-built masks and weights.
+        return forward.replicate(forward.trace_forward(forward.replicate(model), tokens, seg, abl))
 
     @jax.jit
     def loss_by_category(model, tokens, seg, cats, abl):
@@ -117,7 +118,7 @@ def make_fns():
     @jax.jit
     def analyse(model, tokens, seg, cats, tuned):
         model_r = forward.replicate(model)
-        tr = forward.trace_forward(model_r, tokens, seg, forward.no_ablation())
+        tr = forward.replicate(forward.trace_forward(model_r, tokens, seg, forward.no_ablation()))
         labels = tr["labels"]
         top1 = tr["top_ids"][..., 0]
         unembed = forward.unembed_direction(model_r)  # [D, V]
