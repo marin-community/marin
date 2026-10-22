@@ -26,6 +26,8 @@ from experiments.post_training.task_data.code_x import (
     function_split,
     grade_x_task,
     synthesize_x_tasks,
+)
+from experiments.post_training.task_data.code_x import (
     write_split as write_x_split,
 )
 from experiments.post_training.task_data.expert_outputs import (
@@ -56,7 +58,7 @@ from experiments.post_training.task_data.math_r import (
 def _valid_input(code: str, answer: str) -> int | None:
     """One input that produces the answer without echoing the answer literal."""
     namespace: dict = {}
-    exec(code, namespace)  # noqa: S102 - synthesized pool code under test
+    exec(code, namespace)
     target = ast.literal_eval(answer)
     for candidate in list(range(-5000, 5001)) + list(range(-150_000, 150_001, 7)):
         if namespace["f"](candidate) == target and str(candidate) != answer.strip():
@@ -92,7 +94,13 @@ def tiny_tokenizer(tokens) -> PreTrainedTokenizerFast:
     backend = Tokenizer(models.WordLevel(vocab, unk_token="[UNK]"))
     backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
     tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
-    delimiters = [tokens.turn_open_prefix, tokens.turn_open_suffix, tokens.turn_close, tokens.think_open, tokens.think_close]
+    delimiters = [
+        tokens.turn_open_prefix,
+        tokens.turn_open_suffix,
+        tokens.turn_close,
+        tokens.think_open,
+        tokens.think_close,
+    ]
     tokenizer.add_special_tokens({"additional_special_tokens": [token for token in [tokens.bos, *delimiters] if token]})
     return tokenizer
 
@@ -237,7 +245,9 @@ def test_missing_reserved_file_raises(tmp_path):
 
 
 def test_draw_is_seeded_and_reproducible():
-    pool = [{"problem": f"problem number {index} plus one", "answer": str(index), "source": "math"} for index in range(60)]
+    pool = [
+        {"problem": f"problem number {index} plus one", "answer": str(index), "source": "math"} for index in range(60)
+    ]
     tasks_a, _ = draw_r_tasks(pool, seed=3, reserved_pool_path=os.devnull)
     tasks_b, _ = draw_r_tasks(pool, seed=3, reserved_pool_path=os.devnull)
     tasks_c, _ = draw_r_tasks(pool, seed=4, reserved_pool_path=os.devnull)
@@ -392,7 +402,15 @@ def test_tokenized_conversation_masks_reasoning_answer_and_turn_close(tokens, fa
     ids, mask = row["input_ids"], row["assistant_masks"]
     supervised = [token for token, bit in zip(tokenizer.convert_ids_to_tokens(ids), mask, strict=True) if bit]
     assert supervised == [
-        tokens.think_open, "add", "them", tokens.think_close, "the", "answer", "is", "\\boxed{4}", tokens.turn_close
+        tokens.think_open,
+        "add",
+        "them",
+        tokens.think_close,
+        "the",
+        "answer",
+        "is",
+        "\\boxed{4}",
+        tokens.turn_close,
     ]
     assert ids[-1] == tokenizer.convert_tokens_to_ids(tokens.turn_close)
     assert mask == sorted(mask), "the supervised span is one suffix"

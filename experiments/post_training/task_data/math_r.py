@@ -11,9 +11,9 @@ and must hold every problem of those benchmarks, not only the ``P_think`` subset
 rephrased reservations share long spans with the originals even when exact-text dedup
 sees nothing. NuminaMath's ``olympiads`` tag names olympiad sources generally, not
 OlympiadBench, so it is kept: it is the pool's main supply of problems hard enough to
-need long thinking, and the overlap check removes its OlympiadBench collisions. Every kept answer is checked to be verifier-parsable before the task
-ships. Grading goes through the math verifier MarinSkyRL already uses
-(``marin-verifyit[math]``).
+need long thinking, and the overlap check removes its OlympiadBench collisions.
+Every kept answer is checked to be verifier-parsable before the task ships. Grading
+goes through the math verifier MarinSkyRL already uses (``marin-verifyit[math]``).
 """
 
 from __future__ import annotations
@@ -21,9 +21,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from datasets import load_dataset as hf_load_dataset
 from verifyit.grade import InvalidTask
