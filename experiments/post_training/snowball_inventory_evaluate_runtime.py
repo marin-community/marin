@@ -199,7 +199,7 @@ def preflight(request: dict) -> dict:
         raise ValueError("Evaluation decoding budget differs from the declared protocol")
     # The source composer retains an unused HOME-based train default for empty inputs.
     config.skyrl.data.train_data = []
-    revisions = package_revisions()
+    revisions = package_revisions(str(config.runtime.source_digest))
     model = verify_model(str(config.inputs.model.uri))
     tokenizer = preflight_tokenizer(config)
     sessions = config.skyrl.environment.task_sessions
