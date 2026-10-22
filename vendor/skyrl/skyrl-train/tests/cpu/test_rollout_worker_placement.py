@@ -27,7 +27,7 @@ def _nodes(*cpus: float) -> list[RayNode]:
 
 
 def test_workers_spread_evenly_and_deterministically_over_every_node():
-    # The incident topology: 12 workers of 8 CPUs on a six-node run, which used to land on the driver's node.
+    # Twelve workers of 8 CPUs on a six-node run.
     nodes = _nodes(*[128] * 6)
 
     assignment = rollout_worker_nodes(nodes, num_workers=12, cpus_per_worker=8)
