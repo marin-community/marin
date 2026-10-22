@@ -8,6 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
+from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
 
@@ -17,6 +18,7 @@ from marinskyrl.distillation import (
     compile_distillation_plan_from_config,
 )
 from skyrl_train.config.ftpo import validate_ftpo
+from skyrl_train.config.training_budget import RESPONSE_CAPS_KEY, ResponseCaps, training_budget
 from skyrl_train.dynamic_sampling import DynamicSamplingType
 
 from marinskyrl.runtime_options import (
@@ -25,6 +27,7 @@ from marinskyrl.runtime_options import (
     AdvantageEstimator,
     FixedCompletionFormat,
     PolicyLossType,
+    SamplingKind,
 )
 
 
@@ -309,17 +312,45 @@ def validate_fixed_completions(cfg: DictConfig) -> None:
         raise ValueError("fixed-completion rows are single complete sequences; step-wise training is not supported")
     if cfg.trainer.trajectory_selector.type is not None:
         raise ValueError("fixed-completion rewards are inert; unset trainer.trajectory_selector")
-    if cfg.data.sampling.kind is not None:
-        raise ValueError("fixed-completion training reads seeded passes; unset data.sampling.kind")
+    kind = cfg.data.sampling.kind
+    if kind is not None and SamplingKind(kind) is not SamplingKind.DOMAIN_WEIGHTED:
+        raise ValueError(
+            "fixed-completion rewards are inert, so reward-adaptive orders cannot run; use seeded passes "
+            f"(data.sampling.kind=null) or domain-weighted, got {kind}"
+        )
+    if cfg.trainer.rollout_buffer.max_staleness_steps != 0:
+        raise ValueError(
+            "fixed-completion training requires rollout_buffer.max_staleness_steps=0 so each batch is one "
+            "train_batch_size window of the prompt order, keeping the domain-weighted route mixture exact"
+        )
     if cfg.trainer.placement.colocate_all:
         raise ValueError(
             "fixed-completion training launches no inference engines; use trainer.placement.colocate_all=false"
         )
 
 
+def validate_response_caps(cfg: DictConfig, caps: ResponseCaps) -> None:
+    """Reject per-task response caps that a consumer of the global cap would silently ignore."""
+    if not caps.by_data_source or str(cfg.environment.env_class) == FIXED_COMPLETION_ENV_CLASS:
+        return
+    if cfg.generator.trajectory_reward_shaping.enabled:
+        raise ValueError(
+            f"generator.{RESPONSE_CAPS_KEY} is unsupported with trajectory_reward_shaping, whose overlong "
+            "and truncation terms read the single generator.sampling_params.max_generate_length"
+        )
+    if cfg.get("terminal_bench_config") is not None:
+        raise ValueError(
+            f"generator.{RESPONSE_CAPS_KEY} is unsupported with Harbor tasks, whose truncation shaping and "
+            "installed agents read the single generator.sampling_params.max_generate_length"
+        )
+
+
 def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) -> None:
     """Reject objective settings that cannot affect the selected training rows correctly."""
     validate_ftpo(cfg)
+    budget = training_budget(cfg)
+    validate_response_caps(cfg, budget.response_caps)
+    logger.info("Training budget per optimizer step: {}", budget)
     if str(cfg.environment.env_class) == FIXED_COMPLETION_ENV_CLASS:
         validate_fixed_completions(cfg)
     if cfg.trainer.algorithm.policy_loss_type == PolicyLossType.DPO:

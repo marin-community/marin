@@ -27,22 +27,13 @@ from typing import Any, Callable, Dict, List
 import numpy as np
 from omegaconf import DictConfig
 
+from marinskyrl.runtime_options import SamplingKind
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.rollouts.loader import JudgedGroup
 
 EXTRA_INFO_KEY = "extra_info"
 DATA_SOURCE_KEY = "data_source"
 GRADE_KEY = "grade"
-
-
-class SamplingKind(StrEnum):
-    DOMAIN_WEIGHTED = "domain-weighted"
-    NAIVE = "naive"
-    THOMPSON = "thompson"
-    LEARNABILITY = "learnability"
-    GRADE_UNIFORM = "grade-uniform"
-    GRADE_ADAPTIVE = "grade-adaptive"
-    GRADE_PRIOR = "grade-prior"
 
 
 class WeightingKind(StrEnum):

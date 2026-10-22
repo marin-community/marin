@@ -4,13 +4,14 @@ Fixed-data SFT reads expert completions from the training parquet instead of
 generating rollouts. Each row is one training sequence: the loss trains the
 completion tokens through the configured policy loss, and batch geometry comes
 from the same config fields as rollout training so the update budget matches.
-Rows carry a task tag (``data_source``) for collision mass and an optional
-``teacher_route`` for joint-run routing.
+Rows carry a task tag (``data_source``) that selects their response cap and
+attributes collision mass, and an optional ``teacher_route`` for joint-run routing.
 """
 
 from loguru import logger
 
 from marinskyrl.runtime_options import FixedCompletionFormat
+from skyrl_train.config.training_budget import ResponseCaps
 from skyrl_train.dataset.dataset import completion_token_ids, prompt_token_ids
 from skyrl_train.dataset.fixed_completions import FixedCompletionTokens
 from skyrl_train.dataset.preference_pairs import completion_text
@@ -32,13 +33,13 @@ class FixedCompletionsTrajectoryRunner:
         tokenizer,
         *,
         data_format: FixedCompletionFormat,
-        max_generate_length: int,
+        response_caps: ResponseCaps,
         max_input_length: int,
         generator_config,
     ):
         self.tokenizer = tokenizer
         self.data_format = data_format
-        self.max_generate_length = max_generate_length
+        self.response_caps = response_caps
         self.max_input_length = max_input_length
         self.generator_config = generator_config
         self.trajectory_sink: RetentionSink | None = None
@@ -63,36 +64,33 @@ class FixedCompletionsTrajectoryRunner:
     async def stop_eval_session(self) -> None:
         pass
 
-    def _row(self, prompt, completion, mask) -> FixedCompletionTokens:
-        """Budget-check one row against the rollout geometry it trains under."""
+    def _row(self, prompt, completion, mask, data_source: str) -> FixedCompletionTokens:
+        """Budget-check one row against its task's response cap and the sequence budget it trains under."""
+        cap = self.response_caps.for_source(data_source)
         if self.data_format is FixedCompletionFormat.TEXT:
             prompt_ids = prompt_token_ids(self.tokenizer, prompt)
             response_ids = completion_token_ids(
                 self.tokenizer,
                 completion_text(completion, "completion"),
-                field="fixed",
-                max_generate_length=self.max_generate_length,
+                field=f"fixed ({data_source})",
+                max_generate_length=cap,
             )
             loss_mask = [1] * len(response_ids)
         else:
-            prompt_ids, response_ids, loss_mask = (
-                list(prompt),
-                list(completion),
-                list(mask or ()),
-            )
+            prompt_ids, response_ids, loss_mask = list(prompt), list(completion), list(mask or ())
             if not prompt_ids or len(response_ids) != len(loss_mask) or not any(loss_mask):
                 raise ValueError(
                     "tokenized fixed completions require prompt IDs and an aligned mask with supervised tokens"
                 )
-            if len(response_ids) > self.max_generate_length:
+            if len(response_ids) > cap:
                 raise ValueError(
-                    f"fixed completion response span needs {len(response_ids)} tokens but "
-                    f"generator.sampling_params.max_generate_length is {self.max_generate_length}"
+                    f"fixed completion ({data_source}) response span needs {len(response_ids)} tokens over "
+                    f"its {cap}-token response cap"
                 )
-        if len(prompt_ids) + len(response_ids) > self.max_input_length + self.max_generate_length:
+        if len(prompt_ids) + len(response_ids) > self.max_input_length + cap:
             raise ValueError(
-                f"fixed completion exceeds the {self.max_input_length + self.max_generate_length}-token "
-                "sequence budget; filter the row at dataset load instead"
+                f"fixed completion ({data_source}) exceeds its {self.max_input_length + cap}-token "
+                "sequence budget; reject the row at dataset load instead"
             )
         return FixedCompletionTokens(prompt_ids, response_ids, loss_mask)
 
@@ -116,8 +114,10 @@ class FixedCompletionsTrajectoryRunner:
         masks = input_batch.completion_loss_masks
 
         rows = [
-            self._row(prompt, completion, None if masks is None else masks[index])
-            for index, (prompt, completion) in enumerate(zip(input_batch.prompts, input_batch.completions))
+            self._row(prompt, completion, None if masks is None else masks[index], metadata.data_source)
+            for index, (prompt, completion, metadata) in enumerate(
+                zip(input_batch.prompts, input_batch.completions, input_batch.metadata)
+            )
         ]
         batch = static_trajectory_batch(
             prompt_token_ids=[row.prompt_ids for row in rows],

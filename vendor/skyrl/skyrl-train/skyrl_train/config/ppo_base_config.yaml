@@ -462,6 +462,11 @@ generator:
     logprobs: null
     stop: null
 
+  # Per-task response caps keyed by row data_source, each at most sampling_params.max_generate_length
+  # (the engine and tensor bound). Fixed-completion datasets and runners reject rows over their task's cap;
+  # rollout training requests cap generation per turn at it. Empty applies max_generate_length to every task.
+  max_generate_length_by_data_source: {}
+
   eval_sampling_params:
     max_generate_length: ${generator.sampling_params.max_generate_length}
     repetition_penalty: 1.0

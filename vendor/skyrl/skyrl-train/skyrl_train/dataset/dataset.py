@@ -5,6 +5,9 @@ from collections.abc import Mapping
 from typing import List
 from transformers import PreTrainedTokenizerBase
 
+# The top-level column naming a row's teacher route, read by domain-weighted sampling.
+ROUTE_COLUMN = "teacher_route"
+
 
 def read_prompt_files(sources: list[str]) -> datasets.Dataset:
     """Load local parquet/JSON files or explicitly selected Hugging Face splits."""
@@ -115,8 +118,7 @@ def completion_token_ids(
         raise ValueError(f"{field} completion tokenized to zero tokens")
     if len(ids) > max_generate_length:
         raise ValueError(
-            f"{field} completion needs {len(ids)} tokens but "
-            f"generator.sampling_params.max_generate_length is {max_generate_length}"
+            f"{field} completion needs {len(ids)} tokens over its {max_generate_length}-token response cap"
         )
     return ids
 

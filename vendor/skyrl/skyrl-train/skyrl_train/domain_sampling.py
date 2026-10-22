@@ -10,9 +10,8 @@ from typing import Any
 
 import datasets
 
+from skyrl_train.dataset.dataset import ROUTE_COLUMN
 from skyrl_train.rollouts.loader import JudgedGroup
-
-ROUTE_COLUMN = "teacher_route"
 
 
 def weighted_quotas(total: int, weights: Mapping[str, float], batch_index: int) -> dict[str, int]:

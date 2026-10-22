@@ -39,12 +39,15 @@ from marinskyrl.speculative_decoding import (
 )
 from marinskyrl.runtime_options import (
     EvaluationRunner,
+    FixedCompletionFormat,
     WeightSyncTransport,
     inference_engines_required,
     static_fixed_completions_requested,
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
+from skyrl_train.config.training_budget import response_caps
+from skyrl_train.dataset.fixed_completions import FixedCompletionsDataset
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
 
 if TYPE_CHECKING:
@@ -381,16 +384,13 @@ class BasePPOExp:
                 max_completion_length=self.cfg.generator.sampling_params.max_generate_length,
             )
         if static_fixed_completions_requested(self.cfg):
-            from skyrl_train.dataset.fixed_completions import FixedCompletionsDataset  # noqa: PLC0415
-            from marinskyrl.runtime_options import FixedCompletionFormat  # noqa: PLC0415
-
             return FixedCompletionsDataset(
                 tokenizer=self.tokenizer,
                 data_format=FixedCompletionFormat(self.cfg.data.fixed_completion_format),
                 datasets=self.cfg.data.train_data,
                 max_prompt_length=self.cfg.trainer.max_prompt_length,
                 num_workers=8,
-                max_completion_length=self.cfg.generator.sampling_params.max_generate_length,
+                response_caps=response_caps(self.cfg),
             )
         prompts_dataset = self.task_dataset(self.cfg.data.train_data)
         # make sure the dataset is large enough to train on
@@ -537,7 +537,7 @@ class BasePPOExp:
                 generator_config=cfg.generator,
             )
         if static_fixed_completions_requested(cfg):
-            from marinskyrl.runtime_options import FixedCompletionFormat  # noqa: PLC0415
+            # The runner pulls in torch; the CPU-only launcher imports this module without it.
             from skyrl_train.trajectory_runners.fixed_completions import FixedCompletionsTrajectoryRunner  # noqa: PLC0415
 
             if list(cfg.data.get("terminal_bench_data", [])):
@@ -545,7 +545,7 @@ class BasePPOExp:
             return FixedCompletionsTrajectoryRunner(
                 tokenizer,
                 data_format=FixedCompletionFormat(cfg.data.fixed_completion_format),
-                max_generate_length=cfg.generator.sampling_params.max_generate_length,
+                response_caps=response_caps(cfg),
                 max_input_length=cfg.generator.max_input_length,
                 generator_config=cfg.generator,
             )

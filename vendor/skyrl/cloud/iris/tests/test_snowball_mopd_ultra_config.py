@@ -1,5 +1,6 @@
 """Contract checks for the three-teacher Snowball MOPD smoke on the Nemotron Ultra blend."""
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from marinskyrl.distillation import (
     TeacherPlacement,
     validate_distillation_runtime_support,
 )
+from skyrl_train.config.training_budget import training_budget
 
 CONFIG = Path(__file__).parents[1] / "configs" / "snowball_mopd_ultra_smoke.yaml"
 OPD_SMOKE_CONFIG = Path(__file__).parents[1] / "configs" / "snowball_opd_math_smoke.yaml"
@@ -81,3 +83,56 @@ def test_snowball_mopd_smoke_route_weights_survive_config_composition():
 
     assert cfg.data.sampling.kind == "domain-weighted"
     assert dict(cfg.data.sampling.domain_weights) == {"math": 1.0, "swe": 1.0, "terminal": 1.0}
+
+
+def _compose_launch(path: Path):
+    parsed = parse_rl_config(str(path), model_override=STUDENT)
+    return compose_skyrl_config(
+        parsed, {"job_name": "budget-test", "experiments_dir": "/tmp/exp", "num_nodes": 8}, _HPCStub()
+    ).config
+
+
+def _fixed_completion_recipe(rollout_recipe: dict, *, train_batch_size: int, policy_mini_batch_size: int) -> dict:
+    """The M1 arm of a rollout recipe: the same routes and context budget, read from fixed rows."""
+    recipe = copy.deepcopy(rollout_recipe)
+    for section in ("teachers", "teacher_routing"):
+        del recipe[section]
+    recipe["environment"] = {"env_class": "fixed_completion"}
+    algorithm = recipe["trainer"]["algorithm"]
+    del algorithm["distillation"]
+    algorithm.update(policy_loss_type="sft", advantage_estimator="uniform")
+    recipe["trainer"].update(train_batch_size=train_batch_size, policy_mini_batch_size=policy_mini_batch_size)
+    recipe["generator"]["n_samples_per_prompt"] = 1
+    return recipe
+
+
+def test_fixed_completion_recipe_matches_the_snowball_mopd_training_budget(tmp_path):
+    """An M1 recipe spends M4's budget only when it trains rollouts-per-prompt times as many rows per step."""
+    rollout_recipe = yaml.safe_load(CONFIG.read_text())
+    rollouts = rollout_recipe["generator"]["n_samples_per_prompt"]
+    trainer = rollout_recipe["trainer"]
+    m4 = training_budget(_compose_launch(CONFIG))
+
+    matched = tmp_path / "m1_matched.yaml"
+    matched.write_text(
+        yaml.safe_dump(
+            _fixed_completion_recipe(
+                rollout_recipe,
+                train_batch_size=trainer["train_batch_size"] * rollouts,
+                policy_mini_batch_size=trainer["policy_mini_batch_size"] * rollouts,
+            )
+        )
+    )
+    assert training_budget(_compose_launch(matched)) == m4
+
+    copied = tmp_path / "m1_copied_batch.yaml"
+    copied.write_text(
+        yaml.safe_dump(
+            _fixed_completion_recipe(
+                rollout_recipe,
+                train_batch_size=trainer["train_batch_size"],
+                policy_mini_batch_size=trainer["policy_mini_batch_size"],
+            )
+        )
+    )
+    assert training_budget(_compose_launch(copied)) != m4
