@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Grader"
+  short_description: "Measure how often a grader contradicts its task text"
+  default_prompt: "Use $audit-grader to audit this grader against its task text and report its error rate and effect on scores."
