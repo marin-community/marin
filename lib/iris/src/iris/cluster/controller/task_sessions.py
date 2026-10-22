@@ -10,6 +10,7 @@ import json
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -18,6 +19,7 @@ from rigging.server_auth import VerifiedIdentity, require_identity
 from rigging.timing import Timestamp
 from sqlalchemy import delete, func, insert, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.sql.selectable import Join
 
 from iris.cluster.config import CredentialBrokerConfig, user_admitted
 from iris.cluster.controller.auth import CONTROL_PLANE_AUDIENCE, JwtTokenManager
@@ -41,6 +43,20 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import timestamp_to_proto
 
 TASK_ACCESS_LIFETIME = 900
+
+
+class _SessionScope(StrEnum):
+    ATTEMPT = "attempt"
+    JOB = "job"
+    PRINCIPAL = "principal"
+
+
+def _session_attempts_join() -> Join:
+    return task_sessions_table.join(
+        task_attempts_table, task_sessions_table.c.attempt_uid == task_attempts_table.c.attempt_uid
+    ).join(tasks_table, tasks_table.c.task_id == task_attempts_table.c.task_id)
+
+
 _READ_RPCS = frozenset(
     {
         "GetCurrentUser",
@@ -131,11 +147,7 @@ class TaskSessionBroker:
                 sessions.c.finalizing_at_ms,
                 tasks.c.status_message,
             )
-            .select_from(
-                sessions.join(attempts, sessions.c.attempt_uid == attempts.c.attempt_uid)
-                .join(tasks, tasks.c.task_id == attempts.c.task_id)
-                .join(jobs, jobs.c.job_id == tasks.c.job_id)
-            )
+            .select_from(_session_attempts_join().join(jobs, jobs.c.job_id == tasks.c.job_id))
             .where(tasks.c.current_attempt_id == attempts.c.attempt_id)
             .where(sessions.c.attempt_uid == attempt_uid if attempt_uid is not None else True)
         ).all()
@@ -144,10 +156,11 @@ class TaskSessionBroker:
         for row in rows:
             job_id = row.job_id.to_wire()
             blocked = (
-                ("attempt", row.attempt_uid) in blocks
-                or ("principal", row.submitting_user) in blocks
+                (_SessionScope.ATTEMPT, row.attempt_uid) in blocks
+                or (_SessionScope.PRINCIPAL, row.submitting_user) in blocks
                 or any(
-                    scope == "job" and (job_id == target or job_id.startswith(target + "/")) for scope, target in blocks
+                    scope == _SessionScope.JOB and (job_id == target or job_id.startswith(target + "/"))
+                    for scope, target in blocks
                 )
             )
             finalization_started_at = row.finalizing_at_ms
@@ -188,11 +201,7 @@ class TaskSessionBroker:
             uids = (
                 tx.execute(
                     select(sessions.c.attempt_uid)
-                    .select_from(
-                        sessions.join(attempts, sessions.c.attempt_uid == attempts.c.attempt_uid).join(
-                            tasks, tasks.c.task_id == attempts.c.task_id
-                        )
-                    )
+                    .select_from(_session_attempts_join())
                     .where(
                         sessions.c.finalizing_at_ms.is_(None),
                         tasks.c.status_message == TASK_OUTPUT_FINALIZING_STATUS,
@@ -432,7 +441,11 @@ class TaskSessionBroker:
         identity = require_identity()
         if identity.role != "admin":
             raise ConnectError(Code.PERMISSION_DENIED, "Managing task sessions requires admin access")
-        selectors = [("attempt", request.attempt_uid), ("job", request.job_id), ("principal", request.principal)]
+        selectors = [
+            (_SessionScope.ATTEMPT, request.attempt_uid),
+            (_SessionScope.JOB, request.job_id),
+            (_SessionScope.PRINCIPAL, request.principal),
+        ]
         selected = [(scope, target) for scope, target in selectors if target]
         actions = controller_pb2.Controller.ManageTaskSessionsRequest
         if len(selected) != 1 or request.action not in {actions.ROLLOVER, actions.DISABLE, actions.ENABLE}:
@@ -441,9 +454,9 @@ class TaskSessionBroker:
         with self._lock:
             with self._db.transaction() as tx:
                 sessions, attempts, tasks, jobs = task_sessions_table, task_attempts_table, tasks_table, jobs_table
-                if scope == "attempt":
+                if scope == _SessionScope.ATTEMPT:
                     selection = sessions.c.attempt_uid == target
-                elif scope == "principal":
+                elif scope == _SessionScope.PRINCIPAL:
                     selection = jobs.c.submitting_user == target
                 else:
                     selection = or_(
@@ -452,11 +465,7 @@ class TaskSessionBroker:
                 affected = (
                     tx.execute(
                         select(sessions.c.attempt_uid)
-                        .select_from(
-                            sessions.join(attempts, sessions.c.attempt_uid == attempts.c.attempt_uid)
-                            .join(tasks, tasks.c.task_id == attempts.c.task_id)
-                            .join(jobs, jobs.c.job_id == tasks.c.job_id)
-                        )
+                        .select_from(_session_attempts_join().join(jobs, jobs.c.job_id == tasks.c.job_id))
                         .where(
                             selection,
                             tasks.c.current_attempt_id == attempts.c.attempt_id,

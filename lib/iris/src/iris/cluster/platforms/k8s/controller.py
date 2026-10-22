@@ -20,11 +20,13 @@ import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import NamedTuple
 
 from pydantic import BaseModel
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
 from rigging.secrets import (
+    COREWEAVE_SECRET_NAMES,
     ENV_SCHEME,
     FILE_SCHEME,
     SECRETS_DIR_ENV,
@@ -37,6 +39,7 @@ from rigging.secrets import (
 from rigging.timing import Deadline, Duration
 
 from iris.cluster.config import (
+    DEFAULT_CONTROLLER_PORT,
     ControllerVmConfig,
     CoreweavePlatformConfig,
     IrisClusterConfig,
@@ -49,6 +52,7 @@ from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import (
     CONTROLLER_SECRET_NAME,
     CONTROLLER_SECRETS_DIR,
+    CONTROLLER_TLS_NATIVE_PORT_OFFSET,
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
     EGRESS_LABEL,
@@ -194,11 +198,17 @@ def _projects_controller_env_secret(config: IrisClusterConfig) -> bool:
     )
 
 
-def _controller_secret_projections(config: IrisClusterConfig) -> list[tuple[BaseModel, str, str]]:
-    projections: list[tuple[BaseModel, str, str]] = []
+class _ControllerSecretProjection(NamedTuple):
+    model: BaseModel
+    field: str
+    filename: str
+
+
+def _controller_secret_projections(config: IrisClusterConfig) -> list[_ControllerSecretProjection]:
+    projections: list[_ControllerSecretProjection] = []
     if config.auth is not None:
         projections.extend(
-            (config.auth, field, variable)
+            _ControllerSecretProjection(config.auth, field, variable)
             for field, variable in _CONTROLLER_SECRET_FIELDS
             if getattr(config.auth, field)
         )
@@ -214,9 +224,9 @@ def _controller_secret_projections(config: IrisClusterConfig) -> list[tuple[Base
             ref = environment_refs[0]
             variable = ref.removeprefix(ENV_SCHEME)
             validate_secret_name(variable)
-            if any(name == variable for _, _, name in projections):
+            if any(projection.filename == variable for projection in projections):
                 raise ValueError("Controller secret file names must be distinct")
-            projections.append((model, field, variable))
+            projections.append(_ControllerSecretProjection(model, field, variable))
     return projections
 
 
@@ -363,7 +373,7 @@ def _build_controller_deployment(
     if tls_secret:
         pod = deploy_spec["template"]["spec"]
         controller = pod["containers"][0]
-        native_port = port + 1
+        native_port = port + CONTROLLER_TLS_NATIVE_PORT_OFFSET
         controller["command"] = [
             argument.replace("--host=0.0.0.0", "--host=127.0.0.1").replace(f"--port={port}", f"--port={native_port}")
             for argument in controller["command"]
@@ -666,7 +676,7 @@ class K8sControllerProvider:
     def discover_controller(self, controller_config: ControllerVmConfig) -> str:
         cw = controller_config.coreweave
         service_name = cw.service_name or "iris-controller-svc"
-        port = cw.port or 10000
+        port = cw.port or DEFAULT_CONTROLLER_PORT
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
 
     def preflight_controller(self, config: IrisClusterConfig) -> None:
@@ -689,7 +699,7 @@ class K8sControllerProvider:
         immediately if the Deployment is already available.
         """
         cw = config.controller.coreweave
-        port = cw.port or 10000
+        port = cw.port or DEFAULT_CONTROLLER_PORT
         service_name = cw.service_name or "iris-controller-svc"
         if not cw.scale_group:
             raise InfraError("CoreWeave controller config must set scale_group")
@@ -714,8 +724,7 @@ class K8sControllerProvider:
         assert_no_inlined_secrets(config)
         if config.credential_broker is not None:
             shared_keys = {
-                "CW_KEY_ID",
-                "CW_KEY_SECRET",
+                *COREWEAVE_SECRET_NAMES,
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
@@ -771,7 +780,7 @@ class K8sControllerProvider:
                     "data": {"ca.crt": ca},
                 }
             )
-            _, proxy_config = controller_tls_sidecar(port, port + 1)
+            _, proxy_config = controller_tls_sidecar(port, port + CONTROLLER_TLS_NATIVE_PORT_OFFSET)
             self._kubectl.apply_json(
                 {
                     "apiVersion": "v1",
@@ -1182,7 +1191,7 @@ class K8sControllerProvider:
                     self._namespace,
                     network,
                     service_cidr,
-                    (config.controller.coreweave.port or 10000) if config.credential_broker else 0,
+                    (config.controller.coreweave.port or DEFAULT_CONTROLLER_PORT) if config.credential_broker else 0,
                 )
             )
 

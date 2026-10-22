@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Public OpenBao policy declarations for the Iris credential pilot."""
+"""Public OpenBao policy declarations for Iris credential delegation."""
 
 import json
 import re
@@ -73,7 +73,7 @@ def credential_catalog(cluster: str, profiles: tuple[CredentialProfile, ...]) ->
             "user_claim": "sub",
             "token_policies": ["iris-controller"],
             "token_type": "service",
-            "token_ttl": 600,
+            "token_ttl": CONTROLLER_TTL,
             "token_max_ttl": CONTROLLER_TTL,
             "token_explicit_max_ttl": CONTROLLER_TTL,
             "token_no_default_policy": True,

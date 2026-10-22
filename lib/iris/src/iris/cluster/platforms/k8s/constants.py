@@ -12,6 +12,7 @@ CW_REPO_NAME = "coreweave"
 CW_REPO_URL = "https://charts.core-services.ingress.coreweave.com"
 
 DEFAULT_TASK_CACHE_DIR = "/cache"
+CONTROLLER_TLS_NATIVE_PORT_OFFSET = 1
 NVIDIA_GPU_RESOURCE = "nvidia.com/gpu"
 RDMA_RESOURCE = "rdma/ib"
 

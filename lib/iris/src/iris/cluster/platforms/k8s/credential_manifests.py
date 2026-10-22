@@ -3,32 +3,20 @@
 
 """Namespaced broker authority and private controller transport."""
 
+from iris.cluster.platforms.k8s.rbac_manifests import task_secret_binding_manifest, task_secret_role_manifest
+
 TASK_SESSION_ROLE_NAME = "iris-task-sessions"
 CONTROLLER_TLS_CONFIG_MAP = "iris-controller-tls-proxy"
 CONTROLLER_CA_ISSUER = "iris-controller-ca"
 
 
 def credential_secret_rbac(namespace: str, service_account: str) -> tuple[dict, dict]:
-    metadata = {"name": TASK_SESSION_ROLE_NAME, "namespace": namespace}
-    role = {
-        "apiVersion": "rbac.authorization.k8s.io/v1",
-        "kind": "Role",
-        "metadata": metadata,
-        "rules": [
-            {
-                "apiGroups": [""],
-                "resources": ["secrets"],
-                "verbs": ["get", "list", "create", "update", "patch", "delete"],
-            }
-        ],
-    }
-    binding = {
-        "apiVersion": "rbac.authorization.k8s.io/v1",
-        "kind": "RoleBinding",
-        "metadata": metadata,
-        "subjects": [{"kind": "ServiceAccount", "name": service_account, "namespace": namespace}],
-        "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": metadata["name"]},
-    }
+    role = task_secret_role_manifest(namespace)
+    role["metadata"]["name"] = TASK_SESSION_ROLE_NAME
+    role["rules"][0]["verbs"].extend(["get", "list", "update"])
+    binding = task_secret_binding_manifest(namespace, service_account)
+    binding["metadata"]["name"] = TASK_SESSION_ROLE_NAME
+    binding["roleRef"]["name"] = TASK_SESSION_ROLE_NAME
     return role, binding
 
 

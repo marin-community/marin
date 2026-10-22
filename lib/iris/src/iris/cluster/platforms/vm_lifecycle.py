@@ -28,7 +28,7 @@ from dataclasses import dataclass
 
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
-from iris.cluster.config import GcpVmConfig, IrisClusterConfig, ManualVmConfig, VmConfig
+from iris.cluster.config import DEFAULT_CONTROLLER_PORT, GcpVmConfig, IrisClusterConfig, ManualVmConfig, VmConfig
 from iris.cluster.platforms.gcp.controller_bootstrap import (
     CONTROLLER_CONTAINER_NAME,
     build_controller_bootstrap_script_from_config,
@@ -54,7 +54,6 @@ def _identity_resolve_image(image: str, zone: str | None = None) -> str:
 
 
 # Constants
-DEFAULT_CONTROLLER_PORT = 10000
 HEALTH_CHECK_TIMEOUT_SECONDS = 120
 RESTART_LOOP_THRESHOLD = 3
 EARLY_TIMEOUT_SECONDS = 60

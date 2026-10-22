@@ -35,6 +35,7 @@ from rigging.secrets import (
 )
 from rigging.timing import Duration
 
+from iris.cluster.platforms.k8s.constants import CONTROLLER_TLS_NATIVE_PORT_OFFSET
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.platforms.k8s.rbac_manifests import NODE_AGENT_SERVICE_ACCOUNT
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
@@ -134,6 +135,8 @@ class SecretRef:
 # ``gcp-secret://``) or an ordered list of them (first-present-wins). Empty means
 # unset. Marked with :class:`SecretRef` so the resolver / render guard find it.
 SecretRefSpec = Annotated[str | tuple[str, ...], SecretRef()]
+
+DEFAULT_CONTROLLER_PORT = 10000
 
 
 def _normalize_oneof(data: Any, keys: tuple[str, ...]) -> Any:
@@ -1128,47 +1131,55 @@ def _validate_peers(config: IrisClusterConfig) -> None:
             raise ValueError(f"peer '{peer_id}': controller_address is required.")
 
 
+def _validate_credential_broker(config: IrisClusterConfig) -> None:
+    if config.credential_broker is None:
+        return
+    if config.kubernetes_provider is None:
+        raise ValueError("credential_broker currently requires kubernetes_provider")
+    if config.platform.coreweave is None:
+        raise ValueError("credential_broker currently requires a CoreWeave Kubernetes controller")
+    if (config.kubernetes_provider.namespace or "iris") != (config.platform.coreweave.namespace or "iris"):
+        raise ValueError("Broker controller and task namespaces must match")
+    if not config.kubernetes_provider.controller_address.startswith("https://"):
+        raise ValueError("credential_broker requires an HTTPS controller_address")
+    if config.auth is None or not config.auth.required or not config.auth.signing_key:
+        raise ValueError("credential_broker requires auth.required and a persistent auth.signing_key")
+    if config.auth.optional or config.auth.trusted_cidrs:
+        raise ValueError("credential_broker forbids optional auth and trusted_cidrs")
+    if (
+        config.controller.coreweave is None
+        or (config.controller.coreweave.port or DEFAULT_CONTROLLER_PORT) > 65535 - CONTROLLER_TLS_NATIVE_PORT_OFFSET
+    ):
+        raise ValueError("credential_broker requires space for the native TLS upstream port")
+    if config.kubernetes_provider.service_account in {"iris-controller", NODE_AGENT_SERVICE_ACCOUNT}:
+        raise ValueError("Task pods must not use a controller or node-agent ServiceAccount")
+    broker = config.credential_broker
+    if not broker.tls_secret or not broker.profiles:
+        raise ValueError("credential_broker requires tls_secret and storage profiles")
+    for name, profile in broker.profiles.items():
+        if not name or any(not (character.isalnum() or character in "-_") for character in name):
+            raise ValueError("Credential profile names may contain letters, digits, underscores and hyphens")
+        if not profile.allowed_principals or not profile.buckets or not profile.region:
+            raise ValueError(f"credential_broker profile {name} requires principals, buckets and region")
+        if not profile.endpoint.startswith("https://") and profile.endpoint != "http://cwlota.com":
+            raise ValueError(f"credential_broker profile {name} requires HTTPS or explicit CoreWeave LOTA")
+        if profile.api_token is None and profile.oidc is None:
+            raise ValueError(f"credential_broker profile {name} requires api_token or oidc")
+    task_names = set(config.defaults.task_env)
+    for model, field in iter_secret_ref_fields(config):
+        references = getattr(model, field)
+        if references and any(
+            ref.removeprefix("env:") in task_names for ref in as_secret_spec(references) if ref.startswith("env:")
+        ):
+            raise ValueError("Controller secret references must not be projected into task environment defaults")
+
+
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
     _validate_cluster_name(config)
     _validate_peers(config)
     _validate_provider_platform_compat(config)
-    if config.credential_broker is not None:
-        if config.kubernetes_provider is None:
-            raise ValueError("credential_broker currently requires kubernetes_provider")
-        if config.platform.coreweave is None:
-            raise ValueError("credential_broker currently requires a CoreWeave Kubernetes controller")
-        if (config.kubernetes_provider.namespace or "iris") != (config.platform.coreweave.namespace or "iris"):
-            raise ValueError("Broker controller and task namespaces must match")
-        if not config.kubernetes_provider.controller_address.startswith("https://"):
-            raise ValueError("credential_broker requires an HTTPS controller_address")
-        if config.auth is None or not config.auth.required or not config.auth.signing_key:
-            raise ValueError("credential_broker requires auth.required and a persistent auth.signing_key")
-        if config.auth.optional or config.auth.trusted_cidrs:
-            raise ValueError("credential_broker forbids optional auth and trusted_cidrs")
-        if config.controller.coreweave is None or (config.controller.coreweave.port or 10000) >= 65535:
-            raise ValueError("credential_broker requires a Kubernetes controller port below 65535")
-        if config.kubernetes_provider.service_account in {"iris-controller", NODE_AGENT_SERVICE_ACCOUNT}:
-            raise ValueError("Task pods must not use a controller or node-agent ServiceAccount")
-        broker = config.credential_broker
-        if not broker.tls_secret or not broker.profiles:
-            raise ValueError("credential_broker requires tls_secret and storage profiles")
-        for name, profile in broker.profiles.items():
-            if not name or any(not (character.isalnum() or character in "-_") for character in name):
-                raise ValueError("Credential profile names may contain letters, digits, underscores and hyphens")
-            if not profile.allowed_principals or not profile.buckets or not profile.region:
-                raise ValueError(f"credential_broker profile {name} requires principals, buckets and region")
-            if not profile.endpoint.startswith("https://") and profile.endpoint != "http://cwlota.com":
-                raise ValueError(f"credential_broker profile {name} requires HTTPS or explicit CoreWeave LOTA")
-            if profile.api_token is None and profile.oidc is None:
-                raise ValueError(f"credential_broker profile {name} requires api_token or oidc")
-        task_names = set(config.defaults.task_env)
-        for model, field in iter_secret_ref_fields(config):
-            references = getattr(model, field)
-            if references and any(
-                ref.removeprefix("env:") in task_names for ref in as_secret_spec(references) if ref.startswith("env:")
-            ):
-                raise ValueError("Controller secret references must not be projected into task environment defaults")
+    _validate_credential_broker(config)
     _validate_accelerator_types(config)
     validate_scale_group_resources(config.scale_groups)
     _validate_slice_templates(config)

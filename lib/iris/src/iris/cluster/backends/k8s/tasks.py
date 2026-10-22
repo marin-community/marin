@@ -1497,6 +1497,7 @@ _GC_INTERVAL_SECONDS = 60
 
 # Garbage collection: delete terminal pods and orphaned configmaps/PDBs older than this (seconds).
 _GC_MAX_AGE_SECONDS = 3600  # 1 hour
+_CREDENTIAL_SECRET_GRACE_SECONDS = 600
 
 # Garbage collection: shorter retention for terminal gang (Kueue pod-group)
 # pods. Gang pods pin Kueue quota and the TAS topology reservation for as long
@@ -3095,7 +3096,7 @@ class K8sTaskProvider:
                 continue
             age = now.epoch_seconds() - parse_k8s_timestamp(created).timestamp()
             pod_name = metadata["annotations"][_ANNOTATION_SESSION_POD]
-            if age > 600 and self.kubectl.get_json(K8sResource.PODS, pod_name) is None:
+            if age > _CREDENTIAL_SECRET_GRACE_SECONDS and self.kubectl.get_json(K8sResource.PODS, pod_name) is None:
                 self.kubectl.delete(K8sResource.SECRETS, metadata["name"], wait=False)
 
         # Pod-groups with live (Pending/Running) members share one Kueue

@@ -111,6 +111,10 @@ def test_openbao_controller_can_only_delegate_declared_profiles_without_inheriti
     reader = json.loads(catalog["policies"]["workload-reader"])["path"]
     assert reader == {"secret/data/team/model": {"capabilities": ["read"]}}
     assert "secret/data/team/api" not in reader
+    # A fresh login must pass the broker's parent-life gate before issuing any child.
+    login_role = catalog["controller_jwt_role_parameters"]
+    child_limit = max(role["token_explicit_max_ttl"] for role in catalog["token_roles"].values())
+    assert login_role["token_ttl"] > child_limit + login_role["clock_skew_leeway"]
 
 
 def test_openbao_dev_and_main_catalogs_have_disjoint_cluster_authority():

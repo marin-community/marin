@@ -51,6 +51,10 @@ or privileged workloads; use admission/RBAC and a separate management cluster
 if the cluster cannot enforce the pool boundary. Kubernetes administrators,
 cert-manager administrators and the host provider remain trusted.
 
+The mock sets reserved-pool placement for Bao. Moving the primary Iris controller
+onto that pool also requires its node selector and matching authority toleration;
+the current controller manifest does not tolerate the proposed authority taint.
+
 The existing Iris controller ClusterRole allows Pod creation and exec across
 namespaces. A controller in Bao's host cluster is therefore inside the vault's
 trust boundary. Use a dedicated management CKS cluster if execution controllers
@@ -120,6 +124,8 @@ After review and prerequisite provisioning, preview from the project directory:
 
 ```bash
 cd infra/openbao
+# One-time stack creation is an operator action; these stacks do not exist yet.
+pulumi stack init dev --secrets-provider gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 pulumi preview --stack dev --diff
 ```
 
@@ -213,6 +219,12 @@ address; there is no source-IP authorization claim or PROXY-protocol requirement
 in this mock. Every login needs a verified workload JWT and exact auth role.
 Do not expose the endpoint with an uninitialized or unaudited service. All
 consumers need a bounded retry strategy for unavailable or sealed endpoints.
+
+Native CW/GCP federation also needs provider-accessible OIDC discovery and JWKS
+with publicly trusted TLS, or a supported pinned-key arrangement. The pilot's
+private CA is insufficient for that public issuer. This mock does not publish a
+discovery endpoint; qualify a separate public discovery route and explicit issuer
+before enabling provider federation.
 
 ## Iris as a delegation client
 

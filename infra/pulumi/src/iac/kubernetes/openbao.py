@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Render the CoreWeave OpenBao pilot without reading credentials or contacting a cluster."""
+"""Render CoreWeave OpenBao server resources without credentials or cluster access."""
 
 import json
 import re
@@ -46,7 +46,7 @@ class OpenBaoDeployment(BaseModel):
     @classmethod
     def raft_size(cls, value: int) -> int:
         if value not in {1, 3, 5}:
-            raise ValueError("Use one bootstrap server, three pilot voters or five main voters")
+            raise ValueError("OpenBao supports one, three or five Raft replicas")
         return value
 
     @field_validator("namespace", "hostname", "authority_pool", "storage_class")
