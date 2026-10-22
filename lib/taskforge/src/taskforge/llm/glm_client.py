@@ -619,7 +619,15 @@ class GlmClient:
                         except StopAsyncIteration:
                             break
                         events.append(chunk.model_dump_json())
-                        state.handle_chunk(chunk)
+                        try:
+                            state.handle_chunk(chunk)
+                        except Exception as error:
+                            # The accumulator indexes tool-call deltas by their index and raises on one
+                            # whose earlier deltas never arrived; such a stream is the server's fault.
+                            raise _AttemptFailed(
+                                AttemptOutcome.STREAM_ERROR,
+                                f"chunk the accumulator rejected: {type(error).__name__}: {error}",
+                            ) from error
                         if _carries_token(chunk):
                             last_token = time.monotonic()
                             if ttft is None:
