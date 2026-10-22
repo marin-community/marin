@@ -118,6 +118,17 @@ FAMILY_TOKEN_MAPS: dict[str, ChatTokens] = {
     "nemotron_h": NEMOTRON_TOKENS,
 }
 
+# Each family's pinned tokenizer, as (repo id, revision): the same tokenizers the
+# token maps are validated against, reused wherever a token-exact count is needed
+# (trace caps, mask lengths). The pins are the single canonical copy; Stage 0's
+# length filter reads them from here.
+FAMILY_TOKENIZER_REVISIONS: dict[str, tuple[str, str]] = {
+    "grug": ("open-athena/snowball-67b-a2b-base-262k-qk175", "11c9430da3075ef4596f92ee0af142d9d08215c1"),
+    "qwen3_moe": ("Qwen/Qwen3-30B-A3B-Base", "1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9"),
+    "qwen3_5_moe": ("Qwen/Qwen3.5-35B-A3B-Base", "0f0813072d2358973511097385626f21fcb6d422"),
+    "nemotron_h": ("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16", "e0ac9ee3dfd02be21b5479edfc2f671ed269d0a2"),
+}
+
 
 def _jinja_literal(value: str) -> str:
     """Escape ``value`` for use inside a single-quoted Jinja string literal."""
