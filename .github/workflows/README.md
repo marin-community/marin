@@ -106,6 +106,23 @@ Pull requests without `agent-generated` receive
 committable suggestions and no push. The holistic session ignores a head whose
 delta is only `Deslop` commits, which closes the review-then-deslop loop.
 
+## Nightshift area reviews
+
+`ops-nightshift-cleanup.yaml` runs on weekdays at 10:00 UTC and by manual
+dispatch. It launches one `github-automation` session using
+[nightshift-review](../../.agents/skills/nightshift-review/SKILL.md). The
+session chooses one bounded subsystem, reads its callers and state flow using
+the holistic review questions, and compares up to three supported improvements
+before editing. Recent nightshift outcomes and overlapping PRs inform the
+choice of area and prevent duplicate work.
+
+The skill ranks impact and evidence against effort and risk. Only candidates
+with a concrete user or operator consequence and a safe validation plan can
+lead to a PR. The session implements one eligible improvement or records why
+no change is warranted. Its typed Loom result includes the area walkthrough,
+candidate table, evidence, validation limits, and PR URL when present. CI-test
+and documentation-drift nightshift jobs retain their separate audit scopes.
+
 ## SkyRL runtime checks
 
 `Marin - Unit` selects `skyrl-wheel` for SkyRL, its editable Marin and Harbor
