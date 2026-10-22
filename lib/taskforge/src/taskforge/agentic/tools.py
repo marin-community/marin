@@ -22,7 +22,7 @@ import logging
 import re
 import tempfile
 from collections import Counter, defaultdict
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -70,7 +70,7 @@ from taskforge.agentic.gate import Evidence, Gate, missing_evidence
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, GUESS_PROMPT, REVIEW_TASK_PROMPT
 from taskforge.capability import FILE_SAFE_ID, CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
-from taskforge.llm.client import ContextExhausted
+from taskforge.llm.client import Completion, ContextExhausted
 from taskforge.llm.policy import Message
 from taskforge.llm.structured import StructuredOutputError
 
@@ -661,15 +661,20 @@ class ToolSession:
         try:
             result = await self.config.judge.complete_structured(messages, output_type, self.config.judge_policy)
         except StructuredOutputError as error:
+            # A reply that the output limit cut off is the most expensive judge call, so it counts too.
+            self._count_judge_tokens(error.completions)
             raise ToolError(f"The reviewer gave no valid reply; try again: {error}") from error
         except ContextExhausted as error:
             raise ToolError(
                 "The reviewer cannot read this task: its prompt and files are too long. Make them shorter."
             ) from error
-        self.tools.spend.judge_tokens += sum(
-            completion.usage.prompt_tokens + completion.usage.completion_tokens for completion in result.completions
-        )
+        self._count_judge_tokens(result.completions)
         return result.value
+
+    def _count_judge_tokens(self, completions: Sequence[Completion]) -> None:
+        self.tools.spend.judge_tokens += sum(
+            completion.usage.prompt_tokens + completion.usage.completion_tokens for completion in completions
+        )
 
     async def _save_web(self, kind: str, response: Mapping[str, Any]) -> str:
         path = _absolute(f"{WEB_DIR}/{kind}-{self.tools.spend.web_calls}.json")

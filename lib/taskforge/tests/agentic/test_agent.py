@@ -26,8 +26,9 @@ from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, GUESS_PROMPT
 from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, OPTION_PROBLEM, BlindSolution, OptionList, TaskReview
 from taskforge.capability import CapabilityIdea
-from taskforge.llm.client import Completion, ContextExhausted, StructuredResult
+from taskforge.llm.client import Completion, ContextExhausted, FinishReason, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
+from taskforge.llm.structured import CutReplyError, StructuredOutputError
 
 TASK_ID = "ledger--00"
 TASK = f"tasks/{TASK_ID}.json"
@@ -321,6 +322,28 @@ async def test_a_task_too_long_for_the_reviewer_is_refused_and_the_session_conti
     [submit] = tool_replies(result, "call-10")
     assert "too long" in submit["error"]
     assert (result.failure, result.report) == (None, "done")
+
+
+class CutJudge(AcceptingJudge):
+    """Gives replies that the output limit cuts off."""
+
+    async def complete_structured[T: BaseModel](
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
+    ) -> StructuredResult[T]:
+        usage = Usage(prompt_tokens=1000, completion_tokens=131_072, reasoning_tokens=131_072, cached_tokens=0)
+        cut = Completion("", "", (), FinishReason.LENGTH, usage, 0.0, 0.0, 0.0, 0, ())
+        raise StructuredOutputError(CutReplyError("cut off"), (cut,))
+
+
+async def test_a_cut_judge_reply_fails_the_submit_and_counts_its_tokens():
+    script = (*SCRIPT, call("finish", report="done"))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=CutJudge()))
+
+    [submit] = tool_replies(result, "call-10")
+    assert "no valid reply" in submit["error"]
+    assert result.spend.judge_tokens == 132_072
 
 
 async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
