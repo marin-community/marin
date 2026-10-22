@@ -110,18 +110,6 @@ def test_direct_roots_and_children_share_budget_across_clusters(federation):
     assert context(children[0]).user("alice").budget_spent == 30
 
 
-def test_local_budget_lists_do_not_reexport_aggregate_spend(federation):
-    activate(federation.states[0], "/alice/local")
-    activate(federation.states[1], "/alice/remote")
-    federation.sync()
-    with identity_scope(VerifiedIdentity(user_id="admin", role="admin")):
-        local = federation.services[1].list_user_budgets(controller_pb2.Controller.ListUserBudgetsRequest(), None)
-    assert [(budget.user_id, budget.budget_spent) for budget in local.users] == [("alice", 6)]
-    assert federation.children[0].check_submission().user("alice").budget_spent == 12
-    federation.sync()
-    assert federation.children[0].check_submission().user("alice").budget_spent == 12
-
-
 def test_child_counts_new_local_work_before_the_next_sync(federation):
     child = federation.children[0]
     child.check_submission()

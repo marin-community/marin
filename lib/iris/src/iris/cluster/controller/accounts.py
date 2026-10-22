@@ -12,10 +12,11 @@ from rigging.server_auth import get_verified_identity, require_identity
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, func, select
 
-from iris.cluster.controller import writes
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.budget import compute_user_spend
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.federation_budget import FederationBudgets, read_budget_context
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.schema import jobs_table, tasks_table, user_budgets_table
 from iris.cluster.types import TERMINAL_JOB_STATES, USER_JOB_STATES
 from iris.rpc import controller_pb2, job_pb2
@@ -141,12 +142,23 @@ def list_user_budgets(
     request: controller_pb2.Controller.ListUserBudgetsRequest,
     context: RequestContext,
 ) -> controller_pb2.Controller.ListUserBudgetsResponse:
-    """Return local configured and active users with locally executed spend."""
+    """Return every configured user budget with current spend."""
     del request, context
     require_identity()
     with dependencies.db.read_snapshot() as snapshot:
-        budgets = read_budget_context(snapshot, dependencies.budgets.defaults).users.values()
-    return controller_pb2.Controller.ListUserBudgetsResponse(users=list(budgets))
+        budgets = reads.list_user_budgets(snapshot)
+        spend = compute_user_spend(snapshot)
+    return controller_pb2.Controller.ListUserBudgetsResponse(
+        users=[
+            controller_pb2.Controller.GetUserBudgetResponse(
+                user_id=budget.user_id,
+                budget_limit=budget.budget_limit,
+                budget_spent=spend.get(budget.user_id, 0),
+                max_band=budget.max_band,
+            )
+            for budget in budgets
+        ]
+    )
 
 
 def _active_job_count(counts: dict[int, int]) -> int:
