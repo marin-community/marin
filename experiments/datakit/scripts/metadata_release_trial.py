@@ -11,6 +11,7 @@ from itertools import islice
 import pyarrow.parquet as pq
 from marin.datakit.normalize import generate_id
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.store.metadata import ShardManifest, export_metadata_shard
 
@@ -73,7 +74,7 @@ def run_trial(manifest: dict, output_dir: str, *, max_rows: int, replay_max_rows
         try:
             report = export_metadata_shard(
                 shard,
-                f"{output_dir}/sample-{index:05d}",
+                prefix_join(output_dir, f"sample-{index:05d}"),
                 cluster_view=manifest["cluster_view"],
                 max_rows=max_rows,
                 batch_size=min(max_rows, 64),
@@ -130,7 +131,7 @@ def main() -> None:
         manifest = json.load(stream)
     report = run_trial(manifest, args.output, max_rows=args.max_rows, replay_max_rows=args.replay_max_rows)
     output_fs.makedirs(output, exist_ok=True)
-    with output_fs.open(output.rstrip("/") + "/report.json", "w") as stream:
+    with output_fs.open(prefix_join(output, "report.json"), "w") as stream:
         json.dump(report, stream, indent=2, sort_keys=True)
     print(json.dumps({key: report[key] for key in ("status", "reconstructed_sources", "missing_sources")}))
     if report["status"] != "passed":

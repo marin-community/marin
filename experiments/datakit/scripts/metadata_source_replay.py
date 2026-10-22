@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 from marin.datakit import partition_filename
 from marin.datakit.normalize import _make_normalize_fn, _make_whitespace_compactor, _text_from_value
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 from zephyr.readers import SUPPORTED_EXTENSIONS, iter_parquet_row_groups
 from zephyr.shard_keys import deterministic_hash
 
@@ -44,19 +45,17 @@ def recipe_from_inventory(entry: dict, recipe_commit: str) -> SourceReplay:
         if fs.isfile(resolved):
             input_paths.append(root)
             break
-        protocol = root.split("://", 1)[0] if "://" in root else ""
         for directory, _dirs, files in fs.walk(resolved):
             candidates = sorted(name for name in files if not name.startswith(".") and name.endswith(extensions))
             if candidates:
-                path = f"{directory.rstrip('/')}/{candidates[0]}"
-                input_paths.append(f"{protocol}://{path}" if protocol else path)
+                input_paths.append(fs.unstrip_protocol(prefix_join(directory, candidates[0])))
                 break
         if input_paths:
             break
     if not input_paths:
         raise FileNotFoundError(f"No normalization input data file: {entry['marin_source']}")
     output = entry["normalized_artifact"]
-    fs, resolved = filesystem_for(f"{output}/outputs/main/part-00000-of-*.parquet")
+    fs, resolved = filesystem_for(prefix_join(output, "outputs/main/part-00000-of-*.parquet"))
     partitions = fs.glob(resolved)
     if len(partitions) != 1:
         raise ValueError(f"Expected one partition-zero file for {output}, found {len(partitions)}")
@@ -168,28 +167,33 @@ def find_normalized_rows(path: str, ids: set[str], budget: ScanBudget) -> dict[s
     return found
 
 
-def run_source_replay(recipe: SourceReplay, *, max_rows: int, max_projected_bytes: int) -> dict:
-    """Check real source-derived hashes in their original normalized partitions."""
-    if max_rows < 1 or max_projected_bytes < 1 or recipe.num_partitions < 1:
-        raise ValueError("Replay limits and partition count must be positive")
-    samples, examined = sample_normalization_inputs(recipe, max_rows)
+def match_normalized_samples(recipe: SourceReplay, samples: list[dict], budget: ScanBudget) -> set[str]:
+    """Group sample IDs by production partition and annotate matching physical rows."""
     by_partition: dict[int, set[str]] = defaultdict(set)
     for sample in samples:
         partition = deterministic_hash(sample["id"]) % recipe.num_partitions
         sample["normalized_partition"] = partition
         by_partition[partition].add(sample["id"])
-    budget = ScanBudget(max_projected_bytes)
     found: set[str] = set()
     for partition, ids in sorted(by_partition.items()):
-        path = (
-            f"{recipe.normalized_output.rstrip('/')}/outputs/main/{partition_filename(partition, recipe.num_partitions)}"
-        )
+        filename = partition_filename(partition, recipe.num_partitions)
+        path = prefix_join(recipe.normalized_output, prefix_join("outputs/main", filename))
         matched_rows = find_normalized_rows(path, ids, budget)
         found.update(matched_rows)
         for sample in samples:
             if sample["normalized_partition"] == partition and sample["id"] in matched_rows:
                 sample["normalized_path"] = path
                 sample["normalized_row"] = matched_rows[sample["id"]]
+    return found
+
+
+def run_source_replay(recipe: SourceReplay, *, max_rows: int, max_projected_bytes: int) -> dict:
+    """Check real source-derived hashes in their original normalized partitions."""
+    if max_rows < 1 or max_projected_bytes < 1 or recipe.num_partitions < 1:
+        raise ValueError("Replay limits and partition count must be positive")
+    samples, examined = sample_normalization_inputs(recipe, max_rows)
+    budget = ScanBudget(max_projected_bytes)
+    found = match_normalized_samples(recipe, samples, budget)
     missing = {sample["id"] for sample in samples} - found
     return {
         "source": recipe.source,

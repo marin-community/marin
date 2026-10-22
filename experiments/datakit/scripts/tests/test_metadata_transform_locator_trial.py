@@ -160,3 +160,29 @@ def test_biodiversity_candidate_hash_requires_item_identity(tmp_path, retained_i
     else:
         assert report["status"] == "incomplete"
     assert any(row["item_id"] == "partial-book" for row in report["rejected_candidates"])
+
+
+def test_biodiversity_strict_rejects_ambiguous_pages_while_candidate_retains_verified_books(tmp_path):
+    path = tmp_path / "pages.json.gz"
+    pages = [
+        {"item_id": "book", "page_num": "0002", "text": "two"},
+        {"item_id": "book", "page_num": "0001", "text": "one"},
+        {"item_id": "ambiguous", "page_num": "0001", "text": "a"},
+        {"item_id": "ambiguous", "page_num": "0001", "text": "b"},
+    ]
+    with gzip.open(path, "wt") as stream:
+        for row in pages:
+            stream.write(json.dumps(row) + "\n")
+    recipe = _recipe(tmp_path, "cp/biodiversity", biodiversity, [path], "one\n\ntwo", complete=True)
+    normalized_path = Path(recipe.normalization.normalized_output) / "outputs/main" / partition_filename(0, 1)
+    pq.write_table(pa.table({"id": [generate_id("one\n\ntwo")], "source_id": ["book"]}), normalized_path)
+    with pytest.raises(ValueError, match="ambiguous duplicate page_num"):
+        run_transform_replay(recipe, max_raw_rows=4, max_documents=2, max_projected_bytes=1024 * 1024)
+    result = run_biodiversity_candidate_replay(recipe, max_raw_rows=4, max_documents=2, max_projected_bytes=1024 * 1024)
+    assert result["status"] == "passed"
+    assert [sample["item_id"] for sample in result["samples"]] == ["book"]
+    assert result["samples"][0]["input_locators"] == [
+        {"input_path": str(path), "input_row": 1},
+        {"input_path": str(path), "input_row": 0},
+    ]
+    assert result["rejected_candidates"] == [{"item_id": "ambiguous", "reason": "ambiguous_page_order"}]

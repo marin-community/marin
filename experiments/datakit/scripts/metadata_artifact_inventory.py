@@ -13,6 +13,7 @@ from typing import Any
 
 from iris.cluster.redaction import redact_submit_argv
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_value
 
 MAX_METADATA_BYTES = 2 * 1024 * 1024
@@ -54,14 +55,14 @@ def read_metadata(path: str, *, max_bytes: int = MAX_METADATA_BYTES) -> dict:
 
 def _read_record(path: str) -> tuple[str, dict]:
     try:
-        record = read_metadata(path.rstrip("/") + "/.artifact.json")
+        record = read_metadata(prefix_join(path, ".artifact.json"))
         return path, {"status": "found", "record": record}
     except FileNotFoundError:
         return path, {"status": "missing"}
 
 
 def _absolute(prefix: str, path: str) -> str:
-    return path if "://" in path else prefix.rstrip("/") + "/" + path.lstrip("/")
+    return path if "://" in path else prefix_join(prefix, path)
 
 
 def inventory(store_record: dict, *, workers: int = 8, cache_dir: str | None = None) -> dict:
@@ -80,7 +81,7 @@ def inventory(store_record: dict, *, workers: int = 8, cache_dir: str | None = N
         actual_name = identity.removeprefix("datakit/tokenize/").rsplit("_", 1)[0]
         if actual_name != source_name:
             raise ValueError(f"Frozen dependency order mismatch: {source_name} != {actual_name}")
-    prefix = store_record["output_path"].split("/datakit/store_", 1)[0]
+    prefix = str(StoragePath(store_record["output_path"]).parent.parent)
     records: dict[str, dict] = {}
 
     def load(paths: list[str]) -> None:
@@ -98,13 +99,13 @@ def inventory(store_record: dict, *, workers: int = 8, cache_dir: str | None = N
             record = status.get("record")
             if record is not None and "result" not in record:
                 try:
-                    info = read_metadata(path.rstrip("/") + "/.executor_info")
+                    info = read_metadata(prefix_join(path, ".executor_info"))
                 except FileNotFoundError:
                     info = {}
                 dependencies = info.get("dependencies", [])
                 # Copied artifacts retain original-region executor metadata.
                 resolved = [
-                    prefix + "/" + dependency.split("/marin/", 1)[1] if "/marin/" in dependency else dependency
+                    prefix_join(prefix, dependency.split("/marin/", 1)[1]) if "/marin/" in dependency else dependency
                     for dependency in dependencies
                 ]
                 status["record"] = {
@@ -131,7 +132,7 @@ def inventory(store_record: dict, *, workers: int = 8, cache_dir: str | None = N
         roots = dict(zip(INPUT_KINDS, dep_paths[index * 5 : index * 5 + 5], strict=True))
         token = records[roots["tokenize"]].get("record", {})
         source_key = token.get("result", {}).get("source_keys", {}).get("train")
-        normalized = _absolute(prefix, source_key).removesuffix("/outputs/main") if source_key else None
+        normalized = str(StoragePath(_absolute(prefix, source_key)).parent.parent) if source_key else None
         sources.append(
             {
                 "marin_source": name,
@@ -161,12 +162,11 @@ def inventory(store_record: dict, *, workers: int = 8, cache_dir: str | None = N
         source["normalization_executor_info"] = record.get("executor_info")
         relative = (record.get("config") or {}).get("relative_input_path")
         source["normalization_input_paths"] = [
-            dependency.rstrip("/") + "/" + relative if relative else dependency
-            for dependency in record.get("dep_paths", [])
+            prefix_join(dependency, relative) if relative else dependency for dependency in record.get("dep_paths", [])
         ]
         original_dependencies = (record.get("executor_info") or {}).get("dependencies", record.get("dep_paths", []))
         source["original_normalization_input_paths"] = [
-            dependency.rstrip("/") + "/" + relative if relative else dependency for dependency in original_dependencies
+            prefix_join(dependency, relative) if relative else dependency for dependency in original_dependencies
         ]
         token = records[source["artifact_roots"]["tokenize"]].get("record", {}).get("result", {})
         source["normalized_shard_count_hint"] = token.get("counters", {}).get("train", {}).get("zephyr/item_count")
@@ -222,13 +222,13 @@ def audit_provider_routes(
             if records[path].get("metadata_lookup_path"):
                 roots.append(records[path]["metadata_lookup_path"])
             if original_prefix and "/marin/" in path:
-                roots.append(original_prefix.rstrip("/") + "/" + path.split("/marin/", 1)[1])
+                roots.append(prefix_join(original_prefix, path.split("/marin/", 1)[1]))
             roots.append(path)
             if "/raw/" in path and "/" in path.split("/raw/", 1)[1]:
-                roots.extend([root.rsplit("/", 1)[0] for root in roots])
+                roots.extend([str(StoragePath(root).parent) for root in roots])
             for root in dict.fromkeys(roots):
                 for filename in (".provenance.json", "provenance.json"):
-                    location = root.rstrip("/") + "/" + filename
+                    location = prefix_join(root, filename)
                     try:
                         return path, {
                             "status": "found",

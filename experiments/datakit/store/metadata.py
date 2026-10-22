@@ -19,6 +19,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.store.datakit_store import _FilterStats, _keep_document
 
@@ -200,7 +201,7 @@ def export_metadata_shard(
         # Write only after alignment has passed for the complete bounded prefix.
         outputs = []
         for (cluster, quality), rows in sorted(bucket_rows.items()):
-            path = f"{output_dir.rstrip('/')}/cluster={cluster}/quality={quality}/metadata.parquet"
+            path = prefix_join(output_dir, f"cluster={cluster}/quality={quality}/metadata.parquet")
             fs, resolved = filesystem_for(path)
             fs.makedirs(resolved.rsplit("/", 1)[0], exist_ok=True)
             with fs.open(resolved, "wb") as stream:

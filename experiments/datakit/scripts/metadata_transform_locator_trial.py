@@ -13,18 +13,15 @@ import argparse
 import hashlib
 import importlib.util
 import json
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
 import pyarrow.parquet as pq
-from marin.datakit import partition_filename
 from marin.datakit.normalize import _make_normalize_fn, _make_whitespace_compactor, _text_from_value
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
-from zephyr.shard_keys import deterministic_hash
 
-from experiments.datakit.scripts.metadata_source_replay import ScanBudget, SourceReplay, find_normalized_rows
+from experiments.datakit.scripts.metadata_source_replay import ScanBudget, SourceReplay, match_normalized_samples
 
 # Project only fields consumed by the production transforms.
 RAW_COLUMNS = {
@@ -126,6 +123,34 @@ def _transform_module(recipe: TransformReplay):
     return module
 
 
+def _collect_biodiversity_pages(
+    recipe: TransformReplay, budget: RawBudget, max_documents: int
+) -> dict[str, list[tuple[dict, dict]]]:
+    groups: dict[str, list[tuple[dict, dict]]] = {}
+    # Bound selected groups, but scan the input to collect subsequent pages of those items.
+    for path in recipe.raw_paths:
+        for locator, row in raw_rows(path, RAW_COLUMNS["cp/biodiversity"], budget):
+            key = row["item_id"]
+            if key not in groups and len(groups) < max_documents:
+                groups[key] = []
+            if key in groups:
+                groups[key].append((locator, row))
+        if budget.exhausted:
+            break
+    return groups
+
+
+def _order_biodiversity_pages(groups: dict[str, list[tuple[dict, dict]]]) -> set[str]:
+    ambiguous = set()
+    for key, pages in groups.items():
+        pages.sort(key=lambda pair: pair[1]["page_num"])
+        # Production has no explicit tie-break for equal page numbers across partitions.
+        numbers = [row["page_num"] for _, row in pages]
+        if len(numbers) != len(set(numbers)):
+            ambiguous.add(key)
+    return ambiguous
+
+
 def sample_transformed_rows(recipe: TransformReplay, budget: RawBudget, *, max_documents: int) -> list[dict]:
     """Run production transforms and normalization, dropping text from evidence."""
     source = recipe.normalization.source
@@ -151,22 +176,12 @@ def sample_transformed_rows(recipe: TransformReplay, budget: RawBudget, *, max_d
     if source == "cp/biodiversity":
         if not recipe.raw_split_manifest_complete:
             raise ValueError("Biodiversity requires every raw file in the pinned split, not a sampled file list")
-        groups: dict[str, list[tuple[dict, dict]]] = {}
-        # Bound selected groups, but scan all raw rows to collect every page of each selected item.
-        for path in recipe.raw_paths:
-            for locator, row in raw_rows(path, columns, budget):
-                key = row["item_id"]
-                if key not in groups and len(groups) < max_documents:
-                    groups[key] = []
-                if key in groups:
-                    groups[key].append((locator, row))
+        groups = _collect_biodiversity_pages(recipe, budget, max_documents)
         if budget.exhausted:
             return []  # Never emit a partially reconstructed item.
+        ambiguous = _order_biodiversity_pages(groups)
         for key, pages in groups.items():
-            pages.sort(key=lambda pair: pair[1]["page_num"])
-            # Equal page_num keys across input partitions have no explicit tie-break in production.
-            numbers = [row["page_num"] for _, row in pages]
-            if len(numbers) != len(set(numbers)):
+            if key in ambiguous:
                 raise ValueError(f"Biodiversity item {key!r} has ambiguous duplicate page_num ordering")
             for document in module.stitch_pages(key, iter(row for _, row in pages)):
                 record_sample(document, [locator for locator, _ in pages])
@@ -198,21 +213,8 @@ def run_transform_replay(
     budget = RawBudget(max_raw_rows, max_projected_bytes)
     samples = sample_transformed_rows(recipe, budget, max_documents=max_documents)
     normalized = recipe.normalization
-    by_partition: dict[int, set[str]] = defaultdict(set)
-    for sample in samples:
-        partition = deterministic_hash(sample["id"]) % normalized.num_partitions
-        sample["normalized_partition"] = partition
-        by_partition[partition].add(sample["id"])
     match_budget = ScanBudget(max_projected_bytes)
-    found = set()
-    for partition, ids in sorted(by_partition.items()):
-        filename = partition_filename(partition, normalized.num_partitions)
-        path = f"{normalized.normalized_output.rstrip('/')}/outputs/main/{filename}"
-        matches = find_normalized_rows(path, ids, match_budget)
-        found.update(matches)
-        for sample in samples:
-            if sample["normalized_partition"] == partition and sample["id"] in matches:
-                sample.update(normalized_path=path, normalized_row=matches[sample["id"]])
+    found = match_normalized_samples(normalized, samples, match_budget)
     missing = {sample["id"] for sample in samples} - found
     return {
         "source": normalized.source,
@@ -288,16 +290,8 @@ def run_biodiversity_candidate_replay(
         raise ValueError("Trial budgets must be positive")
     module = _transform_module(recipe)
     budget = RawBudget(max_raw_rows, max_projected_bytes)
-    groups: dict[str, list[tuple[dict, dict]]] = {}
-    for path in recipe.raw_paths:
-        for locator, row in raw_rows(path, RAW_COLUMNS["cp/biodiversity"], budget):
-            key = row["item_id"]
-            if key not in groups and len(groups) < max_documents:
-                groups[key] = []
-            if key in groups:
-                groups[key].append((locator, row))
-        if budget.exhausted:
-            break
+    groups = _collect_biodiversity_pages(recipe, budget, max_documents)
+    ambiguous = _order_biodiversity_pages(groups)
     attrs = recipe.normalization.normalization_parameters
     normalize = _make_normalize_fn(
         attrs["text_field"],
@@ -309,9 +303,7 @@ def run_biodiversity_candidate_replay(
     candidates = []
     rejected = []
     for item_id, pages in groups.items():
-        pages.sort(key=lambda pair: pair[1]["page_num"])
-        numbers = [row["page_num"] for _, row in pages]
-        if len(numbers) != len(set(numbers)):
+        if item_id in ambiguous:
             rejected.append({"item_id": item_id, "reason": "ambiguous_page_order"})
             continue
         for document in module.stitch_pages(item_id, iter(row for _, row in pages)):
@@ -321,17 +313,13 @@ def run_biodiversity_candidate_replay(
             )
     matched = []
     match_budget = ScanBudget(max_projected_bytes)
+    match_normalized_samples(recipe.normalization, candidates, match_budget)
     for candidate in candidates:
-        partition = deterministic_hash(candidate["id"]) % recipe.normalization.num_partitions
-        path = (
-            f"{recipe.normalization.normalized_output.rstrip('/')}/outputs/main/"
-            f"{partition_filename(partition, recipe.normalization.num_partitions)}"
-        )
-        matches = find_normalized_rows(path, {candidate["id"]}, match_budget)
-        ordinal = matches.get(candidate["id"])
+        ordinal = candidate.get("normalized_row")
         if ordinal is None:
             rejected.append({"item_id": candidate["item_id"], "reason": "normalized_hash_not_found_or_budget_exhausted"})
             continue
+        path = candidate["normalized_path"]
         found, source_id = _normalized_source_id(path, ordinal, match_budget)
         if not found or source_id != candidate["item_id"]:
             rejected.append({"item_id": candidate["item_id"], "reason": "normalized_item_identity_not_verified"})

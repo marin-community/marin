@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 from marin.datakit import partition_filename
 from marin.datakit.normalize import generate_id
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.datakit.scripts.metadata_artifact_inventory import inventory, read_metadata
 from experiments.datakit.scripts.metadata_source_replay import recipe_from_inventory, run_source_replay
@@ -22,7 +23,7 @@ from experiments.datakit.store.metadata import ShardManifest, export_metadata_sh
 
 
 def _absolute(prefix: str, path: str) -> str:
-    return path if "://" in path else f"{prefix.rstrip('/')}/{path.lstrip('/')}"
+    return path if "://" in path else prefix_join(prefix, path)
 
 
 def probe_source(
@@ -37,26 +38,26 @@ def probe_source(
     """Check real selection alignment and separately replay real normalization inputs."""
     name = source["marin_source"]
     report = {"source": name}
-    prefix = recovered["store_uri"].split("/datakit/store_", 1)[0]
+    prefix = str(StoragePath(recovered["store_uri"]).parent.parent)
     roots = source["artifact_roots"]
     records = recovered["records"]
     try:
         filename = partition_filename(0, source["normalized_shard_count_hint"])
         decon_dir = records[roots["decontam"]]["record"]["result"]["main_output_dir"]
         cluster_dir = records[roots["cluster"]]["record"]["result"]["output_dir"]
-        normalized = _absolute(prefix, source["source_key"]) + "/" + filename
+        normalized = prefix_join(_absolute(prefix, source["source_key"]), filename)
         manifest = ShardManifest(
             marin_source=name,
             normalized=normalized,
-            decontam=_absolute(prefix, decon_dir) + "/" + filename,
-            cluster=_absolute(prefix, cluster_dir) + "/" + filename,
-            quality=roots["quality"] + "/" + filename,
-            content_type=roots["content_type"] + "/" + filename,
-            exact_dedup=_absolute(prefix, source["exact_dedup"]["attr_dir"]) + "/" + filename,
+            decontam=prefix_join(_absolute(prefix, decon_dir), filename),
+            cluster=prefix_join(_absolute(prefix, cluster_dir), filename),
+            quality=prefix_join(roots["quality"], filename),
+            content_type=prefix_join(roots["content_type"], filename),
+            exact_dedup=prefix_join(_absolute(prefix, source["exact_dedup"]["attr_dir"]), filename),
             dedup=(
                 ""
                 if source["fuzzy_exempt"]
-                else (_absolute(prefix, source["verified_fuzzy_dedup"]["attr_dir"]) + "/" + filename)
+                else prefix_join(_absolute(prefix, source["verified_fuzzy_dedup"]["attr_dir"]), filename)
             ),
             bucket_edges=recovered["bucket_edges"],
         )
@@ -114,7 +115,7 @@ def main() -> None:
         raise ValueError("Specify --output or run with IRIS_OUTPUT_DIR")
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    store = read_metadata(args.store.rstrip("/") + "/.artifact.json")
+    store = read_metadata(prefix_join(args.store, ".artifact.json"))
     recovered = inventory(store)
     (output / "inventory.json").write_text(json.dumps(recovered, indent=2))
     sources = recovered["sources"]

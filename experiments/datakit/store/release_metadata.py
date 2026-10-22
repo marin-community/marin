@@ -11,6 +11,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.scripts.metadata_upstream_locators import SourceManifest, validate_locator_mapping
 from experiments.datakit.store.metadata import METADATA_SCHEMA, ShardManifest, export_metadata_shard
@@ -86,22 +87,22 @@ def export_release_metadata_shard(
         outputs = []
         for original, rows in buckets:
             relative = str(Path(original["path"]).relative_to(temporary))
-            target = destination.rstrip("/") + "/" + relative
+            target = prefix_join(destination, relative)
             destination_fs.makedirs(str(Path(target).parent), exist_ok=True)
             with destination_fs.open(target, "wb") as stream:
                 pq.write_table(pa.Table.from_pylist(rows, schema=RELEASE_SCHEMA), stream, compression="zstd")
-            outputs.append({**original, "path": output_dir.rstrip("/") + "/" + relative})
+            outputs.append({**original, "path": prefix_join(output_dir, relative)})
         report = {
             "status": "passed",
             "selected_occurrences": len(selected),
             "outputs": outputs,
             "source_manifests": sorted(source_manifests),
-            "source_catalog": output_dir.rstrip("/") + "/sources.json",
+            "source_catalog": prefix_join(output_dir, "sources.json"),
             "validation": "coordinates checked; independent upstream transform replay required",
         }
         destination_fs.makedirs(destination, exist_ok=True)
-        with destination_fs.open(destination.rstrip("/") + "/sources.json", "w") as stream:
+        with destination_fs.open(prefix_join(destination, "sources.json"), "w") as stream:
             json.dump({key: asdict(value) for key, value in source_manifests.items()}, stream, indent=2)
-        with destination_fs.open(destination.rstrip("/") + "/_complete.json", "w") as stream:
+        with destination_fs.open(prefix_join(destination, "_complete.json"), "w") as stream:
             json.dump(report, stream, indent=2)
         return report
