@@ -1,0 +1,187 @@
+[
+  {
+    "model": "Aleph-Alpha/Kolibri-1",
+    "root": "/benfeuer/eval-20261021-195141-Aleph-Alpha-Kolibri-1-0f2d91e02e514896b556e5b3be602db7-25b7908e",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-195141-Aleph-Alpha-Kolibri-1-0f2d91e02e514896b556e5b3be602db7-swebench-verified-d7e161f472195a42bc382c8eec3ff937/results/harbor_jobs/harbor_swebench-verified_11fef710a145/result.json"
+  },
+  {
+    "model": "IFM/K2-Horizon-MoVA-36B-A4B",
+    "root": "/benfeuer/eval-20261021-193832-K2-Horizon-campaign-0c18760481764880a92fe21fee432d65-a16b3c97",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-193832-K2-Horizon-campaign-0c18760481764880a92fe21fee432d65-swebench-verified-1eee2785a32d55e5b85e8074ec40dadb/results/harbor_jobs/harbor_swebench-verified_da0b9ca2aa4e/result.json"
+  },
+  {
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    "root": "/benfeuer/eval-20261021-194420-Qwen-Qwen3-Coder-30B-A3B-Instruct-16194dab02d84fe599d06293f7977aa0-05520c0b",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-194420-Qwen-Qwen3-Coder-30B-A3B-Instruct-16194dab02d84fe599d06293f7977aa0-swebench-verified-e26bc578976b5ebbafd70cfad9bf0061/results/harbor_jobs/harbor_swebench-verified_3ef32c95a4bf/result.json"
+  },
+  {
+    "model": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+    "root": "/benfeuer/eval-20261021-194547-Qwen-Qwen3-Next-80B-A3B-Instruct-15797dfd97814cf3825c1f30bf330a4e-14cd46e6",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-194547-Qwen-Qwen3-Next-80B-A3B-Instruct-15797dfd97814cf3825c1f30bf330a4e-swebench-verified-dcabb2c87f0652fda27255476a570e9c/results/harbor_jobs/harbor_swebench-verified_df561b5dfef3/result.json"
+  },
+  {
+    "model": "Qwen/Qwen3.6-35B-A3B",
+    "root": "/benfeuer/eval-20261021-194254-Qwen-Qwen3.6-35B-A3B-4369ef786fbe4b73afac7b9bbd0ab63b-721ae06f",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-194254-Qwen-Qwen3.6-35B-A3B-4369ef786fbe4b73afac7b9bbd0ab63b-swebench-verified-1b8923e8807e5dfb903c6f6c0ab8b866/results/harbor_jobs/harbor_swebench-verified_75daab7dad7b/result.json"
+  },
+  {
+    "model": "arcee-ai/Trinity-Mini",
+    "root": "/benfeuer/eval-20261021-170714-arcee-ai-Trinity-Mini-e55fa92163ff4dcab0042f009b7412cf-544227a1",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-170714-arcee-ai-Trinity-Mini-e55fa92163ff4dcab0042f009b7412cf-swebench-verified-09de94bd749c55a5bde7975f167bc2b0/results/harbor_jobs/harbor_swebench-verified_712758ff17ba/result.json"
+  },
+  {
+    "model": "google/gemma-4-26B-A4B-it",
+    "root": "/benfeuer/eval-20261021-194611-google-gemma-4-26B-A4B-it-df89b8f2fcd24d3a9aebd26100eb3774-b1db3b82",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-194611-google-gemma-4-26B-A4B-it-df89b8f2fcd24d3a9aebd26100eb3774-swebench-verified-9f31ceb0f04e55a88a8a91af604db238/results/harbor_jobs/harbor_swebench-verified_9cc4ad2c76d1/result.json"
+  },
+  {
+    "model": "inclusionAI/Ling-lite-1.5",
+    "root": "/benfeuer/eval-20261021-165908-inclusionAI-Ling-lite-1.5-316540bf924c44b39813e939034f4978-175ee920",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-165908-inclusionAI-Ling-lite-1.5-316540bf924c44b39813e939034f4978-swebench-verified-fc6f4fca290d5d72a07b93977cb47b1a/results/harbor_jobs/harbor_swebench-verified_5c1dd8926e13/result.json"
+  },
+  {
+    "model": "laion/snowball-67b-a2b-relay-sft-acont-step999",
+    "root": "/benfeuer/eval-20261021-220513-laion-snowball-67b-a2b-relay-sft-acont-step999-b96995d46a994316bddde9ced7b91a62-33c96692",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-220513-laion-snowball-67b-a2b-relay-sft-acont-step999-b96995d46a994316bddde9ced7b91a62-swebench-verified-7a2a56a2234657ddb7f279cbec794a61/results/harbor_jobs/harbor_swebench-verified_476e8a71ea85/result.json"
+  },
+  {
+    "model": "laion/snowball-67b-a2b-relay-sft-allkimi-step1203",
+    "root": "/benfeuer/eval-20261021-220335-laion-snowball-67b-a2b-relay-sft-allkimi-step1203-4cdf21735c82454b842802cd3136f160-40743943",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-220335-laion-snowball-67b-a2b-relay-sft-allkimi-step1203-4cdf21735c82454b842802cd3136f160-swebench-verified-d16c5d5ab07355a28fdc7f8797671aa8/results/harbor_jobs/harbor_swebench-verified_18d46c0ab6c0/result.json"
+  },
+  {
+    "model": "marianna13/Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465",
+    "root": "/benfeuer/eval-20261021-203350-marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465-55617553005f4dd7bb1b591cd50d75de-b01c9fda",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-203350-marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465-55617553005f4dd7bb1b591cd50d75de-swebench-verified-a9eb8b1ec29a51c1b8702edda5056ee8/results/harbor_jobs/harbor_swebench-verified_e085dbd3490c/result.json"
+  },
+  {
+    "model": "moonshotai/Kimi-Linear-48B-A3B-Instruct",
+    "root": "/benfeuer/eval-20261021-170548-moonshotai-Kimi-Linear-48B-A3B-Instruct-d3ce76cd700747c6a18ee5fe752a67b8-61ca62c2",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-170548-moonshotai-Kimi-Linear-48B-A3B-Instruct-d3ce76cd700747c6a18ee5fe752a67b8-swebench-verified-58eceb47c9c6570ba3a3a2202b9b2884/results/harbor_jobs/harbor_swebench-verified_632a900ca5dc/result.json"
+  },
+  {
+    "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+    "root": "/benfeuer/eval-20261021-170524-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-042c0039a5e942f2b57174e3dc9bd050-daff9153",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-170524-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-042c0039a5e942f2b57174e3dc9bd050-swebench-verified-063128cfd60d554dbebea12374d64ae9/results/harbor_jobs/harbor_swebench-verified_b61ab535495c/result.json"
+  },
+  {
+    "model": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+    "root": "/benfeuer/eval-20261021-194635-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-78d5306ff28748e2982c639225d32624-25938304",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-194635-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-78d5306ff28748e2982c639225d32624-swebench-verified-eeeebfe21d875240ac82401dc83b163e/results/harbor_jobs/harbor_swebench-verified_9780f6b69ed2/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04",
+    "root": "/benfeuer/eval-20261021-195307-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04-9b1004f044084cb188b87e1090675626-b34c5553",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-195307-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04-9b1004f044084cb188b87e1090675626-swebench-verified-e1ceb14f8f4750449eeb4dd0fcb4cef7/results/harbor_jobs/harbor_swebench-verified_d43376c986b8/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02",
+    "root": "/benfeuer/eval-20261021-193642-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-54276794f3374a00a0afbd2b93bbf8ed-3208a58b",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-193642-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-54276794f3374a00a0afbd2b93bbf8ed-swebench-verified-d2e3ea81628751ecbdcffd251b6539e7/results/harbor_jobs/harbor_swebench-verified_2330c91be6e5/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO",
+    "root": "/benfeuer/eval-20261021-191757-open-athena-Grug-67B-A2B-BFCL-Protocol-FTPO-f01057bcbf6146989a84381a5d696fc7-944bbe3d",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-191757-open-athena-Grug-67B-A2B-BFCL-Protocol-FTPO-f01057bcbf6146989a84381a5d696fc7-swebench-verified-14375a6dcc0753c78d8e9cb8f134ed35/results/harbor_jobs/harbor_swebench-verified_6d745f29b7f5/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-BFCL-Recovery",
+    "root": "/benfeuer/eval-20261021-195623-open-athena-Grug-67B-A2B-BFCL-Recovery-4ff71d9f0984489aa92238fffa37dc20-eef97aaf",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-195623-open-athena-Grug-67B-A2B-BFCL-Recovery-4ff71d9f0984489aa92238fffa37dc20-swebench-verified-6bff20ca012f5b968e1c6d5871dc5f10/results/harbor_jobs/harbor_swebench-verified_76f37bba4092/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Continuation-Tool-Retention",
+    "root": "/benfeuer/eval-20261021-192255-open-athena-Grug-67B-A2B-Continuation-Tool-Retention-8b82ae1847dc419d9d27f1c574340709-8c9a3c72",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-192255-open-athena-Grug-67B-A2B-Continuation-Tool-Retention-8b82ae1847dc419d9d27f1c574340709-swebench-verified-1be72fd0b68559c9a6af7d9a0f955449/results/harbor_jobs/harbor_swebench-verified_2a6873c1545c/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21",
+    "root": "/benfeuer/eval-20261021-194127-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-7d1d08f593484094a7c8b0b2faae700e-2b5d48ea",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-194127-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-7d1d08f593484094a7c8b0b2faae700e-swebench-verified-10f5641cb4cf584ea1e0cf389ff50f98/results/harbor_jobs/harbor_swebench-verified_d23e9be24c5f/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom",
+    "root": "/benfeuer/eval-20261021-193809-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom-b103fb6ee4eb4375a24d66d4c330219f-21a3d5a1",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-193809-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom-b103fb6ee4eb4375a24d66d4c330219f-swebench-verified-f3773b48956f5c0f8a5de1968c220cf8/results/harbor_jobs/harbor_swebench-verified_f10a6bd1fbc1/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05",
+    "root": "/benfeuer/eval-20261021-192058-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-d5c0a1ecdf334a0297a7e3c73eac72af-e16aee59",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-192058-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-d5c0a1ecdf334a0297a7e3c73eac72af-swebench-verified-b37f5eb174145bfd8cf3d9847afb9466/results/harbor_jobs/harbor_swebench-verified_7b2643ece5fd/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10",
+    "root": "/benfeuer/eval-20261021-195331-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-29f77792d062414d84ae009ee4a194f1-845546d5",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-195331-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-29f77792d062414d84ae009ee4a194f1-swebench-verified-fe67b56b55025e87b8250df058763469/results/harbor_jobs/harbor_swebench-verified_4ef6088a5368/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12",
+    "root": "/benfeuer/eval-20261021-201222-open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12-3831fe728ac64f8eb653208270143f77-fdd6a379",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-201222-open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12-3831fe728ac64f8eb653208270143f77-swebench-verified-e4ff56373da5592cb895000890245ecd/results/harbor_jobs/harbor_swebench-verified_45447b2710cc/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14",
+    "root": "/benfeuer/eval-20261021-192841-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14-db61c115024a440c8c7c4193119794f1-46a91df6",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-192841-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14-db61c115024a440c8c7c4193119794f1-swebench-verified-a20b768bdd0a53449760bc29496e0a56/results/harbor_jobs/harbor_swebench-verified_369f0b85a0d2/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14",
+    "root": "/benfeuer/eval-20261021-193007-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14-2ea65880d7f8431b95fe821de05d875d-a8a4f77b",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-193007-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14-2ea65880d7f8431b95fe821de05d875d-swebench-verified-fda7dd9fcc275104bba7f691f55c360c/results/harbor_jobs/harbor_swebench-verified_c2b6208c9a6d/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14",
+    "root": "/benfeuer/eval-20261021-192714-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14-0925821a6c5444468f6b3d61b8af1e20-4b80f4d8",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-192714-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14-0925821a6c5444468f6b3d61b8af1e20-swebench-verified-8b97180eac4854b89f06b751f8c2cde3/results/harbor_jobs/harbor_swebench-verified_253c269f2995/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13",
+    "root": "/benfeuer/eval-20261021-192422-open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13-e6dc7faf89e74f1b8a327941d9c54c88-abc1be6d",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-192422-open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13-e6dc7faf89e74f1b8a327941d9c54c88-swebench-verified-bf80a12154fd5339bceabc42423680b7/results/harbor_jobs/harbor_swebench-verified_9b8f67542de0/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14",
+    "root": "/benfeuer/eval-20261021-193133-open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14-40341eb373d643a3be31dd9ef5fa4990-3827692c",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-193133-open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14-40341eb373d643a3be31dd9ef5fa4990-swebench-verified-451d096ffd6f5afb87abaf645f7cfb97/results/harbor_jobs/harbor_swebench-verified_25d430696cea/result.json"
+  },
+  {
+    "model": "open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09",
+    "root": "/benfeuer/eval-20261021-204751-open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09-02beafd855e240d980204b7cfe915af9-a4459b2b",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-204751-open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09-02beafd855e240d980204b7cfe915af9-swebench-verified-38613861e8755f1d9a0743c3c34ccb08/results/harbor_jobs/harbor_swebench-verified_f8da02637948/result.json"
+  },
+  {
+    "model": "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
+    "root": "/benfeuer/eval-20261021-221222-open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92-801c27ab2b094b868eb7588bcfcd07b1-2af02220",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-221222-open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92-801c27ab2b094b868eb7588bcfcd07b1-swebench-verified-1f4d5126a1b151e8a469e75e5831f14a/results/harbor_jobs/harbor_swebench-verified_03a144e1c6b3/result.json"
+  },
+  {
+    "model": "open-athena/Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38",
+    "root": "/benfeuer/eval-20261021-194001-open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38-6da32ea56b62468599d64a5364461b66-601e722a",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-194001-open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38-6da32ea56b62468599d64a5364461b66-swebench-verified-1ddec9a3350d5a20b2a414933a8a5719/results/harbor_jobs/harbor_swebench-verified_a73b68ae3029/result.json"
+  },
+  {
+    "model": "open-athena/Snowball-Smartie-RL-2026.10.15.32-step14",
+    "root": "/benfeuer/eval-20261021-193304-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-6efebfc68c7d48cbb20bdc58ab6f4f51-7e905ce5",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-193304-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-6efebfc68c7d48cbb20bdc58ab6f4f51-swebench-verified-9b706db3483958779b7be5944a66208d/results/harbor_jobs/harbor_swebench-verified_276133846500/result.json"
+  },
+  {
+    "model": "open-athena/Snowball-Smartie-RL-2026.10.17.49-step12",
+    "root": "/benfeuer/eval-20261021-204446-open-athena-Snowball-Smartie-RL-2026.10.17.49-step12-a0ed7a3d846f47858646e1aa35d0f9c0-ff5ca612",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-204446-open-athena-Snowball-Smartie-RL-2026.10.17.49-step12-a0ed7a3d846f47858646e1aa35d0f9c0-swebench-verified-32eb2779e1775d469f85390efcc28f30/results/harbor_jobs/harbor_swebench-verified_fcd1c164bb06/result.json"
+  },
+  {
+    "model": "open-athena/Snowball-Smartie-RL-2026.10.19.57-step8",
+    "root": "/benfeuer/eval-20261021-204620-open-athena-Snowball-Smartie-RL-2026.10.19.57-step8-cedc82b1566145919a140fb0f52a439f-3d2d5177",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-204620-open-athena-Snowball-Smartie-RL-2026.10.19.57-step8-cedc82b1566145919a140fb0f52a439f-swebench-verified-331035d0750f5a9eb488761364c6cf9f/results/harbor_jobs/harbor_swebench-verified_75375a58c5e7/result.json"
+  },
+  {
+    "model": "openai/gpt-oss-20b",
+    "root": "/benfeuer/eval-20261021-194658-openai-gpt-oss-20b-27d0927b6ab04307bdd19ea63c42dbe0-f7fafd03",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-194658-openai-gpt-oss-20b-27d0927b6ab04307bdd19ea63c42dbe0-swebench-verified-376dff1fe3535ed0a9734dbf186710f2/results/harbor_jobs/harbor_swebench-verified_071af4dd3463/result.json"
+  },
+  {
+    "model": "zai-org/GLM-4.7-Flash",
+    "root": "/benfeuer/eval-20261021-195014-zai-org-GLM-4.7-Flash-d3b0b0399e85436ca21d0f0abf3ebd5f-47c4f0d4",
+    "summary_uri": "s3://marin-us-east-02a/marin/evals/20261021-195014-zai-org-GLM-4.7-Flash-d3b0b0399e85436ca21d0f0abf3ebd5f-swebench-verified-74b37f02bc185562926dbc6b2d8b6e40/results/harbor_jobs/harbor_swebench-verified_b8f4940c73aa/result.json"
+  }
+]
