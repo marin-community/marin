@@ -286,9 +286,14 @@ def report(data_dir: Path, series: Sequence[str], steps: Sequence[int], shared: 
         print(f"\n### {bench} ({method})")
         for step in steps:
             keys = [REF, *(run_key(label, step) for label in series)]
-            present = [key for key in keys if key in per]
-            common = set.intersection(*(set(per[key]) for key in present))
+            # A run that has not scored anything yet (its record exists but no items landed) is skipped;
+            # a step with no arm left, or no item shared by every present run, prints only its count.
+            present = [key for key in keys if per.get(key)]
+            common = set.intersection(*(set(per[key]) for key in present)) if present else set()
             n = len(common)
+            if len(present) < 2 or n == 0:
+                print(f"step {step:>2}: n={n}  (no comparable runs)")
+                continue
             print(
                 f"step {step:>2}: n={n}  "
                 + "  ".join(f"{key} {sum(per[key][i] for i in common) / n:.3f}" for key in present)

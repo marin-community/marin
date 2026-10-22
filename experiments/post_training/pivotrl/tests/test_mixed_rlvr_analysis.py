@@ -1,12 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+import json
+
 import numpy as np
 import pytest
 
 from experiments.post_training.pivotrl.mixed_rlvr_analysis import (
+    EVALCHEMY,
+    HARBOR,
+    REF,
     exact_mcnemar_p,
     harbor_scores,
     paired_delta,
+    report,
     sample_scores,
     sign_flip_p,
 )
@@ -41,6 +47,24 @@ def test_swebench_is_strict_on_the_first_trial_and_tblite_needs_two_of_three():
 def test_sample_scores_average_repeated_trials_and_skip_unscored_ones():
     scores = sample_scores({"run": {"q1\t0": True, "q1\t1": False, "q1\t2": None, "q2\t": True}})
     assert scores == {"run": {"q1": 0.5, "q2": 1.0}}
+
+
+def test_report_skips_runs_that_have_not_scored_anything(tmp_path, capsys):
+    # A run whose evaluation is still in flight has a key with no items; a step with no arm left reports
+    # its count instead of dividing by it.
+    tasks = {bench: {REF: {"t1": [1.0], "t2": [0.0]}, "a-step4": {"t1": [1.0], "t2": [1.0]}} for bench in HARBOR}
+    samples = {
+        bench: {REF: {"q1\t": True, "q2\t": False}, "a-step4": {"q1\t": True, "q2\t": True}, "a-step8": {}}
+        for bench in EVALCHEMY
+    }
+    (tmp_path / "tasks.json").write_text(json.dumps(tasks))
+    (tmp_path / "samples.json").write_text(json.dumps(samples))
+
+    report(tmp_path, ["a"], [4, 8], shared=False)
+
+    out = capsys.readouterr().out
+    assert "a-step4 vs REF" in out
+    assert "step  8: n=2  (no comparable runs)" in out
 
 
 def test_paired_delta_uses_shared_items_only():
