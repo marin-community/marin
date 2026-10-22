@@ -113,7 +113,7 @@ dispatch. It launches one `github-automation` session. Follow this procedure
 for that assignment; CI-test and documentation-drift jobs have separate scopes.
 
 1. **Find demand, then choose one area.** Read applicable `AGENTS.md` files
-   and use `consult-echo` for prior work. Inspect the last 20 PRs labeled
+   and use `use-echo` for prior work. Inspect the last 20 PRs labeled
    `nightshift`, including closed PRs and relevant feedback:
 
    ```bash
@@ -131,7 +131,7 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    demand is documented, measure an ordinary caller before proposing work.
 
 2. **Understand the system before proposing edits.** Apply the whole-system
-   questions from [holistic review](../../.agents/skills/review-pr-holistic/SKILL.md):
+   questions from [holistic review](../../.agents/skills/review-pr/references/holistic.md):
    fit with existing concepts, better abstractions, consequences across
    boundaries, hidden tests, claims versus evidence, related PRs, test value,
    and scope. This is an audit of existing behavior; the PR-specific head,
