@@ -12,9 +12,15 @@ src/taskforge/
                                JsonEventStore;
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
+  agentic/                     agent.py: `generate_tasks`, one managed agent that makes tasks for an idea;
+                               tools.py: the agent's Taskforge tools; gate.py: the acceptance rule;
+                               config.py, prompts.py, parallel.py (web search), example_build.py
   capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
-  llm/                         the ModelClient protocol, the GLM client, sampling policy, structured output
+  ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
+  llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
+                               output, ledger recording, agent loop, web tools, the
+                               RolloutEngine model
   stage20_triage/              verdict.py: TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
@@ -29,10 +35,66 @@ src/taskforge/
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
-modules (`capability`, `content_hash`, `llm`), and the shared modules import no stage. The
-coordinator package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import
-any stage and shared module, and `tests/test_imports.py` refuses an import of it from any other
-package, along with the other wrong-way imports.
+modules (`capability`, `content_hash`, `ledger`, `llm`), and the shared modules import no stage.
+The coordinator package, `stage_coordinator`, runs the stages in order and is unnumbered. It may
+import any stage and shared module, and `tests/test_imports.py` refuses an import of it from any
+other package, along with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
+and step over JSONL ledgers.
+
+## Model calls
+
+`llm.recording` records every model call as an `LLM_CALL` span under a `CallLedger` (ledger, workpiece,
+round, step), with tokens, finish reason and the call's attempt record (`attempts`,
+`attempts_<outcome>` counts, non-200 `http_statuses`, `wall_time`). `recorded_complete` and
+`recorded_structured` wrap one call each; `run_agent` and `GlmRolloutModel` record through
+`llm_call_span`, so a rollout's 429s, retries and holds reach the ledger.
+
+```
+run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
+        |                                     |
+        +---------> llm_call_span <-----------+
+                    (record: CallLedger)
+                      |              |
+                      v              v
+          GlmClient.complete,     span(LLM_CALL) -> Ledger.record(LedgerEntry)
+          retries and holds                          |-> JsonlLedger   <root>/<workpiece_id>.jsonl
+                      |                              '-> FinelogLedger taskforge.ledger (under Iris)
+                      v
+          GLM-5.3 router: POST /v1/chat/completions (streamed)
+```
+
+`llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
+own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each assistant turn's
+`reasoning_content`. `shell_tool` offers RolloutEngine's default shell tool on a shellbox
+`Machine`, and `llm.web` adds Parallel search and extract. The client sends the policy's whole
+`max_tokens` with every turn, so a prompt plus that budget beyond the context window raises
+`ContextExhausted`, which ends the loop with `AgentStop.CONTEXT`; long loops set a smaller
+`max_tokens`.
+
+`llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
+the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
+and the call's usage with empty token ids; the rollout model requests neither token ids nor logprobs,
+and refuses a request that carries them (a `ModelRequest.continuation` or pinned prompt ids).
+Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage against the attempt's
+token budget, which Taskforge leaves unset. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
+so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
+one rollout.
+
+## Agentic generation
+
+`agentic.agent.generate_tasks(idea, n, config)` makes up to n tasks for one idea with one managed
+agent, in place of the stages. The agent works in a shell with Python, taskcompendium and verifyit,
+and no network: a bubblewrap `LocalMachineFactory`, which needs the privileged container profile on
+Iris. Its tools do only what the shell cannot:
+
+- `grade`: grade a control answer with the task's grader.
+- `rollout`: run solver or adversary rollouts on ShellSim machines.
+- `web_search`, `web_fetch`: search and read the web with Parallel.
+- `submit`: accept a task when its evidence satisfies the `Gate` and a blind review accepts it.
+- `finish`: end the session with a report.
+
+The checks of `submit` are in `agentic/tools.py`. The driver is
+`experiments/post_training/capability_driven_envs/generate_tasks_agentic.py`.
 
 ## The build DAG
 
@@ -171,3 +233,20 @@ cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
 `tests/test_pipeline_walkthrough.py` exercises `run_workpiece` with a two-step toy program.
+
+Live tests carry `@pytest.mark.live_glm`. The default marker expression excludes them, and they
+skip with a reason when their inputs are missing. They call GLM-5.3's high pool through the router
+port-forward:
+
+```bash
+KUBECONFIG=<open-athena kubeconfig> kubectl -n open-athena port-forward svc/glm53-router 18000:8000 &
+export TASKFORGE_GLM_BASE_URL=http://127.0.0.1:18000/v1
+export GLM_HIGH_TOKEN=<high-pool bearer token>
+uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/pyproject.toml \
+    lib/taskforge/tests -m live_glm
+```
+
+`-m live_glm` replaces the default marker expression. The agent live tests also take
+`TASKFORGE_PARALLEL_KEY_FILE`, a file with a `PARALLEL_KEY=...` line. Live checks write raw evidence
+(request without the bearer token, full response, wall time) under `$TASKFORGE_EVIDENCE_DIR`, or
+`taskforge-evidence/` in the system temp directory, outside the checkout.

@@ -119,7 +119,7 @@ paths = hero_checkpoint_paths()
 The function returns permanent checkpoint paths for the current run and its ancestors, in step order.
 Pass a run ID to select another run. The launcher and function share `CURRENT_HERO_RUN_ID` in [`current_run.py`](current_run.py).
 
-Use the [deployment checklist](../../../.agents/skills/deploy-hero-change/SKILL.md)
+Use the [deployment checklist](../../../.agents/skills/manage-hero-run/references/code-cutover.md)
 for preflight, the 200-step trial, and rollback. `current_run.py` records the
 current run ID. `trigger_hero.sh` records the handoff checkpoint and W&B fork point.
 Update the run ID, handoff checkpoint, and fork point together and land them on main.

@@ -44,7 +44,7 @@ the `marin-prose-cleanup` marker skips the launch entirely.
 
 `agentic-lint.yaml` runs a best-effort Loom lint review on a pull request that
 lacks the `agentic-lint` label. The label records that the PR has had a lint
-pass: the `commit` skill applies it at PR creation after the author's local
+pass: the `manage-pr` skill applies it at PR creation after the author's local
 `./infra/pre-commit.py --review`, and the Loom session adds it after reporting
 its findings. The launcher runs when a non-draft PR from this repository opens,
 reopens, or becomes ready for review, and only when its author has write access
@@ -82,7 +82,7 @@ is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. A gate step reads the pull
 request's size and file patches through the API: the review runs when the
 change has at least 250 changed lines or adds a class, dataclass, or
 `Protocol` under `lib/*/src/` or `experiments/`. The session runs the
-`review-pr-holistic` skill with the `pr-holistic-review` profile and maintains
+`review-pr` skill in holistic mode with the `pr-holistic-review` profile and maintains
 one compact overview ending in
 `<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
 overview by comment ID, preserving finding numbers and updating their status.
@@ -98,7 +98,7 @@ advisory and is not a required check.
 The `deslop` job in `ops-loom-github.yaml` launches a `github-automation`
 session when a holistic packet is posted on a pull request carrying
 `agent-generated`, or when a maintainer review contains `deslop`. The session
-applies only the packet's mechanical items and the `noslop` skill, pushes one
+applies only the packet's mechanical items and the `simplify-code` skill, pushes one
 `Deslop` commit after the narrow checks pass, and replies with
 `<!-- marin-deslop:<sha> -->`. The launcher's per-PR idempotency key permits
 one automatic deslop session; follow-up findings are advisory.
@@ -113,7 +113,7 @@ dispatch. It launches one `github-automation` session. Follow this procedure
 for that assignment; CI-test and documentation-drift jobs have separate scopes.
 
 1. **Find demand, then choose one area.** Read applicable `AGENTS.md` files
-   and use `consult-echo` for prior work. Inspect the last 20 PRs labeled
+   and use `use-echo` for prior work. Inspect the last 20 PRs labeled
    `nightshift`, including closed PRs and relevant feedback:
 
    ```bash
@@ -131,7 +131,7 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    demand is documented, measure an ordinary caller before proposing work.
 
 2. **Understand the system before proposing edits.** Apply the whole-system
-   questions from [holistic review](../../.agents/skills/review-pr-holistic/SKILL.md):
+   questions from [holistic review](../../.agents/skills/review-pr/references/holistic.md):
    fit with existing concepts, better abstractions, consequences across
    boundaries, hidden tests, claims versus evidence, related PRs, test value,
    and scope. This is an audit of existing behavior; the PR-specific head,
@@ -193,8 +193,8 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    change with the baseline using the promised regression or measurement.
    Measure added I/O or materialization on representative input sizes and
    relate local measurements to the whole workflow. Passing existing tests
-   alone does not establish the improvement. Use `update-docs` when guidance
-   changes and `commit` to publish a PR with `agent-generated` and `nightshift`
+   alone does not establish the improvement. Update the nearest docs when guidance
+   changes and use `manage-pr` to publish a PR with `agent-generated` and `nightshift`
    labels. Do not merge it or file issues for unselected candidates.
 
 Publish the report in the session's Loom channel with message kind `result`:
