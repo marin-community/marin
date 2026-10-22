@@ -137,7 +137,6 @@ _GATED_NORM_RANK = 128
 # June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
-_EP_CAPACITY_FACTOR = 1.0
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
 # June 67B qk_mult (YaRN mscale 1.3*(0.1*ln(65536/8192)+1)); used as the field default and the
 # from_hf_config fallback so the two never drift. Real grug_moe exports always carry qk_mult.
@@ -166,10 +165,6 @@ def _reshard_sequence(x: jax.Array, axis: str | None) -> jax.Array:
         return x
     spec = sharding.spec
     return reshard(x, P(spec[0], axis, *spec[2:]))
-
-
-def _activation_reshard(x: jax.Array) -> jax.Array:
-    return reshard(x, _activation_spec())
 
 
 def _hf_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
@@ -229,6 +224,8 @@ class SnowballConfig(HFCompatConfig):
     # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
+    # Dispatch capacity trades memory for overflow; it does not change HF weights.
+    moe_capacity_factor: float = 1.0
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -529,7 +526,7 @@ class DenseMLP(eqx.Module):
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, self.w_down, out_sharding=_token_spec())
-        return _activation_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+        return jax.lax.reshape(out_flat, (b, s, out_flat.shape[-1]), out_sharding=_activation_spec())
 
 
 class SnowballMoEMLP(eqx.Module):
@@ -563,7 +560,7 @@ class SnowballMoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.moe_capacity_factor,
                 pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES),
             ),
             cfg=cfg,
@@ -595,8 +592,7 @@ class SnowballMoEMLP(eqx.Module):
             mesh=get_abstract_mesh(),
             report_capacity_overflow=False,
         )
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        return _activation_reshard(routed)
+        return jax.lax.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
 
 
 class SnowballBlock(eqx.Module):
@@ -757,15 +753,27 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         key=None,
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
-        # attn_mask is ignored: the pinned recipe builds its own per-layer short/long causal masks
-        # inside the transformer core. Segmented/packed inputs are a follow-up (see plan).
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
         lead = raw.shape[:-1]
         s = raw.shape[-1]
         b = int(np.prod(lead)) if lead else 1
         tokens = reshard(raw.reshape(b, s), P(_BATCH_AXES, _context_axis()))
-        hidden = self.transformer(tokens)  # [B, S, D]
+        mask = AttentionMask.causal()
+        if attn_mask is not None:
+            if not isinstance(attn_mask, LmHeadAttentionMask):
+                raise ValueError("Snowball requires a structured causal attention mask")
+            if not attn_mask.is_causal or attn_mask.explicit_mask is not None or attn_mask.causal_offset is not None:
+                raise ValueError("Snowball supports causal attention with optional segment IDs")
+            if attn_mask.segment_ids is not None:
+                q_segments, kv_segments = attn_mask.segment_ids
+                if any(axis.name == self.KeyPos.name for axis in kv_segments.axes):
+                    kv_segments = kv_segments.rename({self.KeyPos.name: Pos.name})
+                mask = mask.with_segment_ids(
+                    q_segments.broadcast_to(input_ids.axes).array.reshape(b, s),
+                    kv_segments.broadcast_to(input_ids.axes).array.reshape(b, s),
+                )
+        hidden = self.transformer(tokens, mask)  # [B, S, D]
         hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
         return hax.named(hidden, out_axes)
