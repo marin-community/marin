@@ -115,6 +115,10 @@ class AxolotlSpec:
     epochs: int = 1
     # One conversation per sequence: the Stage 0 budget is matched in examples, and
     # the #6839 masking canary is defined on unpacked sequences.
+    # Initialize weights from this checkpoint path (a previous curriculum stage's
+    # export) instead of the pinned base; the base still proves tokenizer and
+    # template provenance.
+    init_checkpoint: str | None = None
     # One conversation per sequence: the Stage 0 budget is matched in examples, and
     # the #6839 masking canary is defined on unpacked sequences.
     sample_packing: bool = False
@@ -158,9 +162,13 @@ def axolotl_config(spec: AxolotlSpec, *, scratch_output_dir: str) -> dict[str, A
     plugins = [TEMPLATE_INTEGRITY_PLUGIN]
     if spec.expert_parallel_size > 1:
         plugins.append(EXPERT_PARALLEL_PLUGIN)
+    if spec.init_checkpoint is None and not spec.base.revision:
+        raise ValueError("a base without a revision pin cannot be cited in the manifest")
     config: dict[str, Any] = {
-        "base_model": spec.base.hf_id,
-        "revision_of_model": spec.base.revision,
+        # A chained stage initializes from the previous stage's checkpoint
+        # directory; the fork's base_model accepts a local path.
+        "base_model": spec.init_checkpoint if spec.init_checkpoint else spec.base.hf_id,
+        **({} if spec.init_checkpoint else {"revision_of_model": spec.base.revision}),
         "sequence_len": spec.sequence_len,
         "sample_packing": spec.sample_packing,
         "plugins": plugins,
