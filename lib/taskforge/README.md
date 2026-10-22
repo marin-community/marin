@@ -22,7 +22,8 @@ src/taskforge/
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/            model.py: the TaskProposal document and its generation regex;
-                               source.py: ProposalBatch, SlotFailure, the ProposalSource protocol
+                               source.py: Portfolio, SlotProposal, SlotFailure, the ProposalSource
+                               protocol, `proposal_batch`, `propose_all`
   stage20_triage/              verdict.py: TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
@@ -48,11 +49,27 @@ pinned registry digest.
 
 ## Proposals
 
-A proposal source implements `stage10_proposal.source.ProposalSource[IdeaT]`:
-`async propose(idea, n) -> ProposalBatch`. A batch holds the planning request and completions and
-one `SlotProposal` or `SlotFailure` per slot, in slot order, so a failed slot does not drop its
-siblings. `stage10_proposal.model.TaskProposal` is YAML front matter (`ProposalHeader`, keys in
-`HEADER_KEYS` order) plus a markdown body with required section headings. `parse` and `render`
+A proposal source implements `stage10_proposal.source.ProposalSource[IdeaT, PlanT]` in two phases:
+
+- `async plan(idea, n) -> Portfolio[PlanT]` plans the slots once. A `Portfolio` holds the planning
+  request and completions, the source's own plan record (`plan`, which the document prompts quote),
+  and a `PlannedSlot` per slot, numbered 1 through `n`, that either proposes or carries the
+  `null_reason` the plan gave it. With a dataclass or pydantic plan record it is plain data:
+  `content_hash.pretty_json` writes it and pydantic's `TypeAdapter(Portfolio[PlanT])` reads it back.
+- `async write(idea, portfolio, slot) -> SlotOutcome` writes one slot's document, a `SlotProposal` or
+  a `SlotFailure`, from the idea and the portfolio alone. A slot planned null becomes a proposal with
+  `null_reason` set and makes no model call.
+
+Because no slot waits for another, a scheduler can run each slot's `write` as its own unit and start
+that slot's workpiece as soon as its proposal exists, and a relaunch with a persisted portfolio writes only
+the slots it lacks. `proposal_batch(portfolio, outcomes)` assembles a portfolio and an outcome for
+each of its slots, given in any order, into a `ProposalBatch`: the planning request and completions
+and one outcome per slot, in slot order, so a failed slot does not drop its siblings.
+`propose_all(source, idea, n)` plans, writes every slot concurrently and returns that batch, for a
+caller that wants everything at once.
+
+`stage10_proposal.model.TaskProposal` is YAML front matter (`ProposalHeader`, keys in `HEADER_KEYS`
+order) plus a markdown body with required section headings. `parse` and `render`
 round-trip it and `digest` is the sha256 of the canonical form. `parse` also checks the research
 decision: `research_need: needed` lists at least one `research` item and `not_needed` none, and a
 non-null body cites every item, and only listed items, as `research[i]`. `solver_machine` pins the
