@@ -27,6 +27,7 @@ serve:
   tool_call_parser: k2_horizon
 agent:
   agent_kwargs:
+    model_format: k2_horizon
     thinking_format: chat-template
     extra_body: '{"chat_template_kwargs":{"reasoning_effort":"high"}}'
     interleaved_thinking: true
