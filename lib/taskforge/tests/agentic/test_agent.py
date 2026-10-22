@@ -7,7 +7,7 @@ import dataclasses
 import itertools
 import json
 import shlex
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -170,7 +170,9 @@ class AcceptingJudge:
 
     model: str = "judge"
 
-    async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
+    async def complete(
+        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
+    ) -> Completion:
         raise AssertionError("The tools ask the judge only for structured replies")
 
     async def complete_structured[T: BaseModel](
