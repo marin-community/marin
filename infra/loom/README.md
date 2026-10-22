@@ -320,14 +320,17 @@ Register claude.ai once from a `loom` CLI signed in to `https://loom.oa.dev` as
 an administrator:
 
 ```sh
-loom oauth-client add claude.ai --redirect-uri https://claude.ai/api/mcp/auth_callback
+loom oauth-client add claude.ai \
+  --redirect-uri https://claude.ai/api/mcp/auth_callback \
+  --redirect-uri https://claude.com/api/mcp/auth_callback
 ```
 
-The command prints a client ID and secret once. An organization admin adds a
-custom connector in claude.ai with the URL `https://loom.oa.dev/mcp` and enters
-both values under **Advanced settings**. `loom oauth-client ls` lists registered
-clients, and `loom oauth-client rm <client_id>` removes one and revokes its
-tokens.
+Anthropic says the callback may move to `claude.com`, so the command registers
+both hosts. It prints a client ID and secret once. An organization admin adds a
+custom connector in claude.ai with the URL `https://loom.oa.dev/mcp`, selects
+**Use your own OAuth client** under **Advanced settings**, and enters both
+values. `loom oauth-client ls` lists registered clients, and
+`loom oauth-client rm <client_id>` removes one and revokes its tokens.
 
 Activation requires a Loom build with connector support. An older build,
 including a rollback to one, rejects the unknown `connector.enabled` setting and
