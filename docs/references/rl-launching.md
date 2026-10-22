@@ -174,6 +174,23 @@ which leaves the Iris default in effect. In-pod sandbox graders need namespace c
 `job_pb2.CONTAINER_PROFILE_PRIVILEGED` and give CPU preflight children the same profile. Iris requires
 admin authorization for this elevated profile. Grader commands still run inside their own sandbox.
 
+When a completed `SkyRLRun` supplies the next stage's model, `ArtifactHfModel` reads its recorded
+`hf_model_uri` and tokenizer pins. It does not select another export by directory modification time.
+Keep training and its terminal export upstream of evaluation when unavailable graders must not
+invalidate completed optimizer work.
+
+The Snowball recoverable evaluator saves each single-turn answer before grading, then records whether
+the original harness admitted it. It permits one original-grader attempt for an admitted grading
+infrastructure failure, replaying the recorded turn through the original engine without a model client.
+Recovery supports sandbox script/verifyit graders and host `structure_closure`; other host modes,
+including math and remote judges, fail admission before inference. Per-answer and total deadlines bound
+grading, and the original engine applies the saved machine startup, user and cleanup settings.
+Parsed-channel, generation and harness errors remain unscored. An interrupted grading reservation cannot spend another attempt on restart.
+The report preserves original outcomes, task pairing and fixed denominators; `complete` requires every
+task to have a usable score. A successful inference manifest lets scoring resume without inference.
+Retries reuse the exact first admitted launch, even when the artifact builder creates a new submission
+attempt ID. Changed source, inputs, evaluation settings or recovery policy require a new artifact.
+
 Use artifact dependencies for model and data handoffs. A raw checkpoint path hides provenance and
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do

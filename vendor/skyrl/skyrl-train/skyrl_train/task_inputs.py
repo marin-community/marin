@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from rolloutengine.harness.tools import task_prompt
+from rolloutengine.harness.prefill import prefill_prompt
 from rolloutengine.models import TaskRolloutSpec
-from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
+from skyrl_gym.rollout_specs import PREFILL_HARNESS, is_shell_harness, shell_harness
 from skyrl_gym.task_records import episode_prompt
 from taskcompendium.runtime.shell import resolve_shell_tool
 
@@ -37,6 +38,8 @@ class PreferenceInput:
 
 
 def task_messages(spec: TaskRolloutSpec) -> ConversationType:
+    if spec.harness == PREFILL_HARNESS:
+        return list(prefill_prompt(spec.task).messages)
     if not is_shell_harness(spec.harness):
         return list(episode_prompt(spec.task).messages)
     tool = resolve_shell_tool(spec.task, shell_harness(spec.harness).shell_tool)

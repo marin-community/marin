@@ -308,7 +308,7 @@ def _validate_relative_file_path(name: str, value: str) -> None:
 class ArtifactHfModel:
     """An exact HF export produced by another Marin artifact step."""
 
-    step: ArtifactStep[LevanterCheckpoint]
+    step: ArtifactStep[LevanterCheckpoint] | ArtifactStep[SkyRLRun]
     tokenizer_uri: str
     tokenizer_revision: str
     relative_path: str | None = None
@@ -318,7 +318,23 @@ class ArtifactHfModel:
 
     def resolve(self, ctx: StepContext) -> ResolvedModelLocator:
         artifact_path = ctx.artifact_path(self.step)
-        if self.relative_path is not None:
+        if issubclass(self.step.artifact_type, SkyRLRun):
+            if self.relative_path is not None:
+                raise ValueError("An RL model must use its recorded terminal HF export")
+            if ctx.is_fingerprint:
+                uri = prefix_join(artifact_path, "<terminal-hf-export>")
+            else:
+                completed = ctx.resolved(self.step)
+                assert isinstance(completed, SkyRLRun)
+                if completed.hf_model_uri is None or completed.global_step is None:
+                    raise ValueError("The completed RL artifact has no terminal HF export")
+                if (completed.tokenizer_uri, completed.tokenizer_revision) != (
+                    self.tokenizer_uri,
+                    self.tokenizer_revision,
+                ):
+                    raise ValueError("The RL export tokenizer differs from the requested evaluation tokenizer")
+                uri = completed.hf_model_uri
+        elif self.relative_path is not None:
             uri = prefix_join(artifact_path, self.relative_path)
         elif ctx.is_fingerprint:
             uri = prefix_join(artifact_path, "<terminal-hf-export>")
@@ -639,27 +655,39 @@ class _SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-def _project_command(*arguments: str) -> list[str]:
+def skyrl_cpu_command(*arguments: str) -> list[str]:
+    """Return argv for SkyRL's frozen CPU environment using the current Python."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
+    uv_version = (workspace_root / SKYRL_PROJECT / ".uv-version").read_text().strip()
     return [
+        "uv",
+        "tool",
+        "run",
+        "--from",
+        f"uv=={uv_version}",
+        "--python",
+        sys.executable,
+        "--no-python-downloads",
         "uv",
         "run",
         "--project",
         str(workspace_root / SKYRL_PROJECT),
+        "--python",
+        sys.executable,
+        "--no-python-downloads",
         "--frozen",
         "--extra",
         "cpu",
         "--no-group",
         "dev",
-        "marinskyrl",
         *arguments,
     ]
 
 
 def _launcher_command(config_path: str) -> list[str]:
-    return _project_command("iris", "launch", "--config", config_path)
+    return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:

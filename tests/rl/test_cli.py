@@ -88,6 +88,7 @@ def test_rl_launch_forwards_dedicated_daytona_credential(monkeypatch: pytest.Mon
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "test-rl-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "test-eval-key")
     monkeypatch.setenv("DAYTONA_API_KEY", "test-other-key")
+    monkeypatch.setenv("JUDGE_API_KEY", "test-judge-key")
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
 
     @click.command()
@@ -102,6 +103,7 @@ def test_rl_launch_forwards_dedicated_daytona_credential(monkeypatch: pytest.Mon
     assert environment.env_vars["DAYTONA_RL_API_KEY"] == "test-rl-key"
     assert environment.env_vars["DAYTONA_EVAL_API_KEY"] == "test-eval-key"
     assert environment.env_vars["DAYTONA_API_KEY"] == "test-other-key"
+    assert environment.env_vars["JUDGE_API_KEY"] == "test-judge-key"
     assert "UNRELATED_SECRET" not in environment.env_vars
 
 
