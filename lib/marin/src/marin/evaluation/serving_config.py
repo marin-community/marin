@@ -15,6 +15,7 @@ from types import MappingProxyType
 from fray.types import ResourceConfig, create_environment
 from huggingface_hub import HfApi, hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
+from iris.cluster.tpu_topology import get_tpu_topology
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
@@ -270,7 +271,8 @@ def inference_config_for_model(
     serve = resolved_serve_config(model)
     resolved_instances = serve.instances if instances is None else instances
     geometry = serving_geometry(serve, accelerator)
-    if broker is None and (geometry is None or geometry.task_count == 1):
+    multihost_tpu = accelerator.tpu_type is not None and get_tpu_topology(accelerator.tpu_type).vm_count > 1
+    if broker is None and not multihost_tpu and (geometry is None or geometry.task_count == 1):
         # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
         broker = BrokerConfig(
             worker=InferenceWorkerConfig(
