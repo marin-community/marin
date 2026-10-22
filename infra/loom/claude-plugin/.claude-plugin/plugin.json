@@ -1,0 +1,13 @@
+{
+  "name": "loom",
+  "displayName": "Loom",
+  "version": "0.1.0",
+  "description": "Hand code changes in marin-community repositories to Loom sessions on loom.oa.dev and follow them from Claude.",
+  "author": {
+    "name": "The Marin Authors",
+    "url": "https://github.com/marin-community"
+  },
+  "homepage": "https://github.com/marin-community/marin/tree/main/infra/loom/claude-plugin",
+  "repository": "https://github.com/marin-community/marin",
+  "license": "Apache-2.0"
+}
