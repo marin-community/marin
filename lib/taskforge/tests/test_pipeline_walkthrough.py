@@ -862,7 +862,10 @@ async def test_an_authored_verification_change_reaches_every_later_build_and_aut
     stages = replace(STAGES, author=author, build=build, review=review_in_turn)
     log = InMemoryEventLog()
 
-    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    two_modifies = replace(BUDGET, max_modify_rounds=2)
+    assert (
+        await run_workpiece(coordinator(tmp_path, stages, two_modifies), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    )
     aib, judge = Verification.ANSWER_IN_BOX, Verification.LLM_AS_JUDGE
     assert build.calls == [(aib, None), (judge, TO_JUDGE), (judge, TO_JUDGE), (judge, TO_JUDGE)]
     authored = [(e.round, e.attrs.get("verification_change")) for e in log.events() if e.kind == "authored"]

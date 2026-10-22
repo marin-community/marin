@@ -24,7 +24,7 @@ from taskforge.llm.client import Completion, FinishReason, ModelClient, Structur
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
-from taskforge.stage10_proposal.model import parse
+from taskforge.stage10_proposal.model import Verification, parse
 from taskforge.stage30_author.loader import GRADER_STEP
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
 from taskforge.stage40_build_with_program.run import RLEnvBuildStepOutcome, TaskDraft, WorkpieceBuildProvenance
@@ -106,6 +106,8 @@ def built_draft(store_root: Path) -> TaskDraft:
     provenance = WorkpieceBuildProvenance(
         workpiece_id=WORKPIECE,
         proposal_digest="proposal",
+        verification=Verification.ANSWER_IN_BOX,
+        verification_change=None,
         program_digest="program",
         sdk_version=SDK_VERSION,
         model="model",
@@ -149,6 +151,7 @@ def round_context(
             tool_turn_timeout=20,
             model_turn_timeout=30,
             cleanup_timeout=10,
+            decision=None,
         ),
         deadlines=deadlines or Deadlines(total_turn_timeout=30, attempt_timeout=60),
         k=k,
