@@ -29,7 +29,13 @@ def test_partition_preserves_model_failures_and_recovers_transport_failures():
             "exception_type": "AgentTimeoutError",
             "agent_logs": [{"terminal_error_classes": [], "retry_error_classes": ["ReadTimeout"]}],
         },
-        {"task_name": "verifier", "reward": None, "exception_type": "VerifierTimeoutError"},
+        {
+            "task_name": "verifier",
+            "reward": None,
+            "exception_type": "VerifierTimeoutError",
+            "transport_failure_observed": True,
+            "agent_logs": [{"terminal_error_classes": ["ContextWindowExceededError"]}],
+        },
     ]
     names = {row["task_name"] for row in rows} | {"missing"}
     retained, recovery = prepare["partition"]({"trials": rows}, names)
