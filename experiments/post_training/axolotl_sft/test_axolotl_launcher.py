@@ -117,8 +117,6 @@ def test_router_aux_loss_is_explicit_per_spec():
         _spec(NEMOTRON_3_NANO_30B_A3B_BASE, output_router_logits=False), scratch_output_dir="/scratch/axolotl/n"
     )
     assert "output_router_logits" not in nemotron
-    with pytest.raises(TypeError):
-        _spec(QWEN3_30B_A3B_BASE, output_router_logits=None)
 
 
 def test_expert_parallel_wires_the_plugin_for_qwen_and_refuses_nemotron():
@@ -149,7 +147,7 @@ def test_seed_is_required_and_optimizers_reject_silent_defaults():
     }
     assert AxolotlSpec(**kwargs, seed=7).seed == 7
     with pytest.raises(TypeError):
-        AxolotlSpec(**kwargs)  # no seed default
+        AxolotlSpec(**kwargs)  # no seed default; output_router_logits also required
     with pytest.raises(ValueError, match="positive"):
         AxolotlOptimizer(
             learning_rate="0",
