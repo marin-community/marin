@@ -21,6 +21,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from einops import rearrange
+from haliax.nn.ragged_dot import ragged_dot
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from levanter.grug.attention import AttentionMask, attention, fa4_cute_segment_bounds
@@ -298,6 +299,17 @@ def _dispatch(selected: jax.Array):
     return flat[order], order // k, order % k, counts, starts
 
 
+def _local_ragged_dot(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    """``ragged_dot`` on replicated operands inside a ``shard_map`` (no explicit-sharding rules needed)."""
+    return jax.shard_map(
+        ragged_dot,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(None, None), P(None, None, None), P(None)),
+        out_specs=P(None, None),
+        check_vma=False,
+    )(lhs, rhs, group_sizes)
+
+
 def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
     """The routed MoE plus the shared expert, as ``moe_and_shared_fused`` (dropless)."""
     mlp = block.mlp
@@ -322,13 +334,10 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
 
     expert_sorted, token_sorted, slot_sorted, counts, starts = _dispatch(selected)
     em = mlp.expert_mlp
-    pre = jax.lax.ragged_dot(
-        routed_input[token_sorted], em.w_up, counts, preferred_element_type=jnp.float32, out_sharding=P(None, None)
-    )
+    # haliax's ragged_dot: the Triton grouped GEMM on GPU (XLA's ragged_dot_general lowers to a dense masked product).
+    pre = _local_ragged_dot(routed_input[token_sorted], em.w_up, counts).astype(jnp.float32)
     act = jnp.square(jax.nn.relu(pre)) * abl.neuron_mult[layer][expert_sorted]
-    y = jax.lax.ragged_dot(
-        act.astype(x.dtype), em.w_down, counts, preferred_element_type=jnp.float32, out_sharding=P(None, None)
-    )  # [TK, R]
+    y = _local_ragged_dot(act.astype(x.dtype), em.w_down, counts).astype(jnp.float32)  # [TK, R]
     per_slot = jnp.zeros((t, TOP_K, LATENT), jnp.float32).at[token_sorted, slot_sorted].set(y)
     routed_latent = jnp.einsum("tk,tko->to", used, per_slot)
     routed = jnp.einsum("to,od->td", routed_latent.astype(x.dtype), mlp.w_latent_up, preferred_element_type=jnp.float32)
