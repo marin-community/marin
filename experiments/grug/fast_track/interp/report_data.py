@@ -357,6 +357,10 @@ def main() -> None:
         path = os.path.join(args.data, f"{name}.npz")
         if os.path.exists(path):
             doc[name] = fn(np.load(path))
+    followup_path = os.path.join(args.data, "followup.npz")
+    if os.path.exists(followup_path):
+        f = np.load(followup_path)
+        doc["followup"] = dict(names=[str(x) for x in f["names"]], first=_r(f["first"]), second=_r(f["second"]))
     stats_path = os.path.join(args.data, "stats.npz")
     if os.path.exists(stats_path):
         s = np.load(stats_path)
