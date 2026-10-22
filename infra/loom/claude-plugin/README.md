@@ -11,9 +11,13 @@ Loom sessions on `loom.oa.dev` and follow them from a chat. It contains:
 
 ## Prerequisites
 
-Loom must serve the connector, and claude.ai must be registered as its OAuth
-client. [The Loom deployment README](../README.md#claudeai-connector) covers
-both steps.
+The `connector.enabled` setting must be on in the [Loom deployment](../README.md)
+for `loom.oa.dev`. A Loom administrator registers claude.ai as the connector's
+OAuth client once, which prints a client ID and secret:
+
+```sh
+loom oauth-client add claude.ai --redirect-uri https://claude.ai/api/mcp/auth_callback
+```
 
 Making the plugin available does not add its bundled connector. An
 organization Owner adds a custom connector in **Organization settings >
