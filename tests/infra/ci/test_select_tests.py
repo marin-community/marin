@@ -273,9 +273,9 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     [
         (
             "lib/taskcompendium/src/taskcompendium/lowering.py",
-            ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
+            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
-        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "taskforge-unit"]),
+        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "skyrl-wheel", "taskforge-unit"]),
         (
             "lib/shellbox/src/shellbox/machine.py",
             ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
@@ -290,7 +290,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ),
         (
             "lib/verifyit/src/verifyit/grading.py",
-            ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
+            ["rolloutengine-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
         ),
         (
             "lib/rigging/src/rigging/message.py",
