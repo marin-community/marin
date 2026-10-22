@@ -78,8 +78,8 @@ from typing import NamedTuple
 
 import click
 import yaml
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.config import load_config
-from iris.cluster.credentials import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.platforms.k8s.constants import CW_REPO_NAME, CW_REPO_URL
 from iris.cluster.platforms.k8s.network_manifests import (
     CERT_MANAGER_CHART,

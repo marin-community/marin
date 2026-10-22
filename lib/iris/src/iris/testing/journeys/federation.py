@@ -13,7 +13,6 @@ from iris.cluster.controller.controller import Controller
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.testing.budgets import InProcessBudgetClient
 from iris.testing.journeys.world import JobRef, JourneyWorld, TaskRef
 
 PARENT_CLUSTER_ID = "journey-parent"
@@ -91,7 +90,6 @@ class FederationJourney:
             monkeypatch,
             cluster_id=PEER_ID,
             budget_parent=PARENT_CLUSTER_ID,
-            budget_parent_client=InProcessBudgetClient(lambda: self.parent.controller._service),
         )
         self.connection = InProcessPeerConnection(self.peer.controller)
         self._federation_peer = FederationPeer(
@@ -106,10 +104,10 @@ class FederationJourney:
             cluster_id=PARENT_CLUSTER_ID,
             peer_configs={PEER_ID: PeerConfig(controller_address=_PEER_CONTROLLER_ADDRESS)},
             federation_peers=[self._federation_peer],
-            budget_peer_clients={PEER_ID: InProcessBudgetClient(lambda: self.peer.controller._service)},
+            budget_peers=(PEER_ID,),
         )
         self.manager = self.parent.controller.federation
-        self.parent.controller._budgets.refresh()
+        self.manager.sync_once()
 
     def close(self) -> None:
         self.parent.close()

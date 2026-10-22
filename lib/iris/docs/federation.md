@@ -201,20 +201,18 @@ registered endpoint. The `scope=total` counter is exact; per-endpoint series are
 ## Shared budgets
 
 Set `budget_parent` on each child and list those children in the parent's
-`budget_peers`, a subset of its routing peers. Configure and edit limits on the
-parent; child-local budget edits are rejected.
+`budget_peers`, a subset of its routing peers. Edit limits on the parent;
+child-local budget edits are rejected.
 
-`ListUserBudgets` reports local spend, including direct submissions and child
-jobs. `GetUserBudget` returns parent policy and combined usage. Direct submissions
-and child jobs query the parent before admission.
+`FederationSync` distributes parent limits and usage from other clusters. Its
+response reports the child's local usage, including direct submissions and child
+jobs. Scheduling adds current local usage to the received totals. `GetUserBudget`
+returns that combined view; `ListUserBudgets` reports local usage.
 
-Child controllers need ambient service-account credentials authorized for parent IAP,
-such as a Workload Identity Federation ADC file supplied through
-`GOOGLE_APPLICATION_CREDENTIALS`. The parent reuses federation credentials for
-its child reads. Deploy both sides: older child lists omit unconfigured users.
-
-After 30 seconds without fresh usage or policy, new scheduling pauses. An
-unreachable parent blocks child submissions. Existing attempts keep reconciling.
+Children wait for their first policy after startup. During sync outages, clusters
+keep their last received policy and usage; new submissions remain available.
+Budgets are soft priority limits, so disconnected clusters can exceed the shared
+limit. Deploy both sides to exchange budget data.
 
 ## Observing federation
 

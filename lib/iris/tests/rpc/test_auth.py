@@ -70,10 +70,9 @@ def test_authorize_method_unrestricted_for_other_roles(role):
 # --- federation-peer role: method-scoped to the federation RPC subset ---------
 
 
-@pytest.mark.parametrize("method", ["FederationSync", "GetUserBudget", "ListUserBudgets"])
-def test_authorize_method_allows_federation_reads_for_peer(method):
-    # Does not raise: these reads authenticate a parent polling its budget peers.
-    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
+def test_authorize_method_allows_federation_sync_for_peer():
+    # Does not raise: sync is the representative federation control-plane RPC.
+    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), "FederationSync")
 
 
 def test_authorize_method_allows_scoped_exec_for_peer():

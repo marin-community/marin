@@ -103,7 +103,7 @@ class PeerHeartbeat:
     last_contact_ms: int = 0
 
 
-def peer_credentials(peer: PeerConfig, federation_token_provider: TokenProvider | None) -> ClientCredentials:
+def _peer_credentials(peer: PeerConfig, federation_token_provider: TokenProvider | None) -> ClientCredentials:
     """The client credentials this controller presents to ``peer``.
 
     The federation bearer — this cluster's short-lived ``aud="federation"`` token,
@@ -189,7 +189,7 @@ def connect_to_peer(peer: PeerConfig, federation_token_provider: TokenProvider |
     The connection presents this cluster's federation token (via
     ``federation_token_provider``) on every RPC to the peer.
     """
-    return _PeerRpcConnection(peer.controller_address, peer_credentials(peer, federation_token_provider).interceptors())
+    return _PeerRpcConnection(peer.controller_address, _peer_credentials(peer, federation_token_provider).interceptors())
 
 
 class FederationPeer:

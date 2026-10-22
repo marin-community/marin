@@ -1089,8 +1089,11 @@ def _validate_peers(config: IrisClusterConfig) -> None:
     if not set(config.budget_peers) <= config.peers.keys():
         raise ValueError("budget_peers must name configured federation peers")
     if config.budget_parent:
+        trusted_parents = config.auth.federation_peers if config.auth is not None else {}
+        if trusted_parents and config.budget_parent not in trusted_parents:
+            raise ValueError("budget_parent must name a trusted auth.federation_peers entry")
         if config.user_budgets:
-            raise ValueError("Configure user_budgets on the budget parent, not on a budget child")
+            raise ValueError("Configure user_budgets on the budget parent")
         if config.peers:
             raise ValueError("A budget child cannot also delegate to federation peers")
     for peer_id, peer in config.peers.items():

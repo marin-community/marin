@@ -16,13 +16,14 @@ from rigging.credential_store import CredentialRecord, save_credentials
 from rigging.log_setup import configure_logging
 
 from iris.cli.connect import (
+    IRIS_CLUSTER_CONFIG_DIRS,
+    client_credentials,
     iap_config,
     require_controller_url,
     resolve_cluster_name,
     rpc_client_for_ctx,
 )
 from iris.cluster.config import load_config
-from iris.cluster.credentials import IRIS_CLUSTER_CONFIG_DIRS, client_credentials
 from iris.cluster.platforms.k8s.controller import configure_client_s3
 from iris.rpc import controller_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value

@@ -42,6 +42,7 @@ from iris.cluster.federation.availability import (
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
 from iris.cluster.federation.store import (
+    BudgetExchange,
     CancelTarget,
     FederationStore,
     HandoffSpec,
@@ -115,6 +116,7 @@ class FederationManager:
         store: FederationStore | None = None,
         bundles: BundleStore | None = None,
         cluster_id: str = "",
+        budgets: BudgetExchange | None = None,
         heartbeat_interval: Duration = DEFAULT_HEARTBEAT_INTERVAL,
         sync_interval: Duration = DEFAULT_SYNC_INTERVAL,
         max_handoffs_per_cycle: int = DEFAULT_MAX_HANDOFFS_PER_CYCLE,
@@ -124,6 +126,7 @@ class FederationManager:
         self._store = store
         self._bundles = bundles
         self._cluster_id = cluster_id
+        self._budgets = budgets
         self._heartbeat_interval = heartbeat_interval
         self._sync_interval = sync_interval
         self._max_handoffs_per_cycle = max_handoffs_per_cycle
@@ -443,11 +446,17 @@ class FederationManager:
         assert self._store is not None
         cursor = self._store.read_cursor(peer.peer_id)
         request = controller_pb2.Controller.FederationSyncRequest(requester_id=self._cluster_id, cursor=cursor)
+        if self._budgets is not None:
+            policy = self._budgets.budget_policy(peer.peer_id)
+            if policy is not None:
+                request.budget_policy.CopyFrom(policy)
         try:
             response = peer.federation_sync(request)
         except _PEER_RPC_ERRORS as exc:
             logger.warning("Federation sync with peer %s failed: %s", peer.peer_id, exc)
             return
+        if self._budgets is not None and response.HasField("budget_usage"):
+            self._budgets.record_usage(peer.peer_id, response.budget_usage)
         self._store.apply_sync_batch(
             peer.peer_id,
             list(response.deltas),

@@ -13,7 +13,7 @@ import socket
 import tempfile
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -21,14 +21,13 @@ from pathlib import Path
 import uvicorn
 from finelog.client import RemoteLogHandler
 from rigging import telemetry
-from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.storage_path import prefix_join
 from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import PeerConfig, load_config
+from iris.cluster.config import PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.attempts import CapabilityUrlConfig
 from iris.cluster.controller.audit_logging import log_event
@@ -77,7 +76,7 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.endpoints import ProxyMappingDelta, ProxyRegistryReset
-from iris.cluster.controller.federation_budget import BUDGET_REFRESH_INTERVAL, BudgetClient, FederationBudgets
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
@@ -112,7 +111,6 @@ from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.tasks import PendingKick
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
-from iris.cluster.credentials import IRIS_CLUSTER_CONFIG_DIRS, client_credentials
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
 from iris.cluster.federation.manager import (
@@ -120,7 +118,7 @@ from iris.cluster.federation.manager import (
     DEFAULT_MAX_HANDOFFS_PER_CYCLE,
     FederationManager,
 )
-from iris.cluster.federation.peer import FederationPeer, build_peers, peer_credentials
+from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.runtime.sandbox import task_isolation
@@ -135,7 +133,6 @@ from iris.cluster.types import (
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import SESSION_COOKIE
-from iris.rpc.controller_connect import ControllerServiceClientSync
 
 logger = logging.getLogger(__name__)
 
@@ -414,8 +411,6 @@ class Controller:
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
         federation_peers: Sequence[FederationPeer] | None = None,
-        budget_parent_client: BudgetClient | None = None,
-        budget_peer_clients: Mapping[str, BudgetClient] | None = None,
     ):
         if not config.remote_state_dir:
             raise ValueError(
@@ -468,28 +463,12 @@ class Controller:
             if federation_peers is not None
             else build_peers(config.peers, federation_token_provider=federation_token_provider)
         )
-        if config.budget_parent and budget_parent_client is None:
-            parent_config = load_config(resolve_cluster_config(config.budget_parent, dirs=IRIS_CLUSTER_CONFIG_DIRS))
-            if not parent_config.dashboard_url:
-                raise ValueError("The budget parent's cluster config requires dashboard_url")
-            budget_parent_client = ControllerServiceClientSync(
-                address=parent_config.dashboard_url,
-                interceptors=client_credentials(parent_config, config.budget_parent).interceptors(),
-            )
-        if budget_peer_clients is None:
-            budget_peer_clients = {
-                peer_id: ControllerServiceClientSync(
-                    address=config.peers[peer_id].controller_address,
-                    interceptors=peer_credentials(config.peers[peer_id], federation_token_provider).interceptors(),
-                )
-                for peer_id in config.budget_peers
-            }
         self._budgets = FederationBudgets(
             self._db,
             config.user_budget_defaults,
+            cluster_id=config.cluster_id,
             parent_id=config.budget_parent,
-            parent_client=budget_parent_client,
-            peer_clients=budget_peer_clients,
+            peers=config.budget_peers,
         )
         self._federation = FederationManager(
             peers,
@@ -499,6 +478,7 @@ class Controller:
             ),
             bundles=self._bundle_store,
             cluster_id=config.cluster_id,
+            budgets=self._budgets,
             heartbeat_interval=config.federation_heartbeat_interval,
             max_handoffs_per_cycle=config.max_federation_handoffs_per_cycle,
         )
@@ -592,7 +572,6 @@ class Controller:
         self._native_proxy_metrics: NativeProxyTelemetry | None = None
         self._endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
         self._control_thread: ManagedThread | None = None
-        self._budget_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
 
@@ -785,7 +764,6 @@ class Controller:
         # registration because its first autoscale phase may provision buffer slices
         # whose workers query /system/log-server. In dry-run it runs the schedule
         # phase only.
-        self._budget_thread = self._threads.spawn(self._run_budget_loop, name="budget-loop")
         self._control_thread = self._threads.spawn(self._run_control_loop, name="control-loop")
 
         if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
@@ -913,9 +891,6 @@ class Controller:
         if self._control_thread:
             self._control_thread.stop()
             self._control_thread.join(timeout=join_timeout)
-        if self._budget_thread:
-            self._budget_thread.stop()
-            self._budget_thread.join(timeout=Duration.from_seconds(12))
         if self._prune_thread:
             self._prune_thread.stop()
             self._prune_thread.join(timeout=join_timeout)
@@ -925,7 +900,6 @@ class Controller:
         if self._task_state_collector is not None:
             self._task_state_collector.close()
         self._federation.stop()
-        self._budgets.close()
 
         if self._native_proxy_metrics is not None and self._native_proxy is not None:
             uninstall_native_proxy_metrics(self._native_proxy)
@@ -1008,11 +982,6 @@ class Controller:
     # =========================================================================
     # Unified control tick
     # =========================================================================
-
-    def _run_budget_loop(self, stop_event: threading.Event) -> None:
-        while not stop_event.is_set():
-            self._budgets.refresh(stop_event)
-            stop_event.wait(BUDGET_REFRESH_INTERVAL.to_seconds())
 
     def _run_control_loop(self, stop_event: threading.Event) -> None:
         """Single driver: schedule -> reconcile -> autoscale as phases of one tick.
@@ -1676,7 +1645,6 @@ class Controller:
         """
         if self.started:
             raise RuntimeError("run_control_tick cannot be used after Controller.start")
-        self._budgets.refresh()
         self._control_tick(
             woken=True,
             schedule_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),

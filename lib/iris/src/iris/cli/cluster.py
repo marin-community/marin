@@ -38,7 +38,7 @@ from iris.cli.build import (
     find_marin_root,
     get_git_provenance,
 )
-from iris.cli.connect import require_controller_url, rpc_client_for_ctx
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
 from iris.cluster.composer import build_base_worker_config, provider_bundle
 from iris.cluster.config import (
     KUBERNETES_WORKER_RUNTIME,
@@ -61,7 +61,6 @@ from iris.cluster.controller.rollout import (
     read_rollout_record,
     write_rollout_record,
 )
-from iris.cluster.credentials import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.dashboard_common import VUE_DIST_DIR
 from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.local_cluster import LocalCluster
