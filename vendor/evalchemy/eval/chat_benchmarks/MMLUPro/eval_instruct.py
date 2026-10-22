@@ -108,6 +108,10 @@ class MMLUProBenchmark(BaseBenchmark):
             self.val_examples = preprocess(dataset["validation"])
         return self.test_examples, self.val_examples
 
+    def benchmark_size(self) -> int:
+        questions, _ = self.load_questions()
+        return len(questions[:2] if self.debug else questions)
+
     def validate_prepared_data(self) -> None:
         required_fields = {"answer", "category", "cot_content", "options", "question"}
         test_examples, val_examples = self.load_questions()

@@ -5,6 +5,7 @@ from eval.completion_response import CompletionContentPolicy, CompletionResponse
 from eval.contracts.eval_spec import EvalSpec, GraderSpec, SourceRef
 from eval.graders.math_specs import mmlu_choice
 from eval.sources.common import SourceOptions
+from eval.task import TaskManager
 from tests.contracts.source_harness import FixedEndpoint, evaluate_source
 
 
@@ -77,3 +78,29 @@ def test_mmlu_source_keeps_category_counts_and_micro_accuracy(monkeypatch):
     assert metrics["count_law"] == 1
     assert metrics["num_total"] == len(samples) == 3
     assert sum(sample["accuracy"] for sample in samples) == 2
+
+
+@pytest.mark.parametrize("debug,limit,benchmark_size,attempted", [
+    (False, None, 3, 3),
+    (False, 2, 3, 2),
+    (False, 0.5, 3, 1),
+    (True, None, 2, 2),
+    (True, 1, 2, 1),
+])
+def test_mmlu_metadata_reports_source_size_and_selected_items(monkeypatch, debug, limit, benchmark_size, attempted):
+    rows = [
+        {"question_id": index, "category": "math", "question": "Choose", "options": ["first", "second"],
+         "answer": "B", "cot_content": ""}
+        for index in range(3)
+    ]
+    monkeypatch.setattr(
+        "eval.chat_benchmarks.MMLUPro.eval_instruct.load_dataset",
+        lambda _dataset: {"test": rows, "validation": []},
+    )
+    source = TaskManager(task_list=["MMLUPro"], num_fewshot=0, debug=debug, limit=limit).get_benchmark("MMLUPro")
+
+    metadata = source.describe()
+    specs = list(source.iter_specs(SourceOptions("MMLUPro", source.SOURCE, limit=limit)))
+
+    assert metadata.n_benchmark == benchmark_size
+    assert metadata.n_attempted == attempted == len(specs)
