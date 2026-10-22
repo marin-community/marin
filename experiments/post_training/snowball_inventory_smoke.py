@@ -32,6 +32,7 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     SkyRLTopology,
     run_skyrl,
+    skyrl_cpu_command,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
@@ -112,16 +113,7 @@ def verify_pool_runtime(
     with TemporaryDirectory(prefix="snowball-launch-preflight-") as directory:
         path = Path(directory) / "launch.yaml"
         path.write_text(launch_config_yaml)
-        command = [
-            "uv",
-            "run",
-            "--project",
-            "vendor/skyrl",
-            "--frozen",
-            "--extra",
-            "cpu",
-            "--no-group",
-            "dev",
+        command = skyrl_cpu_command(
             "python",
             "experiments/post_training/snowball_inventory_probe.py",
             "--launch-config",
@@ -130,7 +122,7 @@ def verify_pool_runtime(
             expected_sha256,
             "--output-uri",
             output_uri,
-        ]
+        )
         if validation_sha256 is not None:
             command.extend(["--expected-validation-sha256", validation_sha256])
         if validation_family_counts is not None:
