@@ -40,6 +40,7 @@ from taskforge.agentic.config import AgenticConfig
 from taskforge.agentic.prompts import AGENT_PROMPT, USER_PROMPT
 from taskforge.agentic.tools import (
     AGENT_TOOLS,
+    JUDGE_CALLS_PER_REVIEW,
     MAX_EMPTY_BUDGET_CALLS,
     WORKDIR,
     AcceptedTask,
@@ -137,8 +138,9 @@ def agent_task(idea: CapabilityIdea, n: int, config: AgenticConfig) -> TaskSpec:
         high=high,
         max_format_failures=f"{gate.max_format_failure_rate:.0%}",
         min_adversary_runs=gate.min_adversary_runs,
+        reviews=gate.reviews,
         solver_rollouts=budget.solver_rollouts,
-        judge_calls=budget.judge_calls,
+        submit_reviews=budget.judge_calls // (JUDGE_CALLS_PER_REVIEW * gate.reviews),
         web_calls=budget.web_calls,
         max_empty_budget_calls=MAX_EMPTY_BUDGET_CALLS,
         shell_output_kib=SHELL_OUTPUT_BYTES // 1024,

@@ -46,6 +46,7 @@ from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
+from taskforge.agentic.tools import JUDGE_CALLS_PER_REVIEW
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.glm_client import EndpointSource, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMPolicy
@@ -67,7 +68,7 @@ SUMMARY_FILE = "summary.json"
 NO_REASONING = "none"
 """The solver reasoning effort that switches the thinking of DeepSeek off."""
 MAX_OUTPUT_TOKENS = 32768
-GATE = Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4)
+GATE = Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4, reviews=3)
 COMMAND_TIMEOUT = 30.0
 JUDGE_TEMPERATURE = 0.7
 """Set here, so that a change of the LLMPolicy default does not change the review."""
@@ -89,8 +90,8 @@ def tool_budget(tasks: int) -> ToolBudget:
     """A budget that permits about five rounds of evidence for each task, and research for the idea."""
     return ToolBudget(
         solver_rollouts=64 * tasks,
-        # Each review is two judge calls: a blind solve and the review.
-        judge_calls=8 * tasks + 4,
+        # About four reviewed submits for each task.
+        judge_calls=JUDGE_CALLS_PER_REVIEW * GATE.reviews * (4 * tasks + 2),
         web_calls=10 + 2 * tasks,
     )
 

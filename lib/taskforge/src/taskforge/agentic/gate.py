@@ -24,6 +24,9 @@ class Gate:
     min_adversary_runs: int
     """Adversary rollouts with a graded answer that a task needs. The review decides whether an adversary pass used a
     shortcut."""
+    reviews: int
+    """Independent reviews that must all accept a task. On 313 labeled tasks, three reviews refused about a third of
+    the blocking tasks that one review accepted, and about a tenth of the good tasks."""
 
 
 @dataclass

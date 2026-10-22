@@ -24,10 +24,18 @@ from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, GUESS_PROMPT
-from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, OPTION_PROBLEM, BlindSolution, OptionList, TaskReview
+from taskforge.agentic.tools import (
+    MAX_EMPTY_BUDGET_CALLS,
+    MAX_UNFINISHED_REVIEWS,
+    OPTION_PROBLEM,
+    BlindSolution,
+    OptionList,
+    TaskReview,
+)
 from taskforge.capability import CapabilityIdea
-from taskforge.llm.client import Completion, ContextExhausted, StructuredResult
+from taskforge.llm.client import Completion, ContextExhausted, FinishReason, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
+from taskforge.llm.structured import CutReplyError, StructuredOutputError
 
 TASK_ID = "ledger--00"
 TASK = f"tasks/{TASK_ID}.json"
@@ -207,7 +215,9 @@ def agentic_config(agent_model: Callable[[ModelRequest], Awaitable[ModelTurn]], 
         web=web,
         agent_limits=LIMITS,
         solver_limits=LIMITS,
-        gate=Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4),
+        gate=Gate(
+            min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4, reviews=1
+        ),
         budget=budget,
         command_timeout=10,
         max_concurrent_rollouts=4,
@@ -254,6 +264,42 @@ async def test_submit_refuses_a_task_whose_answer_selects_an_option():
     assert result.tasks == ()
 
 
+@dataclass
+class OnceRefusingJudge(AcceptingJudge):
+    """Refuses the first task that it reviews and accepts the others."""
+
+    reviews: int = 0
+
+    async def complete_structured[T: BaseModel](
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
+    ) -> StructuredResult[T]:
+        result = await super().complete_structured(messages, output_type, policy)
+        if output_type is not TaskReview:
+            return result
+        self.reviews += 1
+        if self.reviews > 1:
+            return result
+        refusal = result.value.model_copy(update={"accept": False, "problems": ("A second reading gives 7",)})
+        return StructuredResult(refusal, ())
+
+
+async def test_one_refusing_review_refuses_a_task_and_its_version_for_good():
+    script = (*SCRIPT, call("submit", path=TASK), call("finish", report="done"))
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=8, web_calls=0), web)
+        gate = dataclasses.replace(config.gate, reviews=2)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=OnceRefusingJudge(), gate=gate))
+
+    [submit] = tool_replies(result, "call-10")
+    assert not submit["accepted"]
+    assert submit["review"]["problems"] == ["A second reading gives 7"]
+    # Another submit of the refused version gets no new review, which could accept it.
+    [again] = tool_replies(result, "call-11")
+    assert "refused this version" in again["error"]
+    assert result.tasks == ()
+    assert result.spend.judge_calls == 4
+
+
 async def test_submit_refuses_a_task_whose_answer_the_prompt_alone_gives():
     script = (*SCRIPT, call("finish", report="done"))
     async with ParallelWeb("unused") as web:
@@ -283,6 +329,34 @@ async def test_a_task_too_long_for_the_reviewer_is_refused_and_the_session_conti
     [submit] = tool_replies(result, "call-10")
     assert "too long" in submit["error"]
     assert (result.failure, result.report) == (None, "done")
+
+
+class CutJudge(AcceptingJudge):
+    """Gives replies that the output limit cuts off."""
+
+    async def complete_structured[T: BaseModel](
+        self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy
+    ) -> StructuredResult[T]:
+        usage = Usage(prompt_tokens=1000, completion_tokens=131_072, reasoning_tokens=131_072, cached_tokens=0)
+        cut = Completion("", "", (), FinishReason.LENGTH, usage, 0.0, 0.0, 0.0, 0, ())
+        raise StructuredOutputError(CutReplyError("cut off"), (cut,))
+
+
+async def test_cut_judge_replies_count_their_tokens_and_refuse_a_version_at_last():
+    submits = tuple(call("submit", path=TASK) for _ in range(MAX_UNFINISHED_REVIEWS + 1))
+    script = (*SCRIPT, *submits, call("finish", report="done"))
+    budget = ToolBudget(solver_rollouts=40, judge_calls=2 * (MAX_UNFINISHED_REVIEWS + 1), web_calls=0)
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), budget, web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=CutJudge()))
+
+    [first] = tool_replies(result, "call-10")
+    assert "no valid reply" in first["error"]
+    [last] = tool_replies(result, f"call-{9 + MAX_UNFINISHED_REVIEWS}")
+    assert "did not finish a review of this version" in last["error"]
+    [again] = tool_replies(result, f"call-{10 + MAX_UNFINISHED_REVIEWS}")
+    assert "refused this version" in again["error"]
+    assert result.spend.judge_tokens == MAX_UNFINISHED_REVIEWS * 132_072
 
 
 async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
