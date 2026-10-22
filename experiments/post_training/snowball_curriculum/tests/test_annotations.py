@@ -29,9 +29,9 @@ def test_public_annotation_projection_excludes_private_contract():
     private = quality_input(task)
     public = public_input(task, "fixture")
     assert "987654321" in private
-    assert "987654321" not in public["public_input"]
-    assert "grader" not in json.loads(public["public_input"])
-    assert "Calculate the sum" in public["public_input"]
+    assert "987654321" not in public.public_input
+    assert "grader" not in json.loads(public.public_input)
+    assert "Calculate the sum" in public.public_input
 
 
 def test_annotation_cache_reuses_results_and_schema_failures_are_repaired(tmp_path):
