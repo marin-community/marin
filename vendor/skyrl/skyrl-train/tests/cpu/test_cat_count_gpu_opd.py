@@ -13,7 +13,7 @@ RUNNER = Path(__file__).parents[2] / "ci" / "marin_nightly" / "run_cat_count_opd
 
 
 def test_gpu_opd_runner_requires_an_explicit_spec_for_evens_only():
-    env = {**os.environ, "TEACHER_WORDS": "evens"}
+    env = {**os.environ, "TEACHER_ROUTES": "evens"}
     env.pop("SPEC", None)
     result = subprocess.run(
         ["bash", str(RUNNER)],
