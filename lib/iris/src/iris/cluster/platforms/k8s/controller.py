@@ -101,6 +101,7 @@ _NODE_AGENT_MAX_UNAVAILABLE = "10%"
 # container alone. Held apart from iris-task-env, which every task pod also mounts:
 # a task must never be able to mint its cluster's tokens.
 CONTROLLER_ENV_SECRET_NAME = "iris-controller-env"
+STORAGE_ENV_SECRET_NAME = "iris-storage-env"
 SIGNING_KEY_ENV_VAR = "IRIS_SIGNING_KEY"
 PRINCIPAL_DIRECTORY_ENV_VAR = "IRIS_PRINCIPAL_DIRECTORY"
 _CONTROLLER_SECRET_FIELDS = (
@@ -226,10 +227,9 @@ def _build_controller_deployment(
     ``env_from_secrets`` names the Secrets the controller container sources its
     environment from, in order.
     """
-    # The cluster default env (S3 storage auth + operator-injected vars) arrives via
-    # the iris-task-env Secret, which task pods mount too; the controller's own
-    # credentials arrive via iris-controller-env, which they do not. optional=true so
-    # a controller-only restart that predates either Secret does not crash-loop.
+    # Task defaults, service storage credentials, and controller authentication
+    # use separate Secrets. Optional references allow controller-only restarts
+    # before a new Secret has been deployed.
     env_from = [{"secretRef": {"name": secret, "optional": True}} for secret in env_from_secrets]
     # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod as
     # BestEffort. Only memory has a limit, so the Pod is Burstable (not
@@ -396,7 +396,7 @@ def _build_node_agent_daemonset(
                                 "--config=/etc/iris/config.json",
                             ],
                             **(
-                                {"envFrom": [{"secretRef": {"name": TASK_ENV_SECRET_NAME}}]}
+                                {"envFrom": [{"secretRef": {"name": STORAGE_ENV_SECRET_NAME}}]}
                                 if storage_health_env is not None
                                 else {}
                             ),
@@ -596,24 +596,26 @@ class K8sControllerProvider:
 
         self.verify_prerequisites(config)
 
-        # Build the cluster default env and project it into the controller and
-        # every task via the iris-task-env Secret + envFrom. Resolution happens
-        # here, in the operator's shell -- the controller never has these secrets.
-        # S3 storage auth and operator-injected vars share one flow.
+        # Service storage keys stay on infrastructure Pods; task defaults carry
+        # only endpoint settings and explicitly requested operator variables.
         self._s3_enabled = self.uses_s3_storage(config)
-        default_env: dict[str, str] = {}
-        if self._s3_enabled:
-            default_env.update(self._s3_task_env())
-        default_env.update(collect_inject_env(config.defaults.inject_env))
+        storage_env = self._s3_storage_env() if self._s3_enabled else {}
+        store = store_config(StoreType.COREWEAVE)
+        credential_names = {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", store.key_id_env, store.key_secret_env}
+        default_env = {name: value for name, value in storage_env.items() if name not in credential_names}
+        injected_env = collect_inject_env(config.defaults.inject_env)
+        default_env.update(injected_env)
         storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
-        if default_env or storage_health is not None:
-            self.ensure_task_env_secret(default_env)
+        if projects_task_env_secret(config):
+            self.ensure_env_secret(TASK_ENV_SECRET_NAME, default_env)
+        if storage_env or storage_health is not None:
+            self.ensure_env_secret(STORAGE_ENV_SECRET_NAME, {**storage_env, **injected_env})
         self.ensure_egress_network_policies(config)
 
         if storage_health is not None:
             # envFrom is captured at pod startup. A Secret revision rolls agents
             # and fences old reports without copying credential values into config.
-            secret = self._kubectl.get_json(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
+            secret = self._kubectl.get_json(K8sResource.SECRETS, STORAGE_ENV_SECRET_NAME)
             assert secret is not None
             environment_revision = hashlib.sha256(
                 json.dumps(
@@ -666,6 +668,7 @@ class K8sControllerProvider:
             secret
             for secret, projected in (
                 (TASK_ENV_SECRET_NAME, projects_task_env_secret(config)),
+                (STORAGE_ENV_SECRET_NAME, self._s3_enabled),
                 (CONTROLLER_ENV_SECRET_NAME, _projects_controller_env_secret(config)),
             )
             if projected
@@ -779,6 +782,7 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
         if self.uses_s3_storage(config) or config.defaults.inject_env:
             self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
+        self._kubectl.delete(K8sResource.SECRETS, STORAGE_ENV_SECRET_NAME)
         if _projects_controller_env_secret(config):
             self._kubectl.delete(K8sResource.SECRETS, CONTROLLER_ENV_SECRET_NAME)
 
@@ -979,14 +983,13 @@ class K8sControllerProvider:
 
     # -- Cluster default env (S3 storage auth + operator-injected vars) -------
 
-    def _s3_task_env(self) -> dict[str, str]:
+    def _s3_storage_env(self) -> dict[str, str]:
         """Compute S3 storage env (creds + endpoint + FSSPEC) from the operator's shell.
 
         Maps the operator's CoreWeave object-storage credentials to the AWS
         names boto3/s3fs expect and derives endpoint/region/FSSPEC_S3 from the
-        configured object-storage endpoint. Folded into the iris-task-env
-        Secret so the controller and every task authenticate to s3:// without
-        per-call-site configuration.
+        configured object-storage endpoint. Stored in iris-storage-env for
+        controller checkpoints and node storage-health probes.
         """
         store = store_config(StoreType.COREWEAVE)
         key_id = os.environ.get(store.key_id_env)
@@ -1013,17 +1016,13 @@ class K8sControllerProvider:
             env[store.endpoint_env] = endpoint
         return env
 
-    def ensure_task_env_secret(self, env: dict[str, str]) -> None:
-        """Create the iris-task-env Secret holding the cluster default env.
-
-        The controller and task pods reference this Secret via envFrom, so the
-        values reach containers without ever passing through the ConfigMap.
-        """
+    def ensure_env_secret(self, name: str, env: dict[str, str]) -> None:
+        """Project environment values without putting secrets in the ConfigMap."""
         self._kubectl.apply_json(
             {
                 "apiVersion": "v1",
                 "kind": "Secret",
-                "metadata": {"name": TASK_ENV_SECRET_NAME, "namespace": self._namespace},
+                "metadata": {"name": name, "namespace": self._namespace},
                 "type": "Opaque",
                 "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
             }

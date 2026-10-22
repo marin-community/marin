@@ -730,6 +730,7 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+    - CW_KEY_ID, CW_KEY_SECRET: submitter object-storage credentials (if set)
     - NCCL_DEBUG: "WARN" for GPU jobs (preserves errors without INFO log volume)
     - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
       at submission (or forwarded from this process's own env when re-submitting inside
@@ -768,6 +769,8 @@ class EnvironmentSpec:
             "TOKENIZERS_PARALLELISM": "false",
             "HF_TOKEN": os.getenv("HF_TOKEN"),
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+            "CW_KEY_ID": os.getenv("CW_KEY_ID"),
+            "CW_KEY_SECRET": os.getenv("CW_KEY_SECRET"),
             # Launch provenance: a task running from a git-less bundle inherits the
             # submitter's identity via Provenance.capture(); transitive, since a task
             # re-submitting captures this same env value.

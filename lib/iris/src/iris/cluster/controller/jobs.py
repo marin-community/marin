@@ -35,6 +35,7 @@ from iris.cluster.controller.projections.attempt_counts import AttemptCountsProj
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.schema import jobs_table, tasks_table
+from iris.cluster.coreweave import coreweave_storage_error
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
@@ -103,6 +104,7 @@ class JobDependencies:
     bundles: BundleStore
     auth: ControllerAuth
     user_budget_defaults: UserBudgetDefaults
+    require_coreweave_credentials: bool = False
 
 
 class JobStatusRow(Protocol):
@@ -788,12 +790,12 @@ def _store_launch_payload(
     return normalized
 
 
-def _route_launch(
+def _plan_launch(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.LaunchJobRequest,
     launch: LaunchIdentity,
-) -> controller_pb2.Controller.LaunchJobResponse | None:
-    """Validate placement and either queue, reject, or select local execution."""
+) -> SubmitPlan:
+    """Validate placement before replacing an existing job or storing payloads."""
     constraints = [Constraint.from_proto(constraint) for constraint in request.constraints]
     tpu_error = validate_tpu_request(request.resources, constraints)
     if tpu_error:
@@ -831,20 +833,13 @@ def _route_launch(
             )
         if dependencies.auth.provider and launch.submitting_user == LOCAL_ADMIN_SUBMITTER:
             raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED)
-        return _queue_federated_job(
-            dependencies,
-            launch.job_id,
-            request,
-            plan.pinned_peer_id,
-            launch.submitting_user,
-        )
     if plan.disposition == SubmitDisposition.REJECT:
         reason = error or "no local backend or peer can host it"
         raise ConnectError(
             Code.FAILED_PRECONDITION,
             f"Job {launch.job_id} is unschedulable: {reason} (constraints: {constraints})",
         )
-    return None
+    return plan
 
 
 def _insert_local_job(
@@ -902,6 +897,17 @@ def launch_job(
     _validate_launch_profile(dependencies, request, launch)
     _validate_launch_capacity(dependencies, request, launch)
 
+    request = _inject_resource_constraints(request)
+    plan = _plan_launch(dependencies, request, launch)
+    if (
+        plan.disposition == SubmitDisposition.LOCAL
+        and dependencies.require_coreweave_credentials
+        and request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX
+    ):
+        storage_error = coreweave_storage_error(request.environment.env_vars)
+        if storage_error:
+            raise ConnectError(Code.INVALID_ARGUMENT, storage_error)
+
     existing = _prepare_job_slot(dependencies, request, launch)
     if existing is not None:
         return existing
@@ -910,10 +916,14 @@ def launch_job(
         request = _store_launch_payload(dependencies, request)
     except BundleUploadError as exc:
         raise ConnectError(Code.UNAVAILABLE, f"Job {launch.job_id} creation failed: {exc}") from exc
-    request = _inject_resource_constraints(request)
-    routed = _route_launch(dependencies, request, launch)
-    if routed is not None:
-        return routed
+    if plan.disposition == SubmitDisposition.QUEUE:
+        return _queue_federated_job(
+            dependencies,
+            launch.job_id,
+            request,
+            plan.pinned_peer_id,
+            launch.submitting_user,
+        )
     return _insert_local_job(dependencies, request, launch, band)
 
 

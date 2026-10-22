@@ -56,6 +56,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.coreweave import coreweave_storage_error
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
@@ -520,6 +521,7 @@ class PodConfig:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    require_coreweave_credentials: bool = False
     task_outputs: TaskOutputPolicy | None = None
     # Name of a Secret whose keys are projected into every task container via
     # envFrom (operator-injected env, defaults.inject_env). Empty disables it.
@@ -678,13 +680,16 @@ def _build_output_uploader(
     policy: TaskOutputPolicy,
     source_prefix: str | None,
     env_secret_name: str,
+    storage_env: dict[str, str],
 ) -> dict:
+    env = output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix)
+    env.extend({"name": name, "value": value} for name, value in storage_env.items())
     container: dict[str, object] = {
         "name": OUTPUT_CONTAINER_NAME,
         "image": image,
         "imagePullPolicy": "IfNotPresent",
         "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.outputship"],
-        "env": output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix),
+        "env": env,
         "volumeMounts": [
             {"name": OUTPUT_MOUNT.name, "mountPath": OUTPUT_MOUNT.container_path},
             {"name": OUTPUT_CONTROL_VOLUME_NAME, "mountPath": OUTPUT_CONTROL_PATH},
@@ -859,6 +864,18 @@ def _build_pod_manifest(
     )
     cluster_env = config.task_env if isolation.include_cluster_env else {}
     combined = {**cluster_env, **dict(run_req.environment.env_vars), **iris_env}
+    storage_env = {}
+    if config.require_coreweave_credentials and isolation.include_cluster_env:
+        storage_error = coreweave_storage_error(run_req.environment.env_vars)
+        if storage_error:
+            raise PodManifestError(storage_error)
+        storage_env = {
+            "CW_KEY_ID": combined["CW_KEY_ID"],
+            "CW_KEY_SECRET": combined["CW_KEY_SECRET"],
+            "AWS_ACCESS_KEY_ID": combined["CW_KEY_ID"],
+            "AWS_SECRET_ACCESS_KEY": combined["CW_KEY_SECRET"],
+        }
+        combined.update(storage_env)
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
     env_list.append(
@@ -1055,6 +1072,7 @@ def _build_pod_manifest(
                 config.task_outputs,
                 config.task_env.get("MARIN_PREFIX"),
                 config.env_secret_name,
+                storage_env,
             )
         )
 

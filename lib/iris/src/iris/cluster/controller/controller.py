@@ -333,6 +333,8 @@ class ControllerConfig:
     dry_run: bool = False
     """Start in dry-run mode: compute scheduling but suppress all side effects."""
 
+    require_coreweave_credentials: bool = False
+
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
 
@@ -501,6 +503,7 @@ class Controller:
             endpoint_service=self._endpoint_service,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
+            require_coreweave_credentials=config.require_coreweave_credentials,
             capability_url_config=CapabilityUrlConfig(
                 cluster_name=config.cluster_id,
                 local_origin=config.dashboard_url,

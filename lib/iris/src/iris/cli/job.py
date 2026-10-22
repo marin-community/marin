@@ -134,7 +134,7 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
             for k, v in cfg["env"].items():
                 env_vars[str(k)] = "" if v is None else str(v)
 
-    for key in ("HF_TOKEN", "WANDB_API_KEY"):
+    for key in ("HF_TOKEN", "WANDB_API_KEY", "CW_KEY_ID", "CW_KEY_SECRET"):
         if key not in env_vars and os.environ.get(key):
             env_vars[key] = os.environ[key]
 

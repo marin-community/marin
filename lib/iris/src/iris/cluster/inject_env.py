@@ -14,7 +14,7 @@ from collections.abc import Sequence
 
 from iris.cluster.config import IrisClusterConfig
 
-# Secret holding the cluster default env (S3 storage auth + operator-injected
+# Secret holding the cluster default env (S3 endpoint settings + operator-injected
 # vars), projected into task pods and the controller via envFrom on Kubernetes.
 TASK_ENV_SECRET_NAME = "iris-task-env"
 
@@ -22,7 +22,7 @@ TASK_ENV_SECRET_NAME = "iris-task-env"
 def projects_task_env_secret(config: IrisClusterConfig) -> bool:
     """Whether the cluster populates the iris-task-env Secret.
 
-    True when S3 storage auth must be injected or operator env is declared. The
+    True when S3 endpoint settings must be injected or operator env is declared. The
     K8s controller creates the Secret exactly when this holds, and task pods /
     the controller add the `envFrom` reference only then — so both decisions
     share this single predicate rather than each re-deriving it (a drift would

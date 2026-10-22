@@ -137,7 +137,7 @@ def _make_provider(
 
 @pytest.fixture(autouse=True)
 def _s3_env_vars(monkeypatch):
-    """Set CW_KEY_ID / CW_KEY_SECRET so the S3 task-env build succeeds."""
+    """Set operator credentials for controller storage."""
     monkeypatch.setenv("CW_KEY_ID", "test-key-id")
     monkeypatch.setenv("CW_KEY_SECRET", "test-key-secret")
 
@@ -287,8 +287,8 @@ def test_start_controller_creates_controller_resources(hostname):
     assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is not None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
-    # S3 storage auth lives in the iris-task-env Secret, not the ConfigMap.
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    # S3 storage auth lives in the iris-storage-env Secret, not the ConfigMap.
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-env")
     assert secret is not None
     assert "AWS_ACCESS_KEY_ID" in secret["data"]
     assert "AWS_SECRET_ACCESS_KEY" in secret["data"]
@@ -353,9 +353,9 @@ def test_start_controller_creates_controller_resources(hostname):
         "--config=/etc/iris/config.json",
     ]
 
-    # Controller consumes that env via envFrom (S3 + injected, one flow).
+    # Controller mounts endpoint defaults and its separate storage credentials.
     container = deploy_spec["template"]["spec"]["containers"][0]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+    assert {entry["secretRef"]["name"] for entry in container["envFrom"]} == {"iris-task-env", "iris-storage-env"}
     # CPU is requested but unlimited (Burstable QoS, not Guaranteed) so the
     # controller can burst onto spare node cores during reconcile spikes; memory
     # is capped to protect the node (issue #6944).
@@ -456,7 +456,7 @@ def test_start_controller_injects_operator_env(monkeypatch):
     assert "wb-secret" not in json.dumps(configmap)
 
     container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+    assert {entry["secretRef"]["name"] for entry in container["envFrom"]} == {"iris-task-env", "iris-storage-env"}
 
     provider.shutdown()
 
@@ -527,19 +527,32 @@ def test_directory_only_deploy_keeps_payload_in_controller_secret(tmp_path: Path
     provider.shutdown()
 
 
-def test_start_controller_s3_storage_creates_task_env_secret():
-    """S3 storage alone (no inject_env) still populates the iris-task-env Secret."""
+def test_start_controller_s3_storage_keeps_service_credentials_off_tasks():
+    """Deploying replaces legacy shared task keys with infrastructure-only keys."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     _seed_prerequisites(k8s, cluster_config)
 
+    k8s.apply_json(
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "iris-task-env", "namespace": "iris"},
+            "data": {
+                name: base64.b64encode(b"legacy-key").decode()
+                for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CW_KEY_ID", "CW_KEY_SECRET")
+            },
+        }
+    )
     provider.start_controller(cluster_config)
 
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-env")
     assert secret is not None
-    assert "AWS_ACCESS_KEY_ID" in secret["data"]
+    assert base64.b64decode(secret["data"]["CW_KEY_ID"]).decode() == "test-key-id"
+    task_secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    assert not {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CW_KEY_ID", "CW_KEY_SECRET"} & task_secret["data"].keys()
     container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+    assert {entry["secretRef"]["name"] for entry in container["envFrom"]} == {"iris-task-env", "iris-storage-env"}
 
     provider.shutdown()
 
@@ -990,7 +1003,7 @@ def test_start_controller_errors_with_invalid_scale_group():
 
 
 def test_start_controller_errors_without_s3_credentials(monkeypatch):
-    """start_controller raises when S3 storage is configured but R2 credentials are not set."""
+    """start_controller raises when S3 storage is configured but CoreWeave credentials are not set."""
     monkeypatch.delenv("CW_KEY_ID", raising=False)
     monkeypatch.delenv("CW_KEY_SECRET", raising=False)
     provider, k8s = _make_provider()
@@ -1186,7 +1199,7 @@ def test_start_controller_creates_one_network_policy_per_egress_policy(service_c
 
 
 @pytest.mark.parametrize("change", ["health_config", "literal_endpoint", "injected_credential"])
-def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(monkeypatch, change):
+def test_storage_health_agent_receives_service_credentials_and_rolls_on_changes(monkeypatch, change):
     provider, k8s = _make_provider()
     config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     config.kubernetes_provider.node_health = NodeHealthConfig(
@@ -1200,9 +1213,9 @@ def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(mon
     agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
     container = agent["spec"]["containers"][0]
     assert {"operator": "Exists"} in agent["spec"]["tolerations"]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env"}}]
+    assert container["envFrom"] == [{"secretRef": {"name": "iris-storage-env"}}]
     assert {"name": "AWS_ENDPOINT_URL", "value": "https://regional.example"} in container["env"]
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-env")
     assert "AWS_ACCESS_KEY_ID" in secret["data"]
     assert not any(item["name"] == "AWS_ACCESS_KEY_ID" for item in container["env"])
     original_config = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"]

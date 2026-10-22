@@ -91,8 +91,10 @@ Do not read or copy data from GCS while running on CoreWeave without explicit
 user approval. The transfer can incur egress charges.
 
 The checkout's `.marin.yaml` supplies job-specific values such as W&B or
-Hugging Face credentials. CoreWeave object-storage access comes from the
-cluster-managed `iris-task-env` Kubernetes Secret.
+Hugging Face credentials. For CoreWeave tasks, export your personal `CW_KEY_ID`
+and `CW_KEY_SECRET` before submitting. Create them on the
+[CoreWeave console Access Keys page](https://console.coreweave.com/object-storage/access-keys).
+Iris forwards both values to the job and rejects submissions missing either value.
 
 ## Watch the job
 

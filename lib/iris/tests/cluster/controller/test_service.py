@@ -1590,3 +1590,44 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
 
     response = service.launch_job(child_req, None)
     assert response.job_id == child_id.to_wire()
+
+
+@pytest.mark.parametrize("env", [{}, {"CW_KEY_ID": "user-key"}, {"CW_KEY_ID": "user-key", "CW_KEY_SECRET": ""}])
+def test_coreweave_launch_rejects_missing_user_keys(state, log_client, mock_controller, tmp_path, monkeypatch, env):
+    monkeypatch.setenv("CW_KEY_ID", "operator-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "operator-secret")
+    service = ControllerServiceImpl(
+        controller=mock_controller,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_client=log_client,
+        db=state._db,
+        endpoint_service=EndpointServiceImpl(db=state._db),
+        require_coreweave_credentials=True,
+    )
+    request = make_job_request("missing-cw-keys")
+    request.environment.env_vars.update(env)
+    with pytest.raises(ConnectError) as exc:
+        service.launch_job(request, None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert "https://console.coreweave.com/object-storage/access-keys" in str(exc.value)
+    assert "operator-secret" not in str(exc.value)
+    with pytest.raises(ConnectError) as missing:
+        service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=request.name), None)
+    assert missing.value.code == Code.NOT_FOUND
+
+    request.environment.env_vars.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
+    response = service.launch_job(request, None)
+    status = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None)
+    assert status.job.job_id == response.job_id
+
+    request.environment.env_vars.clear()
+    request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
+    with pytest.raises(ConnectError) as invalid_replacement:
+        service.launch_job(request, None)
+    assert invalid_replacement.value.code == Code.INVALID_ARGUMENT
+    preserved = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None)
+    assert preserved.job.state == job_pb2.JOB_STATE_PENDING
+
+    sandbox = make_job_request("sandbox-without-storage-keys")
+    sandbox.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    assert service.launch_job(sandbox, None).job_id == sandbox.name

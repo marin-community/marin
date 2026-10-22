@@ -125,6 +125,7 @@ def make_task_backend(
                 controller_address=kp.controller_address or None,
                 managed_label=managed_label,
                 task_env=dict(config.defaults.task_env),
+                require_coreweave_credentials=config.platform.coreweave is not None,
                 task_outputs=config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None,
                 env_secret_name=env_secret_name,
                 local_queue=local_queue,

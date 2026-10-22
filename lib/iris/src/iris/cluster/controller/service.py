@@ -56,6 +56,7 @@ class ControllerServiceImpl:
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
         capability_url_config: attempts.CapabilityUrlConfig | None = None,
+        require_coreweave_credentials: bool = False,
     ):
         self._db = db
         self._controller = controller
@@ -79,6 +80,7 @@ class ControllerServiceImpl:
             bundles=bundle_store,
             auth=resolved_auth,
             user_budget_defaults=resolved_budget_defaults,
+            require_coreweave_credentials=require_coreweave_credentials,
         )
         self._federation = federation_service.FederationDependencies(db=db, runtime=controller)
         self._attempts = attempts.AttemptDependencies(
