@@ -179,6 +179,15 @@ can point at an incomplete export. Keep resume behavior and terminal export expl
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
 
+SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
+that needs only the latest recovery point, set
+`retention=SkyRLRetentionPolicy(resume_checkpoint_count=1)` in `SkyRLSpec`.
+Marin translates this policy to `trainer.max_ckpts_to_keep`; standalone SkyRL
+recipes can set that field directly. Cleanup runs after the replacement checkpoint
+has uploaded and its latest-checkpoint marker has been published. Pending HF
+exports and the selected best native checkpoint remain protected beyond this
+rolling window. Each successful Marin run also produces a durable terminal export.
+
 The temporary checkpoint root is derived from the RL artifact name and version.
 After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
