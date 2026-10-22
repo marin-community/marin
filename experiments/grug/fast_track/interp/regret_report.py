@@ -6,7 +6,9 @@
 ``expert_labels.json``).
 
 Signs: a swap's ``delta`` is loss(edited) - loss(unedited), so its end-to-end gain is ``-delta``; the linear
-``swap_gain`` / ``regret`` are already gains. ``bias_lin`` is loss(unbiased top-10) - loss(actual).
+``swap_gain`` / ``regret`` are already gains. ``bias_lin`` is loss(unbiased top-10) - loss(actual). The end-to-end
+gain reported is over the edited position and the next 15 (``WINDOW_COLUMN``): the rest-of-sequence total also
+carries downstream routing chaos and small bf16 differences between batch rows (no-op swaps are not exactly 0).
 
 Usage: ``python -m experiments.grug.fast_track.interp.regret_report <data dir> <atlas dir> <out.json>``.
 """
@@ -23,8 +25,10 @@ L, E = regret.L, regret.E
 LARGE = regret.LARGE_REGRET
 QS = (50, 90, 99, 99.9)
 NUM_EXAMPLES = 24
+NUM_TOP_SWAPS = 256  # regret.py --swap-top: each layer's swaps start with its top-scored tokens
 TOP_TOKENS = 8
 CONTEXT = 10
+WINDOW_COLUMN = 1  # swap delta columns: at the position, over it and the next 15, rest of sequence, before it
 
 
 def _q(x: np.ndarray) -> list[float]:
@@ -32,12 +36,14 @@ def _q(x: np.ndarray) -> list[float]:
 
 
 def _fit(lin: np.ndarray, e2e: np.ndarray) -> dict:
+    """Linear-vs-end-to-end agreement; ``corr`` is None when the linear values are constant (no estimate)."""
     if len(lin) < 3:
         return dict(n=len(lin))
+    corr = np.corrcoef(lin, e2e)[0, 1] if np.std(lin) > 0 else np.nan
     slope = float(np.sum(lin * e2e) / max(np.sum(lin * lin), 1e-12))
     return dict(
         n=len(lin),
-        corr=round(float(np.corrcoef(lin, e2e)[0, 1]), 3),
+        corr=None if np.isnan(corr) else round(float(corr), 3),
         slope=round(slope, 3),
         lin_mean=round(float(lin.mean()), 4),
         e2e_mean=round(float(e2e.mean()), 4),
@@ -93,18 +99,23 @@ def regret_section(z: dict, labels: list, vocab: list[str]) -> dict:
                 bias_lin_mean=round(float(bias.mean()), 5),
                 bias_lin_q=_q(-bias[disp]),
                 moe_gain_mean=round(float(z["rec/moe_gain"][layer][valid].mean()), 4),
+                near_q=_q(z["rec/near_gain"][layer][valid]) if "rec/near_gain" in z else [],
+                near_large=(
+                    round(float(np.mean(z["rec/near_gain"][layer][valid] > LARGE)), 4) if "rec/near_gain" in z else None
+                ),
                 by_group=by_group,
             )
         )
     kinds = z["swap/kind"]
     lay = z["swap/layer"]
     ref = z["swap/ref"]
-    gain = -z["swap/delta"][:, 2]
+    gain = -z["swap/delta"][:, WINDOW_COLUMN]
     checks = {}
     for kind, name, field in (
         (regret.Kind.REGRET, "regret", "rec/swap_gain"),
         (regret.Kind.BIAS, "bias", "rec/bias_lin"),
         (regret.Kind.TOPIC, "topic", "rec/topic_gain"),
+        (regret.Kind.NEAR, "near", "rec/near_gain"),
     ):
         rows = []
         for layer in range(L):
@@ -112,20 +123,49 @@ def regret_section(z: dict, labels: list, vocab: list[str]) -> dict:
             lin = z[field][layer][ref[m]]
             if kind == regret.Kind.BIAS:
                 lin = -lin  # gain of restoring the unbiased selection
-            rows.append(_fit(lin.astype(np.float64), gain[m].astype(np.float64)))
+            top, rand = np.arange(m.sum()) < NUM_TOP_SWAPS, np.arange(m.sum()) >= NUM_TOP_SWAPS
+            g = gain[m].astype(np.float64)
+            row = _fit(lin.astype(np.float64), g)
+            row["top"] = _fit(lin[top].astype(np.float64), g[top])
+            row["random"] = _fit(lin[rand].astype(np.float64), g[rand])
+            rows.append(row)
         checks[name] = rows
+    attribution = []
+    for layer in range(L):
+        m = np.flatnonzero((kinds == regret.Kind.NEAR) & (lay == layer))[NUM_TOP_SWAPS:]
+        if len(m) == 0:
+            attribution.append(None)
+            continue
+        hit = gain[m] > LARGE
+        in_u = np.asarray([np.isin(z["rec/near_e"][layer][ref[j]], z["rec/unb"][layer][ref[j]]) for j in m])
+        b = np.flatnonzero((kinds == regret.Kind.BIAS) & (lay == layer))[NUM_TOP_SWAPS:]
+        displaced = float(np.mean(z["rec/n_bias_only"][layer][valid] > 0))
+        attribution.append(
+            dict(
+                n=len(m),
+                near_large=round(float(hit.mean()), 4),
+                near_large_bias=round(float(np.mean(hit & in_u)), 4),
+                near_large_router=round(float(np.mean(hit & ~in_u)), 4),
+                restore_large=round(float(np.mean(gain[b] > LARGE)) * displaced, 4),
+                restore_hurts=round(float(np.mean(gain[b] < -LARGE)) * displaced, 4),
+            )
+        )
+    checks["attribution"] = attribution
     noop = kinds == regret.Kind.NOOP
     checks["noise"] = dict(
-        noop_abs_mean=round(float(np.abs(z["swap/delta"][noop, 2]).mean()), 5) if noop.any() else None,
+        noop_abs_mean=round(float(np.abs(z["swap/delta"][noop, WINDOW_COLUMN]).mean()), 5) if noop.any() else None,
+        noop_abs_total=round(float(np.abs(z["swap/delta"][noop, 2]).mean()), 5) if noop.any() else None,
         pre_abs_max=round(float(np.abs(z["swap/delta"][:, 3]).max()), 5),
     )
     # The bias-restore study: per layer, tokens whose selection the bias changed, mean e2e gain of restoring.
     examples = []
-    m = kinds == regret.Kind.REGRET
+    kind = regret.Kind.NEAR if np.any(kinds == regret.Kind.NEAR) else regret.Kind.REGRET
+    field = "near" if kind == regret.Kind.NEAR else "swap"
+    m = kinds == kind
     order = np.flatnonzero(m)[np.argsort(-gain[m])][:NUM_EXAMPLES]
     for j in order:
         layer, t = int(lay[j]), int(ref[j])
-        best, worst = int(z["rec/swap_e"][layer][t]), int(z["rec/worst_e"][layer][t])
+        best, worst = int(z[f"rec/{field}_e"][layer][t]), int(z["rec/worst_e"][layer][t])
         examples.append(
             dict(
                 layer=layer,
@@ -135,11 +175,10 @@ def regret_section(z: dict, labels: list, vocab: list[str]) -> dict:
                 missed_label=labels[layer][best],
                 dropped=worst,
                 dropped_label=labels[layer][worst],
-                lin=round(float(z["rec/swap_gain"][layer][t]), 3),
+                lin=round(float(z[f"rec/{field}_gain"][layer][t]), 3),
                 e2e=round(float(gain[j]), 3),
                 e2e_here=round(float(-z["swap/delta"][j, 0]), 3),
-                in_unbiased=bool(z["rec/swap_in_u"][layer][t]),
-                strong_units=int(z["rec/ns_swap"][layer][t]),
+                in_unbiased=bool(np.isin(best, z["rec/unb"][layer][t])),
                 loss=round(float(z["sample/loss"][t]), 3),
             )
         )
@@ -202,6 +241,7 @@ def mismatch_section(experts: list, labels: list) -> dict:
         rows.append(
             dict(
                 lc_median=round(float(np.median(lc)), 3),
+                enrichment_median=round(float(np.median((1 - lc) / (regret.K / E))), 3),
                 ws_median=round(float(np.median(ws)), 3),
                 ws_q90=round(float(np.percentile(ws, 90)), 3),
                 lu_total=round(float(lu.sum()), 4),
@@ -249,7 +289,7 @@ def ngram_section(z: dict, units: dict, vocab: list[str], labels: list) -> dict:
         rows.append(dict(n=int(m.sum()), selected=round(float(sel[m].mean()), 4) if m.any() else None))
     kinds = z["ngram_swap/kind"]
     ref = z["ngram_swap/ref"]
-    gain = -z["ngram_swap/delta"][:, 2]
+    gain = -z["ngram_swap/delta"][:, WINDOW_COLUMN]
     here = -z["ngram_swap/delta"][:, 0]
     add = kinds == regret.Kind.NGRAM_ADD
     rem = kinds == regret.Kind.NGRAM_REMOVE
