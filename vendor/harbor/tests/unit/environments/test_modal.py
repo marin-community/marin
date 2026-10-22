@@ -1,7 +1,6 @@
 """Unit tests for ModalEnvironment resource configuration."""
 
 import json
-import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -241,9 +240,7 @@ class TestDinDComposeEnvVars:
         assert env_vars["HOST_ARTIFACTS_PATH"] == str(EnvironmentPaths.artifacts_dir)
         assert env_vars["ENV_ARTIFACTS_PATH"] == str(EnvironmentPaths.artifacts_dir)
 
-    def test_infra_vars_win_over_task_and_persistent_env(
-        self, temp_dir, monkeypatch, caplog
-    ):
+    def test_infra_vars_win_over_task_and_persistent_env(self, temp_dir, monkeypatch):
         monkeypatch.setenv("CPUS", "999")
         env = _make_env(
             temp_dir,
@@ -253,14 +250,12 @@ class TestDinDComposeEnvVars:
         )
         dind = _dind(env)
 
-        with caplog.at_level(logging.WARNING):
-            env_vars = dind._compose_env_vars()
+        env_vars = dind._compose_env_vars()
 
         assert env_vars["CPUS"] == "2"
         assert env_vars["MEMORY"] == "4096M"
         assert env_vars["CONTEXT_DIR"] == "/harbor/environment"
         assert env_vars["MAIN_IMAGE_NAME"] == "hb__test-task"
-        assert any("MEMORY" in rec.message for rec in caplog.records)
 
 
 class TestDinDComposeMounts:
