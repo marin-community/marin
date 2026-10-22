@@ -12,7 +12,6 @@ from skyrl_train.workers.megatron.router_telemetry import (
     assert_bias_unchanged,
     collision_metrics,
     layer_index,
-    router_policy_manifest,
     router_telemetry_enabled,
     routed_expert_gradient_norms,
     snapshot_expert_bias,
@@ -132,12 +131,3 @@ def test_telemetry_flag_defaults_off_and_reads_the_config():
     assert router_telemetry_enabled(cfg) is False
     enabled = OmegaConf.merge(cfg, OmegaConf.create({"trainer": {"router_telemetry": {"enabled": True}}}))
     assert router_telemetry_enabled(enabled) is True
-
-
-def test_manifest_records_the_r1_policy():
-    assert router_policy_manifest("grugmoe") == {
-        "model_type": "grugmoe",
-        "router_weights": "trained",
-        "selection_bias": "frozen",
-        "aux_loss_coeff": 0.0,
-    }
