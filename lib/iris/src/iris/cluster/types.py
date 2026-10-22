@@ -721,6 +721,9 @@ except BaseException as exc:
 """
 
 
+COREWEAVE_STORAGE_ENV_VARS = ("CW_KEY_ID", "CW_KEY_SECRET")
+
+
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
@@ -730,6 +733,7 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+    - CW_KEY_ID, CW_KEY_SECRET: submitter object-storage credentials (if set)
     - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
       at submission (or forwarded from this process's own env when re-submitting inside
       a task), so tasks stamp artifacts with the submitter's git identity
@@ -767,6 +771,7 @@ class EnvironmentSpec:
             "TOKENIZERS_PARALLELISM": "false",
             "HF_TOKEN": os.getenv("HF_TOKEN"),
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+            **{name: os.getenv(name) for name in COREWEAVE_STORAGE_ENV_VARS},
             # Launch provenance: a task running from a git-less bundle inherits the
             # submitter's identity via Provenance.capture(); transitive, since a task
             # re-submitting captures this same env value.
