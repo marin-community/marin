@@ -17,7 +17,7 @@ the local backend, ``GRADER_BASE_IMAGE`` becomes ``LOCAL_CPYTHON``. A package
 machine always lowers onto the local backend, so on a host without one ``check``
 rejects it (``host_requirements``).
 
-Every Taskforge spec names ``SHELL_HARNESS``, RolloutEngine's shell harness, and every Taskforge engine
+Every Taskforge spec names ``TOOL_HARNESS``, RolloutEngine's shell harness, and every Taskforge engine
 comes from ``rollout_engine``, which registers that harness with its command timeout: the timeout of one
 shell command belongs to the harness, not to the spec.
 
@@ -70,9 +70,10 @@ from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec.verdict import VERDICT_REWARD
 
 SHELL_CAPABILITY = "shell"
-SHELL_HARNESS = "shellbox"
+TOOL_HARNESS = "tools"
 """The name every Taskforge ``TaskRolloutSpec`` selects its harness by, and ``rollout_engine`` registers
-RolloutEngine's ``ShellHarness`` under."""
+RolloutEngine's ``ShellHarness`` under. The harness serves a shell tool only on a task machine; a task
+without one is a plain conversation, and no machine starts for it."""
 NO_MACHINE = EnvironmentRequirements()
 """The environment of a task without a machine: the solver answers in the conversation, with no tools."""
 FILESYSTEM_CAPABILITY = "filesystem"
@@ -274,12 +275,12 @@ def rollout_limits(
 
 
 def rollout_engine(factories: Mapping[str, MachineFactory], *, command_timeout: float | None) -> RolloutEngine:
-    """A ``RolloutEngine`` on ``factories`` with RolloutEngine's shell harness registered as ``SHELL_HARNESS``.
+    """A ``RolloutEngine`` on ``factories`` with RolloutEngine's shell harness registered as ``TOOL_HARNESS``.
 
     ``command_timeout`` bounds each shell command of a turn; ``None`` leaves it to the turn deadlines.
     ``RolloutEngine.check`` requires it to be shorter than a spec's ``tool_turn_timeout`` when both are set.
     """
-    return RolloutEngine(factories, {SHELL_HARNESS: ShellHarness(command_timeout=command_timeout)})
+    return RolloutEngine(factories, {TOOL_HARNESS: ShellHarness(command_timeout=command_timeout)})
 
 
 def check(spec: TaskRolloutSpec, factories: Mapping[str, MachineFactory]) -> None:
@@ -506,7 +507,7 @@ def lower(
     limits: RolloutLimits,
     factories: Mapping[str, MachineFactory],
 ) -> TaskRolloutSpec:
-    """The ``TaskRolloutSpec`` that runs ``task`` on ``host``'s ``factories`` under ``SHELL_HARNESS``.
+    """The ``TaskRolloutSpec`` that runs ``task`` on ``host``'s ``factories`` under ``TOOL_HARNESS``.
 
     Every Taskforge ``TaskRolloutSpec`` is built here. Each machine runs the requirements
     ``host_requirements`` gives for ``factories``, the same rule for the task machine and the verifier
@@ -529,7 +530,7 @@ def lower(
     grading = grading_environment(task)
     spec = TaskRolloutSpec(
         task=task,
-        harness=SHELL_HARNESS,
+        harness=TOOL_HARNESS,
         task_machine=(
             None if task_machine is None else machine_runtime(task_machine, task.environment_requirements, host)
         ),
