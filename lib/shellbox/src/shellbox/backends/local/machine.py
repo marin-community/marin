@@ -204,16 +204,13 @@ def _sandbox_argv(
     mounts: Iterable[Mount],
     network: NetworkPolicy,
     account: pwd.struct_passwd | None,
-    environment: dict[str, str],
 ) -> list[str]:
     """The bwrap invocation that runs a program over ``root`` with the system directories and ``mounts``.
 
     The system directories are read-only, or, with ``layers``, overlaid by the machine's layer of each.
     The program runs without capabilities; as root, bwrap needs no user namespace for its own.
     """
-    argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try", "--clearenv"]
-    for key, value in environment.items():
-        argv += ["--setenv", key, value]
+    argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try"]
     if network == NetworkPolicy.DENY:
         argv.append("--unshare-net")
     argv += ["--new-session", "--die-with-parent", "--cap-drop", "ALL"]
@@ -280,7 +277,6 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
             mounts=(),
             network=NetworkPolicy.DENY,
             account=None,
-            environment=CONTROL_ENVIRONMENT,
         )
         try:
             probe = subprocess.run(
@@ -510,29 +506,42 @@ class LocalMachine:
             mounts=self.mounts,
             network=self.spec.network,
             account=_command_account(command.user),
-            environment=environment,
         )
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-I",
-            "-S",
-            "-c",
-            LAUNCH_SOURCE,
-            json.dumps(_resource_limits(command.timeout)),
-            *sandbox,
-            "/bin/sh",
-            "-c",
-            RUN_SCRIPT,
-            "shellbox-local",
-            command.cwd or self.spec.workdir or "/",
-            *command.argv,
-            # Task variables, including loader options, take effect only after bwrap builds the sandbox.
-            env=CONTROL_ENVIRONMENT,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
+        arguments = ["--clearenv"]
+        for key, value in environment.items():
+            arguments.extend(("--setenv", key, value))
+        encoded_arguments = [os.fsencode(argument) for argument in arguments]
+        if any(b"\0" in argument for argument in encoded_arguments):
+            raise ValueError("Sandbox arguments cannot contain NUL bytes")
+        # Environment values must stay out of both the host launcher's environment and its public argv.
+        with tempfile.TemporaryFile() as argument_file:
+            argument_file.write(b"\0".join(encoded_arguments) + b"\0")
+            argument_file.seek(0)
+            argument_fd = argument_file.fileno()
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                LAUNCH_SOURCE,
+                json.dumps(_resource_limits(command.timeout)),
+                sandbox[0],
+                "--args",
+                str(argument_fd),
+                *sandbox[1:],
+                "/bin/sh",
+                "-c",
+                RUN_SCRIPT,
+                "shellbox-local",
+                command.cwd or self.spec.workdir or "/",
+                *command.argv,
+                pass_fds=(argument_fd,),
+                env=CONTROL_ENVIRONMENT,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
         assert process.stdin is not None and process.stdout is not None and process.stderr is not None
         limit = command.output_limit_bytes
         try:

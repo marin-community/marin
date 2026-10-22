@@ -271,6 +271,38 @@ def test_task_loader_environment_takes_effect_only_inside_sandbox(tmp_path, envi
     assert not marker.exists()
 
 
+@pytest.mark.parametrize("environment_source", ["spec", "command"])
+def test_task_environment_is_absent_from_host_process_arguments(factory, monkeypatch, environment_source):
+    secret = "canary with spaces, 'quotes', and\na newline"
+    environment = {"SHELLBOX_TEST_SECRET": secret}
+    spec = replace(SPEC, env=environment if environment_source == "spec" else {})
+    command = Command(
+        ("sh", "-c", 'read release; printf "%s" "$SHELLBOX_TEST_SECRET"'),
+        env=environment if environment_source == "command" else {},
+        stdin=b"release\n",
+    )
+    create_subprocess = asyncio.create_subprocess_exec
+    host_arguments = []
+
+    async def observe_launcher(*args, **kwargs):
+        process = await create_subprocess(*args, **kwargs)
+        # The guest waits for stdin, which run() supplies after this returns, keeping its launcher alive.
+        host_arguments.append(Path(f"/proc/{process.pid}/cmdline").read_bytes())
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe_launcher)
+    result = run_command(factory, command, spec)
+    assert (result.exit_code, result.stdout) == (0, secret.encode()), result.stderr
+    assert host_arguments and all(secret.encode() not in arguments for arguments in host_arguments)
+
+
+def test_task_environment_cannot_inject_arguments_through_nul_bytes(factory):
+    # NUL-delimited --args must retain exec's rejection of embedded NULs instead of parsing extra mounts.
+    command = Command(("true",), env={"TASK_VALUE": "value\0--ro-bind\0/etc\0/host-etc"})
+    with pytest.raises(ValueError, match="NUL"):
+        run_command(factory, command)
+
+
 @pytest.mark.parametrize("system_directories", list(SystemDirectories))
 def test_host_configuration_is_hidden_from_commands_and_downloads(tmp_path, system_directories):
     factory = make_factory(system_directories=system_directories)
