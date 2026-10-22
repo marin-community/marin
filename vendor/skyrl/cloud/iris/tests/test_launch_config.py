@@ -597,7 +597,7 @@ async def test_evaluation_session_caps_shared_work_independently_of_training(eva
     assert peak == expected_peak
 
 
-def test_eval_only_task_dataset_preserves_private_grader_and_prefill_contract(tmp_path):
+def test_eval_only_task_dataset_preserves_private_grader_and_assistant_prefix_contract(tmp_path):
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
         unk_token="[UNK]",
@@ -618,7 +618,7 @@ def test_eval_only_task_dataset_preserves_private_grader_and_prefill_contract(tm
     )
     expected = [
         lowered_task(shell_task, verifier_backend="daytona"),
-        lowered_task(native_task, "prefill", max_turns=1, verifier_backend="daytona"),
+        lowered_task(native_task, "assistant_prefix", max_turns=1, verifier_backend="daytona"),
     ]
     path = tmp_path / "validation.parquet"
     write_tasks(path, expected)
