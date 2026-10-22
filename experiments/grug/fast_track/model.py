@@ -3604,6 +3604,11 @@ class Block(eqx.Module):
                 moe_k_keep=moe_k_keep,
                 moe_dynamic_layer=moe_dynamic_layer,
             )
+            cfg = self.mlp.cfg
+            if cfg.shared_ungated_relu2 and cfg.moe_shared_placement != SharedExpertPlacement.OVERLAP:
+                # No shared expert here (shared_expert_mult_*): zero pre-activations, so every layer carries the
+                # stat the shared layers emit (``moe_and_shared_fused``).
+                stats = {**stats, _SHARED_PRE: jnp.zeros((mlp_in.shape[0] * mlp_in.shape[1], 0), mlp_in.dtype)}
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
         return out, stats
