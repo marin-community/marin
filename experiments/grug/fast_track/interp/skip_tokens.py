@@ -193,7 +193,7 @@ def optimizer(steps: int, lr_affine: float, lr_unembed: float):
     return optax.multi_transform({"a": optax.adam(sched(lr_affine)), "w": optax.adam(sched(lr_unembed))}, labels)
 
 
-def ablation_set(head_mean, sub_mean, routed_mean, masks) -> list[tuple[str, forward.Ablation]]:
+def ablation_set(head_mean, sub_mean, routed_mean, masks: dict | None) -> list[tuple[str, forward.Ablation]]:
     base = forward.no_ablation()
     out = []
 
@@ -212,6 +212,8 @@ def ablation_set(head_mean, sub_mean, routed_mean, masks) -> list[tuple[str, for
     subs("layer:L345", [(i, s) for i in UNIT_LAYERS for s in (forward.SUB_ATTN, *moe)])
     out.append(("ve:L5:zero", base._replace(sub_mult=base.sub_mult.at[5, forward.SUB_VE].set(0.0))))
     out.append(("head:L3.h0", base._replace(head_mult=base.head_mult.at[3, 0].set(0.0), head_mean=head_mean)))
+    if masks is None:
+        return out
     layer_ok = np.zeros((forward.NUM_LAYERS, 1, 1), bool)
     layer_ok[list(UNIT_LAYERS)] = True
     for group in ("ngram", "output"):
@@ -233,7 +235,9 @@ def main() -> None:
     parser.add_argument("--eval-train-sequences", type=int, default=256)
     parser.add_argument("--eval-paloma-sequences", type=int, default=4, help="per Paloma set")
     parser.add_argument("--probe-sequences", type=int, default=48, help="train eval sequences kept for probes")
-    parser.add_argument("--masks-tag", default="tn-d512-ckpt1-rno", help="tag holding skip_unit_masks and stats")
+    parser.add_argument(
+        "--masks-tag", default="tn-d512-ckpt1-rno", help="tag holding skip_unit_masks ('': no unit ablations)"
+    )
     args = parser.parse_args()
     t0 = time.time()
     checkpoint = args.checkpoint or common.CHECKPOINTS[args.tag]
@@ -241,8 +245,8 @@ def main() -> None:
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, checkpoint)
-    masks = ngram.load_npz(args.masks_tag, "skip_unit_masks")
-    stats = ngram.load_npz(args.masks_tag, "stats")
+    masks = ngram.load_npz(args.masks_tag, "skip_unit_masks") if args.masks_tag else None
+    stats = ngram.load_npz(args.tag, "stats")
     routed_mean = jnp.asarray(stats["act_sum"] / np.maximum(stats["expert_tokens"][..., None], 1.0), jnp.float32)
     fit = list(common.train_batches(FIT_BATCH, args.fit_sequences, seed=1))
     head_data = list(common.train_batches(args.head_batch, args.head_steps * args.head_batch, seed=3))
