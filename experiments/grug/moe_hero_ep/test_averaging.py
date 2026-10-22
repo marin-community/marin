@@ -321,6 +321,12 @@ def test_kubernetes_region_uses_exclusive_provider_node_range_without_node_read_
         ),
     )
 
+    class ForbiddenApiError(averaging.ApiException):
+        def __init__(self):
+            # Iris falls back to Exception when the optional Kubernetes client is absent.
+            super().__init__()
+            self.status = 403
+
     class MetadataService:
         def __init__(self, *, namespace, timeout):
             pass
@@ -333,7 +339,7 @@ def test_kubernetes_region_uses_exclusive_provider_node_range_without_node_read_
                     "status": {"hostIP": host_ip},
                 }
             if not node_access:
-                raise averaging.KubectlError("Node metadata denied") from averaging.ApiException(status=403)
+                raise averaging.KubectlError("Node metadata denied") from ForbiddenApiError()
             return {"metadata": {"labels": {"topology.kubernetes.io/region": "US-EAST-02"}}}
 
     monkeypatch.setattr(averaging, "CloudK8sService", MetadataService)
