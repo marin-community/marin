@@ -363,6 +363,21 @@ def test_load_file_batch_project_only_injected_path(tmp_path):
     assert rows == [{DEFAULT_FILE_PATH_COLUMN: path}] * 5
 
 
+def test_load_file_preserves_projection_order_with_injected_path(tmp_path):
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS)
+    columns = [DEFAULT_FILE_PATH_COLUMN, "id"]
+    spec = InputFileSpec(path=path, columns=columns)
+
+    records = list(load_file(spec, include_file_paths=True))
+    batches = list(load_file_batch(spec, include_file_paths=True))
+
+    assert all(list(record) == columns for record in records)
+    assert all(batch.schema.names == columns for batch in batches)
+    assert [record["id"] for record in records] == list(range(len(RECORDS)))
+    assert [row for batch in batches for row in batch.to_pylist()] == records
+
+
 def test_load_file_vortex_project_only_injected_path_with_range_and_filter(tmp_path):
     path = str(tmp_path / "data.vortex")
     write_vortex_file(RECORDS, path)
