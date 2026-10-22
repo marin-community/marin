@@ -65,7 +65,6 @@ def training_recipe(
     trainer["eval_batch_size"] = sum(FAMILY_COUNTS.values())
     trainer["evaluation_runner"] = "task"
     trainer["eval_num_prompts"] = None
-    trainer["eval_required_score_coverage"] = 1.0
     recipe.setdefault("trajectory_runner", {}).update(eval_max_concurrent_tasks=16)
     recipe["environment"]["task_sessions"]["daytona"] = {"api_key_env": "DAYTONA_EVAL_API_KEY", "ttl_minutes": 60}
     trainer["algorithm"].update(

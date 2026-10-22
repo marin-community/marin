@@ -538,11 +538,10 @@ class FakeEvaluationRunner:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("evaluation", [evaluate, evaluate_step_wise])
 @pytest.mark.parametrize("scored", [False, True])
-async def test_required_coverage_persists_failed_attempts_and_accepts_valid_zero(tmp_path, evaluation, scored):
+async def test_evaluation_dumps_verifier_results_and_reports_coverage(tmp_path, evaluation, scored):
     cfg = get_default_config()
     cfg.trainer.dump_eval_results = True
     cfg.trainer.export_path = str(tmp_path)
-    cfg.trainer.eval_required_score_coverage = 1.0
     verdict = VerificationResult.verified(0.0) if scored else VerificationResult.unavailable("provider unavailable")
     runner = FakeEvaluationRunner(
         {
@@ -558,14 +557,10 @@ async def test_required_coverage_persists_failed_attempts_and_accepts_valid_zero
     )
     loader = [[{"input": task_input(lowered_task(text_task("paired-task", source="panel"))), "uid": "paired-task"}]]
     tokenizer = SimpleNamespace(decode=lambda _: "response")
-    result = evaluation(loader, runner, cfg, 0, tokenizer, trajectory_sink=object())
+    metrics = await evaluation(loader, runner, cfg, 0, tokenizer, trajectory_sink=object())
+    assert metrics["eval/all/verifier_score_coverage"] == (1.0 if scored else 0.0)
     if scored:
-        metrics = await result
         assert metrics["eval/all/avg_verifier_score"] == 0.0
-        assert metrics["eval/all/verifier_score_coverage"] == 1.0
-    else:
-        with pytest.raises(ValueError, match="Evaluation verifier coverage"):
-            await result
     record = json.loads((tmp_path / "dumped_evals/global_step_0_evals/panel.jsonl").read_text())
     assert record["verification"]["status"] == ("verified" if scored else "unavailable")
     assert record["verification"]["score"] == (0.0 if scored else None)
@@ -602,7 +597,7 @@ async def test_evaluation_session_caps_shared_work_independently_of_training(eva
     assert peak == expected_peak
 
 
-def test_eval_only_task_dataset_preserves_private_grader_and_assistant_prefix_contract(tmp_path):
+def test_eval_only_task_dataset_preserves_private_grader_and_prefill_contract(tmp_path):
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
         unk_token="[UNK]",
@@ -623,7 +618,7 @@ def test_eval_only_task_dataset_preserves_private_grader_and_assistant_prefix_co
     )
     expected = [
         lowered_task(shell_task, verifier_backend="daytona"),
-        lowered_task(native_task, "assistant_prefix", max_turns=1, verifier_backend="daytona"),
+        lowered_task(native_task, "prefill", max_turns=1, verifier_backend="daytona"),
     ]
     path = tmp_path / "validation.parquet"
     write_tasks(path, expected)

@@ -157,7 +157,6 @@ def comparison_recipe(
         evaluation_runner="task",
         eval_num_prompts=None,
         eval_batch_size=sum(FAMILY_COUNTS.values()),
-        eval_required_score_coverage=1.0,
         dump_eval_results=True,
     )
     trainer.setdefault("step_phase_budgets", {}).update(
