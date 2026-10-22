@@ -7,6 +7,7 @@ import asyncio
 import io
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -41,6 +42,7 @@ from shellbox.machine import (
     ExitReason,
     HostImage,
     MachineSpec,
+    MachineTerminated,
     Mount,
     NetworkPolicy,
     PackageSpec,
@@ -363,9 +365,51 @@ def test_timeout_kills_the_command_and_its_descendants(factory):
     assert run_command(factory, command) == Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
 
 
-def test_background_processes_end_with_their_command(factory):
-    result = run_command(factory, Command(("sh", "-c", "sleep 3600 & echo started"), timeout=30))
-    assert (result.exit_code, result.stdout) == (0, b"started\n")
+def test_a_commands_process_group_ends_with_it_and_a_process_that_leaves_it_lasts_until_close(factory):
+    # The detached sleep keeps the output pipes open, and the command still returns once its own processes end.
+    # The command waits until the second sleep has its own process group, which the group's end cannot reach.
+    script = (
+        "sleep 3600 & echo $!; setsid sleep 3600 & echo $!; "
+        'until [ "$(cut -d" " -f5 /proc/$!/stat)" = "$!" ]; do sleep 0.01; done'
+    )
+    started = Command(("sh", "-c", script), timeout=30)
+    probe = 'kill -0 "$1" 2>/dev/null && echo grouped; kill -0 "$2" 2>/dev/null && echo detached'
+
+    async def scenario(machine: LocalMachine) -> tuple[Result, Result]:
+        result = await machine.run(started)
+        return result, await machine.run(Command(("sh", "-c", probe, "sh", *result.stdout.decode().split())))
+
+    started_result, probed = on_machine(factory, SPEC, scenario)
+    assert (started_result.exit_code, len(started_result.stdout.split())) == (0, 2), started_result
+    assert (probed.exit_code, probed.stdout) == (0, b"detached\n"), (started_result, probed)
+
+
+def _sandbox_processes(root: Path) -> list[int]:
+    """The host PIDs of the bwrap processes that build a machine's sandbox over ``root``."""
+    marker = f"\0{root}\0".encode()
+    pids = []
+    for entry in Path("/proc").iterdir():
+        try:
+            if entry.name.isdigit() and marker in (entry / "cmdline").read_bytes():
+                pids.append(int(entry.name))
+        except OSError:
+            pass
+    return pids
+
+
+def test_a_machine_whose_sandbox_was_killed_raises_machine_terminated(factory):
+    async def scenario(machine: LocalMachine) -> None:
+        assert (await machine.run(Command(("true",)))).exit_code == 0
+        sandbox = _sandbox_processes(machine.root)
+        assert sandbox
+        for pid in sandbox:
+            os.kill(pid, signal.SIGKILL)
+        with pytest.raises(MachineTerminated):
+            for _ in range(100):
+                await machine.run(Command(("true",)))
+                await asyncio.sleep(0.1)
+
+    on_machine(factory, SPEC, scenario)
 
 
 def test_output_beyond_the_limit_is_truncated(factory):

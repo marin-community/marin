@@ -5,9 +5,11 @@
 
 Each machine's commands see the host's programs, read-only or copy-on-write, and private runtime
 configuration on top of a private root directory, which holds paths from ``/app`` and ``/tmp`` to ``HOME``.
+A machine builds its sandbox once, and each command enters that sandbox's namespaces.
 """
 
 import asyncio
+import concurrent.futures
 import contextlib
 import io
 import json
@@ -17,13 +19,14 @@ import os
 import pwd
 import re
 import resource
+import select
 import shutil
 import signal
-import subprocess
 import sys
 import tarfile
 import tempfile
 from collections.abc import Iterable
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -39,6 +42,7 @@ from shellbox.machine import (
     ExitReason,
     HostImage,
     MachineSpec,
+    MachineTerminated,
     Mount,
     NetworkPolicy,
     PackageSpec,
@@ -109,6 +113,15 @@ ROOT_MODE = 0o755
 """Lets a command that runs as another user traverse the machine's root directory."""
 STICKY_WORLD_WRITABLE = 0o1777
 PROBE_TIMEOUT = 30
+SANDBOX_SCRIPT = "echo ready; exec >/dev/null 2>&1; while :; do sleep 86400 & wait; done"
+"""The program that holds a machine's namespaces. As the PID namespace's first process, signals from commands do
+not reach it, and its ``wait`` collects the processes that commands leave behind."""
+STOP_GRACE = 10
+"""Seconds a launcher has to kill its command's process group and report, after which it is killed itself."""
+OUTPUT_GRACE = 5
+"""Seconds to keep reading a command's output after it ends, for output that processes it left behind still hold."""
+PROCESS_EXITING = 0x4
+"""``PF_EXITING`` in the flags of ``/proc/<pid>/stat``."""
 
 
 class SandboxUnavailable(RuntimeError):
@@ -203,7 +216,6 @@ def _sandbox_argv(
     layers: Path | None,
     mounts: Iterable[Mount],
     network: NetworkPolicy,
-    account: pwd.struct_passwd | None,
 ) -> list[str]:
     """The bwrap invocation that runs a program over ``root`` with the system directories and ``mounts``.
 
@@ -213,11 +225,7 @@ def _sandbox_argv(
     argv = [str(bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try"]
     if network == NetworkPolicy.DENY:
         argv.append("--unshare-net")
-    argv += ["--new-session", "--die-with-parent", "--cap-drop", "ALL"]
-    if account is not None:
-        # setpriv uses these to switch to the account, and the switch clears them with every other capability.
-        argv += ["--cap-add", "CAP_SETUID", "--cap-add", "CAP_SETGID"]
-    argv += ["--bind", str(root), "/"]
+    argv += ["--new-session", "--die-with-parent", "--cap-drop", "ALL", "--bind", str(root), "/"]
     overlaid = () if layers is None else _overlaid_directories()
     for path in SYSTEM_DIRECTORIES:
         if path in PRIVATE_SYSTEM_DIRECTORIES:
@@ -238,8 +246,6 @@ def _sandbox_argv(
     argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
     for mount in mounts:
         argv += ["--ro-bind", str(mount.host), str(mount.guest)]
-    if account is not None:
-        argv += ["setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--clear-groups", "--"]
     return argv
 
 
@@ -262,38 +268,27 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
 
 
 def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:
-    """Build a sandbox with ``bwrap`` and run a command in it; why it cannot, or None when it can."""
-    root = Path(tempfile.mkdtemp(prefix="shellbox-bwrap-probe-"))
-    layers = None
-    try:
-        _prepare_root(root, None)
-        if system_directories == SystemDirectories.COPY_ON_WRITE:
-            layers = Path(tempfile.mkdtemp(prefix="shellbox-bwrap-probe-layers-"))
-            _prepare_layers(layers)
-        argv = _sandbox_argv(
-            bwrap,
-            root=root,
-            layers=layers,
-            mounts=(),
-            network=NetworkPolicy.DENY,
-            account=None,
-        )
+    """Build a machine's sandbox with ``bwrap`` and run a command in it; why it cannot, or None when it can."""
+
+    async def probe() -> str | None:
+        root, layers = _machine_directories(None, copy_on_write=system_directories == SystemDirectories.COPY_ON_WRITE)
+        spec = MachineSpec(HostImage(), workdir="/")
+        machine = LocalMachine(spec, bwrap=bwrap, root=root, layers=layers, mounts=(), environment=CONTROL_ENVIRONMENT)
         try:
-            probe = subprocess.run(
-                [*argv, "/bin/sh", "-c", "exit 0"],
-                capture_output=True,
-                text=True,
-                timeout=PROBE_TIMEOUT,
-                check=False,
-                env=CONTROL_ENVIRONMENT,
-            )
-        except OSError as error:
-            return str(error)
-    finally:
-        _remove(root)
-        if layers is not None:
-            _remove(layers)
-    return None if probe.returncode == 0 else probe.stderr.strip() or f"exit status {probe.returncode}"
+            async with asyncio.timeout(PROBE_TIMEOUT):
+                await machine._open()
+                result = await machine._control("exit 0", PurePosixPath("/"))
+        except (OSError, RuntimeError, TimeoutError) as error:
+            return str(error) or type(error).__name__
+        finally:
+            await machine.close()
+        if result.exit_code == 0:
+            return None
+        return result.stderr.decode(errors="replace").strip() or f"exit status {result.exit_code}"
+
+    # A factory may be created inside a running event loop, so the probe runs its own loop on another thread.
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        return pool.submit(asyncio.run, probe()).result()
 
 
 def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirectories) -> Path:
@@ -354,15 +349,147 @@ async def _send_input(stdin: asyncio.StreamWriter, data: bytes) -> None:
     stdin.close()
 
 
-async def _bounded_output(stream: asyncio.StreamReader, limit: int) -> tuple[bytes, bool]:
-    """Read ``stream`` to EOF, keeping its first ``limit`` bytes and whether it had more."""
-    kept = bytearray()
-    truncated = False
-    while chunk := await stream.read(READ_CHUNK_BYTES):
-        room = limit - len(kept)
-        truncated = truncated or len(chunk) > room
-        kept += chunk[:room]
-    return bytes(kept), truncated
+async def _end_input(process: asyncio.subprocess.Process, sending: asyncio.Task[None]) -> None:
+    """Stop writing a command's input once it has ended; a process it left behind may hold the pipe unread."""
+    if not sending.done():
+        sending.cancel()
+        assert process.stdin is not None
+        # Closing would wait to flush the input that nothing reads.
+        process.stdin.transport.abort()
+    with contextlib.suppress(asyncio.CancelledError):
+        await sending
+
+
+async def _stop(process: asyncio.subprocess.Process, sending: asyncio.Task[None]) -> None:
+    """Have the launcher kill its command's process group, or kill the launcher if it does not exit in time."""
+    if process.returncode is None:
+        # Not Process.terminate(): Popen polls first, which can reap the child before asyncio's watcher does.
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(process.pid, signal.SIGTERM)
+    await _end_input(process, sending)
+    exiting = asyncio.ensure_future(process.wait())
+    if not (await asyncio.wait({exiting}, timeout=STOP_GRACE))[0]:
+        logger.warning("A command's launcher did not stop within %s seconds; killing it", STOP_GRACE)
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(process.pid, signal.SIGKILL)
+    await exiting
+
+
+def _exited(pidfd: int) -> bool:
+    """Whether the process of ``pidfd`` has exited; ``poll``, since ``select`` refuses descriptors above 1023."""
+    poller = select.poll()
+    poller.register(pidfd, select.POLLIN)
+    return bool(poller.poll(0))
+
+
+class _Output:
+    """The first ``limit`` bytes of a pipe, and whether it had more; what was read stays when reading stops early."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.kept = bytearray()
+        self.truncated = False
+
+    async def collect(self, stream: asyncio.StreamReader) -> None:
+        while chunk := await stream.read(READ_CHUNK_BYTES):
+            room = self.limit - len(self.kept)
+            self.truncated = self.truncated or len(chunk) > room
+            self.kept += chunk[:room]
+
+
+async def _pipe_reader(fd: int) -> tuple[asyncio.StreamReader, asyncio.ReadTransport]:
+    """A stream over the read end ``fd`` of a pipe, which closing the transport closes."""
+    stream = asyncio.StreamReader()
+    transport, _ = await asyncio.get_running_loop().connect_read_pipe(
+        lambda: asyncio.StreamReaderProtocol(stream), os.fdopen(fd, "rb", buffering=0)
+    )
+    return stream, transport
+
+
+@dataclass
+class _Sandbox:
+    """A machine's bwrap sandbox, whose first process holds the namespaces that each command enters."""
+
+    process: asyncio.subprocess.Process
+    """The bwrap process outside the sandbox; killing it ends the sandbox."""
+    pid: int
+    pidfd: int
+    """Of the sandbox's first process, which commands cannot signal and which ends only with the sandbox.
+
+    -1 once the sandbox is stopped."""
+
+    @classmethod
+    async def start(cls, argv: list[str]) -> "_Sandbox":
+        info_read, info_write = os.pipe()
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv[:1],
+                "--as-pid-1",
+                "--info-fd",
+                str(info_write),
+                *argv[1:],
+                "/bin/sh",
+                "-c",
+                SANDBOX_SCRIPT,
+                pass_fds=(info_write,),
+                env=CONTROL_ENVIRONMENT,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+        except BaseException:
+            os.close(info_read)
+            raise
+        finally:
+            os.close(info_write)
+        assert process.stdout is not None and process.stderr is not None
+        info, transport = await _pipe_reader(info_read)
+        pidfd = None
+        try:
+            try:
+                # bwrap writes the sandbox's PID once it exists; the sandbox prints a line once it is ready.
+                pid = json.loads(await info.readuntil(b"}"))["child-pid"]
+                pidfd = os.pidfd_open(pid)
+                ready = await process.stdout.readline()
+            except asyncio.IncompleteReadError:
+                ready = b""
+            finally:
+                transport.close()
+            if ready != b"ready\n":
+                raise RuntimeError(
+                    f"The machine's sandbox did not start: {(await process.stderr.read()).decode(errors='replace')}"
+                )
+        except BaseException:
+            if process.returncode is None:
+                # Not Process.kill(): Popen polls first, which can reap the child before asyncio's watcher does.
+                os.kill(process.pid, signal.SIGKILL)
+            await process.communicate()
+            if pidfd is not None:
+                os.close(pidfd)
+            raise
+        return cls(process, pid, pidfd)
+
+    def running(self) -> bool:
+        """Whether the sandbox's first process lives and is not already exiting, which ends every command."""
+        if self.pidfd < 0 or _exited(self.pidfd):
+            return False
+        try:
+            stat = Path(f"/proc/{self.pid}/stat").read_text()
+        except FileNotFoundError:
+            return False
+        return not int(stat.rsplit(")", 1)[1].split()[6]) & PROCESS_EXITING
+
+    async def stop(self) -> None:
+        with contextlib.suppress(ProcessLookupError):
+            signal.pidfd_send_signal(self.pidfd, signal.SIGKILL)
+        if self.process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(self.process.pid, signal.SIGKILL)
+        await self.process.communicate()
+        os.close(self.pidfd)
+        self.pidfd = -1
 
 
 def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
@@ -419,11 +546,13 @@ def _unpack(stream: bytes, target: Path) -> None:
 
 
 class LocalMachine:
-    """Commands in bubblewrap sandboxes over ``root``, a host directory that only this machine uses.
+    """Commands in one bubblewrap sandbox over ``root``, a host directory that only this machine uses.
 
-    Each command gets new PID, IPC and UTS namespaces, and a network namespace with only loopback under
-    ``NetworkPolicy.DENY``. Files persist in ``root`` between commands, and, with ``layers``, so do writes
-    under the overlaid system directories; processes end with their command.
+    The sandbox, built by ``_open`` and ended by ``close``, has its own PID, IPC and UTS namespaces, and a network
+    namespace with only loopback under ``NetworkPolicy.DENY``; each command enters them. Files persist in
+    ``root`` between commands, and, with ``layers``, so do writes under the overlaid system directories. Each
+    command runs in a session of its own, and its process group ends with it; a process that leaves the group
+    keeps running until ``close``. Once the sandbox has ended, commands raise ``MachineTerminated``.
     """
 
     def __init__(
@@ -442,7 +571,14 @@ class LocalMachine:
         self.mounts = mounts
         self._bwrap = bwrap
         self._environment = environment
+        self._sandbox: _Sandbox | None = None
         self._closed = False
+
+    async def _open(self) -> None:
+        argv = _sandbox_argv(
+            self._bwrap, root=self.root, layers=self.layers, mounts=self.mounts, network=self.spec.network
+        )
+        self._sandbox = await _Sandbox.start(argv)
 
     def _check_open(self) -> None:
         if self._closed:
@@ -499,73 +635,115 @@ class LocalMachine:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
-        sandbox = _sandbox_argv(
-            self._bwrap,
-            root=self.root,
-            layers=self.layers,
-            mounts=self.mounts,
-            network=self.spec.network,
-            account=_command_account(command.user),
-        )
-        arguments = ["--clearenv"]
-        for key, value in environment.items():
-            arguments.extend(("--setenv", key, value))
-        encoded_arguments = [os.fsencode(argument) for argument in arguments]
-        if any(b"\0" in argument for argument in encoded_arguments):
+        if any(not name or "=" in name for name in environment):
+            raise ValueError("Environment variable names must be nonempty and cannot contain '='")
+        fields = [os.fsencode(field) for variable in environment.items() for field in variable]
+        if any(b"\0" in field for field in fields):
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
-        # Environment values must stay out of both the host launcher's environment and its public argv.
-        with tempfile.TemporaryFile() as argument_file:
-            argument_file.write(b"\0".join(encoded_arguments) + b"\0")
-            argument_file.seek(0)
-            argument_fd = argument_file.fileno()
-            process = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-I",
-                "-S",
-                "-c",
-                LAUNCH_SOURCE,
-                json.dumps(_resource_limits(command.timeout)),
-                sandbox[0],
-                "--args",
-                str(argument_fd),
-                *sandbox[1:],
-                "/bin/sh",
-                "-c",
-                RUN_SCRIPT,
-                "shellbox-local",
-                command.cwd or self.spec.workdir or "/",
-                *command.argv,
-                pass_fds=(argument_fd,),
-                env=CONTROL_ENVIRONMENT,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-        assert process.stdin is not None and process.stdout is not None and process.stderr is not None
-        limit = command.output_limit_bytes
+        account = _command_account(command.user)
+        sandbox = self._sandbox
+        assert sandbox is not None
+        if not sandbox.running():
+            raise MachineTerminated("The machine's sandbox has ended")
+        settings = {
+            "limits": _resource_limits(command.timeout),
+            "sandbox": sandbox.pidfd,
+            "account": None if account is None else [account.pw_uid, account.pw_gid],
+        }
+        status_read, status_write = os.pipe()
+        stdout_read, stdout_write = os.pipe()
+        stderr_read, stderr_write = os.pipe()
+        unread = [status_read, stdout_read, stderr_read]
         try:
-            async with asyncio.timeout(command.timeout):
-                _, (stdout, stdout_truncated), (stderr, stderr_truncated) = await asyncio.gather(
-                    _send_input(process.stdin, command.stdin),
-                    _bounded_output(process.stdout, limit),
-                    _bounded_output(process.stderr, limit),
+            # Environment values must stay out of both the host launcher's environment and its public argv.
+            with tempfile.TemporaryFile() as environment_file:
+                environment_file.write(b"".join(field + b"\0" for field in fields))
+                environment_file.seek(0)
+                settings |= {"environment": environment_file.fileno(), "status": status_write}
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-c",
+                    LAUNCH_SOURCE,
+                    json.dumps(settings),
+                    "/bin/sh",
+                    "-c",
+                    RUN_SCRIPT,
+                    "shellbox-local",
+                    command.cwd or self.spec.workdir or "/",
+                    *command.argv,
+                    pass_fds=(environment_file.fileno(), status_write, sandbox.pidfd),
+                    env=CONTROL_ENVIRONMENT,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=stdout_write,
+                    stderr=stderr_write,
+                    start_new_session=True,
                 )
-                returncode = await process.wait()
-        except BaseException as interruption:
-            # Killing bwrap ends the sandbox: --die-with-parent kills its PID namespace and every process in it.
-            with contextlib.suppress(ProcessLookupError):  # The whole group may have exited already.
-                os.killpg(process.pid, signal.SIGKILL)
-            # A reader that stopped with a full buffer pauses its pipe, and wait() needs both pipes at EOF.
-            await process.stdout.read()
-            await process.stderr.read()
-            await process.wait()
-            if isinstance(interruption, TimeoutError):
-                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+        except BaseException:
+            for fd in unread:
+                os.close(fd)
             raise
-        # Report a signal as a shell does, matching the backends that run commands under sh.
-        exit_code = 128 - returncode if returncode < 0 else returncode
-        return Result(exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+        finally:
+            for fd in (status_write, stdout_write, stderr_write):
+                os.close(fd)
+        assert process.stdin is not None
+        stdout, stderr = _Output(command.output_limit_bytes), _Output(command.output_limit_bytes)
+        transports: list[asyncio.ReadTransport] = []
+        collecting: list[asyncio.Task[None]] = []
+        sending = asyncio.create_task(_send_input(process.stdin, command.stdin))
+        try:
+            try:
+                streams = []
+                while unread:
+                    stream, transport = await _pipe_reader(unread.pop(0))
+                    streams.append(stream)
+                    transports.append(transport)
+                collecting = [
+                    asyncio.create_task(output.collect(stream))
+                    for output, stream in zip((stdout, stderr), streams[1:], strict=True)
+                ]
+                async with asyncio.timeout(command.timeout):
+                    # The launcher closes its status pipe when it exits, once the command's process group has ended.
+                    report = await streams[0].read()
+                await _end_input(process, sending)
+                await process.wait()
+            except BaseException as interruption:
+                await _stop(process, sending)
+                if isinstance(interruption, TimeoutError):
+                    return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+                raise
+            # Processes that left the command's process group may still hold its output pipes.
+            _, holding = await asyncio.wait(collecting, timeout=OUTPUT_GRACE)
+            if holding:
+                logger.warning("Processes that a command left running still hold its output; returning what it wrote")
+        finally:
+            for fd in unread:
+                os.close(fd)
+            for task in (sending, *collecting):
+                task.cancel()
+            for transport in transports:
+                transport.close()
+        exit_code = self._exit_code(report)
+        return Result(
+            exit_code, bytes(stdout.kept), bytes(stderr.kept), stdout.truncated, stderr.truncated, ExitReason.EXITED
+        )
+
+    def _exit_code(self, report: bytes) -> int:
+        """The exit status of a command from its launcher's report, as a shell reports one, or why there is none."""
+        assert self._sandbox is not None
+        text = report.removeprefix(b"S").decode(errors="replace")
+        kind, value = text[:1], text[1:].strip()
+        if kind == "X":
+            return int(value)
+        # The sandbox's end kills every command, so a command killed while it ends did not fail on its own.
+        if not self._sandbox.running():
+            raise MachineTerminated("The machine's sandbox ended while the command ran")
+        if kind == "K":
+            return 128 + int(value)
+        if kind == "E":
+            raise RuntimeError(f"Cannot start the command in the machine's sandbox: {value}")
+        raise RuntimeError(f"The command's launcher ended without reporting its exit status: {text!r}")
 
     async def upload(self, source: Path, target: str) -> None:
         self._check_open()
@@ -609,6 +787,8 @@ class LocalMachine:
         if self._closed:
             return
         self._closed = True
+        if self._sandbox is not None:
+            await self._sandbox.stop()
         await asyncio.to_thread(_remove, self.root)
         if self.layers is not None:
             await asyncio.to_thread(_remove, self.layers)
@@ -743,6 +923,7 @@ class LocalMachineFactory:
         machine = LocalMachine(spec, bwrap=self.bwrap, root=root, layers=layers, mounts=mounts, environment=environment)
         tools = source.tools if isinstance(source, PackageSpec) else ()
         try:
+            await machine._open()
             await _start(machine, workdir if overlaid_workdir else None, tools)
         except BaseException:
             await machine.close()
