@@ -27,6 +27,7 @@ from fray.iris_backend import (
 from fray.types import (
     ANY_REGION,
     Entrypoint,
+    EnvironmentConfig,
     GpuConfig,
     JobRequest,
     JobStatus,
@@ -398,6 +399,23 @@ class TestActorGroupEnvironment:
         env = kwargs["environment"]
         assert env is not None
         assert env.env_vars["JAX_PLATFORMS"] == ""
+
+    def test_actor_group_environment_merges_over_device_defaults(self):
+        """Explicit env vars win over, and do not drop, device defaults."""
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-env")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        resources = ResourceConfig(cpu=2, ram="4g")
+        environment = EnvironmentConfig(workspace="/tmp/ws", env_vars={"OMP_NUM_THREADS": "2"})
+        client.create_actor_group(_DummyActor, name="cpu-actor", count=1, resources=resources, environment=environment)
+
+        env = fake_iris.submit.call_args.kwargs["environment"]
+        assert env.env_vars["OMP_NUM_THREADS"] == "2"
+        assert env.env_vars["JAX_PLATFORMS"] == "cpu"
 
 
 def test_create_gpu_actor_group_uses_leafgroup_topology():

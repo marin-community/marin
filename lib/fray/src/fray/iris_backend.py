@@ -777,6 +777,7 @@ class FrayIrisClient:
         count: int,
         resources: ResourceConfig = ResourceConfig(),
         actor_config: ActorConfig = ActorConfig(),
+        environment: EnvironmentConfig | None = None,
         **kwargs: Any,
     ) -> IrisActorGroup:
         """Submit a single Iris job with N replicas, each hosting an instance of actor_class.
@@ -786,7 +787,7 @@ class FrayIrisClient:
         """
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
-        iris_environment = convert_environment(None, device=resources.device)
+        iris_environment = convert_environment(environment, device=resources.device)
 
         # Actor group replicas are independent workers, not an NVLink collective.
         if count > 1 and isinstance(resources.device, GpuConfig):

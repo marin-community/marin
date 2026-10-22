@@ -459,7 +459,9 @@ class SubprocessRunner:
             # faulthandler traceback reaches the parent's log before the
             # process dies.
             child_env = os.environ.copy()
-            child_env["POLARS_MAX_THREADS"] = str(memory_budget.polars_thread_count(task.cost.cpu))
+            # Per-task caps override the worker-wide caps the actor process was
+            # launched with: several tasks can share one worker.
+            child_env.update(memory_budget.native_thread_env(task.cost.cpu))
             with tempfile.TemporaryDirectory(prefix=f"zephyr-external-sort-{task.shard_idx:04d}-") as sort_dir:
                 returncode = self._child_returncode(
                     [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file, sort_dir],

@@ -58,3 +58,7 @@ Shared data is uploaded to filesystem by `ZephyrContext._upload_shared_data()` b
 ### Backends
 
 `ZephyrContext` uses `fray.current_client()`: Iris is auto-detected inside an Iris job, and `LocalClient` is the fallback for local tests and scripts.
+
+### Native thread pools
+
+Native libraries size their pools from the node's core count, not the container's share, and read the cap once, at import or first pool use. Zephyr therefore sets it at the two pre-import boundaries: the coordinator and worker actor-group jobs carry `memory_budget.native_thread_env(<group cpu>)` in their Iris environment, and `SubprocessRunner` children carry `native_thread_env(task cpu)` (Arrow in children is additionally API-pinned to 1 in `shard_subprocess.py`). The variables are `POLARS_MAX_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `NUMBA_NUM_THREADS` and `RAYON_NUM_THREADS`; explicit group env vars override any OMP/Polars settings inherited from the driver job. XLA's CPU pool ignores all of them. `LocalClient` runs actors in-process and leaves host-default pools in place, but `SubprocessRunner` children are capped at task cpu under either backend.
