@@ -107,6 +107,8 @@ class K8sService(Protocol):
 
     def apply_json(self, manifest: dict) -> None: ...
 
+    def patch_node(self, name: str, patch: dict) -> None: ...
+
     def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
 
     def iter_json(
@@ -478,6 +480,19 @@ class CloudK8sService:
                 name = item.get("metadata", {}).get("name")
                 if name:
                     self.delete(resource, name, wait=wait)
+
+    def patch_node(self, name: str, patch: dict) -> None:
+        """Merge-patch a node, retaining resourceVersion preconditions when supplied."""
+        with _k8s_call(f"patch node/{name}"):
+            try:
+                self._resource_api(K8sResource.NODES).patch(
+                    body=patch,
+                    name=name,
+                    content_type="application/merge-patch+json",
+                    **self._request_timeout_kwargs(),
+                )
+            except ApiException as error:
+                raise KubectlError(f"patch node/{name} failed ({error.status}): {error.reason}") from error
 
     # -- remove_finalizer ----------------------------------------------------
 

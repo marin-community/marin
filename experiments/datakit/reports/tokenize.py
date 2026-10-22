@@ -12,12 +12,15 @@ as its chunks. The totals above it count documents.
 
 import os.path
 
+import pyarrow.compute as pc
 from marin.processing.tokenize.attributes import TokenizedAttrData
 
-from experiments.datakit.reports.common import StageReport, render_template, sample_rows, write_report
+from experiments.datakit.reports.common import StageReport, iter_batches, render_template, write_report
 
 HIST_SOURCE_CAP = 8
 HIST_ROWS_PER_SOURCE = 2000
+# Small batches bound driver memory when a sampled row holds a very long document.
+HIST_BATCH_ROWS = 64
 
 
 def _log2_bins(lengths: list[int]) -> list[dict]:
@@ -31,6 +34,16 @@ def _log2_bins(lengths: list[int]) -> list[dict]:
         hi = (1 << b) - 1
         bins.append({"label": str(lo) if lo == hi else f"{lo}-{hi}", "count": counts.get(b, 0)})
     return bins
+
+
+def _sample_lengths(directory: str, limit: int) -> list[int]:
+    """Token counts of up to ``limit`` rows, read without converting ``input_ids`` to Python lists."""
+    lengths: list[int] = []
+    for batch in iter_batches(directory, ["input_ids"], batch_size=HIST_BATCH_ROWS):
+        lengths.extend(pc.list_value_length(batch.column("input_ids")).to_pylist()[: limit - len(lengths)])
+        if len(lengths) >= limit:
+            break
+    return lengths
 
 
 def tokenize_report(output_path: str, sources: dict[str, TokenizedAttrData], split: str) -> StageReport:
@@ -48,8 +61,7 @@ def tokenize_report(output_path: str, sources: dict[str, TokenizedAttrData], spl
     lengths: list[int] = []
     sampled = names[:HIST_SOURCE_CAP]
     for name in sampled:
-        sample = sample_rows(sources[name].output_dirs[split], ["input_ids"], HIST_ROWS_PER_SOURCE)
-        lengths.extend(len(r["input_ids"]) for r in sample)
+        lengths.extend(_sample_lengths(sources[name].output_dirs[split], HIST_ROWS_PER_SOURCE))
 
     total_docs = sum(r["docs"] for r in rows)
     total_tokens = sum(r["tokens"] for r in rows)

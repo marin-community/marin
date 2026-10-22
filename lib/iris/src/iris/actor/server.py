@@ -39,6 +39,7 @@ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 logger = logging.getLogger(__name__)
 
 ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
+DEFAULT_ACTOR_MAX_CONCURRENCY = 32
 
 # Type aliases
 ActorId = NewType("ActorId", str)
@@ -105,13 +106,21 @@ class OperationState:
 
 
 class ActorServer:
-    """Server for hosting actor instances and handling RPC calls."""
+    """Host actors for peers trusted to execute Python code in this process.
+
+    RPC arguments use cloudpickle and can execute code during deserialization.
+    This listener has no authentication middleware; restrict network access to
+    trusted peers or route external calls through a controller endpoint proxy
+    configured to enforce authentication. Null-auth proxies are permissive and
+    must stay on trusted networks. Sharing an actor endpoint delegates the same trust.
+    """
 
     def __init__(
         self,
         host: str = "0.0.0.0",
         port: int | None = None,
         threads: ThreadContainer | None = None,
+        max_concurrency: int = DEFAULT_ACTOR_MAX_CONCURRENCY,
     ):
         """Initialize the actor server.
 
@@ -119,6 +128,7 @@ class ActorServer:
             host: Host address to bind to
             port: Port to bind to. If None or 0, auto-assigns a free port.
             threads: ThreadContainer for managing server threads. If None, uses the default registry.
+            max_concurrency: Maximum number of actor methods that may run concurrently.
         """
         self._host = host
         self._port = port
@@ -130,7 +140,7 @@ class ActorServer:
         self._server: uvicorn.Server | None = None
         # Create dedicated executor for running actor methods
         # This avoids relying on asyncio's default executor which can be shut down prematurely
-        self._executor = self._threads.spawn_executor(max_workers=32, prefix="actor-method")
+        self._executor = self._threads.spawn_executor(max_workers=max_concurrency, prefix="actor-method")
         self._operations: dict[str, OperationState] = {}
         self._operations_lock = threading.Lock()
 

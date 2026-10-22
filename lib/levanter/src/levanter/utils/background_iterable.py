@@ -70,8 +70,10 @@ class BackgroundIterator(Iterator[Ex]):
         if self.thread is not None:
             batch = self.q.get()
             if batch is _SENTINEL:
+                self._stop_event.set()
                 raise StopIteration
             if isinstance(batch, _ExceptionWrapper):
+                self._stop_event.set()
                 batch.reraise()
             return batch
         # No background thread; consume the iterator on demand.

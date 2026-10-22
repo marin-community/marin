@@ -2,12 +2,14 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
 import ChatView from './components/ChatView.vue'
+import CompareView from './components/CompareView.vue'
 import CompletionView from './components/CompletionView.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
 import { createChatShare, fetchChatShare } from './lib/api'
 import { ThinkingMode } from './lib/chat_template'
+import { loadComparison } from './lib/comparison_storage'
 import {
   conversationFromSharedChat,
   isSharedChatHash,
@@ -15,7 +17,7 @@ import {
   sharedChatSnapshot,
   sharedChatUrl,
 } from './lib/shared_chat'
-import { loadConversations, loadParams, newId, saveConversations, saveParams } from './lib/storage'
+import { loadConversations, loadParams, newConversation as createConversation, newId, saveConversations, saveParams } from './lib/storage'
 import type { Conversation } from './lib/types'
 
 const { info, status, model } = useServing()
@@ -27,7 +29,7 @@ const conversations = ref<Conversation[]>(loadConversations())
 const initialHash = window.location.hash
 const sharedHashPresent = isSharedChatHash(initialHash)
 const sharedChatId = sharedChatIdFromHash(initialHash)
-const active = ref<Conversation>(freshConversation())
+const active = ref<Conversation>(createConversation(model.value))
 if (sharedHashPresent) {
   const cleanUrl = new URL(window.location.href)
   cleanUrl.hash = ''
@@ -36,8 +38,15 @@ if (sharedHashPresent) {
 
 const sorted = computed(() => [...conversations.value].sort((a, b) => b.updatedAt - a.updatedAt))
 
-const mode = ref<'chat' | 'completion'>('chat')
+const mode = ref<'chat' | 'compare' | 'completion'>('chat')
 const userPickedMode = ref(false)
+const savedCompareSettings = loadComparison()?.left
+const compareSettings = reactive({
+  system: savedCompareSettings?.system ?? '',
+  thinkingMode: savedCompareSettings?.thinkingMode ?? ThinkingMode.TemplateDefault,
+  customInstructions: savedCompareSettings?.customInstructions ?? '',
+})
+const settingsTarget = computed(() => mode.value === 'compare' ? compareSettings : active.value)
 const showParams = ref(false)
 // Below the md breakpoint the history panel is an overlay drawer.
 const showHistory = ref(false)
@@ -77,7 +86,7 @@ watch(info, (loaded) => {
   if (loaded && !userPickedMode.value) mode.value = loaded.has_chat_template ? 'chat' : 'completion'
 })
 
-function pickMode(picked: 'chat' | 'completion') {
+function pickMode(picked: 'chat' | 'compare' | 'completion') {
   mode.value = picked
   userPickedMode.value = true
 }
@@ -92,22 +101,6 @@ async function shareConversation() {
   }
 }
 
-function freshConversation(): Conversation {
-  return {
-    id: newId(),
-    title: '',
-    model: model.value,
-    system: '',
-    pythonTools: '',
-    shellWorkspace: null,
-    thinkingMode: ThinkingMode.TemplateDefault,
-    customInstructions: '',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    messages: [],
-  }
-}
-
 function persist() {
   const current = active.value
   const alreadySaved = conversations.value.some((conversation) => conversation.id === current.id)
@@ -119,7 +112,7 @@ function persist() {
 
 function newConversation() {
   if (active.value.messages.length) persist()
-  active.value = freshConversation()
+  active.value = createConversation(model.value)
   showHistory.value = false
 }
 
@@ -132,13 +125,13 @@ function selectConversation(id: string) {
 function removeConversation(id: string) {
   conversations.value = conversations.value.filter((c) => c.id !== id)
   saveConversations(conversations.value)
-  if (active.value.id === id) active.value = freshConversation()
+  if (active.value.id === id) active.value = createConversation(model.value)
 }
 
 function clearHistory() {
   conversations.value = []
   saveConversations([])
-  active.value = freshConversation()
+  active.value = createConversation(model.value)
   showHistory.value = false
 }
 </script>
@@ -148,6 +141,7 @@ function clearHistory() {
     <AppHeader :info="info" :status="status" :model="model" />
     <div class="relative flex min-h-0 flex-1">
       <HistoryPanel
+        v-if="mode !== 'compare'"
         :conversations="sorted"
         :active-id="active.id"
         :mobile-open="showHistory"
@@ -159,6 +153,7 @@ function clearHistory() {
       <main class="flex min-w-0 flex-1 flex-col">
         <div class="flex shrink-0 items-center gap-1 border-b border-surface-border px-4">
           <button
+            v-if="mode !== 'compare'"
             class="mr-1 rounded-lg px-2 py-1 text-text-muted transition-colors hover:text-text md:hidden"
             :class="{ 'bg-surface-sunken text-text': showHistory }"
             title="Conversation history"
@@ -169,7 +164,7 @@ function clearHistory() {
             </svg>
           </button>
           <button
-            v-for="tab in ['chat', 'completion'] as const"
+            v-for="tab in ['chat', 'compare', 'completion'] as const"
             :key="tab"
             class="border-b-2 px-3 py-2 text-sm capitalize transition-colors"
             :class="
@@ -225,13 +220,13 @@ function clearHistory() {
         <SamplingControls
           v-if="showParams"
           :params="params"
-          v-model:system="active.system"
-          v-model:thinking-mode="active.thinkingMode"
-          v-model:custom-instructions="active.customInstructions"
-          :show-chat-controls="mode === 'chat'"
+          v-model:system="settingsTarget.system"
+          v-model:thinking-mode="settingsTarget.thinkingMode"
+          v-model:custom-instructions="settingsTarget.customInstructions"
+          :show-chat-controls="mode !== 'completion'"
         />
         <div
-          v-if="shareImportFailed"
+          v-if="shareImportFailed && mode === 'chat'"
           role="alert"
           class="border-b border-status-danger/40 bg-status-danger/10 px-4 py-2 text-center text-xs text-status-danger"
         >
@@ -247,7 +242,16 @@ function clearHistory() {
           :streaming="info ? info.streaming : true"
           @persist="persist"
         />
-        <CompletionView v-else :params="params" :model="model" :streaming="info ? info.streaming : true" />
+        <CompareView
+          v-show="mode === 'compare'"
+          :model="model"
+          :info="info"
+          :params="params"
+          :system="compareSettings.system"
+          :thinking-mode="compareSettings.thinkingMode"
+          :custom-instructions="compareSettings.customInstructions"
+        />
+        <CompletionView v-if="mode === 'completion'" :params="params" :model="model" :streaming="info ? info.streaming : true" />
       </main>
     </div>
   </div>

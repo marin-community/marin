@@ -10,8 +10,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from shellbox.backends.qemu.bundle import guest_code_id, stage_bundle
+from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE, IMAGE_REFERENCE_KEY, guest_code_id, stage_bundle
 from shellbox.image import OCI_TAG, DockerfileSource, PreparedImage, RegistryImage, prepared_image_workdir
+from shellbox.machine import QemuBundle
 
 
 @dataclass(frozen=True)
@@ -44,7 +45,7 @@ def stage_qemu_image(image: PreparedImage, assets: QemuAssets, cache: Path) -> P
     with (cache / f".{key}.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if bundle.is_dir():
-            metadata = json.loads((bundle / "image.json").read_text())
+            metadata = json.loads((bundle / IMAGE_METADATA_FILE).read_text())
             if metadata["manifest_digest"] != image.manifest_digest:
                 raise ValueError("Cached QEMU bundle image digest differs from prepared image")
             if metadata["cwd"] != working_directory:
@@ -66,10 +67,17 @@ def stage_qemu_image(image: PreparedImage, assets: QemuAssets, cache: Path) -> P
                 task_dockerfile=image.source.dockerfile if isinstance(image.source, DockerfileSource) else None,
                 image_reference=image.source.reference if isinstance(image.source, RegistryImage) else None,
             )
-            metadata = json.loads((staged / "image.json").read_text())
+            metadata = json.loads((staged / IMAGE_METADATA_FILE).read_text())
             if metadata["manifest_digest"] != image.manifest_digest:
                 raise ValueError("QEMU bundle image digest differs from prepared image")
             metadata["cwd"] = working_directory
-            (staged / "image.json").write_text(json.dumps(metadata, indent=2) + "\n")
+            (staged / IMAGE_METADATA_FILE).write_text(json.dumps(metadata, indent=2) + "\n")
             staged.rename(bundle)
     return bundle
+
+
+def load_qemu_bundle(path: Path) -> QemuBundle:
+    """Load declared image provenance once when selecting an existing bundle."""
+    metadata_path = path / IMAGE_METADATA_FILE
+    metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
+    return QemuBundle(path, image_reference=metadata.get(IMAGE_REFERENCE_KEY))

@@ -20,13 +20,13 @@ dependencies = [
     # cloud credentials and reads the key from a projected Secret instead.
     "marin-rigging[secrets]",
     "marin-zephyr",
-    "tasktrove-verify[answer,reasoning-gym,schema]",
+    "marin-verifyit[math,reasoning-gym,schema]",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
     # republish. Its native companion marin-finelog-server (the in-process
     # log-server ext, module `finelog_server`, maturin lib/finelog/rust) is NOT a
-    # member: it ships as a pre-built wheel and reaches us transitively via
-    # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
+    # member: it ships as a pre-built wheel in marin-iris's `controller` extra
+    # and iris's test group. `scripts/rust_mode.py dev` swaps
     # marin-finelog-server to a local source build.
     "marin-finelog",
     "marin-deploy",
@@ -65,9 +65,9 @@ pipeline = [
     "jax[cuda13]==0.11.0",
     "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
     "nvidia-nccl-cu13>=2.31.2; sys_platform == 'linux'",
-    "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
-    "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
-    "quack-kernels[cu13]==0.6.1; sys_platform == 'linux'",
+    "nvidia-cutlass-dsl[cu13]==4.6.2; sys_platform == 'linux'",
+    "flash-attn-4[cu13]>=4.0.0b28,<4.1; sys_platform == 'linux'",
+    "quack-kernels[cu13]==0.6.4; sys_platform == 'linux'",
     "jax-triton==0.3.1; sys_platform == 'linux'",
     "triton>=3.6.0,<3.7; sys_platform == 'linux'",
     # Flash Attention's Python helpers import Torch, but the Grug kernels execute
@@ -76,6 +76,7 @@ pipeline = [
 ]
 
 [tool.uv]
+exclude-dependencies = ["litellm"]
 fork-strategy = "fewest"
 # "explicit": allow pre-releases only for packages whose declared specifier
 # names one, so our intentional pre-releases resolve while everything else stays
@@ -84,7 +85,7 @@ fork-strategy = "fewest"
 # marin-dupekit-native nightly (floor in lib/dupekit/pyproject.toml); the
 # omegaconf dev pin in override-dependencies
 # below; and the prerelease-only transitive deps in constraint-dependencies
-# (tfp-nightly and the OpenTelemetry instrumentation packages publish no stable
+# (tfp-nightly and some OpenTelemetry packages publish no stable
 # release).
 prerelease = "explicit"
 constraint-dependencies = [
@@ -95,6 +96,8 @@ constraint-dependencies = [
     "tfp-nightly>=0.1.dev0",
     "opentelemetry-instrumentation>=0.41b0",
     "opentelemetry-instrumentation-grpc>=0.41b0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.59b0",
+    "opentelemetry-util-http>=0.59b0",
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
@@ -112,12 +115,11 @@ override-dependencies = [
     "gitpython>=3.1.59",
     "gradio>=6.14.0",
     "jupyter-server>=2.18.2",
-    "jupyterlab>=4.5.7",
-    "litellm>=1.83.14",
+    "jupyterlab>=4.6.4",
     "lxml>=6.1.0",
     "mistune>=3.3.3",
     "multipart>=1.3.1",
-    "notebook>=7.5.6",
+    "notebook>=7.6.3",
     "orjson>=3.11.9",
     "pillow>=12.2.0",
     "pyasn1>=0.6.3",
@@ -127,6 +129,7 @@ override-dependencies = [
     "setuptools>=82.0.1",
     "tiktoken>=0.12.0",
     "tornado>=6.5.8",
+    "virtualenv>=21.7.13",
 ]
 conflicts = [
     # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
@@ -197,8 +200,12 @@ members = [
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
+    "lib/rolloutengine",
+    "lib/shellbox",
+    "lib/taskcompendium",
+    "lib/taskforge",
     "lib/zephyr",
-    "lib/tasktrove-verify",
+    "lib/verifyit",
     "lib/finestore",
     "infra/pulumi",
     "infra/buckets",
@@ -212,7 +219,7 @@ members = [
 #   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
 #   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
-exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*", "vendor/skyrl", "vendor/skyrl/**", "vendor/evalchemy", "vendor/evalchemy/**", "vendor/harbor", "vendor/harbor/**"]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
@@ -226,8 +233,12 @@ marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
+marin-rolloutengine = { workspace = true }
+marin-shellbox = { workspace = true }
 marin-zephyr = { workspace = true }
-tasktrove-verify = { workspace = true }
+marin-verifyit = { workspace = true }
+marin-taskcompendium = { workspace = true }
+marin-taskforge = { workspace = true }
 marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
@@ -248,6 +259,17 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+# Use CPU Torch for unpinned imports without changing other packages' indexes.
+# marin-core[gpu] explicitly selects its CUDA Torch index.
+[[tool.uv.index]]
+name = "pytorch-cpu-fallback"
+url = "https://download.pytorch.org/whl/cpu/torch/"
+format = "flat"
+
+[tool.iris.bundle]
+include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*"]
+exclude = ["^vendor/harbor/tests(/|$)"]
+
 [tool.black]
 line-length = 121
 target-version = ["py312"]
@@ -257,6 +279,9 @@ preview = true
 extend-exclude = """
 (
     scripts/
+    | vendor/skyrl/
+    | vendor/evalchemy/
+    | vendor/harbor/
 )
 """
 
@@ -268,7 +293,7 @@ target-version = "py312"
 # Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` and
 # `scripts/cost_manager/**` hold scripts invoked directly by `.github/workflows`
 # and stay under ruff.
-extend-exclude = ["scripts/"]
+extend-exclude = ["scripts/", "vendor/skyrl/", "vendor/evalchemy/", "vendor/harbor/"]
 extend-include = ["scripts/ci/**/*.py", "scripts/cost_manager/**/*.py"]
 
 [tool.ruff.lint]
@@ -294,6 +319,7 @@ select = [
     # lib/haliax and lib/levanter carry their own [tool.ruff.lint] configs; these
     # two rules are mirrored there via extend-select so they apply repo-wide.
     "TID252", "ICN001",
+    "TID251",
 ]
 # Keep UP046/UP047 ignored for now: migrating generics to PEP 695 syntax is
 # out of scope for the Python 3.12 floor bump.
@@ -318,6 +344,9 @@ known-first-party = ["experiments"]
 # as first-party and reorder it, so pin it to the third-party group it already sits in.
 known-third-party = ["wandb", "config", "marin"]
 
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"litellm" = { msg = "LiteLLM is blocked; use a provider SDK or an OpenAI-compatible endpoint." }
+
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
@@ -337,7 +366,7 @@ project-includes = [
     "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
-    "lib/tasktrove-verify/src/**/*.py",
+    "lib/verifyit/src/**/*.py",
     "lib/finestore/src/**/*.py",
     "infra/marina/src/**/*.py",
     "infra/marina/apps/**/*.py",
@@ -356,7 +385,7 @@ search-path = [
     "lib/haliax/src",
     "lib/rigging/src",
     "lib/zephyr/src",
-    "lib/tasktrove-verify/src",
+    "lib/verifyit/src",
     "lib/finestore/src",
     "lib/fray/src",
     "lib/iris/src",
@@ -438,6 +467,9 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
+    "vendor/skyrl/**",
+    "vendor/evalchemy/**",
+    "vendor/harbor/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",
@@ -517,6 +549,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
+    "tpu: include in TPU CI; also run on CPU when supported",
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",

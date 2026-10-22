@@ -34,7 +34,7 @@ from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
-from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
@@ -95,17 +95,32 @@ HERO_EP_RUNTIME_ENV = {
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
+DEFAULT_SLOP_FACTOR = 85
+# With the carry offload, host memory offloading (below) lets rematerialization count the offloaded
+# carry as host memory. Rematerialization and the scheduler both work within
+# `(fraction x 184.3 GiB - persistent state) x slop`. At 0.75 / 85 that is 87.7 GiB, below the
+# 96.8 GiB rematerialization still estimates for the step, so it starts offloading values to host
+# itself, which aborts compilation in XLA's `OffloadInstruction` (hlo_rematerialization.cc:2118).
+# 0.78 / 105 raises the budget to 114 GiB, which the step fits, so rematerialization leaves it alone.
+# The same budget holds the ~105 GiB backward once the carry offload also saves the ragged backend's
+# routed MoE output (`MOE_OUTPUT_REMAT_NAME`, 18 GiB), so rematerialization keeps what was saved.
+# Rematerialization also counts the 18.9 GiB of collective buffers, which caps the arena at 95 GiB,
+# so the 143.8 GiB pool holds the worst case with 13 GiB to spare, and the 40.5 GiB outside it stays
+# above the ~28.5 GiB NCCL, cuBLAS, and the CUDA context need.
+OFFLOAD_CARRY_MEM_FRACTION = "0.78"
+OFFLOAD_CARRY_SLOP_FACTOR = 105
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
+XLA_HOST_MEMORY_OFFLOADING_FLAG = "--xla_gpu_enable_host_memory_offloading"
+XLA_DISABLE_ASYNC_COLLECTIVES_FLAG = "--xla_gpu_disable_async_collectives"
+# Every collective type runs synchronously, one at a time.
+SYNC_COLLECTIVES = "ALLCOLLECTIVES"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
-# The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
-# dispatch and combine form one long dependent chain, so admitting several concurrent collectives
-# only contends for the SMs the transport itself needs.
-RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
-# Offload and latency hiding race the reloaded residual with its consumer when overlap exceeds 1.
-OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT = 1
+# The ragged transport and the carry offload run with one collective in flight. Both force it rather
+# than default it; see `_apply_hero_ep_runtime_defaults`.
+SERIAL_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
@@ -198,6 +213,9 @@ def _apply_hero_ep_runtime_defaults(
     processes_per_task: int = 1,
 ) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
+    offload_carry = remat_mode == OFFLOAD_CARRY_REMAT_MODE
+    if offload_carry:
+        env_defaults["XLA_PYTHON_CLIENT_MEM_FRACTION"] = OFFLOAD_CARRY_MEM_FRACTION
     if processes_per_task > 1:
         # With one process per GPU, the per-process CUPTI sessions collide with each
         # other and with CoreWeave's DCGM, so PGLE cannot profile and its recompile
@@ -207,36 +225,41 @@ def _apply_hero_ep_runtime_defaults(
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
-    if ragged:
-        overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
-    elif inline_watch_enabled:
-        overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
-    else:
-        overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     # The scheduler's longer buffer live ranges fit on the ragged transport only once the layer
     # carry leaves HBM. Without that offload its first-step NCCL allocations fail.
     latency_hiding = not ragged or remat_mode == OFFLOAD_CARRY_REMAT_MODE
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         f"--xla_gpu_enable_latency_hiding_scheduler={'true' if latency_hiding else 'false'}",
-        # The scheduler sizes the single `jit_train_step` temp arena against this percentage of
-        # its memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and
-        # persistent state occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served
-        # from pool free space and forces a fresh mapping against the ~17 GiB of physical memory
-        # outside the pool. The default 95 asks for 125.7 GiB and fails that way. 85 sizes the
-        # arena at 113.6 GiB, leaving enough slack for per-node variation in fragmentation. A
-        # lower percentage costs throughput, because a smaller arena makes `HloRematerialization`
-        # recompute more of the step.
-        "--xla_gpu_memory_limit_slop_factor=85",
+        # The scheduler and rematerialization size the single `jit_train_step` temp arena against
+        # this percentage of their memory budget. An arena the pool's free space cannot serve forces
+        # a fresh mapping against the little physical memory outside the pool: without the carry
+        # offload, XLA's default 95 asked for a 125.7 GiB arena and failed that way, and 85 leaves
+        # slack for per-node variation in fragmentation. A lower percentage costs throughput,
+        # because a smaller budget makes `HloRematerialization` recompute more of the step. The
+        # carry offload raises the memory fraction and the percentage together; see
+        # `OFFLOAD_CARRY_SLOP_FACTOR`.
+        f"--xla_gpu_memory_limit_slop_factor={OFFLOAD_CARRY_SLOP_FACTOR if offload_carry else DEFAULT_SLOP_FACTOR}",
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
+    if offload_carry:
+        # Post-schedule `HloRematerialization` charges pinned-host buffers against the device
+        # limit unless this is set, so the 36 GiB offloaded carry stack makes it recompute
+        # ~10 GiB of the backward per step that already fits in HBM.
+        flag_defaults += (f"{XLA_HOST_MEMORY_OFFLOADING_FLAG}=true",)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
-    if remat_mode == OFFLOAD_CARRY_REMAT_MODE:
-        # A wrong overlap limit corrupts training silently, so the offload takes the flag
-        # away from the caller instead of defaulting it.
+    if ragged or offload_carry:
+        # A wrong overlap limit corrupts training silently, so these configurations take the flag
+        # away from the caller instead of defaulting it. With the carry offload, a reloaded
+        # residual races its consumer. On the ragged transport, the backward's transports do not
+        # depend on the recomputed forward's, and with several collectives in flight the two
+        # overlapped and gave run-to-run different gradients, or hung, on GB200. The transport's
+        # dispatch and combine also form one dependent chain, so admitting more collectives only
+        # contends for the SMs it needs.
         xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_COLLECTIVE_OVERLAP_FLAG]
-        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={OFFLOAD_CARRY_COLLECTIVE_OVERLAP_LIMIT}")
+        xla_flags.append(f"{XLA_COLLECTIVE_OVERLAP_FLAG}={SERIAL_COLLECTIVE_OVERLAP_LIMIT}")
     if ragged:
         # Unlike the defaults above, these are not overridable. Selecting the host-launched
         # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
@@ -245,6 +268,14 @@ def _apply_hero_ep_runtime_defaults(
         # occurrence XLA's parser keeps.
         xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
         xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
+    if ragged and not offload_carry:
+        # The overlap limit binds only the latency-hiding scheduler, which this configuration keeps
+        # off. XLA's default scheduler then starts collectives regardless of the limit: compiled for
+        # the EP64 hero layer, it puts two ragged transports in flight at once in the forward and in
+        # the backward, and that hangs or corrupts like an unforced overlap limit. Synchronous
+        # collectives keep them one at a time, so, like the limit, the caller does not choose this.
+        xla_flags = [f for f in xla_flags if f.partition("=")[0] != XLA_DISABLE_ASYNC_COLLECTIVES_FLAG]
+        xla_flags.append(f"{XLA_DISABLE_ASYNC_COLLECTIVES_FLAG}={SYNC_COLLECTIVES}")
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
 
 
@@ -322,6 +353,8 @@ class GrugEvalConfig:
     eval_batch_size: int = 512
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
+    # Keep packing fixed when comparing checkpoints trained at different context lengths.
+    max_seq_len: int | None = None
     prefix: str = "eval"
     # Evaluate with the training MoE backend (capacity-limited, with drops): `eval_current` scores
     # the live parameters and `eval_ema` the EMA parameters; either one schedules the
@@ -341,6 +374,24 @@ class GrugEvalConfig:
 
 
 @dataclass(frozen=True)
+class FlopsBaseline:
+    """Cumulative training FLOPs through a completed handoff step."""
+
+    completed_steps: int
+    total_flops: float
+
+    def offset(self, batch_schedule: BatchSchedule, flops_per_example: float, restored_step: int) -> float:
+        """Return the FLOPs to add to ``flops_per_example`` times the examples seen so far.
+
+        The correction replaces the current shape's cost for the first ``completed_steps`` with the
+        parent's recorded total. It is negative when the current shape costs more per example.
+        """
+        if self.completed_steps > restored_step:
+            raise ValueError("FLOPs baseline must precede or equal the restored checkpoint step")
+        return self.total_flops - flops_per_example * batch_schedule.global_data_offset_by_step(self.completed_steps)
+
+
+@dataclass(frozen=True)
 class GrugRunConfig:
     """Top-level config for grug training."""
 
@@ -355,6 +406,7 @@ class GrugRunConfig:
     # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
+    flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
@@ -373,21 +425,7 @@ def build_train_dataset(
     batch_schedule: BatchSchedule,
     key: PRNGKeyArray,
 ) -> MixtureDataset[GrugLmExample]:
-    pos = Axis("position", max_seq_len)
-    mix_key, shuffle_key = jax.random.split(key)
-    weights = data_config.train_weights
-    if isinstance(weights, list):
-        weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
-
-    initial_batch_size = batch_schedule.batch_size_at_step(0)
-    datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-    return MixtureDataset(
-        datasets=datasets,
-        weights=weights,
-        stop_strategy=data_config.stop_strategy,
-        key=mix_key,
-        block_size=data_config.mixture_block_size,
-    )
+    return data_config.train_mixture(Axis("position", max_seq_len), batch_schedule, key=key)
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -529,7 +567,7 @@ def build_tagged_evaluator(
     mp: jmp.Policy,
     model_transform: Callable[[Transformer], Transformer] | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
-    pos = Axis("position", max_seq_len)
+    pos = Axis("position", max_seq_len if eval_cfg.max_seq_len is None else eval_cfg.max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
     if len(tagged_eval_sets) == 0:
         logger.warning("No evaluation datasets provided.")
@@ -1032,6 +1070,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
+        flops_offset = (
+            config.flops_baseline.offset(batch_schedule, flops_per_example, int(state.step))
+            if config.flops_baseline is not None
+            else 0.0
+        )
 
         eval_cfg = config.eval
         evaluator = None
@@ -1110,7 +1153,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if progress_watchdog is not None:
             state_callbacks.add_hook(progress_watchdog, every=1)
         state_callbacks.add_hook(
-            callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
+            callbacks.log_performance_stats(
+                config.model.max_seq_len, batch_schedule, flops_per_example, flops_offset=flops_offset
+            ),
             every=log_every,
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=stop_step), every=log_every)
@@ -1157,16 +1202,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     step_count = int(step.step)
                     if step_count < 0 or step_count == last_dropless_eval_step:
                         return
-                    last_dropless_eval_step = step_count
                     # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
                     # the expert axis lands replicated, and the copy is much larger than the
                     # train-mesh params. The train step needs almost the whole device budget for
                     # its temporary buffer, thus this copy must die before the next step.
-                    with set_mesh(_mesh):
+                    with (
+                        callbacks.progress_event_scope(
+                            step.emit_event,
+                            callbacks.ProgressEvent.EVALUATION_STARTED,
+                            callbacks.ProgressEvent.EVALUATION_FINISHED,
+                        ),
+                        set_mesh(_mesh),
+                    ):
                         model = _reshard_tree_to_mesh(step.model, _mesh)
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
+                    last_dropless_eval_step = step_count
 
                 eval_hooks.append(dropless_eval_hook)
 

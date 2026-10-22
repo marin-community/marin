@@ -163,6 +163,13 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     return constraints
 
 
+def convert_container_profile(resources: ResourceConfig) -> int:
+    """The Iris profile enum value for ``resources.container_profile``, UNSPECIFIED when unset."""
+    if resources.container_profile is None:
+        return job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+    return job_pb2.ContainerProfile.Value(resources.container_profile)
+
+
 def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
     """Convert fray Entrypoint to Iris Entrypoint."""
     if entrypoint.callable_entrypoint is not None:
@@ -286,7 +293,7 @@ class IrisJobHandle:
         self._job.cancel()
 
 
-def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
+def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str, max_concurrency: int) -> None:
     """Entrypoint for actor-hosting Iris jobs.
 
     Instantiates the actor class, creates an ActorServer, registers the
@@ -321,7 +328,9 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     finally:
         _reset_current_actor(token)
 
-    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"))
+    # Size the method executor from ActorConfig.max_concurrency, as the Fray
+    # contract says. An actor that serves calls during a long method must set it.
+    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"), max_concurrency=max_concurrency)
     server.register(actor_name, instance)
     actual_port = server.serve_background()
 
@@ -697,6 +706,7 @@ class FrayIrisClient:
                 max_task_failures=request.max_task_failures,
                 existing_job_policy=policy,
                 task_image=request.resources.image,
+                container_profile=convert_container_profile(request.resources),
                 priority_band=request.priority,
                 timeout=request.timeout,
             )
@@ -727,7 +737,9 @@ class FrayIrisClient:
         finally:
             _reset_current_actor(token)
 
-        server = ActorServer(host="0.0.0.0", port=0)
+        # host_actor runs in the submitting process, so it must apply the same
+        # ActorConfig contract as actors submitted through create_actor_group.
+        server = ActorServer(host="0.0.0.0", port=0, max_concurrency=actor_config.max_concurrency)
         server.register(actor_name, instance)
         actual_port = server.serve_background()
 
@@ -784,7 +796,14 @@ class FrayIrisClient:
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
-        entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
+        entrypoint = IrisEntrypoint.from_callable(
+            _host_actor,
+            actor_class,
+            args,
+            kwargs,
+            name,
+            actor_config.max_concurrency,
+        )
 
         retry_kwargs: dict[str, Any] = {}
         if actor_config.max_task_retries is not None:
@@ -805,6 +824,7 @@ class FrayIrisClient:
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
             task_image=resources.image,
+            container_profile=convert_container_profile(resources),
             priority_band=actor_config.priority,
             **retry_kwargs,
         )
