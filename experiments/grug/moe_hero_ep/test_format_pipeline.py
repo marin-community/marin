@@ -36,6 +36,7 @@ from experiments.grug.moe_hero_ep.format_pipeline import (
 )
 from experiments.grug.moe_hero_ep.format_sample import native_evaluation_model
 from experiments.grug.moe_hero_ep.format_suite import NativeSuiteRequest, run_suite
+from experiments.grug.moe_hero_ep.format_test_support import smoke_gradient_report, smoke_optimizer_report, smoke_record
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.sft import BaseReference, SftConfig, sft_manifest
@@ -48,9 +49,6 @@ from experiments.grug.moe_hero_ep.sft_launch import (
     save_pilot_inspection,
     sft_measurement_identity,
 )
-from experiments.grug.moe_hero_ep.test_format_eval import smoke_compiled_report, smoke_optimizer_report, smoke_record
-
-pytest_plugins = ["experiments.grug.moe_hero_ep.test_format_handoff"]
 
 
 @pytest.fixture
@@ -289,21 +287,22 @@ def _pilot_evidence(recipe, evidence, root):
         "hero_sft_counters": counters,
     }
     (compact / "metadata.json").write_text(json.dumps(metadata))
+    parameter_bytes = 2048 + 32 * len(original.token_ids)
     optimizer_report = root / "smoke-compact-optimizer-report.json"
     optimizer_report.write_text(
         json.dumps(
             {
-                **smoke_optimizer_report(),
+                **smoke_optimizer_report(parameter_bytes),
                 "checkpoint_metadata_digest": recipe.reference.metadata_digest,
                 "measurement_identity_digest": identity,
             }
         )
     )
-    compiled_report = root / "smoke-compiled-gradient-report.json"
-    compiled_report.write_text(
+    gradient_report = root / "smoke-gradient-structure-report.json"
+    gradient_report.write_text(
         json.dumps(
             {
-                **smoke_compiled_report(),
+                **smoke_gradient_report(len(original.token_ids)),
                 "checkpoint_metadata_digest": recipe.reference.metadata_digest,
                 "measurement_identity_digest": identity,
             }
@@ -314,12 +313,14 @@ def _pilot_evidence(recipe, evidence, root):
             "checkpoint_metadata_digest": recipe.reference.metadata_digest,
             "measurement_identity_digest": identity,
             "sft_config": original,
+            "trainable_parameter_bytes": parameter_bytes,
+            "optimizer_state_bytes": 2 * parameter_bytes + 16,
             "terminal_checkpoint": str(compact),
             "terminal_checkpoint_metadata_digest": digest(metadata),
             "compact_optimizer_report": str(optimizer_report),
             "compact_optimizer_report_sha256": hashlib.sha256(optimizer_report.read_bytes()).hexdigest(),
-            "compiled_gradient_report": str(compiled_report),
-            "compiled_gradient_report_sha256": hashlib.sha256(compiled_report.read_bytes()).hexdigest(),
+            "gradient_structure_report": str(gradient_report),
+            "gradient_structure_report_sha256": hashlib.sha256(gradient_report.read_bytes()).hexdigest(),
             "global_batch_executed_tokens": recipe.batch_size * recipe.model.max_seq_len,
             "updates": tuple(
                 update.model_copy(

@@ -769,11 +769,11 @@ class SmokeRecord(Record):
     compile_seconds: float = Field(ge=0, allow_inf_nan=False)
     warmup_updates: int = Field(ge=0)
     updates: tuple[SmokeUpdate, ...] = Field(min_length=1)
-    compiled_gradient_report: str
-    compiled_gradient_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    gradient_structure_report: str
+    gradient_structure_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     compact_optimizer_report: str
     compact_optimizer_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    avoids_full_base_gradients: bool
+    compact_gradient_outputs: bool
     preserves_activation_gradients: bool
 
 
@@ -795,20 +795,51 @@ def validate_smoke_checkpoint(record: SmokeRecord) -> dict:
         }
     ):
         raise ValueError("Measured smoke terminal checkpoint disagrees with its base, schedule, or actual counters")
-    compiled_raw = StoragePath(record.compiled_gradient_report).read_bytes()
-    if hashlib.sha256(compiled_raw).hexdigest() != record.compiled_gradient_report_sha256:
-        raise ValueError("Compiled evidence report bytes changed")
-    compiled = json.loads(compiled_raw)
+    gradient_raw = StoragePath(record.gradient_structure_report).read_bytes()
+    if hashlib.sha256(gradient_raw).hexdigest() != record.gradient_structure_report_sha256:
+        raise ValueError("Gradient structure report bytes changed")
+    gradient = json.loads(gradient_raw)
     if (
-        compiled.get("schema_version") != 4
-        or compiled.get("parsed_instruction_inventory") is not True
-        or compiled.get("avoids_full_base_gradients") is not True
-        or compiled.get("optimizer_frozen_parameter_inputs") != 0
-        or compiled.get("execution_id") != record.execution_id
-        or compiled.get("checkpoint_metadata_digest") != record.checkpoint_metadata_digest
-        or compiled.get("measurement_identity_digest") != record.measurement_identity_digest
+        gradient.get("schema_version") != 1
+        or gradient.get("kind") != "hero_sft_gradient_structure"
+        or gradient.get("execution_id") != record.execution_id
+        or gradient.get("checkpoint_metadata_digest") != record.checkpoint_metadata_digest
+        or gradient.get("measurement_identity_digest") != record.measurement_identity_digest
     ):
-        raise ValueError("Compiled evidence lacks a matching current-schema compact gradient audit")
+        raise ValueError("Gradient structure report does not match the measured smoke")
+    outputs = {row["path"]: row for row in gradient["gradients"]}
+    if len(outputs) != len(gradient["gradients"]) or not outputs:
+        raise ValueError("Gradient structure contains duplicate paths or no outputs")
+    parameter_bytes = 0
+    for path, row in outputs.items():
+        shape = row["shape"]
+        if row["dtype"] != "float32" or not shape or any(type(dim) is not int or dim <= 0 for dim in shape):
+            raise ValueError("Compact gradient outputs must have positive shapes and FP32 dtype")
+        parameter_bytes += math.prod(shape) * np.dtype(np.float32).itemsize
+        if path in (".input_delta", ".output_delta"):
+            continue
+        if not re.fullmatch(
+            r"\.adapters\.stacked_blocks\.stacked\.(?:attn\.lora_[qkvo]|shared\[\d+\]\.lora_(?:gate|up|down))\.[ab]",
+            path,
+        ):
+            raise ValueError(f"Noncompact gradient output: {path}")
+        other = outputs.get(path[:-1] + ("b" if path.endswith("a") else "a"))
+        if other is None or len(shape) != 3 or len(other["shape"]) != 3:
+            raise ValueError("LoRA gradient outputs must contain paired stacked A/B matrices")
+        a, b = (shape, other["shape"]) if path.endswith("a") else (other["shape"], shape)
+        if a[0] != b[0] or a[-1] != record.sft_config.rank or b[-2] != record.sft_config.rank:
+            raise ValueError("LoRA gradient output shapes differ from the configured rank")
+    input_shape = outputs.get(".input_delta", {}).get("shape", [])
+    output_shape = outputs.get(".output_delta", {}).get("shape", [])
+    if (
+        len(input_shape) != 2
+        or output_shape != list(reversed(input_shape))
+        or input_shape[0] != len(record.sft_config.token_ids)
+        or not any(path.startswith(".adapters.") for path in outputs)
+        or parameter_bytes != record.trainable_parameter_bytes
+        or not record.compact_gradient_outputs
+    ):
+        raise ValueError("Gradient outputs disagree with the compact parameter bytes or selected vocabulary")
     optimizer_raw = StoragePath(record.compact_optimizer_report).read_bytes()
     if hashlib.sha256(optimizer_raw).hexdigest() != record.compact_optimizer_report_sha256:
         raise ValueError("Smoke compact optimizer report bytes changed")
@@ -839,7 +870,7 @@ def assemble_smoke(
 ) -> SmokeRecord:
     """Build a budget-eligible record from actual persisted SFT runtime telemetry.
 
-    Missing HBM, checkpoint timing, compiled evidence or measured input-delta
+    Missing HBM, checkpoint timing, compact gradient outputs or measured input-delta
     gradients blocks assembly. Caller-supplied booleans cannot manufacture those
     measurements. The timing/gradient files remain independently inspectable.
     """
@@ -871,11 +902,8 @@ def assemble_smoke(
     panel_digests = {row["acquisition_diagnostic"]["panel_digest"] for row in raw}
     if len(panel_digests) != 1:
         raise ValueError("Smoke changed the fixed acquisition diagnostic panel")
-    compiled_path = telemetry_directory / "compiled-gradient-report.json"
-    compiled_raw = compiled_path.read_bytes()
-    compiled = json.loads(compiled_raw)
-    if not compiled.get("avoids_full_base_gradients") or compiled.get("optimizer_frozen_parameter_inputs") != 0:
-        raise ValueError("Compiled evidence does not show compact gradients and optimizer inputs")
+    gradient_path = telemetry_directory / "gradient-structure-report.json"
+    gradient_raw = gradient_path.read_bytes()
     optimizer_path = telemetry_directory / "compact-optimizer-report.json"
     optimizer_sha256 = hashlib.sha256(optimizer_path.read_bytes()).hexdigest()
     gradient_norms = [row["input_delta_gradient_norm"] for row in raw]
@@ -900,11 +928,11 @@ def assemble_smoke(
         compile_seconds=first["compile_seconds"],
         warmup_updates=warmup_updates,
         updates=updates,
-        compiled_gradient_report=str(compiled_path),
-        compiled_gradient_report_sha256=hashlib.sha256(compiled_raw).hexdigest(),
+        gradient_structure_report=str(gradient_path),
+        gradient_structure_report_sha256=hashlib.sha256(gradient_raw).hexdigest(),
         compact_optimizer_report=str(optimizer_path),
         compact_optimizer_report_sha256=optimizer_sha256,
-        avoids_full_base_gradients=True,
+        compact_gradient_outputs=True,
         preserves_activation_gradients=True,
     )
     summarize_smoke(record)
@@ -979,8 +1007,8 @@ def plan_pilot(record: SmokeRecord, budget: PilotBudget) -> dict:
     padding and masked prompt tokens are not interchangeable with supervision.
     """
     measured = summarize_smoke(record)
-    if not record.avoids_full_base_gradients or not record.preserves_activation_gradients:
-        raise ValueError("Compiled gradient evidence does not establish the intended LoRA path")
+    if not record.compact_gradient_outputs or not record.preserves_activation_gradients:
+        raise ValueError("Smoke lacks compact gradient outputs or measured activation backpropagation")
     if any(update.gradient_norm == 0 for update in record.updates):
         raise ValueError("Smoke contains zero trainable gradients; diagnose before budgeting")
     if budget.cap_non_padding_tokens < budget.inspection_non_padding_tokens:

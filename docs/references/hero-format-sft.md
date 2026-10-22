@@ -314,26 +314,15 @@ inspect internal kernel allocations or require a general HLO absence certificate
 Independent numerical LoRA checks, finite updates and the declared diagnostic
 limits remain required for the bounded learning smoke.
 
-The older `assemble-smoke` qualification below still consumes a separately
-collected compiler certificate. It is not the launch gate for the reviewed
-bounded smoke; do not fabricate a certificate to satisfy that schema. The older
-assembler pins the optimizer report's raw SHA256, execution, base and measurement
-identity and requires step-zero
-counters and a passing structural report. This does not inspect moment values.
-Matching a frozen tensor's shape does not establish optimizer contamination.
+Smoke qualification pins the gradient-structure and compact-optimizer reports'
+raw SHA256 hashes and checks their execution, base and measurement identities.
+It checks FP32 output shapes for paired LoRA factors and selected vocabulary
+deltas, their total parameter bytes, fresh compact Adam state and measured
+nonzero input-delta gradients. These checks establish the compact gradient
+interface and activation backpropagation. Internal kernel allocations remain
+outside this evidence; compiler audits are optional diagnostics.
 
-Compiled audit schema 4 inventories instructions in every optimized computation,
-including asynchronous bodies, reducers and comparators, and reports coverage
-counts and parsing errors. It keeps ambiguous frozen-shaped results in
-`unverified_weight_shaped_results`. Parameter operands and routing selectors
-alone cannot certify them. Integer custom-call outputs are parsed separately;
-no-write collective destination buffers require matching decoded TTIR and PTX.
-The audit covers declared dot, multiply, scatter, custom-call and conversion
-results. This includes one-token broadcast/multiply outer products and gathered
-short-convolution weight-gradient partials, including unused tuple outputs.
-Opaque kernel internals and other operations need source review. Unsupported declared types or
-computation bodies and any remaining unverified result fail qualification. Copy the
-telemetry directory locally and assemble its measured record using the actual
+Copy the telemetry directory locally and assemble its measured record using the actual
 warmup, microbatch, accumulation and optimizer settings:
 
 ```bash
@@ -345,13 +334,11 @@ uv run python -m experiments.grug.moe_hero_ep.format_eval \
   --output smoke-report.json smoke measured-smoke.json
 ```
 
-Review learning and compilation evidence before selecting a pilot budget. Pin
+Review learning, gradient and optimizer evidence before selecting a pilot budget. Pin
 [SmokeRecord and PilotBudget](https://github.com/marin-community/marin/blob/main/experiments/grug/moe_hero_ep/format_eval.py)
 in the next launch's `LaunchEvidence.smoke` and `LaunchEvidence.pilot_budget`.
-Smoke qualification requires the current compiled audit schema, complete
-instruction inventory and a passing verdict. It pins the compiler report's raw
-SHA256 and execution/base/measurement identities and rechecks the retained bytes
-alongside the optimizer report before accepting a budget.
+Qualification rechecks the retained gradient and optimizer reports before
+accepting a budget. Missing runtime measurements leave the budget unqualified.
 The launcher requires both together, recomputes the budget, and checks the
 recipe's token cap, update count, warmup, learning rates and optimizer lineage.
 Set `PilotBudget.format_panel_id` to the pinned D acceptance panel, including at

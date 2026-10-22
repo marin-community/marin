@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import hashlib
 import json
 from pathlib import Path
 
@@ -23,8 +22,6 @@ from experiments.grug.moe_hero_ep.format_eval import (
     PanelCase,
     PilotBudget,
     Serialization,
-    SmokeRecord,
-    SmokeUpdate,
     assemble_smoke,
     compare_candidates,
     compare_native_candidates,
@@ -40,6 +37,7 @@ from experiments.grug.moe_hero_ep.format_eval import (
     validated_format_metrics,
 )
 from experiments.grug.moe_hero_ep.format_sample import NATIVE_BACKEND, NativePanelRequest, sample_panel
+from experiments.grug.moe_hero_ep.format_test_support import smoke_gradient_report, smoke_optimizer_report, smoke_record
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     Checkpoint,
     Completion,
@@ -51,7 +49,6 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     StopReason,
     digest,
 )
-from experiments.grug.moe_hero_ep.sft import SftConfig
 
 
 def test_native_evaluation_rounding_preserves_expert_selection_near_qb_ties():
@@ -313,89 +310,6 @@ def test_paired_interval_reports_exact_discordant_counts():
     assert measured["confidence_interval_95"][0] < 0 < measured["confidence_interval_95"][1]
 
 
-def smoke_compiled_report() -> dict:
-    return {
-        "schema_version": 4,
-        "execution_id": "real-execution",
-        "checkpoint_metadata_digest": "donor-C",
-        "measurement_identity_digest": "model-data-batch-mesh-resources",
-        "parsed_instruction_inventory": True,
-        "avoids_full_base_gradients": True,
-        "optimizer_frozen_parameter_inputs": 0,
-    }
-
-
-def smoke_optimizer_report() -> dict:
-    return {
-        "schema_version": 1,
-        "execution_id": "real-execution",
-        "checkpoint_metadata_digest": "donor-C",
-        "measurement_identity_digest": "model-data-batch-mesh-resources",
-        "optimizer_step": 0,
-        "compact_optimizer_only": True,
-        "errors": [],
-        "trainable_parameter_bytes": 1024,
-        "optimizer_state_bytes": 2064,
-        "expected_optimizer_state_bytes": 2064,
-    }
-
-
-def smoke_record() -> SmokeRecord:
-    return SmokeRecord(
-        execution_id="real-execution",
-        checkpoint_metadata_digest="donor-C",
-        hardware="GB200-NVL72",
-        gpu_count=64,
-        configuration_digest="config",
-        measurement_identity_digest="model-data-batch-mesh-resources",
-        sft_config=SftConfig(
-            rank=16,
-            alpha=16,
-            token_ids=(128009,),
-            adapter_learning_rate=1e-4,
-            vocab_learning_rate=1e-5,
-            num_steps=4,
-            warmup_steps=1,
-            seed=0,
-        ),
-        terminal_checkpoint="measured-compact-checkpoint",
-        terminal_checkpoint_metadata_digest="measured-compact-metadata",
-        input_batches_digest="fixed-input",
-        sequence_length=16384,
-        global_batch_executed_tokens=65536,
-        microbatch_size=1,
-        gradient_accumulation=4,
-        optimizer="Adam-adapters",
-        trainable_parameter_bytes=1024,
-        optimizer_state_bytes=2064,
-        checkpoint_seconds=2,
-        compile_seconds=30,
-        warmup_updates=1,
-        compiled_gradient_report="compiled-report.json",
-        compiled_gradient_report_sha256=hashlib.sha256(json.dumps(smoke_compiled_report()).encode()).hexdigest(),
-        compact_optimizer_report="compact-optimizer-report.json",
-        compact_optimizer_report_sha256=hashlib.sha256(json.dumps(smoke_optimizer_report()).encode()).hexdigest(),
-        avoids_full_base_gradients=True,
-        preserves_activation_gradients=True,
-        updates=tuple(
-            SmokeUpdate(
-                update=i,
-                elapsed_seconds=10 if i == 1 else 2,
-                executed_tokens=65536,
-                non_padding_tokens=50000,
-                supervised_tokens=20000,
-                peak_hbm_bytes=100000,
-                optimizer_seconds=0.1,
-                loss=2 - i / 100,
-                gradient_norm=1,
-                diagnostic_successes=80 + i,
-                diagnostic_cases=100,
-            )
-            for i in range(1, 5)
-        ),
-    )
-
-
 def test_pilot_uses_non_padding_measurements_and_rejects_too_few_updates():
     smoke = smoke_record()
     measured = summarize_smoke(smoke)
@@ -627,7 +541,7 @@ def test_native_panel_sampler_retains_eot_and_distinguishes_truncation_and_legac
     assert legacy_report["serialization"] == "legacy" and not legacy_report["metrics"]
 
 
-def test_smoke_assembly_requires_persisted_runtime_measurements_and_compiled_proof(tmp_path):
+def test_smoke_assembly_qualifies_compact_outputs_without_compiler_certificate(tmp_path):
     measured = smoke_record()
     metadata = {
         key: measured.model_dump(mode="json")[key]
@@ -657,8 +571,8 @@ def test_smoke_assembly_requires_persisted_runtime_measurements_and_compiled_pro
             "acquisition_diagnostic": {"panel_digest": "fixed-train-diagnostic"},
         }
         (tmp_path / f"update-{update.update:06d}.json").write_text(json.dumps(raw))
-    compiled = tmp_path / "compiled-gradient-report.json"
-    compiled.write_text(json.dumps(smoke_compiled_report()))
+    gradient = tmp_path / "gradient-structure-report.json"
+    gradient.write_text(json.dumps(smoke_gradient_report()))
     optimizer = tmp_path / "compact-optimizer-report.json"
     optimizer.write_text(json.dumps(smoke_optimizer_report()))
     compact = tmp_path / "compact"
@@ -688,20 +602,20 @@ def test_smoke_assembly_requires_persisted_runtime_measurements_and_compiled_pro
         tmp_path, warmup_updates=1, microbatch_size=1, gradient_accumulation=4, optimizer="Adam-adapters"
     )
     assert summarize_smoke(assembled)["median_non_padding_tokens_per_second"] == 25000
-    assert assembled.preserves_activation_gradients and assembled.avoids_full_base_gradients
+    assert assembled.preserves_activation_gradients and assembled.compact_gradient_outputs
     assert assembled.checkpoint_seconds == 2
-    compiled.write_text(json.dumps({**smoke_compiled_report(), "schema_version": 3}))
-    with pytest.raises(ValueError, match="Compiled evidence report bytes changed"):
+    gradient.write_text(json.dumps({**smoke_gradient_report(), "schema_version": 3}))
+    with pytest.raises(ValueError, match="Gradient structure report bytes changed"):
         validate_smoke_checkpoint(assembled)
-    with pytest.raises(ValueError, match="current-schema"):
+    with pytest.raises(ValueError, match="does not match the measured smoke"):
         assemble_smoke(tmp_path, warmup_updates=1, microbatch_size=1, gradient_accumulation=4, optimizer="Adam-adapters")
     for field in ("execution_id", "checkpoint_metadata_digest", "measurement_identity_digest"):
-        compiled.write_text(json.dumps({**smoke_compiled_report(), field: "another-smoke"}))
-        with pytest.raises(ValueError, match="current-schema"):
+        gradient.write_text(json.dumps({**smoke_gradient_report(), field: "another-smoke"}))
+        with pytest.raises(ValueError, match="does not match the measured smoke"):
             assemble_smoke(
                 tmp_path, warmup_updates=1, microbatch_size=1, gradient_accumulation=4, optimizer="Adam-adapters"
             )
-    compiled.write_text(json.dumps(smoke_compiled_report()))
+    gradient.write_text(json.dumps(smoke_gradient_report()))
     # Budget qualification rechecks the pinned structural report, not a copied
     # pass flag or the optimizer byte count alone.
     optimizer.write_text(json.dumps({**smoke_optimizer_report(), "optimizer_step": 1}))
@@ -722,6 +636,16 @@ def test_smoke_assembly_requires_persisted_runtime_measurements_and_compiled_pro
     with pytest.raises(FileNotFoundError):
         assemble_smoke(tmp_path, warmup_updates=1, microbatch_size=1, gradient_accumulation=4, optimizer="Adam-adapters")
     optimizer.write_text(json.dumps(smoke_optimizer_report()))
-    compiled.write_text(json.dumps({"avoids_full_base_gradients": False, "optimizer_frozen_parameter_inputs": 0}))
-    with pytest.raises(ValueError, match="Compiled evidence"):
+    gradient.write_text(json.dumps(smoke_gradient_report()))
+    contaminated = smoke_gradient_report()
+    contaminated["gradients"][2]["path"] = ".adapters.stacked_blocks.stacked.attn.w_q"
+    gradient.write_text(json.dumps(contaminated))
+    with pytest.raises(ValueError, match="Noncompact gradient output"):
+        assemble_smoke(tmp_path, warmup_updates=1, microbatch_size=1, gradient_accumulation=4, optimizer="Adam-adapters")
+    gradient.write_text(json.dumps(smoke_gradient_report()))
+    for path in tmp_path.glob("update-*.json"):
+        row = json.loads(path.read_text())
+        row["input_delta_gradient_norm"] = 0
+        path.write_text(json.dumps(row))
+    with pytest.raises(ValueError, match="No measured input-delta gradient"):
         assemble_smoke(tmp_path, warmup_updates=1, microbatch_size=1, gradient_accumulation=4, optimizer="Adam-adapters")

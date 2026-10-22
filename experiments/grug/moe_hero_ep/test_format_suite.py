@@ -12,112 +12,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from levanter.testing.tokenizer import stage_gpt2_tokenizer
-from levanter.tokenizers import load_tokenizer
-from tokenizers import Tokenizer
 
-from experiments.grug.moe_hero_ep.format_eval import EOT_ID, Interface, Panel, PanelCase, Serialization
-from experiments.grug.moe_hero_ep.format_measure import PtPanel, PtRow, token_bytes_digest
-from experiments.grug.moe_hero_ep.format_sample import NATIVE_BACKEND, native_evaluation_model
-from experiments.grug.moe_hero_ep.format_suite import NativeSuiteRequest, PanelPurpose, SuitePanel, run_suite
+from experiments.grug.moe_hero_ep.format_eval import EOT_ID
+from experiments.grug.moe_hero_ep.format_suite import PanelPurpose, run_suite
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Checkpoint, SampleResult, digest
-
-
-@pytest.fixture
-def suite_inputs(tmp_path):
-    stage_gpt2_tokenizer(Path("lib/levanter/tests"), tmp_path)
-    underlying = Tokenizer.from_file(str(tmp_path / "tokenizer.json"))
-    underlying.add_tokens([f"<unused-{index}>" for index in range(EOT_ID - underlying.get_vocab_size())])
-    underlying.add_special_tokens(["<|eot_id|>", "<|start_header_id|>", "<|end_header_id|>"])
-    underlying.save(str(tmp_path / "tokenizer.json"))
-    tokenizer = load_tokenizer(str(tmp_path))
-    config = native_evaluation_model(
-        GrugModelConfig(
-            vocab_size=len(tokenizer),
-            hidden_dim=16,
-            intermediate_dim=8,
-            shared_expert_intermediate_dim=8,
-            num_experts=4,
-            num_experts_per_token=2,
-            num_layers=1,
-            num_heads=2,
-            num_kv_heads=1,
-            head_dim=8,
-            max_seq_len=16384,
-            sliding_window=8,
-            attention_implementation="reference",
-        )
-    )
-    panel = Panel(
-        release="suite-test",
-        cases=(
-            PanelCase(
-                id="greeting",
-                interface=Interface.SIMPLE,
-                messages=({"role": "user", "content": "Hi"},),
-                legacy_prompt="Hi",
-                seed=0,
-                source="local-fixture",
-                expected="A human-written free-form example",
-            ),
-        ),
-        tokenizer="pinned-local-tokenizer",
-        tokenizer_revision="a" * 40,
-        source_revision="b" * 40,
-        backend=NATIVE_BACKEND,
-        max_new_tokens=2,
-        temperature=0,
-    )
-    content_panel = panel.model_copy(
-        update={"cases": (panel.cases[0].model_copy(update={"id": "content", "expected": "x"}),)}
-    )
-    tokens, weights, segments = (2, 3, 4, 5), (1.0, 0.5, 1.0, 0.0), (0, 0, 0, 0)
-    data = {"heldout-source": "pinned-pt-cache"}
-    pt = PtPanel(
-        source_data_config=data,
-        source_data_config_digest=digest(data),
-        component="pt",
-        tags=("heldout",),
-        tokenizer=panel.tokenizer,
-        tokenizer_revision=panel.tokenizer_revision,
-        sequence_length=4,
-        rows=(
-            PtRow(
-                row_index=0,
-                tokens=tokens,
-                loss_weight=weights,
-                segment_ids=segments,
-                arrays_sha256=token_bytes_digest(tokens, weights, segments),
-            ),
-        ),
-    )
-    pt_path = tmp_path / "pt.json"
-    pt_path.write_text(pt.model_dump_json() + "\n")
-    request = NativeSuiteRequest(
-        checkpoint=Checkpoint(
-            uri="unread-full-model",
-            run_id="suite-test",
-            step=294000,
-            timestamp="2026-10-20",
-            metadata_digest="c" * 64,
-        ),
-        model=draccus.encode(config),
-        source_revision=panel.source_revision,
-        tokenizer=panel.tokenizer,
-        tokenizer_revision=panel.tokenizer_revision,
-        target_cluster="explicit-test-target",
-        expert_axis_size=1,
-        replica_axis_size=1,
-        panels=(
-            SuitePanel(panel=panel, serialization=Serialization.MARIN, purpose=PanelPurpose.FORMAT),
-            SuitePanel(panel=content_panel, serialization=Serialization.MARIN, purpose=PanelPurpose.CONTENT),
-        ),
-        pt_repetitions=1,
-        pt_panel_path=str(pt_path),
-        pt_panel_sha256=hashlib.sha256(pt_path.read_bytes()).hexdigest(),
-    )
-    return request, tokenizer
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleResult, digest
 
 
 @pytest.mark.parametrize("pt_repetitions", (1, 3))

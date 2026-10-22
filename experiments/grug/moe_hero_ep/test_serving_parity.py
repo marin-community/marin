@@ -43,8 +43,6 @@ from experiments.grug.moe_hero_ep.serving_parity import (
     verify_serving_report,
 )
 
-pytest_plugins = ["experiments.grug.moe_hero_ep.test_format_handoff"]
-
 
 def pin(path):
     return JsonPin(path=str(path), sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest())
