@@ -17,11 +17,13 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from importlib.util import find_spec
 from pathlib import Path
 
 from finestore.reader import ReadView
+from rigging.timing import retry_with_backoff
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 # Historical result-tree readers still use these names for pre-FineStore artifacts.
@@ -49,6 +51,8 @@ _CONTEXT_PROMPT_RESERVE = 1024
 # max_length-long prompt). Report a context this much below the true served window so prompt +
 # output never crosses it; on a large-context model the shave is negligible.
 _CONTEXT_MARGIN = 64
+_MODEL_LOOKUP_ATTEMPTS = 3
+_RETRYABLE_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
 def generation_budget(max_gen_toks: int | None, max_length: int | None) -> int | None:
@@ -113,14 +117,24 @@ def served_max_length(base_url: str) -> int | None:
 
     lm-eval's API model cannot see the server's context window and assumes 2048 tokens by default,
     left-truncating longer prompts -- which silently drops few-shot examples on tasks like 25-shot
-    arc_challenge. Returns None when the server does not report a length (the lm-eval default stands).
+    arc_challenge. Retries transient lookup failures and raises if they persist. Returns None only
+    when a successful response does not report a length.
     """
-    try:
+
+    def read_models():
         with urllib.request.urlopen(f"{base_url.rstrip('/')}/models", timeout=30) as resp:
-            payload = json.load(resp)
-    except Exception as exc:
-        print(f"could not read {base_url}/models for max_model_len: {exc}", flush=True)
-        return None
+            return json.load(resp)
+
+    payload = retry_with_backoff(
+        read_models,
+        retryable=lambda exc: (
+            exc.code in _RETRYABLE_HTTP_STATUS
+            if isinstance(exc, urllib.error.HTTPError)
+            else isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+        ),
+        max_attempts=_MODEL_LOOKUP_ATTEMPTS,
+        operation="read served model context length",
+    )
     for entry in payload.get("data", []):
         if entry.get("max_model_len"):
             return int(entry["max_model_len"])
