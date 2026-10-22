@@ -57,6 +57,7 @@ from experiments.post_training.snowball_inventory_smoke import (
     TOKENIZER_MODEL,
     TOKENIZER_REVISION,
     inventory_training_execution,
+    preflight_environment,
     runtime_environment,
     smoke_recipe,
 )
@@ -253,6 +254,7 @@ def preflight_evaluation(config: EvaluationConfig) -> None:
 def run_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
     remote(
         preflight_evaluation,
+        env_vars=preflight_environment(config.launch.launch_config_yaml),
         resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
     )(config)
     with StoragePath(prefix_join(config.output_path, "preflight.json")).open("rt") as source:

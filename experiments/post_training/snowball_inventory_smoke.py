@@ -14,6 +14,7 @@ import click
 import yaml
 from fray.types import ResourceConfig
 from iris.rpc import job_pb2
+from marin.evaluation.eval_env import env_vars_from_keys
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -92,6 +93,17 @@ def runtime_environment() -> dict[str, str]:
     return environment
 
 
+def preflight_environment(launch_document: str) -> dict[str, str]:
+    """Forward only the grader credentials named by the composed task backends."""
+    sessions = yaml.safe_load(launch_document)["skyrl"]["environment"]["task_sessions"]
+    keys = []
+    for backend in ("remote_judge", "daytona"):
+        session = sessions.get(backend)
+        if session is not None:
+            keys.append(session["api_key_env"])
+    return env_vars_from_keys(tuple(keys))
+
+
 def verify_pool_runtime(
     launch_config_yaml: str,
     expected_sha256: str,
@@ -147,6 +159,7 @@ def run_inventory(config: InventoryRunConfig) -> SkyRLRun:
     report_uri = str(StoragePath(config.training.output.terminal_manifest_uri).parent / "probe" / "report.json")
     remote(
         verify_pool_runtime,
+        env_vars=preflight_environment(config.training.launch_config_yaml),
         resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
     )(
         config.training.launch_config_yaml,

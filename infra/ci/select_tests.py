@@ -160,6 +160,12 @@ DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "skyrl-wheel": (
         "vendor/skyrl/",
+        "lib/finelog/",
+        "lib/finestore/",
+        "lib/iris/",
+        "lib/rigging/",
+        "lib/shellbox/",
+        "config/",
         "lib/rolloutengine/",
         "lib/taskcompendium/",
         "lib/verifyit/",

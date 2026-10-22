@@ -6,8 +6,10 @@
 The two arms share the dedicated evaluation account's 16-task budget, eight each.
 Do not overlap another evaluation job using that account with the comparison.
 Each arm starts in its own artifact/checkpoint root and resumes only its own state.
+Periodic arms persist paired reports under evaluation/step-UPDATE/report.json.
 """
 
+import json
 from dataclasses import replace
 from enum import StrEnum
 
@@ -28,6 +30,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.snowball_inventory_evaluate import (
     EvaluationOutcome,
@@ -100,9 +103,29 @@ def summarize_periodic_evaluation(launch_document: str, probe_report: dict, step
     report.update(
         step=step,
         panel_sha256=probe_report["validation_sha256"],
+        source_dumps=records["source_dumps"],
         protocol={"max_new_tokens": MAX_NEW_TOKENS, "request_window_tokens": REQUEST_WINDOW_TOKENS, "temperature": 0.0},
     )
     return report
+
+
+def run_comparison(config: InventoryRunConfig) -> SkyRLRun:
+    """Persist every planned paired evaluation before completing the comparison artifact."""
+    completed = run_inventory(config)
+    root = StoragePath(config.training.output.terminal_manifest_uri).parent
+    probe = json.loads((root / "probe" / "report.json").read_text())
+    max_steps = yaml.safe_load(config.training.launch_config_yaml)["skyrl"]["trainer"]["max_steps"]
+    incomplete = []
+    for step in range(0, max_steps + 1, CHECKPOINT_INTERVAL):
+        report = summarize_periodic_evaluation(config.training.launch_config_yaml, probe, step)
+        destination = root / "evaluation" / f"step-{step}" / "report.json"
+        destination.parent.mkdirs()
+        destination.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+        if not report["complete"]:
+            incomplete.append(step)
+    if incomplete:
+        raise ValueError(f"Comparison evaluation coverage is incomplete at updates {incomplete}; reports: {root}")
+    return completed
 
 
 def comparison_recipe(
@@ -252,7 +275,8 @@ def comparison_step(
             expected_tokenizer_template_sha256,
         )
 
-    return replace(rl, run=run_inventory, build_config=build_config)
+    runner = run_comparison if evaluation_schedule == EvaluationSchedule.PERIODIC else run_inventory
+    return replace(rl, run=runner, build_config=build_config)
 
 
 @click.command(help=__doc__)
