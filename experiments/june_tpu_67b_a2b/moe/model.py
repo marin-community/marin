@@ -113,7 +113,7 @@ class GrugModelConfig:
     moe_implementation: MoeImplementation | None = None
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
     pooled_transport_capacity_factor: float | None = None
-    """Sender pool capacity per destination shard; required by ``fixed_pooled_wave_all_to_all`` only."""
+    """Sender pool capacity per destination shard; required by ``ring_filtered`` and ``fixed_pooled_wave_all_to_all``."""
     num_expert_waves: int = 1
     """Static wave count for ``fixed_pooled_wave_all_to_all``; must divide the local expert count."""
     ce_implementation: str | None = None
