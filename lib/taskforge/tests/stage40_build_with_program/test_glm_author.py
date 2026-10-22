@@ -8,7 +8,8 @@ import pytest
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
-from taskforge.stage30_author.author import PROGRAM_FILE, Revision, RevisionKind
+from taskforge.stage10_proposal.model import Verification
+from taskforge.stage30_author.author import PROGRAM_FILE, Revision, RevisionKind, VerificationChange
 from taskforge.stage40_build_with_program.glm_author import (
     AUTHOR_DIR,
     COMPLETIONS_FILE,
@@ -89,6 +90,24 @@ async def test_a_revision_continues_from_the_program_the_workpiece_holds(
     assert "grader: the reference scored 0.0" in turns[-2]["content"]
     assert turns[-1] == {"role": "user", "content": schema_instruction(ProgramSubmission)}
     assert [(e.step, e.round) for e in ledger.entries if e.kind == EntryKind.LLM_CALL] == [("author", 2)]
+
+
+async def test_a_revision_that_changes_the_verification_names_both_kinds_to_the_model(
+    proposal, glm_client, fake_glm, ledger, tmp_path
+):
+    workpiece_dir = tmp_path / "workpiece"
+    workpiece_dir.mkdir()
+    (workpiece_dir / PROGRAM_FILE).write_text(PROGRAM)
+    fake_glm.stream(content=submission(PROGRAM))
+    change = VerificationChange(Verification.ANSWER_IN_BOX, Verification.DECISION_MODEL, "the reply is prose")
+    revision = Revision(RevisionKind.MODIFY, "the grader accepted a hedged reply", change)
+
+    await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 1, "author"))(
+        change.revise(proposal), revision, {}
+    )
+
+    asked = fake_glm.requests[0]["messages"][-2]["content"]
+    assert "answer_in_box" in asked and "decision_model" in asked
 
 
 async def test_an_author_call_that_never_loads_keeps_its_completions(proposal, glm_client, fake_glm, ledger, tmp_path):

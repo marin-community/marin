@@ -96,7 +96,7 @@ from taskforge.stage40_build_with_program.context import (
     BuildInfrastructureFailure,
     RLEnvBuildContext,
 )
-from taskforge.stage40_build_with_program.glm_author import RECORD_FILE, REVISION_PROMPT, author_messages, sdk_reference
+from taskforge.stage40_build_with_program.glm_author import RECORD_FILE, author_messages, revision_prompt, sdk_reference
 from taskforge.stage40_build_with_program.infrastructure import (
     HOST_REJECTIONS,
     InfrastructureCause,
@@ -251,9 +251,9 @@ class AgenticAuthorConfig:
 
 class ProgramBuilder(Protocol):
     async def __call__(self, source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
-        """Build ``source`` for the session's workpiece and round, as the caller's own build stage would (same step
-        store, model, policy, services and research requirement), leaving ``draft/`` and the build files under
-        ``run_dir``.
+        """Build ``source`` for the session's workpiece and round, as the caller's own build stage would (same
+        proposal, verification change, step store, model, policy, services and research requirement), leaving
+        ``draft/`` and the build files under ``run_dir``.
 
         Raises what the build raises; the session turns ``BuildFailure`` and other exceptions into text for the
         model, re-raises ``ModelUnavailable``, ``BuildExpired`` and an ``OSError`` raised outside the program's
@@ -1144,7 +1144,7 @@ def opening_messages(proposal: TaskProposal, turns: int) -> list[Message]:
 
 
 def _revision_text(revision: Revision) -> str:
-    return f"{REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)}\n{EDIT_AND_SUBMIT}"
+    return f"{revision_prompt(revision)}\n{EDIT_AND_SUBMIT}"
 
 
 def authored_of(session_dir: Path) -> Path:
