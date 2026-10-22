@@ -305,6 +305,9 @@ class GrugTrainerConfig:
     # With ``lm_head_grad_dump_every``: write the train batch's per-token lm_head input-gradient norms and token ids
     # to ``<lm_head_grad_dump_dir>/step-<step>.npz`` on the ``lm_head_grad_dump_due`` steps.
     lm_head_grad_dump_dir: str | None = None
+    # With ``token_norms_dump_every``: per-token embedding / lm_head norms and batch token counts
+    # (``_write_token_norms_dump``) go to ``<token_norms_dump_dir>/step-<step>.npz``.
+    token_norms_dump_dir: str | None = None
     # After these steps, run ``ROUTING_DUMP_SEQUENCES`` fixed held-out sequences and write their routing and routed
     # neuron activity to ``<routing_dump_dir>/step-<step>.npz`` (``write_routing_dump``).
     routing_dump_dir: str | None = None
@@ -1006,6 +1009,83 @@ def _token_embed_stats(before: jax.Array, after: jax.Array) -> dict[str, jax.Arr
     return {f"{TOKEN_EMBED_STATS_PREFIX}{k}": v for k, v in out.items()}
 
 
+# The params entering the step (``step`` updates applied): ``[3, V]`` float32 of each token's ``token_embed`` row
+# norm, lm_head column norm and their cosine, and the batch's ``[V]`` int32 token counts. Kept on device unless a
+# dump fetches them.
+TOKEN_NORMS_KEY = "_token_norms"
+TOKEN_COUNTS_KEY = "_token_counts"
+# Dump every step up to TOKEN_NORMS_EVERY_STEP_UNTIL, every TOKEN_NORMS_EARLY_EVERY steps up to
+# TOKEN_NORMS_EARLY_UNTIL, then every ``token_norms_dump_every`` and at the last step.
+TOKEN_NORMS_EVERY_STEP_UNTIL = 20
+TOKEN_NORMS_EARLY_UNTIL = 200
+TOKEN_NORMS_EARLY_EVERY = 5
+
+
+def token_norms_dump_due(step: int, every: int, last_step: int) -> bool:
+    """Whether the 0-based train ``step`` writes a token-norms dump (``every`` = 0: never)."""
+    if every <= 0:
+        return False
+    if step <= TOKEN_NORMS_EVERY_STEP_UNTIL or step == last_step:
+        return True
+    if step <= TOKEN_NORMS_EARLY_UNTIL:
+        return step % TOKEN_NORMS_EARLY_EVERY == 0
+    return step % every == 0
+
+
+def _token_norm_arrays(params, batch) -> dict[str, jax.Array]:
+    """``TOKEN_NORMS_KEY`` and ``TOKEN_COUNTS_KEY`` of ``params`` and ``batch`` (replicated)."""
+    embed = reshard(params.token_embed.astype(jnp.float32), P(None, None))
+    head = reshard(params.output_proj.astype(jnp.float32), P(None, None)).T
+    embed_norm = jnp.sqrt(jnp.sum(jnp.square(embed), axis=-1))
+    head_norm = jnp.sqrt(jnp.sum(jnp.square(head), axis=-1))
+    cosine = jnp.sum(embed * head, axis=-1) / jnp.maximum(embed_norm * head_norm, 1e-30)
+    tokens = reshard(batch.tokens, P(None, None)).reshape(-1)
+    counts = jnp.zeros(embed.shape[0], jnp.int32).at[tokens].add(1)
+    return {
+        TOKEN_NORMS_KEY: jax.lax.stop_gradient(jnp.stack([embed_norm, head_norm, cosine])),
+        TOKEN_COUNTS_KEY: counts,
+    }
+
+
+class _TokenCountWindow:
+    """Token counts summed over the train steps since the last ``take`` (a resumed run starts a fresh window)."""
+
+    def __init__(self):
+        self.counts: np.ndarray | None = None
+        self.start_step = 0
+
+    def add(self, step: int, counts: np.ndarray) -> None:
+        if self.counts is None:
+            self.counts, self.start_step = counts.astype(np.int64), step
+        else:
+            self.counts += counts
+
+    def take(self) -> tuple[np.ndarray, int]:
+        assert self.counts is not None
+        out = (self.counts, self.start_step)
+        self.counts = None
+        return out
+
+
+def _write_token_norms_dump(dump_dir: str, step: int, norms: np.ndarray, counts: np.ndarray, count_start: int) -> None:
+    """Write the norms of the params after ``step`` updates and the token counts of steps ``count_start..step``."""
+    if jax.process_index() != 0:
+        return
+    buffer = io.BytesIO()
+    np.savez_compressed(
+        buffer,
+        step=np.asarray(step),
+        embed_norm=norms[0],
+        lm_head_norm=norms[1],
+        cosine=norms[2],
+        counts=counts,
+        count_start_step=np.asarray(count_start),
+    )
+    path = f"{dump_dir}/step-{step:06d}.npz"
+    with fsspec.open(path, "wb") as f:
+        f.write(buffer.getvalue())
+
+
 def _write_lm_head_grad_dump(dump_dir: str, step: int, metrics: dict, batch) -> None:
     """Write ``step``'s per-token norms (``_lm_head_grad_metrics`` units: ``norm`` post-norm, ``norm_pre`` pre-norm),
     ``rms_pre`` (each token's RMS entering ``final_norm``), tokens, loss weights and segment ids."""
@@ -1159,10 +1239,11 @@ def _make_train_step(
     lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
     token_embed_stats: bool = False,
+    token_norms: bool = False,
 ):
     """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
     ``lm_head_grad_probe_site`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
-    ``token_embed_stats`` the ``_token_embed_stats``.
+    ``token_embed_stats`` the ``_token_embed_stats``, ``token_norms`` the ``_token_norm_arrays``.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
     (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
     between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
@@ -1194,6 +1275,8 @@ def _make_train_step(
                 qb_params, batch, mp, z_loss, layer_skip, extra_active, lm_head_grad_probe_site, lm_head_grad_clip
             )
         metrics = {"train/loss": loss, **summarized_metrics}
+        if token_norms:
+            metrics.update(_token_norm_arrays(qb_params, batch))
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
             # MFU-baseline mode: run fwd+bwd (grads above) but skip the optimizer update (Muon NS).
@@ -1588,6 +1671,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         eval_interval = eval_cfg.steps_per_eval if eval_cfg is not None and eval_cfg.steps_per_eval else None
         last_ready_time: float | None = None
+        token_counts = _TokenCountWindow()
 
         def finish_step(rec: "_PendingStep", step_state: GrugTrainState | None) -> None:
             """Wait for ``rec``'s step and do its host work. With ``step_state`` (the state after the step, not yet
@@ -1672,6 +1756,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 dump_dir = config.trainer.lm_head_grad_dump_dir
                 if dump_dir is not None and lm_head_grad_dump_due(step, config.model.lm_head_grad_dump_every):
                     _write_lm_head_grad_dump(dump_dir, step, metrics, rec.batch)
+                if TOKEN_COUNTS_KEY in metrics:
+                    token_counts.add(step, np.asarray(metrics[TOKEN_COUNTS_KEY].addressable_data(0)))
+                    if token_norms_dump_due(step, config.model.token_norms_dump_every, stop_step - 1):
+                        assert config.trainer.token_norms_dump_dir is not None
+                        norms = np.asarray(metrics[TOKEN_NORMS_KEY].addressable_data(0))
+                        counts, count_start = token_counts.take()
+                        _write_token_norms_dump(config.trainer.token_norms_dump_dir, step, norms, counts, count_start)
             if step_state is not None:
                 if checkpointer is not None:
                     with callbacks.progress_event_scope(
@@ -2057,6 +2148,7 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         lm_head_grad_probe_site=config.model.lm_head_grad_probe_site if config.model.lm_head_grad_probe else None,
         lm_head_grad_clip=config.model.lm_head_grad_clip,
         token_embed_stats=config.model.token_embed_stats,
+        token_norms=config.model.token_norms_dump_every > 0,
     )
     return train_step_fn, diagnostic_watch_step
 

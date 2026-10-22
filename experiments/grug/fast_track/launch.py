@@ -658,6 +658,9 @@ def build_h100_ladder_run(
                 lm_head_grad_dump_dir=(
                     prefix_join(ctx.output_path, "lm_head_grad") if model.lm_head_grad_dump_every else None
                 ),
+                token_norms_dump_dir=(
+                    prefix_join(ctx.output_path, "token_norms") if model.token_norms_dump_every else None
+                ),
                 routing_dump_steps=routing_dump_steps,
                 xla_autotune_cache_path=autotune_cache_path,
                 preload_library_kernels=rung.device == "GB200",
