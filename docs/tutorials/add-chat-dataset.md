@@ -271,7 +271,7 @@ tokenizer.save_pretrained("path/to/model")
 Point MarinSkyRL's policy tokenizer at that same artifact and enable tool parsing
 in the generator's `engine_init_kwargs` with `enable_auto_tool_choice: true` and
 `tool_call_parser: hermes`. This preserves the existing Marin header and reasoning
-tokens. The [pinned MarinSkyRL wrapper](https://github.com/marin-community/MarinSkyRL/blob/93d84333acdf27275d258f0f25dad24129f0cf6e/skyrl-train/skyrl_train/inference_engines/vllm/utils.py)
+tokens. The [vendored SkyRL wrapper](https://github.com/marin-community/marin/blob/main/vendor/skyrl/skyrl-train/skyrl_train/inference_engines/vllm/utils.py)
 forwards tool-parser settings but does not forward a reasoning parser. Reasoning
 therefore remains in assistant `content`; tool-enabled requests preserve its
 think markers. Returning a separate reasoning field in OpenAI chat-completion

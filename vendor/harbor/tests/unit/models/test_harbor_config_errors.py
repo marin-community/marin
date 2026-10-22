@@ -71,6 +71,14 @@ def test_openai_connect_timeout_is_retryable_infrastructure() -> None:
     assert is_resume_retryable("OpenAITransportConnectTimeoutError")
 
 
+@pytest.mark.parametrize(
+    "name", ["InternalServerError", "APIConnectionError", "APITimeoutError"]
+)
+def test_provider_transport_failure_is_retryable_infrastructure(name: str) -> None:
+    assert error_category(name) is ErrorCategory.INFRASTRUCTURE
+    assert is_resume_retryable(name)
+
+
 def test_phase_cancellation_error_is_retryable_infrastructure() -> None:
     assert error_category("PhaseCancellationError") is ErrorCategory.INFRASTRUCTURE
     assert is_resume_retryable("PhaseCancellationError")

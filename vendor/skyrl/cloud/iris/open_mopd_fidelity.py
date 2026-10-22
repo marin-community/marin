@@ -13,7 +13,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-from cloud.iris.runtime_bundle import LauncherSource, resolve_launcher_source
+from cloud.iris.paths import PROJECT_ROOT
+from rigging.provenance import Provenance, launch_provenance
 
 DEFAULT_CONFIG = Path(__file__).with_name("configs") / "open_mopd_fidelity.json"
 TASK_MODULE = "cloud.iris.open_mopd_fidelity_task"
@@ -135,7 +136,7 @@ class FidelityLaunchPlan:
     steps: int
     gpu_slice: str
     source_commit: str
-    source_digest: str
+    provenance: Provenance
     task_image: str
     output_uri: str
     evaluation_reference: ModelArtifact
@@ -369,12 +370,6 @@ def validate_output_uri(output_uri: str, *, option_name: str = "--output-uri") -
         raise ValueError(f"{option_name} must be a non-root gs:// or s3:// durable prefix")
 
 
-def _provenance(task_image: str, source: LauncherSource) -> tuple[str, str]:
-    if not re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", task_image):
-        raise ValueError("--task-image must be a digest-addressed image reference")
-    return source.digest, task_image
-
-
 def _deviations(config: FidelityConfig, gpu_slice: str) -> tuple[str, ...]:
     deviations = list(config.known_deviations)
     if gpu_slice != config.hardware.gpu:
@@ -390,7 +385,6 @@ def _iris_command(
     cluster_config: Path,
     output_uri: str,
     task_image: str,
-    source_digest: str,
     launcher_root: Path,
     gpu_slice: str,
 ) -> tuple[str, ...]:
@@ -441,8 +435,6 @@ def _iris_command(
         gpu_slice,
         "--task-image",
         task_image,
-        "--source-digest",
-        source_digest,
     )
 
 
@@ -461,17 +453,16 @@ def build_plan(
     validate_output_uri(output_uri)
     gpu_slice = gpu_slice or config.hardware.gpu
     gpu_count(gpu_slice)
-    launcher_source = resolve_launcher_source()
-    source_digest, pinned_image = _provenance(task_image, launcher_source)
+    if not re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", task_image):
+        raise ValueError("--task-image must be a digest-addressed image reference")
     command = _iris_command(
         config,
         config_path=config_path,
         gate=gate,
         cluster_config=cluster_config,
         output_uri=output_uri,
-        task_image=pinned_image,
-        source_digest=source_digest,
-        launcher_root=launcher_source.root,
+        task_image=task_image,
+        launcher_root=PROJECT_ROOT,
         gpu_slice=gpu_slice,
     )
     return FidelityLaunchPlan(
@@ -479,8 +470,8 @@ def build_plan(
         steps=GATES[gate],
         gpu_slice=gpu_slice,
         source_commit=config.source.commit,
-        source_digest=source_digest,
-        task_image=pinned_image,
+        provenance=launch_provenance(),
+        task_image=task_image,
         output_uri=output_uri,
         evaluation_reference=config.evaluation_reference,
         prompt_limit=config.training.prompt_limit,

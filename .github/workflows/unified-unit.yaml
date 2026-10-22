@@ -527,13 +527,13 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "vendor/skyrl/uv.lock"
-      - name: Check independent lock, Marin contract, and built wheel
-        run: uv run --no-project python -m scripts.skyrl_migration check-vendor
-      - name: Exercise the isolated source bundle, launchers, and verifier
+      - name: Check independent lock
+        run: uv lock --project vendor/skyrl --check
+      - name: Exercise packaging, launchers, and verifier
         working-directory: vendor/skyrl
         run: |
-          uv run --isolated --frozen --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
-            cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py
+          uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
+            infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py
 
   unit_tests:
     name: unit-tests

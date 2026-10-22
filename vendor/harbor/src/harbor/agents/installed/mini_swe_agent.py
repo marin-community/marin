@@ -43,6 +43,7 @@ _HOSTED_VLLM_PREFIX = "hosted_vllm/"
 _MODEL_DIRECTORY = "/opt/harbor-mini-swe"
 _K2_HORIZON_MODEL_FORMAT = "k2_horizon"
 _MCP_VERSION = "2.3.0"
+_LITELLM_VERSION = "1.103.5"
 
 
 def _normalize_content(raw_content: Any) -> str:
@@ -473,7 +474,8 @@ class MiniSweAgent(BaseInstalledAgent):
                 '  echo \'export PATH="$HOME/.local/bin:$PATH"\' >> "$HOME/.bashrc";'
                 " fi && "
                 'source "$HOME/.local/bin/env" && '
-                f"uv tool install mini-swe-agent{version_spec} --with mcp=={_MCP_VERSION} && "
+                f"uv tool install mini-swe-agent{version_spec} --with mcp=={_MCP_VERSION} "
+                f"--with litellm=={_LITELLM_VERSION} && "
                 '"$(uv tool dir)/mini-swe-agent/bin/python" '
                 "-c 'from mcp.types import CacheableResult' && "
                 "mini-swe-agent --help"
