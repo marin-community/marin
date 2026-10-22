@@ -772,6 +772,9 @@ class EnvironmentSpec:
             "HF_TOKEN": os.getenv("HF_TOKEN"),
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
             **{name: os.getenv(name) for name in COREWEAVE_STORAGE_ENV_VARS},
+            # S3 clients (tensorstore, boto) read the standard names; upstream sets both in the pod.
+            "AWS_ACCESS_KEY_ID": os.getenv("CW_KEY_ID"),
+            "AWS_SECRET_ACCESS_KEY": os.getenv("CW_KEY_SECRET"),
             # Launch provenance: a task running from a git-less bundle inherits the
             # submitter's identity via Provenance.capture(); transitive, since a task
             # re-submitting captures this same env value.
