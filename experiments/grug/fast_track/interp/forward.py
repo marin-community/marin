@@ -131,6 +131,10 @@ class Ablation(NamedTuple):
     shared_mult: jax.Array  # [L, I] shared hidden units (zero ablation)
     slot_mult: jax.Array  # [L, K] per top-k rank (rank 0 = largest combine weight)
     slot_renorm: jax.Array  # [] 1: renormalize the kept combine weights to the original sum
+    ve_head_mult: jax.Array  # [L, H] MLA value-embedding term per head (times ``sub_mult[:, SUB_VE]``)
+    ve_mean: jax.Array  # [L, H, head_dim] its replacement: the mean gated value embedding
+    kda_early_tokens: jax.Array  # [] KDA writes of each document's first this-many tokens are ablated
+    kda_early_mode: jax.Array  # [] 0: untouched, 1: zero (beta = 0), 2: mean (their values replaced by the mean value)
 
 
 def no_ablation() -> Ablation:
@@ -143,7 +147,18 @@ def no_ablation() -> Ablation:
         shared_mult=jnp.ones((NUM_LAYERS, SHARED_WIDTH), jnp.float32),
         slot_mult=jnp.ones((NUM_LAYERS, TOP_K), jnp.float32),
         slot_renorm=jnp.zeros((), jnp.float32),
+        ve_head_mult=jnp.ones((NUM_LAYERS, NUM_HEADS), jnp.float32),
+        ve_mean=jnp.zeros((NUM_LAYERS, NUM_HEADS, HEAD_DIM), jnp.float32),
+        kda_early_tokens=jnp.zeros((), jnp.int32),
+        kda_early_mode=jnp.zeros((), jnp.int32),
     )
+
+
+def position_in_document(seg: jax.Array) -> jax.Array:
+    """``[B, S]`` each token's offset from its document's first token."""
+    idx = jnp.broadcast_to(jnp.arange(seg.shape[1]), seg.shape)
+    start = jnp.concatenate([jnp.ones_like(seg[:, :1], bool), seg[:, 1:] != seg[:, :-1]], axis=1)
+    return idx - jax.lax.cummax(jnp.where(start, idx, 0), axis=1)
 
 
 def _mix(m: jax.Array, out: jax.Array, mean: jax.Array) -> jax.Array:
@@ -176,7 +191,7 @@ def _heads_through(conv, contrib: jax.Array, seg: jax.Array) -> jax.Array:
     return _bspec(rearrange(out, "(h b) s d -> b s h d", h=h))
 
 
-def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mult, head_mean, out: dict):
+def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mult, head_mean, abl: Ablation, out: dict):
     """KDA (as ``KimiDeltaAttention.__call__``) with per-head outputs; records q, k, v, log-decay g and beta."""
 
     def project(w, conv):
@@ -192,6 +207,11 @@ def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mul
     gate_p = jnp.broadcast_to(scale, attn.dt_bias.shape)
     gate_bias = attn.dt_bias.astype(jnp.float32)
     beta = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn.w_beta).astype(jnp.float32))
+    out["v_clean"] = v
+    early = (position_in_document(seg) < abl.kda_early_tokens)[..., None]  # [B, S, 1]
+    beta = jnp.where(early & (abl.kda_early_mode == 1), 0.0, beta)
+    mean_v = jnp.mean(v.astype(jnp.float32), axis=(0, 1), keepdims=True).astype(v.dtype)
+    v = jnp.where(early[..., None] & (abl.kda_early_mode == 2), mean_v, v)
     options = KdaKernelOptions(
         cfg.kda_chunk_size,
         False,
@@ -235,7 +255,7 @@ def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mul
     return jnp.sum(contrib.astype(jnp.float32), axis=2).astype(x.dtype), contrib
 
 
-def mla_qkv(attn: CausalSelfAttention, x, seg, token_ids, ve_mult):
+def mla_qkv(attn: CausalSelfAttention, x, seg, token_ids, ve_mult, ve_mean):
     """MLA q, k (offset, normed, qk_mult-scaled as the kernel sees them), the projected value and the gated value
     embedding (``v = v_proj + ve``), and the Inkling bias band."""
     latent = attn.kv_latent_norm(jnp.einsum("bsd,dl->bsl", x, attn.w_dkv))
@@ -247,7 +267,8 @@ def mla_qkv(attn: CausalSelfAttention, x, seg, token_ids, ve_mult):
     ve_w = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn.ve_gate.astype(x.dtype)))[..., None]
     lam = attn.ve_lambda.astype(x.dtype)
     v_proj = lam[0] * v_proj
-    ve = (ve_w * ve) * ve_mult.astype(x.dtype)
+    m = ve_mult.astype(jnp.float32)[None, None, :, None]
+    ve = (m * (ve_w * ve).astype(jnp.float32) + (1.0 - m) * ve_mean[None, None]).astype(x.dtype)
     k = partial_key_offset(k, seg, P(_BATCH, None, None, None), ())
     k = rms_norm(k)
     q = rms_norm(q)
@@ -262,10 +283,10 @@ def _xsa(y: jax.Array, v: jax.Array) -> jax.Array:
     return (dot / (jnp.sum(v * v, axis=-1, keepdims=True) + 1e-6)) * v
 
 
-def _mla_branch(attn: CausalSelfAttention, x, seg, token_ids, mask, head_mult, head_mean, ve_mult, out: dict):
+def _mla_branch(attn: CausalSelfAttention, x, seg, token_ids, mask, head_mult, head_mean, ve_mult, ve_mean, out: dict):
     """MLA (as ``CausalSelfAttention.__call__``) with per-head outputs split into the projected-value and the
     value-embedding parts (XSA, the output gate and ``w_o`` are linear in the attended value)."""
-    q, k, v_proj, ve, rel_bias, ve_w = mla_qkv(attn, x, seg, token_ids, ve_mult)
+    q, k, v_proj, ve, rel_bias, ve_w = mla_qkv(attn, x, seg, token_ids, ve_mult, ve_mean)
     v = v_proj + ve
     impl = attn.cfg.gpu_attention if jax.default_backend() == "gpu" else None
     y_proj = _bspec(attention(q, k, v_proj, mask, implementation=impl, rel_bias=rel_bias)[..., :HEAD_DIM])
@@ -415,7 +436,7 @@ def trace_forward(
         w_attn, h = _gate(blocks, layer.attn_res_query_attn, eps)
         attn_in = layer._attn_input(h)
         if i in KDA_LAYERS:
-            _, contrib = _kda_branch(layer.attn, attn_in, seg, cfg, abl.head_mult[i], abl.head_mean[i], out)
+            _, contrib = _kda_branch(layer.attn, attn_in, seg, cfg, abl.head_mult[i], abl.head_mean[i], abl, out)
             ve_contrib = jnp.zeros_like(contrib)
         else:
             contrib, ve_contrib = _mla_branch(
@@ -426,7 +447,8 @@ def trace_forward(
                 mla_mask,
                 abl.head_mult[i],
                 abl.head_mean[i],
-                abl.sub_mult[i, SUB_VE],
+                abl.sub_mult[i, SUB_VE] * abl.ve_head_mult[i],
+                abl.ve_mean[i],
                 out,
             )
             # The branch-output SConv (MLA only) is linear and channelwise: per-head parts go through it alone.
@@ -448,6 +470,7 @@ def trace_forward(
             attn_in=attn_in,
             head_out=contrib,
             ve_out=jnp.sum(ve_contrib.astype(jnp.float32), axis=2),
+            ve_head_out=ve_contrib,
             attn_out=attn_out,
             mlp_gate_in=h2,
             mlp_in=mlp_in,
