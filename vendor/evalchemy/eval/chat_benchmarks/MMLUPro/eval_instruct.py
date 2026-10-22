@@ -15,6 +15,7 @@ from eval.contracts.preflight import (
 from eval.task import BaseBenchmark
 
 choices = [chr(ord("A") + i) for i in range(16)]
+DEBUG_QUESTION_LIMIT = 2
 
 
 def select_by_category(df: List[Dict[str, Any]], subject: str) -> List[Dict[str, Any]]:
@@ -110,7 +111,7 @@ class MMLUProBenchmark(BaseBenchmark):
 
     def benchmark_size(self) -> int:
         questions, _ = self.load_questions()
-        return len(questions[:2] if self.debug else questions)
+        return len(questions[:DEBUG_QUESTION_LIMIT] if self.debug else questions)
 
     def validate_prepared_data(self) -> None:
         required_fields = {"answer", "category", "cot_content", "options", "question"}
@@ -144,7 +145,7 @@ class MMLUProBenchmark(BaseBenchmark):
                 text = generate_cot_prompt(val_examples, example, shots)
             return text
 
-        examples = test_examples[:2] if self.debug else test_examples
+        examples = test_examples[:DEBUG_QUESTION_LIMIT] if self.debug else test_examples
         return text_specs(
             examples, options, prompt=prompt, target=lambda example: example["answer"],
             grader="mmlu_choice", generation_kwargs={"do_sample": False, "max_gen_toks": self.max_new_tokens},
