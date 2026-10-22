@@ -338,7 +338,7 @@ def davinci_dev_env_native_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/davinci-dev-env-native",
         deps=[dl],
         fn=lambda output_path: transform_env_native_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.09.quarantine"},
+        hash_attrs={"version": "2026.10.22.reject-thinking-markup"},
     )
     return processed, normalize_chat_step(
         output_schema=SOURCE_CHAT_SCHEMA,
