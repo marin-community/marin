@@ -16,14 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
-from rigging.cluster_manifest import AuthProvider, ClusterAuth, IapAuth
 from rigging.config_discovery import resolve_cluster_config
 from rigging.credential_store import cluster_name_from_url
-from rigging.credentials import ClientCredentials, credentials_for
+from rigging.credentials import ClientCredentials
 
 from iris.client.client import IrisClient
 from iris.cluster.composer import provider_bundle
-from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
+from iris.cluster.config import IapAuthConfig, IrisClusterConfig, load_config
+from iris.cluster.credentials import IRIS_CLUSTER_CONFIG_DIRS, client_credentials
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.factory import ProviderBundle
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -32,44 +32,6 @@ from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointSer
 logger = logging.getLogger(__name__)
 
 
-def _bundled_iris_config_dir() -> str | None:
-    """Return the iris package's bundled config/ dir when it ships on disk.
-
-    Probes two layouts because the config directory can physically live in
-    two places depending on how iris was installed:
-
-    1. Wheel installs (site-packages): hatchling force-include places the
-       yamls at ``iris/config/`` inside the package. Resolve that via
-       ``Path(__file__).parent.parent / "config"``.
-    2. Editable workspace installs: the yamls stay at their source location
-       ``lib/iris/config/`` — reachable via ``parents[3] / "config"`` from
-       ``lib/iris/src/iris/cli/connect.py``.
-
-    Returns the first directory that exists, or ``None`` for wheel installs
-    that don't ship configs at all.
-    """
-    here = Path(__file__).resolve()
-    wheel_path = here.parent.parent / "config"
-    if wheel_path.is_dir():
-        return str(wheel_path)
-    editable_path = here.parents[3] / "config"
-    if editable_path.is_dir():
-        return str(editable_path)
-    return None
-
-
-# Directories searched (in priority order) to resolve ``--cluster=<name>`` to
-# a YAML config file. Relative paths are resolved against the marin project
-# root by ``rigging.config_discovery``; absolute paths are used as-is.
-IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
-    p
-    for p in (
-        "~/.config/marin/clusters",  # user override — checked first
-        "lib/iris/config",  # in-tree marin checkout
-        _bundled_iris_config_dir(),  # editable install from sibling workspace
-    )
-    if p is not None
-)
 DEFAULT_CONTROLLER_TIMEOUT_MS = 30_000
 
 
@@ -114,39 +76,6 @@ def resolve_cluster_name(
     if controller_url:
         return cluster_name_from_url(controller_url)
     return "default"
-
-
-def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
-    """Adapt iris's ``AuthConfig`` to rigging's shared credential vocabulary."""
-    provider = auth.provider_kind()
-    if provider == "iap":
-        # `programmatic_audiences` are the service-account edge audiences the
-        # client mints against. Empty is fine: rigging's edge resolver falls back
-        # to the desktop client id, which IAP registers as a programmatic client.
-        return ClusterAuth(
-            AuthProvider.IAP,
-            iap=IapAuth(
-                url=auth.iap.url,
-                desktop_oauth_client_id=auth.iap.oauth_client_id or None,
-                desktop_oauth_client_secret=auth.iap.oauth_client_secret or None,
-                programmatic_audiences=tuple(auth.iap.programmatic_audiences),
-                signed_header_audience=auth.iap.signed_header_audience or None,
-            ),
-        )
-    return ClusterAuth(AuthProvider.NONE)
-
-
-def client_credentials(
-    config: IrisClusterConfig | None,
-    cluster_name: str,
-) -> ClientCredentials:
-    """Resolve the cluster's client credentials via the shared rigging resolver."""
-    auth = (
-        _cluster_auth_from_config(config.auth)
-        if config is not None and config.auth is not None
-        else ClusterAuth(AuthProvider.NONE)
-    )
-    return credentials_for(cluster_name, auth)
 
 
 def connect_controller(

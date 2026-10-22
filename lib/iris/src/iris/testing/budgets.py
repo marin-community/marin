@@ -23,9 +23,7 @@ class InProcessBudgetClient:
     def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse:
         self._require_reachable()
         with identity_scope(VerifiedIdentity(user_id="budget-reader", role="admin")):
-            return self._service().get_user_budget(
-                controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id), None
-            )
+            return self._service().get_user_budget(controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id), None)
 
     def list_user_budgets(self) -> controller_pb2.Controller.ListUserBudgetsResponse:
         self._require_reachable()

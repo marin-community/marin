@@ -253,7 +253,7 @@ def test_handoff_from_another_routing_parent_obeys_the_budget_parent_ceiling(fed
     "parent_error", [ConnectionError("unreachable"), IapCredentialsUnavailable("no machine credentials")]
 )
 def test_direct_submission_fails_when_parent_is_unreachable(federation, monkeypatch, parent_error):
-    def unreachable(user_id):
+    def unreachable(_user_id):
         raise parent_error
 
     monkeypatch.setattr(federation.parent_clients[0], "get_user_budget", unreachable)

@@ -21,14 +21,14 @@ from pathlib import Path
 import uvicorn
 from finelog.client import RemoteLogHandler
 from rigging import telemetry
-from rigging.cluster_manifest import load_manifest
+from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.storage_path import prefix_join
 from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import PeerConfig
+from iris.cluster.config import PeerConfig, load_config
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.attempts import CapabilityUrlConfig
 from iris.cluster.controller.audit_logging import log_event
@@ -112,6 +112,7 @@ from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.tasks import PendingKick
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
+from iris.cluster.credentials import IRIS_CLUSTER_CONFIG_DIRS, client_credentials
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
 from iris.cluster.federation.manager import (
@@ -119,7 +120,7 @@ from iris.cluster.federation.manager import (
     DEFAULT_MAX_HANDOFFS_PER_CYCLE,
     FederationManager,
 )
-from iris.cluster.federation.peer import ControllerBudgetClient, FederationPeer, build_peers
+from iris.cluster.federation.peer import ControllerBudgetClient, FederationPeer, build_peers, peer_credentials
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.runtime.sandbox import task_isolation
@@ -467,15 +468,18 @@ class Controller:
             else build_peers(config.peers, federation_token_provider=federation_token_provider)
         )
         if config.budget_parent and budget_parent_client is None:
-            manifest = load_manifest(config.budget_parent)
-            if not manifest.dashboard_url:
-                raise ValueError("The budget parent's cluster manifest requires dashboard_url")
+            parent_config = load_config(resolve_cluster_config(config.budget_parent, dirs=IRIS_CLUSTER_CONFIG_DIRS))
+            if not parent_config.dashboard_url:
+                raise ValueError("The budget parent's cluster config requires dashboard_url")
             budget_parent_client = ControllerBudgetClient(
-                PeerConfig(controller_address=manifest.dashboard_url, cluster=config.budget_parent)
+                parent_config.dashboard_url, client_credentials(parent_config, config.budget_parent)
             )
         if budget_peer_clients is None:
             budget_peer_clients = {
-                peer_id: ControllerBudgetClient(config.peers[peer_id], federation_token_provider)
+                peer_id: ControllerBudgetClient(
+                    config.peers[peer_id].controller_address,
+                    peer_credentials(config.peers[peer_id], federation_token_provider),
+                )
                 for peer_id in config.budget_peers
             }
         self._budgets = FederationBudgets(

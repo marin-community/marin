@@ -124,10 +124,8 @@ def peer_credentials(peer: PeerConfig, federation_token_provider: TokenProvider 
 class ControllerBudgetClient:
     """Budget reads over the same credentials and transport as federation RPCs."""
 
-    def __init__(self, peer: PeerConfig, token_provider: TokenProvider | None = None):
-        self._client = ControllerServiceClientSync(
-            address=peer.controller_address, interceptors=peer_credentials(peer, token_provider).interceptors()
-        )
+    def __init__(self, controller_address: str, credentials: ClientCredentials):
+        self._client = ControllerServiceClientSync(address=controller_address, interceptors=credentials.interceptors())
 
     def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse:
         return self._client.get_user_budget(
