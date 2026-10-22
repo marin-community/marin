@@ -329,7 +329,7 @@ both values under **Advanced settings**. `loom oauth-client ls` lists registered
 clients, and `loom oauth-client rm <client_id>` removes one and revokes its
 tokens.
 
-The setting requires a Loom build with connector support. Pulumi builds the
-HEAD of Loom's default branch, so deploy this configuration only after the Loom
-connector change merges. An older build rejects the unknown setting and
-activation fails.
+Activation requires a Loom build with connector support. An older build,
+including a rollback to one, rejects the unknown `connector.enabled` setting and
+activation fails. Pulumi builds the HEAD of Loom's default branch, so that
+support must be on the default branch before this configuration deploys.
