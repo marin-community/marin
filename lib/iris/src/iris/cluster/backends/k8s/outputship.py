@@ -19,7 +19,6 @@ from iris.cluster.backends.k8s.output_contract import (
     TASK_ID_ENV,
     output_policy_from_environment,
 )
-from iris.cluster.credential_process import configure_task_storage
 from iris.cluster.runtime.env import OUTPUT_PATH
 from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt, task_output_storage_failure
 from iris.cluster.types import AttemptUid
@@ -46,7 +45,6 @@ def _write_result(result: job_pb2.TaskOutputArchive) -> None:
 
 
 def main() -> int:
-    configure_task_storage()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s outputship %(message)s")
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())

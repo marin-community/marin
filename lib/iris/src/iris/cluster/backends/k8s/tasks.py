@@ -59,12 +59,12 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.credential_process import (
+    TASK_AWS_CONFIG_FILE,
     TASK_CA_FILE,
     TASK_CREDENTIAL_CACHE,
     TASK_CREDENTIAL_DIR,
     TASK_CREDENTIAL_FILE,
     TASK_CREDENTIAL_FILE_ENV,
-    TASK_CREDENTIAL_HELPER,
 )
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
@@ -557,11 +557,6 @@ def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
     # Activate the venv the setup script populated. Conditional on it existing so
     # a custom or no-setup script that brings its own environment runs as-is.
     lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
-    if run_req.task_refresh_capability and json.loads(run_req.task_storage_profiles_json):
-        lines.append(
-            'if [ -n "$IRIS_TASK_CREDENTIAL_FILE" ]; then '
-            f'python3 {TASK_CREDENTIAL_HELPER} --write-aws-config "$AWS_CONFIG_FILE"; fi'
-        )
     if run_req.entrypoint.run_command.argv:
         lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
     return "\n".join(lines)
@@ -2755,6 +2750,13 @@ class K8sTaskProvider:
         credential_secret: dict | None = None
         if run_req.task_refresh_capability:
             profiles = json.loads(run_req.task_storage_profiles_json)
+            session_file = credential_process.TaskCredentialFile(
+                controller=self.pods.controller_address,
+                attempt_uid=run_req.attempt_uid,
+                refresh_capability=run_req.task_refresh_capability,
+                profiles=profiles,
+                ca_file=TASK_CA_FILE,
+            )
             credential_secret = {
                 "apiVersion": "v1",
                 "kind": "Secret",
@@ -2771,15 +2773,8 @@ class K8sTaskProvider:
                 },
                 "stringData": {
                     "credential_process.py": Path(credential_process.__file__).read_text(),
-                    "session.json": json.dumps(
-                        {
-                            "controller": self.pods.controller_address,
-                            "attempt_uid": run_req.attempt_uid,
-                            "refresh_capability": run_req.task_refresh_capability,
-                            "profiles": profiles,
-                            "ca_file": TASK_CA_FILE,
-                        }
-                    ),
+                    "session.json": json.dumps(asdict(session_file)),
+                    Path(TASK_AWS_CONFIG_FILE).name: credential_process.aws_config(session_file, TASK_CREDENTIAL_FILE),
                 },
             }
             self.kubectl.apply_json(credential_secret)
@@ -2822,7 +2817,7 @@ class K8sTaskProvider:
                         [
                             {
                                 "name": "AWS_CONFIG_FILE",
-                                "value": f"{TASK_CREDENTIAL_CACHE}/aws-config-{container['name']}",
+                                "value": TASK_AWS_CONFIG_FILE,
                             },
                             {"name": "AWS_PROFILE", "value": next(iter(profiles))},
                             {"name": TASK_S3_PROFILES_ENV, "value": json.dumps(routing)},

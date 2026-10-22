@@ -23,6 +23,7 @@ TASK_CREDENTIAL_FILE_ENV = "IRIS_TASK_CREDENTIAL_FILE"
 TASK_CREDENTIAL_DIR = "/var/run/iris/credentials"
 TASK_CREDENTIAL_FILE = f"{TASK_CREDENTIAL_DIR}/session.json"
 TASK_CREDENTIAL_HELPER = f"{TASK_CREDENTIAL_DIR}/credential_process.py"
+TASK_AWS_CONFIG_FILE = f"{TASK_CREDENTIAL_DIR}/aws-config"
 TASK_CA_FILE = "/var/run/iris/ca/ca.crt"
 TASK_CREDENTIAL_CACHE = "/var/run/iris/credential-cache"
 REFRESH_MARGIN = 900
@@ -99,9 +100,8 @@ def storage_credentials(path: str, profile: str, cache_dir: str = TASK_CREDENTIA
         return result
 
 
-def aws_config(path: str) -> str:
+def aws_config(config: TaskCredentialFile, path: str) -> str:
     """Render SDK profiles whose helper also works in a minimal user venv."""
-    config = read_task_credential_file(path)
     sections = []
     for name, profile in config.profiles.items():
         command = shlex.join(["python3", TASK_CREDENTIAL_HELPER, "--file", path, "--profile", name])
@@ -112,27 +112,12 @@ def aws_config(path: str) -> str:
     return "\n".join(sections)
 
 
-def configure_task_storage() -> None:
-    path = os.environ.get(TASK_CREDENTIAL_FILE_ENV)
-    destination = os.environ.get("AWS_CONFIG_FILE")
-    if path and destination:
-        target = Path(destination)
-        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        target.write_text(aws_config(path))
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--file", default=os.environ.get(TASK_CREDENTIAL_FILE_ENV, TASK_CREDENTIAL_FILE))
     parser.add_argument("--profile")
-    parser.add_argument("--write-aws-config")
     parser.add_argument("--cache-dir", default=TASK_CREDENTIAL_CACHE)
     args = parser.parse_args()
-    if args.write_aws_config:
-        destination = Path(args.write_aws_config)
-        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        destination.write_text(aws_config(args.file))
-        return
     if not args.profile:
         parser.error("--profile is required")
     # The SDK reads its credential_process response from the private stdout pipe.

@@ -6,6 +6,7 @@
 import configparser
 import json
 import os
+import re
 import subprocess
 from collections.abc import Sequence
 from copy import deepcopy
@@ -74,7 +75,8 @@ def test_broker_credentials_use_pod_owned_secret_without_leaking_into_task_envir
     request.container_profile = profile
     request.bundle_id = "bundle-sha"
     request.task_refresh_capability = "private-attempt-refresh-capability"
-    request.entrypoint.run_command.argv[:] = ["bash", "-c", "printf entrypoint-reached"]
+    request.entrypoint.run_command.argv[:] = ["bash", "-c", "printf entrypoint-reached > entrypoint-result"]
+    request.entrypoint.setup_commands.append('if [ -n "$AWS_CONFIG_FILE" ]; then test -s "$AWS_CONFIG_FILE"; fi')
     request.task_storage_profiles_json = json.dumps(
         {
             "training": {
@@ -108,11 +110,12 @@ def test_broker_credentials_use_pod_owned_secret_without_leaking_into_task_envir
         "task-session" in {m["name"] for m in container["volumeMounts"]} for container in pod["spec"]["initContainers"]
     )
     # Map projected files and container mounts into the test directory, then
-    # exercise credential bootstrap before the user entrypoint.
+    # verify setup can use the mounted AWS config before the user entrypoint.
     host_mounts = {
         "/app": tmp_path / "workdir",
         "/var/run/iris/credentials": tmp_path / "credentials",
         "/var/run/iris/credential-cache": tmp_path / "cache",
+        "/tmp": tmp_path / "container-tmp",
     }
     for destination in host_mounts.values():
         destination.mkdir()
@@ -120,14 +123,14 @@ def test_broker_credentials_use_pod_owned_secret_without_leaking_into_task_envir
         (host_mounts["/var/run/iris/credentials"] / filename).write_text(content)
     environment = {"PATH": os.environ["PATH"], "IRIS_VENV": str(tmp_path / "unused-venv")}
     environment.update({entry["name"]: entry["value"] for entry in task["env"] if "value" in entry})
-    script = task["command"][2]
-    for mounted, destination in host_mounts.items():
-        script = script.replace(mounted, str(destination))
-        environment = {name: value.replace(mounted, str(destination)) for name, value in environment.items()}
-    result = subprocess.run(
-        ["bash", "-ec", script], env=environment, capture_output=True, text=True, check=True, timeout=10
-    )
-    assert result.stdout == "entrypoint-reached"
+    mount_paths = re.compile("|".join(re.escape(mounted) for mounted in host_mounts))
+    script = mount_paths.sub(lambda match: str(host_mounts[match.group()]), task["command"][2])
+    environment = {
+        name: mount_paths.sub(lambda match: str(host_mounts[match.group()]), value)
+        for name, value in environment.items()
+    }
+    subprocess.run(["bash", "-ec", script], env=environment, capture_output=True, text=True, check=True, timeout=10)
+    assert (host_mounts["/app"] / "entrypoint-result").read_text() == "entrypoint-reached"
     if storage_granted and profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
         aws_config = configparser.ConfigParser()
         aws_config.read(environment["AWS_CONFIG_FILE"])

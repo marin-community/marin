@@ -176,8 +176,9 @@ Inside a regular task, Iris clients renew controller access automatically.
 `IRIS_TASK_CREDENTIAL_FILE` names the mounted file. A rollover rejection triggers
 one access-token renewal and retry; the access token alone cannot renew itself.
 
-S3 clients use AWS `credential_process` profiles. Iris writes an AWS config for
-each container after its environment is ready. The mounted helper uses only
+S3 clients use AWS `credential_process` profiles. Iris renders the AWS config
+into the attempt Secret and mounts it before any setup or task command runs.
+The mounted helper uses only
 Python's standard library, so the user environment need not install Iris.
 Both helper and broker refresh when credentials have 15 minutes remaining,
 matching the standard SDK advisory refresh window. They cache temporary S3 keys in
