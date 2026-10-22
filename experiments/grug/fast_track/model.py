@@ -916,8 +916,8 @@ class GrugModelConfig:
     attention forward per layer; needed for memory at d1280."""
     value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
     value_embed_layers: tuple[int, ...] | None = None
-    """MLA layers that carry value embeddings (None: every MLA layer). Each layer stack (the body and the
-    ``latent_out_full_layers`` tail) must be wholly in or out."""
+    """MLA layers that carry value embeddings (None: every MLA layer). A layer stack with none of them allocates
+    no VE parameters; in a stack with some of them, the other layers' stacked VE leaves are left unused."""
     value_embed_tie_lm_head: bool = False
     """The value embedding of a token is its lm_head column (``output_proj[:, token]``) split into heads, instead
     of a table of its own; the lm_head gets gradient from both uses. Needs MLA heads x head_dim == hidden_dim."""
@@ -1573,7 +1573,7 @@ class CausalSelfAttention(eqx.Module):
             v = rearrange(_proj(self.cfg, v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
         ve_stats: dict[str, jax.Array] = {}
         if self.ve_lambda is not None:
-            # value_embed_tie_lm_head: the lm_head table is put in place by Transformer._tie_value_embeds.
+            # value_embed_tie_lm_head: the lm_head table is put in place by Transformer._select_value_embeds.
             assert self.value_embed is not None and token_ids is not None
             table = self.value_embed.astype(x.dtype)
             # A sharded table is all-gathered once per use (16k rows: ~200 MB bf16 per MLA layer at hero width) and
@@ -5504,18 +5504,30 @@ class Transformer(eqx.Module):
         )
         return [indices for indices in groups if indices]
 
-    def _tie_value_embeds(self, layers: list[Block]) -> list[Block]:
-        """``value_embed_tie_lm_head``: each VE layer's value-embedding table is the lm_head transposed."""
-        if not self.config.value_embed_tie_lm_head:
+    def _select_value_embeds(self, layers: list[Block]) -> list[Block]:
+        """Apply ``value_embed_layers`` and ``value_embed_tie_lm_head`` to the unstacked layers: a layer outside
+        ``value_embed_layers`` whose stack carries value embeddings drops them (its stacked VE leaves stay as
+        unused parameters), and with the tie each VE layer's table is the lm_head transposed."""
+        cfg = self.config
+        if cfg.value_embed_layers is None and not cfg.value_embed_tie_lm_head:
             return layers
-        table = reshard(self.output_proj.T, P(None, None))
+        table = reshard(self.output_proj.T, P(None, None)) if cfg.value_embed_tie_lm_head else None
 
-        def tie(layer: Block) -> Block:
+        def select(i: int, layer: Block) -> Block:
             if not isinstance(layer.attn, CausalSelfAttention) or layer.attn.ve_lambda is None:
+                return layer
+            if cfg.value_embed_layers is not None and i not in cfg.value_embed_layers:
+                return eqx.tree_at(
+                    lambda b: (b.attn.value_embed, b.attn.ve_lambda, b.attn.ve_gate),
+                    layer,
+                    (None, None, None),
+                    is_leaf=lambda x: x is None,
+                )
+            if table is None:
                 return layer
             return eqx.tree_at(lambda b: b.attn.value_embed, layer, table, is_leaf=lambda x: x is None)
 
-        return [tie(layer) for layer in layers]
+        return [select(i, layer) for i, layer in enumerate(layers)]
 
     def layers(self) -> list[Block]:
         """Every layer as its own module, in layer order (each stack split whole, never sliced)."""
@@ -5754,7 +5766,7 @@ class Transformer(eqx.Module):
         if scan is not None and scan.num_units:
             units, layers = self._split_scanned_units(scan)
         else:
-            units, layers = {}, self._tie_value_embeds(self.layers())
+            units, layers = {}, self._select_value_embeds(self.layers())
         # Every query in gate order [pass 0: attn_0, mlp_0, ..., mlp_{L-1}; pass 1: ...; final].
         gate_queries = (
             [_cast_floats(_unit_queries(scan, units, "attn_res_query_attn", "attn_res_query_mlp"), dtype)]
@@ -6748,15 +6760,10 @@ def _final_layer_config(cfg: GrugModelConfig, tail_cfg: GrugModelConfig) -> Grug
 
 
 def _value_embed_stack_config(cfg: GrugModelConfig, layers: tuple[int, ...]) -> GrugModelConfig:
-    """A softmax layer stack's config under ``value_embed_layers``: unchanged when every layer carries value
-    embeddings, ``value_embeds=none`` when none does."""
-    if cfg.value_embed_layers is None:
+    """A softmax layer stack's config under ``value_embed_layers``: ``value_embeds=none`` when none of its layers
+    carries value embeddings, else unchanged (``Transformer._select_value_embeds`` drops the others')."""
+    if cfg.value_embed_layers is None or any(i in cfg.value_embed_layers for i in layers):
         return cfg
-    chosen = [i in cfg.value_embed_layers for i in layers]
-    if all(chosen):
-        return cfg
-    if any(chosen):
-        raise ValueError(f"value_embed_layers must cover the whole layer stack {layers} or none of it")
     return dataclasses.replace(
         cfg, value_embeds=ValueEmbeds.NONE, value_embed_layers=None, value_embed_tie_lm_head=False
     )
