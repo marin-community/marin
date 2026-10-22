@@ -31,7 +31,7 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName
-from iris.rpc import job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +173,9 @@ class ScriptedTaskBackend:
 
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
+
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        return None
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None

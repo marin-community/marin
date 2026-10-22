@@ -28,7 +28,11 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
-from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
+from rigging.secrets import (
+    as_secret_spec,
+    is_secret_reference,
+    resolve_secret_spec,
+)
 from rigging.timing import Duration
 
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
@@ -547,7 +551,6 @@ class DefaultsConfig(_Config):
     autoscaler: AutoscalerConfig = Field(default_factory=AutoscalerConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     task_env: dict[str, str] = Field(default_factory=dict)  # injected into every task
-    inject_env: list[str] = Field(default_factory=list)  # operator-shell var names
 
     @model_validator(mode="after")
     def _propagate_task_env(self) -> DefaultsConfig:

@@ -5,8 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-
-from harbor.agents.installed.kimi_cli import KimiCli, _WireStep, _PendingToolCall
+from harbor.agents.installed.kimi_cli import KimiCli, _PendingToolCall, _WireStep
 
 # Captured from real kimi-cli --wire output (simple text-only response)
 WIRE_SIMPLE = [
@@ -303,7 +302,7 @@ class TestPopulateContextPostRun:
 
 class TestMaxContextSize:
     def test_model_info_registered_and_used(self, tmp_path: Path):
-        """model_info kwarg registers with litellm so get_model_info lookup returns it."""
+        """Explicit model_info sets the generated context limit."""
         agent = KimiCli(
             logs_dir=tmp_path,
             model_name="moonshot/kimi-k2-0905-preview",
@@ -315,34 +314,7 @@ class TestMaxContextSize:
         )
         assert config["models"]["model"]["max_context_size"] == 262144
 
-    def test_litellm_lookup(self, tmp_path: Path, monkeypatch):
-        """When no model_info kwarg, falls back to LiteLLM database lookup."""
-
-        def fake_get_model_info(model, *args, **kwargs):
-            return {"max_input_tokens": 200000, "max_tokens": 200000}
-
-        monkeypatch.setattr(
-            "harbor.agents.installed.kimi_cli.get_model_info", fake_get_model_info
-        )
-        agent = KimiCli(
-            logs_dir=tmp_path,
-            model_name="moonshot/kimi-k2-0905-preview",
-            api_key="sk-test",
-        )
-        config = json.loads(
-            agent._build_config_json("moonshot", "kimi-k2-0905-preview")
-        )
-        assert config["models"]["model"]["max_context_size"] == 200000
-
-    def test_fallback_when_litellm_fails(self, tmp_path: Path, monkeypatch):
-        """When LiteLLM has no info, falls back to 131072."""
-
-        def fake_get_model_info(model, *args, **kwargs):
-            raise Exception("model not found")
-
-        monkeypatch.setattr(
-            "harbor.agents.installed.kimi_cli.get_model_info", fake_get_model_info
-        )
+    def test_default_context_without_model_info(self, tmp_path: Path):
         agent = KimiCli(
             logs_dir=tmp_path,
             model_name="moonshot/kimi-k2-0905-preview",

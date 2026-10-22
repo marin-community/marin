@@ -346,6 +346,13 @@ jobs:
           UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/vendor/evalchemy/.venv
         run: >-
           uv run --frozen --all-extras --group test pytest -q
+      - name: Check publication policy metrics
+        working-directory: vendor/evalchemy
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/vendor/evalchemy/.venv
+        run: >-
+          uv run --frozen --all-extras --group test python
+          ../../experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/check_policy_metrics.py
 
   harbor:
     name: harbor-unit
@@ -527,22 +534,13 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "vendor/skyrl/uv.lock"
-      - name: Check independent lock, Marin contract, and built wheel
-        run: uv run --no-project python -m scripts.skyrl_migration check-vendor
-      - name: Exercise the isolated source bundle, launchers, and verifier
+      - name: Check independent lock
+        run: uv lock --project vendor/skyrl --check
+      - name: Exercise packaging, launchers, and verifier
         working-directory: vendor/skyrl
         run: |
-          uv run --isolated --frozen --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
-            cloud/iris/tests/test_vendored_runtime_bundle.py \
-            cloud/iris/tests/test_ray_spill_policy.py \
-            cloud/iris/tests/test_task_runtime_source_selection.py \
-            cloud/iris/tests/test_task_runtime_debug_artifacts.py \
-            cloud/iris/tests/test_launch_config.py \
-            cloud/iris/tests/test_checkpoint_export_config.py \
-            cloud/iris/tests/test_open_mopd_fidelity.py \
-            cloud/iris/tests/test_open_mopd_evaluation.py \
-            skyrl-gym/tests/test_aime_answer_normalization.py \
-            skyrl-gym/tests/test_nemotron_judge_assets.py
+          uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
+            infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py
 
   unit_tests:
     name: unit-tests

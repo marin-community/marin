@@ -44,31 +44,32 @@ Outside Iris, `--run` submits a 4-CPU coordinator with 16 GB RAM and 64 GB disk.
 through the Marin hub to their target cluster. The coordinator runs the same module and arguments
 inside Iris, where `--run` executes the artifact graph. This preserves one construction and
 validation path. The submitter forwards `DAYTONA_API_KEY`, `DAYTONA_RL_API_KEY`,
-`DAYTONA_EVAL_API_KEY`, `HF_TOKEN`, and `WANDB_API_KEY` when they
-are present in its environment. The RL and eval keys let rollout and evaluation
-workloads use separate Daytona credentials.
+`DAYTONA_EVAL_API_KEY`, and `TOGETHER_API_KEY` when present in its environment.
+The RL and eval keys let rollout and evaluation use separate Daytona credentials.
+Iris forwards available HF/W&B/CoreWeave credentials and the current application-secret
+bundle as read-only files; ordinary child jobs inherit that bundle by default.
+See [secret delivery](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
 
 ## One Hydra launch document
 
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
-The nested runtime uses its pinned RolloutEngine version for task execution and model requests.
+The nested runtime uses the checkout's RolloutEngine for task execution and model requests.
 Harbor tasks use Shellbox. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
 See [task rollouts](task-rollouts.md) for task execution and backend limits.
 
 The launcher runs `uv run --isolated --project vendor/skyrl --frozen --no-group dev
 marinskyrl` in a child process. SkyRL has its own lock and is excluded from Marin's
 workspace. The child discards the parent's Python environment selection. SkyRL
-may depend on Marin packages inside its own environment; Marin calls SkyRL only
-through the executable.
+installs Marin libraries and Harbor from editable paths in the checkout.
+Marin calls SkyRL through the executable.
 
-The launch document records a hash of the current runtime files, assets, and
-independent lock in `runtime.source_digest`. The isolated executable computes
-it, so ordinary vendor edits change the identity without restaging migration
-provenance. The launcher bundles these files for Iris and workers verify their
-hashes. Workers install the bundled project in editable mode
-with the frozen Megatron/vLLM profile. They do not fetch the fork or require Git.
+Iris submits the Marin repository through its standard workspace bundle.
+Workers run SkyRL from `/app/vendor/skyrl` and install the project in editable
+mode with the frozen Megatron/vLLM profile. Marin artifacts and SkyRL run
+records use `rigging.provenance` for checkout and launch context alongside
+the resolved configuration.
 Outside a Marin checkout, the launcher raises `RuntimeError` before submission.
 
 ```text
@@ -164,7 +165,7 @@ the GPUs assigned to each role.
 
 ## Artifact and runtime boundaries
 
-Identity-bearing inputs belong in `SkyRLSpec`: the vendored SkyRL runtime identity, model and tokenizer,
+Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
@@ -180,10 +181,19 @@ can point at an incomplete export. Keep resume behavior and terminal export expl
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
 
-The temporary checkpoint root is derived from the RL artifact name and version, not only from the
-runtime source digest. When `SkyRLRuntime.source_digest` changes, use a fresh RL artifact version. Reusing the old
+SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
+that needs only the latest recovery point, set
+`retention=SkyRLRetentionPolicy(resume_checkpoint_count=1)` in `SkyRLSpec`.
+Marin translates this policy to `trainer.max_ckpts_to_keep`; standalone SkyRL
+recipes can set that field directly. Cleanup runs after the replacement checkpoint
+has uploaded and its latest-checkpoint marker has been published. Pending HF
+exports and the selected best native checkpoint remain protected beyond this
+rolling window. Each successful Marin run also produces a durable terminal export.
+
+The temporary checkpoint root is derived from the RL artifact name and version.
+After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
-runtime. Reuse a version across a runtime repin only after establishing checkpoint compatibility or
+runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.
 
 ## Pre-launch review
@@ -195,7 +205,7 @@ Before submitting a large run:
    Check that explicit forward and training microbatch sizes agree.
    For `fully_async`, confirm the train batch and policy mini-batch are equal.
 3. Confirm the vendored runtime supports the chosen strategy, CUDA stack, model, and vLLM
-   geometry. If its identity changed, use a fresh RL artifact version unless its checkpoints are
+   geometry. After runtime changes, use a fresh RL artifact version unless its checkpoints are
    explicitly compatible.
 4. Confirm request and response token budgets match the dataset and chat template.
 5. Check coordinator and worker CPU, host memory, disk, concurrency, timeout, and credentials.

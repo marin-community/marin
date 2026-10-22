@@ -106,21 +106,119 @@ Pull requests without `agent-generated` receive
 committable suggestions and no push. The holistic session ignores a head whose
 delta is only `Deslop` commits, which closes the review-then-deslop loop.
 
-## SkyRL migration checks
+## Nightshift area reviews
 
-`Marin - Unit` selects `skyrl-wheel` for SkyRL source, migration manifest, or
-tooling changes. It checks the nested project's lock, Marin library imports and
-constructor keywords, and built-wheel assets against the current source in an
-isolated environment. GPU smoke
-tests and the production launcher cutover remain separate gates; see
-`docs/dev-guide/skyrl-migration.md`.
+`ops-nightshift-cleanup.yaml` runs on weekdays at 10:00 UTC and by manual
+dispatch. It launches one `github-automation` session. Follow this procedure
+for that assignment; CI-test and documentation-drift jobs have separate scopes.
+
+1. **Find demand, then choose one area.** Read applicable `AGENTS.md` files
+   and use `consult-echo` for prior work. Inspect the last 20 PRs labeled
+   `nightshift`, including closed PRs and relevant feedback:
+
+   ```bash
+   gh pr list --repo marin-community/marin --state all --label nightshift --limit 20 \
+     --json number,title,state,createdAt,url,files
+   ```
+
+   Look for an unresolved failure, repeated operator work, a current request,
+   or a measured cost in an active workflow. Read the full discussion,
+   including corrections and rejected fixes. Use that evidence to choose a
+   bounded subsystem under `lib/marin/src/marin`, `lib/iris/src/iris`,
+   `lib/zephyr/src/zephyr`, or `lib/levanter/src/levanter`. Name the affected
+   workflow and why it deserves attention now. Prefer an area the inspected
+   PRs have not recently covered unless new evidence justifies returning. If no
+   demand is documented, measure an ordinary caller before proposing work.
+
+2. **Understand the system before proposing edits.** Apply the whole-system
+   questions from [holistic review](../../.agents/skills/review-pr-holistic/SKILL.md):
+   fit with existing concepts, better abstractions, consequences across
+   boundaries, hidden tests, claims versus evidence, related PRs, test value,
+   and scope. This is an audit of existing behavior; the PR-specific head,
+   delta, posting, and telemetry procedures apply only to PR reviews.
+   Trace entry points, current callers, configuration defaults, state and
+   error transitions, neighboring abstractions, tests, and recent history.
+   Read `TESTING.md` and module testing guidance when assessing coverage.
+   Write a short walkthrough of one ordinary workflow, including its dominant
+   work and failure boundaries. Check open PRs by listing their changed files
+   and filtering by the area's paths; `gh pr list --search` does not search
+   changed paths. Read relevant closed predecessors before developing a fix.
+   Defer work already covered by an open PR or rejected without new evidence.
+
+3. **Generate alternatives from that workflow.** Consider preventing the
+   failure, containing it at an existing boundary, or removing unnecessary
+   work. Compare up to three supported improvements; do not fill a quota. Each
+   candidate needs exact source paths and lines, an affected user or operator,
+   a concrete consequence, a replacement using existing concepts, and a safe,
+   falsifiable regression or measurement. Establish why the affected case
+   matters now: a non-test caller exercising it, an active operational path,
+   a recent failure or request, repeated CI observations, or a measurement on
+   a representative workload. Accompany a synthetic reproducer with evidence
+   of priority. Public-API completeness or unused option combinations alone are
+   insufficient reasons to spend a nightshift run.
+
+   Trace the proposed replacement through the ordinary execution path. Account
+   for added bytes read, peak memory, network requests, repeated passes, and
+   latency. A format or edge-case fix that introduces full-file materialization
+   or extra work for common callers needs evidence that its benefit outweighs
+   that cost.
+
+4. **Choose by demonstrated benefit.** Record a candidate table with evidence
+   of current use, consequence or measured cost, proposed change, validation,
+   effort, risk, and selection or rejection reasons. Distinguish observed
+   impact from possible severity; mark frequency and savings unknown when
+   unmeasured. Prefer removal of recurring cost or failure in exercised paths
+   over isolated edge-case completeness. Explain why the winner is worth more
+   than the alternatives relative to its implementation and review burden.
+   Avoid style-only changes, trivial extraction, and speculative performance
+   claims. Defer changes needing live migrations, distributed ownership
+   redesign, multiple PRs, or validation unavailable to this run.
+
+   If no candidate has enough demonstrated value for one coherent PR, report
+   what was reviewed and why no change is warranted. Do not switch areas
+   repeatedly to force a PR.
+
+5. **Test the replacement, then implement one improvement.** Reproduce the
+   defect or measure the cost before editing. Use a small local prototype to
+   compare the proposed replacement with the baseline through the affected
+   caller. Ask one reviewer with fresh context to try to disprove the selected
+   candidate using its source and demand evidence. Have them check prior
+   decisions, added costs, failure paths, teardown, and any state or ownership
+   boundaries the replacement changes. A helper-level reproducer does not
+   establish that it works across retries, asynchronous completion, or ranks.
+   Drop disproved candidates and reconsider the remaining ones. Narrow claims
+   to the callers and modes actually validated.
+
+   Follow applicable implementation and testing skills. Compare the finished
+   change with the baseline using the promised regression or measurement.
+   Measure added I/O or materialization on representative input sizes and
+   relate local measurements to the whole workflow. Passing existing tests
+   alone does not establish the improvement. Use `update-docs` when guidance
+   changes and `commit` to publish a PR with `agent-generated` and `nightshift`
+   labels. Do not merge it or file issues for unselected candidates.
+
+Publish the report in the session's Loom channel with message kind `result`:
+
+```bash
+loom channels send --kind result "<review and outcome>"
+```
+
+Include the reviewed baseline SHA, reviewed area, walkthrough, candidate table,
+selection or no-change rationale, validation results and limits, and resulting
+PR URL and head SHA when present. Keep the full review in the session; keep the
+PR description focused on its resulting behavior.
+
+## SkyRL runtime checks
+
+`Marin - Unit` selects `skyrl-wheel` for SkyRL, its editable Marin and Harbor
+dependencies, or CI tooling changes. It checks the nested lock and runs the
+packaging, launcher, and verifier tests in SkyRL's CPU environment. GPU smoke
+tests run separately; see `docs/dev-guide/skyrl.md`.
 
 `Marin - SkyRL Nightly` runs OPD, Grug/Megatron and asynchronous GPU CatCount
 at 09:00 UTC. The Grug CUTLASS case runs weekly or by manual selection.
 `Marin - SkyRL CPU Nightly` runs CatCount learning and checkpoint/resume gates
 at 06:00 UTC. Both use the checked-out nested runtime and its independent lock.
-The GPU failure reporter retains the source tracking issue's title prefix so
-transferred failure history continues in the same issue.
 
 ## External dependency updates
 
