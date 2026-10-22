@@ -78,7 +78,7 @@ async def graded(grader: DecisionGrader, messages: list[dict], client: FakeDecis
 
 def trial_spec(built: TaskSpec, **limits) -> TaskRolloutSpec:
     """``built`` without machines under Taskforge's shell harness."""
-    return rollout_spec(built, harness=draft.SHELL_HARNESS, **limits)
+    return rollout_spec(built, harness=draft.TOOL_HARNESS, **limits)
 
 
 def uncalibrated() -> DecisionGrader:
