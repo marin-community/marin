@@ -19,8 +19,13 @@ from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
 import click
+import finelog.types
+import finestore.layout
+import iris.rpc.job_pb2
 import pyarrow.parquet as pq
+import rigging.filesystem.storage_path
 import rolloutengine.engine
+import shellbox.machine
 import taskcompendium.models
 import verifyit.modes.grade_judge
 from cloud.iris.launch_config import load_launch_config
@@ -54,6 +59,11 @@ from verifyit.modes.grade_judge import MODEL_ENV, JudgeConnection
 
 EXPECTED_ROWS = 100_000
 FEATURE_DISTRIBUTIONS = {
+    "marin-finelog": finelog.types,
+    "marin-finestore": finestore.layout,
+    "marin-iris": iris.rpc.job_pb2,
+    "marin-rigging": rigging.filesystem.storage_path,
+    "marin-shellbox": shellbox.machine,
     "marin-taskcompendium": taskcompendium.models,
     "marin-rolloutengine": rolloutengine.engine,
     "marin-verifyit": verifyit.modes.grade_judge,
