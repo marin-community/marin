@@ -322,7 +322,7 @@ def test_control_ids_are_portable_names(identifier):
 @pytest.mark.parametrize(
     "status,bounds,message",
     [
-        (Outcome.SUBMISSION_FAILURE, {"reward_max": 0.0}, "no reward bounds"),
+        (Outcome.SUBMISSION_FAILURE, {"reward_max": 0.0}, "should not have reward bounds"),
         (Outcome.INFRA_ERROR, {}, "graded result or a submission failure"),
         (Outcome.GRADED, {"reward_min": 0.8, "reward_max": 0.2}, "reversed"),
         (Outcome.GRADED, {"reward_max": 1.5}, "outside"),

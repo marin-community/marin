@@ -621,12 +621,11 @@ class GlmClient:
                         events.append(chunk.model_dump_json())
                         try:
                             state.handle_chunk(chunk)
-                        except Exception as error:
+                        except IndexError as error:
                             # The accumulator indexes tool-call deltas by their index and raises on one
                             # whose earlier deltas never arrived; such a stream is the server's fault.
                             raise _AttemptFailed(
-                                AttemptOutcome.STREAM_ERROR,
-                                f"chunk the accumulator rejected: {type(error).__name__}: {error}",
+                                AttemptOutcome.STREAM_ERROR, f"tool-call delta without its earlier deltas: {error}"
                             ) from error
                         if _carries_token(chunk):
                             last_token = time.monotonic()
