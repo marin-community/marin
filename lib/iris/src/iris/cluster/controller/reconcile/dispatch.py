@@ -301,8 +301,6 @@ def drain_for_dispatch(
     defaults = defaults or UserBudgetDefaults()
     if budget_context is not None:
         defaults = budget_context.defaults
-        if not budget_context.ready:
-            max_promotions = 0
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
 

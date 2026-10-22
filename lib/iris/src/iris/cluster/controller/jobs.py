@@ -576,7 +576,7 @@ def _resolve_launch_priority(
         not dependencies.budgets.parent_id or request.federation.requester_id == dependencies.budgets.parent_id
     ):
         return band
-    budget_context = dependencies.budgets.check_submission()
+    budget_context = dependencies.budgets.snapshot()
     if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider and not launch.received_handoff:
         parent = _task_caller_parent(dependencies, launch.job_id)
         if parent is None or priority_band_rank(band) < priority_band_rank(int(parent.priority_band)):

@@ -209,8 +209,9 @@ response reports the child's local usage, including direct submissions and child
 jobs. Scheduling adds current local usage to the received totals. `GetUserBudget`
 returns that combined view; `ListUserBudgets` reports local usage.
 
-Children wait for their first policy after startup. During sync outages, clusters
-keep their last received policy and usage; new submissions remain available.
+Children use configured defaults until their first policy arrives. During sync
+outages, clusters keep their last received policy and usage; submissions remain
+available.
 Budgets are soft priority limits, so disconnected clusters can exceed the shared
 limit. Deploy both sides to exchange budget data.
 

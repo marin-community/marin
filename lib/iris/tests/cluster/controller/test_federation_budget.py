@@ -51,14 +51,14 @@ class BudgetFederation:
 
 
 @pytest.fixture
-def federation(log_client, tmp_path):
+def unsynced_federation(log_client, tmp_path):
     with ExitStack() as stack:
         states = [stack.enter_context(make_controller_state()) for _ in range(3)]
         parent = FederationBudgets(
             states[0]._db, UserBudgetDefaults(budget_limit=10), cluster_id="hub", peers=("a", "b")
         )
         children = [
-            FederationBudgets(state._db, UserBudgetDefaults(budget_limit=0), parent_id="hub") for state in states[1:]
+            FederationBudgets(state._db, UserBudgetDefaults(budget_limit=5), parent_id="hub") for state in states[1:]
         ]
         services = {
             index: ControllerServiceImpl(
@@ -73,8 +73,13 @@ def federation(log_client, tmp_path):
             for index, (state, budgets) in enumerate(zip(states, [parent, *children], strict=True))
         }
         federation = BudgetFederation(states, parent, children, services)
-        federation.sync()
         yield federation
+
+
+@pytest.fixture
+def federation(unsynced_federation):
+    unsynced_federation.sync()
+    return unsynced_federation
 
 
 def context(budgets):
@@ -112,7 +117,7 @@ def test_direct_roots_and_children_share_budget_across_clusters(federation):
 
 def test_child_counts_new_local_work_before_the_next_sync(federation):
     child = federation.children[0]
-    child.check_submission()
+    child.snapshot()
     activate(federation.states[1], "/alice/burst", replicas=2)
     submit_job(federation.states[1], "/alice/later", make_job_request(name="/alice/later", priority_band=INTERACTIVE))
     with federation.states[1]._db.transaction() as tx:
@@ -144,13 +149,29 @@ def test_sync_outage_keeps_policy_and_counts_new_local_work(federation):
     assert context(federation.children[0]).user("alice").budget_spent == 12
 
 
-def test_child_waits_for_initial_policy_after_restart(federation):
-    child = FederationBudgets(federation.states[1]._db, UserBudgetDefaults(), parent_id="hub")
-    with pytest.raises(ConnectError) as caught:
-        child.check_submission()
-    assert caught.value.code == Code.UNAVAILABLE
-    child.receive_policy("hub", federation.parent.budget_policy("a"))
-    assert child.check_submission().user("new-user").budget_limit == 10
+def test_child_admits_and_schedules_before_initial_sync_then_uses_parent_policy(unsynced_federation):
+    federation = unsynced_federation
+    state, child, service = federation.states[1], federation.children[0], federation.services[1]
+    with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
+        service.launch_job(make_job_request(name="/alice/startup", priority_band=INTERACTIVE), None)
+    with state._db.transaction() as tx:
+        first = drain_for_dispatch(tx, budget_context=child.context(tx))
+    assert [task.priority for task in first.tasks_to_run] == [INTERACTIVE]
+
+    with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
+        service.launch_job(make_job_request(name="/alice/local-limit", priority_band=INTERACTIVE), None)
+    with state._db.transaction() as tx:
+        second = drain_for_dispatch(tx, budget_context=child.context(tx))
+    assert [task.priority for task in second.tasks_to_run if task.task_id == "/alice/local-limit/0"] == [BATCH]
+
+    with federation.states[0]._db.transaction() as tx:
+        writes.set_user_budget(tx, "alice", 20, INTERACTIVE, Timestamp.now())
+    federation.sync()
+    with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
+        service.launch_job(make_job_request(name="/alice/parent-limit", priority_band=INTERACTIVE), None)
+    with state._db.transaction() as tx:
+        third = drain_for_dispatch(tx, budget_context=child.context(tx))
+    assert [task.priority for task in third.tasks_to_run if task.task_id == "/alice/parent-limit/0"] == [INTERACTIVE]
 
 
 def test_foreign_parent_cannot_replace_policy_or_contribute_usage(federation):
@@ -206,7 +227,7 @@ def test_direct_submission_reads_parent_ceiling_and_rejects_local_overrides(fede
 
 
 def test_synced_policy_applies_defaults_to_a_new_user(federation):
-    budget = federation.children[0].check_submission().user("new-user")
+    budget = federation.children[0].snapshot().user("new-user")
     assert (budget.user_id, budget.budget_limit, budget.max_band, budget.budget_spent) == (
         "new-user",
         10,

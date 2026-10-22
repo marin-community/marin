@@ -57,8 +57,6 @@ def build_queued_candidates(tx: Tx, *, budget_context: BudgetContext | None = No
     request. Ordered by priority band, then oldest submission first — the order the
     assignment pass consumes them in.
     """
-    if budget_context is not None and not budget_context.ready:
-        return []
     spend = budget_context.spend if budget_context is not None else {}
     limits = budget_context.limits if budget_context is not None else {}
     candidates: list[QueuedCandidate] = []

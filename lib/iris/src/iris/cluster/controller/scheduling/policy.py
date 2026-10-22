@@ -786,8 +786,6 @@ def build_scheduling_context(
     user_budget_limits = budget_context.limits if budget_context is not None else reads.get_all_user_budget_limits(snap)
     if budget_context is not None:
         defaults = budget_context.defaults
-        if not budget_context.ready:
-            pending = []
 
     if health is None or not pending:
         return SchedulingContext(

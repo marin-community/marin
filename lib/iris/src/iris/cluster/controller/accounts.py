@@ -134,7 +134,7 @@ def get_user_budget(
     require_identity()
     if not request.user_id:
         raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
-    return dependencies.budgets.check_submission().user(request.user_id)
+    return dependencies.budgets.snapshot().user(request.user_id)
 
 
 def list_user_budgets(

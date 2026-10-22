@@ -22,7 +22,6 @@ class BudgetContext:
 
     users: dict[str, controller_pb2.Controller.GetUserBudgetResponse]
     defaults: UserBudgetDefaults
-    ready: bool = True
 
     @property
     def spend(self) -> dict[str, int]:
@@ -57,10 +56,7 @@ def read_budget_context(tx: Tx, defaults: UserBudgetDefaults) -> BudgetContext:
 
 
 class FederationBudgets:
-    """Share budgets through sync, retaining the last received values on outages.
-
-    Children need their first policy after startup before admitting new work.
-    """
+    """Share budgets through sync, using defaults until the first policy arrives."""
 
     def __init__(
         self,
@@ -85,11 +81,13 @@ class FederationBudgets:
             policy = self._policy
             reports = dict(self._usage)
         if self.parent_id:
-            if policy is None:
-                return BudgetContext({}, self.defaults, ready=False)
-            context = BudgetContext(
-                {budget.user_id: budget for budget in policy.users},
-                UserBudgetDefaults(policy.default_budget_limit, policy.default_max_band),
+            context = (
+                BudgetContext(
+                    {budget.user_id: budget for budget in policy.users},
+                    UserBudgetDefaults(policy.default_budget_limit, policy.default_max_band),
+                )
+                if policy is not None
+                else BudgetContext({}, self.defaults)
             )
             spend = context.spend
             for user, value in compute_user_spend(tx).items():
@@ -149,9 +147,6 @@ class FederationBudgets:
             budget_parent=self.parent_id, spend=compute_user_spend(tx)
         )
 
-    def check_submission(self) -> BudgetContext:
+    def snapshot(self) -> BudgetContext:
         with self.db.read_snapshot() as tx:
-            context = self.context(tx)
-        if not context.ready:
-            raise ConnectError(Code.UNAVAILABLE, "Waiting for the budget parent's first sync")
-        return context
+            return self.context(tx)
