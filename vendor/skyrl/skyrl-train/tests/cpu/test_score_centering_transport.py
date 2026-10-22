@@ -15,10 +15,13 @@ from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 from skyrl_train.trajectory_runners.selected_topk import align_student_topk
 
 
-@pytest.mark.parametrize("mask,expected_ids,expected_scores", [
-    ([1, 1], [[3, 7], [4, 8]], [[-1.0, -2.0], [-3.0, -4.0]]),
-    ([1, 0, 1], [[3, 7], [-1, -1], [4, 8]], [[-1.0, -2.0], [0.0, 0.0], [-3.0, -4.0]]),
-])
+@pytest.mark.parametrize(
+    "mask,expected_ids,expected_scores",
+    [
+        ([1, 1], [[3, 7], [4, 8]], [[-1.0, -2.0], [-3.0, -4.0]]),
+        ([1, 0, 1], [[3, 7], [-1, -1], [4, 8]], [[-1.0, -2.0], [0.0, 0.0], [-3.0, -4.0]]),
+    ],
+)
 def test_numeric_heads_remain_aligned_across_masked_response_positions(mask, expected_ids, expected_scores):
     response_ids = [11, 12] if len(mask) == 2 else [11, 99, 12]
     ids = np.array([[3, 7], [4, 8]], dtype=np.int32)
@@ -273,7 +276,8 @@ def _encoded_routes(rows):
 
 
 @pytest.mark.asyncio
-async def test_direct_chat_client_captures_exact_student_topk_ids():
+@pytest.mark.parametrize("top_k", [0, 2])
+async def test_direct_chat_client_preserves_numeric_scores_with_optional_head(top_k):
     engine = AsyncMock()
     engine.model_name = "teacher"
     engine.tokenizer = MagicMock()
@@ -295,22 +299,38 @@ async def test_direct_chat_client_captures_exact_student_topk_ids():
             }
         ]
     }
+    if top_k == 0:
+        choice = engine.chat_completion.return_value["choices"][0]
+        choice.pop(CHOICE_TOPK_KEY)
+        choice["logprobs"] = {
+            "content": [
+                {"token": "token_id:9", "logprob": -7.0, "bytes": None, "top_logprobs": []},
+                {"token": "token_id:10", "logprob": -0.1, "bytes": None, "top_logprobs": []},
+            ]
+        }
 
     output = await DirectModelClient(engine).generate(
         {
             "prompts": [[{"role": "user", "content": "question"}]],
             "session_ids": ["test"],
-            "sampling_params": {"logprobs": 2},
+            "sampling_params": {"logprobs": top_k},
             "chat_completion_params": [{}],
         }
     )
 
     body = engine.chat_completion.await_args.args[0]["json"]
-    assert body["top_logprobs"] == 3
     assert body["return_tokens_as_token_ids"] is True
-    assert engine.chat_completion.await_args.args[0][CHAT_TOPK_WIDTH_KEY] == 2
-    np.testing.assert_array_equal(output["student_topk_indices"], [[[2, 3], [10, 11]]])
-    np.testing.assert_allclose(output["behavior_topk_logprobs"], [[[-0.1, -0.2], [-0.1, -0.2]]], rtol=0, atol=1e-7)
+    if top_k:
+        assert body["top_logprobs"] == 3
+        assert engine.chat_completion.await_args.args[0][CHAT_TOPK_WIDTH_KEY] == 2
+        np.testing.assert_array_equal(output["student_topk_indices"], [[[2, 3], [10, 11]]])
+        np.testing.assert_allclose(output["behavior_topk_logprobs"], [[[-0.1, -0.2], [-0.1, -0.2]]], rtol=0, atol=1e-7)
+    else:
+        assert "top_logprobs" not in body
+        assert CHAT_TOPK_WIDTH_KEY not in engine.chat_completion.await_args.args[0]
+        assert not output.get("student_topk_indices")
+    assert output["responses"] == ["answer"]
+    assert output["response_ids"] == [[9, 10]]
     assert output["response_logprobs"] == [[-7.0, -0.1]]
     np.testing.assert_array_equal(output["routed_experts"][0], [[[3, 4]], [[4, 7]]])
     assert output["routed_experts"][0].dtype == np.uint8
