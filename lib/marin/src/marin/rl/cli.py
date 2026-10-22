@@ -35,9 +35,7 @@ _COORDINATOR_ENV_VARS = (
     "DAYTONA_API_KEY",
     "DAYTONA_RL_API_KEY",
     "DAYTONA_EVAL_API_KEY",
-    "HF_TOKEN",
     "TOGETHER_API_KEY",
-    "WANDB_API_KEY",
 )
 
 
@@ -104,6 +102,10 @@ def _coordinator_request(
     env_vars: Mapping[str, str],
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
+    selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
+    for execution in executions:
+        for name in execution.required_env_vars:
+            selected_env[name] = env_vars[name]
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
@@ -122,7 +124,7 @@ def _coordinator_request(
                 job_pb2.ContainerProfile.Name(route.container_profile) if route.container_profile is not None else None
             ),
         ),
-        environment=create_environment(workspace=str(workspace), env_vars=dict(env_vars), extras=["cpu"]),
+        environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
         priority=priority_band_value(route.priority),
         timeout=Duration.from_hours(route.timeout_hours),
     )
@@ -156,7 +158,6 @@ def rl_build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
     module_name = _module_name(module)
 
     def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
-        coordinator_env = {name: os.environ[name] for name in _COORDINATOR_ENV_VARS if name in os.environ}
-        _submit_or_run(module_name, handles, max_concurrent, coordinator_env)
+        _submit_or_run(module_name, handles, max_concurrent, os.environ)
 
     return build_options_with_runner(fn, runner)

@@ -222,8 +222,8 @@ class SkyRLRetentionPolicy:
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
 
     def __post_init__(self) -> None:
-        if not 1 <= self.resume_checkpoint_count <= 5:
-            raise ValueError("SkyRL resume_checkpoint_count must be between one and five")
+        if not 1 <= self.resume_checkpoint_count <= 10:
+            raise ValueError("SkyRL resume_checkpoint_count must be between one and ten")
         if self.temporary_storage_ttl_days <= 0:
             raise ValueError("SkyRL temporary_storage_ttl_days must be positive")
 
@@ -306,12 +306,16 @@ def _validate_relative_file_path(name: str, value: str) -> None:
 
 @dataclass(frozen=True)
 class ArtifactHfModel:
-    """An exact HF export produced by another Marin artifact step."""
+    """An exact HF export; an empty relative path selects the artifact root."""
 
     step: ArtifactStep[LevanterCheckpoint]
     tokenizer_uri: str
     tokenizer_revision: str
     relative_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.relative_path is not None and any(part in (".", "..") for part in self.relative_path.split("/")):
+            raise ValueError("HF model relative_path must not contain dot segments; use '' for the artifact root")
 
     def deps(self) -> tuple[ArtifactStep, ...]:
         return (self.step,)
@@ -428,6 +432,7 @@ class IrisSkyRLExecution:
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
+    required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
 
     def __post_init__(self) -> None:
@@ -584,6 +589,11 @@ def _validate_skyrl_recipe(
     if _declared_config_value(config, "trainer.strategy") != "megatron":
         raise ValueError("SkyRL requires trainer.strategy=megatron")
     _validate_role_plan_config(config, topology.role_plan)
+    if (
+        _declared_config_value(config, "generator.weight_sync_transport") == "expert_block"
+        and topology.role_plan.colocate_all
+    ):
+        raise ValueError("SkyRL expert_block requires non-colocated inference workers")
     forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
     if forward_batch is not _MISSING_CONFIG_VALUE and forward_batch != topology.role_plan.micro_train_batch_size_per_gpu:
         raise ValueError("Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu")

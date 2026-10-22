@@ -54,11 +54,13 @@ _DRIVER_SYSTEM_ENV_KEYS = (
 
 
 # Object-store credentials and config the isolated driver needs to write each trial straight to a
-# remote ``jobs_dir`` (CoreWeave S3, GCS). fsspec reads the ``FSSPEC_S3`` block natively; ``s3fs``
-# reads the ``AWS_*`` variables and ``gcsfs`` reads the ``GOOGLE_*`` ones. Resolved present-only from
-# the eval pod's ambient environment (an Iris CoreWeave task carries the ``AWS_*``/``FSSPEC_S3`` set
-# via ``iris-task-env``; GCS runs on the workload's metadata-server identity with no key file).
+# remote ``jobs_dir`` (CoreWeave S3, GCS). The subprocess shares the task's
+# mounted files; rigging reads its explicit credentials from RIGGING_SECRETS_DIR.
+# GCS normally uses the workload's metadata-server identity.
 _DRIVER_STORAGE_ENV_KEYS = (
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "RIGGING_SECRETS_DIR",
+    "HF_TOKEN_PATH",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",

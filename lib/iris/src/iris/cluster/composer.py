@@ -40,7 +40,6 @@ from iris.cluster.controller.backend import (
     TaskBackend,
 )
 from iris.cluster.controller.log_stack import LogStack
-from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
@@ -107,7 +106,6 @@ def make_task_backend(
         # The LocalQueue name is derived from label_prefix, not configured; Kueue is
         # mandatory (checked above), so it is always set.
         local_queue = local_queue_name(label_prefix)
-        env_secret_name = TASK_ENV_SECRET_NAME if projects_task_env_secret(config) else ""
         return K8sTaskProvider(
             descriptor=descriptor,
             kubectl=CloudK8sService(
@@ -125,8 +123,8 @@ def make_task_backend(
                 controller_address=kp.controller_address or None,
                 managed_label=managed_label,
                 task_env=dict(config.defaults.task_env),
+                require_coreweave_credentials=config.platform.coreweave is not None,
                 task_outputs=config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None,
-                env_secret_name=env_secret_name,
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
                 priority_class_names=pod_priority_classes,
