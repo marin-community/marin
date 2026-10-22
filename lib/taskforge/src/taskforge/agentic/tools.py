@@ -168,7 +168,6 @@ class OptionList(BaseModel):
             "The options, quoted in full in their order. For an option that is a code, quote the text that defines it."
         ),
     )
-    correct: int = Field(ge=1, description="The place of the correct option in the list, from 1.")
 
 
 class TaskReview(BaseModel):
@@ -178,8 +177,8 @@ class TaskReview(BaseModel):
 
     option_lists: tuple[OptionList, ...] = Field(
         description=(
-            "Each list of options in the prompt or the files from which the answer selects one option, with the "
-            "place of the correct option. Empty when the answer selects no option."
+            "Each list of options in the prompt or the files from which the answer selects one option. Empty when "
+            "the answer selects no option."
         )
     )
     failure_causes: tuple[str, ...] = Field(

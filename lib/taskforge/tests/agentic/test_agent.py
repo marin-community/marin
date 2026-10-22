@@ -240,7 +240,7 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
 
 async def test_submit_refuses_a_task_whose_answer_selects_an_option():
     options = ("Lower the cooling water flow.", "Raise the cooling water flow.", "Raise the feed rate.")
-    judge = AcceptingJudge(option_lists=(OptionList(options=options, correct=2),))
+    judge = AcceptingJudge(option_lists=(OptionList(options=options),))
     script = (*SCRIPT, call("finish", report="done"))
     async with ParallelWeb("unused") as web:
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)

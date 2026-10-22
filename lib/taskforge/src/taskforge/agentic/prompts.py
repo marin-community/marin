@@ -58,15 +58,15 @@ difficulty. Role "adversary" tells the \
 solver to get credit without solving the task, for example by finding the answer or exploiting the grader. An \
 adversary can also pass by doing the work, so the reviewer of submit judges its passes. The tool saves the \
 transcripts under /workspace/rollouts/.
-- submit: submit a task. It refuses a task that the tools cannot run, that has a malformed CSV or JSON file, or \
-whose answer selects an option from a list. Then it needs this evidence for the exact TaskSpec: a control with expect \
-"pass" that passed, a control with expect "fail" that failed, and no "fail" control that passed; at least \
-{min_solver_runs} graded solver rollouts with a pass rate from {low} to {high}; format failures in at most \
-{max_format_failures} of the solver rollouts; and at least {min_adversary_runs} adversary rollouts with a graded \
-answer. Then it grades wrong answers that it makes from your two controls, for example your right answer with its \
-last digit changed, and refuses a grader that accepts one. Last, an independent reviewer reads the task, its grader, \
-the failed solver answers and the adversary rollouts, and accepts or refuses it. A changed task has no evidence until \
-you run the tools on it again. submit tells you what is missing or wrong.
+- submit: submit a task. It refuses a task that the tools cannot run or that has a malformed CSV or JSON file. Then \
+it needs this evidence for the exact TaskSpec: a control with expect "pass" that passed, a control with expect \
+"fail" that failed, and no "fail" control that passed; at least {min_solver_runs} graded solver rollouts with a pass \
+rate from {low} to {high}; format failures in at most {max_format_failures} of the solver rollouts; and at least \
+{min_adversary_runs} adversary rollouts with a graded answer. Then it grades wrong answers that it makes from your \
+two controls, for example your right answer with its last digit changed, and refuses a grader that accepts one. \
+Last, an independent reviewer reads the task, its grader, the failed solver answers and the adversary rollouts, and \
+accepts or refuses it. The review refuses a task whose answer selects an option from a list. A changed task has no \
+evidence until you run the tools on it again. submit tells you what is missing or wrong.
 - finish: stop, with a report. The session also stops when {n} tasks are accepted.
 
 # How to work well
@@ -143,7 +143,6 @@ from one other reading of the task.
 adversary that passed by doing the work, as its commands show, is not a problem. An adversary that passed on a task \
 with files without reading them got the answer from the prompt alone.
 - A format example in the prompt contains no part of the answer.
-- In a multiple-choice question, the correct option does not stand out, for example by its length or detail, and \
-one question does not give away the answer of another.
+- One question of the task does not give away the answer of another.
 - The task is different from the accepted tasks: not the same text, story or data with new labels or numbers.
 Give each problem that you find."""
