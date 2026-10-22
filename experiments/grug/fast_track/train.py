@@ -79,6 +79,8 @@ from experiments.grug.fast_track.model import (
     LayerSkip,
     Transformer,
     forward_flops_per_token,
+    layer_onset_gates,
+    layer_onset_update_scales,
 )
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -1041,6 +1043,7 @@ def _loss_and_grads(
     extra_mlp_active: jax.Array | bool = True,
     lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
+    layer_gates: jax.Array | None = None,
 ):
     """With ``lm_head_grad_probe_site`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come
     back as the gradients of zeros probes (``model.lm_head_grad_probe``) differentiated next to the params."""
@@ -1060,6 +1063,7 @@ def _loss_and_grads(
             extra_mlp_active=extra_mlp_active,
             head_grad_probe=probes.get(GradProbeSite.POST_NORM),
             pre_norm_grad_probe=probes.get(GradProbeSite.PRE_NORM),
+            layer_gates=layer_gates,
         )
         if skip is not None:
             metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
@@ -1088,6 +1092,7 @@ def _accumulated_loss_and_grads(
     z_loss,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_active: jax.Array | bool = True,
+    layer_gates: jax.Array | None = None,
 ):
     """``_loss_and_grads`` over ``num_microbatches`` equal slices of ``batch``, one at a time: the loss, gradients
     and float metrics are averaged, integer metrics (counts) summed. Every microbatch runs in one ``lax.scan``
@@ -1096,7 +1101,7 @@ def _accumulated_loss_and_grads(
     micro = reshape_batch_into_microbatches(batch, num_microbatches)
 
     def one(microbatch):
-        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip, extra_mlp_active)
+        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip, extra_mlp_active, layer_gates=layer_gates)
 
     shapes = jax.eval_shape(one, jax.tree.map(lambda x: x[0], micro))
     zeros = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype, out_sharding=getattr(s.sharding, "spec", None)), shapes)
@@ -1143,6 +1148,29 @@ def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_c
     return diagnostic_watch_step
 
 
+def _scale_layer_updates(new: Transformer, old: Transformer, scales: jax.Array) -> Transformer:
+    """``new`` with each layer's parameter step scaled by ``scales[layer]``: the stacked leaves of a layer at scale 0
+    keep ``old`` exactly, at scale 1 take ``new``, in between ``old + scale * (new - old)``."""
+
+    def blend(stack_new, stack_old, indices):
+        s = scales[np.asarray(indices)]
+
+        def leaf(n, o):
+            if not eqx.is_inexact_array(n):
+                return n
+            f = s.reshape((-1,) + (1,) * (n.ndim - 1)).astype(n.dtype)
+            mixed = o + f * (n - o)
+            return jnp.where(f == 0, o, jnp.where(f == 1, n, mixed))
+
+        return jax.tree.map(leaf, stack_new, stack_old)
+
+    stacks = [
+        blend(n, o, idx)
+        for n, o, idx in zip(new.layer_stacks(), old.layer_stacks(), new.stack_layer_indices(), strict=True)
+    ]
+    return eqx.tree_at(lambda t: t.layer_stacks(), new, stacks)
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -1159,8 +1187,12 @@ def _make_train_step(
     lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
     token_embed_stats: bool = False,
+    layer_onset: GrugModelConfig | None = None,
 ):
     """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
+    ``layer_onset`` (a model config with delayed ``layer_onset_steps``) gates the delayed layers' AttnRes sources by
+    ``layer_onset_gates`` and scales their parameter steps by ``layer_onset_update_scales`` (``_scale_layer_updates``):
+    an offline layer's parameters and QB betas stay bit-identical.
     ``lm_head_grad_probe_site`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
     ``token_embed_stats`` the ``_token_embed_stats``.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
@@ -1184,17 +1216,30 @@ def _make_train_step(
         with jax.named_scope("qb_apply"):
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
         extra_active = state.step >= extra_mlp_start_step
+        layer_gates = None if layer_onset is None else layer_onset_gates(layer_onset, state.step)
 
         if grad_accum_microbatches > 1:
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active
+                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active, layer_gates
             )
         else:
             (loss, summarized_metrics), grads = _loss_and_grads(
-                qb_params, batch, mp, z_loss, layer_skip, extra_active, lm_head_grad_probe_site, lm_head_grad_clip
+                qb_params,
+                batch,
+                mp,
+                z_loss,
+                layer_skip,
+                extra_active,
+                lm_head_grad_probe_site,
+                lm_head_grad_clip,
+                layer_gates,
             )
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
+        if layer_onset is not None and (
+            os.environ.get("GRUG_SKIP_OPTIMIZER") or master_param_mode != MasterParamMode.DEVICE
+        ):
+            raise ValueError("layer_onset_steps needs master_param_mode=device and the optimizer step")
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
             # MFU-baseline mode: run fwd+bwd (grads above) but skip the optimizer update (Muon NS).
             # Params/master/opt_state pass through unchanged, so loss does not descend -- this isolates
@@ -1218,6 +1263,9 @@ def _make_train_step(
                 updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
             with jax.named_scope("apply_updates"):
                 params = optax.apply_updates(qb_params, updates)
+            if layer_onset is not None:
+                update_scales = layer_onset_update_scales(layer_onset, state.step)
+                params = _scale_layer_updates(params, qb_params, update_scales)
             master_params = None
         if offload_opt_state:
             opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
@@ -1252,6 +1300,12 @@ def _make_train_step(
                 model_tree_type=type(state.params),
             )
 
+        pending_qb_betas = metrics.get("qb_beta_per_layer", state.pending_qb_betas)
+        if layer_onset is not None:
+            # An offline layer keeps its QB betas, so its router bias stays where it was.
+            offline = layer_onset_update_scales(layer_onset, state.step) == 0
+            pending_qb_betas = jnp.where(offline[:, None], state.pending_qb_betas, pending_qb_betas)
+            metrics.update({f"train/onset/gate_L{i}": layer_gates[i] for i in layer_onset.delayed_layers})
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
@@ -1261,7 +1315,7 @@ def _make_train_step(
             opt_state=opt_state,
             # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
             # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
-            pending_qb_betas=metrics.get("qb_beta_per_layer", state.pending_qb_betas),
+            pending_qb_betas=pending_qb_betas,
         )
         if next_state.pending_qb_betas.shape[-1] <= _LOGGED_QB_BETA_MAX_EXPERTS:
             # Few experts (the specialization study models): log every expert's QB balancing bias.
@@ -2057,8 +2111,21 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         lm_head_grad_probe_site=config.model.lm_head_grad_probe_site if config.model.lm_head_grad_probe else None,
         lm_head_grad_clip=config.model.lm_head_grad_clip,
         token_embed_stats=config.model.token_embed_stats,
+        layer_onset=_layer_onset_config(config.model, trainer.num_train_steps),
     )
     return train_step_fn, diagnostic_watch_step
+
+
+def _layer_onset_config(model: GrugModelConfig, num_train_steps: int) -> GrugModelConfig | None:
+    """``model`` when it delays layers (``layer_onset_steps``), after checking every delayed layer is fully on, ramp and
+    update warmup done, before the last step; else None."""
+    if not model.delayed_layers:
+        return None
+    assert model.layer_onset_steps is not None
+    last = max(model.layer_onset_steps) + max(model.layer_onset_ramp, model.layer_onset_lr_warmup)
+    if last >= num_train_steps:
+        raise ValueError(f"layer_onset_steps: every onset + ramp/warmup must be < num_steps={num_train_steps}")
+    return model
 
 
 def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:

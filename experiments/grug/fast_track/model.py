@@ -922,6 +922,17 @@ class GrugModelConfig:
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
     the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
     attention forward per layer; needed for memory at d1280."""
+    layer_onset_steps: tuple[int, ...] | None = None
+    """Per-layer onset step: layer ``l`` stays offline (its AttnRes sources masked from every later gate and the
+    final gate, its parameters and QB router bias frozen) through step ``t_l``, then its sources enter with weight
+    ``g_l(t) = min(1, (t - t_l) / layer_onset_ramp)`` times their softmax term (a ``log g_l`` logit bias). Layers
+    with onset 0 are always on; all-zero onsets give the default program. Each delayed layer must be its own
+    AttnRes block. Training only: evals and analysis see every layer on (``g = 1``)."""
+    layer_onset_ramp: int = 100
+    """Steps over which a delayed layer's gate ramps from 0 to 1 (``layer_onset_steps``)."""
+    layer_onset_lr_warmup: int = 0
+    """Steps over which a delayed layer's parameter updates ramp from 0 to the full step after its onset (0: full
+    updates from the first step after onset)."""
     value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
     value_embed_layers: tuple[int, ...] | None = None
     """MLA layers that carry value embeddings (None: every MLA layer). A layer stack with none of them allocates
@@ -1106,6 +1117,8 @@ class GrugModelConfig:
                     f"value_embed_tie_lm_head needs MLA heads x head_dim == hidden_dim, got {heads} x "
                     f"{self.inferred_head_dim} != {self.hidden_dim}"
                 )
+        if self.layer_onset_steps is not None:
+            self._validate_layer_onset()
         for name in ("attn_res_logit_soft_cap", "attn_res_final_logit_soft_cap"):
             cap = getattr(self, name)
             if cap is not None and (not self.attn_res or cap <= 0):
@@ -1232,6 +1245,29 @@ class GrugModelConfig:
         if self.entropy_head_input_layer is not None:
             return self.entropy_head_input_layer
         return min(self.entropy_head_layers)
+
+    @property
+    def delayed_layers(self) -> tuple[int, ...]:
+        """The layers ``layer_onset_steps`` brings online after step 0."""
+        return tuple(i for i, t in enumerate(self.layer_onset_steps or ()) if t > 0)
+
+    def _validate_layer_onset(self) -> None:
+        steps = self.layer_onset_steps
+        assert steps is not None
+        if len(steps) != self.num_layers or min(steps) < 0:
+            raise ValueError(f"layer_onset_steps needs {self.num_layers} steps >= 0, got {steps}")
+        if self.layer_onset_ramp < 1 or self.layer_onset_lr_warmup < 0:
+            raise ValueError("layer_onset_ramp must be >= 1 and layer_onset_lr_warmup >= 0")
+        if not self.delayed_layers:
+            return
+        if not self.attn_res or self.scan_layers or self.attn_res_plain_sum or self.attn_res_kv_layers:
+            raise ValueError(
+                "layer_onset_steps needs attn_res (softmax gates), the unrolled loop and no attn_res_kv_layers"
+            )
+        starts = (*attn_res_block_starts(self), self.num_layers)
+        for i in self.delayed_layers:
+            if i not in starts or i + 1 not in starts:
+                raise ValueError(f"layer_onset_steps: delayed layer {i} must be its own AttnRes block, starts {starts}")
 
     @property
     def kv_source_layers(self) -> int:
@@ -4269,6 +4305,7 @@ def _attn_res_mix(
         sources.append(stream)
         logits.append(_attn_res_source_logits(stream, queries[gate_index][None], eps, head_norm)[0])
     logits = _soft_cap_logits(logits, soft_cap)
+    logits = _onset_gate_logits(logits, extras, gate_index, len(blocks), has_partial=partial is not None)
     weights, mixed = _softmax_mix(logits, sources)
     mixed = _gate_variants(mixed, sources, extras, gate_index, eps, has_partial=partial is not None)
     if extras is not None and extras.get("embed2") is not None:
@@ -4335,6 +4372,64 @@ def _soft_cap_logits(logits: list[jax.Array], cap: float | None) -> list[jax.Arr
     if cap is None:
         return logits
     return [cap * jnp.tanh(logit / cap) for logit in logits]
+
+
+def _onset_gate_logits(
+    logits: list[jax.Array],
+    extras: dict[str, jax.Array | None] | None,
+    gate_index: int,
+    num_blocks: int,
+    *,
+    has_partial: bool,
+) -> list[jax.Array]:
+    """Add ``extras["onset"][gate_index]`` (``_onset_logit_table``: ``log g_l`` of delayed layers) to the first
+    ``num_blocks`` source logits and the partial's, after the soft cap so a ``-inf`` masks the source exactly."""
+    table = None if extras is None else extras.get("onset")
+    if table is None:
+        return logits
+    row = table[gate_index]
+    columns = list(range(num_blocks)) + ([-1] if has_partial else [])
+    biased = [logit + row[c] for logit, c in zip(logits, columns, strict=False)]
+    return biased + logits[len(columns) :]
+
+
+def _onset_logit_table(
+    cfg: "GrugModelConfig", schedule: "_BlockSchedule", gates: Float[Array, " L"], num_gates: int
+) -> Float[Array, "G C"]:
+    """Per-(gate, source column) ``log g_l`` for the delayed layers of ``layer_onset_steps``: the column of the block
+    holding layer ``l``'s output (each delayed layer is its own block), or for the last layer the final gate's
+    partial. Every other entry is 0; ``g_l = 0`` gives ``-inf`` and masks the source."""
+    num_columns = schedule.num_extra + len(schedule.starts) + 1
+    log_gates = jnp.log(gates.astype(jnp.float32))
+    table = jnp.zeros((num_gates, num_columns), jnp.float32)
+    for layer in cfg.delayed_layers:
+        if layer == cfg.num_layers - 1:
+            table = table.at[num_gates - 1, num_columns - 1].set(log_gates[layer])
+        else:
+            table = table.at[:, schedule.num_extra + schedule.starts.index(layer) + 1].set(log_gates[layer])
+    return table
+
+
+def layer_onset_gates(cfg: "GrugModelConfig", step: jax.Array) -> Float[Array, " L"]:
+    """``g_l(step)`` of ``layer_onset_steps``: 0 through the onset step, a linear ramp to 1 over
+    ``layer_onset_ramp`` steps, then 1 (always 1 for onset 0)."""
+    assert cfg.layer_onset_steps is not None
+    onset = jnp.asarray(cfg.layer_onset_steps, jnp.float32)
+    ramp = jnp.clip((jnp.asarray(step, jnp.float32) - onset) / cfg.layer_onset_ramp, 0.0, 1.0)
+    return jnp.where(onset > 0, ramp, 1.0)
+
+
+def layer_onset_update_scales(cfg: "GrugModelConfig", step: jax.Array) -> Float[Array, " L"]:
+    """Per-layer multiple of the optimizer's parameter step under ``layer_onset_steps``: 0 while the layer is
+    offline (``g_l = 0``), then 1, or a linear ramp from 0 over ``layer_onset_lr_warmup`` steps."""
+    assert cfg.layer_onset_steps is not None
+    onset = jnp.asarray(cfg.layer_onset_steps, jnp.float32)
+    since = jnp.asarray(step, jnp.float32) - onset
+    if cfg.layer_onset_lr_warmup:
+        scale = jnp.clip(since / cfg.layer_onset_lr_warmup, 0.0, 1.0)
+    else:
+        scale = (since > 0).astype(jnp.float32)
+    return jnp.where(onset > 0, scale, 1.0)
 
 
 def _gate_variants(
@@ -5579,8 +5674,11 @@ class Transformer(eqx.Module):
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
+        layer_gates: Float[Array, " L"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``extra_mlp_active`` (traced bool) turns on the ``extra_mlp_layers`` MLPs (off: no token reaches them).
+        """``layer_gates`` (``layer_onset_gates`` at the train step) masks or ramps the delayed layers' AttnRes
+        sources; None runs every layer fully on.
+        ``extra_mlp_active`` (traced bool) turns on the ``extra_mlp_layers`` MLPs (off: no token reaches them).
         ``pre_norm_grad_probe`` (zeros ``[B, S]``) passes the stream entering ``final_norm`` through
         ``lm_head_grad_probe`` and adds each token's RMS of it as ``FINAL_NORM_INPUT_RMS_KEY``.
         ``layer_skip`` (an eval ablation, AttnRes only) drops the listed layers' attention and MLP outputs for
@@ -5671,6 +5769,7 @@ class Transformer(eqx.Module):
                 (None),
                 layer_skip,
                 extra_mlp_active,
+                layer_gates,
             )
         else:
             if layer_skip is not None:
@@ -5763,6 +5862,7 @@ class Transformer(eqx.Module):
         ple_rows: jax.Array | None = None,
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
+        layer_gates: Float[Array, " L"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -5817,6 +5917,9 @@ class Transformer(eqx.Module):
         queries_flat = jnp.concatenate([*gate_queries, *v_queries, *kv_queries, self.attn_res_query_final[None]])
         queries = queries_flat
         logit_bias = _gate_extras(self, queries.shape[0])
+        if layer_gates is not None and cfg.delayed_layers:
+            onset_table = _onset_logit_table(cfg, schedule, layer_gates, queries.shape[0])
+            logit_bias = {**(logit_bias or {}), "onset": onset_table}
         allowed = {"q", "k", "v", "mlp", "mlp_shared", "mlp_routed", "mlp_router"}
         if set(()) - allowed:
             raise ValueError(f"attn_res_sum_inputs must be a subset of {sorted(allowed)}, got {()}")
@@ -5950,6 +6053,7 @@ class Transformer(eqx.Module):
             logits = _bias_gate_logits(logits, logit_bias, final_index, [*blocks, partial], eps, has_partial=True)
             final_cap = cfg.attn_res_final_logit_soft_cap
             logits = _soft_cap_logits(logits, cfg.attn_res_logit_soft_cap if final_cap is None else final_cap)
+            logits = _onset_gate_logits(logits, logit_bias, final_index, len(blocks), has_partial=True)
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
             if cfg.attn_res_plain_sum:
                 mixed = _stream_sum((*blocks, partial))
@@ -6485,6 +6589,7 @@ class Transformer(eqx.Module):
         extra_mlp_active: jax.Array | bool = True,
         head_grad_probe: Float[Array, "B S"] | None = None,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
+        layer_gates: Float[Array, " L"] | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss, the mid head); evals leave it off
         so they score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the main lm_head
@@ -6500,6 +6605,7 @@ class Transformer(eqx.Module):
             layer_skip=layer_skip,
             extra_mlp_active=extra_mlp_active,
             pre_norm_grad_probe=pre_norm_grad_probe,
+            layer_gates=layer_gates,
         )
         final_norm_rms = router_metrics.pop(FINAL_NORM_INPUT_RMS_KEY, None)
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
