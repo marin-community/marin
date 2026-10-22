@@ -387,10 +387,8 @@ def build_evaluation_batch(
         )
         if violations:
             raise ValueError(f"{spec.version} pre-submit check failed for {name}: {'; '.join(violations)}")
-    if judge is not None and any(
-        not isinstance(definition, HarborDefinition) for _, definition in requested_definitions
-    ):
-        raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop non-Harbor evaluations")
+    if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
+        raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
     group_id = spec.run_id or _group_id(model.name, spec.cache_key)
     created_at = datetime.now(UTC).isoformat()
