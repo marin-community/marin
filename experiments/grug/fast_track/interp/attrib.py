@@ -246,6 +246,12 @@ def ablations(head_mean, sub_mean) -> list[tuple[str, forward.Ablation]]:
                 mult = base.sub_mult.at[i, sub].set(0.0)
                 mean = sub_mean if kind == "mean" else jnp.zeros_like(sub_mean)
                 out.append((f"sub:L{i}.{name}:{kind}", base._replace(sub_mult=mult, sub_mean=mean)))
+    for i in range(L):
+        # The whole layer: attention, shared and routed outputs together.
+        for kind in ("zero", "mean"):
+            mult = base.sub_mult.at[i, : forward.SUB_ROUTED + 1].set(0.0)
+            mean = sub_mean if kind == "mean" else jnp.zeros_like(sub_mean)
+            out.append((f"layer:L{i}:{kind}", base._replace(sub_mult=mult, sub_mean=mean)))
     for i in forward.MLA_LAYERS:
         out.append((f"sub:L{i}.ve:zero", base._replace(sub_mult=base.sub_mult.at[i, forward.SUB_VE].set(0.0))))
     for drop in (1, 2, 3, 5):

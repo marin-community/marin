@@ -36,10 +36,16 @@ from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 logger = logging.getLogger(__name__)
 
 SIZE = "d512"
+ONSET_ARMS = ("ctl", "last-half", "first-half", "stagger", "rstagger", "last-half-wu")
 # The 8-minute Belay d512 (Ckpt 1 at 2760 steps) and the 8821-step 171-TPP ladder rung, by study tag.
 CHECKPOINTS = {
     "tn-d512-ckpt1-rno": "s3://marin-us-east-02a/marin/grug/tn-d512-ckpt1-rno/2026.09.25/checkpoints/step-2760",
     "lc1-l171-d512": "s3://marin-us-east-02a/marin/grug/lc1-l171-d512/2026.09.25/checkpoints/step-8821",
+    # The layer onset study (Ckpt 1 d512, 2760 steps, seed 0; one arm per layer_onset_steps schedule).
+    **{
+        f"lc1-onset-{arm}-s0": f"s3://marin-us-east-02a/marin/grug/lc1-onset-{arm}-s0/2026.09.25/checkpoints/step-2760"
+        for arm in ONSET_ARMS
+    },
 }
 OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=30d/interp-belay-d512"
 SEQ_LEN = launch.SEQ_LEN
