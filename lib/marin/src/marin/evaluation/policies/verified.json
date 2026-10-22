@@ -1,6 +1,5 @@
 {
   "version": "eval-policy-2026-10-22-verified",
-  "runtime_alternatives": {},
   "runtimes": {
     "aime24": "evalchemy[aime24,serve-eval] @ vendor/evalchemy#sha256=67d552a13ff3195a28a62391ad7b2ea813893f93e649b52c24f4cc2f8357ead1",
     "boolq": "evalchemy[serve-eval] @ vendor/evalchemy#sha256=67d552a13ff3195a28a62391ad7b2ea813893f93e649b52c24f4cc2f8357ead1",

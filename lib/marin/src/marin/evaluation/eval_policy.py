@@ -49,7 +49,6 @@ class HarborPolicy(TypedDict):
 class VerifiedPolicy(TypedDict):
     version: str
     runtimes: dict[str, str]
-    runtime_alternatives: dict[str, list[str]]
     harbor_commit: str
     evalchemy: dict[str, EvalRef]
     harbor: dict[str, HarborPolicy]
@@ -179,8 +178,7 @@ def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -
     if version != VERIFIED_VERSION:
         return ()
     expected = VERIFIED_POLICY["runtimes"].get(evaluation.name)
-    alternatives = VERIFIED_POLICY["runtime_alternatives"].get(evaluation.name, ())
-    if expected is None or runtime not in (expected, *alternatives):
+    if expected is None or runtime != expected:
         return ("evaluator runtime differs from the verified source and lock",)
     if evaluation.harbor is not None and evaluation.harbor.harbor_config_commit != VERIFIED_POLICY["harbor_commit"]:
         return ("Harbor preflight differs from the verified upstream import",)

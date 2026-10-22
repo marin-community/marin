@@ -231,7 +231,6 @@ def _resolve_definitions(
     limit: int | None,
     seed: int | None,
     retry_unscored_harbor_trials: bool,
-    version: str | None,
     judge: HostedJudge | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
@@ -363,7 +362,6 @@ def build_evaluation_batch(
         spec.limit,
         spec.seed,
         spec.retry_unscored_harbor_trials,
-        spec.version,
         judge,
     )
     if spec.retry_unscored_harbor_trials and spec.resume_results_path is None:

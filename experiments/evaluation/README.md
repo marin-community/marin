@@ -93,8 +93,6 @@ settings and vendored runtime descriptors are frozen in
 Pass that label with `--version` to check a launch against the profile. Subsets
 are allowed. Other `eval-policy-*` labels cannot launch new runs. Historical
 records and cohort labels remain readable in EvalDash, without a verified marker.
-The profile can also approve exact alternative runtime descriptors per benchmark.
-These preserve the original runtime approval without allowing changes to benchmark settings.
 
 ### Evalchemy
 

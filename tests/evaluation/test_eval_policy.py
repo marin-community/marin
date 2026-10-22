@@ -113,17 +113,6 @@ def test_verified_runtime_uses_the_full_descriptor_not_a_matching_substring():
     assert runtime_violations(VERIFIED_VERSION, evaluation, runtime.replace("sha256=", "sha256=changed"))
 
 
-def test_verified_runtime_alternative_is_exact_and_benchmark_specific(monkeypatch):
-    alternative = "evalchemy[serve-eval] @ vendor/evalchemy#sha256=approved-retry-fix"
-    monkeypatch.setitem(VERIFIED_POLICY, "runtime_alternatives", {"math500": [alternative]})
-    evaluation = _evaluation("math500")
-
-    assert runtime_violations(VERIFIED_VERSION, evaluation, alternative) == ()
-    assert runtime_violations(VERIFIED_VERSION, evaluation, VERIFIED_POLICY["runtimes"]["math500"]) == ()
-    assert runtime_violations(VERIFIED_VERSION, evaluation, alternative + "-changed")
-    assert runtime_violations(VERIFIED_VERSION, _evaluation("gpqa-diamond"), alternative)
-
-
 def test_verified_policy_reports_missing_optional_record_settings():
     evaluation = _evaluation("financebench")
     assert evaluation.evalchemy is not None
