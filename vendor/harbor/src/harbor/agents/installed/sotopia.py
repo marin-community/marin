@@ -74,6 +74,16 @@ class SotopiaAgent(BaseInstalledAgent):
         await environment.upload_file(tokenizer_source, "/vllm_tokenization.py")
         task_config_source = environment.environment_dir / TASK_CONFIG_FILENAME
         await environment.upload_file(task_config_source, TASK_CONFIG_PATH)
+        dependencies = await environment.exec(
+            "python3 -m pip install --no-cache-dir tenacity==9.1.4 "
+            "&& python3 -c 'import vllm_tokenization'",
+            user="root",
+            cwd="/",
+        )
+        if dependencies.return_code != 0:
+            raise RuntimeError(
+                f"Failed to install Sotopia tokenizer dependencies: {dependencies.stderr}"
+            )
 
     @staticmethod
     def _custom_model(model: str, api_base: str | None) -> str:
