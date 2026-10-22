@@ -87,12 +87,14 @@ Evalchemy and Harbor run from [vendor/evalchemy](../../vendor/evalchemy/README.m
 and [vendor/harbor](../../vendor/harbor/README.md). Each has a separate environment
 and frozen lockfile. Neither is installed in the main workspace environment.
 
-The current verified cohort is `eval-policy-2026-10-20-verified`. Its benchmark
+The current verified cohort is `eval-policy-2026-10-22-verified`. Its benchmark
 settings and vendored runtime descriptors are frozen in
 [`verified.json`](../../lib/marin/src/marin/evaluation/policies/verified.json).
 Pass that label with `--version` to check a launch against the profile. Subsets
 are allowed. Other `eval-policy-*` labels cannot launch new runs. Historical
 records and cohort labels remain readable in EvalDash, without a verified marker.
+The profile can also approve exact alternative runtime descriptors per benchmark.
+These preserve the original runtime approval without allowing changes to benchmark settings.
 
 ### Evalchemy
 
@@ -168,6 +170,9 @@ coverage below 90% is marked `infra_failed` and is not cached as successful.
 ## Recovery
 
 Completed evaluations are reused; failed evaluations remain eligible for retry.
+Inference workers can wait for GPU placement without a queue deadline. The
+startup timeout starts after placement. A requeued worker gets a new startup
+timeout when it is placed again.
 If serving fails at startup, every
 pending evaluation gets an infrastructure-failure record.
 
@@ -199,7 +204,7 @@ Two live Harbor drivers must not share one results root.
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import eval_step
 
-evaluation = eval_step(models()["qwen3-0.6b"], "smoke", version="2026.10.20")
+evaluation = eval_step(models()["qwen3-0.6b"], "smoke", version="2026.10.22")
 ```
 
 For produced models, pass `deps` and a `resolve_model(ctx)` callback to

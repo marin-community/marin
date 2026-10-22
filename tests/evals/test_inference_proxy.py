@@ -412,7 +412,7 @@ def test_inference_endpoint_wait_preserves_startup_budget_across_gate_and_requeu
     )
 
 
-def test_inference_endpoint_wait_requeue_preserves_placement_deadline(monkeypatch) -> None:
+def test_inference_endpoint_wait_allows_long_queue_and_requeue(monkeypatch) -> None:
     now = 0.0
     snapshots = iter(
         (
@@ -429,9 +429,9 @@ def test_inference_endpoint_wait_requeue_preserves_placement_deadline(monkeypatc
 
     def sleep(_seconds: float) -> None:
         nonlocal now
-        now += 6
+        now += 5 * 3600
 
-    monkeypatch.setattr(iris_module, "_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS", 10.0)
+    endpoints = iter(([], [], [], [SimpleNamespace(address="https://inference.example", metadata={})]))
     monkeypatch.setattr(iris_module.time, "monotonic", lambda: now)
     monkeypatch.setattr(iris_module.time, "sleep", sleep)
     monkeypatch.setattr(
@@ -439,15 +439,17 @@ def test_inference_endpoint_wait_requeue_preserves_placement_deadline(monkeypatc
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                list_endpoint_instances=lambda _endpoint_name: [],
+                list_endpoint_instances=lambda _endpoint_name: next(endpoints),
                 list_tasks=lambda _job_id: [next(snapshots)],
             )
         ),
     )
     job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
 
-    with pytest.raises(TimeoutError, match="to be placed"):
-        iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=5)
+    assert iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=5) == (
+        "https://inference.example",
+        {},
+    )
 
 
 def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:

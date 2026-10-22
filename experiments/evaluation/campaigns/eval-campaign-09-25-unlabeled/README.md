@@ -6,7 +6,7 @@ and launch commands. The launcher records the vendored Evalchemy runtime's sourc
 and Harbor's upstream revision and runtime descriptor. It checks the independent Harbor
 lockfile before submission.
 
-The launcher defaults to `eval-policy-2026-10-20-verified`. Marin checks each selected benchmark
+The launcher defaults to `eval-policy-2026-10-22-verified`. Marin checks each selected benchmark
 against the single checked-in [profile](../../../../lib/marin/src/marin/evaluation/policies/verified.json),
 including its source settings and vendored runtime. Subset runs are allowed. EvalDash uses the same
 checks for this cohort and keeps historical cohorts available without a verified marker.

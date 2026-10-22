@@ -113,6 +113,17 @@ def test_verified_runtime_uses_the_full_descriptor_not_a_matching_substring():
     assert runtime_violations(VERIFIED_VERSION, evaluation, runtime.replace("sha256=", "sha256=changed"))
 
 
+def test_verified_runtime_alternative_is_exact_and_benchmark_specific(monkeypatch):
+    alternative = "evalchemy[serve-eval] @ vendor/evalchemy#sha256=approved-retry-fix"
+    monkeypatch.setitem(VERIFIED_POLICY, "runtime_alternatives", {"math500": [alternative]})
+    evaluation = _evaluation("math500")
+
+    assert runtime_violations(VERIFIED_VERSION, evaluation, alternative) == ()
+    assert runtime_violations(VERIFIED_VERSION, evaluation, VERIFIED_POLICY["runtimes"]["math500"]) == ()
+    assert runtime_violations(VERIFIED_VERSION, evaluation, alternative + "-changed")
+    assert runtime_violations(VERIFIED_VERSION, _evaluation("gpqa-diamond"), alternative)
+
+
 def test_verified_policy_reports_missing_optional_record_settings():
     evaluation = _evaluation("financebench")
     assert evaluation.evalchemy is not None
@@ -140,7 +151,9 @@ def test_verified_launch_accepts_a_benchmark_subset_and_records_its_runtime(monk
             serve=ServeConfig(max_model_len=32768, auto_overrides=False),
         ),
         evals=(),
-        evalchemy_definitions=(EvalchemyDefinition("math500", CAMPAIGN_ROOT / "evalchemy-configs/math500.yaml"),),
+        evalchemy_definitions=(
+            EvalchemyDefinition("gpqa-diamond", CAMPAIGN_ROOT / "evalchemy-configs/gpqa-diamond.yaml"),
+        ),
         harbor_definitions=(),
         platform=Platform.GPU,
         accelerator="H100x1",
@@ -153,7 +166,7 @@ def test_verified_launch_accepts_a_benchmark_subset_and_records_its_runtime(monk
     )
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="test", launch_host="test"), "test")
     assert batch.version == VERIFIED_VERSION
-    assert [item.identity.eval_ref.name for item in batch.evaluations] == ["math500"]
+    assert [item.identity.eval_ref.name for item in batch.evaluations] == ["gpqa-diamond"]
     assert (
         runtime_violations(
             VERIFIED_VERSION, batch.evaluations[0].identity.eval_ref, batch.evaluations[0].identity.eval_runtime
@@ -168,6 +181,7 @@ def test_verified_launch_accepts_a_benchmark_subset_and_records_its_runtime(monk
         "eval-policy-2026-09-16-verified",
         "eval-policy-2026-09-24-verified",
         "eval-policy-2026-10-19-verified",
+        "eval-policy-2026-10-20-verified",
     ],
 )
 def test_retired_policy_labels_cannot_launch_new_verified_evaluations(version):

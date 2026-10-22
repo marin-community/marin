@@ -73,10 +73,6 @@ _WORKER_LIFECYCLE_POLL_FAILURES = telemetry.counter("marin_inference_worker_life
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
-# Bound on time spent queued (pending/building) before the server job is placed.
-# Distinct from the readiness timeout, which budgets server startup and only
-# counts while the job is actually running.
-_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = 4 * 3600.0
 _ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
@@ -597,7 +593,7 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
     """Wait for the serving job to register its endpoint.
 
     ``timeout_seconds`` budgets server startup after placement. Queue time is
-    bounded separately, and requeue resets the startup clock.
+    unlimited, and requeue resets the startup clock.
     """
 
     def registered_endpoint() -> tuple[str, dict[str, str]] | None:
@@ -609,7 +605,6 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
 
 def _wait_for_serving[T](jobs: tuple[JobHandle, ...], timeout_seconds: float, ready: Callable[[], T | None]) -> T:
     ctx = iris_ctx()
-    placement_deadline = Deadline.from_seconds(_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS)
     ready_deadline: Deadline | None = None
     while True:
         result = ready()
@@ -632,11 +627,6 @@ def _wait_for_serving[T](jobs: tuple[JobHandle, ...], timeout_seconds: float, re
                 raise TimeoutError("Timed out waiting for inference startup")
         else:
             ready_deadline = None
-            if placement_deadline.expired():
-                raise TimeoutError(
-                    "Timed out waiting for inference jobs to be placed "
-                    f"(queued for {_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS:.0f}s)"
-                )
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
 
 
