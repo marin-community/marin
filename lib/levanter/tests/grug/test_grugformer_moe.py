@@ -1913,7 +1913,7 @@ def test_combine_gather_sum_keeps_bf16_sums_in_float32():
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16], ids=["float32", "bfloat16"])
-def test_ring_dedup_down_project_combine_matches_autodiff(dtype, monkeypatch):
+def test_ring_filtered_down_project_combine_matches_autodiff(dtype, monkeypatch):
     """The expert-side down projection and combine match autodiff through ``ragged_dot`` and the weighted
     sum, although its routing-weight gradient comes from ``<hidden, dhidden> / weight`` instead of the expert
     outputs. In float32 everything agrees to rounding. In bfloat16 the routing-weight gradient carries two

@@ -472,7 +472,7 @@ def moe_mlp(
     outputs nor their return transport. That gradient is zero at a zero weight,
     and zero or inexact wherever `|w * dout|` falls below the cotangent dtype's
     smallest normal number, 2^-126, which only output cotangents near underflow
-    reach. `ring_dedup` takes the combine-weight gradient from the down
+    reach. `ring_filtered` takes the combine-weight gradient from the down
     projection's backward as `<hidden, dhidden> / w`: zero at a zero weight and
     rounded like the bfloat16 hidden activations. Every other path, float16
     included, differentiates the combine weights exactly.
