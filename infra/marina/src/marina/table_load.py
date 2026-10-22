@@ -5,7 +5,9 @@
 
 import json
 import re
+from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.csv as pa_csv
@@ -15,6 +17,24 @@ from fastapi.encoders import jsonable_encoder
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 INSERT_BATCH_ROWS = 250
+
+
+def json_row_batches(rows: Iterable[dict[str, Any]], *, max_bytes: int) -> Iterator[str]:
+    """Bound JSON row arrays by bytes after SQL-parameter string escaping."""
+    batch: list[str] = []
+    size = 2
+    for row in rows:
+        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        length = len(json.dumps(encoded).encode()) + 1
+        if length + 2 > max_bytes:
+            raise ValueError("One row exceeds the SQL batch budget")
+        if size + length > max_bytes:
+            yield "[" + ",".join(batch) + "]"
+            batch, size = [], 2
+        batch.append(encoded)
+        size += length
+    if batch:
+        yield "[" + ",".join(batch) + "]"
 
 
 def read_table(path: Path) -> pa.Table:

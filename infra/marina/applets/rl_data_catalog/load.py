@@ -6,13 +6,13 @@
 import json
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from typing import Any
-from urllib.parse import urlparse
 
 import click
 from finestore.rl.curation import CurationCatalog, JudgmentStatus, validate_items
-from marina.client import DEFAULT_MARINA_URL, marina_request
+from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
+from marina.table_load import json_row_batches
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 MAX_BATCH_BYTES = 1_000_000
@@ -34,33 +34,13 @@ TABLE_COLUMNS = {
     ),
     "packets": "pipeline_key TEXT, task_id TEXT, packet TEXT",
 }
-Query = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
-def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
-    """Bound SQL request bodies by encoded bytes, including packet escaping."""
-    batch: list[str] = []
-    size = 2
-    for row in rows:
-        encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        # The SQL API carries the row array as a JSON string, adding another escape layer.
-        length = len(json.dumps(encoded).encode()) + 1
-        if length + 2 > MAX_BATCH_BYTES:
-            raise ValueError("One catalog row exceeds the SQL batch budget")
-        if size + length > MAX_BATCH_BYTES:
-            yield "[" + ",".join(batch) + "]"
-            batch, size = [], 2
-        batch.append(encoded)
-        size += length
-    if batch:
-        yield "[" + ",".join(batch) + "]"
-
-
-def insert_rows(query: Query, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
+def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
     """Insert byte-bounded batches and return the stored row count."""
     names = ", ".join(column.strip().split()[0] for column in columns.split(","))
     count = 0
-    for body in batches(rows):
+    for body in json_row_batches(rows, max_bytes=MAX_BATCH_BYTES):
         result = query(
             f"INSERT INTO {table} (load_id, {names}) SELECT :load_id, {names} "
             f"FROM jsonb_to_recordset(CAST(:rows AS JSONB)) AS row({columns})",
@@ -70,7 +50,7 @@ def insert_rows(query: Query, table: str, columns: str, load_id: str, rows: Iter
     return count
 
 
-def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
+def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]:
     """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
     started = time.monotonic()
     snapshot = catalog.current()
@@ -182,23 +162,6 @@ def load_catalog(catalog: CurationCatalog, query: Query) -> dict[str, Any]:
         "sql_requests": requests,
         "seconds": time.monotonic() - started,
     }
-
-
-def applet_query(service_url: str, applet_id: str) -> Query:
-    """Return a SQL client for the applet's authenticated origin."""
-    details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
-    assert isinstance(details, dict)
-    parsed = urlparse(details["authenticated_url"])
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
-
-    def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
-        result = marina_request(
-            origin, "POST", f"/a/{applet_id}/query", json_body={"sql": sql, "parameters": parameters}
-        )
-        assert isinstance(result, dict)
-        return result
-
-    return query
 
 
 @click.command(help=__doc__)

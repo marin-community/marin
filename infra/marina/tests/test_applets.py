@@ -23,7 +23,7 @@ from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import UrlDatabase, grant_read
 from marina.releases import require_current_main
 from marina.server import MarinaConfig, MarinaSurface, create_app
-from marina.table_load import read_table, table_statements
+from marina.table_load import json_row_batches, read_table, table_statements
 from marina.testing import isolated_database
 from requests import Response as RequestsResponse
 from sqlalchemy import text
@@ -1063,6 +1063,18 @@ def test_publish_prunes_old_revisions_and_allocates_after_rollback(tmp_path: Pat
     next_revision = store.publish(package, "owner@example", published.applet_id, 2)
     assert next_revision.version == 7
     assert [item.version for item in store.versions(published.applet_id)] == [7, 6, 5, 4, 3]
+
+
+def test_json_row_batches_bound_escaped_payloads_and_preserve_rows() -> None:
+    rows = [{"text": '"\\\n漢字' * 8, "index": index} for index in range(5)]
+    batches = list(json_row_batches(rows, max_bytes=400))
+    assert len(batches) > 1
+    assert [row for batch in batches for row in json.loads(batch)] == rows
+    assert all(len(json.dumps(batch).encode()) <= 400 for batch in batches)
+    with pytest.raises(ValueError, match="SQL batch budget"):
+        list(json_row_batches(rows, max_bytes=10))
+    with pytest.raises(ValueError):
+        list(json_row_batches([{"value": float("nan")}], max_bytes=400))
 
 
 def test_table_load_statements_populate_applet_schema(tmp_path: Path, database_url: str) -> None:
