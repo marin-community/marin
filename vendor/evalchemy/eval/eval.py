@@ -192,6 +192,8 @@ def evaluate(
     output_sink: FineStoreOutput | None = None,
 ) -> Dict[str, Dict]:
     """Normalize every source into EvalSpec items and execute one shared flow."""
+    if args is None:
+        args = argparse.Namespace()
     run = RunSpec.from_args(args)
     robust_api.configure_generation_overrides(lm, run.generation)
     if run.seeds[0] is not None:

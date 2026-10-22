@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 import pytest
 from eval.chat_benchmarks.GraphWalks import eval_instruct as graphwalks
 from eval.completion_response import CompletionContentPolicy, CompletionText, completion_response_from_chat_choice
+from eval.contracts.finestore_output import FineStoreOutput, completed_finestore_output, read_finestore_output
 from eval.eval import evaluate
 from eval.sources.common import SourceOptions
 from tests.contracts.source_harness import FixedEndpoint, evaluate_source
@@ -176,3 +177,29 @@ def test_length_ended_parse_failure_scores_zero_and_retains_completion(dataset):
     assert metrics["f1"] == 0.0
     assert samples[0]["completion_responses"][0][0]["finish_reason"] == "length"
     assert samples[0]["answer_extraction_errors"] == ["failed_to_parse"]
+
+
+def test_no_eligible_examples_persist_selection_diagnostics_without_scores(dataset, tmp_path):
+    dataset([row(2000), row(nodes=("node",) * 100)])
+    model = Model()
+    source = graphwalks.GraphWalksBenchmark()
+    root = str(tmp_path / "results")
+    with FineStoreOutput(root, "run", ["GraphWalks"]) as output:
+        result = evaluate(
+            model, Namespace(get_benchmark=lambda _task: source), None,
+            ["GraphWalks"], {"GraphWalks": "Evalchemy chat benchmark"}, [1],
+            args=Namespace(max_length=10000, max_tokens=8200), output_sink=output,
+        )
+        output.finish(result)
+
+    saved = read_finestore_output(root, "run")
+    assert saved["task_outcomes"]["GraphWalks"]["status"] == "failed"
+    assert saved["task_outcomes"]["GraphWalks"]["metrics"] == {}
+    assert "f1" not in saved["results"]["GraphWalks"]
+    selection = saved["results"]["GraphWalks"]["selection"]
+    assert selection["n_benchmark"] == 2
+    assert selection["n_attempted"] == 0
+    assert selection["skipped_context_by_type"] == {"bfs": 1}
+    assert selection["skipped_output_cap_by_type"] == {"bfs": 1}
+    assert not completed_finestore_output(root, "run")
+    assert model.requests == []

@@ -266,8 +266,6 @@ async def run_evaluations(
         if not plan.errors and not predict_only:
             try:
                 document = plan.reducer.finish(plan.name)
-                if plan.benchmark is not None:
-                    document["results"][plan.name].update(plan.benchmark.evaluation_metadata())
             except Exception as error:
                 plan.errors.append(ItemFailure(FailurePhase.GRADING, error))
         if plan.errors:
@@ -302,6 +300,10 @@ async def run_evaluations(
             generated_sample_count=sum(manifest.generated_unit_count for manifest in manifests),
             scored_sample_count=None if predict_only else sum(scored_samples[task] for task in plan.task_names),
         )
+        if plan.benchmark is not None:
+            metadata = plan.benchmark.evaluation_metadata()
+            if metadata:
+                result["results"].setdefault(plan.name, {}).update(metadata)
         result["task_outcomes"][plan.name] = outcome.to_dict()
     if sink is None:
         result["samples"] = samples.samples
