@@ -26,7 +26,7 @@ from verifyit.modes.grade_structure_closure import validate_structure_closure
 from verifyit.spec import StructureClosureSpec
 from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
-from experiments.post_training.structure_closure.benchmark import (
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import (
     CLOSE_REQUIRED,
     TASK_ID_PREFIX,
     ClosureCase,
@@ -34,7 +34,7 @@ from experiments.post_training.structure_closure.benchmark import (
     Split,
     closure_format,
 )
-from experiments.post_training.structure_closure.token_data import (
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.tool_serialization import (
     ToolPrompt,
     native_tool_case,
     native_tool_text,
@@ -130,7 +130,7 @@ def prepare_tasks(cases_directory: Path, output: Path, *, tool_prompt: ToolPromp
                 task = case_task(
                     case,
                     Source(
-                        dataset="structure-closure",
+                        dataset="bfcl-structure-closure",
                         revision=digest,
                         row=f"{split}.jsonl:{number}",
                         importer_revision=IMPORTER_REVISION,

@@ -167,40 +167,50 @@ def task_cases(task_id: str, answer: list, split: str, source_hash: str) -> list
     return cases
 
 
+def split_membership(partition: dict, split: dict) -> tuple[set[str], set[str]]:
+    """Require an exhaustive, disjoint train/validation partition of BFCL parents."""
+    train, validation, parity = (
+        set(split[key]) for key in ("train_task_ids", "diagnostic_reserved_task_ids", "parity_task_ids")
+    )
+    approved = {task["source_id"] for task in partition["complement"]}
+    if train & validation or (train | validation) & parity or train | validation != approved:
+        raise ValueError("Task split is not disjoint and exhaustive")
+    return train, validation
+
+
+def oracle_cases(task_id: str, raw: bytes, split: Split) -> list[ClosureCase]:
+    """Decode the pinned BFCL oracle answer into structural task cases."""
+    script = raw.decode()
+    marker = "<< 'ORACLE_EOF'\n"
+    if script.count(marker) != 1:
+        raise ValueError("Unrecognized oracle heredoc")
+    payload = script.split(marker)[1].split("\nORACLE_EOF")[0]
+    if json_closure_state(payload).status != PrefixStatus.COMPLETE:
+        raise ValueError("Invalid or duplicate-key oracle JSON")
+    answer = json.loads(payload)
+    if not isinstance(answer, list):
+        raise ValueError("Expected answer array")
+    return task_cases(task_id, answer, split, hashlib.sha256(raw).hexdigest())
+
+
 def build_benchmark(source: Path, split_file: Path, output: Path):
     """Audit every source task, then publish a new immutable local candidate."""
     if output.exists():
         raise FileExistsError(output)
     split = json.loads(split_file.read_text())
-    train, validation, parity = (
-        set(split[key]) for key in ("train_task_ids", "diagnostic_reserved_task_ids", "parity_task_ids")
-    )
     partition_file = source / "bfcl_complement-manifest.json"
     partition = json.loads(partition_file.read_text())
-    approved = {task["source_id"] for task in partition["complement"]}
-    if train & validation or (train | validation) & parity or train | validation != approved:
-        raise ValueError("Task split is not disjoint and exhaustive")
+    train, _ = split_membership(partition, split)
     cases, failures = [], []
     for task in partition["complement"]:
         path = source / "bfcl_complement" / task["name"] / "solution/solve.sh"
         try:
             raw = path.read_bytes()
-            script = raw.decode()
-            marker = "<< 'ORACLE_EOF'\n"
-            if script.count(marker) != 1:
-                raise ValueError("Unrecognized oracle heredoc")
-            payload = script.split(marker)[1].split("\nORACLE_EOF")[0]
-            if json_closure_state(payload).status != PrefixStatus.COMPLETE:
-                raise ValueError("Invalid or duplicate-key oracle JSON")
-            answer = json.loads(payload)
-            if not isinstance(answer, list):
-                raise ValueError("Expected answer array")
             cases.extend(
-                task_cases(
+                oracle_cases(
                     task["source_id"],
-                    answer,
+                    raw,
                     Split.TRAIN if task["source_id"] in train else Split.VALIDATION,
-                    hashlib.sha256(raw).hexdigest(),
                 )
             )
         except (OSError, ValueError) as error:

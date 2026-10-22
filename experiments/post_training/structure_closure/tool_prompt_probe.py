@@ -21,10 +21,12 @@ from transformers import PreTrainedTokenizerFast
 from verifyit.closure_scoring import ClosureFormat, score_closure_region
 from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
 
-from experiments.post_training.structure_closure.benchmark import CLOSE_REQUIRED, Family
 from experiments.post_training.structure_closure.token_data import (
     LOCAL_TOKEN_ROUNDTRIP_PASSED,
     TokenizedCaseRecord,
+)
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import CLOSE_REQUIRED, Family
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.tool_serialization import (
     native_tool_text,
     write_result_tool,
 )

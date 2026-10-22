@@ -19,7 +19,7 @@ from pathlib import Path
 
 from verifyit.closure_scoring import ContinuationOutcome, continuation_outcome
 
-from experiments.post_training.structure_closure.benchmark import (
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import (
     CONTINUE_REQUIRED,
     ClosureCase,
     Family,
@@ -88,7 +88,6 @@ def prepare_training_prefixes(source: Path, output: Path) -> dict:
     (output / "validation.jsonl").write_bytes(validation)
     manifest = {
         "kind": "training-near-boundary-prefixes",
-        "source": str(source.resolve()),
         "source_manifest_sha256": hashlib.sha256(source_manifest).hexdigest(),
         "source_train_sha256": hashlib.sha256(original).hexdigest(),
         "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
