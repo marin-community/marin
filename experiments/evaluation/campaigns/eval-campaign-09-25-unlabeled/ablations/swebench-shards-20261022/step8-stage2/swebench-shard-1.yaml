@@ -1,0 +1,70 @@
+n_concurrent_trials: 16
+n_attempts: 1
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+- name: mini-swe-agent
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    version: 2.1.0
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 16384
+datasets:
+- name: swebench-verified
+  version: '1.0'
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/38742b0f9f411c95e0c01468785cac7bb77c9894/registry.json
+  task_names:
+  - astropy__astropy-14096
+  - astropy__astropy-8707
+  - django__django-11749
+  - django__django-12858
+  - django__django-13658
+  - django__django-14311
+  - django__django-14792
+  - django__django-15368
+  - django__django-15554
+  - django__django-16136
+  - django__django-16661
+  - django__django-17084
+  - matplotlib__matplotlib-23412
+  - psf__requests-2317
+  - pydata__xarray-7233
+  - scikit-learn__scikit-learn-10297
+  - scikit-learn__scikit-learn-13779
+  - scikit-learn__scikit-learn-25232
+  - sphinx-doc__sphinx-8551
+  - sphinx-doc__sphinx-9461
+  - sympy__sympy-14976
+  - sympy__sympy-18189
+  - sympy__sympy-22456
+verifier:
+  override_timeout_sec: 300
