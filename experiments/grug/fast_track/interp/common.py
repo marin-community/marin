@@ -131,7 +131,7 @@ class TokenBatch:
     loss_weight: np.ndarray
 
 
-def _examples_to_batch(source: str, examples) -> TokenBatch:
+def examples_to_batch(source: str, examples) -> TokenBatch:
     grug = [grug_lm_example_from_named(ex) if isinstance(ex, LmExample) else ex for ex in examples]
     tokens = np.stack([np.asarray(ex.tokens, np.int32) for ex in grug])
     weights = np.stack([np.asarray(ex.loss_weight, np.float32) for ex in grug])
@@ -142,7 +142,7 @@ def _examples_to_batch(source: str, examples) -> TokenBatch:
     return TokenBatch(source, tokens, np.stack(segs), weights)
 
 
-def _off_mesh(fn):
+def off_mesh(fn):
     """Run ``fn`` on a worker thread: the datasets' per-example jit pins outputs to a CPU device, and JAX's mesh
     context (thread-local) would otherwise make it a GPU-mesh computation."""
 
@@ -154,7 +154,7 @@ def _off_mesh(fn):
     return wrapper
 
 
-@_off_mesh
+@off_mesh
 def paloma_batches(batch_size: int, max_sequences: int | None = None) -> Iterator[TokenBatch]:
     """Every Paloma validation sequence, set by set, in batches of ``batch_size`` (the last batch of a set padded with
     zero-weight copies)."""
@@ -164,7 +164,7 @@ def paloma_batches(batch_size: int, max_sequences: int | None = None) -> Iterato
         n = len(ds) if max_sequences is None else min(len(ds), max_sequences)
         for start in range(0, n, batch_size):
             idx = list(range(start, min(n, start + batch_size)))
-            batch = _examples_to_batch(name, ds.get_batch(idx))
+            batch = examples_to_batch(name, ds.get_batch(idx))
             yield _pad_batch(batch, batch_size)
 
 
@@ -179,7 +179,7 @@ def _pad_batch(batch: TokenBatch, batch_size: int) -> TokenBatch:
     return TokenBatch(batch.source, rep(batch.tokens, 0), rep(batch.segment_ids, 0), rep(batch.loss_weight, 0.0))
 
 
-@_off_mesh
+@off_mesh
 def train_batches(batch_size: int, num_sequences: int, *, seed: int = 0) -> Iterator[TokenBatch]:
     """``num_sequences`` random unseen training-cache sequences (indices past the trained prefix)."""
     sets = data_config().train_sets(Axis("position", SEQ_LEN), key=jax.random.PRNGKey(0))
@@ -189,7 +189,7 @@ def train_batches(batch_size: int, num_sequences: int, *, seed: int = 0) -> Iter
     picks = np.sort(rng.choice(np.arange(TRAINED_SEQUENCES, total), size=num_sequences, replace=False))
     for start in range(0, num_sequences, batch_size):
         idx = [int(i) for i in picks[start : start + batch_size]]
-        batch = _examples_to_batch("train", ds.get_batch(idx))
+        batch = examples_to_batch("train", ds.get_batch(idx))
         yield _pad_batch(batch, batch_size)
 
 

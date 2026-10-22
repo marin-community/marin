@@ -127,7 +127,8 @@ class Ablation(NamedTuple):
     head_mean: jax.Array  # [L, H, D] mean per-head contribution (after w_o, before the branch SConv)
     sub_mult: jax.Array  # [L, NUM_SUB]
     sub_mean: jax.Array  # [L, NUM_SUB, D]
-    neuron_mult: jax.Array  # [L, E, I] routed hidden units (zero ablation)
+    neuron_mult: jax.Array  # [L, E, I] routed hidden units
+    neuron_mean: jax.Array  # [L, E, I] their replacement activation (0: zero ablation)
     shared_mult: jax.Array  # [L, I] shared hidden units (zero ablation)
     slot_mult: jax.Array  # [L, K] per top-k rank (rank 0 = largest combine weight)
     slot_renorm: jax.Array  # [] 1: renormalize the kept combine weights to the original sum
@@ -144,6 +145,7 @@ def no_ablation() -> Ablation:
         sub_mult=jnp.ones((NUM_LAYERS, NUM_SUB), jnp.float32),
         sub_mean=jnp.zeros((NUM_LAYERS, NUM_SUB, HIDDEN), jnp.float32),
         neuron_mult=jnp.ones((NUM_LAYERS, NUM_EXPERTS, EXPERT_WIDTH), jnp.float32),
+        neuron_mean=jnp.zeros((NUM_LAYERS, NUM_EXPERTS, EXPERT_WIDTH), jnp.float32),
         shared_mult=jnp.ones((NUM_LAYERS, SHARED_WIDTH), jnp.float32),
         slot_mult=jnp.ones((NUM_LAYERS, TOP_K), jnp.float32),
         slot_renorm=jnp.zeros((), jnp.float32),
@@ -357,7 +359,8 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
     em = mlp.expert_mlp
     # haliax's ragged_dot: the Triton grouped GEMM on GPU (XLA's ragged_dot_general lowers to a dense masked product).
     pre = _local_ragged_dot(routed_input[token_sorted], em.w_up, counts).astype(jnp.float32)
-    act = jnp.square(jax.nn.relu(pre)) * abl.neuron_mult[layer][expert_sorted]
+    keep = abl.neuron_mult[layer][expert_sorted]
+    act = keep * jnp.square(jax.nn.relu(pre)) + (1.0 - keep) * abl.neuron_mean[layer][expert_sorted]
     y = _local_ragged_dot(act.astype(x.dtype), em.w_down, counts).astype(jnp.float32)  # [TK, R]
     per_slot = jnp.zeros((t, TOP_K, LATENT), jnp.float32).at[token_sorted, slot_sorted].set(y)
     routed_latent = jnp.einsum("tk,tko->to", used, per_slot)
