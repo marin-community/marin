@@ -94,6 +94,42 @@ The generic launcher resolves declared references immediately before Iris submis
 Harbor subprocess receives the Daytona key without inheriting the orchestrator's other credentials.
 Do not put resolved credentials in model YAMLs, runner configs, or evaluation artifacts.
 
+## Sandbox environment isolation
+
+Keep provider credentials in the harness process. An actor sandbox should receive
+only its image's configuration, backend runtime defaults and explicitly declared
+task or command variables. Treat task definitions, images, build contexts and
+explicit mounts as trusted inputs: they can deliberately supply credentials.
+An explicit task environment declaration such as `API_KEY = "${HOST_KEY}"`
+resolves against the harness environment and grants that access. A `${HOST_KEY}`
+reference appearing only in a Compose file does not request host forwarding.
+Below, persistent variables are explicit `persistent_env` / `--ae` settings;
+Harbor infrastructure values name images, resource limits and log mount paths.
+
+| Backend | Environment and configuration supplied by the launcher |
+| --- | --- |
+| Shellbox local / bubblewrap | Fixed `PATH`, `HOME`, `LANG`, optional hash seed and explicit task/command variables. Task variables take effect inside bubblewrap. Private `/etc` copies allowlisted runtime files; host startup files, password hashes, private keys, `/opt` contents and sysfs are hidden. Shared program directories and explicit mounts remain trusted inputs. |
+| Shellbox Docker / local gVisor | Image configuration and explicit task/command variables; no host directory mounts or implicit forwarding of host variables in Shellbox. Docker client configuration, including automatic proxy settings, remains an operator-controlled input. `runsc` changes the execution boundary, not credential policy. |
+| Shellbox Daytona | Image/snapshot configuration and explicit task/command variables. The Daytona client keeps its API credentials in the harness; creation forwards only `MachineSpec.env`. |
+| Shellbox Iris | The `SANDBOX` profile excludes parent environment inheritance, workspace bundles, cluster secrets, task tokens, shared caches and service-account tokens. Kubernetes service links are disabled. `secret_env` is an explicit exception for trusted graders and must never be used for actors. |
+| Shellbox QEMU | Image configuration and explicit task/command variables reach the guest over its serial protocol. The QEMU host process uses host runtime settings; these do not become guest variables. No host filesystem is shared with the guest. |
+| Shellbox ShellSim | Simulator defaults and explicit task/command variables in a private virtual filesystem. |
+| Harbor Docker Compose | Explicit task/persistent variables and Harbor infrastructure values. The local Docker client receives only allowlisted connection, login-path and OS runtime variables from the host. Other host variables are unavailable for Compose interpolation. |
+| Harbor Daytona / Modal Compose | Explicit task/persistent variables and Harbor infrastructure values. Compose references alone do not copy host variables into the remote sandbox. |
+
+Iris's legacy `CONTAINER_PROFILE_GVISOR` retains cluster credentials and is for
+trusted workloads. Model-controlled work must use `CONTAINER_PROFILE_SANDBOX`.
+See the [Iris profile reference](https://github.com/marin-community/marin/blob/main/lib/iris/docs/container-profiles.md)
+and the [Shellbox backend reference](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md).
+
+These contracts describe repository launch paths. They do not certify deployed
+images, existing snapshots, provider-side injected settings or Docker daemon
+configuration. Keep those inputs free of credentials. Local bubblewrap is for
+trusted commands; its `ALLOW` network policy shares the host network. Local
+Docker/gVisor bridge networking can also reach host or cloud metadata services.
+Use denied networking when unnecessary, or Iris's filtered sandbox egress for
+model-controlled workloads on production infrastructure.
+
 ## Endpoint lifecycle
 
 Harbor receives a candidate `RunningModel` whose base URL is an Iris link endpoint. A hosted judge

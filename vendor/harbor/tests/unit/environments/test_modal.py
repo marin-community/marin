@@ -3,7 +3,9 @@
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
@@ -163,6 +165,38 @@ def _dind(env: ModalEnvironment) -> _ModalDinD:
     return strategy
 
 
+@pytest.mark.asyncio
+async def test_compose_references_do_not_copy_host_credentials_to_modal(
+    temp_dir, monkeypatch
+):
+    monkeypatch.setenv("HARBOR_HOST_SECRET", "host-only")
+    env = _make_env(temp_dir, compose=True, task_env={"DECLARED": "task-value"})
+    (env.environment_dir / "docker-compose.yaml").write_text(
+        "services:\n  main:\n    environment:\n      KEY: ${HARBOR_HOST_SECRET}\n"
+    )
+    monkeypatch.setattr(
+        "harbor.environments.modal.Secret.from_dict", lambda values: values
+    )
+
+    async def exec_on_sandbox(*args, secrets, **kwargs):
+        return SimpleNamespace(
+            stdout=SimpleNamespace(
+                read=SimpleNamespace(aio=AsyncMock(return_value=json.dumps(secrets[0])))
+            ),
+            stderr=SimpleNamespace(
+                read=SimpleNamespace(aio=AsyncMock(return_value=""))
+            ),
+            wait=SimpleNamespace(aio=AsyncMock(return_value=0)),
+        )
+
+    env._sandbox = SimpleNamespace(exec=SimpleNamespace(aio=exec_on_sandbox))
+    result = await _dind(env)._compose_exec(["config"])
+    environment = json.loads(result.stdout)
+    assert "HARBOR_HOST_SECRET" not in environment
+    assert environment["DECLARED"] == "task-value"
+    assert environment["MAIN_IMAGE_NAME"] == "hb__test-task"
+
+
 class TestDinDComposeEnvVars:
     def test_contains_required_keys(self, temp_dir):
         dind = _dind(_make_env(temp_dir, compose=True))
@@ -207,7 +241,7 @@ class TestDinDComposeEnvVars:
         assert env_vars["HOST_ARTIFACTS_PATH"] == str(EnvironmentPaths.artifacts_dir)
         assert env_vars["ENV_ARTIFACTS_PATH"] == str(EnvironmentPaths.artifacts_dir)
 
-    def test_infra_vars_win_over_referenced_task_and_persistent_env(
+    def test_infra_vars_win_over_task_and_persistent_env(
         self, temp_dir, monkeypatch, caplog
     ):
         monkeypatch.setenv("CPUS", "999")
@@ -226,7 +260,7 @@ class TestDinDComposeEnvVars:
         assert env_vars["MEMORY"] == "4096M"
         assert env_vars["CONTEXT_DIR"] == "/harbor/environment"
         assert env_vars["MAIN_IMAGE_NAME"] == "hb__test-task"
-        assert any("CPUS" in rec.message for rec in caplog.records)
+        assert any("MEMORY" in rec.message for rec in caplog.records)
 
 
 class TestDinDComposeMounts:

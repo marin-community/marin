@@ -8,11 +8,13 @@ import io
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import tarfile
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -239,6 +241,57 @@ def test_bin_dirs_win_path_lookup_and_host_environment_is_not_inherited(tmp_path
     assert b"SHELLBOX_HOST_SECRET" not in environment.stdout
 
 
+@pytest.mark.parametrize("environment_source", ["spec", "command"])
+def test_task_loader_environment_takes_effect_only_inside_sandbox(tmp_path, environment_source):
+    # A preloaded library can write this host directory before isolation. Inside the sandbox it is read-only.
+    library = tmp_path / "preload.so"
+    marker = tmp_path / "host-marker"
+    factory = make_factory(read_only=(tmp_path,))
+    source = b"""
+    #include <fcntl.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+    __attribute__((constructor)) static void record(void) {
+        const char *path = getenv("SHELLBOX_HOST_MARKER");
+        if (path) {
+            int fd = open(path, O_WRONLY | O_CREAT, 0600);
+            if (fd >= 0) close(fd);
+        }
+    }
+    """
+    subprocess.run(["cc", "-shared", "-fPIC", "-x", "c", "-", "-o", str(library)], input=source, check=True)
+    environment = {"LD_PRELOAD": str(library), "SHELLBOX_HOST_MARKER": str(marker)}
+    spec = replace(SPEC, env=environment if environment_source == "spec" else {})
+    command = Command(
+        ("sh", "-c", 'printf "%s" "$LD_PRELOAD"'),
+        env=environment if environment_source == "command" else {},
+    )
+    result = run_command(factory, command, spec)
+    assert (result.exit_code, result.stdout) == (0, str(library).encode()), result.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("system_directories", list(SystemDirectories))
+def test_host_configuration_is_hidden_from_commands_and_downloads(tmp_path, system_directories):
+    factory = make_factory(system_directories=system_directories)
+    # These host paths must not become visible even when commands run as the host's root user.
+    hidden = ("/etc/profile", "/etc/environment", "/etc/shadow", "/etc/gshadow", "/etc/ssl/private", "/sys/kernel")
+
+    async def scenario(machine: LocalMachine):
+        result = await machine.run(Command(("sh", "-c", 'for path do test ! -e "$path" || exit 1; done', "sh", *hidden)))
+        assert result.exit_code == 0, result.stderr
+        for path in hidden:
+            with pytest.raises(RuntimeError, match="No such file"):
+                await machine.download(path, tmp_path / "download")
+        configuration = await machine.run(Command(("cat", "/etc/resolv.conf")))
+        assert (configuration.exit_code, configuration.stdout) == (0, Path("/etc/resolv.conf").read_bytes())
+        await machine.download("/etc", tmp_path / "etc")
+
+    on_machine(factory, SPEC, scenario)
+    assert not (tmp_path / "etc/profile").exists()
+    assert (tmp_path / "etc/passwd").read_bytes() == Path("/etc/passwd").read_bytes()
+
+
 def test_host_image_adds_read_only_mount_and_program_path(tmp_path, factory):
     bin_dir = tmp_path / "venv-bin"
     bin_dir.mkdir()
@@ -419,9 +472,9 @@ def test_copy_on_write_transfers_see_the_machines_own_system_directories(tmp_pat
         with pytest.raises(UnsupportedMachineSpec):
             await machine.upload(single, f"/sys/{name}")
         # A link to a path that exists only on the host does not resolve in the sandbox.
-        await machine.run(Command(("ln", "-s", str(tmp_path), f"/opt/{name}/host")))
+        await machine.run(Command(("ln", "-s", str(tmp_path), f"/usr/local/share/{name}/host")))
         with pytest.raises(RuntimeError, match="No such file"):
-            await machine.download(f"/opt/{name}/host", downloaded / "host")
+            await machine.download(f"/usr/local/share/{name}/host", downloaded / "host")
         return read
 
     read = on_machine(copy_on_write_factory, SPEC, scenario)
