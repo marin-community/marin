@@ -23,6 +23,7 @@ reasoning; see ``_install_grug_bare_think_end``.
 """
 
 import sys
+import threading
 from dataclasses import dataclass
 
 import mlx.core as mx
@@ -76,6 +77,34 @@ def _grug_thinking_enabled(template_kwargs: dict) -> bool:
     return template_kwargs.get("enable_thinking", True) not in (False, "/nothink")
 
 
+class _UnmarkedTurn:
+    """Response-side state for a thinking-mode turn whose reasoning start was assumed.
+
+    Mirrors vLLM's ``grug`` reasoning parser: text is reasoning only once a think
+    marker or a tool call confirms it. A turn that ends with neither is an
+    answer given without thinking, and is returned as content.
+    """
+
+    def __init__(self):
+        self.marked = False
+        self.pending = ""
+
+    def response_parts(self, text, reasoning_text, tool_calls, finish_reason):
+        """Return the (text, reasoning_text) to send for one response or stream chunk."""
+        reasoning_text = reasoning_text or ""
+        if self.marked or tool_calls:
+            reasoning_text, self.pending, self.marked = self.pending + reasoning_text, "", True
+            return text, reasoning_text or None
+        if finish_reason is None:
+            self.pending += reasoning_text
+            return text, None
+        text, self.pending = self.pending + reasoning_text + text, ""
+        return text, None
+
+
+_grug_turn = threading.local()
+
+
 def _install_grug_bare_think_end() -> None:
     """Parse thinking-mode responses as reasoning until <|end_think|>.
 
@@ -84,14 +113,19 @@ def _install_grug_bare_think_end() -> None:
     response parser in "normal" unless the prompt ends inside a think block, so
     that reasoning and the bare marker land in the content. Start in
     "reasoning" for thinking-mode chat requests instead, and strip a
-    <|start_think|> the model does emit. Remove once mlx-lm supports a
-    per-request initial reasoning state. Applies only when mlx_lm.server is
-    already imported, which it is when the server loads the model.
+    <|start_think|> the model does emit. When the model answers without any
+    think marker or tool call, return that text as content (``_UnmarkedTurn``);
+    streamed responses hold such text back until a marker or the end of the
+    turn decides. Remove once mlx-lm supports a per-request initial reasoning
+    state. Applies only when mlx_lm.server is already imported, which it is when
+    the server loads the model.
     """
     server = sys.modules.get("mlx_lm.server")
     if server is None or getattr(server.ResponseGenerator._tokenize, "_grug_patch", False):
         return
     stock_tokenize = server.ResponseGenerator._tokenize
+    stock_generate = server.ResponseGenerator.generate
+    stock_generate_response = server.APIHandler.generate_response
     stock_transitions = tokenizer_utils.TokenizerWrapper.response_transitions.fget
 
     def _tokenize(self, tokenizer, request, args):
@@ -104,7 +138,33 @@ def _install_grug_bare_think_end() -> None:
             and _grug_thinking_enabled(template_kwargs)
         ):
             initial_state = "reasoning"
+            request._grug_assumed_reasoning = True
         return prompt, segments, segment_types, initial_state, vision
+
+    def generate(self, request, generation_args, progress_callback=None):
+        # _tokenize has run on the generation thread by the time generate returns ctx.
+        ctx, response = stock_generate(self, request, generation_args, progress_callback)
+        if not getattr(request, "_grug_assumed_reasoning", False):
+            _grug_turn.state = None
+            return ctx, response
+        turn = _UnmarkedTurn()
+        _grug_turn.state = turn
+
+        def observed():
+            for gen in response:
+                if any(marker in gen.text for marker in _GRUG_THINK):
+                    turn.marked = True
+                yield gen
+
+        return ctx, observed()
+
+    def generate_response(self, text, finish_reason, *args, tool_calls=None, reasoning_text=None, **kwargs):
+        turn = getattr(_grug_turn, "state", None)
+        if turn is not None:
+            text, reasoning_text = turn.response_parts(text, reasoning_text, tool_calls, finish_reason)
+        return stock_generate_response(
+            self, text, finish_reason, *args, tool_calls=tool_calls, reasoning_text=reasoning_text, **kwargs
+        )
 
     def response_transitions(self):
         transitions = stock_transitions(self)
@@ -114,6 +174,8 @@ def _install_grug_bare_think_end() -> None:
 
     _tokenize._grug_patch = True
     server.ResponseGenerator._tokenize = _tokenize
+    server.ResponseGenerator.generate = generate
+    server.APIHandler.generate_response = generate_response
     tokenizer_utils.TokenizerWrapper.response_transitions = property(response_transitions)
 
 

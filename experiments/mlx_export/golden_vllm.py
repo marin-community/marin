@@ -15,6 +15,14 @@ Usage:
       --prompts out/prompts.json --gpus 8 \
       --output s3://marin-us-east-02a/marin/evals/mlx-export/<model>/golden_vllm.json
   uv run python -m experiments.mlx_export.golden_vllm download --output <same url> --dest out/golden_vllm.json
+
+Without CoreWeave credentials on the Mac, relay the JSON through a private
+Hugging Face dataset instead. A CPU job on the GPU cluster reads it from S3 and
+uploads it with the submitter's HF_TOKEN:
+  uv run python -m experiments.mlx_export.golden_vllm relay --output <same url> \
+      --dataset open-athena/mlx-export-goldens --path-in-repo <model>/<revision>/golden_vllm.json
+  uv run hf download open-athena/mlx-export-goldens <model>/<revision>/golden_vllm.json \
+      --repo-type dataset --local-dir out
 """
 
 import argparse
@@ -27,6 +35,7 @@ from pathlib import Path
 import requests
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from huggingface_hub import HfApi
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.setup_scripts import default_setup_script
@@ -47,6 +56,8 @@ LOGPROBS_K = 25
 CONTINUATION_TOKENS = 64
 HUB_CLUSTER = "marin"
 GPU_CLUSTER = "cw-us-east-02a"
+# Holds the source download; an fp32 export of a 67B model is about 270 GB.
+GOLDEN_DISK = "512g"
 
 
 def _token_id(key) -> int:
@@ -160,7 +171,7 @@ def submit_golden(repo: str, revision: str, prompts: Path, gpus: int, output: st
             args=[repo, revision, fixture["cases"], gpus, release_tag, output],
         ),
         resources=ResourceConfig.with_gpu(
-            "H100", count=gpus, cpu=64, ram="512g", disk="128g", target_cluster=GPU_CLUSTER
+            "H100", count=gpus, cpu=64, ram="512g", disk=GOLDEN_DISK, target_cluster=GPU_CLUSTER
         ),
         environment=create_environment(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
@@ -168,11 +179,41 @@ def submit_golden(repo: str, revision: str, prompts: Path, gpus: int, output: st
         ),
         priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
     )
+    job_id = submit_and_wait(request)
+    print(f"completed {job_id} (vLLM {release_tag}); output: {output}")
+
+
+def submit_and_wait(request: JobRequest) -> str:
     with connect_controller(cluster_name=HUB_CLUSTER) as endpoint:
         with IrisClient.remote(endpoint.url, workspace=MARIN_ROOT, credentials=endpoint.credentials) as client:
             job = FrayIrisClient.from_iris_client(client).submit(request, adopt_existing=False)
             job.wait(raise_on_failure=True, stream_logs=True)
-    print(f"completed {job.job_id} (vLLM {release_tag}); output: {output}")
+    return job.job_id
+
+
+def run_relay_job(output: str, dataset: str, path_in_repo: str) -> None:
+    """Iris entrypoint: copy the golden JSON from S3 to a private Hugging Face dataset."""
+    logging.basicConfig(level=logging.INFO)
+    configure_coreweave_s3()
+    data = StoragePath(output).read_bytes()
+    api = HfApi()
+    api.create_repo(dataset, repo_type="dataset", private=True, exist_ok=True)
+    api.upload_file(path_or_fileobj=data, path_in_repo=path_in_repo, repo_id=dataset, repo_type="dataset")
+    logger.info("relayed %d bytes from %s to %s:%s", len(data), output, dataset, path_in_repo)
+
+
+def relay(args: argparse.Namespace) -> None:
+    if not os.environ.get("HF_TOKEN"):
+        raise ValueError("relay uploads with the submitter's HF_TOKEN; export it first")
+    request = JobRequest(
+        name=f"mlx-export-relay-{os.urandom(4).hex()}",
+        entrypoint=Entrypoint.from_callable(run_relay_job, args=[args.output, args.dataset, args.path_in_repo]),
+        resources=ResourceConfig.with_cpu(cpu=1, ram="4g", target_cluster=GPU_CLUSTER),
+        environment=create_environment(setup_scripts=[default_setup_script(packages=["marin-core"])]),
+        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
+    )
+    job_id = submit_and_wait(request)
+    print(f"completed {job_id}; {args.output} is at {args.dataset}:{args.path_in_repo}")
 
 
 def submit(args: argparse.Namespace) -> None:
@@ -200,6 +241,11 @@ def main() -> None:
     download_parser.add_argument("--output", required=True)
     download_parser.add_argument("--dest", required=True, type=Path)
     download_parser.set_defaults(run=download)
+    relay_parser = commands.add_parser("relay", help="copy the golden JSON to a private HF dataset via a CPU job")
+    relay_parser.add_argument("--output", required=True, help="the s3:// URL the golden job wrote")
+    relay_parser.add_argument("--dataset", required=True, help="private HF dataset repo to upload into")
+    relay_parser.add_argument("--path-in-repo", required=True)
+    relay_parser.set_defaults(run=relay)
     args = parser.parse_args()
     args.run(args)
 

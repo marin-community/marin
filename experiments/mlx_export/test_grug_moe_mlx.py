@@ -315,3 +315,34 @@ def test_reasoning_before_tool_call_without_end_marker():
     parsed = _parse('check files first<tool_call>{"name": "bash"}</tool_call>', "reasoning")
     assert parsed["reasoning"] == "check files first"
     assert parsed["tool"] == '{"name": "bash"}'
+
+
+def _respond(turn, chunks):
+    """Feed (text, reasoning, tool_calls, finish_reason) chunks; return the sent text and reasoning."""
+    sent = {"text": "", "reasoning": ""}
+    for text, reasoning, tool_calls, finish_reason in chunks:
+        text, reasoning = turn.response_parts(text, reasoning, tool_calls, finish_reason)
+        sent["text"] += text
+        sent["reasoning"] += reasoning or ""
+    return sent
+
+
+def test_answer_without_think_markers_is_content():
+    assert _respond(mod._UnmarkedTurn(), [("", "Paris", [], "stop")]) == {"text": "Paris", "reasoning": ""}
+    streamed = [("", "Par", [], None), ("", "is", [], None), ("", "", [], "stop")]
+    assert _respond(mod._UnmarkedTurn(), streamed) == {"text": "Paris", "reasoning": ""}
+
+
+def test_marked_turn_keeps_held_reasoning():
+    turn = mod._UnmarkedTurn()
+    sent = _respond(turn, [("", "plan the ", [], None)])
+    assert sent == {"text": "", "reasoning": ""}
+    turn.marked = True  # <|end_think|> arrived in the next chunk
+    sent = _respond(turn, [("Dear", "email", [], None), (" landlord", "", [], "stop")])
+    assert sent == {"text": "Dear landlord", "reasoning": "plan the email"}
+
+
+def test_tool_call_confirms_held_reasoning():
+    turn = mod._UnmarkedTurn()
+    sent = _respond(turn, [("", "check files first", [], None), ("", "", ['{"name": "bash"}'], "stop")])
+    assert sent == {"text": "", "reasoning": "check files first"}

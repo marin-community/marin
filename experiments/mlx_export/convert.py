@@ -3,9 +3,14 @@
 
 """Convert a Grug MoE Hugging Face export into a quantized MLX build.
 
-Downloads a pinned revision, adds ``grug_moe_mlx.py`` as the repo's
-``model_file``, quantizes it with one of the recipes below, enables mlx-lm's
-tool-call parser, and checks that the result loads.
+Downloads a pinned revision into the Hugging Face cache, adds ``grug_moe_mlx.py``
+as the repo's ``model_file``, casts floating weights to bfloat16, quantizes with
+one of the recipes below, enables mlx-lm's tool-call parser, and checks that the
+result loads. Builds of the same revision share one cached download.
+
+The bfloat16 cast matches the vLLM reference, which serves the source in
+bfloat16. Without it, an fp32 export keeps its unquantized weights and its
+quantization scales in fp32.
 
 Recipes:
   8bit    every quantizable linear at 8 bits.
@@ -32,6 +37,7 @@ from mlx_lm.convert import convert
 from provenance import Recipe, validate_revision, write_manifest
 
 MODEL_FILE = Path(__file__).resolve().parent / "grug_moe_mlx.py"
+CONVERT_DTYPE = "bfloat16"
 GROUP_SIZE = 64
 NON_EXPERT_BITS = 8
 TOOL_PARSER = "json_tools"
@@ -50,13 +56,16 @@ def quant_params(path: str, _module) -> bool | dict:
 
 
 def prepare_source(repo: str, revision: str, src: Path) -> None:
-    snapshot_download(repo, revision=revision, local_dir=src)
+    """Link the cached snapshot into ``src`` and write a config that names the model file."""
+    snapshot = Path(snapshot_download(repo, revision=revision))
+    for cached in sorted(snapshot.iterdir()):
+        if cached.name != "config.json":
+            (src / cached.name).symlink_to(cached.resolve(), target_is_directory=cached.is_dir())
     shutil.copyfile(MODEL_FILE, src / MODEL_FILE.name)
-    config_path = src / "config.json"
-    config = json.loads(config_path.read_text())
+    config = json.loads((snapshot / "config.json").read_text())
     assert config["model_type"] == "grug_moe", f"{repo}@{revision} is not a Grug MoE export"
     config["model_file"] = MODEL_FILE.name
-    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    (src / "config.json").write_text(json.dumps(config, indent=2) + "\n")
 
 
 def finish_build(dst: Path) -> None:
@@ -89,7 +98,7 @@ def main() -> None:
     parser.add_argument("--revision", required=True, help="commit SHA to convert")
     parser.add_argument("--recipe", required=True, type=Recipe, choices=list(Recipe))
     parser.add_argument(
-        "--work-dir", required=True, type=Path, help="holds temporary source downloads and mlx-<recipe>/"
+        "--work-dir", required=True, type=Path, help="holds the temporary source links and mlx-<recipe>/"
     )
     args = parser.parse_args()
 
@@ -106,6 +115,7 @@ def main() -> None:
             quantize=True,
             q_bits=EXPERT_BITS[args.recipe],
             q_group_size=GROUP_SIZE,
+            dtype=CONVERT_DTYPE,
             quant_predicate=quant_params,
             trust_remote_code=True,
         )

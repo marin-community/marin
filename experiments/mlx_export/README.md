@@ -59,9 +59,12 @@ small JSON output. The remote prefix must be in the GPU cluster's bucket; privat
 on one node. Conversion and scoring use this directory's frozen Mac environment.
 
 Use a new `--version` after changing the code, prompt fixture, dependency lock, or vLLM release.
-The artifact fingerprint records these inputs. Conversion downloads into a fresh temporary
-source directory and refuses to overwrite an existing build. After an interrupted conversion,
-remove that failed model artifact directory before retrying.
+The artifact fingerprint records these inputs. Conversion downloads the pinned revision into the
+Hugging Face cache once and links it into a temporary source directory, so both recipes share one
+download. It casts floating weights to bfloat16, which matches the golden reference and keeps an
+fp32 export's unquantized weights and scales out of fp32. It refuses to overwrite an existing
+build. After an interrupted conversion, remove that failed model artifact directory before
+retrying. Allow the source size in the cache plus both builds in free space.
 
 Each model carries `mlx-build.json`, which records the source repository, full commit SHA,
 recipe, and file hashes, excluding the root `README.md` and `LICENSE` added at publication.
@@ -105,9 +108,11 @@ A position is decisive when vLLM's top token leads the runner-up by at least 0.2
   more than one shared expert, tied embeddings). Port it, add a test, and rerun parity.
 - `convert.py` asserts on quantization overrides: module names in `grug_moe_mlx.py` changed, and the
   `.mlp.experts.` match in `quant_params` needs updating.
-- Thinking missing from `reasoning`: `mlx-lm` is not 0.32.2. `grug_moe_mlx.py` replaces
-  `mlx_lm.tokenizer_utils._infer_thinking`, `TokenizerWrapper.response_transitions`, and
-  `mlx_lm.server.ResponseGenerator._tokenize`. Re-check all three before bumping the pin.
+- Thinking missing from `reasoning`, or a plain answer showing up as `reasoning`: `mlx-lm` is not
+  0.32.2. `grug_moe_mlx.py` replaces `mlx_lm.tokenizer_utils._infer_thinking`,
+  `TokenizerWrapper.response_transitions`, `mlx_lm.server.ResponseGenerator._tokenize`,
+  `ResponseGenerator.generate`, and `APIHandler.generate_response`. Re-check all five before bumping
+  the pin.
 
 ## Running a build
 

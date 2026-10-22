@@ -35,7 +35,10 @@ back as OpenAI `tool_calls`.
 `config.json` sets `"model_file": "grug_moe_mlx.py"`, so `mlx-lm` loads the Grug MoE architecture from
 this repo. The file also teaches `mlx-lm` 0.32.2 the thinking markers `<|start_think|>` and
 `<|end_think|>`, and makes the server parse a thinking-mode response as reasoning until
-`<|end_think|>`, since the model sometimes reasons without emitting `<|start_think|>` first. These
+`<|end_think|>`, since the model sometimes reasons without emitting `<|start_think|>` first. A
+response with no think marker and no tool call is an answer given without thinking and is returned
+as content, as vLLM's `grug` reasoning parser does; streamed responses hold such text back until a
+marker or the end of the turn decides. These
 patches depend on `mlx-lm` internals and go away once `mlx-lm` supports the markers. `grug_moe_mlx.py` SHA-256: `{MODEL_FILE_SHA256}`.
 
 ## Parity
