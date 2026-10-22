@@ -14,7 +14,8 @@ import json
 import math
 import os
 import tarfile
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -441,12 +442,15 @@ async def grade_in_sandbox(
     *,
     task_machine: Machine | None = None,
     timeout: float | None = None,
+    deadline: asyncio.Timeout | None = None,
 ) -> GradeResult:
     """Grade with a verifyit grader that has an environment, or with a script grader.
 
     The grading machine comes from ``factory`` with ``machine_spec``, applying the environment's
     working directory and variables. ``task_machine`` is the agent's
     machine; graders that collect inputs or copy artifacts require it. Machine failures propagate.
+    ``deadline``, the caller's grading deadline, stops while the grading machine is prepared and created, which
+    ``machine_spec.startup_timeout`` bounds instead, so that it measures the grader.
     """
     grading = _sandbox_grading(task, task_machine, timeout)
     validate_machine_spec(grading.environment, factory, machine_spec)
@@ -473,7 +477,7 @@ async def grade_in_sandbox(
     ):
         return GradeResult(Outcome.GRADED, 0.0, "Missing submission")
     return await _grade_staged(
-        task, attempt, grading, submissions, factory, machine_spec, task_machine, dict(os.environ)
+        task, attempt, grading, submissions, factory, machine_spec, task_machine, dict(os.environ), deadline
     )
 
 
@@ -497,7 +501,24 @@ async def grade_empty_in_sandbox(
         answer_file = verifyit_answer_file(grading.spec)
     attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=""))))
     submissions = [] if answer_file is None else [StagedFile(answer_file, b"")]
-    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, None, dict(os.environ))
+    return await _grade_staged(task, attempt, grading, submissions, factory, machine_spec, None, dict(os.environ), None)
+
+
+@asynccontextmanager
+async def _paused(deadline: asyncio.Timeout | None) -> AsyncIterator[None]:
+    """Stop ``deadline`` inside the block, and give it back the time it had left when the block ends."""
+    when = None if deadline is None or deadline.expired() else deadline.when()
+    if when is None:
+        yield
+        return
+    assert deadline is not None
+    loop = asyncio.get_running_loop()
+    remaining = when - loop.time()
+    deadline.reschedule(None)
+    try:
+        yield
+    finally:
+        deadline.reschedule(loop.time() + remaining)
 
 
 async def _grade_staged(
@@ -509,6 +530,7 @@ async def _grade_staged(
     machine_spec: MachineSpec,
     task_machine: Machine | None,
     host_environment: Mapping[str, str],
+    deadline: asyncio.Timeout | None,
 ) -> GradeResult:
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
     files = _grading_files(task, attempt, grading, submissions)
@@ -536,7 +558,7 @@ async def _grade_staged(
                     downloaded.append((local, artifact.target))
             archive_path = root / "grading.tar"
             write_archive(archive_path, files, downloaded)
-            async with asyncio.timeout(machine_spec.startup_timeout):
+            async with _paused(deadline), asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(
                     prepare_machine_spec,
                     grading.environment,

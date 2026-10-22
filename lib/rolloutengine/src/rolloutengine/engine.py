@@ -200,8 +200,9 @@ class RolloutEngine:
         messages = recorder.graded_messages()
         assert messages is not None
         started = time.monotonic()
+        deadline = asyncio.timeout(spec.limits.verifier_timeout)
         try:
-            async with asyncio.timeout(spec.limits.verifier_timeout):
+            async with deadline:
                 attempt.outputs = await _captured_outputs(spec, machine)
                 grade = await _grade_rollout(
                     spec,
@@ -212,8 +213,12 @@ class RolloutEngine:
                     attempt.cleanup,
                     resources,
                     stop_reason=recorder.stop_reason,
+                    deadline=deadline,
                 )
         except TimeoutError as error:
+            if not deadline.expired():
+                # The verifier machine's startup deadline: an infrastructure failure, which the grade does not record.
+                raise _Interrupted(RolloutOperation.GRADE) from error
             attempt.grade = GradeResult(
                 Outcome.INFRA_ERROR, None, "Verifier deadline expired", failure=GradingFailure.TIMEOUT
             )

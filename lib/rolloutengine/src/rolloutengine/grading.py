@@ -61,10 +61,12 @@ async def _grade_rollout(
     resources: AsyncExitStack,
     *,
     stop_reason: str,
+    deadline: asyncio.Timeout,
 ) -> GradeResult:
     """Grade in process, through the judge service, or in a fresh verifier machine that the attempt owns.
 
-    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended.
+    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended. ``deadline``, the
+    verifier deadline, stops while a verifier machine is prepared and created.
     """
     task = spec.task
     grader = task.grader
@@ -87,4 +89,5 @@ async def _grade_rollout(
         _machine_spec(grader.environment, selection),
         task_machine=machine,
         timeout=spec.limits.verifier_timeout,
+        deadline=deadline,
     )

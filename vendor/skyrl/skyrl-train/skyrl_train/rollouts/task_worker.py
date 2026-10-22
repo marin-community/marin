@@ -262,7 +262,9 @@ def _failed_rollout(
             RolloutOperation.ATTEMPT: "TrialTimeoutError",
             RolloutOperation.START: "EnvironmentStartTimeoutError",
             RolloutOperation.PREPARE: "AgentSetupTimeoutError",
-            RolloutOperation.GRADE: "VerifierTimeoutError",
+            # The engine records an expired verifier deadline in the grade, handled below. Another timeout while
+            # grading is a verifier machine that did not start in time.
+            RolloutOperation.GRADE: "EnvironmentStartTimeoutError",
         }.get(interruption.operation, "AgentTimeoutError")
     elif isinstance(error, TemplateError):
         exception_type = "TemplateError"

@@ -76,7 +76,8 @@ then builds a managed CPython environment with the locked packages, verifyit, an
 The factory mounts the built root read-only, mounts each placed file at its declared path, sets the
 declared variables and puts its Python on `PATH`; attempts share the built runtime but each gets a
 fresh sandbox. The selected factory's mounts, executable paths, bubblewrap binary, and hash seed remain in use.
-Building the runtime is included in the startup deadline and, for graders, the verifier deadline.
+Building the runtime counts against the machine's startup deadline. For graders, the verifier deadline stops while the
+verifier machine is prepared and created.
 The host needs `uv`, download access for an uncached build, and a working bubblewrap setup.
 Grader staging runs as root, so local grading requires a host process running as root.
 Local machines reject CPU, storage, and GPU allocations; leave those fields unset and `gpus=0`.
@@ -453,13 +454,13 @@ No end event is emitted when a token-contract error or cancellation propagates.
 
 | Field | Boundary |
 | --- | --- |
-| Machine `startup_timeout` | Machine creation, resource upload, setup commands, and the explicit execution-user probe |
+| Machine `startup_timeout` | Machine preparation and creation, resource upload, setup commands, and the explicit execution-user probe |
 | `model_turn_timeout` | One model request |
-| `ShellHarness(command_timeout=...)` | Each shell-tool command, including separate calls within one model turn |
+| `ShellHarness(command_timeout=...)` | Each shell-tool command, including separate calls within one model turn, from when the backend has started it |
 | `tool_turn_timeout` | The time from a model turn to the harness's next request or its end, including its tool operations; a cancelled request starts it again |
 | `total_turn_timeout` | The time from the harness's first request to its end, across all turns in one attempt |
 | `attempt_timeout` | Task startup, the harness, and final verification |
-| `verifier_timeout` | Output capture and the full `grade` call, including separate verifier startup and artifact transfer |
+| `verifier_timeout` | Output capture and the full `grade` call, including artifact transfer; it stops while the verifier machine is prepared and created |
 | `RolloutLimits.cleanup_timeout` | Each cleanup action, outside the attempt deadline |
 | Machine `cleanup_timeout` | Optional override for that machine's cleanup action |
 
@@ -468,6 +469,10 @@ Its expiration cancels the harness and starts grading with `stop_reason="total_t
 No model response means `grade.status=Outcome.UNAVAILABLE` and `grade.reward=None`.
 Backend command limits also stop commands that outlive an enclosing coroutine deadline.
 The command limit is separate from the tool-turn deadline.
+The tool-turn deadline includes the time each command takes to start; the local backend raises `CommandStartTimeout`
+when a command does not start within 60 seconds.
+A verifier machine that misses its startup deadline fails grading with a `TimeoutError` and leaves `grade.failure` unset;
+only an expired verifier deadline records `GradingFailure.TIMEOUT`.
 When these limits are finite, the shell harness's check requires the command limit to be less than the tool-turn deadline.
 Configure the tool-turn deadline to allow the commands and backend cleanup within that turn.
 A timed-out shell command returns a `timed_out` tool observation. The model can continue the task.
@@ -552,7 +557,7 @@ A `VerifyitGrader` with an environment cannot grade a `native_action` answer.
 A `ScriptGrader` declares a command, collect commands, artifacts, an answer path, a conversation path, and a reward source.
 The verifier machine receives the extracted answer at `answer_path`.
 It receives the conversation as OpenAI-style chat-message JSON at `conversation_path`, by default `/tests/conversation.json`.
-The verifier deadline controls the full grading phase.
+The verifier deadline controls the grading phase after the verifier machine starts.
 
 | Reward source | Result | Origin / reason |
 | --- | --- | --- |
