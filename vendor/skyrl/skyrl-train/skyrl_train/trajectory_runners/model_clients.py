@@ -30,7 +30,7 @@ from skyrl_train.inference_engines.chat_template import (
     template_error_from_exception,
 )
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
-from skyrl_train.inference_engines.prefill import prefill_token_ids
+from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
 from skyrl_train.inference_engines.response_topk import select_chat_response_topk
 from skyrl_train.trajectory_runners.types import TokenProvenance
 from skyrl_train.trajectory_runners.routed_experts import normalize_routed_experts
@@ -206,10 +206,10 @@ class DirectModelClient:
         output = await self._client.generate(request)
         return ModelClientOutput(**output, token_provenance=TokenProvenance.ENGINE)
 
-    async def _generate_prefill(
+    async def _generate_assistant_prefix(
         self, request: InferenceEngineInput, messages: list[dict[str, Any]], options: dict[str, Any], session_id: str
     ) -> _ChatResult:
-        prompt_ids = prefill_token_ids(self._client.tokenizer, messages, options)
+        prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
         sampling = dict(request.get("sampling_params") or {})
         requested_tokens = [
             int(options[key])
@@ -231,7 +231,7 @@ class DirectModelClient:
             }
         )
         if output.get("prompt_ids") != [prompt_ids]:
-            raise RolloutContractError("Prefill inference did not report the rendered prompt token IDs")
+            raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
         text = output["responses"][0]
         message = (output.get("assistant_messages") or [{"role": "assistant", "content": text}])[0]
         return _ChatResult(
@@ -284,8 +284,8 @@ class DirectModelClient:
         async def generate_one(messages, row_options, session_id, continuation):
             if row_options.get("extra_body", {}).get("continue_final_message") is True:
                 if continuation is not None:
-                    raise ValueError("An initial prefill cannot reuse a sampled chat continuation")
-                return await self._generate_prefill(request, messages, row_options, session_id)
+                    raise ValueError("An initial assistant prefix cannot reuse a sampled chat continuation")
+                return await self._generate_assistant_prefix(request, messages, row_options, session_id)
             chat_options = self._chat_options(row_options, sampling_params)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {

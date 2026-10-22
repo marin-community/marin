@@ -16,7 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from taskcompendium.convert.structure_closure import structure_closure_task
@@ -31,7 +31,6 @@ from experiments.post_training.snowball_curriculum.native import NATIVE_CONTRACT
 from experiments.post_training.snowball_curriculum.selection import TASK_SPEC_CONTRACT_KIND
 
 TOOLS = "shellbox"
-PREFILL = "prefill"
 RUNTIME_SCHEMA = pa.schema(
     [
         (name, pa.float64() if name == "inclusion_probability" else pa.string())
@@ -120,7 +119,7 @@ def selected_task(row: Mapping[str, Any]) -> SelectedTask:
         raise ValueError("Native private verifier resources changed")
     # This deliberately changes conditioning and grading: historical token IDs and
     # terminal normalization remain source audit, not requirements of current tasks.
-    return SelectedTask(task, PREFILL, ("context", "grader"))
+    return SelectedTask(task, ASSISTANT_PREFIX_HARNESS, ("context", "grader"))
 
 
 def rollout_record(row: dict, deployment: Deployment) -> tuple[dict, dict]:
@@ -191,8 +190,8 @@ def rollout_record(row: dict, deployment: Deployment) -> tuple[dict, dict]:
 
 def check_harness(spec: TaskRolloutSpec) -> None:
     """Reject unknown harnesses and tasks incompatible with their declared limits."""
-    if spec.harness == PREFILL:
-        harness = PrefillHarness()
+    if spec.harness == ASSISTANT_PREFIX_HARNESS:
+        harness = AssistantPrefixHarness()
     elif is_shell_harness(spec.harness):
         harness = shell_harness(spec.harness)
     else:
@@ -297,7 +296,7 @@ def _write_runtime_bundle(
                     raise ValueError("Duplicate selected logical task ID")
                 seen.add(record["task_id"])
                 serialized = TaskRolloutSpec.model_validate_json(record["task_rollout_spec"])
-                counts[PREFILL if serialized.harness == PREFILL else TOOLS] += 1
+                counts[ASSISTANT_PREFIX_HARNESS if serialized.harness == ASSISTANT_PREFIX_HARNESS else TOOLS] += 1
                 audit.write(
                     json.dumps(
                         {"source_row_index": len(seen) - 1, "task_id": record["task_id"], **mapping}, sort_keys=True
