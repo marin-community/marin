@@ -615,7 +615,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("env_vars", "setup_scripts")
+    __slots__ = ("env_vars", "secrets", "setup_scripts")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -623,11 +623,20 @@ class EnvironmentConfig(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class SecretsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
+    SECRETS_FIELD_NUMBER: _ClassVar[int]
     SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
+    secrets: _containers.ScalarMap[str, str]
     setup_scripts: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class CommandEntrypoint(_message.Message):
     __slots__ = ("argv",)

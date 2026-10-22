@@ -20,7 +20,7 @@ workpiece to its next stage::
     BUILD     BUILD_FAILED   reject     DONE      build_revisions + 1; closing rejected (budget)
     VALIDATE  VALIDATED      validated  REVIEW
     REVIEW    DECIDED        accept     DONE      closing accepted (labelled with the band)
-    REVIEW    DECIDED        reject     DONE      closing rejected (the decision's kind)
+    REVIEW    DECIDED        reject     DONE      closing rejected (the event's kind)
     REVIEW    DECIDED        retry      VALIDATE  retries + 1
     REVIEW    DECIDED        abandon    DONE      retries + 1; closing abandoned
     REVIEW    DECIDED        modify     AUTHOR    round + 1; task_digest cleared; revision modify
@@ -29,7 +29,9 @@ workpiece to its next stage::
 
 The coordinator checks the workpiece's budget when it records the event spending it. It picks repair or
 reject for a ``TRIAGED`` event on a REPAIR verdict, revise or reject for ``AUTHOR_FAILED`` and
-``BUILD_FAILED``, and retry or abandon for ``DECIDED``, so ``transition`` reads no budget.
+``BUILD_FAILED``, retry or abandon for a ``DECIDED`` event on a ``Retry``, and modify or reject for one on a
+``Modify``, so ``transition`` reads no budget. A ``Modify`` past the workpiece's MODIFY rounds exits reject
+with kind budget; ``round`` counts the modify exits, so it is the MODIFY rounds spent.
 ``AUTHOR_FAILED`` and ``BUILD_FAILED`` both count toward ``build_revisions``. Triage exits accept or
 reject unless its verdict uses the REPAIR surface; a repair exit returns the workpiece to triage with
 the rewritten proposal, which every later stage runs. An accept records the verdict's author state,
@@ -210,7 +212,8 @@ class WorkpieceState:
 
     Attributes:
         stage: The stage to run next.
-        round: The author, build and validation round. A ``modify`` exit starts the next one.
+        round: The author, build and validation round. Only a ``modify`` exit starts the next one, so it
+            also counts the MODIFY rounds the workpiece has spent.
         seq: The last event's ``seq``.
         proposal_digest: The digest of the proposal the stages run: the opened one, or the last triage rewrite.
         program_digest: The digest of the program authored last.

@@ -10,6 +10,7 @@ import socket
 import ray
 import torch
 from loguru import logger
+from rigging.secrets import SECRETS_DIR_ENV, require_secret
 from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import (
     placement_group,
@@ -681,7 +682,7 @@ def validate_generator_cfg(cfg: DictConfig):
 
     # TODO(tgriggs): use a more modular config validation
     if cfg.trainer.logger == "wandb":
-        assert os.environ.get("WANDB_API_KEY"), "`WANDB_API_KEY` is required for `wandb` logger"
+        require_secret("WANDB_API_KEY")
 
     if cfg.generator.override_existing_update_group == "auto":
         if cfg.generator.backend == "vllm" and not cfg.generator.run_engines_locally:
@@ -1143,9 +1144,10 @@ def prepare_runtime_environment(cfg: DictConfig) -> dict[str, str]:
         env_vars["NCCL_P2P_DISABLE"] = "1"
         env_vars["NCCL_SHM_DISABLE"] = "1"
 
-    # TODO: this can be removed if we standardize on env files.
-    # But it's helpful for a quickstart
-    if os.environ.get("WANDB_API_KEY"):
+    # Ray workers share the task's read-only credential mount.
+    if path := os.environ.get(SECRETS_DIR_ENV):
+        env_vars[SECRETS_DIR_ENV] = path
+    elif os.environ.get("WANDB_API_KEY"):
         logger.info("Exporting wandb api key to ray runtime env")
         env_vars["WANDB_API_KEY"] = os.environ["WANDB_API_KEY"]
 

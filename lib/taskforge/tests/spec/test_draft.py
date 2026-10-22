@@ -757,10 +757,10 @@ def test_agent_visible_files_cannot_lie_under_the_grader_roots(path):
         cpython_task(files=(file("workspace/numbers.txt", "5\n7\n"), file(path, "{}")))
 
 
-def opt_task() -> TaskSpec:
-    """``cpython_task`` shipping a file under /opt, a system directory of the local backend."""
+def system_directory_task() -> TaskSpec:
+    """``cpython_task`` shipping a file under /usr, a system directory of the local backend."""
     return cpython_task().model_copy(
-        update={"resources": ResourceGroups(worker=(file("opt/audit/README.md", "audit"),))}
+        update={"resources": ResourceGroups(worker=(file("usr/share/audit/README.md", "audit"),))}
     )
 
 
@@ -775,8 +775,8 @@ def lower_beside_local(task: TaskSpec, local: RecordingFactory) -> TaskRolloutSp
     )
 
 
-def test_a_copy_on_write_local_factory_keeps_a_task_writing_under_opt_on_the_local_backend():
-    lowered = lower_beside_local(opt_task(), LocalRecordingFactory(Backend.LOCAL, LOCAL_COPY_ON_WRITE))
+def test_a_copy_on_write_local_factory_keeps_a_task_writing_under_usr_on_the_local_backend():
+    lowered = lower_beside_local(system_directory_task(), LocalRecordingFactory(Backend.LOCAL, LOCAL_COPY_ON_WRITE))
 
     assert machine_sources(lowered) == (("local", LOCAL_CPYTHON), ("local", LOCAL_CPYTHON))
 
@@ -786,10 +786,10 @@ def test_a_copy_on_write_local_factory_keeps_a_task_writing_under_opt_on_the_loc
     [LocalRecordingFactory(Backend.LOCAL, LOCAL_READ_ONLY), RecordingFactory(Backend.LOCAL)],
     ids=["read-only", "mode-unstated"],
 )
-def test_a_read_only_local_factory_moves_a_task_writing_under_opt_to_the_container_backend(local: RecordingFactory):
-    """Files the task ships under /opt cannot land on a read-only local backend, and grading stages them on the
+def test_a_read_only_local_factory_moves_a_task_writing_under_usr_to_the_container_backend(local: RecordingFactory):
+    """Files the task ships under /usr cannot land on a read-only local backend, and grading stages them on the
     verifier too, so both machines stay containers."""
-    lowered = lower_beside_local(opt_task(), local)
+    lowered = lower_beside_local(system_directory_task(), local)
     plain = lower_beside_local(cpython_task(), local)
 
     image = RegistryImage(GRADER_BASE_IMAGE)
@@ -798,14 +798,14 @@ def test_a_read_only_local_factory_moves_a_task_writing_under_opt_to_the_contain
 
 
 def test_a_grader_base_task_whose_output_lies_under_a_read_only_root_keeps_its_image():
-    task = cpython_task(output_paths=("/opt/answer",))
+    task = cpython_task(output_paths=("/usr/answer",))
     lowered = lower_beside_local(task, LocalRecordingFactory(Backend.LOCAL, LOCAL_READ_ONLY))
 
     image = RegistryImage(GRADER_BASE_IMAGE)
     assert machine_sources(lowered) == (("gvisor", image), ("gvisor", image))
 
 
-@pytest.mark.parametrize("answer_path,backend", [("/opt/answer.txt", "gvisor"), (ANSWER_PATH, "local")])
+@pytest.mark.parametrize("answer_path,backend", [("/usr/answer.txt", "gvisor"), (ANSWER_PATH, "local")])
 def test_a_grader_base_verifier_staging_its_answer_under_a_read_only_root_keeps_its_image(answer_path, backend):
     grader = python_grader(TEXT_GRADER, {}, environment=BASE, answer_path=answer_path, timeout=20)
     factories = {

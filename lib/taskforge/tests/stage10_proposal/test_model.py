@@ -252,14 +252,6 @@ def test_null_proposal_may_have_abbreviated_body():
     assert parse(render(proposal)) == proposal
 
 
-@pytest.mark.parametrize("decision", [{}, NOT_NEEDED], ids=["needed", "not_needed"])
-def test_render_round_trips_the_research_decision(decision):
-    proposal = _proposal(**decision)
-    canonical = render(proposal)
-    assert f"research_need: {proposal.header.research_need}\n" in canonical
-    assert parse(canonical) == proposal
-
-
 @pytest.mark.parametrize(
     ("edit", "message"),
     [

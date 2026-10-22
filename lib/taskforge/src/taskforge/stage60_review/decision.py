@@ -19,7 +19,7 @@ class RejectKind(StrEnum):
     TASK = "task"
     """The evidence shows a defect in the task."""
     BUDGET = "budget"
-    """The workpiece used up its build revisions."""
+    """The workpiece used up its build revisions, or review asked for a MODIFY round past its budget."""
     HOST = "host"
     """This host cannot run the task."""
 
