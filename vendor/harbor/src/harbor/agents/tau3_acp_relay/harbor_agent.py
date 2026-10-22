@@ -30,7 +30,9 @@ PACKAGE_NAME = "tau3_harbor_acp_relay"
 REMOTE_PACKAGE_ROOT = Path("/tmp") / PACKAGE_NAME
 REMOTE_POLICY_PATH = Path("/tmp/tau3-harbor-acp-policy.md")
 SUMMARY_FILENAME = "tau3-harbor-acp-relay.json"
-POLICY_PATTERN = re.compile(r"<policy>\s*(.*?)\s*</policy>", re.DOTALL)
+POLICY_PATTERN = re.compile(
+    r"^[ \t]*<policy>\s*(.*?)\s*</policy>", re.DOTALL | re.MULTILINE
+)
 
 
 class Tau3RuntimeInfrastructureError(RuntimeError):

@@ -165,6 +165,19 @@ def test_extract_policy_uses_final_policy_block() -> None:
     assert extract_policy(instruction) == "real policy"
 
 
+def test_extract_policy_excludes_instructions_with_inline_policy_reference() -> None:
+    instruction = """<instructions>
+Help a simulated user according to the <policy> provided below.
+Call `send_message_to_user` to speak to the user, then call `end_conversation`.
+</instructions>
+
+<policy>
+Verify before refunding.
+</policy>
+"""
+    assert extract_policy(instruction) == "Verify before refunding."
+
+
 @pytest.mark.parametrize(
     ("remote_error", "expected_error", "return_code"),
     [
