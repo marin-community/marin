@@ -11,11 +11,9 @@ wedged object-store call can fail into the task retry path.
 
 Two ways to apply that setup, for two different callers:
 
-* :func:`configure_fsspec_s3` / :func:`configure_coreweave_s3` write the process-wide
-  ``AWS_*`` variables and the ``FSSPEC_S3`` config block that :mod:`rigging.filesystem.factory`
-  and every plain ``fsspec`` caller read. One endpoint per process — right for a task pinned to
-  one cluster. Processes inside a cluster usually arrive with ``FSSPEC_S3`` already exported by
-  the runtime, in which case these are no-ops.
+* :func:`configure_fsspec_s3` / :func:`configure_coreweave_s3` configure endpoint
+  variables and the ``FSSPEC_S3`` block. Explicit credentials stay in fsspec's
+  in-memory configuration. One endpoint per process suits a task pinned to one cluster.
 * :func:`s3_credentials` and :func:`s3_endpoint` resolve one backend's settings without touching
   the environment, so a single process can hold connections to several backends at once. This is
   what :mod:`rigging.filesystem.buckets` builds per-bucket filesystems from.
@@ -39,9 +37,11 @@ import aiohttp
 import fsspec
 import s3fs
 from aiobotocore.httpsession import AIOHTTPSession
+from botocore.credentials import SharedCredentialProvider
 
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME, configured_listing_cache_options
+from rigging.secrets import get_secret
 
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
@@ -147,7 +147,7 @@ def fsspec_s3_conf(endpoint: str) -> dict:
 
 
 def credential_profile_for_bucket(bucket: str) -> dict:
-    """Read the task bootstrap's routing contract for independent SDK clients."""
+    """Return s3fs options for a configured bucket, or {} when no profile is configured."""
     routes = json.loads(os.environ.get(TASK_S3_PROFILES_ENV, "{}"))
     route = routes.get(bucket)
     if route is None:
@@ -163,14 +163,9 @@ def credential_profile_for_bucket(bucket: str) -> dict:
 def configure_fsspec_s3(endpoint: str, key: str | None = None, secret: str | None = None) -> None:
     """Point ``s3://`` access (fsspec and boto alike) at an S3-compatible *endpoint*.
 
-    Sets the ``AWS_*`` credential/endpoint variables and the ``FSSPEC_S3`` config block, never
-    overwriting values already present, then flushes fsspec's config and s3fs's instance cache so
-    already-imported modules pick the settings up.
+    Sets endpoint variables and ``FSSPEC_S3`` without overwriting existing
+    settings. Credentials stay in memory.
     """
-    if key and secret:
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", key)
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", secret)
-
     os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
     os.environ.setdefault("AWS_REGION", "auto")
     os.environ.setdefault("AWS_DEFAULT_REGION", "auto")
@@ -185,11 +180,15 @@ def configure_fsspec_s3(endpoint: str, key: str | None = None, secret: str | Non
 
     # Flush fsspec/s3fs cached instances so they pick up the new config.
     fsspec.config.set_conf_env(fsspec.config.conf)
+    if key and secret:
+        config = fsspec.config.conf.setdefault("s3", {})
+        config.setdefault("key", key)
+        config.setdefault("secret", secret)
     s3fs.S3FileSystem.clear_instance_cache()
 
 
 def configure_coreweave_s3() -> None:
-    """Configure ``s3://`` access to CoreWeave object storage from ambient ``CW_KEY_*`` credentials.
+    """Configure ``s3://`` access using named CoreWeave credentials from rigging.
 
     For processes outside a CoreWeave cluster (a dev box, a dashboard) that read or write CW
     buckets. No-op when the keys are absent or an ``FSSPEC_S3`` block is already exported (a CW
@@ -202,11 +201,28 @@ def configure_coreweave_s3() -> None:
     configure_fsspec_s3(s3_endpoint(StoreType.COREWEAVE), key=key, secret=secret)
 
 
-def s3_credentials(store: StoreType) -> tuple[str, str] | None:
-    """The ``(key_id, secret)`` pair for *store*, or ``None`` when neither pair is complete.
+def s3_credential_options() -> dict[str, str]:
+    """Read a complete configured credential set or the named AWS secrets."""
+    configured = fsspec.config.conf.get("s3") or {}
+    if configured.get("key") and configured.get("secret"):
+        return {name: configured[name] for name in ("key", "secret", "token") if configured.get(name)}
+    return {
+        option: value
+        for option, name in (
+            ("key", "AWS_ACCESS_KEY_ID"),
+            ("secret", "AWS_SECRET_ACCESS_KEY"),
+            ("token", "AWS_SESSION_TOKEN"),
+        )
+        if (value := get_secret(name))
+    }
 
-    Reads the variables the backend's :class:`~rigging.filesystem.cluster_config.StoreConfig` names, then
-    the generic ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY``. Callers that cannot
+
+def s3_credentials(store: StoreType) -> tuple[str, str] | None:
+    """Resolve a store's key/secret pair, or return ``None`` when unavailable.
+
+    Reads the secrets the backend's :class:`~rigging.filesystem.cluster_config.StoreConfig` names, then
+    the generic ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` and the native
+    ``AWS_SHARED_CREDENTIALS_FILE`` profile. Callers that cannot
     proceed without credentials raise their own error, so a browser can list the buckets it
     *can* reach instead of failing on the first unconfigured backend.
 
@@ -214,11 +230,19 @@ def s3_credentials(store: StoreType) -> tuple[str, str] | None:
         ValueError: if no cluster config declares *store* as an S3-compatible backend.
     """
     config = store_config(store)
-    key = os.environ.get(config.key_id_env) or os.environ.get("AWS_ACCESS_KEY_ID")
-    secret = os.environ.get(config.key_secret_env) or os.environ.get("AWS_SECRET_ACCESS_KEY")
-    if not key or not secret:
-        return None
-    return key, secret
+    key = get_secret(config.key_id_env) or get_secret("AWS_ACCESS_KEY_ID")
+    secret = get_secret(config.key_secret_env) or get_secret("AWS_SECRET_ACCESS_KEY")
+    if key and secret:
+        return key, secret
+    if filename := os.environ.get("AWS_SHARED_CREDENTIALS_FILE"):
+        credentials = SharedCredentialProvider(
+            creds_filename=filename, profile_name=os.environ.get("AWS_PROFILE", "default")
+        ).load()
+        if credentials is not None:
+            frozen = credentials.get_frozen_credentials()
+            if frozen.access_key and frozen.secret_key:
+                return frozen.access_key, frozen.secret_key
+    return None
 
 
 def s3_endpoint(store: StoreType) -> str:
@@ -233,6 +257,6 @@ def s3_endpoint(store: StoreType) -> str:
 
 
 def credentials_hint(store: StoreType) -> str:
-    """A one-line "set these variables" hint naming *store*'s credential environment pair."""
+    """Name the secrets needed to authenticate to *store*."""
     config = store_config(store)
-    return f"set {config.key_id_env} and {config.key_secret_env} (or the generic AWS_* pair)"
+    return f"provide {config.key_id_env} and {config.key_secret_env} secrets (or the generic AWS_* pair)"

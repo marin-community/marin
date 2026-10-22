@@ -33,6 +33,7 @@ from datetime import datetime
 
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.credentials import ClientCredentials
 from rigging.timing import Timestamp
 
 from iris.cluster.credential_process import TASK_CREDENTIAL_FILE_ENV
@@ -336,19 +337,16 @@ def _connect_log_client(controller_address: str) -> LogClient:
 
     Unauthenticated — the finelog log service performs no auth.
     """
+    credentials = (
+        task_credentials(os.environ[TASK_CREDENTIAL_FILE_ENV])
+        if TASK_CREDENTIAL_FILE_ENV in os.environ
+        else ClientCredentials()
+    )
     endpoint_client = EndpointServiceClientSync(
         address=controller_address,
         timeout_ms=10_000,
-        interceptors=(
-            task_credentials(os.environ[TASK_CREDENTIAL_FILE_ENV]).interceptors()
-            if TASK_CREDENTIAL_FILE_ENV in os.environ
-            else ()
-        ),
-        http_client=(
-            task_credentials(os.environ[TASK_CREDENTIAL_FILE_ENV]).http_client()
-            if TASK_CREDENTIAL_FILE_ENV in os.environ
-            else None
-        ),
+        interceptors=credentials.interceptors(),
+        http_client=credentials.http_client(),
     )
     return LogClient.connect(
         LOG_SERVER_ENDPOINT_NAME,

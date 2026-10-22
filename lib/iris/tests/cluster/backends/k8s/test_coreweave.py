@@ -21,6 +21,7 @@ from iris.cluster.config import (
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
     CoreweaveSliceConfig,
+    CredentialBrokerConfig,
     EndpointSpec,
     IrisClusterConfig,
     KubernetesProviderConfig,
@@ -31,6 +32,7 @@ from iris.cluster.config import (
     ScaleGroupConfig,
     SliceConfig,
     StorageConfig,
+    StorageCredentialProfile,
     resolve_config_secrets,
     resolve_principal_references,
 )
@@ -45,6 +47,7 @@ from iris.cluster.platforms.k8s.controller import (
     PrerequisitesNotProvisionedError,
     configure_client_s3,
 )
+from iris.cluster.platforms.k8s.credential_manifests import credential_secret_rbac
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME, build_cluster_queue
 from iris.cluster.platforms.k8s.nodepool_manifests import (
@@ -61,6 +64,8 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
     namespace_manifest,
     node_agent_rbac_manifests,
     service_account_manifest,
+    task_secret_binding_manifest,
+    task_secret_role_manifest,
 )
 from iris.cluster.platforms.k8s.types import (
     K8sResource,
@@ -138,7 +143,7 @@ def _make_provider(
 
 @pytest.fixture(autouse=True)
 def _s3_env_vars(monkeypatch):
-    """Set CW_KEY_ID / CW_KEY_SECRET so the S3 task-env build succeeds."""
+    """Set operator credentials for controller storage."""
     monkeypatch.setenv("CW_KEY_ID", "test-key-id")
     monkeypatch.setenv("CW_KEY_SECRET", "test-key-secret")
 
@@ -233,6 +238,8 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
     k8s.apply_json(cluster_role_binding_manifest(role_name, namespace, service_account))
     for manifest in node_agent_rbac_manifests(namespace):
         k8s.apply_json(manifest)
+    k8s.apply_json(task_secret_role_manifest(namespace))
+    k8s.apply_json(task_secret_binding_manifest(namespace, service_account))
 
     for name, sg in cluster_config.scale_groups.items():
         cw = sg.slice_template.coreweave if sg.slice_template is not None else None
@@ -290,8 +297,8 @@ def test_start_controller_creates_controller_resources(hostname):
     assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is not None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
-    # S3 storage auth lives in the iris-task-env Secret, not the ConfigMap.
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    # S3 storage auth lives in the iris-storage-secrets Secret, not the ConfigMap.
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets")
     assert secret is not None
     assert "AWS_ACCESS_KEY_ID" in secret["data"]
     assert "AWS_SECRET_ACCESS_KEY" in secret["data"]
@@ -358,9 +365,12 @@ def test_start_controller_creates_controller_resources(hostname):
         "--config=/etc/iris/config.json",
     ]
 
-    # Controller consumes that env via envFrom (S3 + injected, one flow).
+    # Credentials use read-only files; ordinary configuration stays in env.
     container = deploy_spec["template"]["spec"]["containers"][0]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+    assert "envFrom" not in container
+    assert {"name": "iris-storage-secrets", "mountPath": "/run/rigging/storage-secrets", "readOnly": True} in container[
+        "volumeMounts"
+    ]
     # CPU is requested but unlimited (Burstable QoS, not Guaranteed) so the
     # controller can burst onto spare node cores during reconcile spikes; memory
     # is capped to protect the node (issue #6944).
@@ -443,26 +453,15 @@ def test_start_controller_local_state_dir_uses_hostpath_not_pvc():
     provider.shutdown()
 
 
-def test_start_controller_injects_operator_env(monkeypatch):
-    """inject_env writes the iris-task-env Secret and wires the controller envFrom."""
+def test_start_controller_does_not_capture_application_credentials(monkeypatch):
     monkeypatch.setenv("WANDB_API_KEY", "wb-secret")
     provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
-    cluster_config.defaults.inject_env.append("WANDB_API_KEY")
-    _seed_prerequisites(k8s, cluster_config)
-
-    provider.start_controller(cluster_config)
-
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
-    assert secret is not None
-    # Values are base64-encoded in the Secret, never in the ConfigMap.
-    assert base64.b64decode(secret["data"]["WANDB_API_KEY"]).decode() == "wb-secret"
-    configmap = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")
-    assert "wb-secret" not in json.dumps(configmap)
-
-    container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
-
+    config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    _seed_prerequisites(k8s, config)
+    provider.start_controller(config)
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets")
+    assert "WANDB_API_KEY" not in secret["data"]
+    assert "wb-secret" not in json.dumps(k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config"))
     provider.shutdown()
 
 
@@ -479,11 +478,11 @@ def test_preflight_controller_caches_signing_key_without_mutating_kubernetes(mon
 
     provider.preflight_controller(cluster_config)
 
-    assert k8s.get_json(K8sResource.SECRETS, "iris-controller-env") is None
+    assert k8s.get_json(K8sResource.SECRETS, "iris-controller-secrets") is None
     monkeypatch.setenv("TEST_OPERATOR_SIGNING_KEY", "key-after-build")
     provider.start_controller(cluster_config)
 
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-env")
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-secrets")
     assert base64.b64decode(secret["data"]["IRIS_SIGNING_KEY"]).decode() == "key-before-build"
 
     provider.shutdown()
@@ -491,6 +490,9 @@ def test_preflight_controller_caches_signing_key_without_mutating_kubernetes(mon
 
 @pytest.mark.parametrize("change_spec", [False, True])
 def test_directory_only_deploy_keeps_payload_in_controller_secret(tmp_path: Path, monkeypatch, change_spec: bool):
+    mounted = tmp_path / "mounted"
+    mounted.mkdir()
+    monkeypatch.setattr("iris.cluster.platforms.k8s.controller.CONTROLLER_SECRETS_DIR", mounted)
     directory = tmp_path / "directory.json"
     before = {"human-999": "before@example.com"}
     after = {"human-999": "after@example.com"}
@@ -500,19 +502,19 @@ def test_directory_only_deploy_keeps_payload_in_controller_secret(tmp_path: Path
     provider, k8s = _make_provider()
     config = _make_cluster_config()
     config.auth = AuthConfig(
-        principal_directory=["env:IRIS_PRINCIPAL_DIRECTORY", f"file:{directory}"],
+        principal_directory=f"file:{directory}",
         allowed_submitters=["principal:human-999"],
     )
     _seed_prerequisites(k8s, config)
     provider.preflight_controller(config)
-    assert k8s.get_json(K8sResource.SECRETS, "iris-controller-env") is None
+    assert k8s.get_json(K8sResource.SECRETS, "iris-controller-secrets") is None
     if change_spec:
         directory = tmp_path / "new-directory.json"
-        config.auth.principal_directory = ("env:IRIS_PRINCIPAL_DIRECTORY", f"file:{directory}")
+        config.auth.principal_directory = f"file:{directory}"
     directory.write_text(json.dumps(after))
     provider.start_controller(config)
 
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-env")
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-secrets")
     payload = base64.b64decode(secret["data"]["IRIS_PRINCIPAL_DIRECTORY"]).decode()
     expected = after if change_spec else before
     assert json.loads(payload) == expected
@@ -521,31 +523,14 @@ def test_directory_only_deploy_keeps_payload_in_controller_secret(tmp_path: Path
     assert "after@example.com" not in json.dumps(configmap)
     rendered = IrisClusterConfig.model_validate_json(configmap["data"]["config.json"])
     assert rendered.auth.allowed_submitters == ["principal:human-999"]
-    monkeypatch.setenv("IRIS_PRINCIPAL_DIRECTORY", payload)
+    (mounted / "IRIS_PRINCIPAL_DIRECTORY").write_text(payload)
     runtime = resolve_principal_references(resolve_config_secrets(rendered))
     auth = create_controller_auth(runtime.auth, cluster_name=runtime.name)
     assert auth.allowed_submitters == (expected["human-999"],)
     deployment = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
-    env_from = deployment["spec"]["template"]["spec"]["containers"][0]["envFrom"]
-    assert {entry["secretRef"]["name"] for entry in env_from} == {"iris-controller-env"}
-    assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
-    provider.shutdown()
-
-
-def test_start_controller_s3_storage_creates_task_env_secret():
-    """S3 storage alone (no inject_env) still populates the iris-task-env Secret."""
-    provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
-    _seed_prerequisites(k8s, cluster_config)
-
-    provider.start_controller(cluster_config)
-
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
-    assert secret is not None
-    assert "AWS_ACCESS_KEY_ID" in secret["data"]
-    container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
-
+    spec = deployment["spec"]["template"]["spec"]
+    assert {v["secret"]["secretName"] for v in spec["volumes"] if "secret" in v} == {"iris-controller-secrets"}
+    assert k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets") is None
     provider.shutdown()
 
 
@@ -558,6 +543,67 @@ def _s3_cluster_config(endpoint: str, external: str = "") -> IrisClusterConfig:
             )
         )
     )
+
+
+def test_broker_deploy_projects_auth_and_minting_sources_as_private_files(tmp_path, monkeypatch):
+    mounted = tmp_path / "mounted"
+    mounted.mkdir()
+    monkeypatch.setattr("iris.cluster.platforms.k8s.controller.CONTROLLER_SECRETS_DIR", mounted)
+    values = {
+        "IRIS_SIGNING_KEY": "synthetic-signing-key",
+        "IRIS_CAPABILITY": "synthetic-capability-key-32-bytes!",
+        "IRIS_CW_API": "synthetic-provider-token",
+    }
+    for name, value in values.items():
+        (tmp_path / name).write_text(value)
+        monkeypatch.setenv(name, "stale-projection")
+    config = _make_cluster_config()
+    config.auth = AuthConfig(
+        required=True, signing_key=(f"file:{tmp_path / 'IRIS_SIGNING_KEY'}", "env:IRIS_SIGNING_KEY")
+    )
+    config.credential_broker = CredentialBrokerConfig(
+        capability_key=(f"file:{tmp_path / 'IRIS_CAPABILITY'}", "env:IRIS_CAPABILITY"),
+        tls_secret="broker-tls",
+        profiles={
+            "training": StorageCredentialProfile(
+                api_token=(f"file:{tmp_path / 'IRIS_CW_API'}", "env:IRIS_CW_API"),
+                allowed_principals=["trainer"],
+                endpoint="https://cwobject.com",
+                region="US-EAST-02A",
+                buckets=["training"],
+            )
+        },
+    )
+    provider, k8s = _make_provider()
+    _seed_prerequisites(k8s, config)
+    for manifest in credential_secret_rbac("iris", "iris-controller"):
+        k8s.apply_json(manifest)
+    k8s.apply_json(
+        {
+            "kind": "Secret",
+            "metadata": {"name": "broker-tls", "namespace": "iris"},
+            "data": {
+                key: base64.b64encode(b"synthetic-certificate").decode() for key in ("ca.crt", "tls.crt", "tls.key")
+            },
+        }
+    )
+    try:
+        provider.start_controller(config)
+        secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-secrets")
+        for name, value in values.items():
+            assert base64.b64decode(secret["data"][name]).decode() == value
+            (mounted / name).write_text(value)
+        rendered = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"]
+        assert all(value not in rendered for value in values.values())
+        runtime = resolve_config_secrets(IrisClusterConfig.model_validate_json(rendered))
+        assert runtime.credential_broker.capability_key == values["IRIS_CAPABILITY"]
+        assert runtime.credential_broker.profiles["training"].api_token == values["IRIS_CW_API"]
+        pod = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]
+        controller = next(container for container in pod["containers"] if container["name"] == "iris-controller")
+        assert not controller.get("envFrom")
+        assert any(mount["mountPath"] == mounted for mount in controller["volumeMounts"])
+    finally:
+        provider.shutdown()
 
 
 @pytest.mark.parametrize(
@@ -686,7 +732,7 @@ def test_stop_controller_deletes_resources():
     _apply_stub(k8s, "DaemonSet", "iris-node-agent")
     _apply_stub(k8s, "Service", "iris-controller-svc")
     _apply_stub(k8s, "ConfigMap", "iris-cluster-config")
-    _apply_stub(k8s, "Secret", "iris-task-env")
+    _apply_stub(k8s, "Secret", "iris-storage-secrets")
     _apply_stub(k8s, "PersistentVolumeClaim", _CONTROLLER_STATE_PVC_NAME)
 
     provider.stop_controller(cluster_config)
@@ -695,7 +741,7 @@ def test_stop_controller_deletes_resources():
     assert k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent") is None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is None
-    assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
+    assert k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets") is None
     assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is None
     provider.shutdown()
 
@@ -957,8 +1003,8 @@ def test_configmap_strips_kubeconfig_path():
     provider.shutdown()
 
 
-def test_controller_endpoint_url_in_task_env_secret():
-    """When object_storage_endpoint is set, AWS_ENDPOINT_URL lands in the iris-task-env Secret."""
+def test_controller_endpoint_is_configuration_and_credentials_stay_in_secret():
+    """The endpoint remains ordinary configuration alongside mounted credentials."""
     k8s = _ControllerDeploymentK8sService(namespace="iris")
     cw_config = CoreweavePlatformConfig(
         region="LGA1",
@@ -973,8 +1019,11 @@ def test_controller_endpoint_url_in_task_env_secret():
 
     provider.start_controller(cluster_config)
 
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
-    assert base64.b64decode(secret["data"]["AWS_ENDPOINT_URL"]).decode() == "https://object.lga1.coreweave.com"
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets")
+    assert "AWS_ENDPOINT_URL" not in secret["data"]
+    deployment = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
+    environment = {v["name"]: v["value"] for v in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert environment["AWS_ENDPOINT_URL"] == "https://object.lga1.coreweave.com"
 
     provider.shutdown()
 
@@ -1021,7 +1070,7 @@ def test_start_controller_errors_with_invalid_scale_group():
 
 
 def test_start_controller_errors_without_s3_credentials(monkeypatch):
-    """start_controller raises when S3 storage is configured but R2 credentials are not set."""
+    """start_controller raises when S3 storage is configured but CoreWeave credentials are not set."""
     monkeypatch.delenv("CW_KEY_ID", raising=False)
     monkeypatch.delenv("CW_KEY_SECRET", raising=False)
     provider, k8s = _make_provider()
@@ -1114,8 +1163,8 @@ def test_start_controller_skips_s3_for_gs_storage(monkeypatch):
     address = provider.start_controller(cluster_config)
 
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
-    # GCS storage with no inject_env: no task-env Secret, no envFrom.
-    assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
+    # GCS storage with no application credentials needs no task Secret.
+    assert k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets") is None
     dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
     container = dep["spec"]["template"]["spec"]["containers"][0]
     assert "envFrom" not in container
@@ -1217,23 +1266,24 @@ def test_start_controller_creates_one_network_policy_per_egress_policy(service_c
 
 
 @pytest.mark.parametrize("change", ["health_config", "literal_endpoint", "injected_credential"])
-def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(monkeypatch, change):
+def test_storage_health_agent_receives_service_credentials_and_rolls_on_changes(monkeypatch, change):
     provider, k8s = _make_provider()
     config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     config.kubernetes_provider.node_health = NodeHealthConfig(
         storage=NodeStorageHealthConfig(scratch="s3://test-bucket/health")
     )
     config.defaults.task_env["AWS_ENDPOINT_URL"] = "https://regional.example"
-    config.defaults.inject_env = ["AWS_SESSION_TOKEN"]
-    monkeypatch.setenv("AWS_SESSION_TOKEN", "first-test-token")
     _seed_prerequisites(k8s, config)
     provider.start_controller(config)
     agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
     container = agent["spec"]["containers"][0]
     assert {"operator": "Exists"} in agent["spec"]["tolerations"]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env"}}]
+    assert "envFrom" not in container
+    assert {"name": "iris-storage-secrets", "mountPath": "/run/rigging/storage-secrets", "readOnly": True} in container[
+        "volumeMounts"
+    ]
     assert {"name": "AWS_ENDPOINT_URL", "value": "https://regional.example"} in container["env"]
-    secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets")
     assert "AWS_ACCESS_KEY_ID" in secret["data"]
     assert not any(item["name"] == "AWS_ACCESS_KEY_ID" for item in container["env"])
     original_config = k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"]
@@ -1242,7 +1292,7 @@ def test_storage_health_agent_receives_task_credentials_and_rolls_on_changes(mon
     elif change == "literal_endpoint":
         config.defaults.task_env["AWS_ENDPOINT_URL"] = "https://other-regional.example"
     else:
-        monkeypatch.setenv("AWS_SESSION_TOKEN", "rotated-test-token")
+        monkeypatch.setenv("CW_KEY_SECRET", "rotated-test-token")
     provider.start_controller(config)
     changed = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")["spec"]["template"]
     assert changed["metadata"]["annotations"] != agent["metadata"]["annotations"]

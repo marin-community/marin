@@ -60,7 +60,7 @@ class ClientCredentials:
     extra_interceptors: tuple = ()
 
     def http_client(self) -> SyncClient | None:
-        """Build a verified transport for a cluster with a private certificate authority."""
+        """Return a transport using this CA bundle, or None to use default transport settings."""
         return SyncClient(SyncHTTPTransport(tls_ca_cert=self.ca_bundle)) if self.ca_bundle else None
 
     def _bearers(self) -> tuple[tuple[str, TokenProvider], ...]:

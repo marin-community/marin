@@ -101,7 +101,7 @@ def storage_credentials(path: str, profile: str, cache_dir: str = TASK_CREDENTIA
 
 
 def aws_config(config: TaskCredentialFile, path: str) -> str:
-    """Render SDK profiles whose helper also works in a minimal user venv."""
+    """Return AWS config sections that refresh each granted profile through the task helper."""
     sections = []
     for name, profile in config.profiles.items():
         command = shlex.join(["python3", TASK_CREDENTIAL_HELPER, "--file", path, "--profile", name])

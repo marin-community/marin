@@ -14,11 +14,10 @@ Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.pr
 
 import functools
 import hashlib
-import os
 import sys
 import urllib.parse
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, NewType
@@ -26,6 +25,7 @@ from typing import Any, NewType
 import cloudpickle
 import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
+from rigging.secrets import SecretBehavior, validate_secret_name
 from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
@@ -128,8 +128,9 @@ LOCAL_ADMIN_SUBMITTER = "local_admin"
 
 A CIDR/loopback (null-auth) submitter authenticates as the anonymous admin rather
 than a person, so its jobs are attributed to this well-known principal. Per-cluster
-federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
-a peer only if that peer's policy names it explicitly."""
+federation rejects this submitter instead of treating it as a delegated person."""
+
+UNVERIFIED_SUBMITTERS = frozenset({"", LOCAL_ADMIN_SUBMITTER, "anonymous"})
 
 
 def is_federated(cluster: str) -> bool:
@@ -725,11 +726,14 @@ except BaseException as exc:
 class EnvironmentSpec:
     """Environment specification for jobs.
 
+    ``secrets`` maps application-chosen names to values delivered as read-only
+    files. Submissions inherit the client's current mounted bundle and HF/W&B/CoreWeave
+    defaults unless ``secret_behavior=SecretBehavior.ISOLATE``; explicit values
+    win. Sandboxes never inherit. ``env_vars`` retain ordinary environment delivery.
+
     Default environment variables (automatically set if not overridden):
     - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
-    - HF_TOKEN: from os.environ (if set)
-    - WANDB_API_KEY: from os.environ (if set)
     - NCCL_DEBUG: "WARN" for GPU jobs (preserves errors without INFO log volume)
     - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
       at submission (or forwarded from this process's own env when re-submitting inside
@@ -752,6 +756,8 @@ class EnvironmentSpec:
 
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
+    secrets: dict[str, str] = field(default_factory=dict, repr=False)
+    secret_behavior: SecretBehavior = SecretBehavior.INHERIT
     extras: Sequence[str] | None = None
     setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] | None = None
@@ -766,8 +772,6 @@ class EnvironmentSpec:
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
-            "HF_TOKEN": os.getenv("HF_TOKEN"),
-            "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
             # Launch provenance: a task running from a git-less bundle inherits the
             # submitter's identity via Provenance.capture(); transitive, since a task
             # re-submitting captures this same env value.
@@ -802,20 +806,29 @@ class EnvironmentSpec:
         else:
             setup_scripts = [s for s in self.setup_scripts if s.strip()]
 
-        return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
+        for name in self.secrets:
+            validate_secret_name(name)
+        return job_pb2.EnvironmentConfig(
+            env_vars=merged_env_vars,
+            secrets=self.secrets,
+            setup_scripts=setup_scripts,
+        )
 
     def to_sandbox_proto(self) -> job_pb2.EnvironmentConfig:
         """Wire format for a ``CONTAINER_PROFILE_SANDBOX`` job: only what this spec names.
 
         Unlike :meth:`to_proto`, nothing is copied from the submitting process
-        (no ``HF_TOKEN``, ``WANDB_API_KEY``, or provenance) and no default uv-sync
+        (including provenance) and no default uv-sync
         setup is built, since a sandbox has no workspace bundle to sync.
         ``setup_scripts`` run verbatim; ``None`` means no setup.
         """
         if self.extras or self.pip_packages or self.sync_packages:
             raise ValueError("A sandbox job has no workspace to sync; extras, pip_packages and sync_packages need one")
+        for name in self.secrets:
+            validate_secret_name(name)
         return job_pb2.EnvironmentConfig(
             env_vars=dict(self.env_vars or {}),
+            secrets=self.secrets,
             setup_scripts=[s for s in self.setup_scripts or [] if s.strip()],
         )
 

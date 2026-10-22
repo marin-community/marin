@@ -51,6 +51,12 @@ or privileged workloads; use admission/RBAC and a separate management cluster
 if the cluster cannot enforce the pool boundary. Kubernetes administrators,
 cert-manager administrators and the host provider remain trusted.
 
+The existing Iris controller ClusterRole allows Pod creation and exec across
+namespaces. A controller in Bao's host cluster is therefore inside the vault's
+trust boundary. Use a dedicated management CKS cluster if execution controllers
+must be unable to control vault Pods; a separate namespace alone cannot enforce
+that separation.
+
 Do not stretch Raft across CW regions or into GCP. Losing the main CW cluster
 stops new secret acquisition across its consumers. GCP retains its workload
 scheduler and any credentials still valid; it gains no emergency vault authority.
@@ -281,8 +287,10 @@ or pinning a KV version does not narrow a broader readable object's vault policy
 
 The existing CW storage broker and Iris task-session tokens remain the runtime
 implementation in this branch. There is no new ignored `openbao:` job/config
-field. Further work must wire admission, helper delivery, token accessors,
-revocation persistence, GCP worker isolation and explicit HF/W&B references.
+field. Reuse the existing `EnvironmentSpec.secrets` and private-file delivery
+for application material. Further work must wire approved vault references,
+admission, helper delivery, token accessors, revocation persistence and GCP worker
+isolation; a submitted secret value is not a vault reference or authorization grant.
 Use native provider federation for storage after separate refresh/permission
 probes; do not assume Bao's AWS engine works against CW S3.
 

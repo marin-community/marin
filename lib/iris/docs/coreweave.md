@@ -105,12 +105,10 @@ only Pod listing, Node reads and patches for storage-health reports, and
 exporter namespaces. Kubernetes RBAC does not restrict Node patches to the
 health annotation or to the agent's own Node.
 
-Apply the cluster's `infra/pulumi` stack before deploying this identity split.
 Iris startup requires the node-agent ServiceAccount, ClusterRole and binding
-and reports missing resources before changing runtime objects. Existing agents
-keep the controller account until their DaemonSet rolls; running task Pods do
-not need to restart for this change. The controller retains its existing grants
-during this rollout.
+and reports missing resources before changing runtime objects. The cluster's
+`infra/pulumi` stack owns those resources. Updating the node-agent DaemonSet
+does not require restarting task Pods.
 
 GPU Pods request `nvidia.com/gpu`. On clusters with `host_network: true`, they
 also request `rdma/ib` and use `ClusterFirstWithHostNet`. Coscheduled jobs add
@@ -357,8 +355,9 @@ The cluster config carries two endpoints for the same S3-compatible store:
 
 Both domains require virtual-hosted bucket addressing. Let Iris, Rigging, or
 [`fsutil`](../../../docs/references/fsutil.md) derive it; do not build endpoint
-URLs by hand. For operator-side access, create a CoreWeave object-storage access
-key and expose only its expected names:
+URLs by hand. Create a personal object-storage access key on the
+[CoreWeave console Access Keys page](https://console.coreweave.com/object-storage/access-keys)
+and export both values before submitting jobs:
 
 ```bash
 export CW_KEY_ID=<key-id>
@@ -366,9 +365,12 @@ export CW_KEY_SECRET=<key-secret>
 uv run fsutil buckets
 ```
 
-During a controller deployment, Iris maps these values to the S3 variables in
-`iris-task-env`. Normal task submissions then receive cluster-managed storage
-access without carrying the operator's shell environment.
+The submitting client forwards these keys into the job's file-delivered secret
+bundle. Iris configures native AWS credential discovery for the task and mounts
+only its storage file into the output uploader. Missing or incomplete keys
+reject a normal CoreWeave submission before replacing an existing job.
+During deployment, the operator's keys go into `iris-storage-secrets` for the
+controller and node health agents alone. Sandboxes receive only explicit secrets.
 
 Task working directories and caches are node-local:
 
@@ -453,17 +455,20 @@ Credentials have separate owners and scopes:
 | Location | Scope |
 | --- | --- |
 | `~/.kube/coreweave-iris` | Operator access to CKS. It is not copied into Pods. |
-| Checkout-local `.marin.yaml` or explicit job environment | Submitter-provided values such as W&B or Hugging Face credentials. |
+| Checkout-local `.marin.yaml` or explicit job environment | Nonsecret job configuration. |
 | Operator `CW_KEY_ID` and `CW_KEY_SECRET` | Input used when deploying the cluster-managed object-storage Secret. |
-| `iris-task-env` Secret | Object-storage credentials and names listed in `defaults.inject_env`; mounted by the controller and task Pods. |
-| `iris-controller-env` Secret | Controller-only credentials such as the cluster signing key; task Pods do not mount it. |
+| `iris-storage-secrets` Secret | Operator object-storage access for the controller and node health agents alone. |
+| Per-attempt Secret | Submitted and inherited application secrets, including personal CoreWeave keys. The output uploader mounts only the derived storage file. |
+| `iris-controller-secrets` Secret | Controller-only credentials such as the cluster signing key; task Pods do not mount it. |
 | `defaults.task_env` | Non-secret cluster defaults written into task Pod environments. |
 
 The Iris CLI loads `.marin.yaml` only when run from that checkout. SDK
-submissions and commands from another directory must pass their task environment
-explicitly. The deploy path rejects literal secrets before writing
+submissions and commands from another directory must pass checkout-local values
+explicitly; the SDK forwards exported CoreWeave credentials. The deploy path
+rejects literal secrets before writing
 `iris-cluster-config`: references remain in the ConfigMap, while resolved values
-go through the two Secrets above.
+go through the two Secrets above. See [secret delivery](secrets.md) for consumers,
+rotation, and explicit credential threading.
 
 Do not dump Pod environments or use `kubectl describe pod` on a task Pod; literal
 job environment values can appear in the output. Inspect named keys and
@@ -601,7 +606,7 @@ kubernetes_provider:
     max_cordoned_nodes: 1
 ```
 
-The node agent uses the cluster task credentials and endpoint to write, read,
+The node agent uses operator storage credentials and the endpoint to write, read,
 and delete a 23-byte object at `<scratch>/<node UID>/<boot ID>`. It needs all
 three permissions. Job-specific environment overrides are outside this check.
 Use a dedicated prefix with lifecycle expiry; a node that never recovers can

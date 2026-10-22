@@ -6,11 +6,11 @@ config:
     hostname: bao.oa.dev
     # OpenBao 2.7.1, resolved from the official registry on 2026-10-22.
     image: ghcr.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
-    # Candidate storage class; verify fsync, reclaim policy and failure behavior before up.
+    # Per-voter Raft data uses this StorageClass; qualification gates are in README.md.
     storage_class: block
     authority_pool: main
     exposure: internal
-    # Bootstrap only openbao-0; grow to five after its initialization and backup.
+    # Each replica requires a separate authority node.
     replicas: 1
     storage_gb: 20
     controller_namespace: iris

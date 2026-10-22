@@ -198,7 +198,7 @@ extend-exclude = ["scripts/"]
 # apply repo-wide: PLC0415 (no function-local imports), and the issue #6219
 # local-import hygiene pair TID252 (absolute over parent-relative imports) and
 # ICN001 (conventional import aliases, e.g. `import numpy as np`).
-extend-select = ["PLC0415", "TID252", "ICN001"]
+extend-select = ["PLC0415", "TID251", "TID252", "ICN001"]
 ignore = [
   "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741"
 ]
@@ -225,3 +225,6 @@ markers = [
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
 ]
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"litellm" = { msg = "LiteLLM is blocked; use a provider SDK or an OpenAI-compatible endpoint." }

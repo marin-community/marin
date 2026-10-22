@@ -12,6 +12,7 @@ from typing import Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from rigging.secrets import validate_secret_name
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import Row, bindparam, func, select
@@ -43,6 +44,7 @@ from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
+    UNVERIFIED_SUBMITTERS,
     USER_JOB_STATES,
     JobName,
     UserBudgetDefaults,
@@ -475,6 +477,11 @@ class LaunchIdentity:
 
 
 def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobName:
+    for name in request.environment.secrets:
+        try:
+            validate_secret_name(name)
+        except ValueError as error:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from None
     if not request.name:
         raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
     if request.HasField("coscheduling") and not request.coscheduling.group_by:
@@ -547,7 +554,7 @@ def _launch_identity(
     _authorize_launch(dependencies, identity, request, context, requested_job_id, received_handoff)
     job_id = _launch_job_id(dependencies, identity, requested_job_id, received_handoff)
     submitting_user = _launch_submitting_user(dependencies, identity, request, job_id)
-    if dependencies.require_task_sessions and submitting_user in {"", "local_admin", "anonymous"}:
+    if dependencies.require_task_sessions and submitting_user in UNVERIFIED_SUBMITTERS:
         raise ConnectError(Code.PERMISSION_DENIED, "Credential broker jobs require an authenticated submitting user")
     return LaunchIdentity(
         job_id=job_id,
@@ -791,12 +798,12 @@ def _store_launch_payload(
     return normalized
 
 
-def _route_launch(
+def _plan_launch(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.LaunchJobRequest,
     launch: LaunchIdentity,
-) -> controller_pb2.Controller.LaunchJobResponse | None:
-    """Validate placement and either queue, reject, or select local execution."""
+) -> SubmitPlan:
+    """Validate placement before replacing an existing job or storing payloads."""
     constraints = [Constraint.from_proto(constraint) for constraint in request.constraints]
     tpu_error = validate_tpu_request(request.resources, constraints)
     if tpu_error:
@@ -834,20 +841,13 @@ def _route_launch(
             )
         if dependencies.auth.provider and launch.submitting_user == LOCAL_ADMIN_SUBMITTER:
             raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED)
-        return _queue_federated_job(
-            dependencies,
-            launch.job_id,
-            request,
-            plan.pinned_peer_id,
-            launch.submitting_user,
-        )
     if plan.disposition == SubmitDisposition.REJECT:
         reason = error or "no local backend or peer can host it"
         raise ConnectError(
             Code.FAILED_PRECONDITION,
             f"Job {launch.job_id} is unschedulable: {reason} (constraints: {constraints})",
         )
-    return None
+    return plan
 
 
 def _insert_local_job(
@@ -905,6 +905,13 @@ def launch_job(
     _validate_launch_profile(dependencies, request, launch)
     _validate_launch_capacity(dependencies, request, launch)
 
+    request = _inject_resource_constraints(request)
+    plan = _plan_launch(dependencies, request, launch)
+    if plan.disposition == SubmitDisposition.LOCAL:
+        error = dependencies.runtime.backend.validate_job(request)
+        if error:
+            raise ConnectError(Code.INVALID_ARGUMENT, error)
+
     existing = _prepare_job_slot(dependencies, request, launch)
     if existing is not None:
         return existing
@@ -913,10 +920,14 @@ def launch_job(
         request = _store_launch_payload(dependencies, request)
     except BundleUploadError as exc:
         raise ConnectError(Code.UNAVAILABLE, f"Job {launch.job_id} creation failed: {exc}") from exc
-    request = _inject_resource_constraints(request)
-    routed = _route_launch(dependencies, request, launch)
-    if routed is not None:
-        return routed
+    if plan.disposition == SubmitDisposition.QUEUE:
+        return _queue_federated_job(
+            dependencies,
+            launch.job_id,
+            request,
+            plan.pinned_peer_id,
+            launch.submitting_user,
+        )
     return _insert_local_job(dependencies, request, launch, band)
 
 

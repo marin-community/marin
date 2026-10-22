@@ -144,7 +144,6 @@ docs = [
 ]
 dev = [
     { include-group = "analysis" },
-    "litellm",
     "marin-shellbox[shellsim]",
     "marin-rigging[prometheus]",
     "marin-style @ git+https://github.com/marin-community/marin-style@727f180cd423246ca1a6164163a5883cda5bf52b",
@@ -164,6 +163,7 @@ packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_tra
 "open_mopd_versions.py" = "open_mopd_versions.py"
 
 [tool.uv]
+exclude-dependencies = ["litellm"]
 package = true
 prerelease = "allow"
 required-version = ">=0.8.10"

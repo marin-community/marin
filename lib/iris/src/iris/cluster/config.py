@@ -28,10 +28,15 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
-from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
+from rigging.secrets import (
+    as_secret_spec,
+    is_secret_reference,
+    resolve_secret_spec,
+)
 from rigging.timing import Duration
 
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
+from iris.cluster.platforms.k8s.rbac_manifests import NODE_AGENT_SERVICE_ACCOUNT
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
@@ -547,7 +552,6 @@ class DefaultsConfig(_Config):
     autoscaler: AutoscalerConfig = Field(default_factory=AutoscalerConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     task_env: dict[str, str] = Field(default_factory=dict)  # injected into every task
-    inject_env: list[str] = Field(default_factory=list)  # operator-shell var names
 
     @model_validator(mode="after")
     def _propagate_task_env(self) -> DefaultsConfig:
@@ -1144,7 +1148,7 @@ def validate_config(config: IrisClusterConfig) -> None:
             raise ValueError("credential_broker forbids optional auth and trusted_cidrs")
         if config.controller.coreweave is None or (config.controller.coreweave.port or 10000) >= 65535:
             raise ValueError("credential_broker requires a Kubernetes controller port below 65535")
-        if config.kubernetes_provider.service_account in {"iris-controller", "iris-node-agent"}:
+        if config.kubernetes_provider.service_account in {"iris-controller", NODE_AGENT_SERVICE_ACCOUNT}:
             raise ValueError("Task pods must not use a controller or node-agent ServiceAccount")
         broker = config.credential_broker
         if not broker.tls_secret or not broker.profiles:
@@ -1158,7 +1162,7 @@ def validate_config(config: IrisClusterConfig) -> None:
                 raise ValueError(f"credential_broker profile {name} requires HTTPS or explicit CoreWeave LOTA")
             if profile.api_token is None and profile.oidc is None:
                 raise ValueError(f"credential_broker profile {name} requires api_token or oidc")
-        task_names = set(config.defaults.inject_env) | set(config.defaults.task_env)
+        task_names = set(config.defaults.task_env)
         for model, field in iter_secret_ref_fields(config):
             references = getattr(model, field)
             if references and any(

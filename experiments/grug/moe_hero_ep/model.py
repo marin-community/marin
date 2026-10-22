@@ -317,6 +317,10 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    ce_grad_in_forward_token_block_size: int | None = None
+    """Rows per scan step of a reduced training loss whose forward also computes its gradients:
+    3 GEMMs instead of the "xla_fast_bwd" kernel's 4, holding the [B, D] and [D, V] gradients
+    from the forward to the backward. None keeps "xla_fast_bwd"."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -1455,6 +1459,11 @@ class Transformer(eqx.Module):
         # against an older run, this is why. Set LEVANTER_CE_XLA_FAST_BWD=0 to
         # force the old backward back on without editing code, or swap this to
         # implementation="xla" for a code-level A/B.
+        # A per-token loss has no fixed row cotangents, so it keeps "xla_fast_bwd".
+        grad_in_forward_token_block_size = (
+            self.config.ce_grad_in_forward_token_block_size if reduction != "none" else None
+        )
+        grad_in_forward = grad_in_forward_token_block_size is not None
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
@@ -1463,8 +1472,9 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
-            implementation="xla_fast_bwd",
-            block_sizes=_CE_BLOCK_SIZES,
+            implementation=None if grad_in_forward else "xla_fast_bwd",
+            block_sizes=None if grad_in_forward else _CE_BLOCK_SIZES,
+            grad_in_forward_token_block_size=grad_in_forward_token_block_size,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss

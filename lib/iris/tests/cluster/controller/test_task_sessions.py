@@ -220,7 +220,7 @@ def test_broker_rejects_anonymous_launch_and_fails_ineligible_dispatch(
         pytest.raises(ConnectError, match="authenticated submitting user"),
     ):
         service.launch_job(make_job_request("/training/anonymous"), None)
-    # A pre-cutover record must finish visibly, rather than remain ASSIGNED with no Pod.
+    # A job without a verified submitter must fail visibly instead of staying ASSIGNED.
     with state._db.transaction() as tx:
         tx.execute(update(jobs_table).where(jobs_table.c.job_id == job).values(submitting_user="local_admin"))
     kubernetes = InMemoryK8sService(namespace="iris")

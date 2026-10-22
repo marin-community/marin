@@ -1,16 +1,16 @@
 """Mini-SWE 2.1 models installed alongside vllm_tokenization in the sandbox."""
 
 import json
+import os
 from typing import Any
 
 import httpx
-import litellm
-from litellm import ModelResponse
+import openai
 from minisweagent.exceptions import LimitsExceeded
-from minisweagent.models.litellm_model import LitellmModel
+from minisweagent.models.openrouter_model import OpenRouterModel
 from minisweagent.models.utils.actions_toolcall import BASH_TOOL
+from openai import OpenAI
 from vllm_tokenization import ContextBudgetExceeded, completion_budget
-
 
 _SUMMARY_SOURCE_MULTIPLIER = 4
 _SUMMARY_OUTPUT_TOKENS = 1024
@@ -80,7 +80,51 @@ def _summary_message(text: str, character_budget: int) -> dict[str, Any]:
     return message
 
 
-class ContextLimitedModel(LitellmModel):
+class OpenAIModel(OpenRouterModel):
+    """Use Mini-SWE's tool handling with an OpenAI-compatible transport."""
+
+    abort_exceptions = [
+        openai.AuthenticationError,
+        openai.NotFoundError,
+        openai.PermissionDeniedError,
+    ]
+
+    def __init__(self, *, api_base: str | None = None, **kwargs: Any):
+        super().__init__(**kwargs)
+        self.api_base = api_base
+        if (
+            not self.api_base
+            and "/" in self.config.model_name
+            and not self.config.model_name.startswith("openai/")
+        ):
+            raise ValueError(
+                "Configure an OpenAI-compatible api_base for this provider"
+            )
+
+    def _completion(
+        self, messages: list[dict[str, Any]], **kwargs: Any
+    ) -> dict[str, Any]:
+        with OpenAI(
+            base_url=self.api_base,
+            api_key=os.environ.get("MSWEA_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or "EMPTY",
+            max_retries=0,
+        ) as client:
+            model = self.config.model_name
+            if model.startswith(("hosted_vllm/", "openai/")):
+                model = model.split("/", 1)[1]
+            return client.chat.completions.create(
+                model=model, messages=messages, **kwargs
+            ).model_dump()
+
+    def _query(self, messages: list[dict[str, str]], **kwargs: Any) -> dict[str, Any]:
+        return self._completion(
+            messages, tools=[BASH_TOOL], **(self.config.model_kwargs | kwargs)
+        )
+
+
+class ContextLimitedModel(OpenAIModel):
     """Preserve native actions and stop cleanly when the context is exhausted."""
 
     def __init__(
@@ -91,8 +135,8 @@ class ContextLimitedModel(LitellmModel):
         max_output_tokens: int,
         **kwargs: Any,
     ) -> None:
-        super().__init__(**kwargs)
-        self.abort_exceptions = [*LitellmModel.abort_exceptions, LimitsExceeded]
+        super().__init__(api_base=api_base, **kwargs)
+        self.abort_exceptions = [*OpenAIModel.abort_exceptions, LimitsExceeded]
         self.api_base = api_base
         self.context_window = context_window
         self.max_output_tokens = max_output_tokens
@@ -106,7 +150,7 @@ class ContextLimitedModel(LitellmModel):
         )
         return result
 
-    def _query(self, messages: list[dict[str, str]], **kwargs: Any) -> ModelResponse:
+    def _query(self, messages: list[dict[str, str]], **kwargs: Any) -> dict[str, Any]:
         request_kwargs = self.config.model_kwargs | kwargs
         try:
             with httpx.Client(timeout=60.0) as client:
@@ -134,16 +178,18 @@ class ContextLimitedModel(LitellmModel):
 class K2HorizonContextLimitedModel(ContextLimitedModel):
     """Supply the reasoning field required by K2's template after tool calls."""
 
-    def _query(self, messages: list[dict[str, str]], **kwargs: Any) -> ModelResponse:
+    def _query(self, messages: list[dict[str, str]], **kwargs: Any) -> dict[str, Any]:
         formatted = [
-            {
-                **message,
-                "reasoning": message.get("reasoning")
-                or message.get("reasoning_content")
-                or "",
-            }
-            if message["role"] == "assistant"
-            else message
+            (
+                {
+                    **message,
+                    "reasoning": message.get("reasoning")
+                    or message.get("reasoning_content")
+                    or "",
+                }
+                if message["role"] == "assistant"
+                else message
+            )
             for message in messages
         ]
         return super()._query(formatted, **kwargs)
@@ -168,9 +214,9 @@ class _ContextCompactionMixin:
 
     def serialize(self) -> dict[str, Any]:
         result = super().serialize()
-        result["info"]["config"]["model"]["summarization_threshold_chars"] = (
-            self.summarization_threshold_chars
-        )
+        result["info"]["config"]["model"][
+            "summarization_threshold_chars"
+        ] = self.summarization_threshold_chars
         result["info"]["context_compaction"] = {
             "summarized_history_messages": self._summarized_history_messages,
             "current_summary": self._summary_message,
@@ -267,24 +313,23 @@ class _ContextCompactionMixin:
                         _SUMMARY_OUTPUT_TOKENS, self.max_output_tokens
                     ),
                 )
-            response = litellm.completion(
-                model=self.config.model_name,
+            response = self._completion(
                 messages=summary_messages,
                 max_tokens=max_tokens,
                 **request_kwargs,
             )
-            content = response.choices[0].message.content
+            content = response["choices"][0]["message"].get("content")
             if isinstance(content, str) and content.strip():
-                usage = response.usage
+                usage = response.get("usage")
                 return content.strip()[:output_chars], {
                     "source_characters": len(source),
                     "source_characters_omitted": omitted_chars,
                     "summary_characters": min(len(content.strip()), output_chars),
                     "summary_prompt_tokens": (
-                        usage.prompt_tokens if usage is not None else None
+                        usage.get("prompt_tokens") if usage is not None else None
                     ),
                     "summary_completion_tokens": (
-                        usage.completion_tokens if usage is not None else None
+                        usage.get("completion_tokens") if usage is not None else None
                     ),
                     "fallback_reason": None,
                 }

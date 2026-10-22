@@ -191,8 +191,9 @@ Historical cohort labels remain selectable. `cohort=all` selects the newest admi
 benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
 it. The UI marks all-cohort and unverified historical views with an asterisk because their settings
 are not verified as comparable. A named verified cohort admits only records with its approved
-benchmark config, evaluator revision, and thinking mode. Models with different normalized source
-YAMLs have separate comparison names ending in `@<12-character digest>`.
+benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
+the selected cohort, including benchmark-specific serving overrides. Each run retains its source
+configuration and digest.
 
 Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share
@@ -229,11 +230,20 @@ finelog hub by internal IP over Direct VPC egress. GCE instance discovery requir
 payload rather than erroring, so the dashboard shows "unreachable" and falls back to the log
 tails recorded on the run.
 
-The `samples/artifact` endpoint resolves a sample's `trajectory_uri` through fsspec,
-restricted to URIs under the run's own `results_path` -- a `..` segment or an out-of-tree URI is
-refused, so the endpoint cannot fetch arbitrary object storage. It size-caps each read and, like the
-logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable, or oversized
-object rather than a 500. Reads are cached briefly, as sample tables are.
+The `samples/artifact` endpoint resolves a sample's `trajectory_uri` or `summary_uri` from the
+FineStore archive or the run's results tree. Direct object-store URIs must be under the run's own
+`results_path`: a `..` segment or an out-of-tree URI is refused. The endpoint size-caps each read
+and, like the logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable,
+or oversized object rather than a 500. Reads are cached briefly, as sample tables are.
+
+For SOTOPIA-hard Harbor samples without an archived ATIF trajectory, the sample reader returns a
+`summary_uri` with a `sotopia-summary://<trial>` reference from the archived trial ID. The artifact
+endpoint reads `harbor_jobs/<job>/<trial>/result.json` and resolves its selected `trial_relpath`
+under the same results path. It displays `agent/sotopia-summary.json` only from that attempt. The
+viewer renders the ordered conversation, evaluator reasoning, dimension scores, and context-budget
+data.
+If no summary is available, the endpoint reports that status. This fallback does not change the
+archived sample or its reward.
 
 `/models/{model}` aggregates in one call everything the Model view needs: the model's identity from
 its newest record, one cohort entry per distinct version (newest first), each eval's score-over-time

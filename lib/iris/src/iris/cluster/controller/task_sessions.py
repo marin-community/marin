@@ -36,7 +36,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.storage_credentials import StorageCredentials, exchange_credentials
 from iris.cluster.credential_process import REFRESH_MARGIN
 from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
-from iris.cluster.types import JobName
+from iris.cluster.types import UNVERIFIED_SUBMITTERS, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -160,7 +160,7 @@ class TaskSessionBroker:
                 blocked
                 or deadline <= now
                 or row.finished_at_ms is not None
-                or row.submitting_user in {"", "local_admin", "anonymous"}
+                or row.submitting_user in UNVERIFIED_SUBMITTERS
             ):
                 continue
             result[row.attempt_uid] = TaskSession(
@@ -231,7 +231,7 @@ class TaskSessionBroker:
                 self._publish(json.dumps(projection))
 
     def prepare(self, requests: Sequence[job_pb2.RunTaskRequest]) -> list[job_pb2.RunTaskRequest | None]:
-        """Stamp a dispatch batch after the exact attempts exist, scanning state once."""
+        """Return attempt-authenticated dispatches, with None for each denied dispatch."""
         if not requests:
             return []
         with self._lock:

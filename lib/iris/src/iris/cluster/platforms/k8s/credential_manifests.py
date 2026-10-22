@@ -5,6 +5,7 @@
 
 TASK_SESSION_ROLE_NAME = "iris-task-sessions"
 CONTROLLER_TLS_CONFIG_MAP = "iris-controller-tls-proxy"
+CONTROLLER_CA_ISSUER = "iris-controller-ca"
 
 
 def credential_secret_rbac(namespace: str, service_account: str) -> tuple[dict, dict]:
@@ -46,7 +47,7 @@ def controller_certificate_manifests(namespace: str, service: str, tls_secret: s
         resource("Issuer", "iris-bootstrap", {"selfSigned": {}}),
         resource(
             "Certificate",
-            "iris-controller-ca",
+            CONTROLLER_CA_ISSUER,
             {
                 "isCA": True,
                 "commonName": f"Iris controller CA ({namespace})",
@@ -56,7 +57,7 @@ def controller_certificate_manifests(namespace: str, service: str, tls_secret: s
                 "privateKey": {"algorithm": "ECDSA", "size": 256},
             },
         ),
-        resource("Issuer", "iris-controller-ca", {"ca": {"secretName": "iris-controller-ca-key"}}),
+        resource("Issuer", CONTROLLER_CA_ISSUER, {"ca": {"secretName": "iris-controller-ca-key"}}),
         resource(
             "Certificate",
             "iris-controller",
@@ -64,7 +65,7 @@ def controller_certificate_manifests(namespace: str, service: str, tls_secret: s
                 "secretName": tls_secret,
                 "duration": "2160h",
                 "renewBefore": "720h",
-                "issuerRef": {"name": "iris-controller-ca", "kind": "Issuer"},
+                "issuerRef": {"name": CONTROLLER_CA_ISSUER, "kind": "Issuer"},
                 "privateKey": {"algorithm": "ECDSA", "size": 256, "rotationPolicy": "Always"},
                 "dnsNames": [
                     service,

@@ -15,7 +15,7 @@ import re
 import shlex
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -25,6 +25,15 @@ from typing import NamedTuple
 from finelog.client.log_client import Table
 from google.protobuf import json_format
 from rigging.filesystem.s3_compat import TASK_S3_PROFILES_ENV
+from rigging.secrets import (
+    AWS_CREDENTIALS_FILENAME,
+    COREWEAVE_SECRET_NAMES,
+    SECRETS_DIR,
+    SECRETS_DIR_ENV,
+    secret_file_contents,
+    secret_file_environment,
+    validate_secret_name,
+)
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster import credential_process
@@ -74,6 +83,9 @@ from iris.cluster.platforms.k8s.constants import (
     NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
     RDMA_RESOURCE,
+    SECRET_FILE_MODE,
+    SECRET_GROUP,
+    STORAGE_SECRETS_DIR,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
@@ -133,6 +145,7 @@ from iris.cluster.runtime.profile import (
 )
 from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
+from iris.cluster.secrets import task_secret_values
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
@@ -149,7 +162,21 @@ from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
+COREWEAVE_ACCESS_KEYS_URL = "https://console.coreweave.com/object-storage/access-keys"
+
 _ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
+
+
+def validate_coreweave_credentials(env: Mapping[str, str]) -> str | None:
+    """Check the submitted storage keys and explain how to supply missing credentials."""
+    missing = [name for name in COREWEAVE_SECRET_NAMES if not env.get(name)]
+    if not missing:
+        return None
+    return (
+        f"CoreWeave jobs require your own object-storage credentials. Missing: {', '.join(missing)}. "
+        f"Create an access key at {COREWEAVE_ACCESS_KEYS_URL}, "
+        "then export CW_KEY_ID and CW_KEY_SECRET before submitting, or supply both in EnvironmentSpec.secrets."
+    )
 
 
 class PodManifestError(ValueError):
@@ -177,6 +204,8 @@ _ANNOTATION_SESSION_POD = "iris.session-pod"
 
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
+_JOB_SECRET_VOLUME_NAME = "job-secrets"
+_JOB_STORAGE_VOLUME_NAME = "job-storage-secrets"
 
 # Native log-shipping sidecar (initContainer + restartPolicy: Always). It reads
 # the task container's CRI log file from the node and pushes to finelog, so the
@@ -533,10 +562,8 @@ class PodConfig:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    require_coreweave_credentials: bool = False
     task_outputs: TaskOutputPolicy | None = None
-    # Name of a Secret whose keys are projected into every task container via
-    # envFrom (operator-injected env, defaults.inject_env). Empty disables it.
-    env_secret_name: str = ""
     # Kueue LocalQueue for coscheduled gang admission. Coscheduled jobs REQUIRE
     # this: dispatching one with no LocalQueue configured raises (Kueue or
     # nothing — there is no non-Kueue colocation fallback).
@@ -690,14 +717,18 @@ def _build_output_uploader(
     image: str,
     policy: TaskOutputPolicy,
     source_prefix: str | None,
-    env_secret_name: str,
+    storage_file: str | None,
+    task_env: dict[str, str],
 ) -> dict:
     container: dict[str, object] = {
         "name": OUTPUT_CONTAINER_NAME,
         "image": image,
         "imagePullPolicy": "IfNotPresent",
         "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.outputship"],
-        "env": output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix),
+        "env": [
+            *[{"name": name, "value": value} for name, value in task_env.items()],
+            *output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix),
+        ],
         "volumeMounts": [
             {"name": OUTPUT_MOUNT.name, "mountPath": OUTPUT_MOUNT.container_path},
             {"name": OUTPUT_CONTROL_VOLUME_NAME, "mountPath": OUTPUT_CONTROL_PATH},
@@ -705,8 +736,11 @@ def _build_output_uploader(
         "resources": {"requests": {"cpu": OUTPUT_UPLOADER_CPU_REQUEST, "memory": "128Mi"}},
         "terminationMessagePolicy": "File",
     }
-    if env_secret_name:
-        container["envFrom"] = [{"secretRef": {"name": env_secret_name}}]
+    if storage_file:
+        container["volumeMounts"].append(
+            {"name": _JOB_STORAGE_VOLUME_NAME, "mountPath": STORAGE_SECRETS_DIR, "readOnly": True}
+        )
+        container["env"].append({"name": "AWS_SHARED_CREDENTIALS_FILE", "value": storage_file})
     return container
 
 
@@ -724,6 +758,10 @@ def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
 def _pdb_name(pod_name: str) -> str:
     """Derive a PDB name from a pod name."""
     return f"{pod_name}-pdb"
+
+
+def _task_secret_name(pod_name: str) -> str:
+    return f"{pod_name}-secrets"
 
 
 def _build_pdb_manifest(
@@ -871,7 +909,17 @@ def _build_pod_manifest(
         resources=run_req.resources if run_req.HasField("resources") else None,
     )
     cluster_env = config.task_env if isolation.include_cluster_env else {}
-    combined = {**cluster_env, **dict(run_req.environment.env_vars), **iris_env}
+    job_secrets = task_secret_values(run_req.environment)
+    if config.require_coreweave_credentials and isolation.include_cluster_env:
+        storage_error = validate_coreweave_credentials(job_secrets)
+        if storage_error:
+            raise PodManifestError(storage_error)
+    job_env = dict(run_req.environment.env_vars)
+    combined = {**cluster_env, **job_env, **iris_env}
+    if job_secrets:
+        combined[SECRETS_DIR_ENV] = str(SECRETS_DIR)
+        for name, value in secret_file_environment(job_secrets).items():
+            combined.setdefault(name, value)
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
     env_list.append(
@@ -950,10 +998,18 @@ def _build_pod_manifest(
         # message with the container's own tail log output instead.
         "terminationMessagePolicy": "FallbackToLogsOnError",
     }
-    # Operator-injected env (defaults.inject_env). envFrom is the lowest
-    # precedence in K8s, so explicit env entries above (user -e, iris vars) win.
-    if config.env_secret_name and isolation.include_cluster_env:
-        container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
+    if job_secrets:
+        for name in job_secrets:
+            validate_secret_name(name)
+        volumes.append(
+            {
+                "name": _JOB_SECRET_VOLUME_NAME,
+                "secret": {"secretName": _task_secret_name(pod_name), "defaultMode": SECRET_FILE_MODE},
+            }
+        )
+        container["volumeMounts"].append(
+            {"name": _JOB_SECRET_VOLUME_NAME, "mountPath": str(SECRETS_DIR), "readOnly": True}
+        )
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
@@ -1060,6 +1116,20 @@ def _build_pod_manifest(
     containers = [container]
     if config.task_outputs is not None and sidecars:
         volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
+        storage_file = None
+        if all(job_secrets.get(name) for name in COREWEAVE_SECRET_NAMES):
+            # The uploader receives only the submitter's storage credentials.
+            volumes.append(
+                {
+                    "name": _JOB_STORAGE_VOLUME_NAME,
+                    "secret": {
+                        "secretName": _task_secret_name(pod_name),
+                        "defaultMode": SECRET_FILE_MODE,
+                        "items": [{"key": AWS_CREDENTIALS_FILENAME, "path": AWS_CREDENTIALS_FILENAME}],
+                    },
+                }
+            )
+            storage_file = str(Path(STORAGE_SECRETS_DIR) / AWS_CREDENTIALS_FILENAME)
         containers.append(
             _build_output_uploader(
                 iris_env["IRIS_TASK_ID"],
@@ -1067,7 +1137,8 @@ def _build_pod_manifest(
                 config.logship_image,
                 config.task_outputs,
                 config.task_env.get("MARIN_PREFIX"),
-                config.env_secret_name,
+                storage_file,
+                config.task_env,
             )
         )
 
@@ -1076,6 +1147,7 @@ def _build_pod_manifest(
         "containers": containers,
         "initContainers": init_containers,
         "volumes": volumes,
+        **({"securityContext": {"fsGroup": SECRET_GROUP}} if job_secrets else {}),
     }
 
     # gVisor isolates the whole pod via a node RuntimeClass; the container
@@ -1084,6 +1156,7 @@ def _build_pod_manifest(
         spec["runtimeClassName"] = "gvisor"
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
+        spec["enableServiceLinks"] = False
 
     if managed_label:
         node_selector[managed_label] = "true"
@@ -2462,6 +2535,11 @@ class K8sTaskProvider:
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+            return None
+        return validate_coreweave_credentials(task_secret_values(request.environment))
+
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
@@ -2801,7 +2879,7 @@ class K8sTaskProvider:
                 container.setdefault("volumeMounts", []).extend(
                     [
                         {"name": "task-session", "mountPath": TASK_CREDENTIAL_DIR, "readOnly": True},
-                        {"name": "controller-ca", "mountPath": "/var/run/iris/ca", "readOnly": True},
+                        {"name": "controller-ca", "mountPath": str(Path(TASK_CA_FILE).parent), "readOnly": True},
                         {"name": "credential-cache", "mountPath": TASK_CREDENTIAL_CACHE},
                     ]
                 )
@@ -2852,6 +2930,31 @@ class K8sTaskProvider:
                 }
             ]
             self.kubectl.apply_json(credential_secret)
+        job_secrets = task_secret_values(run_req.environment)
+        if job_secrets:
+            # Create the Pod first so its UID can own the Secret even if dispatch
+            # is interrupted. The required volume holds task startup until apply.
+            pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+            if pod is None:
+                raise KubectlError(f"Pod {pod_name} disappeared before credential delivery")
+            self.kubectl.apply_json(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {
+                        "name": _task_secret_name(pod_name),
+                        "namespace": self.pods.namespace,
+                        "ownerReferences": [
+                            {"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}
+                        ],
+                    },
+                    "type": "Opaque",
+                    "data": {
+                        name: base64.b64encode(value.encode()).decode()
+                        for name, value in secret_file_contents(job_secrets).items()
+                    },
+                }
+            )
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
@@ -3011,6 +3114,7 @@ class K8sTaskProvider:
             for pod_name in pending:
                 self.kubectl.delete(K8sResource.CONFIGMAPS, f"{pod_name}-wf", wait=False)
                 self.kubectl.delete(K8sResource.PDBS, _pdb_name(pod_name), wait=False)
+                self.kubectl.delete(K8sResource.SECRETS, _task_secret_name(pod_name), wait=False)
                 cleaned.add(pod_name)
         except KubectlError:
             # Keep failed cleanup queued without preventing the terminal-pod sweep.

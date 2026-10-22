@@ -7,6 +7,29 @@ from typing import NamedTuple
 
 NODE_AGENT_SERVICE_ACCOUNT = "iris-node-agent"
 
+TASK_SECRET_ROLE_NAME = "iris-task-secret-delivery"
+
+
+def task_secret_role_manifest(namespace: str) -> dict:
+    """Limit submitted credential management to the controller's namespace."""
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": {"name": TASK_SECRET_ROLE_NAME, "namespace": namespace},
+        "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["create", "patch", "delete"]}],
+    }
+
+
+def task_secret_binding_manifest(namespace: str, service_account: str) -> dict:
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "RoleBinding",
+        "metadata": {"name": TASK_SECRET_ROLE_NAME, "namespace": namespace},
+        "subjects": [{"kind": "ServiceAccount", "name": service_account, "namespace": namespace}],
+        "roleRef": {"kind": "Role", "name": TASK_SECRET_ROLE_NAME, "apiGroup": "rbac.authorization.k8s.io"},
+    }
+
+
 # Permissions the iris-controller ServiceAccount needs at runtime.
 CLUSTER_ROLE_RULES = [
     {
@@ -20,7 +43,6 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch", "patch"]},
-    # Retained during rollout while existing node-agent Pods use this account.
     {"apiGroups": [""], "resources": ["nodes/metrics"], "verbs": ["get"]},
     {
         "apiGroups": [""],

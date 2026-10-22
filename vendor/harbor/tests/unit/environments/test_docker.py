@@ -1,5 +1,6 @@
 """Unit tests for DockerEnvironment command construction."""
 
+import asyncio
 import json
 import logging
 import sys
@@ -93,6 +94,35 @@ def docker_env_with_persistent_env(temp_dir):
     env._validate_daemon_mode = lambda: None
     env._validate_image_os = AsyncMock(return_value=None)
     return env
+
+
+@pytest.mark.asyncio
+async def test_compose_subprocess_does_not_inherit_host_credentials(
+    docker_env_with_persistent_env, monkeypatch
+):
+    monkeypatch.setenv("HARBOR_HOST_SECRET", "host-only")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/host-only/ssh-agent.sock")
+    monkeypatch.setenv("DOCKER_HOST", "unix:///test/docker.sock")
+    create_subprocess = asyncio.create_subprocess_exec
+
+    async def compose(*args, **kwargs):
+        # Replace Docker at the process boundary; report the environment Compose would interpolate.
+        return await create_subprocess(
+            sys.executable,
+            "-c",
+            "import json, os; print(json.dumps(dict(os.environ)))",
+            **kwargs,
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", compose)
+    result = await docker_env_with_persistent_env._run_docker_compose_command(
+        ["config"]
+    )
+    environment = json.loads(result.stdout)
+    assert "HARBOR_HOST_SECRET" not in environment
+    assert "SSH_AUTH_SOCK" not in environment
+    assert environment["DOCKER_HOST"] == "unix:///test/docker.sock"
+    assert environment["FOO"] == "bar"
 
 
 class TestMergeEnv:
@@ -704,7 +734,7 @@ class TestComposeEnvVars:
         env._use_prebuilt = True
 
         with caplog.at_level(logging.WARNING):
-            env_vars = env._compose_env_vars(include_os_env=False)
+            env_vars = env._compose_env_vars(include_client_env=False)
 
         assert env_vars["CPUS"] == "4"
         assert env_vars["MEMORY"] == "8192M"
@@ -1039,7 +1069,7 @@ class TestWindowsPlatformSelection:
     def test_container_name_injected_into_compose_env(self, temp_dir):
         """HARBOR_CONTAINER_NAME should appear in compose env dict."""
         env = self._make_windows_env(temp_dir)
-        env_dict = env._compose_env_vars(include_os_env=False)
+        env_dict = env._compose_env_vars(include_client_env=False)
         assert env_dict["HARBOR_CONTAINER_NAME"] == env._windows_container_name
 
     def test_container_name_cannot_be_overridden_by_task_env(self, temp_dir):
@@ -1074,7 +1104,7 @@ class TestWindowsPlatformSelection:
         env._validate_daemon_mode = lambda: None
         env._validate_image_os = AsyncMock(return_value=None)
 
-        result_env = env._compose_env_vars(include_os_env=False)
+        result_env = env._compose_env_vars(include_client_env=False)
 
         # The framework's name must win
         assert result_env["HARBOR_CONTAINER_NAME"] == env._windows_container_name

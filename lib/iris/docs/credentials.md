@@ -55,9 +55,10 @@ completion message as failures. Bundle downloads also verify their content hash.
 ## Configuration
 
 Configure persistent signing and capability keys and select at least one
-storage profile. Each controller secret reference must include its distinct
-`env:` projection. The deploy operator resolves the other source and places
-the value in `iris-controller-env`; the ConfigMap contains references only.
+storage profile. Each broker secret reference must include a distinct `env:`
+fallback that names its projected file. The deploy operator resolves the source
+into `iris-controller-secrets`; the controller mounts that Secret as private
+files. Its ConfigMap contains only `file:` references to those paths.
 
 ```yaml
 auth:
@@ -91,7 +92,7 @@ from the Ed25519 JWT signing key: ordinary signing-key rotation can retain
 previous public keys while attempts keep their refresh authority. Rotating
 the capability key invalidates existing refresh capabilities and requires a
 coordinated task restart. Never put either key, a provider API token, or shared
-S3 access keys in `defaults.task_env` or `defaults.inject_env`.
+S3 access keys in `defaults.task_env`.
 
 `allowed_principals` accepts exact identities, domain patterns and `*`, using
 the same matching rules as federation admission. Principal-directory
@@ -108,8 +109,8 @@ controller broker and provider credential exchange always use HTTPS. Using
 throughput; it is not an automatic replacement for LOTA.
 
 Controller checkpoint storage and node storage-health probes use the separate
-system storage identity. Its environment is kept out of task Secrets.
-`iris-controller-env` contains controller secrets; `iris-system-storage` is
+system storage identity. Its credential files are kept out of task Secrets.
+`iris-controller-secrets` contains controller secrets; `iris-storage-secrets` is
 available only to the controller's storage path and node health service.
 
 ### OIDC profiles
@@ -190,12 +191,12 @@ profile must select that named AWS profile themselves.
 
 ## Operations and cutover
 
-This is a coordinated cutover. Install the matching controller, task and
+Broker activation requires matching controller, task and
 sidecar code together, apply the namespace RBAC and certificate resources with
 Pulumi, and wait for the TLS Secret before starting the broker deployment.
 Remove CIDR and optional anonymous authentication and all shared task S3 keys.
 Resubmit tasks that need the new identity model; no compatibility bridge is
-provided for existing long-lived jobs. Do not disable the broker or restore
+provided for tasks dispatched without sessions. Do not disable the broker or restore
 shared task keys as an incident workaround.
 
 Authenticate an operator through existing Kubernetes Pod-exec authority:

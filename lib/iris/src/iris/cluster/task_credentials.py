@@ -60,7 +60,7 @@ class TaskSessionRolloverInterceptor:
 
 @cache
 def task_credentials(path: str) -> ClientCredentials:
-    """Refresh control credentials independently of a training process's lifetime."""
+    """Return cached, refreshable RPC credentials and CA trust for an attempt."""
     config = read_task_credential_file(path)
     tokens = RefreshingTokenProvider(_renew(config), lambda _old: _renew(config))
     return ClientCredentials(

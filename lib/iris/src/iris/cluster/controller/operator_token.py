@@ -18,7 +18,7 @@ from iris.cluster.controller.schema import task_credential_audit_table
 
 
 def mint_operator_token(config_path: str, principal: str) -> str:
-    """Exercise existing Pod-exec authority, recording the mint before releasing a JWT."""
+    """Return an audited admin JWT for a principal authorized through Pod exec."""
     config = resolve_config_secrets(load_config(config_path))
     if config.auth is None or not isinstance(config.auth.signing_key, str) or not config.auth.signing_key:
         raise ValueError("Operator login requires a configured controller signing key")

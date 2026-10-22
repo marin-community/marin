@@ -24,7 +24,7 @@ from rigging.filesystem.cross_region import (
     _is_gcs_url,
 )
 from rigging.filesystem.listing_cache import configure_listing_cache_defaults
-from rigging.filesystem.s3_compat import credential_profile_for_bucket, s3_python_config_kwargs
+from rigging.filesystem.s3_compat import credential_profile_for_bucket, s3_credential_options, s3_python_config_kwargs
 from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
@@ -38,8 +38,8 @@ fsspec.register_implementation("mirror", "rigging.filesystem.mirror.MirrorFileSy
 configure_listing_cache_defaults()
 
 
-def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Inject finite botocore timeouts/retries into S3 filesystem kwargs.
+def _s3_filesystem_options(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Merge explicit S3 options with configured credentials and request bounds.
 
     Caller-supplied ``config_kwargs`` values win; we only fill in keys the
     caller did not set. See #6487.
@@ -55,7 +55,10 @@ def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     config_kwargs = {**conf_config_kwargs, **dict(kwargs.get("config_kwargs") or {})}
     for key, value in s3_python_config_kwargs().items():
         config_kwargs.setdefault(key, value)
-    return {**kwargs, "config_kwargs": config_kwargs}
+    result = {**kwargs, "config_kwargs": config_kwargs}
+    if not kwargs.get("anon") and not any(name in kwargs for name in ("key", "secret", "token", "profile", "session")):
+        result.update(s3_credential_options())
+    return result
 
 
 def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
@@ -67,7 +70,7 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     timeouts injected (#6487).
     """
     if url.startswith("s3://"):
-        kwargs = _with_s3_timeout_defaults({**credential_profile_for_bucket(StoragePath(url).bucket), **kwargs})
+        kwargs = _s3_filesystem_options({**credential_profile_for_bucket(StoragePath(url).bucket), **kwargs})
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)
@@ -92,7 +95,7 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
         guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
     if url.startswith("s3://"):
-        kwargs = _with_s3_timeout_defaults({**credential_profile_for_bucket(StoragePath(url).bucket), **kwargs})
+        kwargs = _s3_filesystem_options({**credential_profile_for_bucket(StoragePath(url).bucket), **kwargs})
     return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
@@ -102,7 +105,7 @@ def filesystem(protocol: str, **kwargs: Any) -> Any:
     GCS/S3 listings expire immediately by default, and S3/R2 filesystems get
     finite timeouts injected (#6487)."""
     if protocol in ("s3", "s3a"):
-        kwargs = _with_s3_timeout_defaults(kwargs)
+        kwargs = _s3_filesystem_options(kwargs)
     fs = fsspec.filesystem(protocol, **kwargs)
     if _is_gcs_protocol(protocol):
         fs = CrossRegionGuardedFS(fs)

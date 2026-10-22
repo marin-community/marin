@@ -81,6 +81,9 @@ class FakeDirectProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        return None
+
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 

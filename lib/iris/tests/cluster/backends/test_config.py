@@ -17,6 +17,7 @@ from iris.cluster.config import (
     ControllerVmConfig,
     CoreweavePlatformConfig,
     CoreweaveSliceConfig,
+    CredentialBrokerConfig,
     DefaultsConfig,
     GcpControllerConfig,
     GcpPlatformConfig,
@@ -44,6 +45,7 @@ from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
 from iris.cluster.types import LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
+from iris.rpc import controller_pb2
 from iris.testing.k8s import k8s_backend_descriptor
 from rigging.timing import Duration
 
@@ -1955,3 +1957,22 @@ def test_k8s_backend_uses_canonical_default_task_image():
 
     assert isinstance(backend, K8sTaskProvider)
     assert backend.pods.default_image == "registry.example/iris-task:abc1234"
+
+
+@pytest.mark.parametrize("broker_enabled", [False, True])
+def test_k8s_admission_accepts_broker_authority_without_static_submitter_keys(broker_enabled):
+    config = IrisClusterConfig(
+        platform=PlatformConfig(coreweave=CoreweavePlatformConfig()),
+        kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")),
+        credential_broker=(
+            CredentialBrokerConfig(capability_key="env:CAPABILITY", tls_secret="broker-tls", profiles={})
+            if broker_enabled
+            else None
+        ),
+    )
+    backend = make_task_backend(config, descriptor=k8s_backend_descriptor())
+    try:
+        error = backend.validate_job(controller_pb2.Controller.LaunchJobRequest())
+        assert (error is None) == broker_enabled
+    finally:
+        backend.close()
