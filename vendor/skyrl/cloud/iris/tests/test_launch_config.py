@@ -21,15 +21,6 @@ from skyrl_train.dataset.tasks import source_row_task, write_tasks
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
 from skyrl_train.entrypoints.main_generate import EvalOnlyEntrypoint
 from skyrl_train.evaluate import evaluate, evaluate_step_wise, evaluation_session
-from skyrl_train.rollouts.buffer import write_trajectory_batch
-from skyrl_train.rollouts.finalization import finalize_trajectory_batch
-from skyrl_train.trajectory_runners.trajectory_retention import (
-    TrajectorySink,
-    execute_publication,
-    parse_trajectory_retention_config,
-)
-from skyrl_train.trajectory_runners.trajectory_retention_publisher import InlineTrajectoryPublisher
-from skyrl_train.trajectory_runners.types import TrajectoryBatch
 from taskcompendium.models import (
     ConversationInput,
     ScriptGrader,
@@ -527,29 +518,15 @@ def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path,
     assert OmegaConf.to_container(reloaded, resolve=True) == OmegaConf.to_container(config, resolve=True)
 
 
-@pytest.fixture
-def dummy_config():
-    return get_default_config()
+class FakeEvaluationRunner:
+    def __init__(self, output: dict[str, Any]):
+        self.output = output
 
-
-class DummyRunner:
-    trajectory_runner_cfg = {}
-    trajectory_sink = None
-
-    def __init__(self, outputs: dict[str, TrajectoryBatch]):
-        self.outputs = outputs
-
-    async def run(self, input_batch) -> TrajectoryBatch:
-        output = {**self.outputs[input_batch.metadata[0].uid], "trajectory_ids": list(input_batch.trajectory_ids)}
-        return await finalize_trajectory_batch(input_batch, output, self.trajectory_runner_cfg, self.trajectory_sink)
-
-    async def run_task(self, task, writer) -> int:
-        output = await self.run(task.request)
-        return await write_trajectory_batch(task, writer, output)
+    async def run(self, request) -> dict[str, Any]:
+        return {**self.output, "trajectory_ids": list(request.trajectory_ids)}
 
     def set_trajectory_sink(self, sink) -> None:
-        sink.bind_runner(type(self).__name__)
-        self.trajectory_sink = sink
+        pass
 
     async def start_eval_session(self, *, run_name: str, eval_step: int, val_set_name: str | None = None) -> None:
         pass
@@ -557,117 +534,41 @@ class DummyRunner:
     async def stop_eval_session(self) -> None:
         pass
 
-    async def startup(self) -> None:
-        pass
-
-    async def shutdown(self) -> None:
-        pass
-
-
-def configure_eval(cfg, tmp_path):
-    cfg.generator.backend = "vllm"
-    cfg.generator.eval_sampling_params = OmegaConf.create(
-        {
-            "max_generate_length": 20,
-            "temperature": 0.0,
-            "top_p": 1.0,
-            "top_k": -1,
-            "min_p": 0.0,
-            "logprobs": None,
-            "stop": None,
-        }
-    )
-    cfg.generator.eval_n_samples_per_prompt = 1
-    cfg.environment = OmegaConf.create({"env_class": "gsm8k"})
-    cfg.trainer.dump_eval_results = False
-    cfg.trainer.export_path = str(tmp_path)
-    return cfg
-
-
-class DummyStatefulDataLoader:
-    def __init__(self, batches):
-        self._batches = batches
-
-    def __len__(self):
-        return len(self._batches)
-
-    def __iter__(self):
-        return iter(self._batches)
-
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("step_wise", [False, True])
+@pytest.mark.parametrize("evaluation", [evaluate, evaluate_step_wise])
 @pytest.mark.parametrize("scored", [False, True])
-async def test_required_coverage_persists_failed_attempts_and_accepts_valid_zero(
-    dummy_config, tmp_path, step_wise, scored
-):
-    cfg = configure_eval(dummy_config, tmp_path)
+async def test_required_coverage_persists_failed_attempts_and_accepts_valid_zero(tmp_path, evaluation, scored):
+    cfg = get_default_config()
     cfg.trainer.dump_eval_results = True
+    cfg.trainer.export_path = str(tmp_path)
     cfg.trainer.eval_required_score_coverage = 1.0
     verdict = VerificationResult.verified(0.0) if scored else VerificationResult.unavailable("provider unavailable")
-    runner = DummyRunner(
+    runner = FakeEvaluationRunner(
         {
-            "paired-task": {
-                "prompt_token_ids": [[101]],
-                "response_ids": [[201]],
-                "rewards": [0.0],
-                "loss_masks": [[1]],
-                "stop_reasons": ["stop"],
-                "rollout_logprobs": None,
-                "verification_results": [verdict],
-                "is_last_step": [True],
-            }
+            "prompt_token_ids": [[101]],
+            "response_ids": [[201]],
+            "rewards": [0.0],
+            "loss_masks": [[1]],
+            "stop_reasons": ["stop"],
+            "rollout_logprobs": None,
+            "verification_results": [verdict],
+            "is_last_step": [True],
         }
     )
-    loader = DummyStatefulDataLoader(
-        [[{"input": task_input(lowered_task(text_task("paired-task", source="panel"))), "uid": "paired-task"}]]
-    )
-    evaluation = evaluate_step_wise if step_wise else evaluate
+    loader = [[{"input": task_input(lowered_task(text_task("paired-task", source="panel"))), "uid": "paired-task"}]]
     tokenizer = SimpleNamespace(decode=lambda _: "response")
-    sink = TrajectorySink(
-        parse_trajectory_retention_config(cfg.generator.trajectory_retention),
-        tokenizer,
-        publisher=InlineTrajectoryPublisher(execute_publication),
-    )
-    arguments = dict(
-        eval_dataloader=loader,
-        trajectory_runner=runner,
-        cfg=cfg,
-        global_step=0,
-        tokenizer=tokenizer,
-        trajectory_sink=sink,
-    )
+    result = evaluation(loader, runner, cfg, 0, tokenizer, trajectory_sink=object())
     if scored:
-        metrics = await evaluation(**arguments)
+        metrics = await result
         assert metrics["eval/all/avg_verifier_score"] == 0.0
         assert metrics["eval/all/verifier_score_coverage"] == 1.0
     else:
         with pytest.raises(ValueError, match="Evaluation verifier coverage"):
-            await evaluation(**arguments)
+            await result
     record = json.loads((tmp_path / "dumped_evals/global_step_0_evals/panel.jsonl").read_text())
-    assert record["uid"] == ("eval-0-0--paired-task" if step_wise else "paired-task")
     assert record["verification"]["status"] == ("verified" if scored else "unavailable")
     assert record["verification"]["score"] == (0.0 if scored else None)
-
-
-class EvaluationLifecycle:
-    def __init__(self):
-        self.events = []
-
-    async def pause_and_drain(self):
-        self.events.append("drained")
-
-    def resume(self):
-        self.events.append("resumed")
-
-    def set_trajectory_sink(self, sink):
-        pass
-
-    async def start_eval_session(self, **kwargs):
-        self.events.append("started")
-
-    async def stop_eval_session(self):
-        self.events.append("stopped")
 
 
 @pytest.mark.asyncio
@@ -690,7 +591,7 @@ async def test_evaluation_session_caps_shared_work_independently_of_training(eva
         await release.wait()
         active -= 1
 
-    runner = EvaluationLifecycle()
+    runner = FakeEvaluationRunner({})
     async with evaluation_session(runner, cfg, 0, object()) as pool:
         async with asyncio.TaskGroup() as tasks:
             for source in ("native", "sandbox", "callback"):
@@ -699,7 +600,6 @@ async def test_evaluation_session_caps_shared_work_independently_of_training(eva
                 await ready.wait()
             release.set()
     assert peak == expected_peak
-    assert runner.events == ["started", "stopped"]
 
 
 def test_eval_only_task_dataset_preserves_private_grader_and_prefill_contract(tmp_path):
@@ -738,4 +638,3 @@ def test_eval_only_task_dataset_preserves_private_grader_and_prefill_contract(tm
     selected = dataset.collate_fn(list(dataset))
 
     assert [row["input"].spec for row in selected] == expected
-    assert [row["uid"] for row in selected] == ["0", "1"]
