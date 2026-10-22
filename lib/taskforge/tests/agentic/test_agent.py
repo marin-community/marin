@@ -132,6 +132,21 @@ class PythonSolver:
 
 
 @dataclass
+class LoopingSolver:
+    """Runs a shell command on every turn and never answers."""
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        arguments = json.dumps({"command": "echo still working"})
+        tool_call = {
+            "id": f"call-{len(request.messages)}",
+            "type": "function",
+            "function": {"name": "shell", "arguments": arguments},
+        }
+        message = {"role": "assistant", "content": "", "tool_calls": [tool_call]}
+        return ModelTurn(message, (), (), None, "tool_calls", usage=TokenUsage(5, 1))
+
+
+@dataclass
 class AcceptingJudge:
     """Accepts each task."""
 
@@ -285,27 +300,6 @@ async def test_a_control_that_the_answer_format_rejects_is_no_control():
     assert "controls" in submit["missing"]
 
 
-async def test_rollout_refuses_a_call_that_can_outlast_the_tool_turn():
-    # 4 rollouts run at a time and each can take 40 s, so 3 waves would outlast the 100 s tool turn.
-    script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
-        call("rollout", paths=[TASK], n=9, role="solver"),
-        call("finish", report="done"),
-    )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=9, judge_calls=0, web_calls=0), web)
-        limits = dataclasses.replace(
-            config,
-            agent_limits=LIMITS.model_copy(update={"tool_turn_timeout": 100}),
-            solver_limits=LIMITS.model_copy(update={"attempt_timeout": 40}),
-        )
-        result = await generate_tasks(IDEA, 1, limits)
-
-    [refusal] = tool_replies(result, "call-2")
-    assert "One call can run at most 8 rollouts" in refusal["error"]
-    assert result.spend.solver_rollouts == 0
-
-
 async def test_the_solver_of_the_example_task_has_python():
     script = (
         call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
@@ -319,6 +313,50 @@ async def test_the_solver_of_the_example_task_has_python():
     [rollout] = tool_replies(result, "call-2")
     [answer] = rollout["results"][TASK]["answers"]
     assert "42" in answer["answer"] and "not found" not in answer["answer"]
+
+
+async def test_the_tools_refuse_environment_variables_and_setup_commands():
+    requirements = example_build.task_spec(TASK_ID).environment_requirements
+    tasks = {
+        "tasks/env.json": requirements.model_copy(update={"environment_variables": {"K": "${PARALLEL_API_KEY}"}}),
+        "tasks/setup.json": requirements.model_copy(update={"setup_commands": ("echo 0 > /workspace/ledger.csv",)}),
+    }
+    writes = [
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {path}")
+        for path, environment in tasks.items()
+        for task in [example_build.task_spec(TASK_ID).model_copy(update={"environment_requirements": environment})]
+    ]
+    script = (
+        *writes,
+        *(call("rollout", paths=[path], n=1, role="solver") for path in tasks),
+        call("finish", report="x"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=2, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [env], [setup] = tool_replies(result, "call-3"), tool_replies(result, "call-4")
+    assert "cannot set environment_variables" in env["error"]
+    assert "cannot have setup_commands" in setup["error"]
+    assert result.spend.solver_rollouts == 0
+
+
+async def test_a_solver_that_runs_out_of_turns_fails_its_run():
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("rollout", paths=[TASK], n=1, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
+        solver_limits = LIMITS.model_copy(update={"max_turns": 3})
+        result = await generate_tasks(
+            IDEA, 1, dataclasses.replace(config, solver_model=LoopingSolver(), solver_limits=solver_limits)
+        )
+
+    [rollout] = tool_replies(result, "call-2")
+    evidence = rollout["results"][TASK]["evidence"]
+    assert (evidence["solver_runs"], evidence["solver_passes"], evidence["solver_format_failures"]) == (1, 0, 0)
 
 
 async def test_finish_refuses_once_while_most_of_the_budget_is_left():

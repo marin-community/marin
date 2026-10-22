@@ -17,7 +17,6 @@ error result. A failure of the host, for example an unavailable judge model, rai
 import asyncio
 import json
 import logging
-import math
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Mapping
@@ -30,6 +29,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, validate_cal
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.models import (
+    BUDGET_STOP_REASON,
+    LENGTH_STOP_REASON,
+    MAX_TURNS_STOP_REASON,
+    TOTAL_TURN_TIMEOUT_STOP_REASON,
     GradedRollout,
     MachineRuntimeSpec,
     ModelRequest,
@@ -106,6 +109,10 @@ MAX_EMPTY_BUDGET_CALLS = 3
 EARLY_FINISH_BUDGET_SHARE = 0.5
 """``finish`` refuses once when fewer than n tasks are accepted and more than this share of the solver rollouts are
 left: an agent can stop after a few too-easy versions, when a harder version would get into the band."""
+RAN_OUT_STOP_REASONS = frozenset(
+    {MAX_TURNS_STOP_REASON, BUDGET_STOP_REASON, LENGTH_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON}
+)
+"""Stop reasons of a solver that ran out of a limit before it answered: a failed run, not a format failure."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
 
@@ -357,7 +364,6 @@ class ToolSession:
             raise ToolError("n must be at least 1")
         if not paths or len(set(paths)) < len(paths):
             raise ToolError("Give one or more different paths")
-        self._check_waves(n * len(paths))
         tasks = [await self._load(path) for path in paths]
         specs = [_solver_spec(_adversary_task(task) if role == "adversary" else task, self.config) for task in tasks]
         for path, spec in zip(paths, specs, strict=True):
@@ -371,20 +377,6 @@ class ToolSession:
         )
         left = self.config.budget.solver_rollouts - self.tools.spend.solver_rollouts
         return _result({"results": dict(zip(paths, results, strict=True)), "solver_rollouts_left": left})
-
-    def _check_waves(self, rollouts: int) -> None:
-        """Refuse a call whose rollouts, run ``max_concurrent_rollouts`` at a time, can outlast the agent's tool turn,
-        which would end the session."""
-        attempt, turn = self.config.solver_limits.attempt_timeout, self.config.agent_limits.tool_turn_timeout
-        if attempt is None or turn is None:
-            return
-        slots = self.config.max_concurrent_rollouts
-        most = (math.ceil(turn / attempt) - 1) * slots
-        if rollouts > most:
-            raise ToolError(
-                f"One call can run at most {most} rollouts: {slots} run at a time, each can take {attempt:g} s, and "
-                f"one tool call has {turn:g} s. Split the call."
-            )
 
     async def _rollouts(
         self, task: TaskSpec, spec: TaskRolloutSpec, n: int, role: Literal["solver", "adversary"]
@@ -408,7 +400,9 @@ class ToolSession:
                 continue
             passed = _passed(grade)
             answer = _final_answer(rollout)
-            format_failure = grade.status == Outcome.SUBMISSION_FAILURE
+            format_failure = (
+                grade.status == Outcome.SUBMISSION_FAILURE and rollout.stop_reason not in RAN_OUT_STOP_REASONS
+            )
             answers.append({"passed": passed, "format_failure": format_failure, "answer": _clip(answer, limit=200)})
             if role == "solver" and format_failure:
                 evidence.solver_format_failures += 1
@@ -528,7 +522,8 @@ class ToolSession:
 
     async def _read(self, path: str) -> bytes:
         path = _absolute(path)
-        result = await self.machine.run(Command(("cat", path), output_limit_bytes=MAX_FILE_BYTES))
+        command = Command(("cat", path), timeout=self.config.command_timeout, output_limit_bytes=MAX_FILE_BYTES)
+        result = await self.machine.run(command)
         if result.exit_code != 0:
             raise ToolError(f"Cannot read {path}: {_clip(result.stderr.decode(errors='replace'))}")
         if result.stdout_truncated:
@@ -542,8 +537,8 @@ class ToolSession:
             await self.machine.upload(source, _absolute(path))
 
     async def _load(self, path: str) -> TaskSpec:
-        """The TaskSpec at ``path``, refused at once when its id cannot name its output directory, so that no
-        evidence goes to a task that ``submit`` cannot accept."""
+        """The TaskSpec at ``path``, refused at once when no grade or rollout may run on it: its id cannot name its
+        output directory, or its machine would get what the review cannot see."""
         try:
             task = TaskSpec.model_validate_json(await self._read(path))
         except ValidationError as error:
@@ -556,6 +551,13 @@ class ToolSession:
         key = _task_digest(task)
         if any(accepted.task.id == task.id and _task_digest(accepted.task) != key for accepted in self.tools.accepted):
             raise ToolError(f"An accepted task already has the id {task.id!r}: give this task another id")
+        # The engine resolves ${NAME} in an environment variable from the host, which holds the driver's keys, and
+        # setup commands can rewrite the files after they are installed. The review sees neither.
+        requirements = task.environment_requirements
+        if requirements.environment_variables:
+            raise ToolError("Tasks cannot set environment_variables: put what the solver needs in the prompt or files")
+        if requirements.setup_commands:
+            raise ToolError("Tasks cannot have setup_commands: put the solver's files in resources.worker")
         return task
 
 

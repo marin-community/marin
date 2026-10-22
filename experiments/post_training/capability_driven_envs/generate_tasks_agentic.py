@@ -69,6 +69,8 @@ NO_REASONING = "none"
 MAX_OUTPUT_TOKENS = 32768
 GATE = Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4)
 COMMAND_TIMEOUT = 30.0
+JUDGE_TEMPERATURE = 0.7
+"""Set here, so that a change of the LLMPolicy default does not change the review."""
 MAX_CONCURRENT_ROLLOUTS = 8
 """Solver rollouts of one session at a time."""
 SOLVER_LIMITS = RolloutLimits(
@@ -98,7 +100,8 @@ def agent_limits(turns: int) -> RolloutLimits:
         max_turns=turns,
         max_total_tokens=None,
         model_turn_timeout=1800,
-        tool_turn_timeout=3600,
+        # A turn can hold several tool calls, each with its own deadline, and attempt_timeout bounds the session.
+        tool_turn_timeout=None,
         total_turn_timeout=None,
         attempt_timeout=6 * 3600,
         verifier_timeout=None,
@@ -184,7 +187,7 @@ async def generate_all(
             workspace_factory=workspace_factory(),
             solver_model=solver,
             judge=judge,
-            judge_policy=LLMPolicy(),
+            judge_policy=LLMPolicy(temperature=JUDGE_TEMPERATURE),
             web=web,
             agent_limits=agent_limits(turns),
             solver_limits=SOLVER_LIMITS,
