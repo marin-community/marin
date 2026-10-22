@@ -144,6 +144,7 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-genoa
+    hostname: g530e1c
     # Off-cluster reach is the operator-managed, IP-locked federation ingress
     # (docs/coreweave.md, scripts/install_cw_network.py).
 

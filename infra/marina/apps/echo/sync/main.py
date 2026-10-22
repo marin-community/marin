@@ -27,6 +27,7 @@ import tempfile
 import time
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -46,7 +47,23 @@ BATCH = 400
 # Session advisory lock so overlapping executions don't duplicate repository work.
 SYNC_LOCK_KEY = 0x6563686F  # "echo"
 
-MIRRORED_CHUNK_COLUMNS = tuple(column.name for column in schema.chunks.columns if column.computed is None)
+MIRRORED_CHUNK_COLUMNS = tuple(
+    column.name for column in schema.chunks.columns if column.computed is None and column.name != "sync_hash"
+)
+
+
+@dataclass(frozen=True)
+class ChunkIdentity:
+    source: str
+    kind: str
+    url: str
+    part: int
+
+
+@dataclass(frozen=True)
+class StoredChunk:
+    id: int
+    sync_hash: str | None
 
 
 def mirror_open(path: str, token: str, timeout: int = 600):
@@ -75,13 +92,6 @@ def decode_embedding(blob: bytes | None) -> list[float] | None:
     return list(struct.unpack(f"<{count}f", blob))
 
 
-def chunk_record(row: tuple) -> dict:
-    record = dict(zip(MIRRORED_CHUNK_COLUMNS, row, strict=True))
-    record["date"] = datetime.fromisoformat(record["date"]) if record["date"] else None
-    record["embedding"] = decode_embedding(record["embedding"])
-    return record
-
-
 def corpus_chunk_cursor(database: sqlite3.Connection) -> sqlite3.Cursor:
     placeholders = ",".join("?" * len(SOURCES))
     return database.execute(
@@ -91,31 +101,59 @@ def corpus_chunk_cursor(database: sqlite3.Connection) -> sqlite3.Cursor:
 
 
 def upsert_chunks(conn: sqlalchemy.Connection, corpus: Path) -> tuple[int, int]:
-    """Upsert changed github/discord chunks; delete rows gone upstream. Returns (upserted, deleted).
-
-    Rows whose (id, hash) already match the database are skipped (the hash is the corpus's
-    incremental-embed key; every re-upserted row pays an HNSW graph insertion). Rows stream
-    one BATCH at a time — decoded embeddings are ~30x their sqlite blobs and the full corpus
-    exceeds the job's memory — with each batch a single multi-row VALUES statement.
-    """
-    existing = dict(conn.execute(sqlalchemy.select(schema.chunks.c.id, schema.chunks.c.hash)).fetchall())
+    """Mirror activity changes, preserving chunk IDs. Return (upserted, deleted) counts."""
+    # MarinMirror rebuilds SQLite rowids each time. The canonical URL/part identifies
+    # a chunk across builds, including metadata-only edits and delayed embeddings.
+    existing = {
+        ChunkIdentity(row.source, row.kind, row.url, row.part): StoredChunk(row.id, row.sync_hash)
+        for row in conn.execute(
+            sqlalchemy.select(
+                schema.chunks.c.id,
+                schema.chunks.c.source,
+                schema.chunks.c.kind,
+                schema.chunks.c.url,
+                schema.chunks.c.part,
+                schema.chunks.c.sync_hash,
+            ).where(schema.chunks.c.source.in_(SOURCES))
+        )
+    }
     ids: list[int] = []
+    seen: set[ChunkIdentity] = set()
     upserted = 0
     started = time.time()
     with sqlite3.connect(corpus) as database:
         cursor = corpus_chunk_cursor(database)
         while rows := cursor.fetchmany(BATCH):
-            records = [chunk_record(row) for row in rows]
-            ids.extend(record["id"] for record in records)
-            changed = [r for r in records if existing.get(r["id"], object()) != r["hash"] or r["hash"] is None]
+            changed = []
+            for row in rows:
+                record = dict(zip(MIRRORED_CHUNK_COLUMNS, row, strict=True))
+                identity = ChunkIdentity(record["source"], record["kind"], record["url"], record["part"])
+                if identity in seen:
+                    raise ValueError(f"duplicate activity chunk {identity}")
+                seen.add(identity)
+                # SQLite rowids are build-local. Fingerprint the stored content before
+                # expanding the vector into Python floats.
+                blob = record.pop("embedding")
+                record.pop("id")
+                digest = hashlib.sha256(json.dumps(record, sort_keys=True, ensure_ascii=False).encode())
+                digest.update(b"\x00" if blob is None else b"\x01" + blob)
+                sync_hash = digest.hexdigest()
+                stored = existing.get(identity)
+                if stored is not None and stored.sync_hash == sync_hash:
+                    ids.append(stored.id)
+                    continue
+                record["embedding"] = decode_embedding(blob)
+                record["date"] = datetime.fromisoformat(record["date"]) if record["date"] else None
+                record["sync_hash"] = sync_hash
+                changed.append(record)
             if not changed:
                 continue
             statement = pg_insert(schema.chunks).values(changed)
             statement = statement.on_conflict_do_update(
-                index_elements=[schema.chunks.c.id],
-                set_={name: statement.excluded[name] for name in MIRRORED_CHUNK_COLUMNS if name != "id"},
+                constraint="chunks_identity",
+                set_={name: statement.excluded[name] for name in (*MIRRORED_CHUNK_COLUMNS, "sync_hash") if name != "id"},
             )
-            conn.execute(statement)
+            ids.extend(conn.execute(statement.returning(schema.chunks.c.id)).scalars())
             upserted += len(changed)
             if upserted % 8000 < len(changed):
                 print(f"  upserted {upserted} rows ({upserted / (time.time() - started):.0f}/s)")

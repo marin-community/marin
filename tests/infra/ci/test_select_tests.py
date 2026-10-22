@@ -3,8 +3,11 @@
 
 """Tests for the import-driven test selector (infra/ci/select_tests.py)."""
 
+import os
 import re
+import shutil
 import subprocess
+import sys
 import textwrap
 from collections.abc import Callable
 from pathlib import Path
@@ -12,6 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from infra.ci import run_tests
 from infra.ci.select_tests import (
     SCOPES,
     UV_PACKAGE,
@@ -271,7 +275,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
             "lib/taskcompendium/src/taskcompendium/lowering.py",
             ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
         ),
-        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit"]),
+        ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "taskforge-unit"]),
         (
             "lib/shellbox/src/shellbox/machine.py",
             ["rolloutengine-unit", "shellbox-unit", "taskcompendium-unit", "taskforge-unit"],
@@ -288,9 +292,19 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
             "lib/verifyit/src/verifyit/grading.py",
             ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
         ),
-        ("lib/rigging/src/rigging/message.py", ["rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"]),
+        (
+            "lib/rigging/src/rigging/message.py",
+            ["evalchemy-unit", "harbor-unit", "rolloutengine-unit", "taskcompendium-unit", "taskforge-unit"],
+        ),
+        ("vendor/harbor/src/harbor/job.py", ["harbor-unit"]),
+        ("vendor/harbor/uv.lock", ["harbor-unit"]),
+        ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
+        ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
+        ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
+        ("config/skyrl-migration.toml", ["skyrl-wheel"]),
+        ("config/skyrl-migration/runtime-fixes.patch", ["skyrl-wheel"]),
     ],
 )
 def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_path: str, suites: list[str]) -> None:
@@ -304,6 +318,19 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
 
 
 @pytest.mark.parametrize(
+    "path",
+    [
+        "experiments/post_training/task_curation/harbor_hub.py",
+        "experiments/post_training/task_curation/tests/test_harbor_hub.py",
+    ],
+)
+def test_harbor_acquisition_changes_select_isolated_runtime(tmp_path: Path, path: str) -> None:
+    selection = select_changed_tests([path], tmp_path)
+
+    assert "harbor-unit" in selection.suites
+
+
+@pytest.mark.parametrize(
     "path", ["experiments/post_training/capability_driven_envs/generate_tasks.py", "experiments/post_training/glm.py"]
 )
 def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Path, path: str) -> None:
@@ -313,14 +340,31 @@ def test_capability_environment_change_selects_the_taskforge_suite(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    "shellbox_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
+    "path",
+    [
+        "vendor/evalchemy/eval/chat_benchmarks/MRCR/eval_instruct.py",
+        "vendor/evalchemy/uv.lock",
+        "lib/finestore/src/finestore/client.py",
+        "lib/marin/src/marin/evaluation/evalchemy/runner.py",
+        "experiments/evaluation/evals.py",
+    ],
 )
-def test_required_unit_check_propagates_shellbox_result(shellbox_result: str, expected_exit: int) -> None:
+def test_evaluator_changes_select_the_isolated_evalchemy_suite(tmp_path: Path, path: str) -> None:
+    selection = select_changed_tests([path], tmp_path)
+
+    assert "evalchemy-unit" in selection.suites
+
+
+@pytest.mark.parametrize(
+    "suite_result, expected_exit", [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1)]
+)
+@pytest.mark.parametrize("suite", ["shellbox", "skyrl", "evalchemy", "harbor"])
+def test_required_unit_check_propagates_isolated_suite_result(suite: str, suite_result: str, expected_exit: int) -> None:
     workflow_path = Path(__file__).resolve().parents[3] / ".github/workflows/unified-unit.yaml"
     aggregate = yaml.safe_load(workflow_path.read_text())["jobs"]["unit_tests"]
     results = dict.fromkeys(aggregate["needs"], "success")
-    if "shellbox" in results:
-        results["shellbox"] = shellbox_result
+    assert suite in results
+    results[suite] = suite_result
     script = re.sub(
         r"\$\{\{ needs\.(\w+)\.result \}\}",
         lambda match: results.get(match.group(1), ""),
@@ -330,6 +374,57 @@ def test_required_unit_check_propagates_shellbox_result(shellbox_result: str, ex
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
 
     assert result.returncode == expected_exit
+
+
+@pytest.mark.parametrize("lock_status,test_status,hub_status", [(0, 0, 0), (0, 7, 0), (0, 0, 8), (3, 0, 0)])
+def test_local_runner_executes_harbor_only_changes_and_propagates_failures(
+    tmp_path: Path, lock_status: int, test_status: int, hub_status: int
+) -> None:
+    source_root = Path(run_tests.__file__).resolve().parents[2]
+    for name in ("run_tests.py", "run_harbor_tests.py", "select_tests.py"):
+        target = tmp_path / "infra/ci" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_root / "infra/ci" / name, target)
+    task = write(tmp_path, "vendor/harbor/src/harbor/job.py", "INITIAL = 1\n")
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    task.write_text("CHANGED = 2\n")
+    uv = write(
+        tmp_path,
+        "bin/uv",
+        f"""\
+        #!/bin/sh
+        if [ "$1" = lock ]; then exit {lock_status}; fi
+        case " $* " in
+          *" experiments/post_training/task_curation/tests/test_harbor_hub.py "*)
+            case " $* " in *" --noconftest "*) ;; *) exit 9 ;; esac
+            touch harbor-hub-tests-ran
+            exit {hub_status}
+            ;;
+        esac
+        touch harbor-tests-ran
+        exit {test_status}
+        """,
+    )
+    uv.chmod(0o755)
+    result = subprocess.run(
+        [sys.executable, str(tmp_path / "infra/ci/run_tests.py"), "--base-ref", "HEAD", "--workers", "2"],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": f"{uv.parent}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == (lock_status or test_status or hub_status), result.stderr
+    assert (tmp_path / "harbor-tests-ran").exists() == (lock_status == 0)
+    assert (tmp_path / "harbor-hub-tests-ran").exists() == (lock_status == 0 and test_status == 0)
 
 
 @pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])
@@ -454,7 +549,9 @@ def _tpu_manifest(verifier_source: str = "workspace") -> str:
 def _commit_base_tpu_workspace(tmp_path: Path) -> str:
     write(tmp_path, "uv.lock", _tpu_lock())
     write(tmp_path, "pyproject.toml", _tpu_manifest())
-    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    write(
+        tmp_path, "lib/levanter/tests/test_flash_attention.py", "@pytest.mark.tpu\ndef test_model():\n    assert True\n"
+    )
     write(tmp_path, "lib/levanter/tests/test_torch.py", "@pytest.mark.torch\ndef test_torch():\n    assert True\n")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
@@ -495,7 +592,7 @@ def test_reachable_dependency_changes_select_tpu(tmp_path: Path, lock_change: di
 
     selection = select_changed_tests(["uv.lock"], tmp_path, base_ref=base)
 
-    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_flash_attention.py"]
 
 
 @pytest.mark.parametrize("missing", [True, False])
@@ -512,13 +609,15 @@ def test_unavailable_or_invalid_dependency_graph_selects_tpu(tmp_path: Path, mis
 
 
 def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
-    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    write(
+        tmp_path, "lib/levanter/tests/test_flash_attention.py", "@pytest.mark.tpu\ndef test_model():\n    assert True\n"
+    )
 
     selection = select_all_tests(tmp_path)
 
     assert selection.reason == "run-all-tests"
     assert "shellbox-unit" in selection.suites
-    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_model.py"]
+    assert selection.suite_test_paths["levanter-tpu"] == ["lib/levanter/tests/test_flash_attention.py"]
 
 
 @pytest.mark.parametrize(
@@ -531,10 +630,105 @@ def test_scheduled_full_suite_still_selects_tpu(tmp_path: Path) -> None:
     ],
 )
 def test_source_and_ci_changes_still_select_tpu(tmp_path: Path, path: str) -> None:
-    write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
+    write(
+        tmp_path, "lib/levanter/tests/test_flash_attention.py", "@pytest.mark.tpu\ndef test_model():\n    assert True\n"
+    )
     selection = select_changed_tests([path], tmp_path, run_all_tests=True)
 
     assert "levanter-tpu" in selection.suites
+
+
+@pytest.mark.parametrize("mode", ["diff", "scheduled", "manifest"])
+def test_tpu_marker_keeps_accelerator_files_and_full_cpu_coverage(tmp_path: Path, mode: str) -> None:
+    write(tmp_path, "lib/levanter/src/levanter/shared.py", "VALUE = 1\n")
+    cpu_path = "lib/levanter/tests/test_tokenizers.py"
+    kernel_path = "lib/levanter/tests/test_flash_attention.py"
+    mixed_path = "lib/levanter/tests/test_checkpoint.py"
+    torch_path = "lib/levanter/tests/test_torch.py"
+    write(tmp_path, cpu_path, "from levanter.shared import VALUE\n\ndef test_tokenizer(): ...\n")
+    write(
+        tmp_path,
+        kernel_path,
+        "from levanter.shared import VALUE\n\npytestmark = pytest.mark.tpu\n\ndef test_kernel(): ...\n",
+    )
+    write(
+        tmp_path,
+        mixed_path,
+        """\
+        from levanter.shared import VALUE
+
+        def test_checkpointer_temporal_policy(): ...
+        @pytest.mark.tpu
+        def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(): ...
+        """,
+    )
+    write(
+        tmp_path,
+        torch_path,
+        "from levanter.shared import VALUE\n\n@skip_if_no_torch\ndef test_torch(): ...\n",
+    )
+
+    if mode == "scheduled":
+        selection = select_all_tests(tmp_path)
+    else:
+        changed = ["lib/levanter/src/levanter/shared.py"] if mode == "diff" else ["lib/levanter/pyproject.toml"]
+        selection = select_changed_tests(changed, tmp_path)
+
+    cpu_paths = leg_paths(selection.matrix, "levanter")
+    assert cpu_paths == sorted([cpu_path, mixed_path, kernel_path, torch_path])
+    assert selection.suite_test_paths["levanter-tpu"] == [
+        mixed_path,
+        kernel_path,
+    ]
+    assert selection.suite_test_paths["levanter-torch"] == [torch_path]
+
+
+@pytest.mark.parametrize("changed", ["source", "test"])
+def test_cpu_only_change_does_not_start_tpu_job(tmp_path: Path, changed: str) -> None:
+    source_path = "lib/levanter/src/levanter/tokenizers.py"
+    test_path = "lib/levanter/tests/test_tokenizers.py"
+    write(tmp_path, source_path, "def tokenize(): ...\n")
+    write(tmp_path, test_path, "from levanter.tokenizers import tokenize\n\ndef test_tokenize(): ...\n")
+    write(tmp_path, "lib/levanter/tests/test_flash_attention.py", "def test_kernel(): ...\n")
+
+    selection = select_changed_tests([source_path if changed == "source" else test_path], tmp_path)
+
+    assert leg_paths(selection.matrix, "levanter") == [test_path]
+    assert "levanter-tpu" not in selection.suites
+    assert "levanter-tpu" not in selection.suite_test_paths
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "@pytest.mark.tpu\ndef test_accelerator(): ...\n",
+        "pytestmark = [pytest.mark.tpu]\ndef test_accelerator(): ...\n",
+        "@pytest.mark.tpu\nclass TestAccelerator:\n    def test_kernel(self): ...\n",
+        "class TestAccelerator:\n    @pytest.mark.tpu\n    def test_kernel(self): ...\n",
+        '@pytest.mark.parametrize("backend", [pytest.param("tpu", marks=pytest.mark.tpu), "cpu"])\n'
+        "def test_accelerator(backend): ...\n",
+    ],
+    ids=["function", "module", "class", "method", "parameter"],
+)
+def test_tpu_marked_tests_enter_the_hardware_lane(tmp_path: Path, declaration: str) -> None:
+    test_path = "lib/levanter/tests/test_new_kernel.py"
+    write(tmp_path, test_path, "import pytest\n\n" + declaration)
+
+    selection = select_changed_tests([test_path], tmp_path)
+
+    assert leg_paths(selection.matrix, "levanter") == [test_path]
+    assert selection.suite_test_paths["levanter-tpu"] == [test_path]
+
+
+@pytest.mark.parametrize("marker", ["skipif(False)", "tpu"])
+def test_generated_tests_preserve_torch_selection_and_opt_into_tpu(tmp_path: Path, marker: str) -> None:
+    test_path = "lib/levanter/tests/test_generated.py"
+    write(tmp_path, test_path, f"pytestmark = pytest.mark.{marker}\ntest_generated = make_test()\n")
+
+    selection = select_all_tests(tmp_path)
+
+    assert selection.suite_test_paths["levanter-torch"] == [test_path]
+    assert ("levanter-tpu" in selection.suites) == (marker == "tpu")
 
 
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:

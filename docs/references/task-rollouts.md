@@ -104,12 +104,42 @@ It implements the `Harness` protocol from `rolloutengine.harness.core`:
 - `check(task, limits)` rejects a task that the harness cannot run under the limits. The engine calls it
   before any machine starts.
 - `run(context, session)` runs one attempt and returns when the task is done. `HarnessContext` holds the
-  task, the prepared task machine or `None`, an event sink, the attempt's cleanup scope, and its run ID. The
-  harness calls the model through `session`, a `ModelSession`.
+  task, the attempt's `RolloutLimits`, the prepared task machine or `None`, an event sink, the attempt's
+  cleanup scope, and its run ID. The harness calls the model through `session`, a `ModelSession`.
 
 A harness does not grade. After `run` returns, the engine grades the rollout with the task's grader (see
 [Grading](#grading)). A harness can attach its own reward to a step with `record(data=...)`. The engine does
 not read it.
+
+### Assistant prefills
+
+`PrefillHarness` continues the final assistant text in `ConversationInput.events` once. Register it
+and select it explicitly with `TaskRolloutSpec.harness`:
+
+```python
+from rolloutengine.harness.prefill import PrefillHarness
+
+engine = RolloutEngine({}, {"prefill": PrefillHarness()})
+spec = TaskRolloutSpec(
+    task=task, harness="prefill", limits=limits, task_machine=None, verifier_machine=None
+)
+```
+
+The task must use a plain-text conversation answer. The harness keeps the assistant prefix last and
+sets `extra_body.continue_final_message=True` and `extra_body.add_generation_prompt=False`. The transport
+must support these rendering options. Ordinary chat rendering does not infer continuation from the last
+message's role.
+
+Final tool schemas can condition the continuation. Interactive tools, tool providers and agent
+capabilities are rejected during preflight. The grader can have its own verifier environment and private
+resources. The model must return the continuation as assistant text: parsed reasoning or tool-call
+channels make the attempt invalid, so parser behavior cannot silently turn a continuation into a normal
+zero reward. Structural-closure grading concatenates its fixed text prefix with this continuation and
+scores the first completed outer structure.
+
+The selected model tokenizes the conversation and prefill. Training records its actual prompt and sampled
+response tokens with their logprobs through the normal model session. Historical token IDs do not constrain
+the task. Backends can use `TraceMode.MESSAGES` when only text and usage are available.
 
 ### Model session
 
@@ -125,7 +155,6 @@ and token limits:
 - `record(*, observations=(), data=None, metrics=None)` adds to the step of the last turn, between model
   requests: final observations that the model never receives, the harness's data, and metrics. A turn with
   recorded observations takes no `reply`.
-- `limits` holds the attempt's `RolloutLimits`, for example to tell the model that one turn is left.
 
 The session applies these rules:
 
@@ -233,9 +262,12 @@ engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
 
 ### Shell harness
 
-`ShellHarness(*, command_timeout, shell_tool=ShellToolConfig(), tools={})` from `rolloutengine.harness.shell` serves a
-shell tool on the task machine and host tools from tool providers, and ends on a final response.
+`ShellHarness(*, command_timeout, output_limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, shell_tool=ShellToolConfig(),
+tools={})` from `rolloutengine.harness.shell` serves a shell tool on the task machine and host tools from tool providers,
+and ends on a final response.
 `command_timeout` must be `None` or positive and finite.
+`output_limit_bytes` is the most bytes of stdout, and of stderr, that one shell-tool command returns to the model. It
+must be positive, and its default is the machine output limit, 1 MiB.
 The shell harness exposes `shell(command: string)` when the task declares the shell capability.
 Each command runs through `bash -c`. Files persist between commands; shell variables do not.
 TaskSpec can own the shell interface when its prompt names a particular tool. Declare the
@@ -330,9 +362,11 @@ flowchart LR
 
 RolloutEngine and curation share call decoding, execution, and JSON observations: stdout,
 stderr, exit code, reason, and separate stdout/stderr truncation flags. Each stream holds at most
-the machine output limit, 1 MiB in RolloutEngine; output past it is lost, and its truncation flag is set.
+the machine output limit, 1 MiB in RolloutEngine, or the lower `ShellHarness.output_limit_bytes`; output past it is
+lost, and its truncation flag is set.
 The engine does not keep the rest: a model that expects long output redirects it to a file in the
-workspace and reads it with later commands, and a harness that wants a safety net provides one. The harness
+workspace and reads it with later commands. A harness that runs an agent for its results can set a lower
+`output_limit_bytes` as a safety net, so that one large output cannot fill the agent's context. The harness
 advertises the tools its environment supplies. Trajectories retain the chosen names and call
 IDs. Graders consume the resulting submission independently of the tool interface.
 
@@ -465,9 +499,11 @@ A model failure after a completed turn triggers grading of the completed state.
 If that grading fails, the operation stays `model`, and a note on the model error names the grading failure.
 A turn that the harness did not finish handling retains a terminal step with `metrics["advance_incomplete"] = 1.0`
 (`ADVANCE_INCOMPLETE`). Training callers must exclude that step from their training projections.
-`RolloutInterrupted.rollout.failure` names the exception type and the failed operation.
+`RolloutInterrupted.rollout.failure` names the exception type. Its `diagnostics` hold the `operation`, the first
+2,000 characters of the message as `error`, and the `notes`. Pickle keeps the `rollout`, `operation`, and `grade`.
 Token-contract failures propagate as `RolloutContractError`.
-External cancellation remains cancellation.
+External cancellation remains cancellation. An `AgentHarness` agent that ends with a `CancelledError` before the
+engine stops it fails its attempt.
 
 Cleanup errors preserve a completed grade or the original execution failure.
 `grade.diagnostics.cleanup_errors` contains cleanup operation names and exception types.
@@ -588,6 +624,31 @@ The loss mask is all zeros with one value per response token, and `logprobs` is 
 Every `MESSAGES` record, including an empty or interrupted one, carries `metrics["trace"] = "messages"`.
 Messages, steps, stop reasons, and grades are unchanged.
 Do not train on `MESSAGES` rollouts; reject records that carry the `trace` metric.
+
+## Run an agent
+
+A managed agent is one `run_task` call. A registered harness is the agent program, the model is its endpoint, and
+the task holds the work. A task with `NoGrader` gets an unavailable grade. An `AgentHarness` program reads
+`context.limits`.
+
+`ChatModel` from `rolloutengine.chat` serves an OpenAI-compatible chat endpoint and needs
+`trace=TraceMode.MESSAGES`. Prompt options replace its `max_tokens` and its `extra_body` keys.
+It sets `model`, `messages`, `stream`, and `n` itself. A response without `usage` is a model failure.
+
+```python
+engine = RolloutEngine({}, {"agent": ShellHarness(command_timeout=None, tools={"lookup/v1": lookup})})
+spec = TaskRolloutSpec(
+    task=task, harness="agent", task_machine=None, verifier_machine=None, limits=limits, trace=TraceMode.MESSAGES
+)
+async with openai.AsyncOpenAI(base_url=base_url, api_key=api_key) as client:
+    result = await engine.run_task(spec, ChatModel(client, "glm-5.3", max_tokens=32_768))
+```
+
+For many agents, run the attempts in an `asyncio.TaskGroup` with a `Semaphore`. In each attempt, catch
+`GradedRolloutInterrupted` and keep `GradedRollout(interrupted.rollout, interrupted.grade)`: its
+`rollout.failure` holds the error message. An exception that the engine does not keep in one attempt, such as
+`RolloutContractError`, cancels the group. Across processes, each Zephyr worker makes its own engine, model, and
+judge connection.
 
 ## Use
 

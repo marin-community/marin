@@ -71,6 +71,8 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
         raise ValueError("Task resources require a task machine")
     if spec.task_machine is None and task.tool_bindings:
         raise ValueError("A shell binding requires a task machine")
+    if spec.task_machine is None and task.output_paths:
+        raise ValueError("Output paths require a task machine")
     if spec.task_machine is None and not isinstance(grader, NoGrader) and task.answer_type in WORKSPACE_ANSWERS:
         raise ValueError("Workspace tasks require a task machine")
     if isinstance(grader, ScriptGrader) and (grader.collect or grader.artifacts) and spec.task_machine is None:

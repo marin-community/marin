@@ -27,12 +27,11 @@ from rolloutengine.models import (
     GradedRolloutInterrupted,
     MachineReady,
     Model,
-    RolloutFailure,
     RolloutObserver,
     RolloutOperation,
     TaskRolloutSpec,
 )
-from rolloutengine.recorder import _CleanupScope, _Recorder, _run_harness
+from rolloutengine.recorder import _CleanupScope, _failure_record, _Recorder, _run_harness
 from rolloutengine.validation import validate_spec
 
 
@@ -144,7 +143,7 @@ class RolloutEngine:
         if failure is None:
             return GradedRollout(rollout, grade)
         operation, cause = failure
-        rollout = replace(rollout, failure=RolloutFailure(type(cause).__name__, {"operation": operation.value}))
+        rollout = replace(rollout, failure=_failure_record(operation, cause))
         raise GradedRolloutInterrupted(rollout, operation, grade) from cause
 
     async def _attempt(self, attempt: _Attempt) -> tuple[RolloutOperation, BaseException] | None:
@@ -181,7 +180,8 @@ class RolloutEngine:
         if machine is not None:
             events.emit(MachineReady(time.monotonic() - started))
         # The harness's resources close after grading, before the machines.
-        context = HarnessContext(task, machine, events, _CleanupScope(resources, attempt.cleanup), attempt.run_id)
+        cleanup = _CleanupScope(resources, attempt.cleanup)
+        context = HarnessContext(task, spec.limits, machine, events, cleanup, attempt.run_id)
         failure = await _run_harness(attempt.harness, context, attempt.recorder, attempt_deadline=deadline)
         # A model failure leaves the completed turns intact, so the engine grades them.
         if attempt.recorder.has_response and (failure is None or failure[0] == RolloutOperation.MODEL):
