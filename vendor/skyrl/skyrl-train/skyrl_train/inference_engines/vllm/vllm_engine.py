@@ -178,7 +178,13 @@ class SkyRLOpenAIServingChat(OpenAIServingChat):
         raw_request: "_MinimalRequest",
         prompt_token_ids: list[int],
     ) -> ChatCompletionResponse | ErrorResponse | AsyncGenerator[str, None]:
-        id_only = request.logprobs and request.return_tokens_as_token_ids and request.n == 1
+        id_only = (
+            request.logprobs
+            and request.top_logprobs is not None
+            and request.top_logprobs > 0
+            and request.return_tokens_as_token_ids
+            and request.n == 1
+        )
         capture_id = f"chatcmpl-{self._base_request_id(raw_request, request.request_id)}" if id_only else None
         token = _exact_chat_prompt_token_ids.set(prompt_token_ids)
         try:
@@ -1451,10 +1457,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 state = output_processor.request_states.get(output.request_id)
                 if state is not None:
                     if state.external_req_id in self._id_only_logprob_requests:
-                        # Native logprobs consume IDs and scores only. This also
-                        # avoids decoding unused candidates when a chosen-only
-                        # request shares a batch with a periodic head capture.
-                        # The response detokenizer still produces the text.
+                        # ID-only captures expose IDs and numeric scores only. The
+                        # separate response detokenizer still produces the text.
                         state.logprobs_processor.tokenizer = None
                     self._policy_steps.observe(state.external_req_id, len(output.new_token_ids), engine_core_timestamp)
             return process_outputs(engine_core_outputs, engine_core_timestamp, iteration_stats)

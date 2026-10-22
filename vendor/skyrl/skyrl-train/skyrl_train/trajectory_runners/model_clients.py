@@ -257,9 +257,9 @@ class DirectModelClient:
                 body["stop"] = sampling_params["stop"]
             if sampling_params.get("logprobs") is not None:
                 body["logprobs"] = True
-                body["return_tokens_as_token_ids"] = True
             if requested_top_k is not None:
                 body["top_logprobs"] = requested_top_k + 1
+                body["return_tokens_as_token_ids"] = True
             request_id = uuid4().hex
             headers = {"x-request-id": request_id}
             if session_id is not None:
