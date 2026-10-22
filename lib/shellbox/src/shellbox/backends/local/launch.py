@@ -110,6 +110,7 @@ def _command(
     """The forked command: never returns."""
     try:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
         os.setsid()
         _drop_privileges(libc, last_capability, account)
         os.write(status, b"S")
@@ -153,6 +154,8 @@ def main() -> None:
                 except ProcessLookupError:
                     pass
 
+    # A stop request that arrives before the fork waits until the command exists, so that it ends the command.
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
     signal.signal(signal.SIGTERM, stop)
     try:
         command = os.fork()
@@ -161,6 +164,7 @@ def main() -> None:
         sys.exit(1)
     if command == 0:
         _command(status, libc, last_capability, settings["account"], environment)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
     # Wait without reaping, so the command's PID, and with it its process group's, cannot be reused yet.
     os.waitid(os.P_PID, command, os.WEXITED | os.WNOWAIT)
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
