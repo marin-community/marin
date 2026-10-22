@@ -4,7 +4,7 @@
 """Evaluate configured tasks through an OpenAI-compatible endpoint.
 
 Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG``; the parent builds it in
-:mod:`marin.evaluation.evalchemy.runner`. Each task runs through the evalchemy fork's ``evalchemy``
+:mod:`marin.evaluation.evalchemy.runner`. Each task runs through the vendored ``evalchemy``
 CLI once (one invocation per task so each carries its own ``num_fewshot``) with lm-eval's
 ``local-completions`` (or ``local-chat-completions``) API model pointed at the served URL. Evalchemy
 writes result documents and normalized sample rows directly to FineStore tables at ``out_path``.
@@ -13,16 +13,26 @@ writes result documents and normalized sample rows directly to FineStore tables 
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from importlib.util import find_spec
 from pathlib import Path
 
+from finestore.reader import ReadView
+from rigging.timing import retry_with_backoff
+
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
+# Historical result-tree readers still use these names for pre-FineStore artifacts.
+EVALCHEMY_RESULTS_PREFIX = "results_"
+EVALCHEMY_RESULTS_SUFFIX = ".json"
+_EVALCHEMY_RESULTS_TABLE = "evalchemy_results"
 EVALCHEMY_REQUEST_TIMEOUT_SECONDS = 1800
+_REQUEST_TIMEOUT = EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 
 # Without a configured cap, an lm-eval-native generation task gets the served context minus this
 # prompt reserve, so the model config's context window sets its budget the way Evalchemy's own
@@ -42,6 +52,8 @@ _CONTEXT_PROMPT_RESERVE = 1024
 # max_length-long prompt). Report a context this much below the true served window so prompt +
 # output never crosses it; on a large-context model the shave is negligible.
 _CONTEXT_MARGIN = 64
+_MODEL_LOOKUP_ATTEMPTS = 3
+_RETRYABLE_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
 def generation_budget(max_gen_toks: int | None, max_length: int | None) -> int | None:
@@ -106,14 +118,24 @@ def served_max_length(base_url: str) -> int | None:
 
     lm-eval's API model cannot see the server's context window and assumes 2048 tokens by default,
     left-truncating longer prompts -- which silently drops few-shot examples on tasks like 25-shot
-    arc_challenge. Returns None when the server does not report a length (the lm-eval default stands).
+    arc_challenge. Retries transient lookup failures and raises if they persist. Returns None only
+    when a successful response does not report a length.
     """
-    try:
+
+    def read_models():
         with urllib.request.urlopen(f"{base_url.rstrip('/')}/models", timeout=30) as resp:
-            payload = json.load(resp)
-    except Exception as exc:
-        print(f"could not read {base_url}/models for max_model_len: {exc}", flush=True)
-        return None
+            return json.load(resp)
+
+    payload = retry_with_backoff(
+        read_models,
+        retryable=lambda exc: (
+            exc.code in _RETRYABLE_HTTP_STATUS
+            if isinstance(exc, urllib.error.HTTPError)
+            else isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead))
+        ),
+        max_attempts=_MODEL_LOOKUP_ATTEMPTS,
+        operation="read served model context length",
+    )
     for entry in payload.get("data", []):
         if entry.get("max_model_len"):
             return int(entry["max_model_len"])
@@ -124,10 +146,12 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
     """lm-eval ``--model_args`` for the served OpenAI endpoint (comma-joined ``key=value`` list)."""
     endpoint_path = "chat/completions" if use_chat else "completions"
     if use_chat:
-        # The endpoint applies its own chat template, so the client needs no tokenizer. Loading one
-        # rejects checkpoints whose tokenizer ships custom code (Kimi-Linear) or metadata the
-        # client's Transformers cannot parse (Gemma 4). Mirrors marin-community/evalchemy#140.
-        tokenizer_args: dict[str, object] = {"tokenizer_backend": "none"}
+        tokenizer_backend = config["chat_tokenizer_backend"]
+        tokenizer_args: dict[str, object] = {"tokenizer_backend": tokenizer_backend}
+        if tokenizer_backend == "huggingface":
+            # The tokenizer is used only to preflight the fully rendered prompt; messages still go
+            # to the endpoint, which applies the canonical serving template.
+            tokenizer_args.update(tokenizer=config["tokenizer"], trust_remote_code=True)
     else:
         # Loglikelihood scoring needs local token IDs, so load the checkpoint tokenizer and allow
         # its custom code.
@@ -146,14 +170,15 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         # once); one request exhausting its retries mid-burst closes lm-eval's shared session and
         # fails the whole task, so give each request enough headroom to ride out a burst.
         "max_retries": 8,
-        # lm-eval's per-request client timeout defaults to 300s; a long reasoning generation
-        # (multi-thousand-token chat benchmark) can exceed that, and a spurious timeout retry-storms
-        # the endpoint. 1800s covers a full max_gen_toks generation on a slow serve.
-        "timeout": EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
+        # A long reasoning generation can legitimately need the full policy window. Cutting an
+        # active request off earlier restarts its generation and can saturate the endpoint with
+        # abandoned work; the retry budget still bounds each trial to the policy window.
+        "timeout": _REQUEST_TIMEOUT,
     }
     args.update(config.get("extra_model_args", {}))
     # The total retry budget must cover a valid long generation and leave room for retries.
     args.setdefault("transport_retry_budget", 3 * float(args["timeout"]))
+    args.setdefault("transport_attempt_timeout", float(args["timeout"]))
     if use_chat and config["chat_template_kwargs"]:
         # lm-eval splits model args at every comma; Evalchemy decodes this before building the HTTP payload.
         encoded = base64.urlsafe_b64encode(json.dumps(config["chat_template_kwargs"]).encode("utf-8")).decode("ascii")
@@ -190,6 +215,8 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
         task["name"],
         *(["--gen_kwargs", ",".join(gen_kwargs)] if gen_kwargs else []),
         *budget_args,
+        # FineStore owns the aggregate result and normalized sample rows. Evalchemy treats
+        # --output_path as an alias for this option; passing both leaves no local output to inspect.
         "--finestore_output_path",
         config["out_path"],
         "--finestore_output_prefix",
@@ -203,6 +230,8 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
         cmd += ["--num_fewshot", str(task["num_fewshot"])]
     if config.get("batch_size") is not None:
         cmd += ["--batch_size", str(config["batch_size"])]
+    if config.get("dataset_cache") is not None:
+        cmd += ["--dataset_cache", config["dataset_cache"]]
     if config.get("seed") is not None:
         cmd += ["--seed", str(config["seed"])]
     if task["unsafe_code"]:
@@ -215,6 +244,17 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
     if config.get("debug", False):
         cmd.append("--debug")
     return cmd
+
+
+def completed_result(root: str, source_prefix: str) -> bool:
+    """Whether Evalchemy committed a successful aggregate result to FineStore."""
+    table = ReadView(root).scan(_EVALCHEMY_RESULTS_TABLE)
+    if table is None:
+        return False
+    return any(
+        row.get("source_prefix") == source_prefix and row.get("scored") is True
+        for row in table.to_pylist(maps_as_pydicts="strict")
+    )
 
 
 def main() -> None:
@@ -232,12 +272,14 @@ def main() -> None:
     print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
     failures: list[str] = []
     for task in tasks:
-        # Evalchemy is installed beside the uvx environment's interpreter.
+        # Evalchemy is installed beside the independent project's interpreter.
         cmd = build_command(config, task, sys.executable, max_length)
         print(f"running evalchemy: {' '.join(cmd)}", flush=True)
         result = subprocess.run(cmd)
         if result.returncode != 0:
             failures.append(f"{task['name']}: evalchemy exited {result.returncode}")
+        elif not completed_result(out_path, task["dir"]):
+            failures.append(f"{task['name']}: FineStore has no completed scored result")
     print(f"evalchemy client wrote {len(tasks)} task result(s) to FineStore at {out_path}", flush=True)
     if failures:
         raise SystemExit("evalchemy task failures: " + "; ".join(failures))

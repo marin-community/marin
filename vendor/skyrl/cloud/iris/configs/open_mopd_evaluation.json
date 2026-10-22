@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "fidelity_config": "cloud/iris/configs/open_mopd_fidelity.json",
+  "data": {
+    "repository": "BytedTsinghua-SIA/Open-MOPD-Data",
+    "revision": "9e897efe3257599d4300e2d5ee865a1cc714af87"
+  },
+  "protocol": {
+    "source_commit": "4460e57ad87fef996a0c21f96bde9a7d1ba029b6",
+    "max_model_len": 32768,
+    "dtype": "bfloat16",
+    "max_num_seqs": 1024,
+    "top_p": 0.95,
+    "top_k": -1,
+    "stop_token_ids": [128012]
+  },
+  "hardware": {
+    "gpu": "A100x8",
+    "cpu": 120,
+    "memory": "900GB",
+    "disk": "1TB"
+  },
+  "benchmarks": [
+    {
+      "name": "aime24",
+      "domain": "math",
+      "path": "eval/math/aime24.parquet",
+      "size": 101589,
+      "sha256": "8a72185376a9aba48c7434216fc955f6b4d12e534839cf6eacc4cff5669dcaef",
+      "rows": 30,
+      "samples": 64,
+      "temperature": 0.6,
+      "max_tokens": 31000,
+      "gpu_memory_utilization": 0.9,
+      "enable_thinking": true,
+      "score_mode": "released",
+      "published_score": 21.98,
+      "unavailable_reason": null
+    },
+    {
+      "name": "aime25",
+      "domain": "math",
+      "path": "eval/math/aime25.parquet",
+      "size": 48774,
+      "sha256": "e2162730e61b26feb695680c05ad5bc7a918c902b579890facf84a2f9f41df2f",
+      "rows": 30,
+      "samples": 64,
+      "temperature": 0.6,
+      "max_tokens": 31000,
+      "gpu_memory_utilization": 0.9,
+      "enable_thinking": true,
+      "score_mode": "released",
+      "published_score": 22.86,
+      "unavailable_reason": null
+    },
+    {
+      "name": "livecodebench_v5",
+      "domain": "code",
+      "path": "eval/code/livecodebench_v5.parquet",
+      "size": 550451838,
+      "sha256": "3da81a4b7531ccb3fbfd8b4892a26ac2d05b933a95b4d1bbda9dd6a192ac1b10",
+      "rows": 167,
+      "samples": 10,
+      "temperature": 1.0,
+      "max_tokens": 30000,
+      "gpu_memory_utilization": 0.85,
+      "enable_thinking": true,
+      "score_mode": "unavailable",
+      "published_score": 20.84,
+      "unavailable_reason": "The official LiveCodeBench repo is identifiable at 28fef95ea8c9f7a547c8329f2cd3d32b92c1fa24, but the release omits its required patch and immutable asset revision/hashes."
+    },
+    {
+      "name": "livecodebench_v6",
+      "domain": "code",
+      "path": "eval/code/livecodebench_v6.parquet",
+      "size": 124128492,
+      "sha256": "a247cb1fcbe1ee4a89ff2a425f608c778ab081dadecb77a281a5126a530a8da9",
+      "rows": 175,
+      "samples": 10,
+      "temperature": 1.0,
+      "max_tokens": 30000,
+      "gpu_memory_utilization": 0.85,
+      "enable_thinking": true,
+      "score_mode": "unavailable",
+      "published_score": 22.63,
+      "unavailable_reason": "The official LiveCodeBench repo is identifiable at 28fef95ea8c9f7a547c8329f2cd3d32b92c1fa24, but the release omits its required patch and immutable asset revision/hashes."
+    },
+    {
+      "name": "ifeval",
+      "domain": "if",
+      "path": "eval/if/ifeval_aligned.parquet",
+      "size": 268896,
+      "sha256": "3e84e0b3515f499801bd247c7362b73b142900e7a453f5e765f290f0a2db43d5",
+      "rows": 541,
+      "samples": 1,
+      "temperature": 1.0,
+      "max_tokens": 10000,
+      "gpu_memory_utilization": 0.85,
+      "enable_thinking": true,
+      "score_mode": "released",
+      "published_score": 74.49,
+      "unavailable_reason": null
+    },
+    {
+      "name": "ifbench_test",
+      "domain": "if",
+      "path": "eval/if/ifbench_test_aligned.parquet",
+      "size": 215622,
+      "sha256": "2f517eac1d1a693cc82d86de56319296f4629dce9a40ce71c60fee13f36b3878",
+      "rows": 300,
+      "samples": 1,
+      "temperature": 1.0,
+      "max_tokens": 10000,
+      "gpu_memory_utilization": 0.85,
+      "enable_thinking": true,
+      "score_mode": "unavailable",
+      "published_score": 24.67,
+      "unavailable_reason": "The IFBench repo is identifiable at 1091c4c3de6c1f6ed12c012ed68f11ea450b0117, but the released source omits the lock/setup needed to reproduce its scorer environment."
+    }
+  ],
+  "known_omissions": [
+    "The released source does not pin a complete evaluation environment; the digest-addressed task image defines the executable environment.",
+    "LiveCodeBench v5/v6 and IFBench_test rollouts are generated, but exact scoring is unavailable from the pinned release.",
+    "The formal evaluation specification does not set a random seed.",
+    "The formal specification evaluates a private step-175 path, while the released Hugging Face final model card identifies step 200; their exact relationship is not published."
+  ]
+}

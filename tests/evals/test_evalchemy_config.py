@@ -1,29 +1,41 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The parent builds the Evalchemy child's config; the child turns each task into an ``evalchemy`` argv.
-
-These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
-the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
-task do not collide), the lm-eval command the child runs per task (route selection between the
-completions and chat APIs included), and the FineStore output target. Everything else (job submission,
-serving, the eval itself) is exercised by the cluster smoke.
-"""
+"""Test Evalchemy configuration, command construction, and child cancellation."""
 
 import base64
+import http.client
+import io
 import json
+import os
+import subprocess
+import sys
+import urllib.error
+import zipfile
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
-from marin.evaluation.evalchemy.client import build_command, build_model_args
-from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
+from iris.cluster.client.bundle import create_workspace_zip
+from marin.evaluation.evalchemy import runtime
+from marin.evaluation.evalchemy.client import build_command, build_model_args, served_max_length
+from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
+    EvalchemyRuntimeConfig,
     _run_config_json,
     _run_evalchemy_child,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.runner import (
+    EndpointRoute,
+    EvaluationOutcome,
+    InferenceBackendFinished,
+    InferenceUnavailable,
+    run_evaluation,
+)
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
+from marin.inference.iris import InferenceBackendState
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
 _MODEL = RunningModel(
@@ -33,6 +45,43 @@ _MODEL = RunningModel(
     ),
     tokenizer="Qwen/Qwen3-0.6B",
 )
+
+
+@pytest.mark.parametrize(
+    "backend_state, expected_error",
+    [
+        (InferenceBackendState.RECOVERING, InferenceUnavailable),
+        (InferenceBackendState.FINISHED, InferenceBackendFinished),
+    ],
+)
+def test_evalchemy_cancels_active_child_when_inference_disappears(monkeypatch, backend_state, expected_error):
+    state = InferenceBackendState.READY
+
+    class EvalJob:
+        job_id = "/eval/interrupted"
+        cancelled = False
+        stopped = False
+
+        def wait(self, timeout, *, raise_on_failure=True):
+            nonlocal state
+            if self.cancelled:
+                self.stopped = True
+                return
+            state = backend_state
+            raise TimeoutError("evaluator is still running")
+
+        def cancel(self):
+            self.cancelled = True
+
+    job = EvalJob()
+    client = SimpleNamespace(submit=lambda **_kwargs: job)
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+
+    with pytest.raises(expected_error):
+        _run_evalchemy_child(_MODEL, _config(), "memory://interrupted", {}, backend_state=lambda: state)
+
+    assert job.cancelled
+    assert job.stopped
 
 
 def _config(**overrides) -> EvalchemyRunConfig:
@@ -45,8 +94,106 @@ def _config(**overrides) -> EvalchemyRunConfig:
     return EvalchemyRunConfig(**base)
 
 
+def test_evalchemy_cancels_after_inference_recovers_before_child_start(monkeypatch):
+    recovery_count = 0
+    jobs = []
+
+    class EvalJob:
+        job_id = "/eval/recovered"
+        cancelled = False
+        stopped = False
+
+        def wait(self, timeout, *, raise_on_failure=True):
+            assert self is not jobs[0] or self.cancelled, "stale-endpoint work must stop before waiting"
+            self.stopped = True
+
+        def cancel(self):
+            self.cancelled = True
+
+    def submit(**_kwargs):
+        job = EvalJob()
+        jobs.append(job)
+        return job
+
+    client = SimpleNamespace(submit=submit)
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    session = SimpleNamespace(
+        model=_MODEL,
+        backend_state=lambda: InferenceBackendState.READY,
+        preemption_count=lambda: recovery_count,
+        wait_until_ready=lambda **_kwargs: None,
+    )
+
+    def executor(session, output_dir, env_vars, *, backend_state, judge=None):
+        nonlocal recovery_count
+        if not jobs:
+            # Recovery happens after the runner selected the endpoint but before child startup.
+            recovery_count += 1
+        job_id = _run_evalchemy_child(session.model, _config(), output_dir, env_vars, backend_state=backend_state)
+        return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}}, jobs={"eval": job_id})
+
+    outcome = run_evaluation(executor, session, "memory://recovered", {}, endpoint_route=EndpointRoute.CAPABILITY)
+
+    assert len(jobs) == 2
+    assert jobs[0].cancelled and jobs[0].stopped
+    assert not jobs[1].cancelled and jobs[1].stopped
+    assert outcome.metrics == {"task": {"accuracy": 1.0}}
+
+
+def test_failed_child_cancellation_does_not_start_a_same_archive_retry(tmp_path, monkeypatch):
+    state = InferenceBackendState.READY
+
+    class EvalJob:
+        job_id = "/eval/cancel-failed"
+
+        def wait(self, timeout, **_kwargs):
+            nonlocal state
+            state = InferenceBackendState.RECOVERING
+            raise TimeoutError("still running")
+
+        def cancel(self):
+            raise ConnectionError("cancellation failed")
+
+    client = SimpleNamespace(submit=lambda **_kwargs: EvalJob())
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    session = SimpleNamespace(
+        backend_state=lambda: state,
+        preemption_count=lambda: 0,
+        wait_until_ready=lambda **_kwargs: pytest.fail("must not retry while child cancellation is unconfirmed"),
+    )
+
+    def executor(session, output_dir, env_vars, *, backend_state, judge=None):
+        _run_evalchemy_child(_MODEL, _config(), output_dir, env_vars, backend_state=backend_state)
+        pytest.fail("the child should not finish successfully")
+
+    with pytest.raises(ConnectionError, match="cancellation failed"):
+        run_evaluation(executor, session, str(tmp_path / "cancel-failed"), {}, endpoint_route=EndpointRoute.CAPABILITY)
+
+
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
     return json.loads(_run_config_json(_MODEL, config or _config(), "gs://bucket/evals/qwen3/core"))
+
+
+def test_chat_route_can_load_the_served_tokenizer_for_context_preflight():
+    config = _payload(_config(chat_tokenizer_backend=ChatTokenizerBackend.HUGGING_FACE))
+
+    model_args = dict(
+        pair.split("=", 1) for pair in build_model_args(config, use_chat=True, max_length=73728).split(",")
+    )
+
+    assert model_args["tokenizer_backend"] == "huggingface"
+    assert model_args["tokenizer"] == _MODEL.tokenizer
+    assert model_args["trust_remote_code"] == "True"
+
+
+def test_completion_route_omits_chat_template_kwargs():
+    config = _payload(_config(chat_template_kwargs={"enable_thinking": False}))
+
+    model_args = dict(
+        pair.split("=", 1) for pair in build_model_args(config, use_chat=False, max_length=None).split(",")
+    )
+
+    assert "chat_template_kwargs" not in model_args
 
 
 def test_client_config_json_carries_endpoint_and_per_task_dirs():
@@ -86,6 +233,7 @@ def test_file_config_fields_reach_the_evalchemy_command():
             seed=1234,
             extra_model_args={"timeout": 900},
             max_length=32768,
+            runtime=EvalchemyRuntimeConfig(dataset_cache="s3://eval-data/cache"),
         )
     )
 
@@ -93,9 +241,22 @@ def test_file_config_fields_reach_the_evalchemy_command():
 
     assert command[command.index("--batch_size") + 1] == "1"
     assert command[command.index("--seed") + 1] == "1234"
+    assert command[command.index("--dataset_cache") + 1] == "s3://eval-data/cache"
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
+    assert model_args["transport_retry_budget"] == "2700.0"
+    assert model_args["transport_attempt_timeout"] == "900.0"
     assert model_args["max_length"] == "32768"
+
+
+def test_dataset_cache_follows_output_region_instead_of_launcher_region(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west1")
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    config = json.loads(_run_config_json(_MODEL, _config(), "gs://marin-us-central2/evals/run"))
+
+    command = build_command(config, config["tasks"][0], "/opt/py", 32768)
+
+    assert command[command.index("--dataset_cache") + 1].startswith("gs://marin-us-central2/")
 
 
 def test_explicit_thinking_mode_is_serialized_for_chat_endpoint():
@@ -123,9 +284,10 @@ def test_parent_rejects_endpoint_model_arg_overrides():
         _payload(_config(extra_model_args={"model": "other"}))
 
 
-def test_financebench_requires_an_explicit_external_judge():
+@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench"])
+def test_judged_task_requires_an_explicit_external_judge(task):
     with pytest.raises(ValueError, match="requires an explicit judge"):
-        EvalchemyConfig(tasks=("FinanceBench",))
+        EvalchemyConfig(tasks=(task,))
 
     judge = EvalchemyJudgeConfig(
         base_url="https://judge.example/v1",
@@ -133,7 +295,7 @@ def test_financebench_requires_an_explicit_external_judge():
         api_key=("env:JUDGE_KEY",),
     )
     with pytest.raises(ValueError, match="only for a single FinanceBench"):
-        EvalchemyConfig(tasks=("FinanceBench", "gsm8k"), judge=judge)
+        EvalchemyConfig(tasks=(task, "gsm8k"), judge=judge)
     with pytest.raises(ValueError, match="only for a single FinanceBench"):
         EvalchemyConfig(tasks=("gsm8k",), judge=judge)
 
@@ -163,25 +325,30 @@ def test_financebench_rejects_inline_judge_credentials(judge):
         EvalchemyConfig(tasks=("FinanceBench",), judge=judge)
 
 
-def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypatch):
+@pytest.mark.parametrize("task", ["FinanceBench", "OlympiadBench"])
+def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypatch, task):
     submitted = []
 
     class FakeJob:
         job_id = "/eval/financebench"
 
         def wait(self, timeout):
-            assert timeout == float("inf")
+            pass
 
     client = SimpleNamespace(submit=lambda **kwargs: submitted.append(kwargs) or FakeJob())
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
-    config = _config(
-        name="financebench",
-        tasks=(EvalTaskConfig("FinanceBench", 0, generation=True),),
+    source = EvalchemyConfig(
+        tasks=(task,),
         judge=EvalchemyJudgeConfig(
             base_url="https://judge.example/v1",
             model="judge-model",
             api_key=("env:TOGETHER_API_KEY",),
         ),
+    )
+    config = _config(
+        name=task.lower(),
+        tasks=(EvalTaskConfig(task, 0, generation=True),),
+        judge=source.judge,
     )
 
     _run_evalchemy_child(
@@ -189,6 +356,7 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
         config,
         "gs://bucket/evals/qwen3/financebench",
         {"JUDGE_API_KEY": "judge-key", "HF_TOKEN": "candidate-runtime-token"},
+        backend_state=lambda: InferenceBackendState.READY,
     )
 
     env = submitted[0]["environment"].env_vars
@@ -211,7 +379,168 @@ def test_evalchemy_child_rejects_a_missing_judge_secret():
     )
 
     with pytest.raises(ValueError, match="requires JUDGE_API_KEY"):
-        _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {})
+        _run_evalchemy_child(
+            _MODEL, config, "gs://bucket/evals/qwen3/financebench", {}, backend_state=lambda: InferenceBackendState.READY
+        )
+
+
+def test_evalchemy_child_uses_its_project_environment_instead_of_the_parent(tmp_path, monkeypatch):
+    executable = tmp_path / "bin" / "uv"
+    executable.parent.mkdir()
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['PROBE_OUTPUT']).write_text(json.dumps({\n"
+        "    'environment': os.environ['UV_PROJECT_ENVIRONMENT'],\n"
+        "    'cwd': os.getcwd(),\n"
+        "}))\n"
+    )
+    executable.chmod(0o755)
+    output = tmp_path / "runtime.json"
+
+    def submit(*, entrypoint, environment, **_kwargs):
+        assert not environment.to_proto().setup_scripts
+        subprocess.run(
+            entrypoint.command,
+            env={
+                **os.environ,
+                "IRIS_WORKDIR": str(tmp_path),
+                "UV_PROJECT_ENVIRONMENT": "/parent/.venv",
+                "PROBE_OUTPUT": str(output),
+                "PATH": f"{executable.parent}:{os.environ['PATH']}",
+                **environment.env_vars,
+            },
+            check=True,
+        )
+        return SimpleNamespace(job_id="/eval/isolated", wait=lambda **_kwargs: None)
+
+    client = SimpleNamespace(submit=submit)
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    _run_evalchemy_child(
+        _MODEL, _config(), "gs://bucket/evals/qwen3/core", {}, backend_state=lambda: InferenceBackendState.READY
+    )
+
+    assert json.loads(output.read_text()) == {
+        "environment": str(tmp_path / "vendor/evalchemy/.venv"),
+        "cwd": str(tmp_path),
+    }
+
+
+@pytest.fixture
+def evaluator_sources(tmp_path, monkeypatch):
+    for directory in runtime._RUNTIME_DIRECTORIES:
+        source = tmp_path / directory / "source.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("value = 1\n")
+    for filename in runtime._RUNTIME_FILES:
+        source = tmp_path / filename
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("source input\n")
+    monkeypatch.setattr(runtime, "find_project_root", lambda _start: tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def git_evaluator_sources(evaluator_sources):
+    (evaluator_sources / ".gitignore").write_text("ignored.py\nbuild/\ndist/\n")
+    subprocess.run(["git", "init", "--quiet"], cwd=evaluator_sources, check=True)
+    subprocess.run(["git", "add", "."], cwd=evaluator_sources, check=True)
+    return evaluator_sources
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "vendor/evalchemy/eval/source.py",
+        "vendor/evalchemy/uv.lock",
+        "lib/finestore/src/source.py",
+        "lib/rigging/src/source.py",
+        "lib/marin/src/marin/evaluation/evalchemy/client.py",
+    ],
+)
+def test_evalchemy_provenance_changes_when_runtime_inputs_change(evaluator_sources, filename):
+    before = runtime.evalchemy_runtime_source_hash()
+    source = evaluator_sources / filename
+    source.write_text(source.read_text() + "changed input\n")
+    assert runtime.evalchemy_runtime_source_hash() != before
+
+
+def test_evalchemy_provenance_ignores_build_metadata_and_bytecode(evaluator_sources):
+    before = runtime.evalchemy_runtime_source_hash()
+    for filename in (
+        "vendor/evalchemy/eval/__pycache__/source.cpython-312.pyc",
+        "vendor/evalchemy/eval/benchmark.egg-info/PKG-INFO",
+        "vendor/evalchemy/eval/chat_benchmarks/alpaca_eval/build/lib/alpaca_eval/__init__.py",
+        "vendor/evalchemy/eval/chat_benchmarks/MTBench/dist/wheel.whl",
+        "vendor/evalchemy/eval/.pytest_cache/v/cache/nodeids",
+    ):
+        path = evaluator_sources / filename
+        path.parent.mkdir(parents=True)
+        path.write_text("generated output\n")
+    assert runtime.evalchemy_runtime_source_hash() == before
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["vendor/evalchemy/eval/source.py", "vendor/evalchemy/packages/source.py", "vendor/evalchemy/uv.lock"],
+)
+def test_evalchemy_evaluator_identity_changes_with_evaluator_inputs(git_evaluator_sources, filename):
+    before = runtime.evalchemy_evaluator_source_hash()
+    source = git_evaluator_sources / filename
+    source.write_text(source.read_text() + "changed evaluator\n")
+
+    assert runtime.evalchemy_evaluator_source_hash() != before
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "lib/finestore/src/source.py",
+        "lib/rigging/src/source.py",
+        "lib/marin/src/marin/evaluation/evalchemy/client.py",
+    ],
+)
+def test_evalchemy_dependency_changes_affect_provenance_only(git_evaluator_sources, filename):
+    evaluator = runtime.evalchemy_evaluator_source_hash()
+    provenance = runtime.evalchemy_runtime_source_hash()
+    source = git_evaluator_sources / filename
+    source.write_text(source.read_text() + "changed dependency\n")
+
+    assert runtime.evalchemy_evaluator_source_hash() == evaluator
+    assert runtime.evalchemy_runtime_source_hash() != provenance
+
+
+def test_evalchemy_identity_ignores_gitignored_scratch_and_tracks_shipped_new_code(git_evaluator_sources):
+    evaluator = runtime.evalchemy_evaluator_source_hash()
+    provenance = runtime.evalchemy_runtime_source_hash()
+    (git_evaluator_sources / "vendor/evalchemy/eval/ignored.py").write_text("scratch = True\n")
+
+    assert runtime.evalchemy_evaluator_source_hash() == evaluator
+    assert runtime.evalchemy_runtime_source_hash() == provenance
+
+    (git_evaluator_sources / "vendor/evalchemy/eval/new_source.py").write_text("scoring = 2\n")
+
+    assert runtime.evalchemy_evaluator_source_hash() != evaluator
+    assert runtime.evalchemy_runtime_source_hash() != provenance
+
+
+def test_evalchemy_identities_match_extracted_iris_bundle(git_evaluator_sources, tmp_path, monkeypatch):
+    (git_evaluator_sources / "vendor/evalchemy/eval/new_source.py").write_text("scoring = 2\n")
+    (git_evaluator_sources / "vendor/evalchemy/eval/ignored.py").write_text("scratch = True\n")
+    build = git_evaluator_sources / "vendor/evalchemy/eval/build/lib/generated.py"
+    build.parent.mkdir(parents=True)
+    build.write_text("generated = True\n")
+    evaluator = runtime.evalchemy_evaluator_source_hash()
+    provenance = runtime.evalchemy_runtime_source_hash()
+
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(io.BytesIO(create_workspace_zip(git_evaluator_sources))) as bundle:
+        bundle.extractall(extracted)
+    monkeypatch.setattr(runtime, "find_project_root", lambda _start: extracted)
+
+    assert runtime.evalchemy_evaluator_source_hash() == evaluator
+    assert runtime.evalchemy_runtime_source_hash() == provenance
 
 
 def test_task_dirs_distinguish_shot_variants_of_one_task():
@@ -236,6 +565,8 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert cmd[:3] == ["/opt/evalchemy", "--model", "local-completions"]
     assert "--apply_chat_template" not in cmd
     assert cmd[cmd.index("--tasks") + 1] == "gsm8k"
+    assert "--output_path" not in cmd
+    assert "--log_samples" not in cmd
     assert cmd[cmd.index("--finestore_output_path") + 1] == config["out_path"]
     assert cmd[cmd.index("--finestore_output_prefix") + 1] == "gsm8k_cot"
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
@@ -366,6 +697,46 @@ def test_model_args_carry_served_max_length():
     args = dict(pair.split("=", 1) for pair in build_model_args(_payload(), False, 4096).split(","))
     assert args["max_length"] == "4096"
     assert args["tokenized_requests"] == "False"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.HTTPError("http://model/v1/models", 429, "busy", {}, None),
+        urllib.error.HTTPError("http://model/v1/models", 503, "unavailable", {}, None),
+        urllib.error.URLError("connection refused"),
+        TimeoutError("metadata request timed out"),
+        http.client.IncompleteRead(b'{"data":', 100),
+    ],
+)
+def test_served_max_length_recovers_from_transient_lookup_failure(monkeypatch, error):
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        Mock(side_effect=[error, io.BytesIO(b'{"data":[{"max_model_len":73728}]}')]),
+    )
+
+    assert served_max_length("http://model/v1") == 73728
+
+
+def test_served_max_length_exhausted_lookup_raises_instead_of_using_default(monkeypatch):
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("urllib.request.urlopen", Mock(side_effect=TimeoutError("metadata unavailable")))
+
+    with pytest.raises(TimeoutError):
+        served_max_length("http://model/v1")
+
+
+def test_served_max_length_does_not_retry_permanent_http_error(monkeypatch):
+    error = urllib.error.HTTPError("http://model/v1/models", 401, "unauthorized", {}, None)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        Mock(side_effect=[error, io.BytesIO(b'{"data":[{"max_model_len":73728}]}')]),
+    )
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        served_max_length("http://model/v1")
+    assert caught.value.code == 401
 
 
 def test_auto_overrides_clamps_context_and_leaves_plain_model_alone():

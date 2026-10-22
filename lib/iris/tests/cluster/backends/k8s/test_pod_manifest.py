@@ -1096,6 +1096,7 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert "envFrom" not in task
     assert "serviceAccountName" not in spec
     assert spec["automountServiceAccountToken"] is False
+    assert spec["enableServiceLinks"] is False
     assert "hostNetwork" not in spec
     assert not [v for v in spec["volumes"] if "hostPath" in v and v["name"] in {m.name for m in STANDARD_MOUNTS}]
     assert [c["name"] for c in spec["containers"]] == ["task"]

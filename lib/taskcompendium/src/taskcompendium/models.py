@@ -3,11 +3,10 @@
 
 """One deterministic task: its conversation, environment, grader, and answer format.
 
-A grader is one of four kinds. ``VerifyitGrader`` names a verifyit mode, graded in process
+A grader is one of three kinds. ``VerifyitGrader`` names a verifyit mode, graded in process
 against the extracted answer or, with an environment, by the verifyit command in a fresh
-machine. ``ScriptGrader`` runs a command in a fresh machine and reads its reward. A
-``SessionGrader`` task is graded by the rollout session that runs it. ``NoGrader`` records why a
-task cannot be graded. The answer format says how the final answer is requested from the model
+machine. ``ScriptGrader`` runs a command in a fresh machine and reads its reward. ``NoGrader``
+records why a task cannot be graded. The answer format says how the final answer is requested from the model
 and extracted from its conversation.
 """
 
@@ -33,6 +32,7 @@ from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
     GotestSpec,
+    JudgeSpec,
     JunitSpec,
     PytestSpec,
     ScriptSpec,
@@ -41,7 +41,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.27"
+SCHEMA_VERSION = "0.28"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
@@ -614,14 +614,6 @@ class ScriptGrader(BaseModel):
         return self
 
 
-class SessionGrader(BaseModel):
-    """The rollout session registered for the task grades it."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["session"] = "session"
-
-
 class NoGrader(BaseModel):
     """A task without a runnable grader; ``contract`` keeps the source's grading terms."""
 
@@ -637,12 +629,17 @@ class NoGrader(BaseModel):
         return self
 
 
-Grader = Annotated[VerifyitGrader | ScriptGrader | SessionGrader | NoGrader, Field(discriminator="kind")]
+Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader, Field(discriminator="kind")]
 
 
 def grades_in_process(grader: Grader) -> bool:
     """Whether the grader scores the extracted answer without a grading machine."""
     return isinstance(grader, VerifyitGrader) and grader.environment is None
+
+
+def grades_with_judge(grader: Grader) -> bool:
+    """Whether the grader is a verifyit judge, which grades the answer through a judge service."""
+    return isinstance(grader, VerifyitGrader) and isinstance(verifyit_spec(grader), JudgeSpec)
 
 
 def grader_workspace(grader: Grader) -> str:
@@ -811,6 +808,11 @@ class AnswerCall(BaseAnswerFormat):
         return TextSubmission(arguments[ANSWER_FIELD])
 
 
+NormalAnswerFormat = Annotated[
+    PlainText | Boxed | JsonAnswer | JsonValueAnswer | AnswerCall, Field(discriminator="kind")
+]
+
+
 class FinalAction(BaseAnswerFormat):
     """The final assistant message itself: function calls to the task's final tools, or text."""
 
@@ -819,8 +821,17 @@ class FinalAction(BaseAnswerFormat):
 
     require_call: bool = False
     max_calls: int | None = Field(default=None, gt=0)
+    normal_submission: NormalAnswerFormat | None = None
+
+    @model_validator(mode="after")
+    def validate_normal_submission(self) -> "FinalAction":
+        if self.normal_submission is not None and (self.require_call or self.max_calls is not None):
+            raise ValueError("Normal presentation owns answer constraints")
+        return self
 
     def supports(self, answer_type: AnswerType) -> bool:
+        if self.normal_submission is not None:
+            return self.normal_submission.supports(answer_type)
         return answer_type == AnswerType.NATIVE_ACTION
 
     def validate_final_message(self, response: ConversationEvent) -> TextMessage | AssistantToolCalls:

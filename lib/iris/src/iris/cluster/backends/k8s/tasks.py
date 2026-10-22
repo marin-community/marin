@@ -1071,6 +1071,7 @@ def _build_pod_manifest(
         spec["runtimeClassName"] = "gvisor"
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
+        spec["enableServiceLinks"] = False
 
     if managed_label:
         node_selector[managed_label] = "true"

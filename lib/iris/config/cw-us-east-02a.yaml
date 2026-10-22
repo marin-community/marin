@@ -125,7 +125,7 @@ kubernetes_provider:
   namespace: iris
   node_health:
     storage:
-      scratch: s3://marin-us-east-02a/tmp/ttl=1d/iris-node-health/cw-us-east-02a
+      scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-02a
       minimum_healthy_nodes: 2
     max_cordoned_nodes: 1
   host_network: true                # Required for NCCL/IB multi-host traffic
@@ -144,6 +144,7 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-genoa
+    hostname: g530e1c
     # Off-cluster reach is the operator-managed, IP-locked federation ingress
     # (docs/coreweave.md, scripts/install_cw_network.py).
 
@@ -156,10 +157,7 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
-    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
-    # data under s3://marin-na/ is not reachable from jobs unless they override
-    # AWS_ENDPOINT_URL and credentials themselves.
+    # Durable outputs remain in 02A; shared scratch uses the separate 08A bucket.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
@@ -236,6 +234,7 @@ user_budgets:
       - benjaminfeuer
       - david.hall@openathena.ai
       - dlwh
+      - david.lundgren@openathena.ai
       - mark.muchane@openathena.ai
       - muchanem
       - matt.wittmann@openathena.ai

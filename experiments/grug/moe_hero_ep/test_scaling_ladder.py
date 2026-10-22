@@ -171,21 +171,31 @@ def test_d6144_rejects_a_schedule_that_would_rebuild_its_history_differently():
         build_ladder_run(run_id="test-d6144-steps", size="d6144", num_steps=300_000, version="dev")
 
 
-def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
+@pytest.mark.parametrize(("size", "bucket"), [("d6144", "hero-checkpoints"), ("d768", "marin-us-east-08a")])
+def test_scaling_ladder_keeps_hero_checkpoints_separate_from_shared_scratch(monkeypatch, size, bucket):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
-    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
-    step = build_ladder_run(run_id="test-d6144", size="d6144", version="2026.08.18")
-    output_path = "s3://marin-us-east-02a/marin/grug/test-d6144/v"
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://marin-us-east-08a")
+    run_id = f"test-{size}"
+    step = build_ladder_run(run_id=run_id, size=size, version="2026.08.18")
+    output_path = f"s3://marin-us-east-02a/marin/grug/{run_id}/v"
     ctx = dataclasses.replace(
         StepContext.for_fingerprint(runtime_arg_keys=step.runtime_args, deps=step.deps),
         output_path=output_path,
     )
 
     trainer = step.build_config(ctx).trainer.trainer
-    assert trainer.checkpoint_search_paths("test-d6144") == [
+    temporary_path = f"s3://{bucket}/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/{run_id}/v/checkpoints"
+    search_paths = [
         f"{output_path}/checkpoints",
-        "s3://hero-checkpoints/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
+        temporary_path,
     ]
+    if size != "d6144":
+        search_paths.extend(
+            f"s3://{previous}/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/{run_id}/v/checkpoints"
+            for previous in ("marin-us-east-02a", "hero-checkpoints")
+        )
+    assert trainer.checkpoint_search_paths(run_id) == search_paths
+    assert trainer.checkpointer.temporary_base_path == temporary_path
 
 
 def test_d6144_pins_permanent_checkpoint_at_55000_alongside_the_6000_cadence():

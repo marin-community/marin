@@ -1,0 +1,38 @@
+{
+  "dataset": "daman1209arora/jeebench",
+  "revision": "d070d1113ce365df05903763a2017ec2d0d56118",
+  "rows": [
+    {
+      "subject": "phy",
+      "description": "JEE Adv 2017 Paper 1",
+      "gold": "ABD",
+      "index": 1,
+      "type": "MCQ(multiple)",
+      "question": "A flat plate is moving normal to its plane through a gas under the action of a constant force $F$. The gas is kept at a very low pressure. The speed of the plate $v$ is much less than the average speed $u$ of the gas molecules. Which of the following options is/are true?\n\n[A] The pressure difference between the leading and trailing faces of the plate is proportional to $u v$\n\n[B] The resistive force experienced by the plate is proportional to $v$\n\n[C] The plate will continue to move with constant non-zero acceleration, at all times\n\n[D] At a later time the external force $F$ balances the resistive force"
+    },
+    {
+      "subject": "phy",
+      "description": "JEE Adv 2017 Paper 2",
+      "gold": "A",
+      "index": 1,
+      "type": "MCQ",
+      "question": "Consider an expanding sphere of instantaneous radius $R$ whose total mass remains constant. The expansion is such that the instantaneous density $\\rho$ remains uniform throughout the volume. The rate of fractional change in density $\\left(\\frac{1}{\\rho} \\frac{d \\rho}{d t}\\right)$ is constant. The velocity $v$ of any point on the surface of the expanding sphere is proportional to\n\n[A] $R$\n\n[B] $R^{3}$\n\n[C] $\\frac{1}{R}$\n\n[D] $R^{2 / 3}$"
+    },
+    {
+      "subject": "math",
+      "description": "JEE Adv 2022 Paper 1",
+      "gold": "2.35",
+      "index": 1,
+      "type": "Numeric",
+      "question": "Considering only the principal values of the inverse trigonometric functions, what is the value of\n\n\\[\n\\frac{3}{2} \\cos ^{-1} \\sqrt{\\frac{2}{2+\\pi^{2}}}+\\frac{1}{4} \\sin ^{-1} \\frac{2 \\sqrt{2} \\pi}{2+\\pi^{2}}+\\tan ^{-1} \\frac{\\sqrt{2}}{\\pi}\n\\]?"
+    },
+    {
+      "subject": "math",
+      "description": "JEE Adv 2022 Paper 2",
+      "gold": "1",
+      "index": 1,
+      "type": "Integer",
+      "question": "Let $\\alpha$ and $\\beta$ be real numbers such that $-\\frac{\\pi}{4}<\\beta<0<\\alpha<\\frac{\\pi}{4}$. If $\\sin (\\alpha+\\beta)=\\frac{1}{3}$ and $\\cos (\\alpha-\\beta)=\\frac{2}{3}$, then what is the greatest integer less than or equal to\n\n\\[\n\\left(\\frac{\\sin \\alpha}{\\cos \\beta}+\\frac{\\cos \\beta}{\\sin \\alpha}+\\frac{\\cos \\alpha}{\\sin \\beta}+\\frac{\\sin \\beta}{\\cos \\alpha}\\right)^{2}\n\\]?"
+    }
+  ]
+}

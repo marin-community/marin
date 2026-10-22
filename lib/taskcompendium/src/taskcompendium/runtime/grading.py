@@ -24,7 +24,7 @@ from uuid import uuid4
 from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.spec import Spec, render_spec
 
-from taskcompendium.grading import answer_submission, parse_grade_result
+from taskcompendium.grading import answer_submission, parse_grade_result, terminal_grade
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
@@ -456,7 +456,11 @@ async def grade_in_sandbox(
         if grading.spec is not None and task.answer_type in CONVERSATION_ANSWERS:
             require_submission_compatibility(task)
             assert answer_file is not None
-            submissions.append(StagedFile(answer_file, _verifyit_answer_bytes(answer_submission(task, attempt))))
+            submission = answer_submission(task, attempt)
+            terminal = terminal_grade(grading.spec, submission)
+            if terminal is not None:
+                return terminal
+            submissions.append(StagedFile(answer_file, _verifyit_answer_bytes(submission)))
         elif isinstance(grading.grader, ScriptGrader) and grading.grader.answer_path is not None:
             answer = _script_answer_bytes(answer_submission(task, attempt))
             submissions.append(StagedFile(grading.grader.answer_path, answer))

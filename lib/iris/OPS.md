@@ -311,6 +311,14 @@ days. Kubernetes `DisruptionTarget` conditions are recorded as
 node's taints, conditions, hardware/topology labels, and CoreWeave health
 annotations.
 
+For an evaluator that retries after a `Completed` container event and a later
+`PodDeleted` worker-failure verdict, inspect its durable result archive before
+rerunning or accepting the retry. The evaluator may already have written a
+complete, sealed result even though its parent lacks a canonical record. See
+[Auditing an Evalchemy run](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears)
+for the archive checks. The Iris verdict alone does not establish whether the
+application result is complete.
+
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
 The exec session is non-interactive and buffers output. To run a command that survives disconnect, wrap with `nohup` + `&`:
@@ -399,6 +407,16 @@ CoreWeave confirms the reboot completed (or process death is otherwise proven).
 
 ## Process Inspection & Profiling
 
+If controller RPCs time out while `/health` succeeds, inspect the RPC worker
+threads. Bundle uploads and waits for the same bundle's lock can exhaust that pool
+without stopping the control loop. When RPC profiling is unavailable on CoreWeave,
+use the configured Kubernetes context to run `py-spy dump --pid 1` in the controller
+pod. Repeated `BundleStore.write` stacks in S3 I/O or `_content_lock` identify this
+failure. Launch payload persistence has a 30-second deadline covering the lock
+wait, object existence check, and upload. A failed upload returns an `unavailable`
+job-creation error without inserting the new job; clients can retry after storage
+recovers.
+
 ```bash
 iris process status                         # controller resource usage
 iris process status -t /system/worker/<id>  # worker process status
@@ -414,7 +432,7 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 
 Iris compares JAX compile keys across participating GPU processes before a multi-process compile enters XLA. A `GPU compile fingerprint mismatch` error lists each process index and compile key; check for rank-dependent lowering, shapes, or compiler options. A missing peer fails this check after 60 seconds with the identities that arrived. This check uses JAX's pre-compile key, so a stall caused by divergence inside XLA can still require a native thread profile (`iris process profile --native -t <task> threads`).
 
-GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
+GPU environments set `NCCL_RAS_ENABLE=1` and `NCCL_DEBUG=WARN` by default, with no subsystem filter. The default timestamp is `[%F %T.%3f]`. Set `NCCL_DEBUG=INFO` and a focused `NCCL_DEBUG_SUBSYS` only for diagnostic jobs; the CoreWeave GPU smoke config and supervised wedge repro do this explicitly. Do not use `TRACE` or `CALL` for normal runs.
 
 GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every ten minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
 

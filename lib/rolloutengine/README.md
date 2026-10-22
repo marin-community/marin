@@ -1,39 +1,44 @@
 # Rollout engine
 
-`marin-rolloutengine` executes one TaskCompendium task and returns
-`RolloutData`: the conversation, exact tokens, loss mask, optional log probabilities, grade, and per-turn records.
+`marin-rolloutengine` runs and grades one attempt of a TaskCompendium task. It returns a `GradedRollout`: the
+`Rollout`, with its conversations, exact tokens, loss masks, optional log probabilities, per-turn steps, and run
+outputs, and its grade.
 
-Callers supply a model callable, machine factories, and optional `TaskSession`
-factories. Each factory receives a `TaskSessionContext` for one attempt;
-a session class with that constructor signature can be registered directly.
-Each session prepares model requests, handles responses and tools, and grades the attempt.
-The built-in `shellbox` session uses the same execution
-loop as registered sessions and handles shell tools. Optional `ToolProvider`s, keyed by
-`ProviderRequirement.action_interface`, serve host tools that the session advertises beside the shell tool. `AgentTaskSession` adapts
-an agent that controls its own prompt and tool loop. Its factory can use the
-default grader supplied by the engine.
-For text, number, JSON, and native-action answers, it adds the task's answer-format instruction and tools to the model request.
-For workspace-state tasks, this session adds shell and final-response instructions to the model request.
-Importers retain the task problem without these interface instructions.
-The engine owns model calls, conversation and token accumulation, deadlines, the optional
-`max_total_tokens` budget, and resource cleanup.
-An optional `RolloutObserver` passed as `RolloutEngine(..., observer=...)` receives typed progress events
-from `rolloutengine.contracts` while the attempt runs, so callers can log or trace a rollout before `run()` returns.
-Each event carries the `run_key` passed to `run()`, which defaults to the task id.
-The engine delivers events from a queue and never awaits the observer, so a slow or failing observer does not change the rollout.
+```python
+from rolloutengine.engine import RolloutEngine
+from rolloutengine.harness.shell import ShellHarness
 
-`RolloutEngine.run(lowered)` accepts a `LoweredTaskSpec` and asynchronously returns one rollout.
-The lowered record preserves its `TaskSpec` and adds machine selections and session limits.
-The supported scope is single-stage tasks with prebuilt, digest-pinned images, local package-lock environments, or the built-in ShellSim filesystem.
-After the turn loop, the engine captures the files under the task's `output_paths` from the task machine once
-and returns them in `RolloutData.outputs`; final grading uses that capture.
-The default session then grades an in-process `VerifyitGrader` on the host.
-A `ScriptGrader`, or a `VerifyitGrader` with an environment, grades in a separate verifier machine using its digest-pinned image or a local environment built from its package lock.
-A `SessionGrader` requires a registered task session. A `NoGrader` task receives an `unavailable` grade.
-`TaskSessionSpec.trace` selects `TraceMode.EXACT_TOKENS` (the default) or `TraceMode.MESSAGES`.
-`MESSAGES` accepts chat-endpoint turns without checking or requiring token IDs, records an all-zero loss mask, and marks each record with `metrics["trace"] = "messages"`; never train on those rollouts.
-See the [task rollout reference](../../docs/references/task-rollouts.md)
-for the session lifecycle, exact-token contract, trace modes, failure handling, and backend configuration.
+engine = RolloutEngine(machine_factories, {"shellbox": ShellHarness(command_timeout=30)})
+result = await engine.run_task(spec, model)
+```
+
+- `TaskRolloutSpec` holds an unchanged `TaskSpec` and the choices that run it: the harness name, the task and
+  verifier machines, the limits, the trace mode, and an optional judge connection that is never serialized.
+- The model is the policy under rollout, an async function from `ModelRequest` to `ModelTurn`. Pass it to each
+  `engine.run_task` call.
+- A harness is the agent loop of a task. It implements `Harness`: `check(task, limits)` rejects a task before
+  any machine starts, and `run(context, session)` runs one attempt. The harness calls the model through
+  its `ModelSession` (`start`, `reply`, and `record`), which records the exact tokens and applies the turn
+  and token limits. Register each harness in the `harnesses` mapping; `TaskRolloutSpec.harness` selects one by
+  its key.
+- A harness does not grade. The engine grades the last conversation that has a model turn with the task's
+  grader. A harness can attach its own step data, such as rewards for training, with `record(data=...)`.
+- Built-in harnesses: `ShellHarness` serves a shell tool on the task machine and host tools from registered
+  providers; `AgentHarness` runs an agent that owns its prompts and tool loop, for example an installed agent
+  behind an HTTP proxy; `StepHarness` runs an `Episode` that returns the first prompt and handles each turn.
+  Without interactive tools, `ShellHarness` answers an ordinary conversation and finishes after one response.
+  `PrefillHarness` continues the final assistant text once. Select it explicitly for unfinished assistant
+  messages; it can advertise final tool schemas but cannot execute tools.
+- `harness_rollout` runs one harness on one task with one model, without grading. `task_machine` starts the
+  task machine for it.
+- The engine owns the machines, the attempt deadline, grading, cleanup, and progress events for an optional
+  observer, `RolloutEngine(..., observer=...)`.
+
+`TraceMode.EXACT_TOKENS`, the default, enforces the exact-token contract. `TraceMode.MESSAGES` accepts chat
+endpoints that re-tokenize each request and records an all-zero loss mask. Never train on those rollouts:
+their token IDs need not be the tokens that the model sampled.
+See the [task rollout reference](../../docs/references/task-rollouts.md) for the harness contract, the
+exact-token contract, trace modes, failure handling, and backend configuration.
 
 From the Marin repository root:
 
