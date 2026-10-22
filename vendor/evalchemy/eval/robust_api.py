@@ -249,7 +249,7 @@ def apply_openai_payload_controls() -> bool:
                 eos=eos,
                 **kwargs,
             )
-            return _finalize_generation_payload(self, payload, context_output_cap)
+            return _apply_context_output_cap(payload, context_output_cap)
         payload = original_completions_payload(
             self,
             messages,
