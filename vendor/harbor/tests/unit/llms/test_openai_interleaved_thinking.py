@@ -22,8 +22,7 @@ async def test_openai_sends_reasoning_content_in_messages():
         }
 
     llm = OpenAILLM(model_name="test-model")
-    # Transport-agnostic (message building happens before dispatch); patch both
-    # the async OpenAI transport seam.
+    # Capture the replayed history at the OpenAI transport boundary.
     llm._acreate_chat_raw = fake_chat  # type: ignore[assignment]
 
     message_history = [

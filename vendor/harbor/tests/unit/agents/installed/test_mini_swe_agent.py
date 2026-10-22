@@ -756,7 +756,6 @@ class TestCreateRunAgentCommands:
 
         agent_env = mock_env.exec.call_args.kwargs["env"]
         assert agent_env["MSWEA_API_KEY"] == "EMPTY"
-        assert agent_env["OPENAI_API_BASE"] == "https://hosted-vllm.invalid/v1"
 
     @pytest.mark.asyncio
     async def test_invalid_model_raises(self, temp_dir):

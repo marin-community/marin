@@ -611,10 +611,11 @@ class MiniSweAgent(BaseInstalledAgent):
                     "Please set MSWEA_API_KEY environment variable as fallback"
                 )
 
-        if self._api_base is not None:
-            env["OPENAI_API_BASE"] = self._api_base
-        elif "OPENAI_API_BASE" in os.environ:
-            env["OPENAI_API_BASE"] = os.environ["OPENAI_API_BASE"]
+        api_base = (
+            self._api_base
+            or os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("OPENAI_API_BASE")
+        )
 
         cli_flags = self.build_cli_flags()
         extra_flags = (cli_flags + " ") if cli_flags else ""
@@ -633,6 +634,9 @@ class MiniSweAgent(BaseInstalledAgent):
             )
             await self.exec_as_agent(environment, command=write_config_cmd, env=env)
             config_flags += f"-c {config_path} "
+
+        if api_base is not None:
+            config_flags += f"-c {shlex.quote(f'model.api_base={api_base}')} "
 
         if self._reasoning_effort:
             config_flags += f"-c model.model_kwargs.extra_body.reasoning_effort={shlex.quote(self._reasoning_effort)} "

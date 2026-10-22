@@ -103,6 +103,9 @@ def _get_shared_tokenize_client(timeout: float = 10.0) -> "httpx.Client":  # noq
     return _TOKENIZE_HTTP_CLIENT
 
 
+OPENAI_CHAT_REPLY_PRIMING_TOKENS = 3
+OPENAI_CHAT_TOKENS_PER_MESSAGE = 3
+
 RESERVED_SUMMARY_OUTPUT = 4096
 _MAX_RESERVED_SUMMARY_OUTPUT = 16384
 _OVERLONG_SUMMARY_MAX_BYTES = 32768
@@ -829,11 +832,8 @@ class Terminus2(BaseAgent):
         history only for the request) are included in the count so budget
         accounting matches the real request size.
 
-        Why: the local estimate disagrees with vLLM by exactly +1 token
-        on long, near-budget chat-template renders for unknown HF repos
-        (e.g. laion finetunes), manifesting as `VLLMValidationError:
-        32769 input tokens` rejections that churn Ray ObjectRefs and
-        eventually trigger the SkyRL driver refcount-race SIGABRT.
+        Local estimates are available only for models recognized by tiktoken.
+        Custom served models require the server's tokenizer and chat template.
         """
         # No messages yet (e.g. the proactive-summarization check on the very
         # first episode, before the initial prompt has been appended to the
@@ -912,8 +912,9 @@ class Terminus2(BaseAgent):
             raise ValueError(
                 "Token counting requires a vLLM endpoint for this model"
             ) from None
-        return 3 + sum(
-            3 + sum(len(encoding.encode(str(value))) for value in message.values())
+        return OPENAI_CHAT_REPLY_PRIMING_TOKENS + sum(
+            OPENAI_CHAT_TOKENS_PER_MESSAGE
+            + sum(len(encoding.encode(str(value))) for value in message.values())
             for message in messages
         )
 

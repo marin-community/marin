@@ -91,11 +91,7 @@ class OpenAIModel(OpenRouterModel):
 
     def __init__(self, *, api_base: str | None = None, **kwargs: Any):
         super().__init__(**kwargs)
-        self.api_base = (
-            api_base
-            or os.environ.get("OPENAI_BASE_URL")
-            or os.environ.get("OPENAI_API_BASE")
-        )
+        self.api_base = api_base
         if (
             not self.api_base
             and "/" in self.config.model_name

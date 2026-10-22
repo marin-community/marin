@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from harbor.agents.installed.base import (
+    REQUIRED_MODEL_PRICE_FIELDS,
     BaseInstalledAgent,
     CliFlag,
     with_prompt_template,
@@ -570,10 +571,7 @@ class GeminiCli(BaseInstalledAgent, ACPAgentMixin):
 
         pricing = self._model_info
 
-        if (
-            pricing is None
-            or not {"input_cost_per_token", "output_cost_per_token"} <= pricing.keys()
-        ):
+        if pricing is None or not REQUIRED_MODEL_PRICE_FIELDS <= pricing.keys():
             self.logger.debug(
                 "No model_info pricing for '%s'; cost_usd left as None",
                 self.model_alias,

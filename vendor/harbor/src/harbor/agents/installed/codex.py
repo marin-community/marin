@@ -6,6 +6,7 @@ from time import monotonic
 from typing import Any, Literal
 
 from harbor.agents.installed.base import (
+    REQUIRED_MODEL_PRICE_FIELDS,
     BaseInstalledAgent,
     CliFlag,
     NonZeroAgentExitCodeError,
@@ -314,18 +315,14 @@ class Codex(BaseInstalledAgent):
 
         Codex CLI's session JSONL never includes a cost field, so we apply
         configured per-token rates to the aggregated counts ourselves. Returns
-        None when the model is missing from the table — caller should leave
-        cost_usd unset rather than report a misleading $0.
+        None when model_info omits either input or output token prices.
         """
         if not self.model_alias:
             return None
 
         pricing = self._model_info
 
-        if (
-            pricing is None
-            or not {"input_cost_per_token", "output_cost_per_token"} <= pricing.keys()
-        ):
+        if pricing is None or not REQUIRED_MODEL_PRICE_FIELDS <= pricing.keys():
             self.logger.debug(
                 "No model_info pricing entry for model '%s'; leaving codex "
                 "cost_usd as None",

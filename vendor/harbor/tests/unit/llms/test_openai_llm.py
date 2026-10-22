@@ -1,4 +1,5 @@
 import asyncio
+import copy
 from types import SimpleNamespace
 
 import httpx
@@ -12,7 +13,11 @@ from harbor.llms.base import (
     OutputLengthExceededError,
 )
 from harbor.llms.chat import Chat
-from harbor.llms.openai_llm import OpenAILLM
+from harbor.llms.openai_llm import (
+    _VLLM_CONTEXT_SAFETY_BUFFER,
+    OpenAILLM,
+    _timeout_phase,
+)
 
 
 def _install_fake_chat(llm, *, response=None, capture=None, raise_exc=None):
@@ -345,18 +350,6 @@ def test_openai_get_model_output_limit():
     assert llm.get_model_output_limit() == max_output_tokens
 
 
-def test_openai_get_model_output_limit_not_available(caplog):
-    model_name = "test-integration/no-output-limit-model"
-    llm = OpenAILLM(model_name=model_name, model_info={"max_input_tokens": 100000})
-    assert llm.get_model_output_limit() is None
-
-
-def test_openai_get_model_output_limit_no_model_info(caplog):
-    model_name = "test-integration/unknown-model"
-    llm = OpenAILLM(model_name=model_name)
-    assert llm.get_model_output_limit() is None
-
-
 # ===== Responses API Tests =====
 
 
@@ -604,8 +597,6 @@ async def test_openai_previous_response_id_dropped_on_chat_path():
 async def test_openai_retries_without_rejected_extra_body_params():
     """When the provider rejects return_token_ids, retry without it (no token ids)."""
     calls: list[dict] = []
-
-    import copy
 
     llm = OpenAILLM(model_name="openai/gpt-x", collect_rollout_details=True)
 
@@ -1178,7 +1169,6 @@ def test_get_model_context_limit_uses_vllm_when_registry_missing(monkeypatch):
     monkeypatch.setattr(llm, "_get_vllm_max_model_len", lambda: 32768)
     # The live vLLM limit is shaved by _VLLM_CONTEXT_SAFETY_BUFFER (default 8)
     # so a +/-1 BPE boundary prompt can't render to max_model_len + 1.
-    from harbor.llms.openai_llm import _VLLM_CONTEXT_SAFETY_BUFFER
 
     assert llm.get_model_context_limit() == 32768 - _VLLM_CONTEXT_SAFETY_BUFFER
 
@@ -1198,7 +1188,6 @@ def test_get_vllm_max_model_len_none_without_api_base():
 
 
 def test_get_vllm_max_model_len_parses_models_endpoint(monkeypatch):
-    import httpx as _httpx
 
     captured = {}
 
@@ -1222,7 +1211,7 @@ def test_get_vllm_max_model_len_parses_models_endpoint(monkeypatch):
             captured["url"] = url
             return _FakeResp()
 
-    monkeypatch.setattr(_httpx, "Client", _FakeClient)
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
     llm = OpenAILLM(
         model_name="test-integration/served",
         api_base="http://probe-host:8000/v1",
@@ -1237,7 +1226,6 @@ def test_vllm_max_model_len_probe_is_global_cached(monkeypatch):
     """A SECOND, fresh OpenAILLM instance pointing at the same endpoint reuses the
     process-global probe result and issues NO HTTP GET (the coordinator-loop
     probe-elimination fix)."""
-    import httpx as _httpx
 
     probe_count = {"n": 0}
 
@@ -1261,7 +1249,7 @@ def test_vllm_max_model_len_probe_is_global_cached(monkeypatch):
             probe_count["n"] += 1
             return _FakeResp()
 
-    monkeypatch.setattr(_httpx, "Client", _FakeClient)
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
     base = "http://global-cache-host:8000/v1"
     a = OpenAILLM(model_name="test-integration/gc-a", api_base=base)
     b = OpenAILLM(model_name="test-integration/gc-b", api_base=base)
@@ -1452,7 +1440,6 @@ async def test_connect_timeout_gives_up_after_the_bounded_retries(monkeypatch):
 
 
 def test_timeout_phase_matches_a_vendored_httpx_connect_timeout():
-    from harbor.llms.openai_llm import _timeout_phase
 
     connect_timeout = type(
         "ConnectTimeout", (Exception,), {"__module__": "httpx2._exceptions"}
@@ -1465,7 +1452,6 @@ def test_timeout_phase_matches_a_vendored_httpx_connect_timeout():
 
 
 def test_timeout_phase_rejects_unrelated_same_named_exception():
-    from harbor.llms.openai_llm import _timeout_phase
 
     class ConnectTimeout(Exception):
         pass

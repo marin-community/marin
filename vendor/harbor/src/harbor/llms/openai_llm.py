@@ -338,7 +338,7 @@ _CLIENT_ONLY_LLM_KWARGS = frozenset(
 # few tokens off the vLLM-reported max_model_len so the effective limit sits
 # just below the hard wall and a +/-1 boundary prompt can never render past it.
 # Default 8 tokens; override via HARBOR_VLLM_CONTEXT_SAFETY_BUFFER. Only ever
-# applied to the live vLLM limit (the hard wall), never to the registry value.
+# applied to the live vLLM limit (the hard wall), never to the configured value.
 try:
     _VLLM_CONTEXT_SAFETY_BUFFER = int(
         os.environ.get("HARBOR_VLLM_CONTEXT_SAFETY_BUFFER", "8")
@@ -634,11 +634,9 @@ class OpenAILLM(BaseLLM):
     def _get_vllm_max_model_len(self) -> int | None:
         """Query the live vLLM server's `max_model_len` via `/v1/models`.
 
-        For models served by vLLM under a custom/hashed name (e.g. RL-finetune
-        checkpoints served as `served_model_name=<hash>`), the registry has no
-        entry, so `get_model_info` falls back to a 1e6 context limit — which
-        silently disables the proactive context-length guard. The vLLM server
-        itself is the ground truth, so we read its `max_model_len` directly.
+        The server's max_model_len is authoritative for served checkpoints.
+        Use it to bound explicit model_info limits and avoid oversized requests
+        when model_info is unavailable.
         Cached per instance AND process-globally (see _VLLM_MAX_MODEL_LEN_CACHE);
         returns None when no vLLM api_base is set or the probe fails.
         """
@@ -700,7 +698,7 @@ class OpenAILLM(BaseLLM):
         fallback_context_limit = 1000000
 
         model_info = self._model_info or {}
-        registry_limit = model_info.get("max_input_tokens") or model_info.get(
+        configured_limit = model_info.get("max_input_tokens") or model_info.get(
             "max_tokens"
         )
 
@@ -710,7 +708,7 @@ class OpenAILLM(BaseLLM):
         if vllm_limit is not None and _VLLM_CONTEXT_SAFETY_BUFFER:
             vllm_limit = max(1, vllm_limit - _VLLM_CONTEXT_SAFETY_BUFFER)
 
-        candidates = [c for c in (registry_limit, vllm_limit) if c]
+        candidates = [c for c in (configured_limit, vllm_limit) if c]
         if candidates:
             self._cached_context_limit = min(candidates)
             return self._cached_context_limit

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Union
 
 from harbor.agents.installed.base import (
+    REQUIRED_MODEL_PRICE_FIELDS,
     BaseInstalledAgent,
     CliFlag,
     with_prompt_template,
@@ -370,10 +371,7 @@ class CursorCli(BaseInstalledAgent):
 
         pricing = self._model_info
 
-        if (
-            pricing is None
-            or not {"input_cost_per_token", "output_cost_per_token"} <= pricing.keys()
-        ):
+        if pricing is None or not REQUIRED_MODEL_PRICE_FIELDS <= pricing.keys():
             self.logger.debug(
                 "No pricing entry for model '%s'; leaving cursor-cli cost_usd as None",
                 self.model_alias,

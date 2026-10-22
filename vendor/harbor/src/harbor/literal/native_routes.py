@@ -1,12 +1,14 @@
 """Messages and Responses endpoints backed by the literal completion recorder."""
 
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncStream
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from harbor.literal.native_api import (
     CORRELATION_ID_HEADER,
@@ -23,6 +25,13 @@ from harbor.llms.vllm_tokenization import (
 )
 
 LITERAL_API_BASE = "http://literal/v1"
+
+
+@dataclass(frozen=True)
+class NativeCompletion:
+    response: ChatCompletion | AsyncStream[ChatCompletionChunk]
+    resources: AsyncExitStack
+    prompt_tokens: int
 
 
 async def native_prompt_count(
@@ -71,7 +80,7 @@ async def native_completion(
     request: Request,
     limits: NativeAPILimits,
     task_agent: str,
-) -> tuple[Any, AsyncExitStack, int]:
+) -> NativeCompletion:
     if not chat.get("tools") and chat.get("tool_choice") in (None, "auto", "none"):
         chat.pop("tool_choice", None)
     count, context = await native_prompt_count(
@@ -111,7 +120,7 @@ async def native_completion(
     except BaseException:
         await resources.aclose()
         raise
-    return result, resources, count
+    return NativeCompletion(result, resources, count)
 
 
 def register_native_routes(
@@ -125,17 +134,22 @@ def register_native_routes(
             chat = anthropic_chat_request(body)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        result, resources, prompt_tokens = await native_completion(
+        completion = await native_completion(
             recorder, chat, request, limits, "claude-code"
         )
-        if body.get("stream"):
+        result = completion.response
+        if isinstance(result, AsyncStream):
             return StreamingResponse(
                 native_events(
-                    result, resources, "anthropic", body["model"], prompt_tokens
+                    result,
+                    completion.resources,
+                    "anthropic",
+                    body["model"],
+                    completion.prompt_tokens,
                 ),
                 media_type="text/event-stream",
             )
-        async with resources:
+        async with completion.resources:
             return JSONResponse(
                 native_output(result.model_dump(), "anthropic", body["model"])
             )
@@ -159,17 +173,20 @@ def register_native_routes(
             chat = responses_chat_request(body)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        result, resources, prompt_tokens = await native_completion(
-            recorder, chat, request, limits, "codex"
-        )
-        if body.get("stream"):
+        completion = await native_completion(recorder, chat, request, limits, "codex")
+        result = completion.response
+        if isinstance(result, AsyncStream):
             return StreamingResponse(
                 native_events(
-                    result, resources, "responses", body["model"], prompt_tokens
+                    result,
+                    completion.resources,
+                    "responses",
+                    body["model"],
+                    completion.prompt_tokens,
                 ),
                 media_type="text/event-stream",
             )
-        async with resources:
+        async with completion.resources:
             return JSONResponse(
                 native_output(result.model_dump(), "responses", body["model"])
             )
